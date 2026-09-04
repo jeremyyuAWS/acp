@@ -1657,6 +1657,58 @@ def _mark_discovered(scan_id: str) -> None:
                            scan_id, exc_info=True)
 
 
+def _discover_norm_row(it: dict) -> dict:
+    """One scanner listing item as the discover-phase normalised record.
+
+    Lifted out of _scan_discover's listing block so the PER-SITE CHECKPOINT can build exactly the
+    same row. A checkpoint that persisted a site through a second, parallel mapping would drift
+    from the end-of-scan one the moment either grew a field — and the drift would show up as a
+    resumed scan whose early sites are missing metadata the late ones have, which reads as a
+    tenant that labels some sites and not others.
+    """
+    return {"file": it["name"], "drive_file_id": it.get("id"), "mime": it.get("mime"),
+            "path": it.get("path"), "checksum": it.get("checksum"),
+            "drive_id": it.get("driveId"),
+            # WHICH SharePoint site and library this document came from. Carried on the
+            # scannable record by the walk (scanner._sp_classify_item) and persisted per
+            # row: a run now spans a SET of sites, so the scan's scope can no longer answer
+            # "which site is this file in" for any individual document.
+            "site_id": it.get("siteId"), "library_name": it.get("libraryName"),
+            "site_name": it.get("siteName"),
+            # The SharePoint-native metadata for the ANALYSED half of the estate. The
+            # non-scannable half already carries it (scanner._sp_inventory_row builds the
+            # row itself); without this the two halves of one inventory would disagree —
+            # a retention label on every video and none on any document, which reads as a
+            # tenant that labels media and is in fact a wiring gap.
+            **_sp_scannable_metadata(it),
+            "drive_account_id": it.get("drive_account_id"),
+            "source_modified": it.get("source_modified"),
+            "source_mime": it.get("source_mime"), "created_at": it.get("created_at"),
+            "owner": it.get("owner"), "parent_folder": it.get("parent_folder"),
+            "size_kb": it.get("size_kb"),
+            "content_type": it.get("content_type")}
+
+
+def _discover_inventory_row(it: dict) -> dict:
+    """One normalised record as the scan_inventory row add_inventory persists. See
+    _discover_norm_row for why this is a function rather than a comprehension."""
+    import classify as _cls
+    return {"file": it["file"], "drive_file_id": it.get("drive_file_id"),
+            "mime": it.get("source_mime"), "size_kb": it.get("size_kb"),
+            "doc_class": _cls.classify_from_metadata(it["file"], it.get("source_mime"))["doc_class"],
+            "checksum": it.get("checksum"), "path": it.get("path"),
+            "created_at": it.get("created_at"), "source_modified": it.get("source_modified"),
+            "owner": it.get("owner"), "parent_folder": it.get("parent_folder"),
+            "drive_id": it.get("drive_id"),
+            "site_id": it.get("site_id"), "library_name": it.get("library_name"),
+            "site_name": it.get("site_name"),
+            **{k: it.get(k) for k in ("retention_label", "sensitivity_label",
+                                      "sharing_scope", "item_kind", "checked_out_by",
+                                      "sp_version", "modified_by", "sp_metadata")},
+            "drive_account_id": it.get("drive_account_id"),
+            "content_type": it.get("content_type")}
+
+
 def _scope_collapse(current_count: int, baseline_count: int) -> dict | None:
     """Describe a material suspicious non-zero listing collapse, if one occurred."""
     import os as _os
@@ -1674,11 +1726,25 @@ def _scope_collapse(current_count: int, baseline_count: int) -> dict | None:
 
 
 def _enforce_scope_collapse_guard(scan_id: str, user: str | None, scope: dict,
-                                  items: list[dict], inventory: list[dict] | None = None) -> None:
-    """Fail a severely collapsed whole-source discovery before its inventory is published."""
+                                  items: list[dict], inventory: list[dict] | None = None,
+                                  prior_count: int = 0) -> None:
+    """Fail a severely collapsed whole-source discovery before its inventory is published.
+
+    `prior_count` is the estate THIS scan already persisted on an earlier attempt — the sites a
+    per-site checkpoint completed before the run died. It is the load-bearing argument for
+    resumable scans and it is easy to leave out: a resumed run lists only the sites it has left,
+    so a 30-site estate that got 28 sites in on attempt 1 arrives here with two sites' worth of
+    files and looks exactly like the permissions collapse this guard exists to catch. The scan
+    would then be failed and blocked, with a message telling the operator to check access that is
+    not the problem — strictly worse than having no resume at all, because the first attempt at
+    least finished with a bad count rather than a wrong diagnosis.
+    """
     whole_source = (scope.get("kind") == "drive" or
                     (scope.get("kind") == "sharepoint" and not scope.get("folders")))
-    if not (whole_source and user and items and not scope.get("truncated")):
+    # `(items or prior_count)` rather than `items`: a resumed run whose remaining sites list
+    # nothing still has an estate — the one a previous attempt persisted — and skipping the guard
+    # on it would make "die once, retry" a way to walk a genuine collapse straight past the check.
+    if not (whole_source and user and (items or prior_count) and not scope.get("truncated")):
         return
     current_account = next(
         (it.get("drive_account_id") for it in items if it.get("drive_account_id")), None)
@@ -1691,7 +1757,7 @@ def _enforce_scope_collapse_guard(scan_id: str, user: str | None, scope: dict,
     # the two collections that together form the inventory.
     raw_count = scope.get("raw")
     current_count = (int(raw_count) if isinstance(raw_count, (int, float))
-                     else len(items) + len(inventory or []))
+                     else len(items) + len(inventory or [])) + prior_count
     integrity = _scope_collapse(current_count, baseline["count"])
     if not integrity:
         return
@@ -1703,7 +1769,10 @@ def _enforce_scope_collapse_guard(scan_id: str, user: str | None, scope: dict,
     integrity["message"] = message
     scope["integrity"] = integrity
     scope.setdefault("enumeration", {})["complete"] = False
-    core.store.set_scan_files(scan_id, len(items))
+    # `current_count`, not `len(items)`: on a resumed run those differ, and the number left on the
+    # row must be the one the refusal is about — otherwise the message and the estate a reader
+    # sees beside it disagree, on the screen where the disagreement is the whole question.
+    core.store.set_scan_files(scan_id, current_count)
     core.store.merge_scan_scope(scan_id, scope)
     core.store.set_scan_status(scan_id, "failed")
     core.store.log_decision("system", "scan.scope_collapse", scan_id=scan_id, detail=message)
@@ -2068,21 +2137,70 @@ def _scan_discover(payload: dict, job: dict) -> None:
     # is a cheap COUNT(*) query; the threshold > 0 is correct because add_inventory is
     # idempotent (ON CONFLICT) and the only writer for this scan_id is us.
     _checkpoint_resume = False
+    # Sites a previous attempt of THIS scan listed and persisted, as
+    # {site_id: {listed, estate, name}} — what the scanner needs to skip them AND to keep
+    # reporting what each held. Empty on every run that is not a SharePoint partial resume, which
+    # is every run today that did not die mid-listing.
+    _sp_resume_sites: dict = {}
+    _existing_inv_count = 0
+    # The ASSESSABLE half of what a previous attempt persisted. Tracked separately from the row
+    # count because scan_runs.files has always meant "assessable files", and a resumed run that
+    # reported only the tail it listed would show a thirty-site estate as a two-site one on every
+    # screen that reads that column.
+    _sp_prior_assessable = 0
     if defer:
         _existing_inv_count = core.store.count_inventory(scan_id)
         if _existing_inv_count > 0:
-            _checkpoint_resume = True
             # The listing boundary and enumeration evidence were persisted before inventory.
             # Reload them so retry-time integrity checks do not silently see an empty scope.
             scope = (((core.store.get_scan(scan_id, owner=user) or {}).get("run") or {})
                      .get("scope") or {})
+            _cp = scope.get("sp_checkpoint") or {}
+            if _cp and not _cp.get("listing_complete"):
+                # PARTIAL, not finished. `count_inventory > 0` used to mean one thing — a run
+                # that listed the WHOLE estate and died afterwards — and the resume below skips
+                # the listing entirely on the strength of it. Per-site checkpoints break that
+                # equivalence: rows now appear mid-listing, so without this branch a 30-site scan
+                # that died at site 3 would resume by declaring three sites the whole estate and
+                # publishing it. The marker is what distinguishes the two, and it is written by
+                # the same call that records the last site.
+                # WHAT EACH SITE HELD, not just which sites are done. A resumed site the
+                # scanner reports `complete` beside the zero this attempt walked is a WRONG
+                # number rather than a missing one — indistinguishable, to the reader, from a
+                # site that genuinely held nothing, which is the one confusion the per-site
+                # report exists to remove. The counts are in this scan's own inventory, so
+                # reading them here costs one pass over rows already being read.
+                _sp_resume_sites = {str(x): {"listed": 0, "estate": 0, "name": None}
+                                    for x in (_cp.get("sites") or []) if x}
+                _persisted_rows = core.store.list_inventory(scan_id)
+                for r in _persisted_rows:
+                    assessable = r.get("doc_class") not in (None, "unsupported", "media")
+                    _sp_prior_assessable += 1 if assessable else 0
+                    known = _sp_resume_sites.get(str(r.get("site_id") or ""))
+                    if known is None:
+                        continue
+                    known["estate"] += 1
+                    known["listed"] += 1 if assessable else 0
+                    known["name"] = known["name"] or r.get("site_name")
+                # Carried through init_scan_run below, which writes scope=EXCLUDED.scope and
+                # would otherwise NULL it — losing attempt 1's sites on attempt 2, so a run that
+                # died twice would re-walk everything the first attempt had already paid for.
+                scope = {"sp_checkpoint": dict(_cp)}
+                print(f"[scan] {scan_id}: resuming a partial SharePoint listing — "
+                      f"{len(_sp_resume_sites)} site(s) already persisted "
+                      f"({_existing_inv_count} rows), listing only what is left", flush=True)
+            else:
+                _checkpoint_resume = True
 
     if not _checkpoint_resume:
         # Create the scan_runs row NOW, before the file listing, so GET /scans/{id} returns a
         # result as soon as a worker claims the job.  Skipped on retry: the row already exists
         # and re-initing would reset status and scope to their discover-start defaults.
         core.store.init_scan_run(scan_id, source, 0, started, rb.name, rb.hash, owner=user,
-                                 status="running")
+                                 status="running",
+                                 # Only ever set on a partial-listing resume; None on a first
+                                 # attempt, which is the argument this call has always passed.
+                                 scope=(scope or None) if _sp_resume_sites else None)
 
         # Claim the active-Discovery slot before listing. Two concurrent requests for the same
         # source will both reach init_scan_run (each with their own scan_id), but only one will
@@ -2255,6 +2373,44 @@ def _scan_discover(payload: dict, job: dict) -> None:
                     # expired, never-synced and due-for-reconciliation gets the right answer for
                     # each instead of one answer for all of them.
                     sp_delta_plan = _sp_site_delta_plan(user, sp_tok, folder, folders)
+
+        # ── PER-SITE CHECKPOINT (Phase 4) ────────────────────────────────────────────────────
+        #
+        # A thirty-site estate is a long listing, and until now it was also an ATOMIC one: the
+        # inventory was persisted in a single write after the last site, so a run that died at
+        # site 28 threw away twenty-eight sites' worth of Graph calls and started again at site
+        # one. That is the failure mode a large tenant hits most, because it is the tenant whose
+        # listing runs long enough to be interrupted.
+        #
+        # This persists each site AS IT FINISHES and records which sites are done. add_inventory
+        # is idempotent per (scan_id, file), so a row written here and again by the end-of-listing
+        # write is one row — which is what makes the checkpoint safe to be wrong about: the worst
+        # case is redundant work, never a duplicate or a missing document.
+        #
+        # ONLY COMPLETE SITES ARRIVE HERE. The scanner does not emit a site the cap truncated or
+        # a library that failed (see _sp_list's _emit_site), because `sites` below is what the
+        # resume SKIPS — and skipping a half-listed site would publish the half as the whole.
+        _sp_checkpoint_sites: list[str] = sorted(_sp_resume_sites)
+
+        def _sp_site_done(site_id: str, site_files: list, site_inventory: list) -> None:
+            rows = ([_discover_inventory_row(_discover_norm_row(it)) for it in (site_files or [])]
+                    + list(site_inventory or []))
+            from scanner import _dedupe_inventory_files
+            _dedupe_inventory_files(rows)
+            if rows:
+                core.store.add_inventory(scan_id, rows)
+            if site_id not in _sp_checkpoint_sites:
+                _sp_checkpoint_sites.append(site_id)
+            # Written AFTER add_inventory, never before. The marker is a claim that this site's
+            # rows are durable; a resume trusts it enough to not walk the site again, so a marker
+            # that outran its own rows would silently delete a site from the estate.
+            core.store.merge_scan_scope(scan_id, {"sp_checkpoint": {
+                "sites": list(_sp_checkpoint_sites), "listing_complete": False}})
+            print(f"[scan] {scan_id}: SharePoint site {site_id} checkpointed "
+                  f"({len(rows)} row(s)); {len(_sp_checkpoint_sites)} site(s) durable", flush=True)
+
+        _sp_checkpointing = (source == "sharepoint" and defer
+                             and _os.environ.get("ACP_SP_CHECKPOINT", "1").strip() != "0")
         try:
             items = _list(source, svc, folder=effective_folder, sp_token=sp_tok,
                           max_files=FANOUT_MAX_FILES, **({"folders": folders} if folders else {}),
@@ -2262,7 +2418,9 @@ def _scan_discover(payload: dict, job: dict) -> None:
                           exclude_remediated=bool(payload.get("exclude_remediated", False)),
                           scope_out=scope, scope_files=_scope_for_listing(user), inventory_out=inventory,
                           progress_cb=_listing_progress, drive_delta=drive_delta, sp_delta=sp_delta,
-                          **({"sp_delta_plan": sp_delta_plan} if sp_delta_plan else {}))
+                          **({"sp_delta_plan": sp_delta_plan} if sp_delta_plan else {}),
+                          **({"sp_site_done": _sp_site_done} if _sp_checkpointing else {}),
+                          **({"sp_skip_sites": _sp_resume_sites} if _sp_resume_sites else {}))
         except JobCancelledError:
             # A user pressed Stop. Before this clause existed the blanket handler below caught it
             # and recorded scan_runs.status='failed' with a 'listing_failed' event — so the one
@@ -2272,9 +2430,16 @@ def _scan_discover(payload: dict, job: dict) -> None:
             # Reached only after scanner._search_folder's drain has returned, so by here the
             # discovery pool is shut down and joined: no folder fetch can still be running or
             # writing. That is what makes 'cancelled' honest rather than optimistic — it is the
-            # STOPPED state, not merely the observed one. Nothing partial is persisted: `items`
-            # was never assigned, and the merge_scan_scope/add_inventory writes below are all
-            # downstream of this raise.
+            # STOPPED state, not merely the observed one.
+            #
+            # A SHAREPOINT RUN MAY LEAVE ROWS BEHIND, and that is new. `items` is still never
+            # assigned and every write below this raise is still skipped, but the per-site
+            # checkpoint above has already persisted each site that finished before the Stop.
+            # They stay: they are real, correctly attributed rows of a run the store marks
+            # 'cancelled', never published (mark_published is downstream of this raise and gated
+            # on a complete enumeration) and so never a collapse baseline. What they DO become is
+            # a suspicious-zero baseline for a later scan of the same source, which is the
+            # conservative direction — a subsequent zero is refused rather than published.
             try:
                 core.store.set_scan_status(scan_id, "cancelled")
                 core.store.log_decision("system", "scan.discover_cancelled", scan_id=scan_id,
@@ -2358,7 +2523,12 @@ def _scan_discover(payload: dict, job: dict) -> None:
         # loudly here avoids publishing an empty inventory that overwrites a real one. Skipped
         # when the listing was truncated (truncated means large estate, not empty) and when the
         # source is new (no previous scan → legitimate first run can return 0).
-        if not items and not _truncated:
+        # `not _existing_inv_count` because a RESUMED listing only covers the sites the previous
+        # attempt did not reach, and "the remaining two sites held nothing assessable" is not the
+        # silent zero this whole block exists to refuse. Without it a resume that finished an
+        # estate whose tail happens to be media would be failed as a suspicious zero, against a
+        # baseline that includes the twenty-eight sites already sitting in its own inventory.
+        if not items and not _truncated and not _existing_inv_count:
             _first_scan = True   # updated below once we know
             _baseline_id = None  # updated below once we know; initialized here so the
                                  # except block can test it safely even if the try raises
@@ -2511,8 +2681,15 @@ def _scan_discover(payload: dict, job: dict) -> None:
         # migration for a per-scan JSON fact would be a schema change bought for nothing.
         if source == "sharepoint" and sp_delta_plan:
             scope["sp_cursors"] = _sp_scan_cursors(user, sp_delta_plan)
-        _enforce_scope_collapse_guard(scan_id, user, scope, items, inventory)
-        core.store.set_scan_files(scan_id, len(items))
+        # THE LISTING IS OVER. Recorded before anything reads the checkpoint back, and recorded
+        # even when no site was checkpointed, because its absence is what a resume treats as "the
+        # whole estate is here" — see the resume branch at the top of this function.
+        if _sp_checkpointing:
+            scope["sp_checkpoint"] = {"sites": list(_sp_checkpoint_sites),
+                                      "listing_complete": True}
+        _enforce_scope_collapse_guard(scan_id, user, scope, items, inventory,
+                                      prior_count=_existing_inv_count)
+        core.store.set_scan_files(scan_id, len(items) + _sp_prior_assessable)
         core.store.merge_scan_scope(scan_id, scope)
         # ADR 0042, ordered AFTER both durable writes above rather than after _list() returned:
         # the count and the enumeration evidence are what this event asserts, so it must not be
@@ -2526,46 +2703,11 @@ def _scan_discover(payload: dict, job: dict) -> None:
                            "folders_visited": _enum.get("folders_visited"),
                            "truncated": bool(_enum.get("truncated")),
                            "complete": bool(_enum.get("complete"))})
-        norm = [{"file": it["name"], "drive_file_id": it.get("id"), "mime": it.get("mime"),
-                 "path": it.get("path"), "checksum": it.get("checksum"),
-                 "drive_id": it.get("driveId"),
-                 # WHICH SharePoint site and library this document came from. Carried on the
-                 # scannable record by the walk (scanner._sp_classify_item) and persisted per
-                 # row: a run now spans a SET of sites, so the scan's scope can no longer answer
-                 # "which site is this file in" for any individual document.
-                 "site_id": it.get("siteId"), "library_name": it.get("libraryName"),
-                 "site_name": it.get("siteName"),
-                 # The SharePoint-native metadata for the ANALYSED half of the estate. The
-                 # non-scannable half already carries it (scanner._sp_inventory_row builds the
-                 # row itself); without this the two halves of one inventory would disagree —
-                 # a retention label on every video and none on any document, which reads as a
-                 # tenant that labels media and is in fact a wiring gap.
-                 **_sp_scannable_metadata(it),
-                 "drive_account_id": it.get("drive_account_id"),
-                 "source_modified": it.get("source_modified"),
-                 "source_mime": it.get("source_mime"), "created_at": it.get("created_at"),
-                 "owner": it.get("owner"), "parent_folder": it.get("parent_folder"),
-                 "size_kb": it.get("size_kb"),
-                 "content_type": it.get("content_type")} for it in items]
+        norm = [_discover_norm_row(it) for it in items]
     if defer:
         if not _checkpoint_resume:
-            import classify as _cls
             from scanner import _dedupe_inventory_files
-            inv = [{"file": it["file"], "drive_file_id": it.get("drive_file_id"),
-                    "mime": it.get("source_mime"), "size_kb": it.get("size_kb"),
-                    "doc_class": _cls.classify_from_metadata(it["file"], it.get("source_mime"))["doc_class"],
-                    "checksum": it.get("checksum"), "path": it.get("path"),
-                    "created_at": it.get("created_at"), "source_modified": it.get("source_modified"),
-                    "owner": it.get("owner"), "parent_folder": it.get("parent_folder"),
-                    "drive_id": it.get("drive_id"),
-                    "site_id": it.get("site_id"), "library_name": it.get("library_name"),
-                    "site_name": it.get("site_name"),
-                    **{k: it.get(k) for k in ("retention_label", "sensitivity_label",
-                                              "sharing_scope", "item_kind", "checked_out_by",
-                                              "sp_version", "modified_by", "sp_metadata")},
-                    "drive_account_id": it.get("drive_account_id"),
-                    "content_type": it.get("content_type")}
-                   for it in norm] + inventory
+            inv = [_discover_inventory_row(it) for it in norm] + inventory
             _dedupe_inventory_files(inv)
             if inv:
                 _job_id = job.get("id")
@@ -2612,6 +2754,23 @@ def _scan_discover(payload: dict, job: dict) -> None:
                                    "updated": _inv_outcome.get("updated"),
                                    "unchanged": _inv_outcome.get("unchanged"),
                                    "failed": _inv_outcome.get("failed")})
+        if _sp_resume_sites:
+            # THE ESTATE IS THE STORE'S, not this attempt's. Everything below — the lifecycle
+            # denominator, the assessable/empty decision, the discovered event's count, the
+            # decision log — reads `items` and `inv`, and on a resumed run those hold only the
+            # sites this attempt had left to list. A 30-site scan that finished its last two
+            # sites here would otherwise close as a two-site estate and, if those two held
+            # nothing assessable, finalize instead of offering Assess over the other twenty-eight.
+            #
+            # Read back rather than concatenated: the rows this attempt just wrote and the rows
+            # attempt 1 wrote are the same table, and re-deriving from it is the only version of
+            # this that cannot double-count a site both attempts happened to touch.
+            inv = core.store.list_inventory(scan_id)
+            items = [r for r in inv
+                     if r.get("doc_class") not in (None, "unsupported", "media")]
+            norm = items
+            core.store.set_scan_files(scan_id, len(items))
+
         # Phase B4 — with the inventory persisted, run enabled disposition rules against it and
         # record candidate lifecycle outcomes (never executing the Drive move/delete here). Runs
         # before the no-assessable-items short-circuit below because a rule may match a
