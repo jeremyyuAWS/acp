@@ -166,6 +166,13 @@ function InfraNode({ data }) {
 
 const nodeTypes = { run: RunNode, infra: InfraNode }
 
+// THE SCOPE OF THIS NUMBER IS NOT THE STAGE IT IS DRAWN ON. api/routes/control.py reads ONE
+// container app — WORKER_APP_NAME, defaulting to `acp-worker` — so this is a tier-wide reading,
+// and it is attached to every stage node. Without the qualifier, Discover, Assess and Remediate
+// each display the same vCPU/RAM/disk figures as though they were that service's own allocation.
+//
+// The per-service numbers that ARE per-service (slots, active, available, heartbeat, version)
+// come from that role's own heartbeat and are shown alongside.
 function reportedWorkerSize(capacity) {
   if (!capacity?.configured) return 'Size telemetry not configured'
   const cpu = capacityValue(capacity.cpu_cores_per_replica, ' vCPU')
@@ -184,6 +191,12 @@ export function infrastructureDetail(data, snapshot = {}, capacity = null) {
         ['Service health', service.alive ? 'Online' : 'Offline'],
         ['Worker slots', `${service.active || 0} active · ${service.available || 0} available of ${service.slots || 0}`],
         ['Replica size', reportedWorkerSize(capacity)],
+        // Adjacent to the size deliberately: the figure above is ONE container app's, drawn on
+        // every stage node, so the row that says whose it is has to sit next to it rather than
+        // at the bottom of the list.
+        ['Size measured from', capacity?.configured
+          ? `One Azure Container App (${capacity.worker_app_name || 'name not reported'}) covering the worker tier — not measured per service`
+          : 'Not reported'],
         ['Replicas', capacity?.configured ? `${capacityValue(capacity.current_replicas)} running · ${capacityValue(capacity.min_replicas)} min · ${capacityValue(capacity.max_replicas)} max` : 'Not reported'],
         ['Live utilization', capacity?.metrics_available ? `${capacityValue(capacity.cpu_percent, '%')} CPU · ${capacityValue(capacity.memory_percent, '%')} memory` : 'Not reported'],
         ['Active revision', capacity?.active_revision_name || 'Not reported'],
@@ -212,23 +225,37 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
   const sourceKinds = ['drive', 'sharepoint']
   const sourceLabel = { drive: 'Google Drive', sharepoint: 'SharePoint' }
   const nodes = sourceKinds.map((source, index) => ({ id: `source:${source}`, type: 'infra', position: { x: 0, y: 30 + index * 105 },
+    ariaLabel: `${sourceLabel[source]} connector, ${runs.some((run) => run.source === source) ? 'active' : 'ready'}. Select for details.`,
     data: { kind: 'source', label: sourceLabel[source], status: runs.some((run) => run.source === source) ? 'active' : 'ready',
       detail: 'Authorized document connector', color: '#246B79', hasInput: false,
       active: runs.filter((run) => run.source === source && run.status !== 'recent').length } }))
   nodes.push(
-    { id: 'infra:intake', type: 'infra', position: { x: 225, y: 82 }, data: { kind: 'intake', label: 'ACP intake', status: connection,
+    { id: 'infra:intake', type: 'infra', position: { x: 225, y: 82 },
+      ariaLabel: `ACP intake and orchestration, ${connection}. Select for details.`,
+      data: { kind: 'intake', label: 'ACP intake', status: connection,
       detail: 'Authentication · scope · orchestration', color: '#51404E', connection } },
-    { id: 'infra:queue', type: 'infra', position: { x: 455, y: 82 }, data: { kind: 'queue', label: 'Shared queue',
+    { id: 'infra:queue', type: 'infra', position: { x: 455, y: 82 },
+      ariaLabel: `Shared queue, ${snapshot?.summary?.queued || 0} waiting. Select for details.`,
+      data: { kind: 'queue', label: 'Shared queue',
       status: `${snapshot?.summary?.queued || 0} waiting`, detail: 'Durable · tenant-fair scheduling', color: '#A66A16' } },
   )
   ;['discover', 'assess', 'remediate'].forEach((stage, index) => {
     const service = serviceByStage.get(stage) || { stage, active: 0, available: 0, slots: 0, alive: false }
-    nodes.push({ id: `stage:${stage}`, type: 'infra', position: { x: 690, y: index * 105 }, data: { kind: 'worker',
+    // ariaLabel sits on the NODE, not in `data` — ReactFlow reads node.ariaLabel when it renders
+    // the wrapper (index.js: "aria-label": node.ariaLabel). Nested in data it is silently ignored,
+    // which is how this was first written and what the announcement test caught.
+    nodes.push({ id: `stage:${stage}`, type: 'infra', position: { x: 690, y: index * 105 },
+      ariaLabel: `${STAGE[stage].label} workers, ${service.alive ? 'online' : 'standby'}, `
+        + `${service.active} active of ${service.slots} slots. Select for details.`,
+      data: { kind: 'worker',
       label: `${STAGE[stage].label} workers`, status: service.alive ? 'online' : 'standby',
       detail: `${service.active} active · ${service.available} available of ${service.slots}`,
-      metric: reportedWorkerSize(capacity), color: STAGE[stage].color, service } })
+      metric: capacity?.configured ? `Tier: ${reportedWorkerSize(capacity)}` : reportedWorkerSize(capacity),
+      color: STAGE[stage].color, service } })
   })
-  nodes.push({ id: 'infra:output', type: 'infra', position: { x: 935, y: 82 }, data: { kind: 'output', label: 'Durable outputs',
+  nodes.push({ id: 'infra:output', type: 'infra', position: { x: 935, y: 82 },
+    ariaLabel: 'Durable outputs, protected. Select for details.',
+    data: { kind: 'output', label: 'Durable outputs',
     status: 'protected', detail: 'Results · corrected copies · audit trail', color: '#287C45', hasOutput: false, wide: true } })
   const edges = [
     ...sourceKinds.map((source) => ({ id: `${source}:intake`, source: `source:${source}`, target: 'infra:intake', style: { stroke: '#246B79' } })),

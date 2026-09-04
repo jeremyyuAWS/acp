@@ -104,7 +104,10 @@ describe('Admin live traffic graph', () => {
       assess: { alive: true, pool_size: 2, age_s: 3, version: 'v12' },
     } } }, new Map(), capacity, 'live')
     const worker = graph.nodes.find((node) => node.id === 'stage:assess').data
-    expect(worker.metric).toBe('2 vCPU · 4Gi RAM · 8Gi temporary disk')
+    // Loosened from toBe by the scope fix: the node metric now carries a `Tier:` qualifier,
+    // because one container app's size is drawn on all three stage nodes. Still asserts the
+    // measured size reaches the node, which is what this test was protecting.
+    expect(worker.metric).toContain('2 vCPU · 4Gi RAM · 8Gi temporary disk')
     const detail = infrastructureDetail(worker, { summary: {} }, capacity)
     expect(detail.facts).toContainEqual(['Replica size', '2 vCPU · 4Gi RAM · 8Gi temporary disk'])
     expect(detail.facts).toContainEqual(['Replicas', '2 running · 1 min · 10 max'])
@@ -116,5 +119,40 @@ describe('Admin live traffic graph', () => {
     expect(source).toMatch(/onNodeClick=.*setSelectedKey/)
     expect(source).toContain('selectedInfrastructure.facts.map')
     expect(source).toContain('Idle · select any tile to inspect the ready processing path')
+  })
+})
+
+describe('Idle map: scope and announcement', () => {
+  const snapshot = { runs: [], summary: { queued: 0, worker_roles: {
+    discovery: { alive: true, pool_size: 3, age_s: 8 }, assess: { alive: true, pool_size: 2, age_s: 2 },
+    remediate: { alive: true, pool_size: 2, age_s: 3 } }, by_stage: {} } }
+  const capacity = { configured: true, worker_app_name: 'acp-worker', cpu_cores_per_replica: 2,
+    memory_per_replica: '4Gi', ephemeral_storage_per_replica: '8Gi', current_replicas: 1 }
+
+  it('does not present one container app reading as each stage own size', () => {
+    // api/routes/control.py reads a single app (WORKER_APP_NAME), and the same figure is attached
+    // to every stage node. Unqualified, Discover/Assess/Remediate each claim it as their own.
+    const detail = infrastructureDetail(
+      { kind: 'worker', label: 'Assess workers', service: { alive: true, active: 0, available: 2, slots: 2 } },
+      snapshot, capacity)
+    const labels = detail.facts.map(([label]) => label)
+    expect(labels).toContain('Replica size')
+    expect(detail.facts.find(([l]) => l === 'Size measured from')[1])
+      .toMatch(/One Azure Container App \(acp-worker\) covering the worker tier — not measured per service/)
+  })
+
+  it('marks the on-node size as the tier figure it is', () => {
+    const stage = buildTrafficGraph(snapshot, new Map(), capacity).nodes.find((n) => n.id === 'stage:assess')
+    expect(stage.data.metric).toMatch(/^Tier: /)
+  })
+
+  it('names every node for a screen reader', () => {
+    // ReactFlow gives nodes tabIndex 0 and routes Enter/Space through the click handler, so the
+    // map is keyboard-operable; with no ariaLabel each tile announces only as "node".
+    const nodes = buildTrafficGraph(snapshot, new Map(), capacity).nodes
+    const unlabelled = nodes.filter((n) => n.type === 'infra' && !n.ariaLabel)
+    expect(unlabelled.map((n) => n.id)).toEqual([])
+    expect(nodes.find((n) => n.id === 'stage:discover').ariaLabel)
+      .toMatch(/Discover workers, online, 0 active of 3 slots/)
   })
 })
