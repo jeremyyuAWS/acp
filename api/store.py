@@ -1769,8 +1769,8 @@ class _PgAdapter:
     # indexes. Additive on the usual terms: an older replica never reads or writes this table, and
     # every route behind it is guarded by the new capability-map entries, so a replica without
     # this code keeps serving all existing surfaces unchanged.
-    _SCHEMA_VERSION = 14
-    _SCHEMA_CHECKSUM_AT_VERSION = "063d03f78cc45848512a665cc7d773ac"
+    _SCHEMA_VERSION = 15
+    _SCHEMA_CHECKSUM_AT_VERSION = "78973be69cc99a58230bde5306c6423e"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
