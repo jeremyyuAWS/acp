@@ -57,6 +57,18 @@ describe('Preview — the "invisible structure/metadata" copy bug is fixed', () 
 })
 
 describe('Guided pane — decision-first ordering + grounded evidence', () => {
+  it('keeps the decision actions directly after the detail instead of pinning them below empty space', async () => {
+    await renderInbox({ queue: [CONTRAST_APPLY], decisions: {} })
+    const detail = container.querySelector('.remediation-detail')
+    const content = container.querySelector('.remediation-detail-content')
+    const actions = container.querySelector('.remediation-detail-actions')
+    expect(detail).toBeTruthy()
+    expect(content?.nextElementSibling).toBe(actions)
+    expect(detail.style.height).toBe('')
+    expect(content.style.flex).toBe('')
+    expect(content.style.overflowY).toBe('')
+  })
+
   it('orders the pane Your task → Before / after → What ACP changed, with the evidence strip collapsed', async () => {
     await renderInbox({ queue: [CONTRAST_APPLY], decisions: {} })
     const text = container.textContent
