@@ -1553,7 +1553,12 @@ def db_max_conn(env: dict | None = None) -> int:
 #     fleet's real replica counts in db_max_conn's docstring and tests/test_db_pool.py.
 #   - CPU: a separate, parallel incident-review thread (not independently verified from this
 #     PR — see the PR body) reported the production Postgres server near-continuously
-#     CPU-saturated (~98% mean, ~24h). Connection-slot headroom and CPU headroom are ORTHOGONAL —
+#     CPU-saturated (~98% mean, ~24h). THAT WORKSTREAM'S WRITE-UP IS
+#     docs/prd-reliability-hardening.md, and "not independently verified" means not verified from
+#     within THIS PR, not that the number is soft: it is an Azure Monitor one-minute metric over
+#     29-30 Aug, a 24h mean of minute averages of 98.36%, with 1,434 of 1,440 minutes at >=90% and
+#     staging at 16.55% as a control. Named here because a reader tracing the figure lands on this
+#     comment, reads "not independently verified", and discounts a measured finding. Connection-slot headroom and CPU headroom are ORTHOGONAL —
 #     a server can have free connection slots while being fully CPU-bound — and more concurrent
 #     connections against an already CPU-saturated server can worsen contention rather than help.
 #     This constant cannot see that dimension at all, so it deliberately stops at "clearly enough

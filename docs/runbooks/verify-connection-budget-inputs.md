@@ -80,8 +80,24 @@ prompt to update the document, not a regression.
 ## Before changing anything
 
 The four preconditions in `docs/db-connection-budget.md` §4 still apply, and the fourth is the one
-most likely to be skipped: **watch CPU, not only connections.** Production was reported at 98.36%
-mean CPU over 24h against an observed connection peak of 74 of 150. `api/store.py` records why
-that ordering matters — connection-slot headroom and CPU headroom are orthogonal, and more
-concurrent connections against an already CPU-saturated server can worsen contention rather than
-relieve it.
+most likely to be skipped: **watch CPU, not only connections.**
+
+Production ran at **98.36% mean CPU** over 24 hours, with 1,434 of 1,440 minutes averaging at least
+90%, against an observed connection peak of **74 of 150**. The source is
+`docs/prd-reliability-hardening.md` — Azure Monitor one-minute metrics over 29–30 August, with
+staging at 16.55% as a control. Cite it when you repeat the figure: `api/store.py` calls the same
+finding "not independently verified from this PR", which reads as hearsay if you stop there, and it
+is not.
+
+`api/store.py` records why the ordering matters — connection-slot headroom and CPU headroom are
+orthogonal, and more concurrent connections against a CPU-saturated server can worsen contention
+rather than relieve it.
+
+**Read the tier while you are in there.** Both environments run `Standard_B1ms`, a burstable SKU,
+and at the incident minute the CPU-credit metric reported 1 remaining credit. A burstable instance
+out of credits is throttled regardless of what `max_connections` says, so the SKU may matter more
+than any number in this runbook. The reviewers were careful that credits were not observed AT zero
+— do not upgrade that to proven credit exhaustion; measure it.
+
+    az postgres flexible-server show -g "$RG" -n <server> --query "sku" -o tsv
+    # plus the cpu_credits_remaining metric in Azure Monitor over the same window

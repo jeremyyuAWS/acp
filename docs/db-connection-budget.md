@@ -47,6 +47,21 @@ access; reading live configuration is a separate authorised step):
 | `ACP_WORKERS` (worker tier) | 12 | 2 |
 | `max_connections` | 150 (user override) | 50 (system default) |
 | Observed 24h peak connections | 74 | 27 |
+| Mean database CPU | 98.36% | 16.55% |
+| Database SKU | `Standard_B1ms` | `Standard_B1ms` |
+
+**Where the CPU figure comes from, because tracing it leads somewhere misleading.**
+`docs/prd-reliability-hardening.md` §"Review window and method" is the source: Azure Monitor
+one-minute database metrics over 29 Aug 16:45 UTC – 30 Aug 16:45 UTC, reported as the 24-hour mean
+of minute averages, with **1,434 of 1,440 minutes averaging at least 90%** and staging at 16.55%
+over the same sampling as a control. That is a stated method with a corroborating distribution,
+not an impression.
+
+Cite it when repeating the number. `api/store.py` describes the same finding as coming from "a
+separate, parallel incident-review thread (not independently verified from this PR)", which reads
+as *unverified* if you stop there — it means not verified from within THAT PR, and the parallel
+workstream it points at is the document above. A reader tracing the figure through `store.py`
+alone will conclude it is hearsay and discount it. It is not.
 
 > **These two sets disagree, and that matters.** `deploy.sh` passes replica flags only on
 > `containerapp create`, never on `update`, so live limits persist from whatever was set out of
@@ -72,7 +87,7 @@ doubling of everything.
 Both environments' ceilings exceed their servers. These are **potential** ceilings — pools grow on
 demand, and the observed peaks were 74 and 27 — so nothing is breached today. What has changed is
 that the gap is now wider than when the incident was analysed, and the binding constraint in
-production is CPU (98.36% mean over 24h), not connection slots.
+production is CPU (98.36% mean over 24h — see §1's provenance note), not connection slots.
 
 **Why the fix is not "shrink the pools".** At 10 worker replicas the worker term dominates: even a
 pool of 10 per process — below one connection per thread, so every job thread would contend — still
@@ -140,8 +155,14 @@ and therefore the owner's, not this document's.
 2. **Confirm the reserve** by counting real non-application clients rather than accepting 15/8.
 3. **Validate in staging first**, after its `max_connections` is raised — otherwise the validation
    environment is the constraint.
-4. **Watch CPU, not only connections.** Production sat at 98.36% mean CPU for 24h. Fewer, better
-   queries move that; more connections do not. The inventory fix (#1051, 8.0× → 1.0× read
+4. **Watch CPU, not only connections.** Production sat at 98.36% mean CPU for 24h, and
+   1,434 of its 1,440 minutes averaged at least 90% (`docs/prd-reliability-hardening.md`).
+   Fewer, better queries move that; more connections do not. Note also what the same document
+   records about the tier: both environments run **`Standard_B1ms`**, a burstable SKU, and at the
+   incident minute the CPU-credit metric reported **1 remaining credit** — so "add connections" and
+   "add replicas" are both being proposed against a server that was out of burst headroom. That
+   observation is the reviewers' own, and they were careful to say credits were not seen at zero;
+   do not upgrade it to proven credit exhaustion. The inventory fix (#1051, 8.0× → 1.0× read
    amplification) and shared `/jobs` polling (#1054, five pollers → one) both reduce the load this
    budget has to accommodate, and are worth measuring before re-tuning anything.
 
