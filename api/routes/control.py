@@ -186,6 +186,9 @@ def _empty_capacity(configured: bool) -> dict:
     return {
         "configured": configured, "current_replicas": None, "min_replicas": None,
         "max_replicas": None, "cpu_percent": None, "memory_percent": None,
+        "cpu_cores_per_replica": None, "memory_per_replica": None,
+        "ephemeral_storage_per_replica": None, "workload_profile_name": None,
+        "active_revision_name": None, "worker_app_name": _AZ_APP,
         "metrics_available": False, "measured_at": None,
         "revision_health": None, "revision_provisioning_state": None, "draining_replicas": None,
         "revision_traffic_percent": None, "metrics_unavailable_reason": None,
@@ -263,6 +266,15 @@ def get_capacity():
         scale = app.properties.template.scale
         result["min_replicas"] = scale.min_replicas
         result["max_replicas"] = scale.max_replicas
+        result["workload_profile_name"] = getattr(app.properties, "workload_profile_name", None)
+        result["active_revision_name"] = getattr(app.properties, "latest_ready_revision_name", None)
+        containers = getattr(app.properties.template, "containers", None) or []
+        if containers:
+            resources = getattr(containers[0], "resources", None)
+            if resources is not None:
+                result["cpu_cores_per_replica"] = getattr(resources, "cpu", None)
+                result["memory_per_replica"] = getattr(resources, "memory", None)
+                result["ephemeral_storage_per_replica"] = getattr(resources, "ephemeral_storage", None)
     except Exception:  # noqa: BLE001 — can't even reach the Container App; nothing else to try
         return result
 

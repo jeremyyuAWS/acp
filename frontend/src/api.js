@@ -1429,7 +1429,10 @@ export const setWorkerReplicas = (minReplicas) => (SIM
 // per-field graceful degradation, not a fetch failure; never rendered as a fabricated 0/'—'.
 export const getWorkerCapacity = () => (SIM
   ? sim({ configured: false, current_replicas: null, min_replicas: null, max_replicas: null,
-          cpu_percent: null, memory_percent: null, metrics_available: false, measured_at: null })
+          cpu_percent: null, memory_percent: null, cpu_cores_per_replica: null,
+          memory_per_replica: null, ephemeral_storage_per_replica: null,
+          workload_profile_name: null, active_revision_name: null,
+          metrics_available: false, measured_at: null })
   : fetch(`${BASE}/control/workers/capacity`, { headers: headers() }).then(j))
 // The FULL deploy/revision history for the acp-worker Container App — every revision, not just
 // the active one getWorkerCapacity() extracts a handful of fields from. Read-only, open to any

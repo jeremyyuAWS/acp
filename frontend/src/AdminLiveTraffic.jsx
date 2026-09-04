@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Background, Controls, Handle, MiniMap, Position, ReactFlow } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { getAdminActivity, openAdminActivityStream } from './api.js'
+import { getAdminActivity, getWorkerCapacity, openAdminActivityStream } from './api.js'
 
 const STAGE = {
   discover: { label: 'Discover', color: '#4F7F2A' },
@@ -87,6 +87,42 @@ export function trendToggleLabel(expanded) {
   return expanded ? 'Hide live trends' : 'Show live trends'
 }
 
+export function capacityValue(value, suffix = '') {
+  return value == null || value === '' ? 'Not reported' : `${value}${suffix}`
+}
+
+function AzureCapacity({ capacity, state }) {
+  if (state === 'loading' && !capacity) return <div className="panel muted" style={{ padding: 12, marginBottom: 12 }}>Loading Azure capacity…</div>
+  if (state === 'unavailable') return <div className="panel" role="status" style={{ padding: 12, marginBottom: 12 }}>
+    <b>Azure capacity telemetry unavailable</b><div className="muted" style={{ fontSize: 12 }}>Live job flow remains available; infrastructure measurements could not be refreshed.</div>
+  </div>
+  if (!capacity?.configured) return <div className="panel" style={{ padding: 12, marginBottom: 12 }}>
+    <b>Azure capacity telemetry not configured</b><div className="muted" style={{ fontSize: 12 }}>Connect the Azure subscription to show replica size, storage, utilization, and revision health.</div>
+  </div>
+  const metricReason = capacity.metrics_available ? null : ({ permission: 'Monitoring Reader permission needed', no_data: 'Azure Monitor has not reported samples yet', error: 'Azure Monitor refresh failed' }[capacity.metrics_unavailable_reason] || 'Metrics not reported')
+  const tiles = [
+    ['RUNNING REPLICAS', capacityValue(capacity.current_replicas), `${capacityValue(capacity.min_replicas)} min · ${capacityValue(capacity.max_replicas)} max`],
+    ['COMPUTE / REPLICA', capacityValue(capacity.cpu_cores_per_replica, ' vCPU'), `${capacityValue(capacity.memory_per_replica)} memory`],
+    ['EPHEMERAL STORAGE / REPLICA', capacityValue(capacity.ephemeral_storage_per_replica), 'Temporary worker disk; corrected files use durable storage'],
+    ['LIVE UTILIZATION', capacity.metrics_available ? `${capacityValue(capacity.cpu_percent, '%')} CPU` : 'Not reported', capacity.metrics_available ? `${capacityValue(capacity.memory_percent, '%')} memory · last 5 min` : metricReason],
+    ['ACTIVE REVISION', capacityValue(capacity.revision_health), `${capacityValue(capacity.revision_provisioning_state)} · ${capacityValue(capacity.revision_traffic_percent, '%')} traffic`],
+    ['ROLLOUT', capacityValue(capacity.draining_replicas), `${capacityValue(capacity.workload_profile_name)} profile · ${capacity.active_revision_name || 'revision not reported'}`],
+  ]
+  return <section className="panel" aria-label="Azure worker infrastructure" style={{ padding: 12, marginBottom: 12 }}>
+    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 9 }}>
+      <div><b>Azure worker infrastructure</b><div className="muted" style={{ fontSize: 11 }}>Configured size and live Azure measurements</div></div>
+      <span className="muted" style={{ fontSize: 11 }}>{capacity.measured_at ? `Measured ${age(capacity.measured_at)} ago` : 'Measurement time unavailable'}</span>
+    </div>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 8 }}>
+      {tiles.map(([label, value, detail]) => <div key={label} style={{ minWidth: 0, padding: 10, border: '1px solid var(--border)', borderRadius: 9 }}>
+        <div className="muted" style={{ fontSize: 10.5 }}>{label}</div>
+        <b style={{ display: 'block', fontSize: 17, overflowWrap: 'anywhere' }}>{value}</b>
+        <div className="muted" style={{ fontSize: 11, overflowWrap: 'anywhere' }}>{detail}</div>
+      </div>)}
+    </div>
+  </section>
+}
+
 function RunNode({ data }) {
   const cfg = STAGE[data.run.stage] || { label: data.run.stage, color: '#6B7280' }
   const pct = data.run.total ? Math.round((data.run.completed / data.run.total) * 100) : 0
@@ -148,6 +184,8 @@ export default function AdminLiveTraffic() {
   const [selectedKey, setSelectedKey] = useState(null)
   const [expanded, setExpanded] = useState(false)
   const [connection, setConnection] = useState('connecting')
+  const [capacity, setCapacity] = useState(null)
+  const [capacityState, setCapacityState] = useState('loading')
   const history = useRef(new Map())
 
   useEffect(() => {
@@ -159,6 +197,16 @@ export default function AdminLiveTraffic() {
       onError: () => { if (active) setConnection('reconnecting') },
     })
     return () => { active = false; stream.close() }
+  }, [])
+
+  useEffect(() => {
+    let active = true
+    const refresh = () => getWorkerCapacity()
+      .then((data) => { if (active) { setCapacity(data); setCapacityState('live') } })
+      .catch(() => { if (active) setCapacityState('unavailable') })
+    refresh()
+    const timer = window.setInterval(refresh, 30000)
+    return () => { active = false; window.clearInterval(timer) }
   }, [])
 
   useEffect(() => {
@@ -193,6 +241,7 @@ export default function AdminLiveTraffic() {
       <div className="panel" style={{ padding: 12 }}><div className="muted" style={{ fontSize: 11 }}>UTILIZATION</div>
         <b style={{ fontSize: 20 }}>{summary.utilization_pct ?? '—'}%</b><div className="muted">{summary.worker_tier_alive ? 'Worker tier online' : 'Worker tier unavailable'}</div></div>
     </div>
+    <AzureCapacity capacity={capacity} state={capacityState} />
     {!!stageRows.length && <div aria-label="Load by processing stage" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
       {stageRows.map(([stage, row]) => <span className="chip" key={stage} style={{ borderColor: STAGE[stage]?.color }}>
         <b>{STAGE[stage]?.label || stage}</b>&nbsp; {row.running} active · {row.queued} waiting
