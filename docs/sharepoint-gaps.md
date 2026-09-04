@@ -53,7 +53,7 @@ rules), and `docs/pilot-scope.md`.
 | Archival rule: **folder-based** | Folder path **is read** (`parentReference`); folder-skip exists — but the disposition engine has **no path/folder match field** | **Small build** — the data is already fetched; expose a `path`/`folder` rule field. |
 | Archival rule: **user-based (departed employee)** | `owner` match field | **Partial** — owner match ✅; "departed" needs the **UTSW roster** as an input (the SOW puts rule-supply on UTSW). |
 | **Smart archival — check active collaborators before flagging** | Not ingested | **Gap** — needs Graph **sharing/activity signals** (permissions / recent collaborators); extra reads, possibly extra scope. |
-| **Read SharePoint-native metadata** (managed metadata, content types, retention/sensitivity labels) as rule inputs | Reads file basics + folder path only — **not** custom columns/labels | **Build (within read scopes)** — extend the item read to `listItem/fields`. This is the "rules using native capabilities" enabler. |
+| **Read SharePoint-native metadata** (managed metadata, content types, retention/sensitivity labels) as rule inputs | ✅ **Built 2026-09-04.** The walk expands `listItem($expand=fields)` on the page it already fetches, so content types, the tenant's managed columns, versions and check-out state arrive at no extra round trip; retention labels come from a wider `driveItem` `$select`. Every field carries an availability state, and `managed:<Column>` is a lifecycle-rule field. | **Closed as a build. Open as a PROOF**: the Graph shapes are documented-but-unverified against a real tenant. `scripts/sp_metadata_probe.py` is the instrument — run it against the UTSW tenant and read the evidence table. Sensitivity labels are the known gap: Graph exposes them on driveItem in **beta** only, so ACP reports them `unavailable`, never "unset". |
 | **Tag files back into SharePoint's native columns** | Read-only. A native column write needs **`Sites.Manage.All` + per-library provisioning** — documented at `scanner.py:521` | **Out of scope by design for the pilot.** The SOW says archival is **flagging only** → ACP flags **internally** (its own store / approval queue). Native SharePoint write-back is **post-pilot** + a write scope. |
 | Daily monitoring cadence | Scheduled re-scans | ✅ (1440 min) |
 | SSO via Microsoft login, single tenant, Azure VPC | MSAL delegated, single-tenant per deploy | ✅ (VPC is infra config, not code) |
@@ -88,9 +88,12 @@ the read-only posture.
    is the **validation** half: no 30-site run has ever executed against a real tenant, so
    permissions at breadth, Content Type retrieval, large-library enumeration, throttling behaviour
    and SSE completion are all unproven outside unit tests. That is now the top item, not the build.
-2. **Native-metadata reads + folder/user rule fields** are small, high-value builds that directly enable
-   the folder-/date-/user archival rules **UTSW will supply** — pair them with UTSW providing the rule
-   definitions and the departed-employee roster.
+2. ~~**Native-metadata reads + folder/user rule fields** are small, high-value builds~~ — **built
+   2026-09-04**. A rule can now key on content type, retention label, sharing scope, library, item
+   kind, check-out state, and on the tenant's own managed columns (`managed:Records Category`).
+   What UTSW still supplies is unchanged: the rule definitions and the departed-employee roster.
+   What ACP still owes is the PROOF that each field arrives from their tenant — one run of
+   `scripts/sp_metadata_probe.py`, which prints exactly that table.
 3. **Image alt-text depends on the vision model, not the downloaded Llama.** Llama is a *text* model; WCAG
    1.1.1 needs a *vision* model, and the GPU path is currently down (backlog **R2/R12**), so image
    remediation falls to CPU/manual today. Set that expectation for the "image" half of the ~15 codes.
@@ -116,8 +119,79 @@ the read-only posture.
   existed, and `/config` serves it so the site picker stops the operator at the same number the
   server will accept. Sites past the cap are recorded as `skipped` with a reason and the estate is
   marked truncated — never dropped silently.
+- **`ACP_SP_LIST_FIELDS`** (default `1`) — expand each item's backing `listItem` alongside the
+  listing page, which is what reads content types and the tenant's managed columns. Set to `0`
+  for the leanest possible walk. Turning it off does not blank those fields: it makes them report
+  `unavailable` **with that reason**, so a report never presents a deliberately lean scan as an
+  estate with no metadata.
+- **`ACP_SP_PERMISSIONS`** (default `0`) — read each item's permissions collection. Off because it
+  is one Graph call **per document** on top of the walk, which across a 30-site estate is the
+  difference between a scan and an outage. Until it is on, `permissions` reports `unavailable`
+  with the switch named in the reason.
 - **`ACP_SP_ENUMERATE`** (default `walk`) — set to `search` to list via the SharePoint search index
   instead of walking `/children`. Faster on a very large estate and **knowingly incomplete**: the
   index is eventually consistent and under-reports recent changes with no error (issue #333
   measured 39 of 178 files on production). Not the default, and the scan logs which mode produced
   its inventory so a count can always be attributed to the method behind it.
+
+
+---
+
+## Reading a SharePoint metadata field that came back empty
+
+Every SharePoint-native field ACP records carries a **state** beside its value, because an empty
+cell has two opposite meanings and they call for opposite responses:
+
+| State | Means | Whose problem |
+|---|---|---|
+| `present` | a value was read | — |
+| `not_configured` | ACP read the container and the field was empty | the **tenant's** — an answer: they do not use this field |
+| `unavailable` | ACP could not read the container, and the reason says why | **ACP's** — a task: a scope, a Graph version, a refused `$select` |
+| `not_applicable` | the field cannot exist for this item (a OneDrive file has no site) | nobody's |
+
+`not_configured` is only ever claimable from a container that was read successfully — enforced at
+the single constructor in `api/sp_metadata.py`, not left to each call site to remember. This is
+the whole safety property of the module, and `tests/test_sp_metadata.py` bite-checks it.
+
+Where the state surfaces:
+
+- **File drawer** — "Not read", with the reason, instead of a dash (`SharePointMetadata.jsx`).
+- **Inventory CSV** — `sp_availability` and `sp_unread_reason` columns beside the values.
+- **Lifecycle rule evidence** — "`retention_label` was NOT READ from SharePoint" instead of
+  "`retention_label` not recorded". The rule matches nothing either way; only the human reading
+  why can act on the difference.
+- **`scripts/sp_metadata_probe.py`** — the per-field evidence table across a real tenant.
+
+The one field that is `unavailable` by construction today is **sensitivity_label**: Graph exposes
+`driveItem.sensitivityLabel` on **beta** and on v1.0 only through the `extractSensitivityLabels`
+action, and ACP walks v1.0 driveItems. Asking for the property in a v1.0 `$select` would 400 the
+whole listing for a field that would not have arrived anyway. An estate whose sensitivity labels
+have never been requested must not read as an estate with no sensitivity labels — so it says so.
+
+### Where this metadata is filterable — and where it deliberately is not
+
+The Phase 2 plan lists "inventory filters" alongside rules, lifecycle policies, exports and audit
+evidence. Four of those five are wired. The fifth has **no live host in the current product**, and
+that is a recorded decision rather than an omission:
+
+- Discover's **Document Location** filter was removed on 2026-09-02 with the per-department block
+  it lived in (PRD "ACP Discover and Overview Simplification"), and nothing else on Discover
+  filters the list. `discoverLocationFilter.test.jsx` pins that removal so a restored filter has
+  to restore the view-only guarantee with it.
+- The **review queue's** filter set lives in `DispositionReviewWorkspace.jsx`, which is currently
+  unmounted (CLAUDE.md's retired-components list).
+
+Adding a SharePoint filter to either would mean reviving a control the product deliberately took
+out — the exact move CLAUDE.md warns against, and the way `RemediationFixPreview` once shipped
+live because a session read *unmounted* as *unfinished*. So the metadata is filterable today
+through the surfaces that exist:
+
+- **lifecycle rules**, which are the real filter — `content_type`, `retention_label`,
+  `sharing_scope`, `item_kind`, `checked_out_by`, `site_name`, `library_name`, and
+  `managed:<any tenant column>`;
+- **the inventory CSV**, which an auditor filters in a spreadsheet, and which carries the
+  availability state beside every value so an empty cell is interpretable;
+- **the file drawer**, per document.
+
+If a filtered inventory VIEW is wanted, it is a product decision to re-open a screen that was
+closed on purpose — not a gap to fill quietly from a connector phase.

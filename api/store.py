@@ -640,6 +640,37 @@ _SCHEMA = [
     # away. NULL for every non-SharePoint source and for a OneDrive listing, which has no site.
     "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS site_id TEXT",
     "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS library_name TEXT",
+    # SharePoint-NATIVE metadata (Phase 2). Drive gives a file a name, a size, an owner and a
+    # folder; SharePoint gives it a content type, the managed columns that content type defines,
+    # a retention label, a sharing scope, a version and a check-out state. That is the difference
+    # between "we found a spreadsheet" and "we found a Research Data Management Plan under a
+    # 7-year retention label" — and it is what a records manager can write a rule against.
+    #
+    # The scalars are columns because a rule preview SELECTs them (store.
+    # list_pending_disposition_candidates) and a JSON extract per row in that query would be the
+    # N+1 this schema keeps avoiding. `sp_metadata` carries what cannot be columns: the tenant's
+    # OWN managed columns, whose names ACP cannot know in advance without a migration per
+    # customer, and the per-field AVAILABILITY map.
+    #
+    # The availability map is the load-bearing half. An empty `retention_label` cell is
+    # uninterpretable on its own — an estate with no retention plan and an estate whose labels
+    # Graph refused to hand over look identical — and those call for opposite responses. Stored
+    # at the row so the distinction survives to an export and an auditor, which is the Phase 2
+    # exit gate stated as a column.
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS site_name TEXT",
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS retention_label TEXT",
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS sensitivity_label TEXT",
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS sharing_scope TEXT",
+    # 'page' or 'document'. A SharePoint page is authored in SharePoint and has no downloadable
+    # source document, so assessing one as a document produces a finding about a file that does
+    # not exist in the form the report claims.
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS item_kind TEXT",
+    # A checked-out file is one a remediation write-back would silently fail against — the
+    # precondition Phase 5 has to check, recorded now while the walk is already reading it.
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS checked_out_by TEXT",
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS sp_version TEXT",
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS modified_by TEXT",
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS sp_metadata TEXT",
     # Per-document lifecycle status (PRD §4.3). One of: Active, Archive Candidate, Archived,
     # Delete Candidate, Deleted, Failed, Exempted. Defaults to Active on first discovery; a rule
     # run (Discover) or a manual action moves it. `lifecycle_rule_id`/`lifecycle_reason` record
@@ -1690,8 +1721,16 @@ class _PgAdapter:
     # cursors, exception reports, write-back targeting) need preserved at the row grain, because
     # once a run covers a set of sites the run itself can no longer answer "which site is this
     # document in" for any individual file.
-    _SCHEMA_VERSION = 12
-    _SCHEMA_CHECKSUM_AT_VERSION = "1b63b55167c0def43a08e47542ff986e"
+    # v13 adds scan_inventory's SharePoint-native metadata columns (Phase 2) — retention_label,
+    # sensitivity_label, sharing_scope, item_kind, checked_out_by, sp_version, modified_by and
+    # the sp_metadata JSON that carries the tenant's own managed columns plus the per-field
+    # availability map. Additive on the usual terms, and additive in BEHAVIOUR: a replica without
+    # this code writes none of them, add_inventory COALESCEs every one through its ON CONFLICT so
+    # an older replica's re-list cannot erase a richer read, and every consumer treats them as
+    # optional. A replica that has not rolled forward keeps discovering and inventorying exactly
+    # as it does today, it simply records no SharePoint-native metadata.
+    _SCHEMA_VERSION = 13
+    _SCHEMA_CHECKSUM_AT_VERSION = "33426639e7bd3bb229a2d4fa58c66ab5"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -2414,8 +2453,11 @@ class Store:
         now = self._now()
         sql = ("INSERT INTO scan_inventory(scan_id,file,drive_file_id,mime,size_kb,doc_class,"
                "checksum,path,created_at,source_modified,owner,parent_folder,discovered_at,drive_id,"
-               "content_type,drive_account_id,site_id,library_name) "
-               "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+               "content_type,drive_account_id,site_id,library_name,site_name,"
+               "retention_label,sensitivity_label,sharing_scope,item_kind,checked_out_by,"
+               "sp_version,modified_by,sp_metadata) "
+               "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,"
+               "%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                "ON CONFLICT(scan_id,file) DO UPDATE SET "
                "drive_file_id=EXCLUDED.drive_file_id, mime=EXCLUDED.mime, size_kb=EXCLUDED.size_kb, "
                "doc_class=EXCLUDED.doc_class, checksum=EXCLUDED.checksum, path=EXCLUDED.path, "
@@ -2431,7 +2473,21 @@ class Store:
                # may not know the site, and a gap must not erase a site id an earlier list of the
                # same row recorded.
                "site_id=COALESCE(EXCLUDED.site_id, scan_inventory.site_id), "
-               "library_name=COALESCE(EXCLUDED.library_name, scan_inventory.library_name)")
+               "library_name=COALESCE(EXCLUDED.library_name, scan_inventory.library_name), "
+               "site_name=COALESCE(EXCLUDED.site_name, scan_inventory.site_name), "
+               # COALESCE for the same reason content_type uses it, and it matters more here: a
+               # re-list that fell back to a leaner Graph tier (the expansion refused this time,
+               # a transient 400) carries NULL for every column-sourced field. Overwriting would
+               # erase a retention label an earlier, richer read of the same row recorded — a
+               # real answer replaced by a gap, which is the direction that misleads.
+               "retention_label=COALESCE(EXCLUDED.retention_label, scan_inventory.retention_label), "
+               "sensitivity_label=COALESCE(EXCLUDED.sensitivity_label, scan_inventory.sensitivity_label), "
+               "sharing_scope=COALESCE(EXCLUDED.sharing_scope, scan_inventory.sharing_scope), "
+               "item_kind=COALESCE(EXCLUDED.item_kind, scan_inventory.item_kind), "
+               "checked_out_by=COALESCE(EXCLUDED.checked_out_by, scan_inventory.checked_out_by), "
+               "sp_version=COALESCE(EXCLUDED.sp_version, scan_inventory.sp_version), "
+               "modified_by=COALESCE(EXCLUDED.modified_by, scan_inventory.modified_by), "
+               "sp_metadata=COALESCE(EXCLUDED.sp_metadata, scan_inventory.sp_metadata)")
 
         def _params(it: dict) -> tuple:
             return (scan_id, it.get("file"), it.get("drive_file_id"), it.get("mime"),
@@ -2439,7 +2495,10 @@ class Store:
                     it.get("created_at"), it.get("source_modified"), it.get("owner"),
                     it.get("parent_folder"), it.get("discovered_at") or now, it.get("drive_id"),
                     it.get("content_type"), it.get("drive_account_id"),
-                    it.get("site_id"), it.get("library_name"))
+                    it.get("site_id"), it.get("library_name"), it.get("site_name"),
+                    it.get("retention_label"), it.get("sensitivity_label"),
+                    it.get("sharing_scope"), it.get("item_kind"), it.get("checked_out_by"),
+                    it.get("sp_version"), it.get("modified_by"), it.get("sp_metadata"))
 
         failed = 0
         with self._db.cursor() as cur:
@@ -2653,7 +2712,9 @@ class Store:
                  "created_at,source_modified,owner,parent_folder,discovered_at,drive_id,"
                  "lifecycle_status,lifecycle_rule_id,lifecycle_reason,exclusion_reason,"
                  "lifecycle_override_reason,lifecycle_overridden_by,lifecycle_overridden_at,"
-                 "content_type")
+                 "content_type,site_id,library_name,site_name,"
+                 "retention_label,sensitivity_label,sharing_scope,item_kind,checked_out_by,"
+                 "sp_version,modified_by,sp_metadata")
 
     def list_inventory(self, scan_id: str) -> list[dict]:
         with self._db.cursor() as cur:
@@ -9866,8 +9927,15 @@ class Store:
         both, and the two lists never need deduplicating against each other.
         """
         with self._db.cursor() as cur:
+            # The SharePoint-native columns are selected here for the same reason doc_class and
+            # size_kb are: this is the PREVIEW path, and a preview that cannot see a field the
+            # Discover-time evaluator can see reports "would match: 0" for a rule that will in
+            # fact tag the estate. A preview that disagrees with the run is worse than no preview.
             q = ("SELECT si.scan_id, si.file, si.path, si.parent_folder, si.created_at, "
                  "si.source_modified, si.owner, si.doc_class, si.size_kb, "
+                 "si.content_type, si.retention_label, si.sensitivity_label, si.sharing_scope, "
+                 "si.item_kind, si.checked_out_by, si.site_name, si.library_name, "
+                 "si.sp_metadata, "
                  "si.lifecycle_status, sr.source "
                  "FROM scan_inventory si JOIN scan_runs sr ON sr.id = si.scan_id "
                  "WHERE sr.status='discovered'")
@@ -9877,11 +9945,16 @@ class Store:
                 params = (owner,)
             self._db.execute(cur, q, params)
             rows = self._db.fetchall(cur)
+        import handlers as _handlers      # local: handlers imports store at module scope
         return [{"doc_id": f"scan:{r['scan_id']}:{r['file']}", "source": r.get("source"),
                  "path": r.get("path"), "parent_folder": r.get("parent_folder"),
                  "created_at": r.get("created_at"), "source_modified": r.get("source_modified"),
                  "owner": r.get("owner"), "doc_class": r.get("doc_class"),
                  "size_kb": r.get("size_kb"),
+                 # THE SAME reshaping the Discover-time evaluator uses, called rather than
+                 # copied: two hand-maintained versions of "which columns become which rule
+                 # inputs" is how a preview and a run come to disagree about the same rule.
+                 **_handlers._sp_rule_inputs(r),
                  "lifecycle_status": r.get("lifecycle_status")}
                 for r in rows]
 
