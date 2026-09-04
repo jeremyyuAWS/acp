@@ -1780,7 +1780,6 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
         site_report[s_id] = {"id": s_id, "libraries": [], "listed": 0, "estate": 0,
                              "status": "skipped",
                              "error": f"over the {_sp_max_sites()}-site limit for one scan"}
-    drive_site: dict[str, str] = {}          # drive id -> the site it belongs to
 
     def _tick():
         """Per-site progress out to the job/SSE stream. Emitted as each SITE resolves rather than
@@ -1797,6 +1796,19 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
     if locations:
         # Chosen folders. Each location is (drive_id, item_id) — never a bare item id, because a
         # Graph item id is unique only within its drive (see _sp_folders).
+        #
+        # FOLDERS BEAT SITES when a request carries both, which is the product's own reading
+        # (frontend/src/scanScope.js says the same about the label): the folders are the tighter
+        # boundary and the later answer. What changes here is that the sites are SAID to have been
+        # dropped rather than silently ignored — the pre-multi-site code took this branch and
+        # never mentioned the site at all, which is the same shape as the defect this whole change
+        # is about, one level down. The pickers never produce this mix today; an API caller can.
+        for s_id in site_report:
+            site_report[s_id].update(
+                status="skipped",
+                error="narrowed to the selected folders — this site's libraries were not walked")
+        if site_report:
+            hit_cap = True
         for drive_id, item_id in locations:
             walked, cut = _sp_walk_folder(token, drive_id, item_id, max_files, exts,
                                           inventory_out=None, exclude_ids=exclude_ids,
@@ -1857,7 +1869,6 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
             rep["status"] = "scanning"
             rep["libraries"] = [{"id": d["id"], "name": d.get("name")} for d in drives]
             for d in drives:
-                drive_site[d["id"]] = s_id
                 if use_search:
                     targets.append((d["id"], _pages(f"{GRAPH}/drives/{d['id']}/root/search(q='')"
                                                     f"?$select={_SP_ITEM_SELECT}&$top=200"),

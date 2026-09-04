@@ -321,6 +321,24 @@ def test_a_onedrive_document_has_no_site_to_carry(monkeypatch):
     assert "siteId" not in rec and "libraryName" not in rec
 
 
+def test_folders_beat_sites_but_the_dropped_sites_are_said_out_loud(monkeypatch):
+    """A request carrying both is narrowed to the folders — the tighter boundary and the later
+    answer, which is what the label does too. The pre-multi-site code took the same branch and
+    never mentioned the site at all; saying so is the difference between a narrowing the operator
+    chose and one nobody could see."""
+    import httpx
+    monkeypatch.setattr(httpx, "get", _fake_graph({
+        "https://graph.microsoft.com/v1.0/drives/dX/items/F/children": {"value": [
+            {"id": "i1", "name": "in-folder.docx", "file": {}}]},
+    }))
+    scope: dict = {}
+    files = scanner._sp_list("tok", 50, sites=["S1"], locations=[("dX", "F")], scope_out=scope)
+    assert [f["name"] for f in files] == ["in-folder.docx"]
+    [rep] = scope["sites"]
+    assert rep["status"] == "skipped" and "narrowed to the selected folders" in rep["error"]
+    assert scope["inventory"]["truncated"] is True
+
+
 # ── the site cap ─────────────────────────────────────────────────────────────────────────────
 
 def test_sites_past_the_cap_are_dropped_and_the_listing_says_so(monkeypatch):
@@ -532,3 +550,51 @@ def test_the_same_site_twice_is_one_site_for_the_guard_too(monkeypatch):
     monkeypatch.setenv("ACP_SP_MAX_SITES", "1")
     from routes.scans import sharepoint_site_overflow
     assert sharepoint_site_overflow(None, ["S1", "S1"]) is None
+
+
+# ── the wiring: the walk's per-site ticks have to reach the job stream ────────────────────────
+
+def test_list_passes_the_progress_callback_through_to_the_walk(monkeypatch):
+    """A callback the caller supplies and _list never forwards is a live progress feature that
+    exists in the scanner and reaches nobody — the shape that survives review because both halves
+    look finished."""
+    seen = {}
+
+    def fake_sp_list(token, max_files, **kw):
+        seen.update(kw)
+        return []
+
+    monkeypatch.setattr(scanner, "_sp_list", fake_sp_list, raising=True)
+    monkeypatch.setattr(scanner, "_sp_site_name", lambda t, s: s, raising=True)
+    cb = lambda *a, **k: None       # noqa: E731
+    scanner._list("sharepoint", sp_token="tok", folders=["S1", "S2"], scope_out={},
+                  progress_cb=cb)
+    assert seen.get("progress_cb") is cb
+    assert seen.get("sites") == ["S1", "S2"]
+
+
+def test_a_caller_with_no_callback_calls_the_walk_exactly_as_before(monkeypatch):
+    """A caller that has not opted into a feature must not be able to tell it exists — the same
+    discipline `locations` and `sites` follow, and the reason four existing stubs still pass."""
+    seen = {}
+
+    def fake_sp_list(token, max_files, **kw):
+        seen.update(kw)
+        return []
+
+    monkeypatch.setattr(scanner, "_sp_list", fake_sp_list, raising=True)
+    scanner._list("sharepoint", sp_token="tok", scope_out={})
+    assert "progress_cb" not in seen and "sites" not in seen
+
+
+def test_the_job_progress_callback_accepts_the_per_site_breakdown():
+    """handlers._listing_progress is the other end of the tick. Its signature is what decides
+    whether the breakdown reaches the SSE stream or is swallowed as a TypeError the scanner then
+    falls back from — silently, into the count-only path."""
+    import inspect
+
+    import handlers
+    src = inspect.getsource(handlers)
+    assert "sites: list | None = None) -> None:" in src, \
+        "_listing_progress cannot receive the per-site breakdown"
+    assert 'patch["sites"] = sites' in src, "the breakdown never reaches the job state"

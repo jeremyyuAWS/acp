@@ -130,7 +130,15 @@ export function scopeLabel(scope) {
         // boundary the scan did not have.
         const picked = (scope.folders || []).map((f) => f && f.name).filter(Boolean)
         if (picked.length) {
-          const where = scope.site_name ? ` on “${scope.site_name}”` : ' in OneDrive'
+          // " in OneDrive" only when there really is no site. A multi-site run has no singular
+          // `site_name`, so keying off that field alone put "in OneDrive" on folders that live in
+          // a SharePoint library — naming the wrong source, which is the failure the branch below
+          // was written to stop.
+          const on = scopeSites(scope)
+          const where = scope.site_name ? ` on “${scope.site_name}”`
+            : on.length === 1 && on[0].name ? ` on “${on[0].name}”`
+            : on.length ? ` on ${on.length} SharePoint sites`
+            : ' in OneDrive'
           return `in ${picked.map((n) => `“${n}”`).join(', ')}${where}`
         }
       }

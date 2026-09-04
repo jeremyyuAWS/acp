@@ -6,6 +6,7 @@ import FileDrawer from './FileDrawer.jsx'
 import { retentionBucket, isAcceptable } from './retentionSignal.js'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import SitePicker from './SitePicker.jsx'
+import SiteActivity from './SiteActivity.jsx'
 import DispositionRules from './DispositionRules.jsx'
 import { Bars } from './charts.jsx'
 import { DEPARTMENTS } from './sim.js'
@@ -908,6 +909,13 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           discovering) — see FolderActivity.jsx's own header comment for why this stops short of
           the full tree view. */}
       <FolderActivity active={progress?.active_folders} recent={progress?.recent_folders} />
+
+      {/* Per-SITE coverage for a multi-site SharePoint run: which sites are done, which are still
+          queued, which could not be read and why, and the libraries covered on each. Live rows
+          while the scan runs, the run's own recorded rows afterwards — the same shape from both
+          sources on purpose (see SiteActivity.jsx). Renders nothing for OneDrive, a folder scan,
+          Drive or a local corpus, which have no sites. */}
+      <SiteActivity sites={progress?.sites || scope?.sites} />
 
       {/* Discovery leads with facts from THIS listing. */}
       {!busy && (run?.discovered_at || run?.status === 'discovered') && (
