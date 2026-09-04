@@ -7,18 +7,15 @@ import { clusterRows, clusterOfFinding, batchTargetsOf } from './remediationClus
 import { fixSteps, appName } from './remediationGuide.js'
 import { scOf } from './fixSummary.js'
 import { changeSentence, isContrastFinding } from './remediationEvidence.js'
-import GroundedBeforeAfter from './GroundedBeforeAfter.jsx'
-import RemediationPreview from './RemediationPreview.jsx'
 import WorkspaceProgress from './WorkspaceProgress.jsx'
-import RemediationTransform from './RemediationTransform.jsx'
 import WorkspaceFooter from './WorkspaceFooter.jsx'
 
 // Master/detail Remediation inbox. Remediation is queue work — select an item, understand it, act,
 // move to the next — so the layout is a TWO-column split: a 35% work queue on the left to find and
 // choose the next finding, and a 65% remediation WORKSPACE on the right that stacks, in one scrolling
-// column, everything needed to finish it — Problem → Evidence → How to fix → Decision. The document
-// preview is folded into the Evidence section (not a separate third pane that sat empty for every
-// structure/metadata finding). Selecting a row NEVER expands it; it populates the workspace. Acting
+// column, everything needed to finish it — Problem → Evidence → How to fix → Decision. Full-document
+// viewing is an explicit action instead of a persistent third pane. Selecting a row NEVER expands
+// it; it populates the workspace. Acting
 // on a finding auto-advances to the next unresolved one, which is what makes the whole thing feel
 // fast. All derivation lives in remediationInboxModel.js; this file is presentation.
 
@@ -27,6 +24,19 @@ const fmtOf = (file) => String(file || '').split('.').pop().toLowerCase()
 // The success-criterion key a finding shares with its siblings, used to batch a decision across
 // every other queued finding of the same rule (W8). Normalised so 'SC_1_1_1' / 'WCAG 1.1.1' / '1.1.1' all match.
 const scKeyOf = (f) => scOf(f?.rule_id || f?.ruleId || f?.wcag)
+const LARGE_BATCH_THRESHOLD = 10
+
+const WHY_BY_SC = {
+  '1.1.1': 'Text alternatives let screen-reader users understand images and other non-text content.',
+  '1.3.1': 'Programmatic structure helps assistive technology identify headings, lists, tables, and relationships.',
+  '1.3.2': 'A meaningful reading order ensures content makes sense when it is read aloud or navigated without its visual layout.',
+  '1.4.3': 'Sufficient contrast makes text easier to read for people with low vision and in difficult viewing conditions.',
+  '2.4.2': 'A descriptive document title helps people identify the document and distinguish it from other open content.',
+  '2.4.4': 'Descriptive link text helps people understand a link’s destination without relying on surrounding context.',
+  '3.1.1': 'The correct document language helps screen readers pronounce and interpret the content accurately.',
+  '3.1.2': 'Correct language metadata helps screen readers pronounce passages written in another language.',
+  '4.1.2': 'Accessible names and roles let assistive technology identify controls and explain how to use them.',
+}
 
 function LaneRail({ lane }) {
   return <span aria-hidden="true" style={{ flex: '0 0 4px', alignSelf: 'stretch', borderRadius: 4, background: railColorOf(lane) }} />
@@ -42,6 +52,45 @@ function Meta({ row }) {
       {row.effort && row.effort !== '—' && <span>{row.effort}</span>}
     </div>
   )
+}
+
+// Detector payloads occasionally contain serialized HTML entities. They are data, not markup, so
+// decode the small HTML entity surface we display without using dangerouslySetInnerHTML.
+function displayText(value) {
+  return String(value ?? '')
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([\da-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&nbsp;/gi, '\u00a0').replace(/&amp;/gi, '&').replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>').replace(/&quot;/gi, '"').replace(/&apos;|&#39;/gi, "'")
+}
+
+function problemOf(f, issue) {
+  if (f.problemStatement) return displayText(f.problemStatement)
+  const before = displayText(f.before || f.observed || '')
+  const after = displayText(f.after || '')
+  if (before && after) return `ACP found ${before} where ${after} is recommended.`
+  return `ACP found an issue with ${issue.toLowerCase()} in this document.`
+}
+
+function whyOf(f) {
+  return displayText(f.whyMatters || f.rationale || WHY_BY_SC[scKeyOf(f)]
+    || 'Correcting this issue helps people using assistive technology understand and use the document.')
+}
+
+// Highlight only the characters that changed. The full value remains in the accessible label, so
+// screen readers receive a clean comparison rather than punctuation around separate fragments.
+function ChangedValue({ from, to }) {
+  const a = displayText(from)
+  const b = displayText(to)
+  if (!a || !b || a === b) return <>{b || 'Not recorded'}</>
+  let start = 0
+  while (start < a.length && start < b.length && a[start] === b[start]) start += 1
+  let end = 0
+  while (end < a.length - start && end < b.length - start && a[a.length - 1 - end] === b[b.length - 1 - end]) end += 1
+  const prefix = b.slice(0, start)
+  const changed = b.slice(start, b.length - end || undefined)
+  const suffix = end ? b.slice(-end) : ''
+  return <>{prefix}{changed && <mark className="remediation-change">{changed}</mark>}{suffix}</>
 }
 
 // `showFile` is false for rows sitting under a document group header (the header already names the
@@ -284,18 +333,25 @@ function taskLineOf(f, lane) {
   }
 }
 
-function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCount = 0, onApplyToMatching, cluster = null, scanId = null, draft = null, onDraftChange, saving = false, error = null }) {
+function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFindings = [], onApplyToMatching, cluster = null, draft = null, onDraftChange, saving = false, error = null, headingRef = null, detailExtra = null, emptyState = null }) {
+  const [applyMatching, setApplyMatching] = useState(false)
+  const [matchingPreviewOpen, setMatchingPreviewOpen] = useState(false)
+  const [copiedValue, setCopiedValue] = useState('')
+  useEffect(() => { setApplyMatching(false) }, [f?.id])
+  useEffect(() => { setMatchingPreviewOpen(false) }, [f?.id])
+  useEffect(() => { setCopiedValue('') }, [f?.id])
   if (!f) {
     return (
       <div style={{ display: 'grid', placeItems: 'center', height: '100%', textAlign: 'center', padding: 24 }}>
         <div className="muted">
           <div style={{ fontSize: 34 }} aria-hidden="true">✓</div>
-          <p style={{ marginTop: 8 }}>Select a finding to review it here.<br />Acting on one moves you to the next automatically.</p>
+          {emptyState || <p style={{ marginTop: 8 }}>Select a finding from the inbox to review its recommended action.</p>}
         </div>
       </div>
     )
   }
   const r = rowModel(f, decisions)
+  const matchingCount = matchingFindings.length
   const lane = laneOf(f)
   // Handoff (a rejected AI fix, W2) is worked by hand like a manual finding — guided steps + the
   // "Mark as assigned" action — so it shares the manual detail treatment.
@@ -314,7 +370,21 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
   // The plain-language "What ACP changed" sentence — real values only (null when nothing to describe).
   const changed = !isManual ? changeSentence(f) : null
   const hasProposedValue = f.after != null && f.after !== ''
-  const sectionLabel = { fontSize: 11.5, letterSpacing: '.08em', textTransform: 'uppercase' }
+  const currentValue = displayText(f.before || f.observed || 'Not recorded')
+  const proposedValue = displayText(draftValue || f.after || '')
+  const copyValue = async (kind, value) => {
+    if (!navigator.clipboard?.writeText) return
+    await navigator.clipboard.writeText(value)
+    setCopiedValue(kind)
+  }
+  const why = whyOf(f)
+  const decide = (decision) => {
+    if (applyMatching && matchingCount > LARGE_BATCH_THRESHOLD) {
+      const ok = window.confirm(`Apply this decision to ${matchingCount + 1} findings across ${new Set([f.file, ...matchingFindings.map((x) => x.file)]).size} documents?`)
+      if (!ok) return
+    }
+    return applyMatching && matchingCount > 0 ? onApplyToMatching?.(f, decision) : onDecide?.(f, decision)
+  }
   return (
     <div className="remediation-detail" style={{ display: 'flex', flexDirection: 'column' }}>
       {/* Keep this content-sized. The workspace owns scrolling; making this child 100% tall
@@ -322,19 +392,23 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
           region between the evidence accordions and their actions. */}
       <div className="remediation-detail-content" style={{ padding: '18px 22px' }}>
         {/* 1 · What is this — and what do I need to DO about it? */}
-        <p className="muted" style={{ ...sectionLabel, margin: 0 }}>{eyebrow}</p>
-        <h3 style={{ margin: '4px 0 6px', fontSize: 19 }}>{r.issue}</h3>
-        <p style={{ fontSize: 14, color: 'var(--ink)', margin: '0 0 4px' }}>{lane.didLine}.</p>
-        <Meta row={{ ...r, wcag: (f.rule_id || f.ruleId || '') }} />
+        <div className="remediation-review-header">
+          <p className="muted" style={{ margin: 0, fontSize: 12, fontWeight: 600 }}>{eyebrow}</p>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+            <div style={{ minWidth: 0 }}>
+              <h3 ref={headingRef} tabIndex="-1" style={{ margin: '4px 0 4px', fontSize: 20 }}>{displayText(r.issue)}</h3>
+              <p className="muted" style={{ margin: 0, fontSize: 13, overflowWrap: 'anywhere' }}>{displayText(r.file)}</p>
+            </div>
+            {onOpenWord && <button className="ghost" onClick={() => onOpenWord(f)}>View full document</button>}
+          </div>
+          <Meta row={{ ...r, wcag: (f.rule_id || f.ruleId || '') }} />
+        </div>
+        <p style={{ fontSize: 15, lineHeight: 1.55, margin: '18px 0 0' }}>{problemOf(f, r.issue)}</p>
 
         {/* Your task — the imperative, so the reviewer is never left guessing what to do here. Hidden
             once the finding is resolved (the verification line below then speaks instead). */}
         {!resolved && (
-          <div style={{ marginTop: 14, border: '1px solid var(--line,#e2dce4)', borderLeft: '3px solid var(--accent,#3b6fd6)',
-                        borderRadius: 8, padding: '10px 12px', background: 'var(--surface-2,#f6f5f8)' }}>
-            <p className="muted" style={{ ...sectionLabel, margin: '0 0 4px' }}>Your task</p>
-            <p style={{ fontSize: 13.5, lineHeight: 1.45, margin: 0 }}>{taskLineOf(f, lane)}</p>
-          </div>
+          <p style={{ fontSize: 13.5, lineHeight: 1.5, margin: '10px 0 0' }}><b>Your task:</b> {taskLineOf(f, lane)}</p>
         )}
 
         {isManual ? (
@@ -344,30 +418,18 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
           </div>
         ) : (
           <>
-            {/* 2 · Before / after — SEE the change, so a normal reviewer can judge whether the document
-                still looks acceptable. Grounded in the finding's real before/after (contrast swatches
-                with the ratio computed from the real colours, or the literal value change). */}
-            <div style={{ marginTop: 18 }}>
-              <p className="muted" style={{ ...sectionLabel, margin: '0 0 8px' }}>Before / after</p>
-              <GroundedBeforeAfter finding={f} scanId={scanId} />
+            <div className="remediation-comparison" aria-label="Current and proposed values">
+              <div><b>Current</b><span aria-label={`Current value: ${currentValue}`}>{currentValue}</span><button type="button" className="linklike remediation-copy-value" onClick={() => copyValue('current', currentValue)}>{copiedValue === 'current' ? 'Copied' : 'Copy current'}</button></div>
+              <div><b>Proposed</b><span aria-label={`Proposed value: ${proposedValue}`}><ChangedValue from={currentValue} to={proposedValue} /></span><button type="button" className="linklike remediation-copy-value" onClick={() => copyValue('proposed', proposedValue)}>{copiedValue === 'proposed' ? 'Copied' : 'Copy proposed'}</button></div>
             </div>
-
-            {/* 3 · What ACP changed — the plain sentence + the real values. */}
-            {changed && (
-              <div style={{ marginTop: 18 }}>
-                <p className="muted" style={{ ...sectionLabel, margin: '0 0 6px' }}>What ACP changed</p>
-                <p style={{ fontSize: 13.5, lineHeight: 1.5, margin: 0 }}>{changed}</p>
-              </div>
-            )}
+            {changed && <p style={{ fontSize: 13.5, lineHeight: 1.5, margin: '10px 0 0' }}>{displayText(changed)}</p>}
 
             {/* Editable draft (apply lane only) — the reviewer adjusts the exact text ACP will write,
                 then applies their version. Empties reset to the AI's proposal, never a blank fix.
                 Preserves the #412/#415 "Save edited fix" behaviour. */}
             {canEdit && (
               <div style={{ marginTop: 14 }}>
-                <label className="muted" htmlFor="rem-draft" style={{ ...sectionLabel, display: 'block', margin: '0 0 6px' }}>
-                  Edit before applying
-                </label>
+                <label className="muted" htmlFor="rem-draft" style={{ display: 'block', margin: '0 0 6px', fontSize: 12, fontWeight: 600 }}>Edit proposed value</label>
                 <textarea id="rem-draft" value={draftValue} onChange={(e) => onDraftChange?.(e.target.value)}
                           aria-label="Edit the proposed fix" rows={2}
                           style={{ width: '100%', fontSize: 13.5, padding: '8px 10px', borderRadius: 8,
@@ -378,30 +440,35 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
           </>
         )}
 
-        {/* 5 · Supporting details — collapsed by default. Useful evidence, but NOT a substitute for
-            seeing the change above. The Issue found → Proposed fix → Verified result strip lives here. */}
+        {!isManual && <p className="muted" style={{ fontSize: 13, lineHeight: 1.45, margin: '14px 0 0' }}>
+          {onRecheck ? 'After approval, ACP will create a corrected copy and verify this criterion again.'
+                     : 'This change requires human confirmation; ACP cannot verify its meaning automatically.'}
+        </p>}
+        <section aria-labelledby="why-this-matters" style={{ marginTop: 18 }}>
+          <h4 id="why-this-matters" style={{ margin: '0 0 5px', fontSize: 14 }}>Why this matters</h4>
+          <p className="muted" style={{ fontSize: 13, lineHeight: 1.5, margin: 0 }}>{why}</p>
+        </section>
+
         {!isManual && hasProposedValue && (
           <details style={{ marginTop: 16 }}>
-            <summary style={{ cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>Detection &amp; verification detail</summary>
-            <div style={{ marginTop: 10 }}>
-              <RemediationTransform finding={f} decisions={decisions} />  {/* Found → Proposed → Verified */}
-            </div>
-          </details>
-        )}
-        {(f.rationale || f.whyMatters) && (
-          <details style={{ marginTop: 8 }}>
-            <summary style={{ cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>Why this matters</summary>
-            <p className="muted" style={{ fontSize: 13, marginTop: 8 }}>{f.whyMatters || f.rationale}</p>
+            <summary style={{ cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>Detection and verification details</summary>
+            <dl className="remediation-details-list">
+              <div><dt>How ACP detected this</dt><dd>{displayText(f.detectionMethod || f.proposalSource || 'Automated document analysis')}</dd></div>
+              <div><dt>Observed value</dt><dd>{currentValue}</dd></div>
+              <div><dt>Verification</dt><dd>{onRecheck ? `The corrected copy will be rescanned for WCAG ${scKeyOf(f) || 'compliance'}.` : 'Human confirmation required.'}</dd></div>
+              <div><dt>Current verification state</dt><dd>{resolved ? 'Awaiting verification' : 'Awaiting approval'}</dd></div>
+            </dl>
           </details>
         )}
         {(f.proposalSource || f.evidence) && (
           <details style={{ marginTop: 8 }}>
-            <summary style={{ cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>Technical evidence &amp; audit history</summary>
+            <summary style={{ cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>Technical evidence</summary>
             <p className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>
               {f.evidence}{f.proposalSource ? ` · source: ${f.proposalSource}` : ''}
             </p>
           </details>
         )}
+        {detailExtra}
       </div>
 
       {/* 4 · Decision bar — follows the evidence so actions stay visually connected to it. */}
@@ -430,14 +497,24 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
               {' '}The other {matchingCount} carry the same criterion and an actionable proposal; manual,
               blocked and already-decided findings are excluded.
             </span>
-            <button className="ghost" style={{ fontSize: 12.5 }} disabled={saving}
-                    onClick={() => onApplyToMatching?.(f, { state: 'accepted' })}>
-              Approve this decision for {matchingCount} other {scKeyOf(f) ? `WCAG ${scKeyOf(f)} ` : ''}finding{matchingCount === 1 ? '' : 's'}
-            </button>
-            <button className="ghost" style={{ fontSize: 12.5 }} disabled={saving}
-                    onClick={() => onApplyToMatching?.(f, { state: 'rejected' })}>
-              Reject this decision for {matchingCount} other {scKeyOf(f) ? `WCAG ${scKeyOf(f)} ` : ''}finding{matchingCount === 1 ? '' : 's'}
-            </button>
+            <div>
+              <button type="button" className="linklike" aria-expanded={matchingPreviewOpen}
+                      onClick={() => setMatchingPreviewOpen((open) => !open)}>Review matching items</button>
+              {matchingPreviewOpen && <>
+              <ul className="remediation-match-preview">
+                {matchingFindings.slice(0, 5).map((item) => (
+                  <li key={item.id}><b>{displayText(item.file)}</b><span>{displayText(item.after || item.observed || 'No proposed value recorded')}</span></li>
+                ))}
+              </ul>
+              {matchingCount > 5 && <p className="muted" style={{ margin: '4px 0 0' }}>And {matchingCount - 5} more matching findings.</p>}
+              </>}
+            </div>
+            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: matchingPreviewOpen ? 'pointer' : 'not-allowed', color: 'var(--ink)' }}>
+              <input type="checkbox" checked={applyMatching} disabled={!matchingPreviewOpen} onChange={(e) => setApplyMatching(e.target.checked)} />
+              <span>Apply this decision to {matchingCount} matching {scKeyOf(f) ? `WCAG ${scKeyOf(f)} ` : ''}finding{matchingCount === 1 ? '' : 's'}</span>
+            </label>
+            {!matchingPreviewOpen && <span className="muted">Review the matching items before applying one decision to the group.</span>}
+            {applyMatching && <span>This affects {matchingCount} additional finding{matchingCount === 1 ? '' : 's'} across {new Set(matchingFindings.map((x) => x.file)).size} additional document{new Set(matchingFindings.map((x) => x.file)).size === 1 ? '' : 's'}.</span>}
           </div>
         )}
         <div style={{ padding: '12px 22px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -463,7 +540,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
                back for a person; it does NOT auto-revert the applied change (no backend undo exists —
                see PR body), so it is labelled as a flag, not a "reject & revert". */
             <>
-              <button className="primary" disabled={saving} onClick={() => onDecide?.(f, { state: 'accepted' })}>
+              <button className="primary" disabled={saving} onClick={() => decide({ state: 'accepted' })}>
                 {saving ? 'Saving…' : 'Approve & next →'}
               </button>
               <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>This looks wrong</button>
@@ -473,13 +550,13 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
           ) : (
             <>
               <button className="primary" disabled={saving}
-                      onClick={() => onDecide?.(f, { state: 'accepted', value: canEdit ? draftValue : undefined })}>
+                      onClick={() => decide({ state: 'accepted', value: canEdit ? draftValue : undefined })}>
                 {saving ? 'Saving…' : edited ? 'Save edited fix & next →' : 'Approve & next →'}
               </button>
               {/* A specific action, not a bare "Reject": declining an AI fix hands the finding to a
                   person (the handoff lane), so the label names that outcome rather than leaving the
                   reviewer to guess what "Reject" does. */}
-              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>Reject → manual</button>
+              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>Send to manual</button>
               <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>
               <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>
               {onOpenWord && <button className="ghost" disabled={saving} onClick={() => onOpenWord(f)}>Open source document</button>}
@@ -500,19 +577,6 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
   )
 }
 
-// ── Workspace layout: how the guided pane and the document preview share the space beside the
-// inbox. Split = side by side, Stacked = preview below the guided pane, Focus = preview hidden so
-// the fix has the whole workspace (text-only fixes rarely need the render). Named to NOT collide
-// with the preview's own Before/After/Side-by-side control, which is about the document diff. ──
-const LAYOUTS = [
-  ['split', 'Split', 'Guided remediation and document preview side by side'],
-  ['stacked', 'Stacked', 'Document preview stacked below the guided pane'],
-  ['focus', 'Focus', 'Hide the document preview and focus on the fix'],
-]
-const LAYOUT_KEYS = LAYOUTS.map(([k]) => k)
-// Where the preview sits once it is OPEN. 'focus' is not a placement — it is the preview being
-// closed, which is the default workspace and is driven by the toggle rather than by this group.
-const PLACEMENTS = LAYOUTS.filter(([k]) => k !== 'focus')
 // Below this the queue and the review panel each get the full width, one at a time. Chosen so the
 // review panel keeps a readable measure at 200% zoom rather than at a device size.
 const NARROW_Q = '(max-width: 820px)'
@@ -524,6 +588,8 @@ const LS = 'acp.remediate.'
 function readLS(k, dflt) { try { const v = localStorage.getItem(LS + k); return v == null ? dflt : v } catch { return dflt } }
 function readNum(k, dflt) { const n = parseFloat(readLS(k, '')); return Number.isFinite(n) ? n : dflt }
 function writeLS(k, v) { try { localStorage.setItem(LS + k, String(v)) } catch { /* storage unavailable — keep the in-memory value */ } }
+function readSession(k, dflt) { try { return sessionStorage.getItem(k) ?? dflt } catch { return dflt } }
+function writeSession(k, v) { try { sessionStorage.setItem(k, String(v)) } catch { /* keep in-memory state */ } }
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n))
 
 // A keyboard-operable resize handle. Pointer drag resizes in the browser; Arrow keys nudge it,
@@ -555,7 +621,7 @@ function Divider({ orientation, label, value, min, max, onDrag, onNudge }) {
 
 export default function RemediationInbox({
   queue = [], decisions = {}, onDecide, onOpenWord, onRecheck,
-  initialSort = 'priority', initialTab = 'needs-review', scanId = null, initialLayout = null,
+  initialSort = 'priority', initialTab = 'needs-review', scanId = null,
   assignees = {}, myEmail = null, onAssign,
   // The per-ITEM board components (R4 fix preview, R7 per-document progress, R10 audit trail)
   // belong beside the selected finding, but this component must not import them: it already owns
@@ -570,6 +636,11 @@ export default function RemediationInbox({
   const [tab, setTab] = useState(initialTab)
   const [sort, setSort] = useState(initialSort)
   const [search, setSearch] = useState('')
+  const filterKey = `acp.remediate.filters.${scanId || 'current'}`
+  const [priorityFilter, setPriorityFilter] = useState(() => readSession(`${filterKey}.priority`, 'all'))
+  const [formatFilter, setFormatFilter] = useState(() => readSession(`${filterKey}.format`, 'all'))
+  useEffect(() => { writeSession(`${filterKey}.priority`, priorityFilter) }, [filterKey, priorityFilter])
+  useEffect(() => { writeSession(`${filterKey}.format`, formatFilter) }, [filterKey, formatFilter])
   const [collapsed, setCollapsed] = useState({}) // file -> true when a document group is collapsed
   const [drafts, setDrafts] = useState({}) // finding id -> reviewer-edited proposed value (null until edited)
   const [assignedOnly, setAssignedOnly] = useState(false) // "Assigned to me" filter — files whose assignee is myEmail
@@ -582,25 +653,8 @@ export default function RemediationInbox({
   const [expandedClusters, setExpandedClusters] = useState({})  // cluster key -> true
   const toggleCluster = (key) => setExpandedClusters((e) => ({ ...e, [key]: !e[key] }))
 
-  // Workspace layout + pane sizes, restored from the reviewer's last session (localStorage).
-  const [layout, setLayout] = useState(() => {
-    // DEFAULT: two panels — the queue and the review canvas, nothing else. The document preview is
-    // a THIRD pane, and making it persistent turned the default experience into a workstation the
-    // reviewer had to manage before they could review anything. It is now opened on demand from the
-    // "Full document preview" toggle, which is what 'focus' means here: preview hidden.
-    //
-    // A reviewer who turns it on keeps it on — the choice still persists in localStorage and still
-    // wins over this default, so the advanced layout is preserved rather than removed.
-    const v = initialLayout ?? readLS('layout', 'focus')
-    return LAYOUT_KEYS.includes(v) ? v : 'focus'
-  })
-  const [leftW, setLeftW] = useState(() => clamp(readNum('leftW', 28), 18, 45))   // inbox width, % of the row
-  const [centerW, setCenterW] = useState(() => clamp(readNum('centerW', 34), 20, 60)) // guided width in Split, % of the row
-  const [topFrac, setTopFrac] = useState(() => clamp(readNum('topFrac', 0.5), 0.25, 0.75)) // guided height in Stacked
-  useEffect(() => { writeLS('layout', layout) }, [layout])
+  const [leftW, setLeftW] = useState(() => clamp(readNum('leftW', 33), 28, 40))
   useEffect(() => { writeLS('leftW', leftW) }, [leftW])
-  useEffect(() => { writeLS('centerW', centerW) }, [centerW])
-  useEffect(() => { writeLS('topFrac', topFrac) }, [topFrac])
 
   // ── Narrow viewports: two panels side by side stop being two panels and become two half-panels.
   // Below the breakpoint the workspace shows ONE of them at a time — the queue, or the finding with
@@ -623,20 +677,10 @@ export default function RemediationInbox({
   // returns. Ignored entirely at desktop widths, where both panels are on screen at once.
   const [narrowPane, setNarrowPane] = useState('queue')
 
-  // The preview is open in either placement; 'focus' is the closed, two-panel default. Reopening
-  // restores the placement the reviewer last used rather than always snapping back to side-by-side.
-  const previewOpen = layout !== 'focus'
-  const lastPlaceRef = useRef(layout === 'stacked' ? 'stacked' : 'split')
-  useEffect(() => { if (previewOpen) lastPlaceRef.current = layout }, [layout, previewOpen])
-  const togglePreview = () => setLayout((l) => (l === 'focus' ? lastPlaceRef.current : 'focus'))
-
   const rowRef = useRef(null)   // the .rinbox flex row — the frame for horizontal (column) resizes
-  const wsRef = useRef(null)    // the stacked workspace column — the frame for the vertical resize
   // Drag: translate a pointer position into a percentage of the relevant frame. Guarded on a real
   // measured size, so jsdom's zero-size rects leave the value untouched (keyboard drives the tests).
-  const dragLeft = (x) => { const r = rowRef.current?.getBoundingClientRect(); if (r?.width) setLeftW(clamp(((x - r.left) / r.width) * 100, 18, 45)) }
-  const dragCenter = (x) => { const r = rowRef.current?.getBoundingClientRect(); if (r?.width) setCenterW(clamp(((x - r.left) / r.width) * 100 - leftW, 20, Math.max(20, 100 - leftW - 15))) }
-  const dragTop = (_x, y) => { const r = wsRef.current?.getBoundingClientRect(); if (r?.height) setTopFrac(clamp((y - r.top) / r.height, 0.25, 0.75)) }
+  const dragLeft = (x) => { const r = rowRef.current?.getBoundingClientRect(); if (r?.width) setLeftW(clamp(((x - r.left) / r.width) * 100, 28, 40)) }
 
   const counts = useMemo(() => workflowCounts(queue, decisions), [queue, decisions])
   const prog = useMemo(() => progress(queue, decisions), [queue, decisions])
@@ -652,9 +696,11 @@ export default function RemediationInbox({
     const q = search.trim().toLowerCase()
     const filtered = queue.filter((f) => matchesWorkflow(f, tab, decisions) &&
       (!assignedOnly || assignedToMe(f)) &&
+      (priorityFilter === 'all' || String(f.severity || 'unrated').toLowerCase() === priorityFilter) &&
+      (formatFilter === 'all' || fmtOf(f.file) === formatFilter) &&
       (!q || rowModel(f, decisions).issue.toLowerCase().includes(q) || String(f.file).toLowerCase().includes(q)))
     return sortQueue(filtered, sort)
-  }, [queue, tab, sort, search, decisions, assignedOnly, assignees, myEmail]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [queue, tab, sort, search, decisions, assignedOnly, assignees, myEmail, priorityFilter, formatFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keep a valid selection: default to the first unresolved visible row.
   useEffect(() => {
@@ -667,14 +713,24 @@ export default function RemediationInbox({
   // only ever show a busy or failed state against the finding it actually belongs to.
   const [savingId, setSavingId] = useState(null)
   const [saveError, setSaveError] = useState(null)
+  const [savedMessage, setSavedMessage] = useState('')
+  const savedTimerRef = useRef(null)
+  useEffect(() => () => clearTimeout(savedTimerRef.current), [])
   // Findings the parent has optimistically removed from `queue` while their write is in flight. Kept
   // only until the write settles, so the review pane never blanks mid-decision.
   const heldRef = useRef(new Map())
 
   const selected = queue.find((f) => f.id === selectedId) || heldRef.current.get(selectedId) || null
+  const reviewHeadingRef = useRef(null)
+  const focusReviewRef = useRef(false)
   // One selection entry point for both layouts: at desktop widths this is just setSelectedId; when
   // only one panel fits, picking a finding is also the navigation TO it.
-  const selectRow = (id) => { setSelectedId(id); setNarrowPane('detail') }
+  const selectRow = (id) => { focusReviewRef.current = true; setSelectedId(id); setNarrowPane('detail') }
+  useEffect(() => {
+    if (!focusReviewRef.current) return
+    focusReviewRef.current = false
+    reviewHeadingRef.current?.focus()
+  }, [selectedId, narrowPane])
   const groups = useMemo(() => groupByDocument(visible), [visible])
   const clusters = useMemo(() => clusterRows(visible, decisions), [visible, decisions])
 
@@ -717,7 +773,11 @@ export default function RemediationInbox({
     const row = clusterOfFinding(clusters, f?.id)
     return batchTargetsOf(row, decisions).filter((x) => x.id !== f?.id)
   }
-  const matchingCount = selected ? matchingOf(selected).length : 0
+  const matchingFindings = selected ? matchingOf(selected) : []
+  const queueComplete = queue.length > 0 && queue.every((f) => isResolved(f, decisions))
+  const emptyReviewState = queue.length === 0 || queueComplete
+    ? <div><b style={{ color: 'var(--ink)' }}>All review items are complete.</b><br />{prog.resolved} resolved · {counts.completed || 0} completed</div>
+    : <p style={{ marginTop: 8 }}>No items are available in {WORKFLOW_LABELS[tab]}. Choose another status from the inbox.</p>
 
   // Act on a finding, then auto-advance to the next unresolved one — the behaviour that makes the
   // queue feel like a controlled worklist rather than a scroll through an audit report.
@@ -750,6 +810,10 @@ export default function RemediationInbox({
     // `visible` is the list as it was when this handler was created, i.e. BEFORE the parent removed
     // the decided row — which is exactly the ordering the "next" finding should be taken from.
     const nextDecisions = { ...decisions, [f.id]: decision }
+    setSavedMessage(`${rowModel(f, decisions).issue} saved. Moving to the next finding.`)
+    clearTimeout(savedTimerRef.current)
+    savedTimerRef.current = setTimeout(() => setSavedMessage(''), 2400)
+    focusReviewRef.current = true
     setSelectedId(nextUnresolvedId(visible, f.id, nextDecisions))
   }
 
@@ -777,6 +841,10 @@ export default function RemediationInbox({
       setSelectedId(failed[0].id)
       return
     }
+    setSavedMessage(`${targets.length} matching findings saved. Moving to the next finding.`)
+    clearTimeout(savedTimerRef.current)
+    savedTimerRef.current = setTimeout(() => setSavedMessage(''), 2400)
+    focusReviewRef.current = true
     setSelectedId(nextUnresolvedId(visible, f.id, nextDecisions))
   }
 
@@ -829,57 +897,21 @@ export default function RemediationInbox({
         )}
         <span style={{ fontSize: 13, fontWeight: 700 }}>Guided remediation</span>
       </span>
-      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
-        {/* One control, not a layout picker. The default workspace is two panels; this opens the
-            document preview beside (or below) the review canvas and closes it again. The selected
-            finding and any unsaved edit survive both directions — `drafts` and `selectedId` live on
-            this component, and the guided column keeps its position in the tree either way.
-            Hidden at narrow widths: a third pane cannot help where two panels already do not fit. */}
-        {!narrow && (
-          <button type="button" aria-pressed={previewOpen} onClick={togglePreview}
-                  title={previewOpen ? 'Close the document preview and return to the two-panel workspace'
-                                     : 'Open the full document preview beside the review panel'}
-                  style={{ fontSize: 11.5, fontWeight: 600, padding: '4px 10px', borderRadius: 8, cursor: 'pointer',
-                           border: `1px solid ${previewOpen ? 'transparent' : 'var(--line,#e2dce4)'}`,
-                           background: previewOpen ? 'var(--accent,#3b6fd6)' : 'var(--bg,#fff)',
-                           color: previewOpen ? '#fff' : 'inherit' }}>
-            {previewOpen ? '\u2715 ' : ''}Full document preview
-          </button>
-        )}
-        {previewOpen && !narrow && (
-          <div role="group" aria-label="Preview placement"
-               style={{ display: 'inline-flex', border: '1px solid var(--line,#e2dce4)', borderRadius: 8, overflow: 'hidden' }}>
-            {PLACEMENTS.map(([key, label, title]) => (
-              <button key={key} type="button" aria-pressed={layout === key} title={title} onClick={() => setLayout(key)}
-                      style={{ fontSize: 11.5, padding: '4px 9px', cursor: 'pointer', border: 'none',
-                               borderLeft: key === 'split' ? 'none' : '1px solid var(--line,#e2dce4)',
-                               background: layout === key ? 'var(--accent,#3b6fd6)' : 'var(--bg,#fff)',
-                               color: layout === key ? '#fff' : 'inherit', fontWeight: layout === key ? 700 : 500 }}>
-                {label}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
     </div>
   )
   const guidedBody = (
     <>
       <DetailPane f={selected} decisions={decisions} onDecide={act} onOpenWord={onOpenWord} onRecheck={onRecheck}
+                  headingRef={reviewHeadingRef}
                   saving={savingId != null && savingId === selected?.id}
                   error={saveError && selected && saveError.id === selected.id ? saveError : null}
-                  matchingCount={matchingCount} onApplyToMatching={applyToMatching} cluster={selectedCluster?.type === 'cluster' ? selectedCluster : null}
-                  scanId={selected?.scanId || scanId}
+                  matchingFindings={matchingFindings} onApplyToMatching={applyToMatching} cluster={selectedCluster?.type === 'cluster' ? selectedCluster : null}
                   draft={selected ? (drafts[selected.id] ?? null) : null}
-                  onDraftChange={(v) => selected && setDrafts((d) => ({ ...d, [selected.id]: v }))} />
-      {renderDetailExtra ? renderDetailExtra(selected) : null}
+                  onDraftChange={(v) => selected && setDrafts((d) => ({ ...d, [selected.id]: v }))}
+                  detailExtra={renderDetailExtra ? renderDetailExtra(selected) : null}
+                  emptyState={emptyReviewState} />
     </>
   )
-  const previewHeader = (
-    <div style={{ flex: '0 0 auto', padding: '10px 12px', borderBottom: '1px solid var(--line,#e2dce4)', fontSize: 13, fontWeight: 700 }}>Document preview</div>
-  )
-  const previewBody = <RemediationPreview finding={selected} scanId={selected?.scanId || scanId} />
-
   return (
     <div className="rinbox-wrap">
       {/* Screen-reader announcer: the selected finding and its place in the queue, updated on every
@@ -888,6 +920,7 @@ export default function RemediationInbox({
            style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 }}>
         {announce}
       </div>
+      {savedMessage && <div className="remediation-saved" role="status" aria-live="polite">✓ {savedMessage}</div>}
       {/* Dark app header (mockup): the section title + the workflow-status tabs as the page's top
           chrome — one lens on where every finding sits in the pipeline (Inbox → In progress →
           Ready to validate → Blocked → Done), spanning the three panes below. */}
@@ -909,7 +942,7 @@ export default function RemediationInbox({
       </div>
       {/* Persistent progress bar — the selected document's remediation progress + ETA, above the panes. */}
       <WorkspaceProgress queue={queue} decisions={decisions} selected={selected} />
-      <div className="rinbox" data-layout={narrow ? 'focus' : layout} data-narrow={narrow ? narrowPane : undefined} ref={rowRef} style={{ display: 'flex', gap: 0, border: '1px solid var(--line,#e2dce4)', borderRadius: '0 0 12px 12px', overflow: 'hidden', minHeight: 480 }}>
+      <div className="rinbox" data-layout="two-column" data-narrow={narrow ? narrowPane : undefined} ref={rowRef} style={{ display: 'flex', gap: 0, border: '1px solid var(--line,#e2dce4)', borderRadius: '0 0 12px 12px', overflow: 'hidden', minHeight: 480 }}>
       {/* ── Left: the work queue — find and select the next finding (resizable) ── */}
       <div className="rinbox-queuepane" hidden={narrow && narrowPane !== 'queue'}
            style={{ ...(narrow ? { flex: '1 1 auto', maxWidth: 'none' } : { flex: `0 0 ${leftW}%`, maxWidth: `${leftW}%` }),
@@ -929,6 +962,24 @@ export default function RemediationInbox({
                     style={{ flex: '0 0 auto', fontSize: 11.5, padding: '5px 6px', borderRadius: 6, border: '1px solid var(--line,#e2dce4)' }}>
               {SORTS.map((s) => <option key={s} value={s}>{SORT_LABEL[s]}</option>)}
             </select>
+          </div>
+          <div className="remediation-filters" aria-label="Filter remediation inbox">
+            <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} aria-label="Filter by priority">
+              <option value="all">All priorities</option>
+              <option value="critical">Critical</option><option value="serious">Serious</option>
+              <option value="moderate">Moderate</option><option value="minor">Minor</option><option value="unrated">Unrated</option>
+            </select>
+            <select value={formatFilter} onChange={(e) => setFormatFilter(e.target.value)} aria-label="Filter by file format">
+              <option value="all">All formats</option><option value="docx">DOCX</option><option value="pdf">PDF</option>
+              <option value="pptx">PPTX</option><option value="xlsx">XLSX</option>
+            </select>
+            {(priorityFilter !== 'all' || formatFilter !== 'all') && (
+              <button className="linklike" onClick={() => { setPriorityFilter('all'); setFormatFilter('all') }}>Clear filters</button>
+            )}
+            <details className="remediation-shortcuts">
+              <summary>Keyboard help</summary>
+              <span>↑/↓ or J/K: move · Home/End: first/last · Enter: open selected item</span>
+            </details>
           </div>
           {/* "Assigned to me" filter + a context assign chip for the selected document. Mirrors the
               #417 backend (files_assigned_to); shown only for a signed-in reviewer with an assign
@@ -968,11 +1019,17 @@ export default function RemediationInbox({
         <div ref={listRef} onKeyDown={onQueueKey} aria-label="Findings — use Up and Down arrow keys to move between them"
              style={{ flex: '1 1 auto', overflowY: 'auto' }}>
           {visible.length === 0 ? (
-            <p className="muted" style={{ padding: 16, fontSize: 13 }}>
-              {assignedOnly
+            <div className="muted" style={{ padding: 16, fontSize: 13 }}>
+              {queue.length === 0 || queueComplete
+                ? <><b style={{ color: 'var(--ink)' }}>All review items are complete.</b><p style={{ margin: '6px 0 0' }}>{prog.resolved} resolved · {counts.completed || 0} completed</p></>
+                : search.trim()
+                ? <>No findings match “{displayText(search.trim())}”. <button className="linklike" onClick={() => setSearch('')}>Clear search</button></>
+                : priorityFilter !== 'all' || formatFilter !== 'all'
+                ? <>No findings match these filters. <button className="linklike" onClick={() => { setPriorityFilter('all'); setFormatFilter('all') }}>Clear filters</button></>
+                : assignedOnly
                 ? <>Nothing in this view is assigned to you. <button className="linklike" onClick={() => setAssignedOnly(false)}>Show all</button></>
-                : <>Nothing here. {tab !== 'needs-review' && <button className="linklike" onClick={() => setTab('needs-review')}>Back to Needs review</button>}</>}
-            </p>
+                : <>No items in {WORKFLOW_LABELS[tab]}. {tab !== 'needs-review' && <button className="linklike" onClick={() => setTab('needs-review')}>Review AI suggestions</button>}</>}
+            </div>
           ) : group === 'issue' ? clusters.map((row) => (
             row.type === 'single'
               ? <QueueRow key={row.key} f={row.finding} decisions={decisions}
@@ -1007,8 +1064,8 @@ export default function RemediationInbox({
 
       {/* Divider between the inbox and the workspace — present whenever both are on screen. */}
       {!narrow && (
-        <Divider orientation="vertical" label="Resize the inbox" value={leftW} min={18} max={45}
-                 onDrag={dragLeft} onNudge={(d) => setLeftW((w) => clamp(w + d * 2, 18, 45))} />
+        <Divider orientation="vertical" label="Resize the inbox" value={leftW} min={28} max={40}
+                 onDrag={dragLeft} onNudge={(d) => setLeftW((w) => clamp(w + d * 2, 28, 40))} />
       )}
 
       {/* ── The workspace: the review canvas, plus the document preview when it is open ──
@@ -1016,14 +1073,11 @@ export default function RemediationInbox({
           same position in the element tree whether the preview is closed, beside it, or below it, so
           React reconciles it instead of remounting — which is what lets the reviewer open the full
           preview mid-decision and come back to their scroll position and their unsaved edit. */}
-      <div className="rinbox-workspace" ref={wsRef} hidden={narrow && narrowPane !== 'detail'}
+      <div className="rinbox-workspace" hidden={narrow && narrowPane !== 'detail'}
            style={{ flex: '1 1 auto', minWidth: 0, minHeight: 480,
                     display: narrow && narrowPane !== 'detail' ? 'none' : 'flex',
-                    flexDirection: layout === 'stacked' ? 'column' : 'row' }}>
-        <div style={{ ...(layout === 'stacked' ? { flex: `0 0 ${topFrac * 100}%` }
-                        : previewOpen ? { flex: `0 0 ${centerW}%`, maxWidth: `${centerW}%` }
-                        : { flex: '1 1 auto' }),
-                      minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+                    flexDirection: 'row' }}>
+        <div style={{ flex: '1 1 auto', minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           {guidedHeader}
           <div className="rinbox-guided-scroll"
                style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', overflowX: 'hidden' }}>
@@ -1031,19 +1085,6 @@ export default function RemediationInbox({
           </div>
         </div>
 
-        {previewOpen && (
-          <>
-            {layout === 'stacked'
-              ? <Divider orientation="horizontal" label="Resize the document preview" value={topFrac * 100} min={25} max={75}
-                         onDrag={dragTop} onNudge={(d) => setTopFrac((t) => clamp(t + d * 0.05, 0.25, 0.75))} />
-              : <Divider orientation="vertical" label="Resize the document preview" value={centerW} min={20} max={60}
-                         onDrag={dragCenter} onNudge={(d) => setCenterW((w) => clamp(w + d * 2, 20, Math.max(20, 100 - leftW - 15)))} />}
-            <div style={{ flex: '1 1 auto', minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-              {previewHeader}
-              <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto' }}>{previewBody}</div>
-            </div>
-          </>
-        )}
       </div>
       </div>
       {/* Sticky workflow guide (Show → Review → Verify) + Previous / N of M / Next navigation. */}

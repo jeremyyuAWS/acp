@@ -2006,6 +2006,40 @@ def sharepoint_scope_sites(scope: dict | None) -> tuple[str, ...]:
     return (str(one),) if one else ()
 
 
+def _sp_coverage(live_checkpoint) -> dict:
+    """Per-site coverage counts from a run's checkpointed listing progress, for the live map.
+
+    Returns an EMPTY dict — not zeros — when the run has no site data: a Drive scan, a OneDrive
+    run, a SharePoint scan that has not reached its first site yet. Zeros would render as "0 of 0
+    sites" on every non-SharePoint run in the operations map, which is a fact about the map
+    rather than about the estate.
+
+    Never raises. This is a JSON blob written by a worker and read by an admin screen; one that a
+    partially-rolled-forward replica wrote in a shape this code does not expect must cost the
+    coverage counts, never the map.
+    """
+    if not live_checkpoint:
+        return {}
+    try:
+        state = json.loads(live_checkpoint) if isinstance(live_checkpoint, str) else live_checkpoint
+    except Exception:  # noqa: BLE001
+        return {}
+    sites = (state or {}).get("sites") if isinstance(state, dict) else None
+    if not isinstance(sites, list) or not sites:
+        return {}
+    rows = [s for s in sites if isinstance(s, dict)]
+    return {
+        "sites_total": len(rows),
+        "sites_done": sum(1 for s in rows if s.get("status") == "complete"),
+        # Blocked and skipped are counted together as "not read": on this screen the operator is
+        # asking how much of the estate is covered, and both answer "not this bit". WHICH of the
+        # two, and why, is the exception report's job (/scans/{sid}/exceptions.csv).
+        "sites_unread": sum(1 for s in rows
+                            if s.get("status") in ("blocked", "skipped")),
+        "libraries_total": sum(len(s.get("libraries") or []) for s in rows),
+    }
+
+
 def job_priority(job_type: str) -> int:
     """Queue precedence for a job type. Callers may still pass `priority=` explicitly to
     override — this only decides what happens when they say nothing, which is every caller
@@ -6268,19 +6302,57 @@ class Store:
         Keep these as database facts rather than UI estimates: job state explains the queue,
         file_records proves a corrected copy was stored, and remediation_diff proves a fix
         survived the verification pass.
+
+        SCOPED TO THE LATEST BATCH, and counted one terminal outcome per document. Both halves
+        are needed, and they close the same defect from opposite ends. Live 2026-09-04, scan
+        8b83e9e1ca5c: 147 SharePoint documents failed, the batch was submitted again, the second
+        147 failed the same way, and this method — which counted every dead `remediate_file` row
+        the scan had ever produced — answered `failed: 294` against a batch of 147. The UI
+        subtracted and rendered "-147 documents remediated", a number no arrangement of facts can
+        justify. Scoping to the newest batch is the fix; counting distinct documents is what
+        keeps the number sane for jobs enqueued before `batch_id` was recorded (batch_id NULL),
+        where there is no batch to scope to.
         """
+        import json as _json
         with self._db.cursor() as cur:
+            # The batch a user is watching is the one most recently submitted. NULL for jobs
+            # enqueued before batch_id was stamped — the distinct-document count below carries
+            # those on its own.
+            self._db.execute(cur,
+                "SELECT batch_id FROM jobs WHERE scan_id=%s AND type='remediate_file' "
+                "ORDER BY created_at DESC, id DESC LIMIT 1", (scan_id,))
+            _row = self._db.fetchone(cur)
+            batch_id = (_row or {}).get("batch_id")
+            _scope = " AND batch_id=%s" if batch_id else ""
+            _args = (scan_id, batch_id) if batch_id else (scan_id,)
             self._db.execute(cur,
                 "SELECT status,COUNT(*) AS n FROM jobs WHERE scan_id=%s "
-                "AND type='remediate_file' AND status IN ('queued','running') GROUP BY status",
-                (scan_id,))
+                "AND type='remediate_file' AND status IN ('queued','running')" + _scope +
+                " GROUP BY status", _args)
             job_counts = {row["status"]: row["n"] for row in self._db.fetchall(cur)}
             queued = int(job_counts.get("queued", 0) or 0)
             running = int(job_counts.get("running", 0) or 0)
+            # Every job in scope, so a failure count can never exceed the work it is counted
+            # against — the last guard, independent of how the rows below are grouped.
             self._db.execute(cur,
-                "SELECT COUNT(*) AS n FROM jobs WHERE scan_id=%s AND type='remediate_file' "
-                "AND status='dead'", (scan_id,))
-            failed = self._db.fetchone(cur)["n"]
+                "SELECT COUNT(*) AS n FROM jobs WHERE scan_id=%s AND type='remediate_file'" +
+                _scope, _args)
+            batch_total = int((self._db.fetchone(cur) or {}).get("n", 0) or 0)
+            self._db.execute(cur,
+                "SELECT id,payload FROM jobs WHERE scan_id=%s AND type='remediate_file' "
+                "AND status='dead'" + _scope, _args)
+            _dead_docs: set[str] = set()
+            for row in self._db.fetchall(cur):
+                payload = row.get("payload")
+                if isinstance(payload, str):
+                    try:
+                        payload = _json.loads(payload)
+                    except Exception:
+                        payload = {}
+                # Fall back to the job id so a payload-less row still counts as one failure —
+                # dropping it would understate, and this method's job is to be exact.
+                _dead_docs.add((payload or {}).get("file") or f"job:{row.get('id')}")
+            failed = min(len(_dead_docs), batch_total) if batch_total else len(_dead_docs)
             self._db.execute(cur,
                 "SELECT file,drive_write_url,remediated_at FROM file_records WHERE scan_id=%s "
                 "AND remediated_at IS NOT NULL ORDER BY remediated_at DESC LIMIT 5", (scan_id,))
@@ -6301,6 +6373,9 @@ class Store:
         latest = recent[0] if recent else None
         return {"in_flight": queued + running, "queued": queued, "running": running,
                 "failed": failed, "stored_documents": stored,
+                # The batch these counts are scoped to, named so a client can tell "this scan"
+                # from "this run of it" — and can clamp against the same total the server used.
+                "batch_id": batch_id, "batch_documents": batch_total,
                 "verified_documents": int(verified.get("documents", 0) or 0),
                 "fixes_applied": int(verified.get("fixes", 0) or 0), "by_rule": by_rule,
                 "latest_file": latest["file"] if latest else None,
@@ -9558,7 +9633,7 @@ class Store:
                 # filename, while a vocabulary term cannot.
                 "SELECT j.scan_id,j.type,j.status,j.created_at,j.updated_at,j.payload,"
                 "j.locked_at,j.error_class,j.attempts,"
-                "sr.owner_email,sr.source,sr.files,sr.files_done "
+                "sr.owner_email,sr.source,sr.files,sr.files_done,sr.live_checkpoint "
                 "FROM jobs j JOIN scan_runs sr ON sr.id=j.scan_id "
                 "WHERE j.scan_id IN (SELECT DISTINCT scan_id FROM jobs "
                 "WHERE status IN ('queued','running')) OR "
@@ -9582,6 +9657,13 @@ class Store:
                 "oldest_queued_at": None, "current_file": None,
                 "current_job_type": None, "current_rule_id": None,
                 "current_job_started_at": None, "last_error_class": None, "max_attempts_seen": 0,
+                # SharePoint COVERAGE, for the operations map. A 30-site walk is one long
+                # "discovering" bar there today: the file count ticks and nothing says which
+                # sites are done, which are queued, or that one is blocked on a consent that
+                # lapsed this morning. The per-site report is already checkpointed on the run
+                # (core._maybe_checkpoint accumulates the listing's own progress patches), so
+                # this is a read of something already written, not new instrumentation.
+                **_sp_coverage(row.get("live_checkpoint")),
             })
             status = row.get("status")
             item["total"] += 1

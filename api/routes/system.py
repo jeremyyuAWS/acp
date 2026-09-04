@@ -1146,10 +1146,19 @@ class AIProviderUpdate(BaseModel):
 def get_ai_providers(request: Request):
     """Admin: the configurable cloud AI providers as SAFE views — endpoint, model, whether the
     referenced secret is present, and who owns it — never a key value (ADR 0019 §6). Admin-gated:
-    provider governance config isn't exposed to non-owners."""
+    provider governance config isn't exposed to non-owners.
+
+    `secret_write` tells the page whether THIS deployment can accept a pasted key at all (a Key
+    Vault is configured and its SDK is installed). The field exists so the UI never renders an
+    input that cannot work: without it the only way to discover an unconfigured vault is to type
+    a live credential into a box and have it rejected."""
     _require_admin(request)
     import providers as _providers
-    return {"providers": _providers.list_provider_views()}
+    import secret_store as _secrets
+    store = _secrets.active_secret_store()
+    ok, reason = store.writable()
+    return {"providers": _providers.list_provider_views(),
+            "secret_write": {"available": ok, "kind": store.kind, "reason": reason}}
 
 
 @router.put("/ai/providers")
@@ -1217,6 +1226,64 @@ def put_ai_provider(body: AIProviderUpdate, request: Request):
     core.store.log_decision("admin", f"settings.ai_provider.{provider}",
                             detail=f"provider={provider} enabled={enabled} endpoint={endpoint or '—'} "
                                    f"key_secret_ref={ref or '—'} (key value never handled here)")
+    return {"providers": _providers.list_provider_views()}
+
+
+class AIProviderSecretWrite(BaseModel):
+    value: str
+
+
+@router.post("/ai/providers/{provider}/secret")
+def put_ai_provider_secret(provider: str, body: AIProviderSecretWrite, request: Request):
+    """Admin: set one provider's API key by writing it to the deployment's Key Vault.
+
+    The one place in this product where a key VALUE is accepted, and it is accepted only to hand
+    straight to the vault: nothing is written to the database except the resulting reference name
+    (`keyvault:acp-ai-<provider>-key`), nothing is logged but that name, and no read path can
+    return the value — `provider_view` has never carried it and still does not.
+
+    A deployment with no vault configured REFUSES (422) rather than falling back to storing the
+    value anywhere else. That refusal is the feature: it is what keeps "we could not do this
+    safely" from turning into "we did it unsafely".
+
+    The vault secret's name is derived from the provider, never supplied by the caller — a name
+    over HTTP would let one admin overwrite another provider's secret, or something else in a
+    shared vault, through a field that looks like a label.
+    """
+    _require_admin(request)
+    import providers as _providers
+    import secret_store as _secrets
+    provider = (provider or "").strip().lower()
+    if provider not in _providers.CLOUD_PROVIDERS:
+        raise HTTPException(422, f"unknown provider '{provider}' — one of {list(_providers.CLOUD_PROVIDERS)}")
+    try:
+        ref = _secrets.write_provider_secret(provider, body.value)
+    except ValueError:
+        raise HTTPException(422, "the key value is empty")
+    except RuntimeError as e:
+        # "no vault is configured", or "the SDK is not installed in this image" — an operator's
+        # fix, and one an admin cannot make from this page, so it is reported verbatim.
+        raise HTTPException(422, {"error": "this deployment cannot store a key value", "detail": str(e)})
+    except Exception as e:
+        # A vault that refused the write (identity lacks secrets/set, network, throttling). The
+        # TYPE and message are surfaced because "it did not work" sends someone to read code.
+        raise HTTPException(502, {"error": "the key vault rejected the write",
+                                  "detail": f"{type(e).__name__}: {e}"})
+
+    existing = core.store.get_ai_provider_config(provider) or {}
+    core.store.upsert_ai_provider_config(
+        provider,
+        enabled=bool(existing.get("enabled")),
+        endpoint=existing.get("endpoint"),
+        deployment=existing.get("deployment"),
+        model=existing.get("model"),
+        key_secret_ref=ref,
+        updated_by=getattr(request.state, "user_email", None) or "admin",
+    )
+    # The audit row names the reference, never the value — same rule as the config route above.
+    core.store.log_decision("admin", f"settings.ai_provider.{provider}.secret",
+                            detail=f"provider={provider} key_secret_ref={ref} "
+                                   f"(written to the key vault; value never stored or logged)")
     return {"providers": _providers.list_provider_views()}
 
 

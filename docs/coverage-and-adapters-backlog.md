@@ -63,7 +63,7 @@ scheduled here — each is bookmarked so the next sprint can pick up the thread.
   `ADAPTER_READY`, wire SigV4 via `boto3.request.AWSRequest` (the pattern already used in the
   existing AWS integration path). Same probe + attribution constraints apply.
 
-- [ ] **veraPDF Phase 0 — local corroboration engine.** `docs/adr/0028-amendment-local-corroboration-engines.md`
+- [x] **veraPDF Phase 0 — local corroboration engine.** `docs/adr/0028-amendment-local-corroboration-engines.md`
   and `docs/spikes/2026-07-17-verapdf-spike.md` document a complete spike. veraPDF (MPL-2.0)
   corroborates ACP's 1.3.1 / 2.4.2 / 3.1.1 PDF findings with per-content-item granularity.
   Two paths: **RECORDED** (pre-captured JSON, always-on in CI — no binary needed), **LIVE**
@@ -71,13 +71,17 @@ scheduled here — each is bookmarked so the next sprint can pick up the thread.
   wiring the RECORDED path into the test suite and the LIVE path behind a feature flag. Requires
   no document egress and no licensing overhead beyond veraPDF's MPL-2.0. Adds corroborating
   evidence to three criteria without fabricating new detection.
+  ✅ `api/verapdf_corroborate.py` with RECORDED (`parse_fixture`) and LIVE (`corroborate_pdf`,
+  feature-flagged via `ACP_VERAPDF_REST`) paths. Scanner integration in `analyse_and_assess`
+  annotates existing 1.3.1/2.4.2/3.1.1 findings with `{"engine":"veraPDF/ua1","failed_checks":N}`.
+  38 tests (34 always-on RECORDED, 4 LIVE skipped without Docker). Fixtures in `tests/fixtures/`.
 
-- [ ] **2.5.3 AcroForm field types in PDF.** `api/remediate_pdf.py`'s `pdf_form_field_checks()`
-  covers pushbutton and list-box AcroForm fields but not text inputs, checkboxes, or radio
-  buttons. These are the majority of real form fields and each has a label-linkage check
-  (explicit `/TU` tooltip vs. adjacent text heuristic). Extend `pdf_form_field_checks()` to
-  cover all five AcroForm field types. **Bounded native build; capability registry update +
-  structural test with a real-form fixture.**
+- [x] **2.5.3 AcroForm field types in PDF.** ✅ Extended `label_in_name.detect` to cover all
+  AcroForm field types: push buttons (deterministic, `PDF_LABEL_NOT_IN_NAME`, SERIOUS) plus
+  text (/Tx), checkbox/radio (/Btn non-pushbutton), choice (/Ch), signature (/Sig) via heuristic
+  (`PDF_ACCESSIBLE_NAME_PROGRAMMATIC`, MODERATE) — flags snake_case/camelCase accessible names
+  that will never match what a speech-input user says. Spike fixture (`pdf-form-fields-spike.pdf`)
+  used as structural test. 51 tests. Updated capability registry reason string.
 
 ---
 

@@ -1,22 +1,22 @@
 """2.5.3 Label in Name — PDF.
 
-Scope: AcroForm push buttons. Push buttons are the only field type in PDF where both
-the visible text label and the accessible name are programmatically available in the same
-field object:
+Two checks, different confidence:
 
+DETERMINISTIC — AcroForm push buttons (rule PDF_LABEL_NOT_IN_NAME, SERIOUS):
   Visible caption  → /MK /CA  (normal caption text, rendered on the button face)
   Accessible name  → /TU      (tooltip, preferred) or /T (partial name, fallback)
+  WCAG 2.5.3 requires the accessible name to CONTAIN the visible text (case-insensitive).
 
-WCAG 2.5.3 requires the accessible name to CONTAIN the visible text (case-insensitive).
-A push button whose /TU reads "Search the form" while its caption reads "Go" passes;
-one whose /TU reads "btn_primary" while its caption reads "Submit" fails.
+HEURISTIC — all other field types: text (/Tx), checkbox/radio (/Btn non-pushbutton),
+  choice (/Ch), signature (/Sig) (rule PDF_ACCESSIBLE_NAME_PROGRAMMATIC, MODERATE):
+  These fields display their visible label as separate text objects on the page, not
+  linked to the field object, so a direct caption-to-name comparison requires rendering.
+  Instead, the accessible name is flagged when it looks like a developer identifier
+  (snake_case containing underscores, or camelCase starting lowercase with an uppercase
+  letter) — a programmatic name will never match what a speech-input user says.
 
-Coverage PARTIAL (not FULL): only push buttons carry a caption in the AcroForm dictionary.
-Text fields, checkboxes, and radio buttons display labels as separate text objects on the
-page — not linked to the field object — so they cannot be compared without rendering.
-Confidence HIGH: within the push-button subset the comparison is exact and deterministic.
-
-Rule ID: PDF_LABEL_NOT_IN_NAME
+Coverage PARTIAL (not FULL): push buttons carry both caption and name in the same dict;
+other fields require a rendering step not available here.
 """
 from __future__ import annotations
 
@@ -28,6 +28,9 @@ from swallowed import swallowed
 # PDF Ff bit positions (0-indexed).  See ISO 32000 Table 227.
 _FLAG_PUSHBUTTON = 1 << 16   # bit 17 in 1-indexed PDF spec notation
 _FLAG_RADIO      = 1 << 15   # bit 16 — distinguishes radio from checkbox
+
+# AcroForm field types other than push buttons covered by the heuristic check.
+_HEURISTIC_FTS = frozenset({"/Tx", "/Ch", "/Sig"})
 
 
 def _is_pushbutton(field) -> bool:
@@ -71,8 +74,22 @@ def _accessible_name(field) -> str:
         return ""
 
 
+def _looks_programmatic(name: str) -> bool:
+    """True when name looks like a developer identifier rather than a human-readable label.
+
+    Flags snake_case (contains underscore) and camelCase (starts lowercase with at least
+    one uppercase letter). Single-word names starting uppercase ('Name', 'Email') and
+    names with spaces ('Full Name') are not flagged — they read as plausible labels.
+    """
+    if not name or any(c.isspace() for c in name):
+        return False
+    if '_' in name:
+        return True
+    return name[0].islower() and any(c.isupper() for c in name)
+
+
 def detect(path: Path) -> list[dict]:
-    """2.5.3 Label in Name — push buttons whose accessible name does not contain the caption."""
+    """2.5.3 Label in Name — push buttons (deterministic) and other fields (heuristic)."""
     try:
         import pikepdf
     except Exception:
@@ -91,33 +108,56 @@ def detect(path: Path) -> list[dict]:
             except Exception:
                 return []
 
-            failures: list[str] = []
+            pushbtn_failures: list[str] = []
+            heuristic_failures: list[str] = []
+
             for field in fields:
-                if str(field.get("/FT", "")) != "/Btn":
-                    continue
-                if not _is_pushbutton(field):
-                    continue
-                cap = _caption(field)
-                if not cap:
-                    continue          # no visible caption — nothing to compare
-                name = _accessible_name(field)
-                if cap.lower() not in name.lower():
-                    failures.append(f'caption "{cap}" not in name "{name}"')
+                ft = str(field.get("/FT", ""))
+                if ft == "/Btn" and _is_pushbutton(field):
+                    cap = _caption(field)
+                    if not cap:
+                        continue
+                    name = _accessible_name(field)
+                    if cap.lower() not in name.lower():
+                        pushbtn_failures.append(f'caption "{cap}" not in name "{name}"')
+                elif ft in _HEURISTIC_FTS or (ft == "/Btn" and not _is_pushbutton(field)):
+                    name = _accessible_name(field)
+                    if _looks_programmatic(name):
+                        field_id = str(field.get("/T") or "")
+                        heuristic_failures.append(
+                            f'field {field_id!r} has programmatic accessible name {name!r}'
+                        )
 
-            if not failures:
-                return []
+            results: list[dict] = []
 
-            sample = "; ".join(failures[:3])
-            if len(failures) > 3:
-                sample += f" (and {len(failures) - 3} more)"
-            return [{
-                "ruleId": "PDF_LABEL_NOT_IN_NAME",
-                "wcag": "2.5.3 Label in Name",
-                "severity": "SERIOUS",
-                "detail": (
-                    f"push button accessible name does not contain the visible caption: {sample} — "
-                    "speech-input users who activate the button by its visible label will fail"
-                ),
-            }]
+            if pushbtn_failures:
+                sample = "; ".join(pushbtn_failures[:3])
+                if len(pushbtn_failures) > 3:
+                    sample += f" (and {len(pushbtn_failures) - 3} more)"
+                results.append({
+                    "ruleId": "PDF_LABEL_NOT_IN_NAME",
+                    "wcag": "2.5.3 Label in Name",
+                    "severity": "SERIOUS",
+                    "detail": (
+                        f"push button accessible name does not contain the visible caption: {sample} — "
+                        "speech-input users who activate the button by its visible label will fail"
+                    ),
+                })
+
+            if heuristic_failures:
+                sample = "; ".join(heuristic_failures[:3])
+                if len(heuristic_failures) > 3:
+                    sample += f" (and {len(heuristic_failures) - 3} more)"
+                results.append({
+                    "ruleId": "PDF_ACCESSIBLE_NAME_PROGRAMMATIC",
+                    "wcag": "2.5.3 Label in Name",
+                    "severity": "MODERATE",
+                    "detail": (
+                        f"form field accessible name appears to be a developer identifier: {sample} — "
+                        "speech-input users say the visible label; a programmatic name will not match"
+                    ),
+                })
+
+            return results
     except Exception:
         return []

@@ -78,7 +78,19 @@ export default function SiteActivity({ sites }) {
                   and one with none look identical from the site name alone. */}
               {libs.length > 0 && (
                 <span className="muted" style={{ fontSize: 10.5, paddingLeft: 2 }}>
-                  {libs.length} librar{libs.length === 1 ? 'y' : 'ies'}: {libs.map((l) => l.name || l.id).join(', ')}
+                  {libs.length} librar{libs.length === 1 ? 'y' : 'ies'}:{' '}
+                  {libs.map((l, i) => {
+                    const mode = l.mode === 'delta' ? 'incremental' : l.mode === 'full' ? 'full scan' : null
+                    const changes = l.mode === 'delta'
+                      ? [Number.isFinite(l.changed) && `${l.changed.toLocaleString()} changed`,
+                         Number.isFinite(l.removed) && `${l.removed.toLocaleString()} removed`]
+                        .filter(Boolean).join(' · ')
+                      : null
+                    return <span key={l.id || `${s.id}-${i}`}>
+                      {i > 0 && ', '}{l.name || l.id}
+                      {mode && <> ({mode}{changes ? ` · ${changes}` : ''})</>}
+                    </span>
+                  })}
                 </span>
               )}
               {/* Verbatim. "Sites.Read.All" and "429" are different problems with different

@@ -514,7 +514,7 @@ not on that list; components that are supposed to be live are.
 `AssessmentReconciliation`, `ConfidenceDashboard`, `ControlPlane`, `Dashboard`,
 `DiscoverCompleteSummary`, `DiscoveryCompleteness`, `Disposition`, `DispositionReviewWorkspace`,
 `EstateCoverage`, `EstateTreemap`, `FileTypeConfig`, `Insight`, `LifecycleOverrideControl`, `LiveAssessment`, `PiiPanel`,
-`ProcessingDetails`, `RemediationApprovals`, `RiskScore`, `RolePrivilege`, `Rubric`, `ScanScope`,
+`ProcessingDetails`, `RemediationApprovals`, `RemediationPreview`, `RemediationTransform`, `RiskScore`, `RolePrivilege`, `Rubric`, `ScanScope`,
 `ScanScopeChip`, `ScanSetup`, `ScopeFunnel`, `ScopeRules`, `ScreenReaderDemo`, `Upload`,
 `WordCloud`.
 

@@ -62,6 +62,19 @@ describe('DiscoverRunProgress renders nothing until a scan is live', () => {
 })
 
 describe('the discovery step checklist', () => {
+  it('keeps the SharePoint boundary visible on the live card', () => {
+    const html = renderToStaticMarkup(createElement(DiscoverRunProgress, {
+      progress: PROG, busy: true, source: 'sharepoint',
+      scope: { kind: 'sharepoint', sites: [
+        { id: 's1', name: 'Clinical', status: 'complete', libraries: [{ id: 'l1', name: 'Documents' }] },
+      ] },
+    }))
+    expect(html).toContain('Content source')
+    expect(html).toContain('SharePoint')
+    expect(html).toContain('Clinical')
+    expect(html).toContain('1 document library')
+  })
+
   it('shows Discovering documents heading', () => {
     const html = render(PROG, true)
     expect(html).toContain('Discovering documents')

@@ -84,10 +84,10 @@ def test_readiness_names_every_missing_field(provider, cfg, expect_missing):
 
 
 def test_a_provider_with_no_adapter_is_never_ready():
-    """bedrock is in the catalogue so Settings can show it, with no adapter yet behind it.
-    Reporting it ready would arm an escalation that cannot fire. gemini is no longer in this set —
-    it has an adapter as of the gemini-adapter PR and is covered by the agreement guard below."""
-    for name in ("bedrock",):
+    """All CLOUD_PROVIDERS now have adapters. This test is a canary: if a new provider is added to
+    the catalogue without an adapter, it will appear here via the agreement guard below rather than
+    this test, which is intentionally left as a no-op loop so the structure stays visible."""
+    for name in ():   # no unimplemented providers remain; bedrock joined in the bedrock-adapter PR
         r = providers.activation_readiness(name, {"model": "x", "key_secret_ref": "K"})
         assert r["ready"] is False
         assert "no adapter" in r["detail"]

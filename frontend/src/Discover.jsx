@@ -543,6 +543,13 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         lifecycle_matches: (Number(scope?.lifecycle_archive) || 0)
           + (Number(scope?.lifecycle_delete) || 0)
           + (Number(scope?.lifecycle_tagged) || 0),
+        // The live job supplies these during the SSE run. Rehydrate the SAME fields from the
+        // persisted inventory delta after a refresh so SharePoint's per-library delta scan does
+        // not lose its new/updated/unchanged result the moment the stream closes. Drive and
+        // SharePoint both finish through add_inventory(), so one rendering path covers both.
+        save_new: scope?.inventory_delta?.new ?? null,
+        save_updated: scope?.inventory_delta?.updated ?? null,
+        save_unchanged: scope?.inventory_delta?.unchanged ?? null,
       }
     : null
   const discoveryProgressForCard = progress ?? completedDiscoveryProgress
@@ -824,7 +831,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           from the last GET /scans/{id} the outer `scan` state holds, which during an active run
           can be the PREVIOUS scan's terminal value until this one settles. */}
       {/* The queue/assignment card below owns status until listing starts. */}
-      {!(busy && ['queued', 'preparing', 'submitting'].includes(progress?.phase)) && <DiscoverRunProgress progress={discoveryProgressForCard} busy={busy} onStop={onStop} onContinue={onAdvance} sources={sources} inv={inv} preflightDegraded={preflightDegraded} freshness={progress?.freshness ?? run?.freshness ?? null} runStartedAt={run?.started_at ?? null} />}
+      {!(busy && ['queued', 'preparing', 'submitting'].includes(progress?.phase)) && <DiscoverRunProgress progress={discoveryProgressForCard} busy={busy} onStop={onStop} onContinue={onAdvance} sources={sources} source={run?.source} scope={scope} inv={inv} preflightDegraded={preflightDegraded} freshness={progress?.freshness ?? run?.freshness ?? null} runStartedAt={run?.started_at ?? null} />}
 
       {(() => {
         const jobClaimed = !!(discoverJobInfo && discoverJobInfo.status && discoverJobInfo.status !== 'queued')

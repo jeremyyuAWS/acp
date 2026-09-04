@@ -139,11 +139,12 @@ describe('auditTrail and auditSummary', () => {
 
 // ── rendering ───────────────────────────────────────────────────────────────
 describe('DocumentAudit rendering', () => {
-  it('renders nothing before the fetch answers', async () => {
+  it('announces loading before the fetch answers without claiming the trail is empty', async () => {
     let resolve
     getDocumentTimeline.mockReturnValue(new Promise((r) => { resolve = r }))
     const c = await mount({ scanId: 's1', file: 'a.docx' })
-    expect(c.textContent).toBe('')
+    expect(c.querySelector('[role="status"]').textContent).toMatch(/Loading audit trail/)
+    expect(c.querySelector('.audit-empty')).toBe(null)
     await act(async () => { resolve([]) })
   })
 
@@ -230,6 +231,18 @@ describe('DocumentAudit rendering', () => {
     const box = c.querySelector('input[type="checkbox"]')
     await act(async () => { box.click() })
     expect(c.querySelectorAll('.audit-row').length).toBe(8)
+  })
+
+  it('preserves and offers to copy a correlation ID recorded on an event', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    getDocumentTimeline.mockResolvedValue([{ ...EV.fix, correlation_id: 'run-123' }])
+    const c = await mount({ scanId: 's1', file: 'a.docx' })
+    const button = c.querySelector('.audit-copy-correlation')
+    expect(button).toBeTruthy()
+    await act(async () => { button.click() })
+    expect(writeText).toHaveBeenCalledWith('run-123')
+    expect(button.textContent).toMatch(/Copied correlation ID/)
   })
 
   it('a trail that changed nothing says that, rather than showing an empty list', async () => {

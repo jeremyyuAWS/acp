@@ -60,6 +60,10 @@ _map_many([
     ("GET", "/sources"), ("GET", "/sources/locations"), ("GET", "/folders"),
     ("GET", "/sharepoint/sites"), ("GET", "/sharepoint/folders"),
     ("GET", "/sharepoint/sites/{site_id:path}/drives"),
+    # Reading a tenant's onboarding readiness is the same right as reading its sites: it names
+    # which permissions this sign-in carries and which metadata the tenant will answer, and it
+    # issues nothing but the bounded read-only probes the picker beside it already makes.
+    ("GET", "/sharepoint/readiness"),
     ("GET", "/drive/folder-name"), ("GET", "/drive/adc-scopes"),
 ], _SOURCES_READ)
 # Changing where ACP looks is `sources.manage` (PRD §5), not merely seeing the tab.
@@ -176,6 +180,7 @@ _map_many([("PUT", "/schedule")], {"monitor.view", "settings.view"})
 # ── Live Operations ───────────────────────────────────────────────────────────
 _map_many([("GET", "/admin/activity"), ("GET", "/jobs"), ("GET", "/jobs/{job_id}"),
            ("GET", "/control/estate"), ("GET", "/control/workers/capacity"),
+           ("GET", "/control/costs"),
            ("GET", "/control/workers/replicas"), ("GET", "/control/workers/revisions")],
           {"operations.view"})
 _map_many([("POST", "/admin/jobs/clear-dead"), ("PATCH", "/control/workers/replicas")],
@@ -187,7 +192,8 @@ _map_many([("GET", "/admin/analytics/overview"), ("GET", "/ai/costs")], {"analyt
 # ── Settings and platform administration ──────────────────────────────────────
 _map_many([("GET", "/settings"), ("GET", "/ai/providers"), ("GET", "/ai/status")],
           {"settings.view"})
-_map_many([("PUT", "/settings"), ("PUT", "/ai/providers"), ("POST", "/ai/providers/test")],
+_map_many([("PUT", "/settings"), ("PUT", "/ai/providers"), ("POST", "/ai/providers/test"),
+           ("POST", "/ai/providers/{provider}/secret")],
           {"settings.view"})
 _map_many([("PUT", "/workers")], {"workers.manage"})
 _map_many([("GET", "/admin/people"), ("GET", "/admin/allowlist"), ("GET", "/admin/admins")],

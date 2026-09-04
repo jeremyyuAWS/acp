@@ -2081,8 +2081,10 @@ def pdf_input_purpose_checks(path: Path) -> list[dict]:
 def pdf_label_in_name_checks(path: Path) -> list[dict]:
     """2.5.3 Label in Name — PDF. Implementation: formats/pdf/detectors/label_in_name.py.
 
-    PARTIAL/HIGH: push buttons only — the sole AcroForm field type where both the visible
-    caption (/MK /CA) and the accessible name (/TU or /T) are in the same field dictionary."""
+    PARTIAL/HIGH (push buttons): /MK /CA caption compared to /TU or /T accessible name.
+    PARTIAL/MEDIUM (text, checkbox, radio, choice, signature — heuristic): accessible name
+    flagged when it looks like a developer identifier (snake_case/camelCase); visible labels
+    for these types are separate page text not linked to the field object."""
     try:
         from formats.pdf.detectors.label_in_name import detect
         return detect(path)

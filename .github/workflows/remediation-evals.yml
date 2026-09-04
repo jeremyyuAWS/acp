@@ -1,0 +1,173 @@
+# Run the Remediation Evals Kit against a PAID model tier, on demand only.
+#
+# WHY DISPATCH-ONLY, AND WHY THAT IS LOAD-BEARING. Every call this job makes is billed. On
+# push or pull_request it would spend real money on every commit and turn CI red whenever a
+# vendor had a bad five minutes — a failure with nothing to do with the diff, on the gate
+# people are supposed to trust. There is deliberately no `push:`, `pull_request:` or
+# `schedule:` trigger here, and tests/test_remediation_evals_workflow.py fails if one is added
+# without that decision being made again.
+#
+# The free part of the kit is NOT here: `rules-only` and the scripted stubs run in the ordinary
+# backend suite (tests/test_remediation_evals_kit.py) on every PR, where they cost nothing and
+# catch a grader that has stopped biting. This workflow exists for the one thing that suite
+# cannot do — ask what a hosted model actually does.
+#
+# WHAT IT WILL NOT DO:
+#   * run an `ollama:` candidate. There is no model server on a GitHub runner, so every case
+#     would come back a transport error and the report would present a candidate with 100%
+#     unusable output as a measurement. Rejected up front, by name.
+#   * start without the key the named candidates need — checked before the first call, so the
+#     failure is "the secret is missing" and not 300 authentication errors.
+#   * start if the pre-flight estimate exceeds the run's own spend cap.
+name: remediation-evals
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidates:
+        description: 'Space-separated candidate specs (e.g. "rules-only anthropic:claude-haiku-4-5")'
+        required: true
+        default: 'rules-only anthropic:claude-haiku-4-5'
+      repeats:
+        description: 'Repeats per case. 1 is a look; 3 is a result (a single pass cannot tell 90% accurate from 67%)'
+        required: true
+        default: '3'
+      max_spend_usd:
+        description: 'Refuse to start if the pre-flight estimate exceeds this'
+        required: true
+        default: '2.00'
+      limit:
+        description: 'Cap the number of cases (blank = all 100). Use for a cheap smoke run'
+        required: false
+        default: ''
+      fail_on_gate:
+        description: 'Fail the job if any candidate fails any gate'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never two paid runs at once. cancel-in-progress is FALSE on purpose: cancelling a run
+  # halfway spends the money and produces no report, which is the worst of both.
+  group: remediation-evals
+  cancel-in-progress: false
+
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Reject candidates this runner cannot honestly measure
+        env:
+          CANDIDATES: ${{ inputs.candidates }}
+        run: |
+          set -euo pipefail
+          for spec in $CANDIDATES; do
+            case "$spec" in
+              ollama:*)
+                echo "::error::$spec — no Ollama server runs on a GitHub runner. Every case would"
+                echo "::error::come back a transport error and be reported as unusable output."
+                echo "::error::Run local models on a machine that has them (see docs/remediation-evals-local-model-run.md)."
+                exit 1 ;;
+            esac
+          done
+
+      - name: Check the keys the named candidates need
+        env:
+          CANDIDATES: ${{ inputs.candidates }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EVALS_API_KEY: ${{ secrets.EVALS_API_KEY }}
+        run: |
+          set -euo pipefail
+          need_anthropic=0; need_hosted=0
+          for spec in $CANDIDATES; do
+            case "$spec" in
+              anthropic:*) need_anthropic=1 ;;
+              hosted:*)    need_hosted=1 ;;
+            esac
+          done
+          if [ "$need_anthropic" = 1 ] && [ -z "${ANTHROPIC_API_KEY}" ]; then
+            echo "::error::an anthropic: candidate was requested but the ANTHROPIC_API_KEY secret is empty."
+            echo "::error::Set it in Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          if [ "$need_hosted" = 1 ] && [ -z "${EVALS_API_KEY}" ]; then
+            echo "::error::a hosted: candidate was requested but the EVALS_API_KEY secret is empty."
+            exit 1
+          fi
+          echo "key check passed"
+
+      - name: Install the SDK only if a Claude candidate was asked for
+        env:
+          CANDIDATES: ${{ inputs.candidates }}
+        run: |
+          set -euo pipefail
+          case "$CANDIDATES" in
+            *anthropic:*) python -m pip install --quiet --upgrade anthropic ;;
+            *) echo "no anthropic: candidate — nothing to install (the kit itself is stdlib-only)" ;;
+          esac
+
+      - name: Pre-flight — price the run before making a call
+        env:
+          CANDIDATES: ${{ inputs.candidates }}
+          REPEATS: ${{ inputs.repeats }}
+          LIMIT: ${{ inputs.limit }}
+        run: |
+          set -euo pipefail
+          args=""
+          for spec in $CANDIDATES; do args="$args -c $spec"; done
+          if [ -n "$LIMIT" ]; then args="$args --limit $LIMIT"; fi
+          python scripts/run_remediation_evals.py --estimate-only --repeats "$REPEATS" $args
+
+      - name: Run the evals
+        id: run
+        env:
+          CANDIDATES: ${{ inputs.candidates }}
+          REPEATS: ${{ inputs.repeats }}
+          LIMIT: ${{ inputs.limit }}
+          MAX_SPEND: ${{ inputs.max_spend_usd }}
+          FAIL_ON_GATE: ${{ inputs.fail_on_gate }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EVALS_API_KEY: ${{ secrets.EVALS_API_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          args=""
+          for spec in $CANDIDATES; do args="$args -c $spec"; done
+          if [ -n "$LIMIT" ]; then args="$args --limit $LIMIT"; fi
+          if [ "$FAIL_ON_GATE" = "true" ]; then args="$args --fail-on-gate"; fi
+          python scripts/run_remediation_evals.py \
+            --repeats "$REPEATS" --max-spend-usd "$MAX_SPEND" $args \
+            --json "out/$(date +%F)-evals.json" --md "out/$(date +%F)-evals.md"
+
+      - name: Put the report on the run summary
+        if: always()
+        run: |
+          set -euo pipefail
+          # `always()` because a --fail-on-gate failure is exactly when someone wants to read the
+          # table, and a run that died before writing one should say so rather than 404.
+          if ls out/*.md >/dev/null 2>&1; then
+            cat out/*.md >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No report was written — the run failed before it produced one." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: remediation-evals-report
+          path: out/
+          if-no-files-found: warn
+          # A paid run's evidence is worth keeping longer than the 90-day default is worth
+          # arguing about; commit the JSON to evals/reports/ when a run is one you want to cite.
+          retention-days: 90
