@@ -69,20 +69,20 @@ describe('Guided pane — decision-first ordering + grounded evidence', () => {
     expect(content.style.overflowY).toBe('')
   })
 
-  it('orders the pane Your task → Before / after → What ACP changed, with the evidence strip collapsed', async () => {
+  it('orders the pane Your task → Current / Proposed → Why this matters, with evidence collapsed', async () => {
     await renderInbox({ queue: [CONTRAST_APPLY], decisions: {} })
     const text = container.textContent
     const iTask = text.indexOf('Your task')
-    const iBA = text.indexOf('Before / after')
-    const iChanged = text.indexOf('What ACP changed')
+    const iCurrent = text.indexOf('Current')
+    const iWhy = text.indexOf('Why this matters')
     expect(iTask).toBeGreaterThan(-1)
-    expect(iBA).toBeGreaterThan(iTask)
-    expect(iChanged).toBeGreaterThan(iBA)
-    // The old Issue found → Proposed fix → Verified strip is demoted into a collapsed <details>.
+    expect(iCurrent).toBeGreaterThan(iTask)
+    expect(iWhy).toBeGreaterThan(iCurrent)
     const evDetails = [...container.querySelectorAll('details')]
       .find((d) => d.querySelector('summary')?.textContent.includes('Detection'))
     expect(evDetails).toBeTruthy()
-    expect(evDetails.textContent).toContain('Issue found')   // the strip lives inside it, not up top
+    expect(evDetails.open).toBe(false)
+    expect(text).not.toContain('Issue found')
   })
 
   it('the task line is plain, imperative and criterion-aware (a contrast decision)', async () => {
@@ -91,9 +91,11 @@ describe('Guided pane — decision-first ordering + grounded evidence', () => {
     expect(container.textContent).toContain('apply it')                        // imperative, apply lane
   })
 
-  it('shows a grounded before/after and a plain "what changed" sentence with the real values', async () => {
+  it('shows full-width current/proposed rows and a plain change sentence with the real values', async () => {
     await renderInbox({ queue: [CONTRAST_APPLY], decisions: {} })
-    expect(container.textContent).toContain('The quick brown fox')            // the swatches
+    expect(container.querySelector('.remediation-comparison')).toBeTruthy()
+    expect(container.textContent).toContain('Current')
+    expect(container.textContent).toContain('Proposed')
     expect(container.textContent).toContain('Text color changed from #EEEEEE to #767676')
     expect(container.textContent).toContain('Contrast increased from 1.2:1 to 4.5:1')
     expect(container.textContent).toContain('No text or layout changed')
@@ -118,7 +120,7 @@ describe('Guided pane — preserves the #412/#415 behaviours', () => {
     expect(container.textContent).not.toContain('Re-scan')                    // capital-R only after save
     await unmountAll(); ({ container, root } = createTestRoot())
     await renderInbox({ queue: [CONTRAST_APPLY], decisions: { 1: { state: 'accepted' } } })
-    await click(btnByText('Awaiting validation'))                            // where the saved fix sits
+    await click(btnByText('Awaiting verification'))
     await click(btnByText('Heading contrast is too low'))
     expect(container.textContent).toContain('Re-scan')
     expect(container.textContent).toContain('Certified')
