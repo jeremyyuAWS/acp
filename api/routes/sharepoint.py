@@ -146,7 +146,14 @@ def describe_sharepoint_readiness(request: Request, roots: list[str] | None) -> 
             try:
                 libs = scanner._sp_drives(token, r)
             except PermissionError as e:
-                root_results.append({"id": r, "kind": "site", "exists": False, "error": str(e)})
+                # WHOSE PROBLEM, alongside the message. The message is already the diagnosis
+                # (scanner._sp_get calls sp_readiness); `owner` is the same verdict in a form the
+                # preflight UI can group by, so an operator selecting thirty sites sees "two need
+                # the site owner, one needs your admin" rather than thirty sentences to read.
+                import sp_readiness
+                root_results.append({"id": r, "kind": "site", "exists": False, "error": str(e),
+                                     "owner": sp_readiness.diagnose_refusal(
+                                         403, token=token, on_site=True)["owner"]})
                 continue
             except Exception as e:  # noqa: BLE001 — a transport failure is not a missing site
                 root_results.append({"id": r, "kind": "site", "exists": False,
@@ -174,6 +181,103 @@ def describe_sharepoint_readiness(request: Request, roots: list[str] | None) -> 
     bad = [r for r in root_results if not r.get("exists")]
     return {"ready": not bad, "credential_valid": True, "roots": root_results,
            "reason": None if not bad else f"{len(bad)} of {len(checked)} selected folder(s) unreachable"}
+
+
+@router.get("/sharepoint/readiness")
+def sharepoint_readiness(request: Request, site: str = "", probe: bool = True):
+    """TENANT ONBOARDING: what this tenant will and will not answer, before a scan is committed.
+
+    The two questions a first run against a customer tenant fails on, asked up front instead of
+    discovered at the end:
+
+    1. **Which permissions does this sign-in actually carry?** Read from the token's own claims
+       (sp_readiness.token_scopes) — no Graph call, and the difference between "the grant is
+       missing" and "the grant is there and this account is not a member of that site" is the
+       difference between a task for the tenant admin and a task for the site owner. Before this,
+       every refusal was reported as the former.
+    2. **Which SharePoint-native metadata will arrive?** The walk asks for the wide `$select` and
+       the `listItem` expansion and silently falls back when a tenant refuses them, so a refused
+       tenant produces a complete estate with every content type unread — and says so only per
+       document, only after the scan. Three bounded requests settle it in advance.
+
+    `site` names a site to probe; omitted, the signed-in user's own OneDrive is used. `probe=false`
+    reports the token facts alone and issues NO Graph call, which is what a caller wants when the
+    question is "am I signed in with the right scopes" rather than "will this tenant answer".
+
+    DELIBERATELY NOT A GATE. Nothing here refuses a scan: a tenant that answers only tier 2 can
+    still be scanned, and should be — it produces a real estate with less metadata. This endpoint
+    exists so that outcome is a decision somebody made rather than one they discover afterwards.
+    """
+    import sp_readiness
+    token = _token(request)
+    granted, why_not = sp_readiness.token_scopes(token)
+    report: dict = {
+        "scopes": sorted(granted) if granted else None,
+        "scopes_unreadable": why_not,
+        "has_sites_scope": sp_readiness._has(granted, sp_readiness.SITES_SCOPE)
+                           if granted else None,
+        "site": site or None,
+        "libraries": None,
+        "metadata": None,
+        "problems": [],
+    }
+    # A token with no Sites.Read.All is not an error and is not refused here — a OneDrive-only
+    # deployment is a legitimate configuration. It is reported, because the operator selecting a
+    # SITE with this token is about to get a 403 and this is where that becomes predictable.
+    if granted is not None and not report["has_sites_scope"]:
+        report["problems"].append({
+            "owner": sp_readiness.TENANT_ADMIN,
+            "missing_scope": sp_readiness.SITES_SCOPE,
+            "message": (f"This sign-in does not carry {sp_readiness.SITES_SCOPE}, so SharePoint "
+                        f"SITES will be refused; the signed-in user's own OneDrive still works. "
+                        f"A tenant admin grants it on the Azure app registration."),
+        })
+    if not probe:
+        return report
+
+    drive_id = None
+    if site:
+        try:
+            libs = scanner._sp_drives(token, site)
+        except PermissionError as e:
+            # The diagnosis _sp_get already made, carried through rather than re-derived: one
+            # place decides whose problem a refusal is, and a second opinion here could disagree
+            # with the message the scan itself will print.
+            report["problems"].append({"owner": sp_readiness.UNKNOWN_OWNER, "message": str(e)})
+            return report
+        except Exception as e:  # noqa: BLE001 — a transport failure is not a permissions verdict
+            report["problems"].append({"owner": sp_readiness.UNKNOWN_OWNER,
+                                       "message": f"Microsoft Graph error: {e}"})
+            return report
+        report["libraries"] = [{"id": d["id"], "name": d.get("name")} for d in libs]
+        if not libs:
+            report["problems"].append({
+                "owner": sp_readiness.SITE_OWNER,
+                "message": "No document libraries are visible on this site, so a scan of it "
+                           "would return nothing.",
+            })
+            return report
+        drive_id = libs[0]["id"]
+
+    try:
+        report["metadata"] = sp_readiness.probe_metadata_tiers(token, drive_id)
+    except PermissionError as e:
+        report["problems"].append({"owner": sp_readiness.UNKNOWN_OWNER, "message": str(e)})
+        return report
+    except Exception as e:  # noqa: BLE001
+        report["problems"].append({"owner": sp_readiness.UNKNOWN_OWNER,
+                                   "message": f"Microsoft Graph error: {e}"})
+        return report
+    if (report["metadata"] or {}).get("refused"):
+        report["problems"].append({
+            "owner": sp_readiness.TENANT_ADMIN,
+            "message": (f"This tenant refuses part of what the walk asks for, so a scan will "
+                        f"record {report['metadata']['reads']}. Fields it cannot read are "
+                        f"reported as 'unavailable' per document rather than as 'not "
+                        f"configured' — they are not missing from the tenant, they were not "
+                        f"handed over."),
+        })
+    return report
 
 
 @router.post("/sharepoint/upload")
