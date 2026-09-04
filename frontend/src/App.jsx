@@ -1585,28 +1585,19 @@ export default function App() {
       <a className="skiplink" href="#main-content">Skip to main content</a>
       <header>
         <div className="brand"><Logo /><h1 className="sub">Accessibility Platform</h1>
-          {/* The version's DATE is Pacific (deploy.sh BUILD_TZ); fmtStamp renders the build
-              instant in the viewer's zone. Tag it so the two never read as contradictory. */}
-          <span className="muted" title={`Version dated in Pacific time · built ${fmtStamp(__BUILD_TIME__)} (your local time)`}
-                style={{ fontSize: 11, marginLeft: 10, fontFamily: 'ui-monospace, monospace', whiteSpace: 'nowrap' }}>
-            {void tick}v{platformVersion || __BUILD_VERSION__} PT · updated {timeAgo(__BUILD_TIME__)}
-          </span>
         </div>
-        <div className="userbox">
-          {me.role && <span className="chip" title={me.scope}>{me.role}</span>}
-          {rubric && me.allow?.includes('settings') && <span className="chip">{rubric.target} · rubric {rubric.hash.slice(0, 8)}</span>}
+        <div className="header-actions">
           {/* Process-health chip — visible only once a discovery run has completed. Shows
-              the highest-severity signal for the run: worker failure > unreadable files > healthy.
+              exceptions only: worker failure > unreadable files. Healthy is the quiet default.
               Uses allFiles (not files) so the type-filter never hides error-status rows from
               the count, and the indicator describes the full run rather than the current view. */}
           {run?.completed_at && (() => {
             const unreadable = allFiles.filter(f => f.status === 'error').length
             const workerError = run?.status === 'failed'
+            if (!workerError && unreadable === 0) return null
             const [chipColor, chipBg, chipLabel, chipTip] = workerError
               ? ['#7A271A', '#FEF3F2', 'Worker error', 'Assessment stopped due to a processing failure. Some files were not scored.']
-              : unreadable > 0
-              ? ['#6B3A00', '#FFF7E6', `${unreadable} unreadable`, `${unreadable} file${unreadable !== 1 ? 's' : ''} could not be opened and were skipped.`]
-              : ['#074D31', '#ECFDF3', 'Healthy', 'All files were processed successfully.']
+              : ['#6B3A00', '#FFF7E6', `${unreadable} unreadable`, `${unreadable} file${unreadable !== 1 ? 's' : ''} could not be opened and were skipped.`]
             return (
               <span title={chipTip} style={{
                 fontSize: 11, fontWeight: 700, letterSpacing: '0.04em',
@@ -1619,33 +1610,43 @@ export default function App() {
               </span>
             )
           })()}
-          {/* Global mode (applies across scanning, explanations, and remediation). The
-              scan-only options (Deep scan, Queued) live on the Sources tab where you scan. */}
-          <PrivateAiBadge aiEnabled={aiEnabled} />
           <HitlBell />
-          <button
-            className={`wcag-toggle${wcagMode ? ' wcag-toggle--on' : ''}`}
-            onClick={() => setWcagMode(v => !v)}
-            title={wcagMode
-              ? 'High-contrast colours are on across every tab. Click to restore ACP’s standard colour palette.'
-              : 'Standard colours are on. Click to use ACP’s high-contrast colour palette across every tab.'}
-            aria-label={wcagMode
-              ? 'Use standard colour palette across every tab'
-              : 'Use high-contrast colour palette across every tab'}
-            aria-pressed={wcagMode}>
-            {wcagMode ? '◉ Contrast' : '◎ Contrast'}
-          </button>
-          <button
-            className={`ai-toggle${aiEnabled ? ' ai-toggle--on' : ''}`}
-            onClick={() => setAiEnabled(v => !v)}
-            title={aiEnabled
-              ? 'AI is on across the whole platform — it helps explain findings and draft fixes. Click to turn AI off (rules-only mode; AI-dependent fixes route to human review).'
-              : 'AI is off — everything runs on the deterministic rules engine only. Click to turn AI back on.'}
-            aria-pressed={aiEnabled}>
-            {aiEnabled ? '✦ AI on' : '◻ AI off'}
-          </button>
-          <span className="user">{me.email}</span>
-          {me.allow?.includes('settings') && <button className="cogbtn" aria-label="Platform settings" title="Platform settings" onClick={() => setSettingsOpen(true)}>⚙</button>}
+          <details className="header-menu accessibility-menu">
+            <summary aria-label="Accessibility and AI preferences">
+              <span aria-hidden="true">◉</span> Accessibility
+            </summary>
+            <div className="header-menu-panel" role="group" aria-label="Accessibility and AI preferences">
+              <div className="header-menu-heading">Display and assistance</div>
+              <button className={`menu-setting${wcagMode ? ' menu-setting--on' : ''}`}
+                onClick={() => setWcagMode(v => !v)} aria-pressed={wcagMode}>
+                <span><b>High-contrast palette</b><small>Apply accessible colours across every tab</small></span>
+                <span aria-hidden="true">{wcagMode ? 'On' : 'Off'}</span>
+              </button>
+              <button className={`menu-setting${aiEnabled ? ' menu-setting--on' : ''}`}
+                onClick={() => setAiEnabled(v => !v)} aria-pressed={aiEnabled}>
+                <span><b>AI assistance</b><small>{aiEnabled ? 'Explanations and drafting enabled' : 'Deterministic rules only'}</small></span>
+                <span aria-hidden="true">{aiEnabled ? 'On' : 'Off'}</span>
+              </button>
+              <PrivateAiBadge aiEnabled={aiEnabled} />
+            </div>
+          </details>
+          <details className="header-menu account-menu">
+            <summary aria-label={`Account menu for ${me.email}`}>
+              <span className="account-avatar" aria-hidden="true">{(me.name || me.email || '?').split(/\s|@/).filter(Boolean).slice(0, 2).map(s => s[0]).join('').toUpperCase()}</span>
+              <span className="account-chevron" aria-hidden="true">⌄</span>
+            </summary>
+            <div className="header-menu-panel account-panel">
+              <div className="account-identity">
+                <b>{me.name || me.email}</b>
+                <span>{me.email}</span>
+              </div>
+              {me.role && <div className="account-meta"><span>Role</span><b>{me.role}</b></div>}
+              {rubric && <div className="account-meta"><span>Rubric</span><b>{rubric.target} · {rubric.hash.slice(0, 8)}</b></div>}
+              <div className="account-meta"><span>Build</span><b title={`Built ${fmtStamp(__BUILD_TIME__)} (your local time)`}>
+                {void tick}v{platformVersion || __BUILD_VERSION__} PT · {timeAgo(__BUILD_TIME__)}
+              </b></div>
+              <div className="menu-separator" />
+              {me.allow?.includes('settings') && <button className="menu-action" aria-label="Platform settings" onClick={() => setSettingsOpen(true)}>⚙ <span>Settings</span></button>}
           {/* SWITCH ACCOUNT — a full teardown, then the sign-in screen, which now asks Google
               and Microsoft for an account chooser rather than reusing the browser's single
               signed-in session.
@@ -1657,7 +1658,7 @@ export default function App() {
               account while reading another's Drive, with the scans owned by the first — the
               wrong half of a switch, and invisible. So this does the same complete teardown as
               sign out and differs only in saying what it is for. */}
-          <button className="ghost small" title="Sign out and choose a different Google or Microsoft account"
+              <button className="menu-action" title="Sign out and choose a different Google or Microsoft account"
                   onClick={async () => {
             // Best-effort: clear the running scan's backend token store so the worker
             // doesn't keep credentials that are about to become invalid.
@@ -1666,8 +1667,8 @@ export default function App() {
             clearActivityStorage()
             try { sessionStorage.clear() } catch { /* ignore */ }
             window.location.reload()
-          }}>switch account</button>
-          <button className="ghost small" onClick={async () => {
+              }}>⇄ <span className="menu-action-label">switch account</span></button>
+              <button className="menu-action menu-action--danger" onClick={async () => {
             // Best-effort: clear the running scan's backend token store so the worker
             // doesn't keep credentials that are about to become invalid.
             try { const a = await getActiveScan(); if (a?.id) await clearScanTokens(a.id) } catch { /* ignore */ }
@@ -1677,7 +1678,9 @@ export default function App() {
             // on this browser — no scan, decisions, assess phase, or files survive.
             try { sessionStorage.clear() } catch { /* ignore */ }
             window.location.reload()
-          }}>sign out</button>
+              }}>↪ <span className="menu-action-label">sign out</span></button>
+            </div>
+          </details>
         </div>
       </header>
       {backendDown && (() => {
@@ -1752,7 +1755,12 @@ export default function App() {
           </button>
         </div>
       )}
-      {me.scope && <div className="scopebar"><i className="scopedot" />access scope · <b>{me.scope}</b></div>}
+      <div className="header-context" aria-label="Current workspace context">
+        {me.scope && <span><i className="scopedot" /><b>{me.scope}</b></span>}
+        {rubric && <span><b>{rubric.target}</b></span>}
+        {allFiles.length > 0 && <span><b>{allFiles.length.toLocaleString()}</b> documents</span>}
+        {run?.completed_at && run?.status !== 'failed' && <span className="context-verified">✓ Verified</span>}
+      </div>
 
       <nav aria-label="Compliance workflow">
         <div className="tabs" role="tablist" aria-label="Compliance workflow">
