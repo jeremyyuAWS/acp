@@ -26,7 +26,6 @@ from .values import build_values, render_values_yaml
 NOT_YET_IMPLEMENTED = {
     "init": "guided configuration (PRD S10) — phase 2",
     "install": "provisioning — phase 3+, deliberately out of the first slice (PRD S23.6)",
-    "status": "reads a live installation — phase 2",
     "upgrade": "phase 5",
     "rollback": "phase 5",
     "backup": "phase 5",
@@ -142,6 +141,72 @@ def cmd_doctor(args) -> int:
     return 0 if report["ok"] else 1
 
 
+def cmd_status(args) -> int:
+    """Is the running installation healthy, and is it still what the document describes?
+
+    EXIT CODES, chosen for what a pipeline should do:
+
+        0  installed, healthy, and matching the document
+        1  installed but degraded or drifted, OR a blocking check that could not run, OR nothing
+           is installed here at all — the last is a definite answer to a question the operator
+           asked, not an absence of one
+        2  the cluster could not be reached, so nothing was established. Retryable; 1 is not.
+    """
+    from . import cluster as cluster_mod
+    from . import installation as installation_mod
+    from . import status as status_mod
+
+    document, result = _load_and_validate(args.spec)
+    if not result.ok:
+        _print_findings("Errors", result.errors, sys.stderr)
+        print(f"\nrefusing to read status: {args.spec} is invalid", file=sys.stderr)
+        return 1
+
+    values = build_values(document)
+    namespace = args.namespace or (document.get("metadata") or {}).get("name") or "acp"
+
+    # Reachability is established by the same probe doctor uses, so the two commands agree about
+    # what "the cluster is not there" means — and so status does not report an empty installation
+    # for a cluster it simply could not contact.
+    probe = cluster_mod.gather(namespace=namespace, context=args.context)
+    if not probe.reachable:
+        report = status_mod.report({}, installation_mod.InstallationFacts(), namespace=namespace,
+                                   reachable=False, unreachable_reason=probe.unreachable_reason)
+    else:
+        facts = installation_mod.gather(namespace=namespace, context=args.context)
+        report = status_mod.report(values, facts, namespace=namespace)
+
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        _print_status(report, spec=args.spec)
+
+    if not report["reachable"]:
+        return 2
+    return 0 if report["ok"] else 1
+
+
+def _print_status(report: dict, *, spec: str) -> None:
+    print(f"acpctl status — {spec}")
+    print(f"namespace: {report['namespace']}")
+    print()
+    for check in report["checks"]:
+        from .doctor import Check
+        print(Check(**check).render())
+    print()
+    if not report["reachable"]:
+        print("NOTHING WAS CHECKED — the cluster could not be reached. This is not a healthy "
+              "installation; it is no information at all.")
+        return
+    print(f"{report['blockers']} blocker(s), {report['warnings']} warning(s), "
+          f"{report['unknown']} could not be determined")
+    if report["drifted"]:
+        print("DRIFT: what is running is not what this document describes. The document is meant "
+              "to be the record of what was installed, and the next change will be based on it.")
+    if report["ok"] and not report["drifted"]:
+        print("Healthy, and matching the document.")
+
+
 def _print_doctor(report: dict, *, spec: str) -> None:
     print(f"acpctl doctor — {spec}")
     if report["reachable"]:
@@ -199,6 +264,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--context", default=None, help="kubeconfig context to use")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p.set_defaults(func=cmd_doctor)
+
+    p = sub.add_parser(
+        "status", help="health and drift of a running installation (reads only, changes nothing)")
+    p.add_argument("spec")
+    p.add_argument("--namespace", "-n", default=None,
+                   help="namespace to read (default: the document's metadata.name)")
+    p.add_argument("--context", default=None, help="kubeconfig context to use")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
+    p.set_defaults(func=cmd_status)
 
     for name, why in sorted(NOT_YET_IMPLEMENTED.items()):
         p = sub.add_parser(name, help=f"not yet implemented — {why}")

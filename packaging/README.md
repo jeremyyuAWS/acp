@@ -73,6 +73,7 @@ python -m acpctl plan      packaging/examples/standard-production.acp-deployment
 python -m acpctl inventory packaging/examples/regulated.acp-deployment.yaml --json
 python -m acpctl values    packaging/examples/regulated.acp-deployment.yaml
 python -m acpctl doctor    packaging/examples/standard-production.acp-deployment.yaml
+python -m acpctl status    packaging/examples/standard-production.acp-deployment.yaml
 ```
 
 `validate` exits 0 on success and 1 on any error; warnings are printed and never fail. The
@@ -121,6 +122,58 @@ failure counts as a blocker.
 and says so in the finding rather than implying certainty. It does not connect to Postgres, Redis
 or object storage either; that would mean shipping credentials to a laptop. The connection-budget
 rule in `spec.py` is the static half of that question.
+
+## `status` — is what is running still what the document says?
+
+`doctor` asks whether a cluster *can* run the document, before an install. `status` asks whether
+what is running *is* the document, after one. Same read-only guarantee: it reuses the same kubectl
+allow-list, and the end-to-end test asserts on the log that every call it made was a read.
+
+```bash
+python -m acpctl status <spec> -n acp-production
+python -m acpctl status <spec> --context prod --json
+```
+
+| Exit | Meaning |
+|---|---|
+| 0 | installed, healthy, and matching the document |
+| 1 | degraded, drifted, nothing installed here, or a blocking check that could not run |
+| 2 | the cluster could not be reached — retryable, and deliberately not 1 |
+
+### The drift half is the part nothing else does
+
+`kubectl get pods` shows health. What no other tool checks is whether the deployment document
+still describes the installation — and `acpctl values` stamps this on every file it renders:
+
+> edit the deployment document and regenerate, or the two disagree and the document stops being
+> the record of what was installed
+
+A `kubectl scale`, a hand-edited values file, a half-finished upgrade: each leaves the document
+describing something that no longer exists, silently, and the document is what the next operator
+reads before making a change.
+
+### Autoscaling is not drift
+
+The obvious check compares running replicas against the document's `replicaCount` — and fires on
+**every healthy autoscaled tier**, because `replicaCount` is the floor and a KEDA tier configured
+3–10 and sitting at 7 is the system working. A report that is red on every correct installation is
+one nobody reads, and then the real drift is unread with it.
+
+So an autoscaled tier is judged on whether its count is inside its range; a tier with no
+autoscaler is judged on the exact number, since nothing legitimately changes it. Those are
+opposite rules and they are separate branches, not one comparison with a tolerance.
+
+Two more comparisons that look obvious and are wrong:
+
+- **The release is compared on the `app.kubernetes.io/version` label, not the image string.**
+  `acpctl install` pins digests, so a correctly-installed release runs `repo@sha256:…` while the
+  document names a tag — comparing image strings would call every properly-pinned install drifted.
+- **The document is checked against the installation before anything else.** Pass the wrong
+  environment's file and every comparison below is against the wrong baseline; the output would be
+  a list of confident falsehoods that sends somebody to "fix" a healthy installation. Profile and
+  platform are on the labels, so that case is detectable — and when it fires, the comparison
+  stops rather than continuing in colour. Health is still reported, because health does not depend
+  on the document at all.
 
 ## The four profiles
 
