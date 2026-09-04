@@ -8,6 +8,7 @@ import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediat
 import EvidenceCard from './EvidenceCard.jsx'
 import { CAPABILITY_FALLBACK, fmtOf, autoSCs, modeFor, reviewRecommended } from './capability.js'
 import PagePreview from './PagePreview.jsx'
+import SharePointMetadata from './SharePointMetadata.jsx'
 import { WCAG } from './wcagCatalog.js'
 import { confidenceForFinding, confidenceForCoverage, confClass } from './confidence.js'
 import { TraceChip } from './Transparency.jsx'
@@ -757,6 +758,10 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
       </div>
     </>
   )
+  // SharePoint's own vocabulary for this document, WITH per-field read state — see
+  // SharePointMetadata.jsx for why the second half is the point. Renders nothing for a Drive or
+  // local file, which carry no such record.
+  const spBlock = <SharePointMetadata metadata={file.sp_metadata} />
   const ontBlock = file.ont && (
     <>
       <h4 className="drawerh">Business classification · your ontology</h4>
@@ -797,6 +802,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
         {tagBlock}
         {ontBlock}
         {metaBlock}
+        {spBlock}
         <FileLocation file={file} />
         <h4 className="drawerh">Retention recommendation</h4>
         <div className="reccard" style={{ borderColor: ret.fg + '55' }}>
@@ -991,6 +997,7 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
           (see the <AccessibilityStatus> above), so there is one card, one action, one estimate. */}
 
       {metaBlock}
+      {spBlock}
       <FileLocation file={file} />
 
       {tagBlock}

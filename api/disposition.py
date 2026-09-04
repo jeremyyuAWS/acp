@@ -38,7 +38,39 @@ FIELDS = {"department", "business_criticality", "regulatory_tags", "triage_score
          # ADR-0020-stage-2 classification Discover already shows ("pdf-document",
          # "spreadsheet", "image", ...); size_kb is the scanner's own inventory size,
          # newly threaded through to `documents` by upsert_document alongside it.
-         "doc_class", "size_kb"}
+         "doc_class", "size_kb",
+         # SharePoint-NATIVE rule inputs (Phase 2). The point of the SharePoint connector is that
+         # the customer has already done the information architecture — content types, retention
+         # labels, a records category column — and a rule keyed on ACP's own guesses ignores all
+         # of it. "Archive anything under the Superseded content type" is a rule a records
+         # manager can defend to an auditor; "archive anything older than 7 years" is one they
+         # have to justify from scratch.
+         #
+         # NULL on every non-SharePoint source, and — the part that matters — NULL is also what a
+         # field ACP could not READ looks like here. A rule keyed on retention_label therefore
+         # matches nothing on an estate whose labels Graph refused, exactly as it does on an
+         # estate with no labels. That is why the availability map is persisted beside the value
+         # (scan_inventory.sp_metadata) and surfaced in the export: the rule cannot tell the two
+         # apart, so the human reading its output has to be able to.
+         "content_type", "retention_label", "sensitivity_label", "sharing_scope",
+         "item_kind", "checked_out_by", "site_name", "library_name"}
+
+#: A rule may also key on the tenant's OWN managed columns, written `managed:<Column Name>` —
+#: `{"field": "managed:Records Category", "op": "eq", "value": "Superseded"}`.
+#:
+#: Dynamic by necessity, not by preference: managed metadata means the customer names the
+#: columns, so an allow-list of known fields cannot exist and a schema column per column would
+#: need a migration per customer. The prefix keeps them namespaced away from ACP's own fields, so
+#: a tenant with a column literally called "owner" cannot shadow the built-in one.
+MANAGED_PREFIX = "managed:"
+
+
+def managed_field(field: str) -> str | None:
+    """The tenant column a `managed:` field names, or None when it is not one of those."""
+    if isinstance(field, str) and field.startswith(MANAGED_PREFIX):
+        name = field[len(MANAGED_PREFIX):].strip()
+        return name or None
+    return None
 
 
 def _iso_before(a, b) -> bool:
@@ -72,8 +104,10 @@ def validate_match(match: list[dict]) -> None:
     for cond in match:
         if not isinstance(cond, dict) or "field" not in cond or "op" not in cond:
             raise ValueError(f"malformed condition: {cond!r}")
-        if cond["field"] not in FIELDS:
-            raise ValueError(f"unknown field: {cond['field']!r} (allowed: {sorted(FIELDS)})")
+        if cond["field"] not in FIELDS and managed_field(cond["field"]) is None:
+            raise ValueError(
+                f"unknown field: {cond['field']!r} (allowed: {sorted(FIELDS)}, or "
+                f"{MANAGED_PREFIX}<SharePoint column name>)")
         if cond["op"] not in _OPS:
             raise ValueError(f"unknown op: {cond['op']!r} (allowed: {sorted(_OPS)})")
 
@@ -136,20 +170,55 @@ def _parent_folder(path: str | None) -> str | None:
     return posixpath.dirname(path)
 
 
-def matches(doc: dict, match: list[dict]) -> bool:
-    """True iff `doc` satisfies every condition (AND) in `match`. Assumes
-    validate_match already passed — does not re-check field/op safety."""
+def _values(doc: dict) -> dict:
+    """The doc plus its derived fields — one place, so matches() and evaluate() cannot disagree
+    about what a condition was tested against."""
     # source_modified is a documents-table column other work is adding; read it
     # only via .get() so this module never assumes it exists.
-    values = {
+    return {
         **doc,
         "age_days": _days_since(doc.get("created_at")),
         "modified_age_days": _days_since(doc.get("source_modified")),
         "modified_at": doc.get("source_modified"),
         "parent_folder": _parent_folder(doc.get("path")),
     }
+
+
+def _read(values: dict, field: str):
+    """One field's observed value, including the tenant's own SharePoint columns.
+
+    A `managed:` field is looked up in `managed_columns` — the bag scanner writes from the
+    expanded listItem — rather than in the doc's own keys, so a tenant column can never shadow
+    or be shadowed by an ACP field of the same name.
+
+    CASE-INSENSITIVE on the column name, because the name in a rule is typed by a human reading
+    it off a SharePoint list header and the name in the payload is Graph's internal spelling;
+    a rule that silently matches nothing because of a capital letter is indistinguishable from a
+    rule that correctly matches nothing, which is the failure mode this whole module documents.
+    """
+    name = managed_field(field)
+    if name is None:
+        return values.get(field)
+    cols = values.get("managed_columns")
+    if not isinstance(cols, dict):
+        return None
+    if name in cols:
+        return cols[name]
+    lowered = name.lower()
+    for k, v in cols.items():
+        if str(k).lower() == lowered:
+            return v
+    return None
+
+
+def matches(doc: dict, match: list[dict]) -> bool:
+    """True iff `doc` satisfies every condition (AND) in `match`. Assumes
+    validate_match already passed — does not re-check field/op safety."""
+    # source_modified is a documents-table column other work is adding; read it
+    # only via .get() so this module never assumes it exists.
+    values = _values(doc)
     for cond in match:
-        if not _OPS[cond["op"]](values.get(cond["field"]), cond.get("value")):
+        if not _OPS[cond["op"]](_read(values, cond["field"]), cond.get("value")):
             return False
     return True
 
@@ -169,11 +238,28 @@ _OP_WORDS = {
 }
 
 
-def _condition_reason(op: str, field: str, observed, expected, passed: bool) -> str:
+def _condition_reason(op: str, field: str, observed, expected, passed: bool,
+                      availability: dict | None = None, reasons: dict | None = None) -> str:
     """Human-readable explanation for one condition's outcome."""
     absent = observed is None
     src = _DERIVED_FROM.get(field)
     absent_label = f"'{src}' not recorded" if src else f"'{field}' not recorded"
+    # A SharePoint-native field that was not read says so, instead of borrowing the wording for a
+    # field the tenant left unset. Same sentence position, opposite meaning, and the difference is
+    # what the reader of this evidence is deciding on.
+    # A `managed:` condition's availability is the bag's, not a key of its own: the whole column
+    # set arrives together or not at all, so "Records Category was not read" is a fact about the
+    # listItem expansion, recorded once.
+    state = (availability or {}).get(
+        "managed_columns" if managed_field(field) else field)
+    if absent and state == "unavailable":
+        why = (reasons or {}).get(field) or (reasons or {}).get("managed_columns")
+        absent_label = (f"'{field}' was NOT READ from SharePoint, so this rule could not be "
+                        f"evaluated against it" + (f" — {why}" if why else ""))
+    elif absent and state == "not_configured":
+        absent_label = f"SharePoint records no '{field}' on this document"
+    elif absent and state == "not_applicable":
+        absent_label = f"'{field}' does not apply to this document"
 
     if not passed:
         if absent and op in ("gt", "gte", "lt", "lte", "before", "after", "eq"):
@@ -237,18 +323,20 @@ def evaluate(doc: dict, match: list[dict]) -> dict:
     The per-condition rows make it possible to explain to a reviewer exactly why a file
     did or did not satisfy a rule, including when a missing metadata field was the cause.
     """
-    values = {
-        **doc,
-        "age_days": _days_since(doc.get("created_at")),
-        "modified_age_days": _days_since(doc.get("source_modified")),
-        "modified_at": doc.get("source_modified"),
-        "parent_folder": _parent_folder(doc.get("path")),
-    }
+    values = _values(doc)
+    # WHY a SharePoint field was empty, when the row carries it. `sp_availability` is the
+    # per-field state scanner recorded at discovery ({"retention_label": "unavailable", ...}) and
+    # `sp_reasons` the message that went with it. Without them a rule's evidence says
+    # "'retention_label' not recorded" for two situations that mean opposite things — the tenant
+    # applies no retention labels (an answer) versus Graph refused to hand them over (a task) —
+    # and an auditor reading the evidence cannot tell which conclusion the rule supports.
+    availability = doc.get("sp_availability") if isinstance(doc.get("sp_availability"), dict) else {}
+    reasons = doc.get("sp_reasons") if isinstance(doc.get("sp_reasons"), dict) else {}
     rows = []
     all_passed = True
     for cond in match:
         field, op, expected = cond["field"], cond["op"], cond.get("value")
-        observed = values.get(field)
+        observed = _read(values, field)
         passed = bool(_OPS[op](observed, expected))
         if not passed:
             all_passed = False
@@ -258,7 +346,8 @@ def evaluate(doc: dict, match: list[dict]) -> dict:
             "value": expected,
             "observed_value": observed,
             "outcome": "pass" if passed else "fail",
-            "reason": _condition_reason(op, field, observed, expected, passed),
+            "reason": _condition_reason(op, field, observed, expected, passed,
+                                        availability=availability, reasons=reasons),
         })
     return {"matched": all_passed, "conditions": rows}
 
