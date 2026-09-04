@@ -3,6 +3,23 @@
 **Status:** Proposal for the platform owner. **Nothing here is applied**, and no Azure setting was
 read or changed to produce it. **Created:** 30 August 2026.
 
+> **Correction, 4 September 2026 — the topology in §1 and §2 is stale, and the headline number is
+> an understatement.** Everything below models ONE worker tier at 3–10 replicas. Production runs
+> `acp-app` plus THREE role-restricted worker apps (`acp-discovery` 1–2, `acp-assess` 5–5,
+> `acp-remediate` 5–5 — `deploy/public/rightsize-production.sh`, and `docs/worker-split.md`). The
+> split multiplied the term that already dominated: the steady ceiling is **384**, not 328, at the
+> same carried `ACP_WORKERS=12`.
+>
+> Two consequences for §3. There is no tier at max 10 for "worker `--max-replicas` 10 → 4" to act
+> on; and carried onto the deployed shape, that cut does **not** reach the budget — 328 on its own,
+> and still **156** with `ACP_DB_MAX_CONN=12` on every app. It would pay the throughput cost
+> (rightsize-production.sh keeps five replicas warm deliberately, for the batch stages' performance
+> baseline) without buying the margin.
+>
+> `tests/test_db_connection_budget.py` now computes over N tiers and pins all of the above. §4's
+> preconditions are unchanged and still come first — `docs/runbooks/verify-connection-budget-inputs.md`
+> is the read-only procedure for step 1.
+
 The arithmetic below is executable: `tests/test_db_connection_budget.py` derives every pool from
 the same `db_max_conn()` the containers use, so a change to the formula moves these numbers
 instead of silently invalidating them. A budget nobody can run is a budget nobody checks — which

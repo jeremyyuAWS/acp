@@ -33,6 +33,7 @@ WHAT IS VERIFIED HERE vs WHAT IS CARRIED:
 """
 from __future__ import annotations
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -50,21 +51,58 @@ def pool_for(workers: int, override: int | None = None) -> int:
     return db_max_conn(env)
 
 
-def fleet_ceiling(*, api_max, api_min, worker_max, worker_min, worker_threads,
-                  api_override=None, worker_override=None, overlap=True) -> int:
-    """Connections the fleet may hold at once.
+@dataclass(frozen=True)
+class Tier:
+    """One container app: its replica range, its thread count, and any pool override.
+
+    A TIER, not "the API and the worker". The two-tier shape this file was written around no
+    longer describes production, which runs acp-app plus THREE role-restricted worker apps
+    (acp-discovery / acp-assess / acp-remediate, per docs/worker-split.md and
+    deploy/public/rightsize-production.sh). The old signature could not express that at all, so
+    the budget it computed was for a topology that had been split underneath it — which is the
+    same way the 3-10 replica model went stale.
+    """
+
+    name: str
+    max_replicas: int
+    min_replicas: int
+    threads: int                      # ACP_WORKERS on that app; 0 for the API tier
+    override: int | None = None       # ACP_DB_MAX_CONN, if one is set
+
+    @property
+    def pool(self) -> int:
+        return pool_for(self.threads, self.override)
+
+    @property
+    def ceiling(self) -> int:
+        return self.max_replicas * self.pool
+
+
+def fleet_ceiling_tiers(tiers: "list[Tier]", *, overlap: bool = True) -> int:
+    """Connections the fleet may hold at once, over any number of tiers.
 
     One process per replica (verified: uvicorn with no --workers). `overlap` adds the OUTGOING
     revision at its MINIMUM replicas — a rolling deploy runs both revisions, and the incoming one
     is what scales to max under load, so min-of-old plus max-of-new is the realistic worst case
     rather than a doubling of everything.
     """
-    api = pool_for(0, api_override)
-    wrk = pool_for(worker_threads, worker_override)
-    total = api_max * api + worker_max * wrk
+    total = sum(t.ceiling for t in tiers)
     if overlap:
-        total += api_min * api + worker_min * wrk
+        total += sum(t.min_replicas * t.pool for t in tiers)
     return total
+
+
+def fleet_ceiling(*, api_max, api_min, worker_max, worker_min, worker_threads,
+                  api_override=None, worker_override=None, overlap=True) -> int:
+    """The two-tier form, kept because the proposal below is stated in it.
+
+    Delegates to `fleet_ceiling_tiers` rather than repeating the arithmetic, so the two cannot
+    disagree; `test_the_two_tier_form_is_the_general_form` holds that.
+    """
+    return fleet_ceiling_tiers([
+        Tier("api", api_max, api_min, 0, api_override),
+        Tier("worker", worker_max, worker_min, worker_threads, worker_override),
+    ], overlap=overlap)
 
 
 # Operational reserve: schema migrations, scripts/monitor.py, an admin psql session, Azure
@@ -167,3 +205,130 @@ def test_an_override_below_the_floor_is_still_clamped():
     """A budget must not be settable to something that cannot serve a request at all."""
     assert pool_for(12, 0) == 2
     assert pool_for(12, 1) == 2
+
+
+# ── The deployed shape is THREE worker tiers, not one ─────────────────────────────────────────
+#
+# Everything above models one worker tier at 3-10 replicas. Production does not have one. It runs
+# acp-app plus three role-restricted worker apps, and deploy/public/rightsize-production.sh is the
+# reviewed capacity baseline that sets them:
+#
+#     acp-app        1.0 CPU  2Gi  replicas 1-3
+#     acp-discovery  1.0 CPU  2Gi  replicas 1-2
+#     acp-assess     2.0 CPU  4Gi  replicas 5-5
+#     acp-remediate  2.0 CPU  4Gi  replicas 5-5
+#
+# So "cut worker max-replicas from 10 to 4" has no tier to act on: nothing in the repo's own
+# baseline is at 10. The tests below recompute against the shape that is actually configured.
+#
+# WHAT IS CARRIED AND WHAT IS NOT. The replica ranges are VERIFIED in this repo
+# (rightsize-production.sh). ACP_WORKERS on the three worker apps is NOT: deploy/public/
+# redeploy.sh sets it on none of them, so each inherits whatever was set out of band, and
+# api/worker_main.py forces 12 when it is unset. Rather than pick one and present it as fact,
+# these tests assert over BOTH plausible values — 2 (deploy.sh's ACP_WORKER_COUNT default) and 12
+# (the 2026-08-30 Azure read) — and assert only the conclusion that holds either way.
+
+# Verified: deploy/public/rightsize-production.sh.
+RIGHTSIZE_REPLICAS = {
+    "acp-app": (1, 3),
+    "acp-discovery": (1, 2),
+    "acp-assess": (5, 5),
+    "acp-remediate": (5, 5),
+}
+PLAUSIBLE_WORKER_THREADS = (2, 12)
+
+
+def deployed_tiers(worker_threads: int, *, worker_override=None, api_override=None,
+                   assess_range=None, remediate_range=None) -> list[Tier]:
+    """The four production container apps, with the worker replica ranges optionally overridden."""
+    ranges = dict(RIGHTSIZE_REPLICAS)
+    if assess_range:
+        ranges["acp-assess"] = assess_range
+    if remediate_range:
+        ranges["acp-remediate"] = remediate_range
+    tiers = [Tier("acp-app", ranges["acp-app"][1], ranges["acp-app"][0], 0, api_override)]
+    for name in ("acp-discovery", "acp-assess", "acp-remediate"):
+        lo, hi = ranges[name]
+        tiers.append(Tier(name, hi, lo, worker_threads, worker_override))
+    return tiers
+
+
+@pytest.mark.parametrize("threads", PLAUSIBLE_WORKER_THREADS)
+def test_the_deployed_three_tier_shape_exceeds_the_server_whatever_acp_workers_is(threads):
+    """The corrected finding. 328 was for a topology production no longer has.
+
+    Asserted over both plausible thread counts because the real one is not knowable from this
+    repository, and the conclusion does not depend on it.
+    """
+    steady = fleet_ceiling_tiers(deployed_tiers(threads), overlap=False)
+    assert steady + RESERVE_PROD > PROD_LIMIT, (
+        f"at ACP_WORKERS={threads} the deployed four-app shape now fits {PROD_LIMIT} "
+        f"(steady {steady}) — update docs/db-connection-budget.md, which still says it does not")
+
+
+def test_the_split_raised_the_ceiling_above_the_single_worker_tier_model():
+    """Splitting one worker tier into three multiplied the term that already dominated.
+
+    Pinned because docs/db-connection-budget.md's headline number (328) is now an UNDERSTATEMENT
+    of the shape it was describing, and an understated budget is the kind that gets accepted.
+    """
+    single_tier = fleet_ceiling(**PROD_TODAY, overlap=False)
+    three_tier = fleet_ceiling_tiers(deployed_tiers(12), overlap=False)
+    assert single_tier == 328
+    assert three_tier == 384
+    assert three_tier > single_tier
+
+
+@pytest.mark.parametrize("threads", PLAUSIBLE_WORKER_THREADS)
+def test_cutting_assess_and_remediate_to_four_does_not_reach_the_budget(threads):
+    """Why "cut worker max-replicas to 4" is not sufficient on its own.
+
+    It is the doc's proposal carried onto the deployed shape, and it does not arrive: the cut pays
+    the throughput cost (rightsize-production.sh keeps five replicas warm deliberately, for the
+    batch stages' performance baseline) without buying the safety margin it was supposed to buy.
+    """
+    cut = deployed_tiers(threads, assess_range=(1, 4), remediate_range=(1, 4))
+    steady = fleet_ceiling_tiers(cut, overlap=False)
+    assert steady + RESERVE_PROD > PROD_LIMIT, (
+        f"cutting to 4 now fits at ACP_WORKERS={threads} (steady {steady}) — recompute the "
+        f"proposal in docs/db-connection-budget.md")
+
+
+def test_cutting_to_four_does_not_fit_even_with_the_proposed_pool_override():
+    """The proposal's OTHER half does not rescue it either, on the three-tier shape.
+
+    ACP_DB_MAX_CONN=12 on every app, with assess and remediate at max 4, still lands over the
+    server. This is the arithmetic behind "verify the live configuration before tuning": the
+    published proposal was computed for two tiers and does not transfer.
+    """
+    cut = deployed_tiers(12, worker_override=12, api_override=12,
+                         assess_range=(1, 4), remediate_range=(1, 4))
+    steady = fleet_ceiling_tiers(cut, overlap=False)
+    assert steady == 156
+    assert steady + RESERVE_PROD > PROD_LIMIT
+
+
+def test_the_two_tier_form_is_the_general_form():
+    """Bite check for the refactor: the old signature must not have acquired its own arithmetic."""
+    kwargs = dict(api_max=3, api_min=1, worker_max=10, worker_min=3, worker_threads=12)
+    explicit = fleet_ceiling_tiers([
+        Tier("api", 3, 1, 0), Tier("worker", 10, 3, 12),
+    ])
+    assert fleet_ceiling(**kwargs) == explicit
+    assert fleet_ceiling(**kwargs, overlap=False) == fleet_ceiling_tiers(
+        [Tier("api", 3, 1, 0), Tier("worker", 10, 3, 12)], overlap=False)
+
+
+def test_the_replica_ranges_here_match_the_rightsize_script():
+    """These numbers are only worth asserting on if they still describe the reviewed baseline."""
+    import re
+    script = (Path(__file__).resolve().parent.parent
+              / "deploy" / "public" / "rightsize-production.sh").read_text()
+    found = {
+        m.group(1): (int(m.group(2)), int(m.group(3)))
+        for m in re.finditer(r"^update_app\s+(\S+)\s+\S+\s+\S+\s+(\d+)\s+(\d+)", script, re.M)
+    }
+    for name, expected in RIGHTSIZE_REPLICAS.items():
+        assert found.get(name) == expected, (
+            f"{name} is {found.get(name)} in rightsize-production.sh but {expected} here — the "
+            f"baseline moved, so every number in this section needs recomputing")
