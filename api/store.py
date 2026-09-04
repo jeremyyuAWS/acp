@@ -9709,6 +9709,22 @@ class Store:
         result = [grouped[key] for key in active | recent]
         for item in result:
             item["status"] = "active" if (item["queued"] or item["running"]) else "recent"
+        # Confirmed findings so far, for the throughput panel's findings-per-minute. One aggregate
+        # per ACTIVE assess run — bounded by concurrent runs, not by estate size — and deliberately
+        # not taken for recent ones, which are finished and whose count no longer moves. It is the
+        # SAME SUM the certification report totals (live_findings_count), so a rate derived from it
+        # reconciles with the final cert rather than being a second, divergent tally.
+        #
+        # None, never 0, when the store cannot answer: a run with no findings and a run whose
+        # findings could not be counted are different facts.
+        _findings = getattr(self, "live_findings_count", None)
+        for item in result:
+            item["findings"] = None
+            if callable(_findings) and item["status"] == "active" and item["stage"] == "assess":
+                try:
+                    item["findings"] = int(_findings(item["scan_id"]))
+                except Exception:
+                    item["findings"] = None
         waiting = sorted((r for r in result if r["queued"]),
                          key=lambda r: str(r.get("oldest_queued_at") or ""))
         for position, item in enumerate(waiting, 1):

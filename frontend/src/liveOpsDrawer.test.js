@@ -11,8 +11,8 @@ import {
   PROVENANCE, capacityForService, metricGroups, niceCeiling, num, outputModel, provenance,
   queueModel, rateSeries,
   replicaLifecycle, reported, revisionLabel, runModel, sampleForNode, saturationModel, scaleEvents,
-  scaleExplanation, secondsSince, seriesForMetric, sourceModel, tenantConcentration, trendMarkers,
-  updatedAgo, workerJobHealth,
+  scaleExplanation, secondsSince, seriesForMetric, sourceModel, tenantConcentration, throughputModel,
+  trendMarkers, updatedAgo, workerJobHealth,
 } from './liveOpsDrawer.js'
 
 const NOW = Date.parse('2026-09-04T14:32:00Z')
@@ -740,5 +740,64 @@ describe('Each worker service reads its own container app', () => {
     const single = { configured: true, worker_app_name: 'acp-assess', cpu_cores_per_replica: 2 }
     expect(capacityForService(single, { role: 'assess' })).toBe(single)
     expect(capacityForService(single, { role: 'discovery' })).toBe(null)
+  })
+})
+
+
+describe('Throughput, and how it compares with five minutes ago', () => {
+  const at = (offsetS, documents) => ({ at: iso(offsetS), documents })
+
+  it('measures the current rate from the counter change over real elapsed time', () => {
+    // 60 documents over 300s = 12/min.
+    const model = throughputModel([at(-300, 100), at(0, 160)], 'documents', { nowMs: NOW })
+    expect(model.current).toBe(12)
+  })
+
+  it('compares like with like, both halves measured the same way', () => {
+    // Previous five minutes: 30 over 300s = 6/min. Current: 60 over 300s = 12/min.
+    const model = throughputModel(
+      [at(-600, 70), at(-300, 100), at(-299, 100), at(0, 160)], 'documents', { nowMs: NOW })
+    expect(model.previous).toBe(6)
+    expect(model.current).toBe(12)
+    expect(model.change).toBe(6)
+    expect(model.direction).toBe('up')
+    expect(model.reason).toBe(null)
+  })
+
+  it('refuses a comparison against half a window, and says which half is missing', () => {
+    // A tab open four minutes has a rate but nothing honest to compare it against.
+    const model = throughputModel([at(-240, 100), at(0, 160)], 'documents', { nowMs: NOW })
+    expect(model.current).not.toBe(null)
+    expect(model.previous).toBe(null)
+    expect(model.change).toBe(null)
+    expect(model.reason).toMatch(/needs a full 5 minutes before this one/)
+  })
+
+  it('says when there is not even a rate yet', () => {
+    expect(throughputModel([at(0, 100)], 'documents', { nowMs: NOW }).reason)
+      .toMatch(/two readings at least 30s apart/)
+    // Two readings four seconds apart are not a rate either.
+    expect(throughputModel([at(-4, 100), at(0, 101)], 'documents', { nowMs: NOW }).current).toBe(null)
+  })
+
+  it('treats a counter going backwards as a change of subject, not negative throughput', () => {
+    // A redeploy, or a run ageing out of the snapshot's fifteen-minute tail. Work is not un-done.
+    expect(throughputModel([at(-300, 160), at(0, 100)], 'documents', { nowMs: NOW }).current).toBe(null)
+  })
+
+  it('reports a rate of nothing as nothing, which is a measurement', () => {
+    const model = throughputModel([at(-300, 100), at(0, 100)], 'documents', { nowMs: NOW })
+    expect(model.current).toBe(0)
+    expect(model.reason).toMatch(/needs a full 5 minutes/)
+  })
+
+  it('never counts findings that were not counted', () => {
+    // Only assess runs carry a findings count; a 0 would read as "no findings found".
+    const snapshot = { generated_at: iso(0), summary: { completed_jobs: 40,
+      by_stage: { assess: { findings: null }, remediate: { completed: 5 } } } }
+    const sample = sampleForNode({ kind: 'queue' }, { snapshot })
+    expect(sample.findings).toBe(null)
+    expect(sample.documents).toBe(40)
+    expect(sample.fixes).toBe(5)
   })
 })

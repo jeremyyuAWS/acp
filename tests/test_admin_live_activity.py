@@ -152,8 +152,12 @@ def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(mo
             "processing": {"alive": False, "pool_size": 4, "age_s": 999, "version": "v9"},
         },
         "by_stage": {
-            "assess": {"runs": 1, "running": 3, "queued": 8, "completed": 2, "total": 13},
-            "remediate": {"runs": 1, "running": 1, "queued": 2, "completed": 4, "total": 7},
+            # `findings` is None, not 0: this stub reports no findings count, and "no findings yet"
+            # is a different fact from "findings were not counted for this stage".
+            "assess": {"runs": 1, "running": 3, "queued": 8, "completed": 2, "total": 13,
+                       "findings": None},
+            "remediate": {"runs": 1, "running": 1, "queued": 2, "completed": 4, "total": 7,
+                          "findings": None},
         },
         # Stated, not omitted: ACP records which SERVICE ran a job, never which replica, because
         # the worker_instances registry that would carry that has no writer yet. Reading the empty

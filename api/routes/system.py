@@ -1355,10 +1355,15 @@ def _admin_activity_snapshot() -> dict:
     for run in runs:
         stage = run.get("stage") or "unknown"
         stage_row = by_stage.setdefault(stage, {"runs": 0, "running": 0, "queued": 0,
-                                                  "completed": 0, "total": 0})
+                                                  "completed": 0, "total": 0, "findings": None})
         stage_row["runs"] += 1
         for field in ("running", "queued", "completed", "total"):
             stage_row[field] += int(run.get(field) or 0)
+        # Summed only where it was counted. A stage whose runs report no findings gets None rather
+        # than 0, so "no findings yet" and "findings not counted for this stage" stay different —
+        # only assess runs carry a count (see store.admin_live_activity).
+        if run.get("findings") is not None:
+            stage_row["findings"] = int(stage_row.get("findings") or 0) + int(run["findings"])
     # The queue's own composition and rates, for the Live Operations queue visualization. Guarded
     # because an older store may not carry it: the drawer renders a missing row as "Not reported"
     # rather than as zero, so degrading to absent is honest and degrading to {} would not be.

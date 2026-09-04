@@ -239,6 +239,57 @@ export function capacityForService(capacity, service = {}) {
   return capacityMatchesService(capacity, service) ? capacity : null
 }
 
+/* ─────────────────────── Throughput ─────────────────────── */
+
+export const THROUGHPUT_SERIES = [
+  { key: 'documents', label: 'Documents', field: 'documents', unit: '/min' },
+  { key: 'findings', label: 'Findings', field: 'findings', unit: '/min' },
+  { key: 'fixes', label: 'Fixes', field: 'fixes', unit: '/min' },
+]
+
+/**
+ * A rate now, and how it compares with the five minutes before.
+ *
+ * Both halves are measured the same way — a cumulative counter's change divided by the real time
+ * between the first and last sample in each half — so the comparison is between like and like. It
+ * needs a full previous window to compare against, which is why a tab open for four minutes gets a
+ * current rate and an explicitly absent trend rather than a change computed from half a window and
+ * presented as if it meant the same thing.
+ *
+ * A counter that goes backwards (a redeploy, a run leaving the snapshot's fifteen-minute tail)
+ * yields null, not a negative rate: work is not un-done, so a fall in the counter is a change of
+ * what is being counted, not a measurement of throughput.
+ */
+export function throughputModel(series = [], field, { nowMs = Date.now(), halfMs = 5 * 60000 } = {}) {
+  const points = series
+    .map((point) => ({ t: new Date(point.at).getTime(), value: num(point[field]) }))
+    .filter((point) => Number.isFinite(point.t) && point.value != null)
+  const rateOver = (from, to) => {
+    const window = points.filter((point) => point.t >= from && point.t <= to)
+    if (window.length < 2) return null
+    const spanS = (window[window.length - 1].t - window[0].t) / 1000
+    if (spanS < 30) return null            // the same evidence rule the run ETA uses
+    const delta = window[window.length - 1].value - window[0].value
+    if (delta < 0) return null
+    return Math.round((delta / spanS) * 60 * 10) / 10
+  }
+  const current = rateOver(nowMs - halfMs, nowMs)
+  const previous = rateOver(nowMs - 2 * halfMs, nowMs - halfMs)
+  const change = current == null || previous == null ? null : Math.round((current - previous) * 10) / 10
+  return {
+    current, previous, change,
+    direction: change == null ? null : change > 0 ? 'up' : change < 0 ? 'down' : 'flat',
+    // Said, not implied by an empty space: the reader should know whether a missing trend means
+    // "nothing happened" or "not measured for long enough yet".
+    reason: current == null
+      ? 'Not enough samples yet — a rate needs two readings at least 30s apart.'
+      : previous == null
+        ? `No comparison yet — that needs a full ${Math.round(halfMs / 60000)} minutes before this one.`
+        : null,
+    windowMinutes: Math.round(halfMs / 60000),
+  }
+}
+
 /* ─────────────────────── Scaling activity ─────────────────────── */
 
 /**
@@ -783,6 +834,7 @@ export function sampleForNode(data = {}, ctx = {}) {
     memory_pct: null, failure_pct: null, replicas: null, oldest_wait_s: null,
     cpu_cores: null, working_set_bytes: null, restarts: null,
     network_in_bytes: null, network_out_bytes: null,
+    documents: null, findings: null, fixes: null,
     requests: null, response_ms: null, retries: null, connect_timeouts: null, ejected_hosts: null,
   }
   if (data.kind === 'worker') {
@@ -824,6 +876,12 @@ export function sampleForNode(data = {}, ctx = {}) {
       requests: ingress('requests'), response_ms: ingress('response_ms'),
       retries: ingress('retries'), connect_timeouts: ingress('connect_timeouts'),
       ejected_hosts: ingress('ejected_hosts'),
+      // Cumulative counters for the throughput panel. `findings` stays null unless a stage
+      // actually counted them — assess does, the others do not, and a 0 there would read as
+      // "no findings" rather than "not counted".
+      documents: num(summary.completed_jobs),
+      fixes: num(stages.remediate?.completed),
+      findings: num(stages.assess?.findings),
       active_jobs: num(summary.running), queue_depth: num(summary.queued),
       completed: num(summary.completed_jobs),
       failure_pct: failed == null || done == null || !denominator

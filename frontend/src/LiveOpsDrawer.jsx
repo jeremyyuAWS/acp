@@ -5,7 +5,8 @@ import {
   capacityForService, componentState, defaultMetricFor, eventClock, eventsForNode, filterEvents,
   formatDuration,
   REPLICA_STATES, gaugeModel, metricGroups, nodeTypeLabel, outputModel, provenance, queueModel,
-  replicaLifecycle, reported, saturationModel, scaleEvents, scaleExplanation, workerJobHealth,
+  THROUGHPUT_SERIES, replicaLifecycle, reported, saturationModel, scaleEvents, scaleExplanation,
+  throughputModel, workerJobHealth,
   revisionLabel, runModel, seriesForMetric, sourceModel, tenantConcentration, trendMarkers,
   updatedAgo,
 } from './liveOpsDrawer.js'
@@ -219,6 +220,37 @@ function ReplicaLifecycle({ lifecycle, nowMs, measuredAt }) {
       </li>)}
     </ul>}
     <Source kind="azure" at={measuredAt} nowMs={nowMs} detail="Container Apps control plane" />
+  </section>
+}
+
+/**
+ * Documents, findings and fixes per minute, each against the five minutes before it.
+ *
+ * The comparison is the point — a rate on its own says nothing about whether the system is
+ * catching up or falling behind. Where a rate or its comparison cannot be measured yet, the row
+ * says WHICH of the two is missing, because "nothing is happening" and "this tab has not been
+ * open long enough" are different answers and an empty cell means neither.
+ */
+function Throughput({ samples, nowMs }) {
+  const rows = THROUGHPUT_SERIES.map((series) => ({ ...series, ...throughputModel(samples, series.field, { nowMs }) }))
+  return <section aria-label="Throughput" style={{ ...PANEL, padding: 14 }}>
+    <b>Throughput</b>
+    <ul style={{ listStyle: 'none', margin: '9px 0 0', padding: 0, display: 'grid', gap: 7, fontSize: 12 }}>
+      {rows.map((row) => <li key={row.key} style={{ display: 'grid',
+        gridTemplateColumns: 'minmax(70px,1fr) auto auto', gap: 9, alignItems: 'baseline' }}>
+        <span>{row.label}</span>
+        <b>{row.current == null ? NOT_REPORTED : `${row.current}${row.unit}`}</b>
+        <span style={{ color: row.change == null ? 'var(--muted)'
+          : row.change > 0 ? TONE.ok : row.change < 0 ? TONE.warn : 'var(--muted)', fontSize: 11 }}>
+          {row.change == null ? '—'
+            : `${row.change > 0 ? '▲' : row.change < 0 ? '▼' : '■'} ${Math.abs(row.change)}${row.unit} vs previous ${row.windowMinutes} min`}
+        </span>
+      </li>)}
+    </ul>
+    {rows.some((row) => row.reason) && <p className="muted" style={{ fontSize: 11, margin: '8px 0 0' }}>
+      {rows.find((row) => row.reason).reason}
+    </p>}
+    <Source kind="session" nowMs={nowMs} />
   </section>
 }
 
@@ -706,11 +738,15 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
       health={workerJobHealth(snapshot, node.service?.stage, { nowMs })}
       queueDepth={snapshot?.summary?.by_stage?.[node.service?.stage]?.queued} />
   } else if (node?.kind === 'queue') {
-    primary = <QueueBar queue={queueModel(snapshot?.summary, { nowMs })} nowMs={nowMs}
+    primary = <><QueueBar queue={queueModel(snapshot?.summary, { nowMs })} nowMs={nowMs}
       generatedAt={snapshot?.generated_at} concentration={tenantConcentration(snapshot?.runs)} />
+      <Throughput samples={shown.samples} nowMs={nowMs} /></>
   } else if (node?.kind === 'run') {
     primary = <RunRadial run={node.run || {}} accent={accent}
       model={runModel(node.run, shown.samples, { nowMs })} />
+  } else if (node?.kind === 'intake') {
+    primary = <><IntakeSummary snapshot={snapshot} state={state} />
+      <Throughput samples={shown.samples} nowMs={nowMs} /></>
   } else if (node?.kind === 'source') {
     primary = <SourceHealth model={sourceModel(node, snapshot)} state={state} nowMs={nowMs} />
   } else if (node?.kind === 'output') {

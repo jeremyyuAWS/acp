@@ -454,6 +454,37 @@ describe('Replica lifecycle', () => {
   })
 })
 
+describe('Throughput panel', () => {
+  const counters = [
+    { at: iso(-600), documents: 70, fixes: 4, findings: 10 },
+    { at: iso(-300), documents: 100, fixes: 8, findings: 22 },
+    { at: iso(-299), documents: 100, fixes: 8, findings: 22 },
+    { at: iso(0), documents: 160, fixes: 20, findings: 22 },
+  ]
+
+  it('shows each rate against the five minutes before it', async () => {
+    const container = await mount({ nodeId: 'infra:queue', node: { kind: 'queue', label: 'Shared queue' },
+      samples: counters })
+    expect(container.textContent).toContain('Throughput')
+    expect(container.textContent).toContain('12/min')                 // documents now
+    expect(container.textContent).toContain('vs previous 5 min')
+  })
+
+  it('says which half is missing rather than leaving a blank cell', async () => {
+    const container = await mount({ nodeId: 'infra:queue', node: { kind: 'queue', label: 'Shared queue' },
+      samples: [{ at: iso(-240), documents: 100 }, { at: iso(0), documents: 160 }] })
+    expect(container.textContent).toContain('needs a full 5 minutes before this one')
+  })
+
+  it('reports a metric nobody counted as not reported', async () => {
+    const container = await mount({ nodeId: 'infra:queue', node: { kind: 'queue', label: 'Shared queue' },
+      samples: [{ at: iso(-300), documents: 100 }, { at: iso(0), documents: 160 }] })
+    const findings = [...container.querySelectorAll('li')].map((el) => el.textContent)
+      .find((text) => text.startsWith('Findings'))
+    expect(findings).toContain('Not reported')
+  })
+})
+
 describe('Trend strip', () => {
   const workerNode = { kind: 'worker', label: 'Assess workers', service }
 
