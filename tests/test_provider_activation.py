@@ -84,9 +84,10 @@ def test_readiness_names_every_missing_field(provider, cfg, expect_missing):
 
 
 def test_a_provider_with_no_adapter_is_never_ready():
-    """gemini and bedrock are in the catalogue so Settings can show them, with no adapter behind
-    them. Reporting them ready would arm an escalation that cannot fire."""
-    for name in ("gemini", "bedrock"):
+    """bedrock is in the catalogue so Settings can show it, with no adapter yet behind it.
+    Reporting it ready would arm an escalation that cannot fire. gemini is no longer in this set —
+    it has an adapter as of the gemini-adapter PR and is covered by the agreement guard below."""
+    for name in ("bedrock",):
         r = providers.activation_readiness(name, {"model": "x", "key_secret_ref": "K"})
         assert r["ready"] is False
         assert "no adapter" in r["detail"]
