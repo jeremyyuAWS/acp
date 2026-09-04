@@ -66,6 +66,15 @@ PRICE_BOOK: dict[str, Pricing] = {
     # your own number, it is the input that decides whether local beats hosted.
     "local-gpu": Pricing("local_amortised", usd_per_hour=1.10, note="one warm GPU host"),
     "local-cpu": Pricing("local_amortised", usd_per_hour=0.10, note="CPU-only container"),
+    # Named vendor tiers, first-party list prices per 1M tokens converted to per 1k, with the
+    # date the price was read. A named tier is preferred over the generic rungs above when the
+    # candidate is that model: the generic ones are order-of-magnitude placeholders, and a
+    # report that says "hosted-mid" cannot be checked against an invoice.
+    "anthropic-opus-5": Pricing("per_token", 0.005, 0.025, note="Claude Opus 5, list 2026-06-24"),
+    "anthropic-sonnet-5": Pricing("per_token", 0.002, 0.010,
+                                  note="Claude Sonnet 5, list 2026-06-24"),
+    "anthropic-haiku-4-5": Pricing("per_token", 0.001, 0.005,
+                                   note="Claude Haiku 4.5, list 2026-06-24"),
     "free": Pricing("free", note="deterministic rule code"),
 }
 
