@@ -181,13 +181,22 @@ def test_an_unassigned_person_calculates_to_nothing_rather_than_to_everything(en
 
 # ── 4. the three ways access cannot be established ────────────────────────────
 
-def test_an_unassigned_person_gets_nothing_once_enforcement_is_on(env, enforcing):
+def test_an_unassigned_person_gets_the_default_role_once_enforcement_is_on(env, enforcing):
+    """CHANGED BY OWNER DECISION, 2026-09-04: "All signed-in users receive a default Platform
+    User RBAC role." This test previously asserted the opposite — no role meant no access — on
+    the fail-closed principle the rest of this file still follows.
+
+    The reversal is narrow and deliberate: being signed in is already an authorization decision
+    (core.email_allowed admitted them), so an unassigned user is not an unknown, they are a known
+    user nobody has narrowed yet. The two cases below — suspended, and a role id that does not
+    resolve — still get nothing, because in those a decision WAS recorded.
+    """
     s, _core, _st = env
     out = s.my_access(request=_req(NOBODY))
     assert out["enforced"] is True
-    assert set(out["tabs"].values()) == {"hidden"}
-    assert out["capabilities"] == []
-    assert out["role"] is None
+    assert out["role"]["id"] == rbac.PLATFORM_USER
+    assert out["defaulted"] is True
+    assert set(out["tabs"].values()) == {"operate"}
 
 
 def test_a_suspended_person_gets_nothing_even_holding_a_real_role(env, enforcing):
@@ -219,7 +228,10 @@ def test_an_anonymous_caller_gets_nothing_when_enforcing(env, enforcing):
     s, _core, _st = env
     for who in ("", None):
         out = s.my_access(request=_req(who))
-        assert out["capabilities"] == []
+        assert out["capabilities"] == [], (
+            "an anonymous caller was given the default role — 'all SIGNED-IN users' does not "
+            "include a caller with no identity, and /me/access is exempt from the capability "
+            "gate precisely so a signed-out browser can call it")
         assert set(out["tabs"].values()) == {"hidden"}
 
 

@@ -498,6 +498,31 @@ def _matches_a_protected_route(path: str) -> bool:
     return False
 
 
+def match_registered_route(path: str, method: str):
+    """The registered APIRoute this request will actually dispatch to, or None.
+
+    Sibling of _matches_a_protected_route above, and separate from it because the two want
+    different answers. That one asks "is this a real API path at all", so a method mismatch still
+    counts. This one is used to look a route up in the capability map (PRD §11), where the METHOD
+    is half the key — GET /admin/roles and DELETE /admin/roles/{id} are different permissions —
+    so only a FULL match will do. A PARTIAL match (right path, wrong verb) resolves to no route
+    here, which is correct: FastAPI will answer 405, and there is no capability to check on a
+    request that reaches no endpoint.
+
+    Returns the route object rather than its path so callers get the PATTERN (`/scans/{sid}`),
+    not the concrete path (`/scans/abc123`) — the map is keyed on patterns, and keying it on
+    concrete paths would mean a table with one row per scan.
+    """
+    from starlette.routing import Match
+    scope = {"type": "http", "path": path, "method": (method or "GET").upper(),
+             "path_params": {}}
+    for route in _protected_routes():
+        match, _ = route.matches(scope)
+        if match == Match.FULL:
+            return route
+    return None
+
+
 def is_public(path: str) -> bool:
     if path in ALWAYS_PUBLIC:
         return True

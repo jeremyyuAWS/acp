@@ -16,6 +16,7 @@ Endpoint groups (see routes/):
 """
 from __future__ import annotations
 import base64
+import json
 import os
 from pathlib import Path
 
@@ -103,6 +104,76 @@ if _pg_pool is not None:
                 "occurred_at": _dt.now(_tz.utc).isoformat(),
             },
         )
+
+
+# ── workspace-role enforcement (PRD §11) ──────────────────────────────────────
+#
+# REGISTERED BEFORE _access_gate, WHICH IS WHAT MAKES IT RUN AFTER IT, and the inversion is
+# worth stating because I got it backwards first and the tests caught it. Starlette's
+# add_middleware INSERTS at the head of the list and the head is the OUTERMOST layer, so the
+# LAST middleware registered is the FIRST to see a request. Defining this above _access_gate
+# therefore puts the access gate outside it: auth runs first, stamps request.state.user_email,
+# and only then does this read it.
+#
+# Registered the other way round, this gate sees no identity at all and answers 403 ("you lack
+# permission") to every request including the owner's — where the truth is 401 ("we do not know
+# who you are"). PRD §11 asks for exactly that distinction, and getting it backwards tells an
+# expired session it has been demoted. The symptom is not subtle once you look, and it is
+# invisible if you only test handlers: the middleware is not in that path at all.
+#
+# ONE ENFORCEMENT POINT, not 236. See api/workspace_capability_map.py for why the mapping is a
+# table and how tests/test_capability_map_is_complete.py makes "100% of routes mapped" (PRD §18)
+# a checkable claim rather than an assertion.
+#
+# COST, STATED PLAINLY: when enforcement is ON this resolves the caller's role per request, which
+# is a settings read (the people record) plus a role read. There is deliberately NO cache —
+# PRD §9 requires a changed role to take effect on the user's NEXT request, and any TTL is a
+# window in which a revoked permission still works. With the flag OFF the middleware returns
+# before touching the store at all, so the default path pays nothing. Whether that per-request
+# cost is acceptable under real load is a slice-6 question, and it is not answered here.
+@app.middleware("http")
+async def _workspace_capability_gate(request, call_next):
+    import workspace_capability_map as capmap
+    import workspace_roles as wr
+
+    if not wr.rbac_enabled():
+        return await call_next(request)
+
+    route = core.match_registered_route(request.scope.get("path", ""), request.method)
+    if route is None:
+        return await call_next(request)          # not an API route we know; the gate above owns it
+    needed = capmap.required_capabilities(request.method, route.path)
+    if not needed:
+        return await call_next(request)          # exempt by design — capmap says why
+
+    email = getattr(request.state, "user_email", None)
+    access = wr.access_for_email(core.store, email, owner_email=core.OWNER_EMAIL,
+                                 is_suspended=_capability_gate_suspended)
+    held = frozenset(access.get("capabilities") or ())
+    if held & needed:
+        return await call_next(request)
+
+    # 403, not 404. PRD §11 reserves 404 for "confirming another tenant's object exists would
+    # disclose information" — which is a per-OBJECT decision the routes already make via their
+    # owner-scoped reads (get_scan(..., owner=...) answers 404 for a foreign scan). This gate is
+    # about the CAPABILITY, and a role that lacks it is not being told about anyone else's data
+    # by being told it lacks it. Conflating the two would make every permission error look like a
+    # missing page, which is unactionable for the user and unloggable for an operator.
+    role = (access.get("role") or {}).get("name")
+    detail = (f"your {role} role does not include this action" if role
+              else "you have no workspace role, so this action is not available")
+    return Response(status_code=403, media_type="application/json",
+                    content=json.dumps({"detail": detail,
+                                        "required": sorted(needed), "capability_denied": True}))
+
+
+def _capability_gate_suspended(email: str) -> bool:
+    """PRD §14 — a suspended user has no effective permissions. Read from the managed-person
+    record, the same source routes/system.py uses, so the two cannot disagree about who is
+    suspended."""
+    target = (email or "").strip().lower()
+    person = next((p for p in core.store.get_people() if p.get("email") == target), None)
+    return (person or {}).get("status") == "suspended"
 
 
 @app.middleware("http")

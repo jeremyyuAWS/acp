@@ -91,7 +91,9 @@ def test_an_explicit_apply_seeds_and_assigns(env):
     assert set(out["roles_created"]) == set(rbac.BUILTIN_ROLES)
     assert wr.role_id_for_email(st, OWNER) == rbac.OWNER
     assert wr.role_id_for_email(st, "deva@hosp.org") == rbac.PLATFORM_ADMIN
-    assert wr.role_id_for_email(st, "nurse@hosp.org") == rbac.COMPLIANCE_MANAGER
+    # Platform User since the owner's 2026-09-04 default-role decision; see
+    # tests/test_default_platform_user_role.py for why the backfill target changed.
+    assert wr.role_id_for_email(st, "nurse@hosp.org") == rbac.PLATFORM_USER
 
 
 @pytest.mark.parametrize("body", [None, {}, {"apply": False}, {"apply": "yes"}, {"apply": "true"},
