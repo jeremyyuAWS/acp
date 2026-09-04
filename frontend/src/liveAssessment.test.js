@@ -32,10 +32,24 @@ describe('normalizeLive', () => {
       .toEqual(['findings_so_far', 'need_attention'])
     expect(m.queue.inFlight).toBe(6)
     expect(m.queue.queued).toBe(99)
-    expect(m.queue.workers).toEqual({ busy: 6, max: 8, idle: 2 })
+    // capacityScope says WHOSE capacity `max` describes. Production's API is serve-only, so the
+    // pool size comes from an assess role heartbeat and reports the concurrency inside ONE replica
+    // — 'per_replica' when it did, null when max came from this process's own pool. Carrying the
+    // scope is what stops a per-replica number being read as an estate-wide total.
+    expect(m.queue.workers).toEqual({ busy: 6, max: 8, idle: 2, capacityScope: null })
     expect(m.queue.current.criterionName).toBe('Contrast (Minimum)')
     expect(m.queue.processing).toBe(true)
     expect(m.warnings).toEqual([])
+  })
+
+  it('carries the per-replica scope through when the backend reports one', () => {
+    const m = normalizeLive({ ...full, queue: { ...full.queue,
+      workers: { ...full.queue.workers, capacity_scope: 'per_replica' } } })
+    expect(m.queue.workers.capacityScope).toBe('per_replica')
+    // Anything else is null rather than passed through: the scope is a closed fact about where the
+    // number came from, not a free-text label to render.
+    expect(normalizeLive({ ...full, queue: { ...full.queue,
+      workers: { ...full.queue.workers, capacity_scope: 'estate' } } }).queue.workers.capacityScope).toBe(null)
   })
 
   it('treats an absent queue block as PENDING, not zero (independent-merge backend)', () => {
