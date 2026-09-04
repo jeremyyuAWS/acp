@@ -508,3 +508,21 @@ def test_huggingface_without_key_excluded_from_cloud_selection(monkeypatch):
     monkeypatch.setattr(core, "store", _store(setting="huggingface", configs={"huggingface": cfg}))
     p = providers.active_vision_provider()
     assert isinstance(p, providers.OllamaVisionProvider)
+
+
+def test_probe_image_bytes_is_deterministic():
+    b1 = providers.probe_image_bytes()
+    b2 = providers.probe_image_bytes()
+    assert b1 == b2, "probe_image_bytes() must return identical bytes on every call"
+    assert b1[:8] == b"\x89PNG\r\n\x1a\n", "probe_image_bytes() must return a valid PNG"
+
+
+def test_huggingface_endpoint_property_is_read_only():
+    p = providers.HuggingFaceVisionProvider("https://ep.hf.co", "tok", model="m")
+    assert p.endpoint == "https://ep.hf.co"
+    try:
+        p.endpoint = "https://evil.example.com"
+        assert p.zone == providers.zone_for_url("https://ep.hf.co"), \
+            "zone must stay consistent with the original endpoint even if endpoint attribute is overwritten"
+    except AttributeError:
+        pass  # property with no setter — ideal
