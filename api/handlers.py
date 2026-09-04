@@ -576,6 +576,28 @@ def _enqueue_proposals(scan_id: str, filename: str, sc: str, rule_name: str,
     except Exception:
         swallowed("_enqueue_proposals: store.enqueue_proposals failed — EVERY proposal for this (file, "
                    "criterion) is lost, and the reviewer sees a document with no suggested fixes", scan_id)
+        return
+    # ADR 0041 auto-apply gate: skip human review for Group A SCs whose fix was already written
+    # inline AND confirmed by structural re-scan (validated=True). The gate is at this choke
+    # point because every proposal for every SC passes through here — one gate, not one per caller.
+    if validated and sc in {"2.4.4", "2.4.9", "4.1.2"}:
+        try:
+            item_id = core.store.auto_approve_proposals(scan_id, filename, sc)
+            if item_id:
+                core.store.log_decision(
+                    "system", "hitl.auto_approved", scan_id=scan_id, file=filename,
+                    detail=f"{sc}: validated fix auto-approved by ADR 0041 gate (no human review)")
+                try:
+                    if core.store.mark_file_compliant_if_reviewed(scan_id, filename):
+                        core.store.log_decision(
+                            "system", "revalidate.certified", scan_id=scan_id, file=filename,
+                            detail="all findings resolved — certified & advanced to Publish "
+                                   "(ADR 0041 auto-approve)")
+                except Exception:
+                    swallowed("_enqueue_proposals: certify after auto-approve failed", scan_id)
+        except Exception:
+            swallowed("_enqueue_proposals: ADR 0041 auto-approve gate failed — "
+                      "proposal stays pending for human review", scan_id)
 
 
 # Media extensions the remediation lane admits. A SUBSET of scan_formats' "av" list, and

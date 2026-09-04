@@ -257,6 +257,11 @@ def build_ladder(runs: Sequence[RunResult], cases: Sequence[Case], gates: Gates 
         "blended_calls_per_dollar": (float("inf") if blended <= 0 else 1.0 / blended),
         "meets_target": blended <= gates.max_usd_per_call,
         "share_routed_to_human": human_routed / total_cases,
+        # The share a candidate tier actually carries. Reported next to the cost because the
+        # budget is trivially met by routing everything to a human, and a run against two
+        # sub-2B local models did exactly that: $0/call, "target MET", and not one category
+        # automated. Cost without coverage is not a result.
+        "autonomous_coverage": 1.0 - human_routed / total_cases,
         "share_routed_to_paid_tier": paid / total_cases,
         "share_under_sampled": under / total_cases,
         # If routing alone does not reach the target, this is the remaining lever and its size:
@@ -363,10 +368,18 @@ def render_markdown(report: dict[str, Any]) -> str:
         L.append(f"| `{cat}` | {row['cases']} | **{row['choice']}** "
                  f"| ${row.get('usd_per_case', 0.0):.2e} | {row['why']} |")
     L.append("")
+    coverage = lad.get("autonomous_coverage", 1.0 - lad["share_routed_to_human"])
     L.append(f"Blended: {fmt_usd_per_call(lad['blended_usd_per_call'])} — "
              f"target {TARGET_CALLS_PER_DOLLAR:,} calls/$ "
-             f"**{'MET' if lad['meets_target'] else 'NOT met'}**.")
+             f"**{'MET' if lad['meets_target'] else 'NOT met'}** at "
+             f"**{_pct(coverage)} autonomous coverage**.")
     L.append("")
+    if lad["meets_target"] and lad.get("share_routed_to_paid_tier", 0.0) == 0.0 \
+            and lad["share_routed_to_human"] > 0:
+        L.append("- **Read the cost figure with the coverage figure.** Nothing routes to a paid "
+                 "tier here, so the budget is met by NOT automating — a $0 blended cost with "
+                 f"{_pct(lad['share_routed_to_human'])} of cases on a human is a statement about "
+                 "the candidates, not a result.")
     L.append(f"- {_pct(lad['share_routed_to_human'])} of cases route to a human, "
              f"{_pct(lad['share_routed_to_paid_tier'])} to a paid tier, the rest to rule code.")
     L.append(f"- {_pct(lad['share_under_sampled'])} of cases sit in under-sampled categories — "

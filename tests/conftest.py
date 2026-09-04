@@ -369,3 +369,20 @@ def _office_analyser_for_lane_proofs(request, monkeypatch):
                 for p in Path(dest).iterdir()}
 
     monkeypatch.setattr(scanner, "_analyse_office", _stand_in)
+
+
+@pytest.fixture(autouse=True)
+def _no_graph_retry_sleep(monkeypatch):
+    """Graph retries happen in tests; the WAITING does not.
+
+    scanner._sp_get retries 429/5xx with a real backoff (and honours Graph's Retry-After, which
+    can be tens of seconds). A suite that slept through those would take hours, and a suite that
+    disabled the retries would stop exercising the one code path throttling is about — so the
+    seam is the sleep, not the retry. Autouse because any test whose Graph stub answers 5xx pays
+    the wait whether or not it knows the retry exists.
+    """
+    import sys
+    scanner = sys.modules.get("scanner")
+    if scanner is not None and hasattr(scanner, "_sp_sleep"):
+        monkeypatch.setattr(scanner, "_sp_sleep", lambda _s: None, raising=True)
+    yield

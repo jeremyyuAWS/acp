@@ -142,6 +142,9 @@ Adding a provider is a subclass with one method (`HttpModelCandidate._request`).
 
 ---
 
+**Measured against real models:** [First real-model run](remediation-evals-local-model-run.md) —
+two local models on CPU, both failing every safety gate, 0% of categories routed to a model.
+
 ## 5. First run — what it found
 
 Default run (100 cases, 3 repeats, stubs + rule code):

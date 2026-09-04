@@ -120,6 +120,11 @@ the read-only posture.
   existed, and `/config` serves it so the site picker stops the operator at the same number the
   server will accept. Sites past the cap are recorded as `skipped` with a reason and the estate is
   marked truncated — never dropped silently.
+- **`ACP_SP_MAX_RETRIES`** (default `4`, hard-capped at 10) — how many times a **throttled or
+  transiently-failed** Graph GET is retried. Small on purpose: `scanner._sp_get` is the single
+  door every SharePoint call goes through — the walk, the delta feed, the site list, the drives
+  list, the freshness replay — so a generous budget here multiplies across an estate rather than
+  adding to it. `0` disables retrying entirely.
 - **`ACP_SP_RECONCILE_DAYS`** (default `7`) — how old a library's delta cursor may get before it
   is walked in full again. A **correctness** control, not a performance knob: Graph's delta feed
   reports driveItem changes, and a managed-column edit that does not touch the driveItem may never
@@ -281,3 +286,44 @@ A file the delta mentions is `stale`, one it reports deleted is `unavailable` wi
 obtained, not what the timestamps then mean. When the replay itself fails, the response carries
 `sharepoint_freshness_error` — an operator seeing a wall of `untracked` deserves to know it is a
 Graph problem this endpoint hit rather than a scan that recorded nothing.
+
+
+---
+
+## Graph throttling, and the exception report (Phase 4a)
+
+**SharePoint had no retry at all.** Every SharePoint call goes through `scanner._sp_get`, which
+made one `httpx.get` and failed on whatever came back — while the Drive path has had
+`execute(num_retries=5)` from the start. Graph throttles hard, with `429` and a `Retry-After`, and
+on a 30-site estate that is not an edge case; it is the ordinary Friday afternoon.
+
+`_sp_get` now retries **429 and 5xx and transport failures**, honouring `Retry-After` when Graph
+sends one (capped, because a header is caller-controlled input and a scan must not be parked for
+six hours by one) and otherwise backing off exponentially **with full jitter** — not decoration:
+a 30-site walk that hits a tenant-wide throttle would otherwise retry every library in lockstep,
+re-creating the burst that caused the throttle at the moment the service asked for less.
+
+**A 401/403 is never retried, and that exclusion is load-bearing.** It is a scope problem, not a
+busy service: the answer will not change, Phase 1's per-site isolation reads the `PermissionError`
+to mark that site blocked *with the consent that would fix it*, and retrying would turn one fast
+correct diagnosis into four slow ones — delaying the only thing the operator can act on, and
+dressing a permissions failure as a performance one. A 400 is not retried either: a refused
+`$select` will be refused again, and the walk's tier fallback depends on it coming back promptly.
+
+Each site records how many retries it cost (`throttled` on the site report). "This took an hour"
+and "this took an hour because Graph throttled us 240 times" are the same wall-clock and
+completely different problems, and only the second is one an operator can act on.
+
+### `GET /scans/{sid}/exceptions.csv`
+
+The exportable exception report: every site and library the scan could **not** read, with the
+reason. An estate report says what was found; this says what was missed, which is the half an
+auditor and an IT admin act on — and a customer chasing thirty consents needs a list they can send
+to somebody rather than a screen they have to read one run at a time.
+
+Rows are per site **and** per library, because those fail independently: a site can be readable
+while one of its libraries throttles out. A site that completed is not an exception however little
+it held — an empty library is an answer about the tenant, and listing it would bury the sites that
+need action under the ones that are simply small. **An all-clear scan returns a header row and no
+data**, never a 404: a report that 404s when nothing failed is indistinguishable from one that
+could not be produced, and that difference is exactly what the reader is asking about.

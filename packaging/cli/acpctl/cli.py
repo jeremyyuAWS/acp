@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Sequence
 
 from . import __version__, spec as spec_mod
@@ -24,7 +25,6 @@ from .values import build_values, render_values_yaml
 # PRD S10's full command list. Unimplemented commands are REJECTED with a message naming the
 # phase they belong to, never accepted-and-ignored.
 NOT_YET_IMPLEMENTED = {
-    "init": "guided configuration (PRD S10) — phase 2",
     "install": "provisioning — phase 3+, deliberately out of the first slice (PRD S23.6)",
     "upgrade": "phase 5",
     "rollback": "phase 5",
@@ -33,6 +33,21 @@ NOT_YET_IMPLEMENTED = {
     "uninstall": "phase 5",
     "support-bundle": "phase 5",
 }
+
+
+# The release `init` writes when none is given. A single place, so the default cannot disagree
+# between the CLI's help text and the generated document.
+DEFAULT_RELEASE = "2026.9"
+
+
+def init_profiles():
+    from .init_doc import PROFILES
+    return PROFILES
+
+
+def init_platforms():
+    from .init_doc import PLATFORMS
+    return PLATFORMS
 
 
 def _print_findings(kind: str, findings: Sequence, stream) -> None:
@@ -47,6 +62,70 @@ def _load_and_validate(path: str) -> tuple[dict | None, spec_mod.Result]:
     document = spec_mod.load_document(path)
     result = spec_mod.validate(document)
     return document, result
+
+
+def cmd_init(args) -> int:
+    """Generate a deployment document that is valid the moment it is written.
+
+    STDOUT BY DEFAULT, AND THAT IS THE READ-ONLY BOUNDARY RATHER THAN AN EXCEPTION TO IT. Every
+    other acpctl command writes nothing at all, and tests/test_packaging_cli.py enforces that by
+    patching `open`. `init` is the first command with any reason to produce a file — so it
+    produces TEXT, and writing is opt-in with `-o`. `acpctl init > acp.yaml` is the ordinary use,
+    and the read-only test covers `init` without `-o` alongside the rest.
+
+    With `-o` it REFUSES TO OVERWRITE. The one file this tool can write is the record of a
+    deployment, quite possibly one already installed and edited; silently replacing it would
+    destroy the only description of a running system. There is deliberately no --force: removing
+    the file yourself is one command, and it is a decision worth making explicitly.
+
+    The generated document is validated BEFORE it is emitted. A generator whose output its own
+    validator rejects is worse than no generator, so that cannot reach the operator even if the
+    defaults are wrong.
+    """
+    from . import init_doc
+
+    try:
+        document = init_doc.build(
+            profile=args.profile, platform=args.platform, name=args.name,
+            environment=args.environment, release=args.release, region=args.region,
+            public_url=args.public_url, registry=args.registry)
+    except init_doc.InitError as exc:
+        print(f"acpctl init: {exc}", file=sys.stderr)
+        return 1
+
+    # The generator's promise, checked rather than asserted. If the defaults ever stop satisfying
+    # the contract, the failure surfaces here — naming the rules — instead of in the operator's
+    # first `validate`.
+    result = spec_mod.validate(document)
+    if not result.ok:
+        _print_findings("Errors", result.errors, sys.stderr)
+        print("\nacpctl init generated a document that does not satisfy the contract. This is a "
+              "bug in acpctl, not in your arguments — please report it with the flags you used.",
+              file=sys.stderr)
+        return 1
+
+    text = init_doc.render(document, path_hint=args.output or "<spec>")
+
+    if not args.output:
+        print(text, end="")
+        _print_findings("Warnings", result.warnings, sys.stderr)
+        return 0
+
+    target = Path(args.output)
+    if target.exists():
+        print(f"acpctl init: {target} already exists — refusing to overwrite it.\n"
+              "That file is the record of a deployment and may describe something already "
+              "installed. Move it aside, or write to a different path.", file=sys.stderr)
+        return 1
+    try:
+        target.write_text(text, encoding="utf-8")
+    except OSError as exc:
+        print(f"acpctl init: could not write {target}: {exc}", file=sys.stderr)
+        return 1
+    print(f"wrote {target}", file=sys.stderr)
+    _print_findings("Warnings", result.warnings, sys.stderr)
+    print(f"\nNext: python -m acpctl validate {target}", file=sys.stderr)
+    return 0
 
 
 def cmd_validate(args) -> int:
@@ -237,6 +316,20 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="Not yet implemented: " + ", ".join(sorted(NOT_YET_IMPLEMENTED)))
     parser.add_argument("--version", action="version", version=f"acpctl {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser(
+        "init", help="generate a valid deployment document (prints to stdout unless -o is given)")
+    p.add_argument("--profile", default="standard", choices=sorted(init_profiles()))
+    p.add_argument("--platform", default="kubernetes", choices=sorted(init_platforms()))
+    p.add_argument("--name", default="acp", help="deployment name (default: acp)")
+    p.add_argument("--environment", default="production")
+    p.add_argument("--release", default=DEFAULT_RELEASE, help="ACP version to deploy")
+    p.add_argument("--region", default=None)
+    p.add_argument("--public-url", default=None, help="the hostname ACP will be served on")
+    p.add_argument("--registry", default=None, help="image registry to pull from")
+    p.add_argument("-o", "--output", default=None,
+                   help="write to this path instead of stdout; refuses to overwrite")
+    p.set_defaults(func=cmd_init)
 
     p = sub.add_parser("validate", help="check a deployment document against the contract")
     p.add_argument("spec")
