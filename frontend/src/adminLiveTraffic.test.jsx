@@ -25,13 +25,13 @@ describe('Admin live traffic graph', () => {
   it('connects each live run to its worker stage within the persistent topology', () => {
     const graph = buildTrafficGraph({ runs: [run] })
     expect(graph.nodes.map((node) => node.id)).toContain('s1:assess')
-    expect(graph.edges.find((edge) => edge.id === 'out:s1:assess').style.strokeWidth).toBe(2)
+    expect(graph.edges.find((edge) => edge.id === 'out:s1:assess').style.strokeWidth).toBe(3)
     expect(graph.nodes.find((node) => node.id === 's1:assess').data.run.current_file).toBe('Report.docx')
   })
 
   it('uses crisp solid non-scaling paths instead of fuzzy dashed animation', () => {
     expect(trafficEdgeStyle('#123456', true)).toMatchObject({
-      stroke: '#123456', strokeWidth: 2, opacity: 0.95,
+      stroke: '#123456', strokeWidth: 3, opacity: 1,
       vectorEffect: 'non-scaling-stroke', shapeRendering: 'geometricPrecision',
     })
     const graph = buildTrafficGraph({ runs: [run], summary: { active_runs: 1 } })

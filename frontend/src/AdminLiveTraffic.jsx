@@ -194,8 +194,8 @@ const nodeTypes = { run: RunNode, infra: InfraNode }
 export function trafficEdgeStyle(color, active = false) {
   return {
     stroke: color,
-    strokeWidth: active ? 2 : 1.35,
-    opacity: active ? 0.95 : 0.72,
+    strokeWidth: active ? 3 : 2,
+    opacity: active ? 1 : 0.9,
     vectorEffect: 'non-scaling-stroke',
     shapeRendering: 'geometricPrecision',
   }
