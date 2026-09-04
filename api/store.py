@@ -6391,6 +6391,34 @@ class Store:
             row = self._db.fetchone(cur)
         return row["drive_file_id"] if row else None
 
+    def get_source_checksum(self, scan_id: str, file: str) -> str | None:
+        """The content checksum Assess had for this file — Drive's md5Checksum or SharePoint's
+        quickXorHash — or None when the listing carried neither.
+
+        FROM scan_inventory, which is the only table that has it. `file_records.checksum` exists
+        as a column and is always NULL: the scan report's per-file rows carry no checksum for
+        save_scan to write, and get_scan does not select the column either. Anything that reads a
+        checksum off a scan's FILES therefore reads None, silently — which is how the remediation
+        job came to look for its cached source bytes under a key nothing had written (ADR 0020
+        keys the cache by this checksum when there is one). See routes/scans.remediate_scan.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT checksum FROM scan_inventory WHERE scan_id=%s AND file=%s",
+                (scan_id, file))
+            row = self._db.fetchone(cur)
+        return (row or {}).get("checksum") or None
+
+    def get_source_checksums(self, scan_id: str) -> dict[str, str]:
+        """Every file in the scan that has a checksum, {file: checksum}. One query for a batch,
+        rather than get_source_checksum per document across a 147-file estate."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT file,checksum FROM scan_inventory WHERE scan_id=%s AND checksum IS NOT NULL",
+                (scan_id,))
+            return {row["file"]: row["checksum"] for row in self._db.fetchall(cur)
+                    if row.get("checksum")}
+
     def record_publish(self, scan_id: str, file: str, published_url: str | None = None) -> str:
         """Mark a file published (ADR 0010 archive-copy). Stores the Drive URL of the
         published fixed copy when one was written; COALESCE keeps a prior URL if this

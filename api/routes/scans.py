@@ -544,6 +544,21 @@ async def remediate_scan(sid: str, request: Request):
     # two 147-document batches reported "294 failed" out of 147, and the UI subtracted its way
     # to -147 remediated. See store.remediation_status.
     batch_id = uuid.uuid4().hex[:16]
+    # THE KEY THE CACHE WAS WRITTEN UNDER. ADR 0020 keys a cached original by its content
+    # checksum whenever the listing carried one — {owner}/{checksum} — and only falls back to
+    # {owner}/{scan_id}/{filename} when it did not. SharePoint listings have carried
+    # quickXorHash since #963, so a SharePoint scan's bytes are under the checksum key.
+    #
+    # This used to read `f.get("checksum")` off get_scan's file rows, which is ALWAYS None:
+    # that SELECT has no checksum column, and file_records.checksum is NULL anyway because the
+    # scan report's file rows carry none for save_scan to write. So every job looked under a key
+    # nothing had written, missed, and fell through to the Drive downloader. scan_inventory is
+    # where the value actually lives — one query for the batch, not one per document.
+    try:
+        checksums = core.store.get_source_checksums(sid)
+    except Exception:
+        swallowed("routes.scans.remediate_scan: reading the scan's source checksums failed", sid)
+        checksums = {}
     enqueued = []
     for f in res["files"]:
         # Honour the triage scope: skip files the user marked N/A or deferred.
@@ -573,7 +588,8 @@ async def remediate_scan(sid: str, request: Request):
             "remediate_file",
             {"scan_id": sid, "file": f["file"], "drive_file_id": drive_file_id,
              "remediated_folder_id": remediated_folder_id, "drive_token": token,
-             "source": source, "owner": owner, "checksum": f.get("checksum")},
+             "source": source, "owner": owner,
+             "checksum": checksums.get(f["file"]) or f.get("checksum")},
             scan_id=sid, batch_id=batch_id)
         enqueued.append(jid)
     return {"scan_id": sid, "enqueued": len(enqueued), "job_ids": enqueued,
