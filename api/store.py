@@ -1674,8 +1674,19 @@ class _PgAdapter:
     # tables and enforces nothing from them, and a replica without the code never touches them at
     # all. Neither can lose access to a surface it has today, because nothing consults these rows
     # until the flag turns the enforcement on.
-    _SCHEMA_VERSION = 11
-    _SCHEMA_CHECKSUM_AT_VERSION = "9e2e7bf4ebbe9c9ab0e14376ffa0d3b9"
+    # v12 adds scan_inventory.site_id and .library_name — which SharePoint site and which document
+    # library each discovered row came from, now that one run can span up to 30 sites and the
+    # scan's scope holds a SET rather than one site id. Additive on the usual terms, and additive
+    # in BEHAVIOUR for the same reason v4's fence was: a replica without this code writes neither
+    # column, add_inventory COALESCEs both through its ON CONFLICT, and every consumer reads them
+    # as optional — so an older replica keeps listing and inventorying exactly as it does today,
+    # it simply records no site attribution. Nothing reads these columns to decide anything yet;
+    # they are the identity the later SharePoint phases (per-site metadata, per-library delta
+    # cursors, exception reports, write-back targeting) need preserved at the row grain, because
+    # once a run covers a set of sites the run itself can no longer answer "which site is this
+    # document in" for any individual file.
+    _SCHEMA_VERSION = 12
+    _SCHEMA_CHECKSUM_AT_VERSION = "1b63b55167c0def43a08e47542ff986e"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
