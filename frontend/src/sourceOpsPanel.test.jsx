@@ -379,6 +379,14 @@ describe('the pending-approval queue', () => {
 })
 
 describe('the lifecycle audit trail', () => {
+  it('makes the source-scoped run history explicit and discoverable', async () => {
+    const c = await mount()
+    await click(tab(c, 'Activity'))
+    expect(c.textContent).toMatch(/Run history/)
+    expect(c.textContent).toMatch(/this source only, newest first/)
+    expect(c.textContent).toMatch(/Expand a run for its timing, coverage, errors, owner, and run ID/)
+  })
+
   it('lives on Activity, beside what the source has been doing', async () => {
     const c = await mount()
     expect(c.textContent).not.toMatch(/Lifecycle decisions/)   // not on Overview

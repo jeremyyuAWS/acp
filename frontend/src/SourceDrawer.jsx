@@ -384,7 +384,14 @@ export default function SourceDrawer({ source, files = [], scans = [], onClose, 
 
       {tab === 'Activity' && (
         <>
-          <h4 className="drawerh">Recent activity</h4>
+          <h4 className="drawerh">
+            Run history
+            <span style={{ float: 'right' }}>{runs.length}</span>
+          </h4>
+          <p className="muted" style={{ fontSize: 12, marginTop: -4 }}>
+            Discovery runs for this source only, newest first. Expand a run for its timing,
+            coverage, errors, owner, and run ID.
+          </p>
           {runs.length === 0 ? (
             <p className="muted" style={{ fontSize: 13 }}>No discovery runs recorded for this source.</p>
           ) : (
