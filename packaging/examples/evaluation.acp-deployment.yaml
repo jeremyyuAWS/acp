@@ -1,0 +1,69 @@
+# Evaluation — one machine, Docker Compose, no high availability (PRD S8).
+#
+# This is the profile deploy/compose/docker-compose.yml already implements. It is here as the
+# contract's description of that stack, not as a replacement for it: PRD S22 keeps existing
+# deployment assets until their retirement is explicit and tested.
+apiVersion: packaging.acp.mova.io/v1alpha1
+kind: ACPDeployment
+metadata:
+  name: acp-evaluation
+  environment: development
+  region: local
+runtime:
+  version: "2026.9"
+  profile: evaluation
+  platform: compose
+  publicUrl: "https://localhost:8077"
+  imageRegistry: "ghcr.io/movateai/acp"
+api:
+  replicas: { min: 1, max: 1 }
+  resources: { preset: small }
+workers:
+  # A single-node stack must drain its own queue: with every worker tier at 0 the app boots
+  # healthy, serves the SPA, and every scan sits queued forever.
+  discover:
+    replicas: { min: 1, max: 1 }
+    resources: { preset: small }
+  assess:
+    replicas: { min: 1, max: 1 }
+    resources: { preset: small }
+  remediate:
+    replicas: { min: 1, max: 1 }
+    resources: { preset: small }
+data:
+  postgres:
+    mode: embedded
+    backupRetentionDays: 0
+    storage: 20Gi
+    maxConnections: 150
+  redis:
+    mode: embedded
+  objectStorage:
+    mode: embedded
+    encryption: provider-managed
+ai:
+  mode: local-only
+  ollama:
+    enabled: true
+    modelVolume: 200Gi
+observability:
+  openTelemetry: true
+  exporter: local
+  grafana: true
+  langfuse:
+    mode: self-hosted
+network:
+  privateWorkers: true
+  publicIngress: true
+  allowedEgress: []
+secrets:
+  provider: env-file
+  refs:
+    database-url: { name: acp-env, key: DATABASE_URL }
+    langfuse-secret-key: { name: acp-env, key: LANGFUSE_SECRET_KEY }
+sources:
+  - local-upload
+capacity:
+  maxSourceFileSizeMb: 50
+  concurrentFilesPerWorker: 2
+  expectedDocumentsPerDay: 500
