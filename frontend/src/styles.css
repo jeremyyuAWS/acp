@@ -1207,6 +1207,12 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 /* Upload step done-badge: white on #639922 = 3.44:1 — 11px text needs 4.5:1 (FAIL 1.4.3).
    Darken to --success-fg-strong (#2F5310); white on #2F5310 = 8.4:1. */
 [data-wcag="on"] .upstep.done .upnum { background: var(--success-fg-strong); }
+/* Assess pipeline: active step indicator #4B861F on #F2F8EA = 4.10:1 (FAIL 1.4.3, need 4.5:1) */
+[data-wcag="on"] .assesslist li.active .alstate { color: var(--success-fg-strong); } /* #2F5310 on #F2F8EA = 8.2:1 */
+/* Coverage segment bars: review bar #e0900a on white = 2.57:1 (FAIL 1.4.11, need ≥3:1) */
+[data-wcag="on"] .seg-review { background: #8A5A00; } /* 5.93:1 on white */
+/* Verify-track progress bar: #BF8C00 on #faf8fb = 2.85:1 (FAIL 1.4.11); darken to match amber fix pattern */
+[data-wcag="on"] .verify-track > i { background: #7A5000; } /* 6.68:1 on --bg */
 .setoverlay { position: fixed; inset: 0; background: rgba(40, 30, 48, 0.38); backdrop-filter: blur(2px); z-index: 80; display: flex; align-items: flex-start; justify-content: center; padding: 36px 20px; overflow-y: auto; }
 .setpanel { background: var(--bg); border-radius: 16px; width: min(1360px, 97vw); box-shadow: 0 24px 64px rgba(30, 22, 34, 0.4); overflow: hidden; }
 .sethead { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 22px; background: var(--card); border-bottom: 1px solid var(--line); font-size: 15px; position: sticky; top: 0; }

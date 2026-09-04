@@ -126,7 +126,11 @@ _map_many([
     ("GET", "/scans/{scan_id}/files/{filename:path}/verify-contrast"),
     ("GET", "/scans/{scan_id}/files/{filename:path}/verify-resize"),
     ("GET", "/scans/{scan_id}/files/{filename:path}/verify-pdf-contrast"),
+    ("GET", "/scans/{scan_id}/files/{filename:path}/dispositions"),
 ], _ASSESS_READ)
+_map_many([
+    ("POST", "/scans/{scan_id}/files/{filename:path}/dispose"),
+], {"assess.run"})
 # The rubric is what "compliant" MEANS. Reading it is part of assessing; changing it is a
 # platform-configuration act, which is why it sits behind Settings rather than Assess.
 _map_many([("GET", "/rubric")], _ASSESS_READ)

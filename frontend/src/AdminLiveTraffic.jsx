@@ -2,6 +2,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Background, Controls, Handle, MiniMap, Position, ReactFlow } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { getAdminActivity, getWorkerCapacity, openAdminActivityStream } from './api.js'
+import { ensureResizeObserver } from './resizeObserverFallback.js'
+
+ensureResizeObserver(typeof window === 'undefined' ? globalThis : window)
 
 const STAGE = {
   discover: { label: 'Discover', color: '#4F7F2A' },
@@ -185,6 +188,34 @@ const nodeTypes = { run: RunNode, infra: InfraNode }
 //
 // The per-service numbers that ARE per-service (slots, active, available, heartbeat, version)
 // come from that role's own heartbeat and are shown alongside.
+// What the size figure actually describes, said in terms of the services that ARE reporting.
+//
+// WORKER_APP_NAME names ONE container app, and production runs three worker services of two
+// different sizes (deploy/public/rightsize-production.sh: acp-discovery 1 CPU / 2Gi, acp-assess
+// and acp-remediate 2 CPU / 4Gi). So a reading taken from one of them is right for itself,
+// possibly right for a same-sized sibling, and wrong for the rest. An earlier version of this
+// row claimed the reading covered the whole worker tier, which is false whenever the sizes
+// differ — and they do.
+//
+// `services` comes from the role heartbeats, so the count is what is actually reporting rather
+// than a hardcoded 3, and `stage` is named when the app can be matched to one of them.
+export function sizeScopeNote(capacity, services = []) {
+  if (!capacity?.configured) return 'Not reported'
+  const app = capacity.worker_app_name
+  if (!app) return 'Azure did not report which container app was measured'
+  const total = services.length
+  // `acp-assess` -> the assess role; `acp-discovery` -> discovery. Anything else stays unmatched.
+  const matched = services.find((s) => app === `acp-${s.role}` || app.endsWith(`-${s.role}`))
+  if (!total) return `Measured from ${app} only — no worker services are reporting to compare it against`
+  if (matched) {
+    const label = STAGE[matched.stage]?.label || matched.stage
+    return total === 1
+      ? `Measured from ${app} (${label}), the only reporting worker service`
+      : `Measured from ${app} (${label}) only — 1 of ${total} reporting worker services; the others may be sized differently`
+  }
+  return `Measured from ${app}, which is not one of the ${total} reporting worker services — it may not describe any of them`
+}
+
 function reportedWorkerSize(capacity) {
   if (!capacity?.configured) return 'Size telemetry not configured'
   const cpu = capacityValue(capacity.cpu_cores_per_replica, ' vCPU')
@@ -206,9 +237,7 @@ export function infrastructureDetail(data, snapshot = {}, capacity = null) {
         // Adjacent to the size deliberately: the figure above is ONE container app's, drawn on
         // every stage node, so the row that says whose it is has to sit next to it rather than
         // at the bottom of the list.
-        ['Size measured from', capacity?.configured
-          ? `One Azure Container App (${capacity.worker_app_name || 'name not reported'}) covering the worker tier — not measured per service`
-          : 'Not reported'],
+        ['Size measured from', sizeScopeNote(capacity, workerServiceRows(snapshot?.summary || {}))],
         ['Replicas', capacity?.configured ? `${capacityValue(capacity.current_replicas)} running · ${capacityValue(capacity.min_replicas)} min · ${capacityValue(capacity.max_replicas)} max` : 'Not reported'],
         ['Live utilization', capacity?.metrics_available ? `${capacityValue(capacity.cpu_percent, '%')} CPU · ${capacityValue(capacity.memory_percent, '%')} memory` : 'Not reported'],
         ['Active revision', capacity?.active_revision_name || 'Not reported'],
@@ -262,7 +291,12 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
       data: { kind: 'worker',
       label: `${STAGE[stage].label} workers`, status: service.alive ? 'online' : 'standby',
       detail: `${service.active} active · ${service.available} available of ${service.slots}`,
-      metric: capacity?.configured ? `Tier: ${reportedWorkerSize(capacity)}` : reportedWorkerSize(capacity),
+      // Named rather than "Tier:", which claimed a coverage one container app does not have.
+      // The app name is what makes a figure repeated on all three stage nodes readable: it says
+      // whose size this is, so a stage it does not describe is visibly not describing itself.
+      metric: capacity?.configured && capacity.worker_app_name
+        ? `${capacity.worker_app_name}: ${reportedWorkerSize(capacity)}`
+        : reportedWorkerSize(capacity),
       color: STAGE[stage].color, service } })
   })
   nodes.push({ id: 'infra:output', type: 'infra', position: { x: 935, y: 82 },
