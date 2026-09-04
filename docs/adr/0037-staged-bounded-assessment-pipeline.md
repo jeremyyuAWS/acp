@@ -149,3 +149,9 @@ Each step ships behind the guard suite and is re-measured before the next.
 Proposed. The next PR is **Step 0 — the instrumentation slice**: measure per-stage time with no
 behaviour change, so every subsequent worker-count decision is made from data. Nothing about the flat
 pool changes until its numbers are in.
+
+**Fairness invariant shipped independently (2026-09-03).** The durable queue now selects, within
+each priority class, the tenant with the fewest active claims and then the tenant least recently
+served before considering job age. This is work-conserving (one tenant may use idle capacity) and
+applies across the existing role-specific worker pools; it does not depend on the later staged-pool
+split described by this ADR.

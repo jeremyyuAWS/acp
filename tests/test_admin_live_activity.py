@@ -82,6 +82,7 @@ def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(mo
         "queued": 10, "running": 4, "completed_jobs": 12,
         "worker_slots": 4, "available_slots": 0, "utilization_pct": 100,
         "pressure": "saturated", "worker_tier_alive": True,
+        "scheduling_policy": "tenant_fair_least_loaded",
         "by_stage": {
             "assess": {"runs": 1, "running": 3, "queued": 8, "completed": 2, "total": 13},
             "remediate": {"runs": 1, "running": 1, "queued": 2, "completed": 4, "total": 7},
