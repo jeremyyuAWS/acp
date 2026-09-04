@@ -605,11 +605,15 @@ class HuggingFaceVisionProvider:
     there is no per-call token price to look up (ADR 0016 — never invent a cost). Never raises."""
 
     def __init__(self, endpoint: str, api_key: str, *, model: str):
-        self.endpoint = (endpoint or "").rstrip("/")
+        self._endpoint = (endpoint or "").rstrip("/")
         self._key = api_key
         self.model = model
         self.name = "huggingface"
-        self.zone = zone_for_url(self.endpoint)
+        self.zone = zone_for_url(self._endpoint)
+
+    @property
+    def endpoint(self) -> str:
+        return self._endpoint
 
     def generate(self, prompt: str, image_bytes: bytes, *, model: str | None = None,
                  timeout: float = 120.0) -> dict:
@@ -872,6 +876,8 @@ def cloud_vision_provider() -> VisionProvider | None:
         setting = (core.store.get_setting("ai_vision_provider") or "").strip().lower()
     except Exception:
         setting = ""
+    # Fallback order: managed cloud providers first (azure_openai, openai, anthropic), then
+    # self-hosted HuggingFace Inference Endpoints. Admin's explicit setting is tried first.
     order = ([setting] if setting in CLOUD_PROVIDERS else []) + \
             [p for p in ("azure_openai", "openai", "anthropic", "huggingface") if p != setting]
     for name in order:
