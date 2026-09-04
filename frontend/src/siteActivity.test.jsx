@@ -77,6 +77,17 @@ describe('SiteActivity', () => {
     expect(c.textContent).toMatch(/2 libraries: Documents, Policies/)
   })
 
+  it('shows which libraries used Graph delta and the live change counts', async () => {
+    const sites = [{ id: 'c,1,1', name: 'Finance', status: 'complete', listed: 12,
+      libraries: [
+        { id: 'd1', name: 'Documents', mode: 'delta', changed: 3, removed: 1 },
+        { id: 'd2', name: 'Policies', mode: 'full' },
+      ] }]
+    const c = await mount({ sites })
+    expect(c.textContent).toMatch(/Documents \(incremental · 3 changed · 1 removed\)/)
+    expect(c.textContent).toMatch(/Policies \(full scan\)/)
+  })
+
   it('never shows the raw Graph site id as a label', async () => {
     // (host,guid,guid) is the least recognisable string in this product.
     const c = await mount({ sites: SITES })

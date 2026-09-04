@@ -543,6 +543,13 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         lifecycle_matches: (Number(scope?.lifecycle_archive) || 0)
           + (Number(scope?.lifecycle_delete) || 0)
           + (Number(scope?.lifecycle_tagged) || 0),
+        // The live job supplies these during the SSE run. Rehydrate the SAME fields from the
+        // persisted inventory delta after a refresh so SharePoint's per-library delta scan does
+        // not lose its new/updated/unchanged result the moment the stream closes. Drive and
+        // SharePoint both finish through add_inventory(), so one rendering path covers both.
+        save_new: scope?.inventory_delta?.new ?? null,
+        save_updated: scope?.inventory_delta?.updated ?? null,
+        save_unchanged: scope?.inventory_delta?.unchanged ?? null,
       }
     : null
   const discoveryProgressForCard = progress ?? completedDiscoveryProgress
