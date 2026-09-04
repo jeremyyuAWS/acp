@@ -2796,6 +2796,23 @@ class Store:
         fresh raw item (apply_sp_delta) and so legitimately have none this scan, exactly as
         before. Tracked as a known gap in docs/TODO.md P1e; this is that fix.
 
+        The SharePoint-NATIVE columns (site_id, site_name, library_name, retention_label,
+        sensitivity_label, sharing_scope, item_kind, checked_out_by, sp_version, modified_by,
+        sp_metadata) are selected for exactly the reason content_type is, one phase later. Phase 2
+        made them real columns and add_inventory populates them; leaving them out of THIS select
+        would have every unchanged file re-inventoried with no retention label, no content type
+        and no managed columns on every delta sync — the same silent erasure, on a wider set of
+        fields, and this time on the ones a records manager writes rules against.
+
+        Carrying them forward is correct for an unchanged file BY CONSTRUCTION: Graph's delta
+        feed reports the item, and a file the delta does not mention has not changed. The caveat
+        worth knowing is at the edge of that construction — a managed-column edit that does not
+        touch the driveItem may not surface in the delta feed at all, so a carried-forward column
+        can go stale without anything noticing. That is not a reason to re-read every file (which
+        would spend exactly the saving this feature exists for); it is the reason periodic full
+        reconciliation exists (ACP_SP_RECONCILE_DAYS), and it is why that setting is a correctness
+        control rather than a performance one.
+
         Rows with no drive_file_id are dropped (a local/non-Drive row, or one from a scan old
         enough to predate that column) — they carry nothing a delta could ever reconcile
         against."""
@@ -2813,7 +2830,9 @@ class Store:
             self._db.execute(cur,
                 "SELECT file, drive_file_id, mime, size_kb, checksum, created_at, "
                 "source_modified, owner, parent_folder, drive_id, drive_account_id, "
-                "content_type "
+                "content_type, site_id, site_name, library_name, retention_label, "
+                "sensitivity_label, sharing_scope, item_kind, checked_out_by, sp_version, "
+                "modified_by, sp_metadata "
                 "FROM scan_inventory WHERE scan_id=%s",
                 (row["id"],))
             return [r for r in self._db.fetchall(cur) if r.get("drive_file_id")]

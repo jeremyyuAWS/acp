@@ -56,6 +56,7 @@ rules), and `docs/pilot-scope.md`.
 | **Read SharePoint-native metadata** (managed metadata, content types, retention/sensitivity labels) as rule inputs | ✅ **Built 2026-09-04.** The walk expands `listItem($expand=fields)` on the page it already fetches, so content types, the tenant's managed columns, versions and check-out state arrive at no extra round trip; retention labels come from a wider `driveItem` `$select`. Every field carries an availability state, and `managed:<Column>` is a lifecycle-rule field. | **Closed as a build. Open as a PROOF**: the Graph shapes are documented-but-unverified against a real tenant. `scripts/sp_metadata_probe.py` is the instrument — run it against the UTSW tenant and read the evidence table. Sensitivity labels are the known gap: Graph exposes them on driveItem in **beta** only, so ACP reports them `unavailable`, never "unset". |
 | **Tag files back into SharePoint's native columns** | Read-only. A native column write needs **`Sites.Manage.All` + per-library provisioning** — documented at `scanner.py:521` | **Out of scope by design for the pilot.** The SOW says archival is **flagging only** → ACP flags **internally** (its own store / approval queue). Native SharePoint write-back is **post-pilot** + a write scope. |
 | Daily monitoring cadence | Scheduled re-scans | ✅ (1440 min) |
+| **Incremental re-scan at estate scale** | ✅ **Built 2026-09-04.** A per-LIBRARY delta plan: each document library is reconstructed from its own Graph delta cursor or re-walked, in the same pass, under one budget. One expired cursor degrades one library, not the estate. | **Closed.** Its exit gate is a test, not a claim: `tests/test_sp_incremental_estate.py` runs 30 sites fully and then incrementally over the same fixture and requires identical inventories — plus zero `/children` calls for the libraries that had cursors. |
 | SSO via Microsoft login, single tenant, Azure VPC | MSAL delegated, single-tenant per deploy | ✅ (VPC is infra config, not code) |
 
 ---
@@ -119,6 +120,12 @@ the read-only posture.
   existed, and `/config` serves it so the site picker stops the operator at the same number the
   server will accept. Sites past the cap are recorded as `skipped` with a reason and the estate is
   marked truncated — never dropped silently.
+- **`ACP_SP_RECONCILE_DAYS`** (default `7`) — how old a library's delta cursor may get before it
+  is walked in full again. A **correctness** control, not a performance knob: Graph's delta feed
+  reports driveItem changes, and a managed-column edit that does not touch the driveItem may never
+  appear in it, so a library synced incrementally forever could carry a stale records category
+  indefinitely with nothing saying so. `0` disables the forced reconciliation for an operator who
+  has measured their tenant and accepts that knowingly.
 - **`ACP_SP_LIST_FIELDS`** (default `1`) — expand each item's backing `listItem` alongside the
   listing page, which is what reads content types and the tenant's managed columns. Set to `0`
   for the leanest possible walk. Turning it off does not blank those fields: it makes them report
@@ -195,3 +202,65 @@ through the surfaces that exist:
 
 If a filtered inventory VIEW is wanted, it is a product decision to re-open a screen that was
 closed on purpose — not a gap to fill quietly from a connector phase.
+
+
+---
+
+## Incremental discovery at estate scale (Phase 3)
+
+`_sp_whole_library_target` answers only for the one shape a single-drive delta can serve: the
+whole of exactly one library. A SITE request covers several, so **every site scan fell through to
+a complete re-walk on every run** — the case the incremental feature was built for, and the only
+one a 30-site estate is ever in.
+
+The plan is therefore **per library** (`core.sp_multi_sync_plan`), because a 30-site estate never
+has one answer: one library's cursor is fresh, another's expired last week, a third has never been
+synced, a fourth is due its periodic reconciliation. Collapsing that to a single yes/no means
+either walking everything because one library needs it, or reconstructing everything and quietly
+serving a stale estate for the one that did not.
+
+```
+{"delta": {drive_id: {prior_files, changed, removed_ids}},   # reconstructed
+ "full":  {drive_id: "why this one has to be walked"},        # walked, with the reason
+ "carried": int}                                              # documents not re-read
+```
+
+Both kinds of library go through the *same* per-item loop in `_sp_list`, so a reconstructed
+library is indistinguishable downstream from a walked one — which is what makes the estate-wide
+totals comparable across the two modes, and what the exit-gate test asserts.
+
+**Uncertainty always resolves to the full listing.** No cursor, an expired link, a failed
+change-check, a Graph error while resolving the libraries, a folder-narrowed request Graph's delta
+query cannot honour — every one of them walks. An optimisation that can fail a scan is worse than
+no optimisation, and the failure would land on the largest estates first.
+
+**What the scope records**, because a file count cannot show that an incremental run worked (it is
+supposed to equal the full run's): `scope.incremental` names the libraries reconstructed, the
+libraries re-walked and why each, and how many documents were carried forward without re-reading.
+
+### Phase 2's metadata survives a Phase 3 sync — and that needed fixing
+
+`docs/TODO.md` P1e records the Content Type being silently erased on every delta sync for months,
+because one column name was missing from one `SELECT`: `add_inventory` wrote it, and the
+reconstruction baseline never read it back. Phase 2 added eleven more columns of exactly that kind,
+and they are the ones lifecycle rules are written against.
+
+They are now carried forward on the reconstructed item (`_acp_sp_carried`) and read back by
+`latest_scan_inventory_items`, with `tests/test_sp_incremental_estate.py` asserting both — the
+source assertion included, because the query's shape *is* the defect and a round trip would pass on
+any column list that happened to include them for another reason.
+
+The carry-forward is correct for an unchanged file by construction, and the edge worth knowing is
+stated rather than glossed: a managed-column edit that does not touch the driveItem may never
+surface in the delta feed, so a carried-forward column can go stale silently. That is precisely
+what `ACP_SP_RECONCILE_DAYS` exists for.
+
+### Still open in Phase 3
+
+**SharePoint-native freshness reporting.** `GET /scans/{sid}/source-status` answers per file with a
+live Drive `files().get()`, and returns `untracked` for every SharePoint file. The SharePoint
+answer should not be a per-file poll at all — SharePoint has something Drive does not, a delta
+cursor, which makes freshness one Graph call per LIBRARY instead of one per document. Doing it
+properly means recording each scan's own cursor so "changed since THIS scan" is answerable rather
+than "changed since the last sync". That is a schema field and its own change; it is not in this
+one, and `source-status` is unchanged for SharePoint until it lands.
