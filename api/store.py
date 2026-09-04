@@ -3736,6 +3736,10 @@ class Store:
                          # a product version, on exactly the same footing as the run it belongs to.
                          "acr_manual_step",
                          "acr_decision_log",
+                         # W4 disposition records are customer data — a human's recorded attestation
+                         # or out-of-scope decision, scoped by owner_email, on the same footing as
+                         # decision_log and disposition_audit above.
+                         "criterion_disposition",
                          # Published snapshots included, and the tension is worth naming: they are
                          # immutable, which means never MODIFIED — not exempt from an explicit,
                          # owner-authorised wipe of the whole account. overview_snapshots is
