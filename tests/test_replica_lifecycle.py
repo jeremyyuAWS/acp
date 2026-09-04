@@ -274,3 +274,95 @@ def test_the_block_never_claims_azure_said_which_rule_fired(control):
 
 def test_an_unreadable_scale_section_is_none_rather_than_an_empty_configuration(control):
     assert control._scale_block(SimpleNamespace(properties=SimpleNamespace(template=None))) is None
+
+
+# ── Every worker app, not one ───────────────────────────────────────────────────────────────
+
+def _app_named(cpu, memory):
+    return SimpleNamespace(id=f"/subs/x/{cpu}", properties=SimpleNamespace(
+        template=SimpleNamespace(
+            scale=_scale(), containers=[SimpleNamespace(resources=SimpleNamespace(
+                cpu=cpu, memory=memory, ephemeral_storage="8Gi"))]),
+        latest_ready_revision_name="rev1", workload_profile_name="Consumption",
+        configuration=SimpleNamespace(ingress=None)))
+
+
+def _multi_app_client(by_name):
+    return SimpleNamespace(
+        container_apps=SimpleNamespace(get=lambda rg, name: by_name[name]),
+        container_apps_revisions=SimpleNamespace(list_revisions=lambda rg, app: SimpleNamespace(value=[])),
+        container_apps_revision_replicas=SimpleNamespace(
+            list_replicas=lambda rg, app, rev: SimpleNamespace(value=[])),
+    )
+
+
+def test_reads_every_configured_worker_app_with_its_own_size(control, monkeypatch):
+    """Production runs acp-discovery at 1 CPU / 2Gi and acp-assess and acp-remediate at 2 CPU /
+    4Gi, so one app's reading is right for itself and wrong for a differently sized sibling. That
+    is why Live Operations had to suppress those figures on two of three services."""
+    monkeypatch.setattr(control, "_AZ_APP_NAMES", ("acp-discovery", "acp-assess", "acp-remediate"))
+    monkeypatch.setattr(control, "_AZ_APP", "acp-discovery")
+    monkeypatch.setattr(control, "_az_client", lambda: _multi_app_client({
+        "acp-discovery": _app_named(1.0, "2Gi"),
+        "acp-assess": _app_named(2.0, "4Gi"),
+        "acp-remediate": _app_named(2.0, "4Gi")}))
+    monkeypatch.setattr(control, "_monitor_client",
+                        lambda: SimpleNamespace(metrics=SimpleNamespace(
+                            list=lambda *a, **kw: SimpleNamespace(value=[]))))
+
+    body = control.get_capacity()
+    assert body["worker_app_names"] == ["acp-discovery", "acp-assess", "acp-remediate"]
+    assert body["apps"]["acp-discovery"]["cpu_cores_per_replica"] == 1.0
+    assert body["apps"]["acp-assess"]["cpu_cores_per_replica"] == 2.0
+    assert body["apps"]["acp-assess"]["worker_app_name"] == "acp-assess"
+    # Top-level stays the first app's, so every existing caller is unaffected.
+    assert body["cpu_cores_per_replica"] == 1.0
+    assert body["worker_app_name"] == "acp-discovery"
+
+
+def test_one_unreachable_app_does_not_take_the_others_down(control, monkeypatch):
+    def _get(rg, name):
+        if name == "acp-remediate":
+            raise RuntimeError("not found")
+        return _app_named(2.0, "4Gi")
+
+    client = _multi_app_client({})
+    client.container_apps = SimpleNamespace(get=_get)
+    monkeypatch.setattr(control, "_AZ_APP_NAMES", ("acp-assess", "acp-remediate"))
+    monkeypatch.setattr(control, "_AZ_APP", "acp-assess")
+    monkeypatch.setattr(control, "_az_client", lambda: client)
+    monkeypatch.setattr(control, "_monitor_client",
+                        lambda: SimpleNamespace(metrics=SimpleNamespace(
+                            list=lambda *a, **kw: SimpleNamespace(value=[]))))
+
+    body = control.get_capacity()
+    assert body["apps"]["acp-assess"]["app_unavailable"] is False
+    assert body["apps"]["acp-assess"]["cpu_cores_per_replica"] == 2.0
+    # The broken one says so about ITSELF rather than blanking the reading for both.
+    assert body["apps"]["acp-remediate"]["app_unavailable"] is True
+    assert body["apps"]["acp-remediate"]["worker_app_name"] == "acp-remediate"
+
+
+def test_a_single_app_deployment_behaves_exactly_as_before(control, monkeypatch):
+    monkeypatch.setattr(control, "_AZ_APP_NAMES", ())
+    monkeypatch.setattr(control, "_AZ_APP", "acp-assess")
+    monkeypatch.setattr(control, "_az_client",
+                        lambda: _multi_app_client({"acp-assess": _app_named(2.0, "4Gi")}))
+    monkeypatch.setattr(control, "_monitor_client",
+                        lambda: SimpleNamespace(metrics=SimpleNamespace(
+                            list=lambda *a, **kw: SimpleNamespace(value=[]))))
+
+    body = control.get_capacity()
+    assert body["worker_app_names"] == ["acp-assess"]
+    assert list(body["apps"]) == ["acp-assess"]
+    assert body["cpu_cores_per_replica"] == 2.0
+
+
+def test_neither_app_name_has_a_default(control, monkeypatch):
+    """CLAUDE.md records the retired `acp-worker` default as a real incident. A guessed LIST would
+    repeat it three times over, so unset still means unconfigured."""
+    monkeypatch.setattr(control, "_AZ_APP_NAMES", ())
+    monkeypatch.setattr(control, "_AZ_APP", None)
+    assert control._configured_apps() == (None,)
+    src = (ACP / "api" / "routes" / "control.py").read_text()
+    assert "acp-worker" not in src.split("WHAT AZURE ACTUALLY REPORTS")[0].split("_AZ_APP_NAMES")[1][:400]

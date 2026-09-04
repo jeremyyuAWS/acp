@@ -50,7 +50,26 @@ from swallowed import swallowed
 _AZ_SUB  = os.environ.get("AZURE_SUBSCRIPTION_ID")
 _AZ_RG   = os.environ.get("AZURE_RESOURCE_GROUP", "mdk-accessibility")
 _AZ_APP  = os.environ.get("WORKER_APP_NAME") or None
-_AZ_CONFIGURED = bool(_AZ_SUB and _AZ_APP)
+# EVERY worker app, not one. Production runs acp-discovery (1 CPU / 2Gi), acp-assess and
+# acp-remediate (2 CPU / 4Gi) — deploy/public/rightsize-production.sh — so one app's CPU, memory,
+# replica count and restart count describe itself, possibly a same-sized sibling, and nothing
+# else. Reading a single app is why Live Operations has to SUPPRESS those figures on two of the
+# three worker services rather than show another app's numbers as theirs.
+#
+# WORKER_APP_NAMES is a comma-separated list and is optional: unset, this behaves exactly as
+# before, reading only WORKER_APP_NAME. There is still no default app name — CLAUDE.md records
+# the retired `acp-worker` default as a real incident, and a guessed list would repeat it three
+# times over.
+_AZ_APP_NAMES = tuple(n.strip() for n in (os.environ.get("WORKER_APP_NAMES") or "").split(",") if n.strip())
+
+
+def _configured_apps() -> tuple[str, ...]:
+    """The worker apps to read, resolved at CALL time rather than import time so a test (and a
+    reconfigured process) sees the current values."""
+    return _AZ_APP_NAMES or (_AZ_APP,)
+
+
+_AZ_CONFIGURED = bool(_AZ_SUB and (_AZ_APP or _AZ_APP_NAMES))
 
 
 def _az_client():
@@ -319,13 +338,13 @@ def _gather_metrics(app_id: str, now: datetime) -> tuple[dict, str | None]:
     return out, reason
 
 
-def _empty_capacity(configured: bool) -> dict:
+def _empty_capacity(configured: bool, app_name: str | None = None) -> dict:
     return {
         "configured": configured, "current_replicas": None, "min_replicas": None,
         "max_replicas": None, "cpu_percent": None, "memory_percent": None,
         "cpu_cores_per_replica": None, "memory_per_replica": None,
         "ephemeral_storage_per_replica": None, "workload_profile_name": None,
-        "active_revision_name": None, "worker_app_name": _AZ_APP,
+        "active_revision_name": None, "worker_app_name": app_name or _AZ_APP,
         "metrics_available": False, "measured_at": None,
         "revision_health": None, "revision_provisioning_state": None, "draining_replicas": None,
         "revision_traffic_percent": None, "metrics_unavailable_reason": None,
@@ -361,57 +380,99 @@ def _rev_field(rev, name, default=None):
 
 @router.get("/control/workers/capacity")
 def get_capacity():
-    """Azure-side capacity evidence for the acp-worker Container App: how many replicas are
-    actually running right now, and recent CPU/memory utilization — as opposed to
-    GET /control/workers/replicas' CONFIGURED min/max scale rule, which says nothing about
-    whether Azure has actually provisioned that many, or how loaded they are.
+    """Azure-side capacity evidence for the worker Container Apps: how many replicas are actually
+    running right now, their lifecycle, the scale rule, and recent Azure Monitor metrics — as
+    opposed to GET /control/workers/replicas' CONFIGURED min/max scale rule, which says nothing
+    about whether Azure has actually provisioned that many, or how loaded they are.
 
-    Open to any authenticated user, same reasoning as GET /control/workers/replicas (#950) —
-    this is read-only visibility, not a control action, and costs nothing to expose.
+    Open to any authenticated user, same reasoning as GET /control/workers/replicas (#950) — this
+    is read-only visibility, not a control action, and costs nothing to expose.
 
-    Also reports revision health: `revision_health`/`revision_provisioning_state` (the active
-    revision's own Azure-reported state — "Healthy"/"Unhealthy"/"None" and "Provisioned"/
-    "Provisioning"/"Failed"/etc.) and `draining_replicas` (replicas still up on OLD, non-active
-    revisions — the practical signal that a rollout is mid-drain rather than done).
+    READS EVERY CONFIGURED WORKER APP. `WORKER_APP_NAMES` (comma-separated) names them all;
+    `WORKER_APP_NAME` remains the single-app path and the default when the list is unset. The
+    top-level fields are the FIRST app's, unchanged in shape and meaning so every existing caller
+    keeps working, and `apps` carries one block per app keyed by name. That is what lets each
+    worker service in Live Operations show its OWN CPU, memory, replicas and restarts: production
+    runs three differently sized worker apps, so a single reading is right for itself and wrong
+    for the rest, which is why the UI has had to suppress those figures on two of three services.
 
-    And `revision_traffic_percent`: the active revision's own share of ingress traffic
-    (`app.properties.configuration.ingress.traffic`, 0-100). This is a DIFFERENT question from
-    revision_health — a revision can be perfectly Healthy and Provisioned while still receiving
-    0% of traffic, which is exactly what a stuck blue-green rollout looks like (a real production
-    incident on this app: the new revision came up healthy but ingress was never repointed at it,
-    stranding it at 0% until someone noticed customer-facing requests were still hitting the old
-    one). `active` in list_revisions() and "receiving traffic" are independently-tracked Azure
-    states — this field is what closes that specific gap.
-
-    And `metrics_unavailable_reason`, set whenever `metrics_available` is false: `"permission"`
-    (the Azure Monitor call itself failed with a 401/403 — the identity is very likely missing
-    the Monitoring Reader role this docstring already asks for), `"no_data"` (the call succeeded
-    but came back with no data points — CpuPercentage/MemoryPercentage are Microsoft Preview
-    metrics and can simply be unpopulated on a fresh or freshly-scaled resource, nothing wrong),
-    or `"error"` (anything else — network, quota, a transient Azure fault). Before this field
-    existed, all three looked identical: silence. `None` when `metrics_available` is true.
-
-    Graceful at every step, matching the rest of this module: `configured: false` when Azure
-    isn't set up; `current_replicas`/`cpu_percent`/`memory_percent`/`revision_health`/
-    `draining_replicas` individually stay None (never a fabricated 0) if their specific Azure
-    call fails — a missing Monitoring Reader grant on this identity, CpuPercentage/
-    MemoryPercentage being unavailable (both are Microsoft Preview metrics as of 2026 and can be
-    withdrawn or renamed), or any other partial failure degrades that one field rather than
-    502ing the whole response and hiding the min/max data that DID come back. UNVERIFIED against
-    a live Azure account as of this PR — the Azure SDK response shapes here are built from
-    current published documentation, not exercised against a real Container App; treat the first
-    real deployment as this endpoint's actual proof, not this code review.
+    Graceful at every step, per app: `configured: false` when Azure isn't set up; a single
+    unreachable app degrades to its own `app_unavailable` block rather than taking the others
+    down; and within an app, `current_replicas` / `cpu_percent` / `revision_health` /
+    `draining_replicas` individually stay None (never a fabricated 0) when their specific Azure
+    call fails. UNVERIFIED against a live Azure account — the SDK response shapes here are built
+    from Microsoft's published REST reference, not exercised against a real Container App; treat
+    the first real deployment as this endpoint's actual proof.
     """
     if not _AZ_CONFIGURED:
         return _empty_capacity(False)
+    # Every configured worker app, keyed by name. The top-level fields stay the FIRST app's, so
+    # every existing caller of this endpoint is unaffected; `apps` is what lets each worker
+    # service in Live Operations show its own figures instead of suppressing them.
+    #
+    # `apps` is omitted entirely when no app is NAMED — _AZ_CONFIGURED can be true in a test that
+    # patches it directly, and a block keyed by a null name would be worse than none.
+    apps = [name for name in _configured_apps() if name]
+    blocks = {name: _capacity_for_app(name) for name in apps}
+    primary = blocks.get(_AZ_APP) or (next(iter(blocks.values())) if blocks else _capacity_for_app(_AZ_APP))
+    result = dict(primary)
+    if blocks:
+        result["apps"] = blocks
+        result["worker_app_names"] = apps
+    return result
 
+
+def _capacity_for_app(app_name: str) -> dict:
+    """One container app's capacity, replicas, revisions, scale rule and metrics.
+
+    Split out of get_capacity so the same reading can be taken for each worker app. Every failure
+    mode it had is unchanged and per-app: one unreachable app degrades to its own
+    `app_unavailable` block rather than taking the others down with it.
+
+    The field-by-field contract this carries, unchanged from when it was get_capacity's own body:
+
+        this is read-only visibility, not a control action, and costs nothing to expose.
+    
+        Also reports revision health: `revision_health`/`revision_provisioning_state` (the active
+        revision's own Azure-reported state — "Healthy"/"Unhealthy"/"None" and "Provisioned"/
+        "Provisioning"/"Failed"/etc.) and `draining_replicas` (replicas still up on OLD, non-active
+        revisions — the practical signal that a rollout is mid-drain rather than done).
+    
+        And `revision_traffic_percent`: the active revision's own share of ingress traffic
+        (`app.properties.configuration.ingress.traffic`, 0-100). This is a DIFFERENT question from
+        revision_health — a revision can be perfectly Healthy and Provisioned while still receiving
+        0% of traffic, which is exactly what a stuck blue-green rollout looks like (a real production
+        incident on this app: the new revision came up healthy but ingress was never repointed at it,
+        stranding it at 0% until someone noticed customer-facing requests were still hitting the old
+        one). `active` in list_revisions() and "receiving traffic" are independently-tracked Azure
+        states — this field is what closes that specific gap.
+    
+        And `metrics_unavailable_reason`, set whenever `metrics_available` is false: `"permission"`
+        (the Azure Monitor call itself failed with a 401/403 — the identity is very likely missing
+        the Monitoring Reader role this docstring already asks for), `"no_data"` (the call succeeded
+        but came back with no data points — CpuPercentage/MemoryPercentage are Microsoft Preview
+        metrics and can simply be unpopulated on a fresh or freshly-scaled resource, nothing wrong),
+        or `"error"` (anything else — network, quota, a transient Azure fault). Before this field
+        existed, all three looked identical: silence. `None` when `metrics_available` is true.
+    
+        Graceful at every step, matching the rest of this module: `configured: false` when Azure
+        isn't set up; `current_replicas`/`cpu_percent`/`memory_percent`/`revision_health`/
+        `draining_replicas` individually stay None (never a fabricated 0) if their specific Azure
+        call fails — a missing Monitoring Reader grant on this identity, CpuPercentage/
+        MemoryPercentage being unavailable (both are Microsoft Preview metrics as of 2026 and can be
+        withdrawn or renamed), or any other partial failure degrades that one field rather than
+        502ing the whole response and hiding the min/max data that DID come back. UNVERIFIED against
+        a live Azure account as of this PR — the Azure SDK response shapes here are built from
+        current published documentation, not exercised against a real Container App; treat the first
+        real deployment as this endpoint's actual proof, not this code review.
+    """
     now = datetime.now(timezone.utc)
-    result = _empty_capacity(True)
+    result = _empty_capacity(True, app_name)
     result["measured_at"] = now.isoformat()
 
     try:
         client = _az_client()
-        app = client.container_apps.get(_AZ_RG, _AZ_APP)
+        app = client.container_apps.get(_AZ_RG, app_name)
         scale = app.properties.template.scale
         result["min_replicas"] = scale.min_replicas
         result["max_replicas"] = scale.max_replicas
@@ -474,7 +535,7 @@ def get_capacity():
         # (already gathered above) are still returned rather than lost.
 
     try:
-        revisions = client.container_apps_revisions.list_revisions(_AZ_RG, _AZ_APP)
+        revisions = client.container_apps_revisions.list_revisions(_AZ_RG, app_name)
         rev_list = getattr(revisions, "value", None)
         if rev_list is None:
             rev_list = list(revisions)
@@ -522,9 +583,9 @@ def get_capacity():
         replicas = []
         for row in rows:
             if row["active"] and row["name"]:
-                replicas.extend(_replica_rows(client, row["name"], draining=False))
+                replicas.extend(_replica_rows(client, row["name"], draining=False, app_name=app_name))
             elif row["name"] and (row["replicas"] or 0) > 0:
-                replicas.extend(_replica_rows(client, row["name"], draining=True))
+                replicas.extend(_replica_rows(client, row["name"], draining=True, app_name=app_name))
         result["replicas"] = replicas
         result["replica_lifecycle"] = _lifecycle_summary(replicas)
     except Exception:  # noqa: BLE001 — revision health stays None; everything gathered above
@@ -672,11 +733,13 @@ def _replica_state(replica, draining: bool) -> tuple[str, str | None]:
     return "ready", detail
 
 
-def _replica_rows(client, revision_name: str, draining: bool = False) -> list[dict]:
+def _replica_rows(client, revision_name: str, draining: bool = False,
+                  app_name: str | None = None) -> list[dict]:
     """Per-replica lifecycle rows for one revision. Never raises: a revision whose replicas cannot
     be listed contributes nothing rather than failing the whole reading."""
     try:
-        answer = client.container_apps_revision_replicas.list_replicas(_AZ_RG, _AZ_APP, revision_name)
+        answer = client.container_apps_revision_replicas.list_replicas(
+            _AZ_RG, app_name or _AZ_APP, revision_name)
     except Exception:  # noqa: BLE001
         swallowed("routes.control._replica_rows: listing replicas for a revision failed")
         return []
@@ -855,7 +918,7 @@ def get_revisions():
         swallowed("routes.control.get_revisions: reading a revision's fields failed")
 
     try:
-        revisions = client.container_apps_revisions.list_revisions(_AZ_RG, _AZ_APP)
+        revisions = client.container_apps_revisions.list_revisions(_AZ_RG, app_name)
         rev_list = getattr(revisions, "value", None)
         if rev_list is None:
             rev_list = list(revisions)

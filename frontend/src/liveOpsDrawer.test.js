@@ -8,7 +8,8 @@ import {
   CAPACITY_RULES, NOT_REPORTED, TREND_WINDOW_MS, appendSample, arcPath, capacityMatchesService,
   chartModel, componentState, defaultMetricFor, deriveEvents, etaSeconds, eventClock,
   eventsForNode, filterEvents, formatDuration, gaugeModel, mergeEvents, metricsForKind,
-  PROVENANCE, metricGroups, niceCeiling, num, outputModel, provenance, queueModel, rateSeries,
+  PROVENANCE, capacityForService, metricGroups, niceCeiling, num, outputModel, provenance,
+  queueModel, rateSeries,
   replicaLifecycle, reported, revisionLabel, runModel, sampleForNode, saturationModel, scaleEvents,
   scaleExplanation, secondsSince, seriesForMetric, sourceModel, tenantConcentration, trendMarkers,
   updatedAgo, workerJobHealth,
@@ -680,5 +681,41 @@ describe('Per-worker job health', () => {
     const unclaimed = { ...snapshot,
       runs: [{ ...snapshot.runs[0], current_job_started_at: null }] }
     expect(workerJobHealth(unclaimed, 'assess', { nowMs: NOW }).jobs[0].runtimeS).toBe(null)
+  })
+})
+
+
+describe('Each worker service reads its own container app', () => {
+  const multi = { configured: true, worker_app_name: 'acp-discovery',
+    cpu_cores_per_replica: 1, apps: {
+      'acp-discovery': { worker_app_name: 'acp-discovery', cpu_cores_per_replica: 1, memory_per_replica: '2Gi' },
+      'acp-assess': { worker_app_name: 'acp-assess', cpu_cores_per_replica: 2, memory_per_replica: '4Gi' },
+      'acp-remediate': { worker_app_name: 'acp-remediate', cpu_cores_per_replica: 2, memory_per_replica: '4Gi' },
+    } }
+
+  it('gives every service its own reading instead of suppressing two of three', () => {
+    expect(capacityForService(multi, { role: 'assess' }).memory_per_replica).toBe('4Gi')
+    expect(capacityForService(multi, { role: 'discovery' }).memory_per_replica).toBe('2Gi')
+    expect(capacityForService(multi, { role: 'remediate' }).worker_app_name).toBe('acp-remediate')
+  })
+
+  it('names a block from its key when the block does not name itself', () => {
+    const unnamed = { configured: true, apps: { 'acp-assess': { cpu_cores_per_replica: 2 } } }
+    expect(capacityForService(unnamed, { role: 'assess' })).toMatchObject({
+      worker_app_name: 'acp-assess', cpu_cores_per_replica: 2 })
+  })
+
+  it('returns null rather than the wrong block for a service Azure did not read', () => {
+    // The whole point: two of three services used to show nothing because the one measured app
+    // was not theirs, and showing that app's figures instead would have been worse than none.
+    expect(capacityForService(multi, { role: 'release' })).toBe(null)
+    expect(capacityForService(null, { role: 'assess' })).toBe(null)
+    expect(capacityForService(multi, {})).toBe(null)
+  })
+
+  it('falls back to the single-app behaviour when no apps block is published', () => {
+    const single = { configured: true, worker_app_name: 'acp-assess', cpu_cores_per_replica: 2 }
+    expect(capacityForService(single, { role: 'assess' })).toBe(single)
+    expect(capacityForService(single, { role: 'discovery' })).toBe(null)
   })
 })

@@ -179,6 +179,49 @@ describe('Primary visualization per node', () => {
   })
 })
 
+describe('Every worker service shows its own Azure numbers', () => {
+  const perApp = (name, cpu) => ({ configured: true, worker_app_name: name, measured_at: iso(-20),
+    current_replicas: 2, metrics_window_minutes: 15,
+    metrics: { restarts: azureMetric('Replica restarts', 'RestartCount', cpu) } })
+  const multi = { ...capacity, apps: {
+    'acp-discovery': perApp('acp-discovery', 7),
+    'acp-assess': perApp('acp-assess', 3),
+    'acp-remediate': perApp('acp-remediate', 11) } }
+
+  it('shows the discover service own restarts rather than suppressing them', async () => {
+    // Before the multi-app read this panel said "Azure measured acp-assess, not this service".
+    const container = await mount({ nodeId: 'stage:discover', capacity: multi,
+      node: { kind: 'worker', label: 'Discover workers',
+        service: { ...service, role: 'discovery', stage: 'discover' } } })
+    expect(container.textContent).not.toContain('not this service')
+    expect(container.textContent).toContain('REPLICA RESTARTS')
+    expect(container.textContent).toContain('7')
+  })
+
+  it('keeps each service on its own app numbers', async () => {
+    // Asserted on the tile itself: "11" also occurs in the filename on this page, and a
+    // whole-page substring check would pass or fail for the wrong reason.
+    const restarts = (container) => [...container.querySelectorAll('div')]
+      .map((el) => el.textContent)
+      .find((text) => text.startsWith('REPLICA RESTARTS'))
+    const assess = await mount({ nodeId: 'stage:assess', capacity: multi,
+      node: { kind: 'worker', label: 'Assess workers', service } })
+    expect(restarts(assess)).toContain('3')
+    expect(restarts(assess)).not.toContain('11')
+    const remediate = await mount({ nodeId: 'stage:remediate', capacity: multi,
+      node: { kind: 'worker', label: 'Remediate workers',
+        service: { ...service, role: 'remediate', stage: 'remediate' } } })
+    expect(restarts(remediate)).toContain('11')
+  })
+
+  it('still declines for a service no configured app describes', async () => {
+    const container = await mount({ nodeId: 'stage:release', capacity: multi,
+      node: { kind: 'worker', label: 'Release workers',
+        service: { ...service, role: 'release', stage: 'release' } } })
+    expect(container.textContent).toContain('not this service')
+  })
+})
+
 describe('Azure Monitor in the drawer', () => {
   const workerNode = { kind: 'worker', label: 'Assess workers', service }
 

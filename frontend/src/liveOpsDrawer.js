@@ -213,6 +213,32 @@ export function capacityMatchesService(capacity, service = {}) {
   return app === `acp-${role}` || app.endsWith(`-${role}`)
 }
 
+/**
+ * THIS service's own Azure reading.
+ *
+ * The backend now reads every configured worker app and returns them keyed by name under `apps`,
+ * so a service whose app is in that list gets its OWN CPU, memory, replicas, restarts and
+ * lifecycle instead of having them suppressed. When only one app is configured — or the service's
+ * app is not among those read — this falls back to the old single-app behaviour: the top-level
+ * block if it IS this service's, and null otherwise.
+ *
+ * Returning null rather than the wrong block is the whole point. Two of three worker services
+ * used to show nothing because the one measured app was not theirs; showing that app's figures
+ * instead would have been worse than showing none.
+ */
+export function capacityForService(capacity, service = {}) {
+  if (!capacity || !service?.role) return null
+  const apps = capacity.apps
+  if (apps && typeof apps === 'object') {
+    for (const [name, block] of Object.entries(apps)) {
+      if (!block) continue
+      const named = { ...block, worker_app_name: block.worker_app_name || name }
+      if (capacityMatchesService(named, service)) return named
+    }
+  }
+  return capacityMatchesService(capacity, service) ? capacity : null
+}
+
 /* ─────────────────────── Scaling activity ─────────────────────── */
 
 /**

@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { prefersReducedMotion, useDialog } from './a11y.js'
 import {
   EVENT_FILTERS, EVENT_ICONS, NOT_REPORTED, TONE, arcPath, capacityMatchesService, chartModel,
-  componentState, defaultMetricFor, eventClock, eventsForNode, filterEvents, formatDuration,
+  capacityForService, componentState, defaultMetricFor, eventClock, eventsForNode, filterEvents,
+  formatDuration,
   REPLICA_STATES, gaugeModel, metricGroups, nodeTypeLabel, outputModel, provenance, queueModel,
   replicaLifecycle, reported, saturationModel, scaleEvents, scaleExplanation, workerJobHealth,
   revisionLabel, runModel, seriesForMetric, sourceModel, tenantConcentration, trendMarkers,
@@ -668,7 +669,13 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
   useDialog(panelRef, onClose)
   useEffect(() => { setMetricKey(defaultMetricFor(node?.kind)); setShowAll(false) }, [nodeId, node?.kind])
 
-  const state = componentState(node, { snapshot, capacity, connection })
+  // A worker node reads ITS OWN app's block when the backend published one; every other node
+  // keeps the top-level reading. Before the multi-app read, two of three worker services showed
+  // nothing here, because the single measured app was not theirs.
+  const serviceCapacity = node?.kind === 'worker'
+    ? (capacityForService(capacity, node.service) || capacity)
+    : capacity
+  const state = componentState(node, { snapshot, capacity: serviceCapacity, connection })
   const name = node?.kind === 'run'
     ? `${node.run?.stage || 'Run'} run · ${node.run?.owner || 'unknown user'}`
     : node?.label || 'Component'
@@ -676,7 +683,7 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
   // Azure Monitor's own fifteen minutes where it has them — that history covers time before this
   // tab was opened, which the browser's own samples never can.
   const picked = seriesForMetric(shown.samples, metricKey,
-    { capacity, service: node?.kind === 'worker' ? node.service : null })
+    { capacity: serviceCapacity, service: node?.kind === 'worker' ? node.service : null })
   const chart = useMemo(() => chartModel(picked.samples, metricKey, { nowMs }), [picked.samples, metricKey, nowMs])
   const nodeEvents = useMemo(() => filterEvents(eventsForNode(shown.events, nodeId), filter), [shown.events, nodeId, filter])
   const markers = useMemo(() => trendMarkers(eventsForNode(shown.events, nodeId),
@@ -689,9 +696,9 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
 
   let primary = null
   if (node?.kind === 'worker') {
-    primary = <WorkerGauge service={node.service} capacity={capacity} nowMs={nowMs}
+    primary = <WorkerGauge service={node.service} capacity={serviceCapacity} nowMs={nowMs}
       gauge={gaugeModel(node.service, { stalled: snapshot?.summary?.pressure === 'stalled' })}
-      saturation={saturationModel(node.service, capacity, { samples: shown.samples,
+      saturation={saturationModel(node.service, serviceCapacity, { samples: shown.samples,
         queueDepth: snapshot?.summary?.by_stage?.[node.service?.stage]?.queued })}
       health={workerJobHealth(snapshot, node.service?.stage, { nowMs })}
       queueDepth={snapshot?.summary?.by_stage?.[node.service?.stage]?.queued} />
@@ -721,7 +728,7 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
         borderLeft: `5px solid ${accent}`, display: 'grid', alignContent: 'start', gap: 12,
         boxShadow: '-12px 0 35px rgba(24,20,28,.22)', isolation: 'isolate' }}>
       <LiveHeader name={name} kind={node?.kind} state={state} connection={connection}
-        generatedAt={snapshot?.generated_at} revision={revisionLabel(node, capacity)} nowMs={nowMs}
+        generatedAt={snapshot?.generated_at} revision={revisionLabel(node, serviceCapacity)} nowMs={nowMs}
         onClose={onClose} onViewAll={onClose} />
       {state.detail && <p className="muted" style={{ fontSize: 12, margin: 0 }}>{state.detail}</p>}
       {primary}
