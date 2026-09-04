@@ -1,0 +1,91 @@
+{{/*
+One Deployment per worker role, from the `workers` map.
+
+RANGED, NOT WRITTEN OUT THREE TIMES. The roles today are discover, assess and remediate, and the
+temptation is three near-identical files. Three files drift: a probe added to two of them, a
+resource bump applied to the one somebody was looking at. Ranging over the map also means adding
+a fourth role is a key in a deployment document rather than a chart change — which is the
+difference between an operator being able to size their own installation and filing a request.
+*/}}
+{{- range $role, $cfg := .Values.workers }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "acp.fullname" $ }}-worker-{{ $role }}
+  labels:
+    {{- include "acp.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: worker
+    acp.mova.io/worker-role: {{ $role | quote }}
+spec:
+  {{- /* Same reason as the API: KEDA's ScaledObject owns replicas when it is enabled. */}}
+  {{- if not $cfg.autoscaling.enabled }}
+  replicas: {{ $cfg.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "acp.selectorLabels" $ | nindent 6 }}
+      app.kubernetes.io/component: worker
+      acp.mova.io/worker-role: {{ $role | quote }}
+  template:
+    metadata:
+      labels:
+        {{- include "acp.selectorLabels" $ | nindent 8 }}
+        app.kubernetes.io/component: worker
+        acp.mova.io/worker-role: {{ $role | quote }}
+        acp.mova.io/tier: worker
+      {{- with $.Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "acp.serviceAccountName" $ }}
+      {{- with $.Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml $.Values.podSecurityContext | nindent 8 }}
+      {{- /*
+        A worker in the middle of a document gets time to finish it. The default 30s is shorter
+        than a large PDF's remediation pass, so a rolling upgrade would kill work mid-write and
+        leave the job to be retried from the top — which for an already-slow document is the
+        difference between a deploy nobody notices and one that shows up as a queue backlog.
+      */}}
+      terminationGracePeriodSeconds: 300
+      containers:
+        - name: worker
+          image: {{ include "acp.image" (dict "root" $ "component" "worker") | quote }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml $.Values.securityContext | nindent 12 }}
+          env:
+            {{- include "acp.commonEnv" $ | nindent 12 }}
+            {{- range $k, $v := $cfg.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- /*
+            NO HTTP PROBES. Workers do not listen; they claim jobs from the queue. A readiness
+            probe on a port nothing serves fails forever, and a liveness probe on one restarts a
+            healthy worker every failureThreshold. Liveness for a queue consumer is a different
+            question (is it still claiming?) and belongs with the job log, not here — stated
+            rather than left as an apparent omission.
+          */}}
+          {{- with $cfg.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with $.Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $.Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with $.Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

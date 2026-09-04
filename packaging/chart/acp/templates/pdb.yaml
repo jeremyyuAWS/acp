@@ -1,0 +1,29 @@
+{{- if .Values.podDisruptionBudget.enabled }}
+{{/*
+The high-availability profile's actual guarantee.
+
+Anti-affinity is a PREFERENCE — it spreads pods when there is room and shrugs when there is not.
+A PodDisruptionBudget is what survives a node drain: without one, `kubectl drain` on the node
+holding both API replicas evicts both, and the cluster autoscaler does exactly that during a
+routine node upgrade. That is the failure "high availability" is bought to prevent, and it is not
+prevented by replica count alone.
+
+API ONLY, DELIBERATELY. A worker evicted mid-document loses that document's in-flight work and
+the job returns to the queue — costly, not an outage. Budgeting worker disruptions too would
+block node drains on a tier that is designed to be interrupted, and a drain that cannot complete
+is its own incident.
+*/}}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "acp.fullname" . }}-api
+  labels:
+    {{- include "acp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  selector:
+    matchLabels:
+      {{- include "acp.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+{{- end }}

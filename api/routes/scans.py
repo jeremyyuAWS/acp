@@ -2478,6 +2478,59 @@ def get_file_geometry(scan_id: str, filename: str, request: Request,
     return {"bbox": _geom.shape_bbox(data, ext, locator)}
 
 
+@router.get("/scans/{scan_id}/files/{filename:path}/source_link")
+def get_file_source_link(scan_id: str, filename: str, request: Request,
+                         page: int = Query(1, ge=1)):
+    """Deep-link URL back to the source document, scoped to the given slide/page.
+
+    Owner-scoped and non-blocking: returns 200 with `{url: null}` when a link cannot be
+    constructed (local upload, missing token, Graph error) so the card degrades gracefully.
+
+    Drive: constructs the link from the stored `drive_file_id` — no API call.
+    SharePoint: calls Graph `GET /drives/{drive_id}/items/{drive_file_id}?$select=webUrl`
+      with the caller-supplied `x-sp-token`; appends `?web=1&slide={page}` for .pptx.
+      Returns `{url: null}` when no token is supplied or when the Graph call fails.
+    Local / unknown: returns `{url: null}`.
+
+    Honesty (ADR 0016): a real stored id or a live Graph response, or nothing."""
+    import os as _os
+
+    owner = _owner(request)
+    row = core.store.get_source_link_data(scan_id, filename, owner=owner)
+    if row is None:
+        raise HTTPException(404, "scan not found")
+
+    source = (row.get("source") or "").lower()
+    drive_file_id = row.get("drive_file_id") or ""
+
+    if source == "drive" and drive_file_id:
+        return {"url": f"https://drive.google.com/file/d/{drive_file_id}/view",
+                "label": "Open in Drive"}
+
+    if source == "sharepoint" and drive_file_id:
+        token = request.headers.get("x-sp-token")
+        if not token:
+            return {"url": None}
+        drive_id = row.get("drive_id") or ""
+        try:
+            import scanner as _scanner
+            graph_url = (f"{_scanner.GRAPH}/drives/{drive_id}/items/{drive_file_id}"
+                         if drive_id else
+                         f"{_scanner.GRAPH}/me/drive/items/{drive_file_id}")
+            item = _scanner._sp_get(token, graph_url + "?$select=webUrl")
+            web_url = item.get("webUrl", "")
+            if not web_url:
+                return {"url": None}
+            ext = _os.path.splitext(filename)[1].lower()
+            if ext == ".pptx":
+                web_url = f"{web_url}?web=1&slide={page}"
+            return {"url": web_url, "label": "Open in SharePoint"}
+        except Exception:
+            return {"url": None}
+
+    return {"url": None}
+
+
 @router.get("/scans/{scan_id}/files/{filename:path}/heading-outline")
 def get_heading_outline(scan_id: str, filename: str, request: Request):
     """The docx heading outline `{before,after}` for a heading finding's Structure evidence — the
