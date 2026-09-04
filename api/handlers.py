@@ -717,6 +717,16 @@ def _remediation_source_bytes(scan_id: str, filename: str, payload: dict,
         from scanner import read_cached_source
         owner = payload.get("owner")
         checksum = payload.get("checksum")
+        if not checksum:
+            # BOTH KEY SHAPES ARE LIVE, and a job that carries no checksum can still have its
+            # bytes under the checksum key — every job enqueued before the route learned to
+            # stamp one does, and jobs are durable, so those are still in the queue. Resolve it
+            # from scan_inventory (store.get_source_checksum) rather than treating a payload
+            # without one as proof the cache used the scan-keyed shape.
+            try:
+                checksum = core.store.get_source_checksum(scan_id, filename)
+            except Exception:
+                swallowed("_remediation_source_bytes: resolving the source checksum failed", scan_id)
         data = read_cached_source(scan_id, filename, owner, checksum=checksum)
         if data is None and checksum:
             # The checksum key only holds bytes when the LISTING carried that checksum. A file
