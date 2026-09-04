@@ -46,8 +46,8 @@ rules), and `docs/pilot-scope.md`.
 
 | SOW requirement | ACP today | Gap / effort |
 |---|---|---|
-| **Up to 30 SharePoint locations** | ✅ **Built 2026-09-04.** One run spans up to 30 sites (`ACP_SP_MAX_SITES`), every library on each, one shared budget, per-site totals and failure isolation. A "location" is read as a **site**; a site's libraries are still scanned together, as they always were. | **Closed as an engineering item.** What remains is the **scale proof**: 30 sites has an exit-gate unit test (`tests/test_sharepoint_multi_site.py`) but has never been run against a real tenant. See backlog **R11**. |
-| Full scan, no doc-count limit at scan | Batch path for large estates | **Not load-tested** at 30-location breadth (backlog **R11**) — exactly what `scripts/robustness_corpus.py` probes. |
+| **Up to 30 SharePoint locations** | ✅ **Built 2026-09-04.** One run spans up to 30 sites (`ACP_SP_MAX_SITES`), every library on each, one shared budget, per-site totals and failure isolation. A "location" is read as a **site**; a site's libraries are still scanned together, as they always were. | **Closed in code and synthetic scale tests.** `tests/test_sp_scale.py` proves 30 sites × 4 libraries × 3 nested folders while bounding Graph calls. A real-tenant run remains the deployment proof. |
+| Full scan, no doc-count limit at scan | Batch path for large estates; synthetic 30-site traversal is bounded by pages/folders rather than documents | **Code and synthetic proof complete.** Production proof against the customer's library sizes remains tenant-dependent. |
 | Auto-flag non-applicable types (tiff, PhD, fonts…) | Filtered-by-type bucket | ✅ supported |
 | Archival rule: **date-based** | `age_days` match field | ✅ supported |
 | Archival rule: **folder-based** | Folder path **is read** (`parentReference`); folder-skip exists — but the disposition engine has **no path/folder match field** | **Small build** — the data is already fetched; expose a `path`/`folder` rule field. |
@@ -103,8 +103,8 @@ the read-only posture.
 
 ## Related backlog
 
-- **R11** — multi-user / concurrency load test (the 30-location full-scan scenario). **Now the
-  binding item for the 30-location requirement**: the orchestration exists, the proof does not.
+- **R11** — multi-user queue isolation and concurrent fan-out are closed; `tests/test_sp_scale.py`
+  adds the SharePoint-specific 30-site traversal proof. Only real-tenant breadth remains unverified.
 - **R2 / R3 / R12** — RunPod vision not engaged (image alt-text degraded to CPU/manual).
 - The **folder/native-metadata rule fields** and **multi-site scan** are new items this doc introduces;
   add them to `docs/BACKLOG.md` if the SOW is signed.
@@ -120,6 +120,14 @@ the read-only posture.
   existed, and `/config` serves it so the site picker stops the operator at the same number the
   server will accept. Sites past the cap are recorded as `skipped` with a reason and the estate is
   marked truncated — never dropped silently.
+- **`ACP_SP_CONCURRENCY`** (default `1`, capped at 16) — how many document libraries may be
+  walked at once. **Serial by default, and that is a refusal rather than caution**: overlapping
+  walks dispatch a library *before* the budget that decides whether its result is wanted has been
+  spent, so a scan with a tight cap walks libraries whose documents are then discarded — real
+  Graph calls against a customer's tenant for an estate that is already a floor. Phase 1 rejected
+  exactly that when it chose to walk libraries lazily. Raise it when the cap is comfortably above
+  the estate (the ordinary scheduled 30-site run), where nothing is discarded and the win is free.
+  `1` takes the identical code path, so anything reproducing at `1` is not a concurrency problem.
 - **`ACP_SP_MAX_RETRIES`** (default `4`, hard-capped at 10) — how many times a **throttled or
   transiently-failed** Graph GET is retried. Small on purpose: `scanner._sp_get` is the single
   door every SharePoint call goes through — the walk, the delta feed, the site list, the drives
@@ -327,3 +335,48 @@ it held — an empty library is an answer about the tenant, and listing it would
 need action under the ones that are simply small. **An all-clear scan returns a header row and no
 data**, never a 404: a report that 404s when nothing failed is indistinguishable from one that
 could not be produced, and that difference is exactly what the reader is asking about.
+
+
+---
+
+## Walking libraries concurrently (Phase 4b)
+
+**The trap.** `_sp_list` spends one shared budget across every selected site, and two Phase 1
+properties depend on the order it is spent in: "one budget, not one per site", and "a site the
+budget never reached is truncation, recorded as skipped". Consume results as they arrive and
+*which* sites get skipped becomes whichever library happened to return first — the same tenant,
+scanned twice, reports a different estate. A count an operator cannot reproduce is worse than a
+slow scan, and a lock around the budget removes the race without removing that.
+
+**The resolution: dispatch concurrently, consume in selection order.** A bounded look-ahead walks
+up to `ACP_SP_CONCURRENCY - 1` libraries beyond the one being consumed; the budget is spent by the
+consumer, in the order the operator chose their sites. The estate is identical at every
+concurrency — `tests/test_sp_concurrency.py` asserts exactly that, running the same fixture at 1
+and at 4 and comparing the analysis set, the inventory, the truncation flag and every per-site
+status, **including the truncation boundary**, which is the half that actually depends on order.
+
+The look-ahead is a **sliding window, not a full dispatch**: submitting every library up front
+would walk all thirty of a truncated estate to use the first three, which is the cost the serial
+default exists to avoid.
+
+**Throttling is attributed per library, not per turn in the loop.** A snapshot taken around one
+site's turn also catches whatever the other sites spent in parallel, which would send an operator
+chasing a throttled library to the wrong site. Each walk counts its own retries on its own thread.
+
+### Site coverage on Live Operations
+
+A 30-site walk is one long "discovering" bar on the operations map: the file count ticks and
+nothing says which sites are done, which are queued, or that one is blocked on a consent that
+lapsed this morning. The per-site report is already checkpointed on the run, so the map now reads
+it — "12 of 30 sites, 41 libraries · 3 not read", summed across concurrent runs because that map
+is cross-tenant. A source reporting no site data (Drive, OneDrive, a scan before its first site)
+shows nothing rather than "0 of 0 sites", which would be a fact about the screen.
+
+### Still open in Phase 4
+
+**Per-site checkpoints and resumable scans.** A 30-site scan that dies at site 28 currently
+re-lists all thirty: `handlers`' existing checkpoint resume is all-or-nothing (it skips listing
+only when the whole inventory was already persisted, and inventory is written *after* the listing
+completes). True per-site resume means persisting each site's rows as it finishes and skipping
+completed sites on retry — a streaming-inventory change to the discover path rather than a
+connector change, and worth its own PR rather than being smuggled into this one.

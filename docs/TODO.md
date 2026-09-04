@@ -87,7 +87,7 @@ This is a behaviour change, not bookkeeping: several detectors compute the AA an
 | `2.4.3` | pptx | **partial** | high | other focus-order conditions (non-placeholder shape sequences, embedded control tab order) are not examined |
 | `2.4.4` | docx | **partial** | high | whether otherwise-descriptive text actually names THIS destination — a link reading 'Annual Report' that point |
 | `2.4.4` | pdf | **partial** | high | whether otherwise-descriptive text names the correct destination is a content judgement not examinable from th |
-| `2.5.3` | pdf | **partial** | high | other field types (text, checkbox, radio) display their labels as separate text objects not linked to the fiel |
+| `2.5.3` | pdf | **partial** | high | text, checkbox, radio, choice, signature fields: accessible name is flagged when it looks like a developer ide |
 | `3.1.1` | html | **full** | high | whether the declared language is the CORRECT one is a content question 3.1.1 does not ask |
 | `3.1.2` | docx | **partial** | high | a shorter foreign phrase or a single borrowed word is under the length floor langdetect needs to be trusted, a |
 | `3.1.2` | xlsx | **partial** | medium | SpreadsheetML has no per-run language element, so shorter phrases and statistical uncertainty in langdetect's  |

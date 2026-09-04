@@ -3,6 +3,7 @@ import WorkerCard from './WorkerCard.jsx'
 import LiveCounter from './LiveCounter.jsx'
 import { nextMilestone } from './discoveryMilestone.js'
 import { deriveRunAge, submittedText, elapsedText, startedText } from './queueAge.js'
+import SourceVisibility from './SourceVisibility.jsx'
 
 // The Discover RUNNING screen: a per-step checklist showing what the discovery agent is doing.
 // This replaces the generic scan-progress banner on the Discover tab so the screen stays scoped
@@ -141,7 +142,7 @@ function DiscoverStep({ label, kpi, status, sublines = [] }) {
   )
 }
 
-export default function DiscoverRunProgress({ progress, busy, onStop, sources, inv = null, onReview, onContinue, preflightDegraded = null, freshness = null, runStartedAt = null }) {
+export default function DiscoverRunProgress({ progress, busy, onStop, sources, source = null, scope = null, inv = null, onReview, onContinue, preflightDegraded = null, freshness = null, runStartedAt = null }) {
   // MOUNT time, and named for it. This clock answers "how long has this VIEW been watching",
   // which is the right input for the stall and slow-lifecycle hints below — they are questions
   // about the watching, and server-anchoring them would fire them instantly on any reload of an
@@ -567,6 +568,7 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
               {startedText(runAge, fmtElapsedSecs)}
             </span>
           </div>
+          <SourceVisibility source={source} scope={scope} />
           <div role="list" aria-label="Discovery steps"
                style={{ display: 'flex', flexDirection: 'column', gap: 9, marginBottom: 14 }}>
             {stoppedSteps.map(({ key, ...rest }) => <DiscoverStep key={key} {...rest} />)}
@@ -613,6 +615,7 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
               Updates complete
             </span>
           </div>
+          <SourceVisibility source={source} scope={scope} />
           <div role="list" aria-label="Discovery steps"
                style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
             {steps.map(({ key, ...rest }) => <DiscoverStep key={key} {...rest} />)}
@@ -696,6 +699,8 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, i
             )}
           </div>
         </div>
+
+        <SourceVisibility source={source} scope={scope} />
 
         <div aria-live="polite" aria-atomic="false" role="list" aria-label="Discovery steps"
              style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>

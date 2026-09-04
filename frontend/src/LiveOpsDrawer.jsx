@@ -108,8 +108,9 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queu
         <path d={arcPath(100, 100, 78, 1)} fill="none" stroke="var(--line)" strokeWidth="16" strokeLinecap="round" />
         {gauge.fraction > 0 && <path d={arcPath(100, 100, 78, gauge.fraction)} fill="none" stroke={color}
           strokeWidth="16" strokeLinecap="round" />}
-        <text x="100" y="86" textAnchor="middle" fontSize="30" fontWeight="700" fill="var(--ink)">
-          {gauge.pct == null ? '—' : `${gauge.pct}%`}
+        <text x="100" y="86" textAnchor="middle" fontSize={gauge.overCommitted ? 20 : 30}
+          fontWeight="700" fill="var(--ink)">
+          {gauge.pct == null ? (gauge.overCommitted ? 'over' : '—') : `${gauge.pct}%`}
         </text>
         <text x="100" y="104" textAnchor="middle" fontSize="11" fill="var(--muted)">
           {gauge.active} of {gauge.slots} slots
@@ -123,9 +124,11 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queu
           {gauge.stateLabel}
         </div>
         <p style={{ margin: '6px 0 0', fontSize: 13 }}>{gauge.text}.</p>
-        <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
-          Amber from 75% of slots, red at 100% — the documented capacity rule, not a colour range.
-        </div>
+        {gauge.overCommittedNote
+          ? <p className="muted" style={{ fontSize: 11, marginTop: 6 }}>{gauge.overCommittedNote}</p>
+          : <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+            Amber from 75% of slots, red at 100% — the documented capacity rule, not a colour range.
+          </div>}
         <div className="muted" style={{ fontSize: 11, marginTop: 4, overflowWrap: 'anywhere' }}>
           Heartbeat {service?.age_s == null ? NOT_REPORTED : `${Math.round(service.age_s)}s ago`}
         </div>

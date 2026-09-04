@@ -4,6 +4,7 @@ import '@xyflow/react/dist/style.css'
 import { getAdminActivity, getWorkerCapacity, openAdminActivityStream } from './api.js'
 import { ensureResizeObserver } from './resizeObserverFallback.js'
 import LiveOpsDrawer from './LiveOpsDrawer.jsx'
+import LiveOpsCostSummary from './LiveOpsCostSummary.jsx'
 import { appendSample, deriveEvents, formatDuration, mergeEvents, sampleForNode, secondsSince } from './liveOpsDrawer.js'
 
 ensureResizeObserver(typeof window === 'undefined' ? globalThis : window)
@@ -210,6 +211,76 @@ function RunNode({ data }) {
   </div>
 }
 
+/**
+ * The live bar on a map tile.
+ *
+ * The map answers "where is work" and the drawer answers "how much"; a tile with a fill answers
+ * the second at a glance, so a saturated service is visible without opening anything. It updates
+ * on every SSE snapshot because it is derived from the same node data the tile already renders.
+ *
+ * `fraction` is clamped to 1 and `over` is passed separately rather than letting the bar overflow:
+ * more work in flight than slots is not a share of capacity (see gaugeModel), so it is drawn as a
+ * full bar in the saturated tone and SAID in the label, never as a bar running past its own track.
+ * A fraction of null draws no bar at all — an unmeasured value gets no fill, not an empty one that
+ * reads as zero.
+ */
+function NodeGauge({ fraction, label, color, over = false, tone }) {
+  const measured = typeof fraction === 'number' && Number.isFinite(fraction)
+  const width = measured ? Math.min(1, Math.max(0, fraction)) * 100 : 0
+  return <div style={{ marginTop: 6 }}>
+    <div role="img" aria-label={label} style={{ height: 5, borderRadius: 3, background: 'var(--line)',
+      overflow: 'hidden' }}>
+      {measured && <div style={{ width: `${width}%`, height: '100%', borderRadius: 3,
+        background: over ? 'var(--error-fg)' : (tone || color) }} />}
+    </div>
+    <div className="muted" style={{ fontSize: 10, marginTop: 2, overflowWrap: 'anywhere' }}>{label}</div>
+  </div>
+}
+
+/**
+ * What each tile's bar measures, or null when nothing on that tile is a ratio.
+ *
+ * Only two node kinds have an honest denominator: a worker service (busy slots against its own
+ * slot count) and the shared queue (waiting work against the tier's total slots, which is what
+ * "can the queue be picked up now" means). A source connector and the output store have no
+ * capacity to be a fraction of, so they get no bar rather than an invented one.
+ */
+export function nodeGauge(data = {}, summary = {}) {
+  if (data.kind === 'worker') {
+    const service = data.service || {}
+    const active = Number(service.active || 0)
+    const slots = Number(service.slots || 0)
+    if (!slots) return { fraction: null, label: 'Worker slots not reported', over: false }
+    const over = active > slots
+    return {
+      fraction: Math.min(1, active / slots),
+      over,
+      label: over ? `${active} jobs against ${slots} reported slots`
+        : `${active} of ${slots} slots busy (${Math.round((active / slots) * 100)}%)`,
+    }
+  }
+  if (data.kind === 'queue') {
+    const queued = Number(summary.queued || 0)
+    const slots = Number(summary.worker_slots || 0)
+    if (!slots) return { fraction: null, label: `${queued} waiting · worker slots not reported`, over: false }
+    const over = queued > slots
+    return {
+      fraction: Math.min(1, queued / slots),
+      over,
+      label: over ? `${queued} waiting, more than the ${slots} slots that could pick them up`
+        : `${queued} waiting against ${slots} worker slots`,
+    }
+  }
+  if (data.kind === 'run') {
+    const run = data.run || {}
+    const total = Number(run.total || 0)
+    if (!total) return { fraction: null, label: 'Run total not reported', over: false }
+    return { fraction: Math.min(1, Number(run.completed || 0) / total), over: false,
+      label: `${run.completed || 0} of ${total} documents complete` }
+  }
+  return null
+}
+
 function InfraNode({ data }) {
   const color = data.color || '#51606D'
   return <div title="Select for infrastructure details; double-click for telemetry"
@@ -224,6 +295,7 @@ function InfraNode({ data }) {
       <span style={{ color, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap' }}>{data.status}</span>
     </div>
     <div className="muted" style={{ fontSize: 11, marginTop: 4, lineHeight: 1.3, overflowWrap: 'anywhere' }}>{data.detail}</div>
+    {data.gauge && <NodeGauge {...data.gauge} color={color} />}
     {data.metric && <div style={{ fontSize: 11, marginTop: 5, fontWeight: 700, overflowWrap: 'anywhere' }}>{data.metric}</div>}
     {data.outputPorts?.length
       ? data.outputPorts.map(({ id, top }) => <Handle key={id} id={id} type="source"
@@ -233,6 +305,20 @@ function InfraNode({ data }) {
 }
 
 const nodeTypes = { run: RunNode, infra: InfraNode }
+
+// React Flow's `animated` flag renders a moving dashed stroke. At the fitView zoom those dashes
+// repeatedly land between device pixels, which makes an otherwise healthy path look fuzzy. Keep
+// every route solid and communicate activity with a slightly stronger, non-scaling stroke; the
+// nodes already state active/online status in text, so motion is not carrying information.
+export function trafficEdgeStyle(color, active = false) {
+  return {
+    stroke: color,
+    strokeWidth: active ? 3 : 2,
+    opacity: active ? 1 : 0.9,
+    vectorEffect: 'non-scaling-stroke',
+    shapeRendering: 'geometricPrecision',
+  }
+}
 
 // THE SCOPE OF THIS NUMBER IS NOT THE STAGE IT IS DRAWN ON. api/routes/control.py reads ONE
 // container app — WORKER_APP_NAME, defaulting to `acp-worker` — so this is a tier-wide reading,
@@ -348,15 +434,18 @@ export function runFacts(run = {}, nowMs = Date.now()) {
  *
  * · A DESTINATION for a click. `detail` names the node whose drawer explains the work on this
  *   line, so selecting the line that is moving answers "what is that?" — the question the motion
- *   provokes. `interactionWidth` widens the hit area well past the 1.5px stroke; the same drawer
- *   is reachable from either node the line joins, so a pointer is never the only way to it.
+ *   provokes. `interactionWidth` widens the hit area well past the stroke; the same drawer is
+ *   reachable from either node the line joins, so a pointer is never the only way to it.
+ *
+ * The stroke itself comes from `trafficEdgeStyle`, so the crisp non-scaling geometry that landed
+ * in #1329 survives: that change was about how a line RENDERS at any zoom, this one is about what
+ * a line MEANS, and the two are independent.
  */
 export function flowEdge({ id, source, target, color, active = false, detail, ...rest }) {
   return {
     id, source, target, animated: active, focusable: true, interactionWidth: 20,
     data: { detail: detail || target, active },
-    style: { stroke: color, strokeWidth: active ? 2.4 : 1.4, opacity: active ? 1 : 0.75,
-      cursor: 'pointer' },
+    style: { ...trafficEdgeStyle(color, active), cursor: 'pointer' },
     markerEnd: { type: MarkerType.ArrowClosed, color, width: 15, height: 15 },
     ...rest,
   }
@@ -368,11 +457,35 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
   const serviceByStage = new Map(services.map((service) => [service.stage, service]))
   const sourceKinds = ['drive', 'sharepoint']
   const sourceLabel = { drive: 'Google Drive', sharepoint: 'SharePoint' }
-  const nodes = sourceKinds.map((source, index) => ({ id: `source:${source}`, type: 'infra', position: { x: 0, y: 70 + index * 135 },
-    ariaLabel: `${sourceLabel[source]} connector, ${runs.some((run) => run.source === source) ? 'active' : 'ready'}. Select for details.`,
-    data: { kind: 'source', label: sourceLabel[source], status: runs.some((run) => run.source === source) ? 'active' : 'ready',
-      detail: 'Authorized document connector', color: '#246B79', hasInput: false,
-      active: runs.filter((run) => run.source === source && run.status !== 'recent').length } }))
+  const nodes = sourceKinds.map((source, index) => {
+    const mine = runs.filter((run) => run.source === source)
+    // SHAREPOINT COVERAGE, when a run is actually reporting it. A 30-site walk is one long
+    // "discovering" bar on this map otherwise: the file count ticks and nothing says which sites
+    // are done, which are still queued, or that one is blocked on a consent that lapsed this
+    // morning. Summed across concurrent runs because this map is cross-tenant — it answers "what
+    // is the estate doing", not "what is my scan doing".
+    //
+    // Only when at least one run carries the fields. A Drive run has none, and rendering "0 of 0
+    // sites" under Google Drive would be a fact about this component rather than about anything
+    // an operator could act on.
+    const covered = mine.filter((run) => Number.isFinite(run.sites_total))
+    const sitesTotal = covered.reduce((n, r) => n + (r.sites_total || 0), 0)
+    const sitesDone = covered.reduce((n, r) => n + (r.sites_done || 0), 0)
+    const sitesUnread = covered.reduce((n, r) => n + (r.sites_unread || 0), 0)
+    const libraries = covered.reduce((n, r) => n + (r.libraries_total || 0), 0)
+    const coverage = sitesTotal
+      ? `${sitesDone} of ${sitesTotal} site${sitesTotal === 1 ? '' : 's'}`
+        + `${libraries ? `, ${libraries} librar${libraries === 1 ? 'y' : 'ies'}` : ''}`
+        + `${sitesUnread ? ` · ${sitesUnread} not read` : ''}`
+      : null
+    return { id: `source:${source}`, type: 'infra', position: { x: 0, y: 70 + index * 135 },
+      ariaLabel: `${sourceLabel[source]} connector, ${mine.length ? 'active' : 'ready'}.`
+        + `${coverage ? ` ${coverage}.` : ''} Select for details.`,
+      data: { kind: 'source', label: sourceLabel[source], status: mine.length ? 'active' : 'ready',
+        detail: coverage || 'Authorized document connector', color: '#246B79', hasInput: false,
+        coverage,
+        active: mine.filter((run) => run.status !== 'recent').length } }
+  })
   nodes.push(
     { id: 'infra:intake', type: 'infra', position: { x: 230, y: 138 },
       ariaLabel: `ACP intake and orchestration, ${connection}. Select for details.`,
@@ -382,6 +495,7 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
       ariaLabel: `Shared queue, ${snapshot?.summary?.queued || 0} waiting. Select for details.`,
       data: { kind: 'queue', label: 'Shared queue',
       status: `${snapshot?.summary?.queued || 0} waiting`, detail: 'Durable · tenant-fair scheduling', color: '#A66A16',
+      gauge: nodeGauge({ kind: 'queue' }, snapshot?.summary || {}),
       outputPorts: [
         { id: 'discover', top: '22%' }, { id: 'assess', top: '50%' }, { id: 'remediate', top: '78%' },
       ] } },
@@ -403,7 +517,7 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
       metric: capacity?.configured && capacity.worker_app_name
         ? `${capacity.worker_app_name}: ${reportedWorkerSize(capacity)}`
         : reportedWorkerSize(capacity),
-      color: STAGE[stage].color, service } })
+      color: STAGE[stage].color, service, gauge: nodeGauge({ kind: 'worker', service }) } })
   })
   nodes.push({ id: 'infra:output', type: 'infra', position: { x: 1000, y: 158 },
     ariaLabel: 'Durable outputs, protected. Select for details.',
@@ -436,7 +550,8 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
     const last = series.at(-1)
     if (!last || ['completed', 'running', 'queued'].some((field) => Number(last[field] || 0) !== sample[field])) series.push(sample)
     historyMap.set(key, series.slice(-30))
-    nodes.push({ id: key, type: 'run', position: { x: 335 + (i % 3) * 255, y: 455 + Math.floor(i / 3) * 145 }, data: { kind: 'run', run, history: series } })
+    nodes.push({ id: key, type: 'run', position: { x: 335 + (i % 3) * 255, y: 455 + Math.floor(i / 3) * 145 },
+      data: { kind: 'run', run, history: series } })
     // Both of a run's lines resolve to the RUN's own drawer, not to the stage they end at: the
     // work moving along them belongs to this run, and the stage node answers a different question
     // (that service's capacity) that its own line already reaches.
@@ -557,6 +672,7 @@ export default function AdminLiveTraffic() {
         <b style={{ fontSize: 20 }}>{summary.utilization_pct ?? '—'}%</b><div className="muted">{summary.worker_tier_alive ? 'Worker tier online' : 'Worker tier unavailable'}</div></div>
     </div>
     <AzureCapacity capacity={capacity} state={capacityState} />
+    <LiveOpsCostSummary />
     {!!stageRows.length && <div aria-label="Load by processing stage" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
       {stageRows.map(([stage, row]) => <span className="chip" key={stage} style={{ borderColor: STAGE[stage]?.color }}>
         <b>{STAGE[stage]?.label || stage}</b>&nbsp; {row.running} active · {row.queued} waiting

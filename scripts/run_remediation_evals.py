@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from evals import candidates as cand      # noqa: E402
+from evals.cost import estimate_run_usd   # noqa: E402
 from evals.harness import run             # noqa: E402
 from evals.report import Gates, build_report, render_markdown  # noqa: E402
 from evals.schema import SUITES, load_cases                     # noqa: E402
@@ -52,6 +53,13 @@ def main() -> int:
     ap.add_argument("--md", dest="md_out", default=None)
     ap.add_argument("--fail-on-gate", action="store_true",
                     help="exit 1 if any candidate fails any gate")
+    ap.add_argument("--max-spend-usd", type=float, default=None,
+                    help="refuse to start if the pre-flight estimate exceeds this. The guard "
+                         "against a fat-fingered --repeats on a paid tier; the estimate is "
+                         "deliberately conservative and cache hits only make the real bill "
+                         "smaller")
+    ap.add_argument("--estimate-only", action="store_true",
+                    help="print the pre-flight cost estimate and exit without calling anything")
     args = ap.parse_args()
 
     cases = load_cases(args.cases, suites=tuple(args.suites) if args.suites else None,
@@ -66,13 +74,39 @@ def main() -> int:
                      if args.max_usd_per_call is not None else {}),
                   min_varr=args.min_varr)
 
-    runs = []
+    resolved = []
     for spec in specs:
         try:
-            candidate = cand.resolve(spec)
+            resolved.append(cand.resolve(spec))
         except ValueError as e:
             print(f"skipping {spec}: {e}", file=sys.stderr)
-            continue
+
+    # Pre-flight: price the run BEFORE making a call, because the alternative is finding out
+    # afterwards. Every candidate is quoted, free ones included, so a run that costs nothing
+    # says so rather than being silent.
+    calls = len(cases) * args.repeats
+    total = 0.0
+    print(f"pre-flight: {len(cases)} cases x {args.repeats} repeat(s) = {calls} calls "
+          f"per candidate", file=sys.stderr)
+    for c in resolved:
+        est = estimate_run_usd(c.pricing, calls)
+        total += est
+        # The key SOURCE, never the key. "which credential did this run use" is the question
+        # that otherwise gets answered by assumption — and answered wrong when the product's
+        # provider config names a secret the environment does not carry.
+        print(f"  {c.name:34s} ~${est:,.4f}  ({c.pricing.kind}"
+              f"{': ' + c.pricing.note if c.pricing.note else ''})"
+              f"  key: {c.key_source()}", file=sys.stderr)
+    print(f"  {'TOTAL':34s} ~${total:,.4f}", file=sys.stderr)
+    if args.estimate_only:
+        return 0
+    if args.max_spend_usd is not None and total > args.max_spend_usd:
+        print(f"refusing to start: estimate ${total:,.4f} exceeds --max-spend-usd "
+              f"${args.max_spend_usd:,.4f}", file=sys.stderr)
+        return 2
+
+    runs = []
+    for candidate in resolved:
         runs.append(run(candidate, cases, repeats=args.repeats, cache=not args.no_cache))
 
     if not runs:

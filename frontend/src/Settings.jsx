@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { resetDemoData, resetMyData, getAllowlist, setAllowlist, inviteTester, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, testAiProvider, getAiStatus, getAdmins, setAdmins, getMe, getToken } from './api.js'
+import { resetDemoData, resetMyData, getAllowlist, setAllowlist, inviteTester, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, putAiProviderSecret, testAiProvider, getAiStatus, getAdmins, setAdmins, getMe, getToken } from './api.js'
 import { SIM } from './sim.js'
 import WorkerReplicaControl from './WorkerReplicaControl.jsx'
 import ReviewMemory from './ReviewMemory.jsx'
@@ -654,16 +654,37 @@ const PROVIDER_LABELS = {
 // escalation path and from the selector; only this gate stood between them and an admin. The
 // backend agrees with this list rather than being told by it — providerActivation.test.js pins
 // that the two cannot drift, and PUT /ai/providers refuses to enable a provider it cannot build.
-const ADAPTER_READY = new Set(['azure_openai', 'openai', 'anthropic', 'gemini', 'huggingface'])
+const ADAPTER_READY = new Set(['azure_openai', 'openai', 'anthropic', 'gemini', 'bedrock', 'huggingface'])
 
-// ADR 0019 §6 — the admin's AI provider governance page. The KEY is never entered here: an admin's
-// ops team provisions it as a container/Key-Vault secret, and this stores only the secret's NAME
-// (key_secret_ref). The page shows whether the referenced secret is present, never its value.
+// ADR 0019 §6 — the admin's AI provider governance page. The key VALUE never reaches the
+// database: this stores only the secret's NAME (key_secret_ref), and the page shows whether the
+// referenced secret is present, never its value.
+//
+// TWO WAYS to supply that secret, and the difference is who does the work:
+//   * an ops team provisions it as an environment/container secret and the admin types its NAME
+//     (the original design, and the only option where no vault is configured);
+//   * where the deployment has a Key Vault, the admin pastes the key itself and it is written
+//     STRAIGHT to the vault — `secretWrite.available` gates that field, the input is write-only
+//     (its value comes from local state that starts empty and is cleared after every attempt,
+//     never from the server), and the stored reference becomes `keyvault:acp-ai-<provider>-key`.
+//
+// The comment here used to say "the KEY is never entered here", and aiProviders.test.js asserted
+// that sentence. Both were true until the vault path shipped; the test went on passing against
+// the COMMENT after the UI gained the field, which is how a stale claim becomes the thing a test
+// protects. The assertion now names the property that is actually load-bearing: no key value in
+// the database, and none in the non-secret config PUT.
 export function AIProvidersPanel({ onAccess }) {
   const [providers, setProviders] = useState(null)
   const [draft, setDraft] = useState({})     // provider -> edited fields
   const [busy, setBusy] = useState('')
   const [note, setNote] = useState('')
+  // Whether THIS deployment can accept a pasted key at all (a Key Vault is configured and its
+  // SDK is present). Default false: without a vault the field must not appear, because the only
+  // other way to learn it cannot work is to type a live credential into it.
+  const [secretWrite, setSecretWrite] = useState({ available: false, reason: '', kind: '' })
+  // Held in component state, never in `draft` — draft is what the Save button sends, and a key
+  // must never ride along with the non-secret config PUT.
+  const [keyDraft, setKeyDraft] = useState({})
   // A 403 here is the one reliable read-only signal the SPA has: /ai/providers and
   // PUT /settings share the same owner-only gate. Swallowing it (the old
   // `.catch(() => setProviders([]))`) left every admin field editable and every save
@@ -672,7 +693,11 @@ export function AIProvidersPanel({ onAccess }) {
   const [denied, setDenied] = useState(false)
   useEffect(() => {
     getAiProviders()
-      .then((d) => { setProviders(d.providers || []); onAccess?.(true) })
+      .then((d) => {
+        setProviders(d.providers || [])
+        setSecretWrite(d.secret_write || { available: false, reason: '', kind: '' })
+        onAccess?.(true)
+      })
       .catch((e) => {
         const forbidden = /\b403\b|forbidden|owner/i.test(e?.message || '')
         setDenied(forbidden); setProviders([]); onAccess?.(!forbidden)
@@ -683,6 +708,22 @@ export function AIProvidersPanel({ onAccess }) {
   if (denied) return <ReadOnlyNotice />
   const edit = (p, field, val) => setDraft((d) => ({ ...d, [p]: { ...(d[p] || {}), [field]: val } }))
   const field = (row, f) => (draft[row.provider]?.[f] ?? row[f] ?? '')
+  const saveKey = (row) => {
+    const value = (keyDraft[row.provider] || '').trim()
+    if (!value) return
+    setBusy(row.provider); setNote('')
+    putAiProviderSecret(row.provider, value)
+      .then((res) => {
+        // Clear the field on success AND on failure below: a live credential must not sit in a
+        // form for the rest of the session, and a retry is one paste away.
+        setKeyDraft((k) => ({ ...k, [row.provider]: '' }))
+        setProviders(res.providers)
+        setNote(`✓ ${PROVIDER_LABELS[row.provider] || row.provider} key stored in the vault`)
+      })
+      .catch((e) => { setKeyDraft((k) => ({ ...k, [row.provider]: '' }))
+                      setNote(e.message || 'the key was not stored') })
+      .finally(() => setBusy(''))
+  }
   const save = (row) => {
     const d = draft[row.provider] || {}
     setBusy(row.provider); setNote('')
@@ -709,7 +750,7 @@ export function AIProvidersPanel({ onAccess }) {
         transparent and only fires when local falls short.
       </p>
       <p className="muted" style={{ fontSize: 13, background: 'var(--card, #f7f4fb)', border: '1px solid var(--line)', borderRadius: 8, padding: '8px 12px' }}>
-        🔐 <b>The key is never entered here.</b> Your ops team provisions it as a container / Key
+        🔐 <b>The key value never reaches the database.</b> Your ops team provisions it as a container / Key
         Vault secret; you enter only the secret’s <b>reference name</b> (e.g.
         <code> AZURE_OPENAI_API_KEY</code>). The key value never touches the database, this page, or
         a log — only whether it’s present is shown.
@@ -745,6 +786,28 @@ export function AIProvidersPanel({ onAccess }) {
               <L label="Secret reference NAME (not the key)"><input value={field(row, 'key_secret_ref')} placeholder="AZURE_OPENAI_API_KEY"
                      onChange={(e) => edit(row.provider, 'key_secret_ref', e.target.value)} style={INP} /></L>
             </div>
+            {/* The key field appears ONLY where the deployment can actually store one. It is
+                write-only by construction: `value` comes from local state that starts empty and
+                is cleared after every attempt, never from the server — no read path returns a key,
+                so there is nothing to prefill and nothing to reveal. */}
+            {secretWrite.available && (
+              <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px dashed var(--line)' }}>
+                <L label={`Or paste the key — stored in ${secretWrite.kind === 'azure_key_vault' ? 'Key Vault' : 'the secret store'}, never in the database`}>
+                  <input type="password" autoComplete="off" value={keyDraft[row.provider] || ''}
+                         placeholder="paste the provider API key"
+                         onChange={(e) => setKeyDraft((k) => ({ ...k, [row.provider]: e.target.value }))}
+                         style={INP} />
+                </L>
+                <button className="ghost small" style={{ marginTop: 8 }} onClick={() => saveKey(row)}
+                        disabled={busy === row.provider || !(keyDraft[row.provider] || '').trim()}>
+                  {busy === row.provider ? 'Storing…' : 'Store key in the vault'}
+                </button>
+                <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                  The value is written straight to the vault and this page never receives it back.
+                  The reference above becomes <code>keyvault:acp-ai-{row.provider}-key</code>.
+                </div>
+              </div>
+            )}
             <button className="ghost small" style={{ marginTop: 10 }} onClick={() => save(row)}
                     disabled={busy === row.provider || !dirty}>
               {busy === row.provider ? 'Saving…' : 'Save'}

@@ -86,6 +86,7 @@ export function normalizeLive(raw) {
     phase: raw.phase || raw.state || null,
     phaseLabel: PHASE_LABEL[raw.phase] || raw.phase || raw.state || '',
     source: raw.source || null,
+    scope: raw.scope && typeof raw.scope === 'object' ? raw.scope : null,
     runId: raw.run_id || null,
     totals: { discovered: n((raw.totals || {}).discovered), eligible: n((raw.totals || {}).eligible) },
     kpiCards,

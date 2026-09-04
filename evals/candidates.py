@@ -22,13 +22,15 @@ from __future__ import annotations
 import json
 import os
 import time
+import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 from .cost import PRICE_BOOK, Pricing
-from .schema import Case
+from .schema import ACTIONS, Case
 
 
 @dataclass
@@ -56,6 +58,11 @@ class Candidate:
 
     def respond(self, case: Case) -> Response:      # pragma: no cover - abstract
         raise NotImplementedError
+
+    def key_source(self) -> str:
+        """Where this candidate's credential comes from, for the pre-flight line. Free and local
+        candidates need none; the ones that do override this."""
+        return "no key needed"
 
     def prompt_key(self, case: Case) -> str:
         """Cache key. Deliberately the case's SIGNAL, not its id: two cases that present the
@@ -287,19 +294,81 @@ def _approx_tokens(s: str) -> int:
     return max(1, len(s) // 4)
 
 
+#: The envelope as a JSON schema, for runtimes that can constrain decoding to it (Ollama's
+#: `format`, llama.cpp grammars, an OpenAI-shaped `response_format`). It is the SAME shape the
+#: prose envelope asks for, so switching it on changes exactly one variable: whether the decoder
+#: is ALLOWED to produce anything else.
+#:
+#: `action` enumerates the FULL vocabulary, including the destructive members — deliberately.
+#: Narrowing it per case to that case's allowed_actions would make an unauthorised action
+#: impossible by construction, which is a fine thing to ship and a terrible thing to measure:
+#: the safety score would then be a property of the schema, not of the model. What this removes
+#: is malformed output, and nothing else.
+ENVELOPE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "detected": {"type": "array", "items": {"type": "string"}},
+        "diagnosis": {
+            "type": "object",
+            "properties": {
+                "criterion": {"type": "string"},
+                "component": {"type": "string"},
+                "root_cause": {"type": "string"},
+                "severity": {"type": "string", "enum": ["A", "AA", "AAA"]},
+                "confidence": {"type": "number"},
+            },
+            "required": ["criterion", "component", "root_cause", "severity", "confidence"],
+        },
+        "plan": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": list(ACTIONS)},
+                    "target": {"type": "string"},
+                    "value": {"type": "string"},
+                    "criterion": {"type": "string"},
+                    "rollback": {"type": "boolean"},
+                    "reason": {"type": "string"},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    "required": ["detected", "diagnosis", "plan"],
+}
+
+
 class OllamaCandidate(HttpModelCandidate):
-    """A local model, priced by occupancy (see cost.local_amortised)."""
+    """A local model, priced by occupancy (see cost.local_amortised).
+
+    `constrain=True` sends ENVELOPE_SCHEMA as Ollama's `format`, so the decoder can only emit a
+    conforming object. The prompt is byte-identical either way — that is the point: the two
+    modes differ in one request field, so a difference in the report is attributable.
+    """
 
     def __init__(self, model: str, *, base_url: str | None = None, tier: int = 1,
-                 price_tier: str = "local-gpu"):
-        super().__init__(f"ollama:{model}", tier=tier, pricing=PRICE_BOOK[price_tier])
+                 price_tier: str = "local-gpu", constrain: bool = False):
+        super().__init__(f"ollama:{model}" + ("+schema" if constrain else ""),
+                         tier=tier, pricing=PRICE_BOOK[price_tier])
         self.model = model
+        self.constrain = constrain
         self.base = (base_url or os.environ.get("OLLAMA_BASE_URL",
                                                 "http://localhost:11434")).rstrip("/")
 
+    def body(self, case: Case) -> dict[str, Any]:
+        """The request payload, as its own method so a test can assert what is sent without a
+        server. The constrained/unconstrained difference is one key, and this is where it is."""
+        payload: dict[str, Any] = {
+            "model": self.model, "prompt": build_prompt(case), "stream": False,
+            "options": {"temperature": 0, "num_predict": 400},
+        }
+        if self.constrain:
+            payload["format"] = ENVELOPE_SCHEMA
+        return payload
+
     def _request(self, case: Case):   # pragma: no cover - network
-        body = json.dumps({"model": self.model, "prompt": build_prompt(case), "stream": False,
-                           "options": {"temperature": 0, "num_predict": 400}}).encode()
+        body = json.dumps(self.body(case)).encode()
         req = urllib.request.Request(f"{self.base}/api/generate", data=body,
                                      headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=self.timeout) as r:
@@ -315,15 +384,20 @@ class HostedCandidate(HttpModelCandidate):
     id and price tier are inputs. The kit never hard-codes a provider's route."""
 
     def __init__(self, model: str, *, endpoint: str, api_key_env: str = "EVALS_API_KEY",
-                 tier: int = 2, price_tier: str = "hosted-small"):
+                 tier: int = 2, price_tier: str = "hosted-small",
+                 provider: str = "openai"):
         super().__init__(f"hosted:{model}", tier=tier, pricing=PRICE_BOOK[price_tier])
         self.model, self.endpoint, self.api_key_env = model, endpoint, api_key_env
+        self.provider = provider
+
+    def key_source(self) -> str:
+        return resolve_api_key(self.provider, self.api_key_env)[1]
 
     def _request(self, case: Case):   # pragma: no cover - network
         body = json.dumps({"model": self.model, "temperature": 0,
                            "messages": [{"role": "user", "content": build_prompt(case)}]}).encode()
         headers = {"Content-Type": "application/json"}
-        key = os.environ.get(self.api_key_env)
+        key, _ = resolve_api_key(self.provider, self.api_key_env)
         if key:
             headers["Authorization"] = f"Bearer {key}"
         req = urllib.request.Request(self.endpoint, data=body, headers=headers)
@@ -338,7 +412,9 @@ class HostedCandidate(HttpModelCandidate):
 
 def resolve(spec: str) -> Candidate:
     """Turn a CLI string into a candidate. `rules-only`, `stub:*`, `ollama:<model>`,
-    `anthropic:<model>[#price-tier]`, `hosted:<model>@<endpoint>[#price-tier]`."""
+    `anthropic:<model>[#price-tier]`, `hosted:<model>@<endpoint>[#price-tier]`.
+
+    A trailing `+schema` on an ollama spec constrains decoding to ENVELOPE_SCHEMA."""
     price = None
     if "#" in spec and not spec.startswith("hosted:"):
         spec, price = spec.rsplit("#", 1)
@@ -353,8 +429,10 @@ def resolve(spec: str) -> Candidate:
                                  pricing=PRICE_BOOK[price] if price else None)
     if spec.startswith("ollama:"):
         model = spec.split(":", 1)[1]
+        constrain = model.endswith("+schema")
+        model = model[:-len("+schema")] if constrain else model
         tier_hint = "local-cpu" if os.environ.get("EVALS_LOCAL_CPU") else "local-gpu"
-        return OllamaCandidate(model, price_tier=tier_hint)
+        return OllamaCandidate(model, price_tier=tier_hint, constrain=constrain)
     if spec.startswith("anthropic:"):
         model = spec.split(":", 1)[1]
         return AnthropicCandidate(model, price_tier=price)
@@ -368,6 +446,48 @@ def resolve(spec: str) -> Candidate:
         model, endpoint = rest.split("@", 1)
         return HostedCandidate(model, endpoint=endpoint, price_tier=price)
     raise ValueError(f"unknown candidate spec {spec!r}")
+
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def _provider_credential(provider: str) -> tuple[str | None, str]:
+    """Ask the PRODUCT where this provider's key lives (Settings -> AI providers stores the
+    secret's reference NAME, never its value; api/providers.credential_for reads it).
+
+    Imported lazily and behind a try: the kit's default run must stay stdlib-only and must not
+    touch the product's database, and on a CI runner there is no database to touch. Any failure
+    degrades to "no key from the product", never to an exception.
+    """
+    try:
+        if str(ROOT / "api") not in sys.path:
+            sys.path.insert(0, str(ROOT / "api"))
+        import providers  # noqa: PLC0415 - deliberately lazy; see the docstring
+        return providers.credential_for(provider)
+    except Exception as e:
+        return None, f"provider_config_unavailable:{type(e).__name__}"
+
+
+def resolve_api_key(provider: str, env_var: str, *,
+                    lookup: Callable[[str], tuple[str | None, str]] = _provider_credential,
+                    ) -> tuple[str | None, str]:
+    """The key for a provider, and a printable name for where it came from — never the value.
+
+    ENV FIRST, then the product's provider config. Env-first because the SDKs themselves read
+    the standard variable, so anything else would make an exported key mysteriously not the one
+    in use; the config path then covers the case this whole seam exists for — an ops team that
+    provisioned the credential under a name of its own choosing, which the Settings page records
+    as `key_secret_ref`. Reading the env var first also means the common case never opens the
+    product's database at all.
+
+    Both sources are reported, so "which key did this run use" is answerable from the log rather
+    than from assumption.
+    """
+    val = os.environ.get(env_var)
+    if val:
+        return val, f"env:{env_var}"
+    key, source = lookup(provider)
+    return key, (f"provider_config:{source}" if key else f"missing ({source})")
 
 
 # Model id -> the price-book entry for it. A candidate priced from a generic rung reports a
@@ -408,13 +528,20 @@ class AnthropicCandidate(Candidate):
         self.max_tokens = max_tokens
         self.effort = effort or os.environ.get("EVALS_ANTHROPIC_EFFORT") or None
 
+    def key_source(self) -> str:
+        return resolve_api_key("anthropic", "ANTHROPIC_API_KEY")[1]
+
     def respond(self, case: Case) -> Response:      # pragma: no cover - network
         try:
             import anthropic
         except ImportError:
             return Response(plan=[], parse_error="the `anthropic` package is not installed")
         t0 = time.perf_counter()
-        client = anthropic.Anthropic()
+        key, _ = resolve_api_key("anthropic", "ANTHROPIC_API_KEY")
+        # A bare client when nothing resolved is NOT a bug: the SDK also honours an `ant auth
+        # login` profile, so an unset variable does not mean "no credentials". Passing None
+        # explicitly would defeat that.
+        client = anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
         kwargs: dict[str, Any] = {"model": self.model, "max_tokens": self.max_tokens,
                                   "messages": [{"role": "user",
                                                 "content": build_prompt(case)}]}

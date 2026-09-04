@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { azureBytes, azureLatest, buildTrafficGraph, capacityValue, flowEdge, infrastructureDetail, queueConcentration, sizeScopeNote, trendToggleLabel, workerServiceRows } from './AdminLiveTraffic.jsx'
+import { azureBytes, azureLatest, buildTrafficGraph, capacityValue, flowEdge, infrastructureDetail, nodeGauge, queueConcentration, sizeScopeNote, trafficEdgeStyle, trendToggleLabel, workerServiceRows } from './AdminLiveTraffic.jsx'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(join(here, 'AdminLiveTraffic.jsx'), 'utf8')
@@ -30,8 +30,28 @@ describe('Admin live traffic graph', () => {
   it('connects each live run to its worker stage within the persistent topology', () => {
     const graph = buildTrafficGraph({ runs: [run] })
     expect(graph.nodes.map((node) => node.id)).toContain('s1:assess')
-    expect(graph.edges.find((edge) => edge.id === 'out:s1:assess').animated).toBe(true)
+    expect(graph.edges.find((edge) => edge.id === 'out:s1:assess').style.strokeWidth).toBe(3)
     expect(graph.nodes.find((node) => node.id === 's1:assess').data.run.current_file).toBe('Report.docx')
+  })
+
+  it('uses crisp non-scaling paths at every zoom', () => {
+    // #1329's subject, kept: a line's GEOMETRY should not blur or thicken as the map scales.
+    //
+    // Its blanket "no animation anywhere" assertion is deliberately gone. That PR removed the
+    // dashes as fuzzy; the owner then asked for movement on the lines carrying work, so the two
+    // requirements are reconciled rather than one overriding the other — the stroke stays crisp
+    // and non-scaling, and only an ACTIVE line moves. `.react-flow__edge.animated` is stopped
+    // outright under prefers-reduced-motion (styles.css), and activity is also carried by weight
+    // and opacity, so nothing depends on the motion alone.
+    expect(trafficEdgeStyle('#123456', true)).toMatchObject({
+      stroke: '#123456', strokeWidth: 3, opacity: 1,
+      vectorEffect: 'non-scaling-stroke', shapeRendering: 'geometricPrecision',
+    })
+    const graph = buildTrafficGraph({ runs: [run], summary: { active_runs: 1 } })
+    expect(graph.edges.every((edge) => edge.style.vectorEffect === 'non-scaling-stroke')).toBe(true)
+    expect(graph.edges.every((edge) => edge.style.shapeRendering === 'geometricPrecision')).toBe(true)
+    // Idle lines still do not move.
+    expect(buildTrafficGraph({ runs: [], summary: {} }).edges.every((edge) => !edge.animated)).toBe(true)
   })
 
   it('builds a bounded sparkline history from successive SSE snapshots', () => {
@@ -360,5 +380,63 @@ describe('The size figure says whose size it is', () => {
 
   it('never claims tier-wide coverage from a single app reading', () => {
     expect(source).not.toMatch(/covering the worker tier/)
+  })
+})
+
+
+describe('The map tiles carry a live gauge', () => {
+  it('fills a worker tile by the share of its own slots that are busy', () => {
+    const gauge = nodeGauge({ kind: 'worker', service: { active: 2, slots: 4 } })
+    expect(gauge).toEqual({ fraction: 0.5, over: false, label: '2 of 4 slots busy (50%)' })
+  })
+
+  it('never draws a bar past its own track, and says so instead', () => {
+    // The bug this exists for: against a real deployment the drawer read "51 of 2 worker slots
+    // active (2550%)". More work in flight than slots is not a share of capacity — the slot count
+    // comes from a last-writer-wins heartbeat describing ONE replica while the job count covers
+    // them all, and a stale lease looks identical.
+    const gauge = nodeGauge({ kind: 'worker', service: { active: 51, slots: 2 } })
+    expect(gauge.fraction).toBe(1)
+    expect(gauge.over).toBe(true)
+    expect(gauge.label).toBe('51 jobs against 2 reported slots')
+    expect(gauge.label).not.toContain('%')
+  })
+
+  it('measures the queue against the slots that could pick it up', () => {
+    expect(nodeGauge({ kind: 'queue' }, { queued: 3, worker_slots: 6 }))
+      .toEqual({ fraction: 0.5, over: false, label: '3 waiting against 6 worker slots' })
+    expect(nodeGauge({ kind: 'queue' }, { queued: 184, worker_slots: 7 }).over).toBe(true)
+  })
+
+  it('draws no bar at all when there is no denominator to be a share of', () => {
+    // An unmeasured value gets no fill — not an empty one that reads as zero.
+    expect(nodeGauge({ kind: 'worker', service: { active: 2, slots: 0 } }))
+      .toEqual({ fraction: null, over: false, label: 'Worker slots not reported' })
+    expect(nodeGauge({ kind: 'queue' }, { queued: 4 }).fraction).toBe(null)
+    // A connector and the output store have no capacity to be a fraction of.
+    expect(nodeGauge({ kind: 'source' })).toBe(null)
+    expect(nodeGauge({ kind: 'output' })).toBe(null)
+  })
+
+  it('attaches the gauge to the worker and queue tiles, and updates it from each snapshot', () => {
+    const graph = buildTrafficGraph({ runs: [], summary: { queued: 5, worker_slots: 10,
+      by_stage: { assess: { running: 1 } },
+      worker_roles: { assess: { alive: true, pool_size: 2, age_s: 1 } } } })
+    expect(graph.nodes.find((n) => n.id === 'stage:assess').data.gauge)
+      .toMatchObject({ fraction: 0.5, label: '1 of 2 slots busy (50%)' })
+    expect(graph.nodes.find((n) => n.id === 'infra:queue').data.gauge)
+      .toMatchObject({ fraction: 0.5, label: '5 waiting against 10 worker slots' })
+    // The next snapshot rebuilds the graph, so the bar is as live as the tile it sits on.
+    const busier = buildTrafficGraph({ runs: [], summary: { queued: 9, worker_slots: 10,
+      by_stage: { assess: { running: 2 } },
+      worker_roles: { assess: { alive: true, pool_size: 2, age_s: 1 } } } })
+    expect(busier.nodes.find((n) => n.id === 'stage:assess').data.gauge.fraction).toBe(1)
+    expect(busier.nodes.find((n) => n.id === 'infra:queue').data.gauge.fraction).toBe(0.9)
+  })
+
+  it('does not put a second progress bar on a run tile that already has one', () => {
+    const graph = buildTrafficGraph({ runs: [{ scan_id: 's1', stage: 'assess', source: 'drive',
+      owner: 'a@example.org', completed: 5, total: 20, running: 1, queued: 2 }] })
+    expect(graph.nodes.find((n) => n.id === 's1:assess').data.gauge).toBeUndefined()
   })
 })

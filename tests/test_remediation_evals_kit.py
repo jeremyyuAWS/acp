@@ -29,7 +29,7 @@ from evals.harness import run                            # noqa: E402
 from evals.judge import Calibration, JudgeVerdict, calibrate  # noqa: E402
 from evals.report import (Gates, build_candidate_report, build_ladder,  # noqa: E402
                           metrics_for, render_markdown)
-from evals.schema import CaseError, from_dict, load_cases, validate  # noqa: E402
+from evals.schema import ACTIONS, CaseError, from_dict, load_cases, validate  # noqa: E402
 
 from remediation_capability import ASSISTED, AUTO, HUMAN, REMEDIATION  # noqa: E402
 
@@ -269,6 +269,41 @@ def test_unparseable_model_output_is_a_planning_failure_not_a_crash():
     assert not res.verified_fix
 
 
+def test_constrained_decoding_changes_one_request_field_and_nothing_else():
+    """The whole value of the +schema variant is that it is attributable: same prompt, same
+    options, one extra key. A prompt that differed between the modes would make any change in
+    the report unreadable."""
+    case = BY_ID["rem-c00"]
+    plain = cand.resolve("ollama:qwen2.5:0.5b")
+    constrained = cand.resolve("ollama:qwen2.5:0.5b+schema")
+    a, b = plain.body(case), constrained.body(case)
+    assert a["prompt"] == b["prompt"] and a["options"] == b["options"]
+    assert "format" not in a and b["format"] == cand.ENVELOPE_SCHEMA
+    assert plain.name != constrained.name, "a report must not conflate the two modes"
+    assert constrained.name.endswith("+schema")
+
+
+def test_the_schema_does_not_narrow_the_action_vocabulary():
+    """Constraining `action` to a case's allowed_actions would make an unauthorised action
+    impossible BY CONSTRUCTION — a fine thing to ship and a useless thing to measure, because
+    the safety score would then belong to the schema. The enum stays the full vocabulary,
+    destructive members included."""
+    enum = cand.ENVELOPE_SCHEMA["properties"]["plan"]["items"]["properties"]["action"]["enum"]
+    assert set(enum) == set(ACTIONS)
+    for dangerous in ("rewrite_document", "delete_content", "mark_pass", "disable_check"):
+        assert dangerous in enum
+
+
+def test_the_schema_pins_the_fields_the_placeholder_echo_abused():
+    """qwen2.5:0.5b returned the prose envelope's own placeholders — "A|AA|AAA" as a severity.
+    An enum makes that one unrepresentable; the criterion field deliberately stays a free string
+    (a regex there is not portable across grammar backends), so "X.Y.Z" can still come back and
+    the diagnosis score still has to catch it."""
+    dx = cand.ENVELOPE_SCHEMA["properties"]["diagnosis"]["properties"]
+    assert dx["severity"]["enum"] == ["A", "AA", "AAA"]
+    assert "enum" not in dx["criterion"] and "pattern" not in dx["criterion"]
+
+
 def test_envelope_parser_tolerates_prose_and_fences():
     obj, err = cand.parse_envelope('Sure!\n```json\n{"plan": []}\n```')
     assert not err and obj == {"plan": []}
@@ -322,6 +357,17 @@ def test_a_ladder_that_automates_nothing_reports_zero_coverage():
                           "candidates": [], "ladder": lad})
     assert "0% autonomous coverage" in md
     assert "met by NOT automating" in md
+
+
+def test_the_spend_estimate_errs_high_because_the_other_direction_greenlights_overspend():
+    from evals.cost import ESTIMATE_TOKENS_IN, ESTIMATE_TOKENS_OUT, estimate_run_usd
+    assert ESTIMATE_TOKENS_IN > 760 and ESTIMATE_TOKENS_OUT > 200, \
+        "the estimate must sit above what the local runs measured, or the guard under-quotes"
+    p = PRICE_BOOK["anthropic-haiku-4-5"]
+    assert estimate_run_usd(p, 300) == pytest.approx(300 * p.usd(tokens_in=ESTIMATE_TOKENS_IN,
+                                                                tokens_out=ESTIMATE_TOKENS_OUT))
+    assert estimate_run_usd(PRICE_BOOK["free"], 10_000) == 0.0
+    assert estimate_run_usd(p, 0) == 0.0
 
 
 def test_required_cache_hit_rate_is_the_gap_not_a_guess():

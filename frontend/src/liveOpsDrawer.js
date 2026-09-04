@@ -485,24 +485,43 @@ export function gaugeModel(service = {}, options = {}) {
     return { available: false, reason: 'Worker slot counts are not reported by this service.', tone: 'idle', state: 'unavailable' }
   }
   const fraction = slots > 0 ? Math.min(1, active / slots) : 0
-  const pct = slots > 0 ? Math.round((active / slots) * 100) : null
+  // MORE WORK IN FLIGHT THAN SLOTS IS NOT A PERCENTAGE, and rendering it as one is how this gauge
+  // came to read "51 of 2 worker slots active (2550%)" against a real deployment. The two numbers
+  // are measured differently: `active` is running jobs across the whole service, while `slots` is
+  // the pool size carried in a heartbeat that is last-writer-wins across replicas — so a service
+  // with several replicas reports one replica's concurrency against every replica's work. A stale
+  // lease produces the same shape. Either way the ratio is not a utilisation, so the percentage is
+  // withheld and the condition is named instead of being dressed up as 2550% of capacity.
+  const overCommitted = slots > 0 && active > slots
+  const pct = slots > 0 && !overCommitted ? Math.round((active / slots) * 100) : null
   const availableSlots = Math.max(0, slots - active)
   let state = 'available'
   if (!service.alive) state = 'unavailable'
-  else if (options.stalled) state = 'saturated'
+  else if (options.stalled || overCommitted) state = 'saturated'
   else if (slots > 0 && active >= slots * CAPACITY_RULES.saturatedAt) state = 'saturated'
   else if (slots > 0 && active >= slots * CAPACITY_RULES.approachingAt) state = 'approaching'
   else if (active === 0) state = 'idle'
   const tone = { available: 'ok', approaching: 'warn', saturated: 'bad', idle: 'idle', unavailable: 'idle' }[state]
   return {
     available: true, active, slots, availableSlots, provisioning, fraction, pct, state, tone,
+    overCommitted,
     // The accessible equivalent the PRD requires: the gauge is decorative, this sentence is the data.
-    text: `${active} of ${slots} worker slots active`
-      + (pct == null ? '' : ` (${pct}%)`)
-      + `, ${availableSlots} available`
-      + (provisioning == null ? '' : `, ${provisioning} provisioning`),
-    stateLabel: { available: 'Capacity available', approaching: 'Approaching capacity',
-      saturated: 'At capacity', idle: 'Idle — capacity available', unavailable: 'Capacity unavailable' }[state],
+    text: overCommitted
+      ? `${active} jobs in flight against ${slots} reported worker slots`
+      : `${active} of ${slots} worker slots active`
+        + (pct == null ? '' : ` (${pct}%)`)
+        + `, ${availableSlots} available`
+        + (provisioning == null ? '' : `, ${provisioning} provisioning`),
+    // Named rather than computed: this is the condition, not a share of capacity.
+    overCommittedNote: overCommitted
+      ? 'More jobs are running than this service reports slots for. The slot count comes from a '
+        + 'heartbeat that is last-writer-wins across replicas, so it describes one replica while '
+        + 'the job count covers them all; a stale lease looks the same. No utilisation percentage '
+        + 'is shown, because this ratio is not one.'
+      : null,
+    stateLabel: overCommitted ? 'Over committed'
+      : { available: 'Capacity available', approaching: 'Approaching capacity',
+        saturated: 'At capacity', idle: 'Idle — capacity available', unavailable: 'Capacity unavailable' }[state],
   }
 }
 

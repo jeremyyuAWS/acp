@@ -136,6 +136,27 @@ def fmt_usd_per_call(usd: float) -> str:
     return f"${usd:.3e}/call ({usd * 100:.5f}c/call, {1.0 / usd:,.0f} calls/$)"
 
 
+# A deliberately CONSERVATIVE per-call token estimate for the pre-flight, above what the local
+# runs actually measured (~760 in / ~200 out). A budget guard that under-estimates is worse than
+# none: it green-lights the run that overspends. These are the numbers a preflight quotes; the
+# ledger still bills what the API reports.
+ESTIMATE_TOKENS_IN = 900
+ESTIMATE_TOKENS_OUT = 300
+ESTIMATE_LATENCY_S = 3.0
+
+
+def estimate_run_usd(pricing: Pricing, calls: int, *, tokens_in: int = ESTIMATE_TOKENS_IN,
+                     tokens_out: int = ESTIMATE_TOKENS_OUT,
+                     latency_s: float = ESTIMATE_LATENCY_S) -> float:
+    """What a run of `calls` calls would cost at list price, before any cache hits.
+
+    Cache hits only ever make it cheaper, so this is an upper bound on a run whose prompts
+    repeat — which is the direction a spend guard has to err in.
+    """
+    return max(0, calls) * pricing.usd(tokens_in=tokens_in, tokens_out=tokens_out,
+                                       latency_s=latency_s)
+
+
 def required_cache_hit_rate(uncached_usd_per_call: float,
                             target: float = TARGET_USD_PER_CALL) -> float:
     """What fraction of calls must be cache hits for this tier to clear the budget.

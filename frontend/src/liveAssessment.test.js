@@ -3,6 +3,7 @@ import { normalizeLive, isNewerFrame } from './liveAssessment.js'
 
 const full = {
   available: true, active: true, phase: 'assessing', source: 'onedrive', run_id: 'r1',
+  scope: { kind: 'sharepoint', sites: [{ id: 's1', name: 'Clinical' }] },
   totals: { discovered: 819, eligible: 512 },
   kpis: { completed: 145, processing: 105, findings_so_far: 47, need_attention: 22, unable_to_assess: 3 },
   outcomes: { passed: 120, review: 22, failed: 3, processing: 105 },
@@ -20,6 +21,7 @@ describe('normalizeLive', () => {
     const m = normalizeLive(full)
     expect(m.available).toBe(true)
     expect(m.phaseLabel).toBe('Assessing')
+    expect(m.scope.sites[0].name).toBe('Clinical')
     expect(m.totals).toEqual({ discovered: 819, eligible: 512 })
     expect(m.kpiCards.map((c) => [c.key, c.value, c.pending])).toEqual([
       ['completed', 145, false], ['processing', 105, false], ['findings_so_far', 47, false],

@@ -168,7 +168,48 @@ human. That is the intended conservatism: the ladder routes a category autonomou
 
 ---
 
-## 6. Limits — stated, not implied
+## 6. Running it against a paid tier
+
+**Where the key comes from.** The kit reads the environment variable first
+(`ANTHROPIC_API_KEY` / `EVALS_API_KEY`), then falls back to the product's own provider config —
+the `key_secret_ref` an admin sets in **Settings → AI providers** — via
+`api/providers.credential_for()`. So a credential your ops team provisioned under a name of its
+own choosing works for the evals without a second place to configure it, and the Settings page's
+"key present" light also tells you the evals will run.
+
+The key value still never reaches the database or the browser: the page stores the secret's NAME,
+both readers resolve it from the environment. The pre-flight prints the SOURCE per candidate
+(`key: env:ANTHROPIC_API_KEY`, `key: provider_config:ACP_ANTHROPIC_KEY`,
+`key: missing (secret_absent:ACP_ANTHROPIC_KEY)`) so "which credential did this run use" is
+answerable from the log rather than by assumption.
+
+Locally:
+
+```bash
+python scripts/run_remediation_evals.py --estimate-only --repeats 3 \
+  -c rules-only -c anthropic:claude-haiku-4-5          # price it first
+python scripts/run_remediation_evals.py --repeats 3 --max-spend-usd 2.00 \
+  -c rules-only -c anthropic:claude-haiku-4-5
+```
+
+`--estimate-only` prices the run and exits; `--max-spend-usd` refuses to start when the estimate
+exceeds it. The estimate deliberately quotes above what real runs measure (900 in / 300 out per
+call), because a guard that under-quotes green-lights the run that overspends, and cache hits
+only ever make the real bill smaller.
+
+In CI, `.github/workflows/remediation-evals.yml` runs the same command **on manual dispatch
+only**, with `ANTHROPIC_API_KEY` (or `EVALS_API_KEY`) as a repository secret. It is not wired to
+`push` or `pull_request` on purpose: every call is billed, and a vendor's bad five minutes would
+turn the PR gate red for reasons unrelated to the diff. The free half of the kit — `rules-only`
+and the scripted stubs — already runs in the ordinary backend suite on every PR, which is where
+a grader that stopped biting gets caught.
+
+The job refuses an `ollama:` candidate by name (no model server exists on a runner, so every case
+would return a transport error and the report would present 100% unusable output as a
+measurement), checks the secret before spending rather than after, and always passes a spend cap.
+`tests/test_remediation_evals_workflow.py` pins each of those.
+
+## 7. Limits — stated, not implied
 
 - **The executor is simulated.** `evals/world.py` holds a dict of addressable fields, the findings
   over them and an audit trail — not a real .docx round-trip. It is the right fixture for "did the

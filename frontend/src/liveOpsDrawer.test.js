@@ -108,6 +108,29 @@ describe('Worker gauge thresholds come from a documented rule', () => {
     expect(gaugeModel({ ...service, active: 0, slots: 4 }, { stalled: true }).state).toBe('saturated')
   })
 
+  it('withholds a percentage when more work is in flight than there are slots', () => {
+    // Seen against a real deployment: "51 of 2 worker slots active (2550%)". `active` counts
+    // running jobs across the whole service while `slots` is the pool size from a heartbeat that
+    // is last-writer-wins across replicas, so the two are not a ratio — and a stale lease produces
+    // the same shape. The condition is named instead of dressed up as 2550% of capacity.
+    const gauge = gaugeModel({ ...service, active: 51, slots: 2 })
+    expect(gauge.pct).toBe(null)
+    expect(gauge.overCommitted).toBe(true)
+    expect(gauge.state).toBe('saturated')
+    expect(gauge.stateLabel).toBe('Over committed')
+    expect(gauge.text).toBe('51 jobs in flight against 2 reported worker slots')
+    expect(gauge.text).not.toContain('%')
+    expect(gauge.fraction).toBe(1)          // the arc fills, it does not wrap
+    expect(gauge.overCommittedNote).toMatch(/last-writer-wins across replicas/)
+  })
+
+  it('still reports a real percentage when the counts are comparable', () => {
+    const gauge = gaugeModel({ ...service, active: 2, slots: 3 })
+    expect(gauge.overCommitted).toBe(false)
+    expect(gauge.pct).toBe(67)
+    expect(gauge.overCommittedNote).toBe(null)
+  })
+
   it('carries the accessible text equivalent the visual gauge cannot', () => {
     expect(gaugeModel({ ...service, active: 2, slots: 3 }).text)
       .toBe('2 of 3 worker slots active (67%), 1 available')

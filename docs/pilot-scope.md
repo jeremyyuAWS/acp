@@ -12,7 +12,7 @@ re-checked and lifted as the platform matures. Where this doc and the code disag
 | Dimension | Pilot scope |
 |---|---|
 | Users | 3 pilot users |
-| Source | **SharePoint** (read-only, delegated, single tenant) — one document library, not the whole tenant |
+| Source | **SharePoint** (read-only, delegated, single tenant) — selected sites and their document libraries, up to 30 sites per run |
 | Document types | **DOCX (primary)**; XLSX / PPTX / PDF *assess-only* (see below) |
 | Content | **Text + images only** — no audio/video |
 | Language | **English only** |
@@ -57,10 +57,11 @@ re-checked and lifted as the platform matures. Where this doc and the code disag
    **25 figures/file**, PDF reading-order samples the **first 20 pages**. Beyond that, coverage truncates
    (surfaced honestly, but the file is only partially assessed).
 
-8. **One SharePoint library, staggered scans.** Scope to a specific document library, not "everywhere the
-   user can see." Multi-user concurrency is code-verified but **not load-tested** — 3 users scanning at
-   once is the exact untested scenario; stagger or cap concurrent scans.
-   — traces to **R11** (concurrency load test).
+8. **Selected SharePoint sites, with an explicit boundary.** A run can span up to 30 selected sites
+   and walks every document library on each. The 30-site path and concurrent queue isolation are
+   synthetically verified; until the tenant is available, library sizes, permissions and Graph
+   throttling at UTSW remain unmeasured. The UI records every selected site and library so omissions
+   are visible rather than silently treated as a complete estate.
 
 9. **Continuous Monitoring is change-based only.** The Monitor tab now surfaces real source drift, but
    re-validation triggers on source *change*, not on a schedule/age. Don't promise time-based re-attestation.
@@ -76,7 +77,8 @@ re-checked and lifted as the platform matures. Where this doc and the code disag
       scopes (`User.Read`, `Files.Read.All`, `Sites.Read.All`), **admin consent granted**, no client
       secret. See `docs/sharepoint-app-registration.md`.
 - [ ] **AI is local** — no cloud provider enabled; provenance badge reads 🟢 Local on a test fix.
-- [ ] **Scope set** — one library, DOCX-led, English, ≤25 pages, media excluded.
+- [ ] **Scope set** — the approved SharePoint sites selected (up to 30), DOCX-led, English,
+      ≤25 pages per document, media excluded.
 - [ ] **Expectations set with users** — DOCX gets fixed; other formats get assessed; alt-text is
       reviewed; output is a download.
 
@@ -84,7 +86,7 @@ re-checked and lifted as the platform matures. Where this doc and the code disag
 
 ## One-line summary for the customer
 
-> The pilot fixes and certifies **English DOCX documents (≤25 pages) from one SharePoint library**,
+> The pilot fixes and certifies **English DOCX documents (≤25 pages) from selected SharePoint sites**,
 > assesses PDF/XLSX/PPTX, keeps all PHI on your own infrastructure, and delivers remediated files as
 > downloads. Image alt-text and non-DOCX fixes are reviewed by a person; audio/video and non-English
 > content are out of scope for this pilot.

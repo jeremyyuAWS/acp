@@ -116,6 +116,7 @@ describe('the completed Discovery SSE checklist survives a refresh', () => {
       scope: {
         kind: 'drive',
         folders_walked: 12,
+        inventory_delta: { new: 12, updated: 5, unchanged: 153 },
         lifecycle_rules_enabled: 2,
         lifecycle_archive: 3,
         lifecycle_delete: 1,
@@ -132,6 +133,7 @@ describe('the completed Discovery SSE checklist survives a refresh', () => {
     expect(t).toContain('Applied lifecycle rules')
     expect(t).toContain('4 matched')
     expect(t).toContain('Finalized Discovery')
+    expect(t).toContain('12 new · 5 updated · 153 unchanged')
   })
 })
 

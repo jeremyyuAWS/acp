@@ -17,6 +17,15 @@ vi.mock('./api.js', () => ({
     },
   })),
   getWorkerCapacity: vi.fn(async () => ({ configured: false })),
+  getLiveOpsCosts: vi.fn(async () => ({
+    configured: false,
+    measured_at: '2026-09-04T20:00:00Z',
+    estimated_hourly_usd: null,
+    estimated_daily_usd: null,
+    rate_source: null,
+    services: [],
+    billing: { freshness_label: 'Azure billing feed not configured' },
+  })),
   openAdminActivityStream: vi.fn(() => ({ close: vi.fn() })),
 }))
 

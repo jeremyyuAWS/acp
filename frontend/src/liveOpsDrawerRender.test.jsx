@@ -130,6 +130,16 @@ describe('Primary visualization per node', () => {
     expect(container.textContent).toContain('Amber from 75% of slots, red at 100%')
   })
 
+  it('does not render an impossible utilisation percentage', async () => {
+    // The screenshot that prompted this: "51 of 2 worker slots active (2550%)".
+    const container = await mount({ nodeId: 'stage:assess',
+      node: { kind: 'worker', label: 'Assess workers', service: { ...service, active: 51, slots: 2, available: 0 } } })
+    expect(container.textContent).not.toContain('2550')
+    expect(container.textContent).toContain('Over committed')
+    expect(container.textContent).toContain('51 jobs in flight against 2 reported worker slots')
+    expect(container.textContent).toContain('last-writer-wins across replicas')
+  })
+
   it('bands the gauge amber once the documented threshold is crossed', async () => {
     const container = await mount({ nodeId: 'stage:assess',
       node: { kind: 'worker', label: 'Assess workers', service: { ...service, active: 3, slots: 4 } } })
