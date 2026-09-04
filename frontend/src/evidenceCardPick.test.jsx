@@ -21,6 +21,7 @@ vi.mock('./api.js', () => ({
   getFileThumbnail: () => Promise.resolve(null),   // Thumbnail.jsx self-hides without a blob
   getFilePage: () => Promise.resolve(null),
   getFileGeometry: () => Promise.resolve(null),
+  getSourceLink: () => Promise.resolve({ url: null }),
   getScanAiCalls: () => Promise.resolve([]),
   validateAlt: () => Promise.resolve({}),
 }))

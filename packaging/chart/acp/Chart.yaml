@@ -1,0 +1,44 @@
+apiVersion: v2
+name: acp
+description: >-
+  ACP accessibility compliance platform — the API tier and the three worker tiers, as one
+  application package. Infrastructure (Postgres, Redis, object storage, secrets, ingress) is
+  supplied by the platform adapter; see ADR 0048.
+type: application
+
+# The chart's own version, bumped when the TEMPLATES change.
+version: 0.1.0
+
+# The application release this chart defaults to. Overridden per install by `image.tag`, which
+# `acpctl values` sets from the deployment document's runtime.version — so this default is what
+# you get from a bare `helm install` with no values, not what a real deployment uses.
+appVersion: "2026.9"
+
+home: https://github.com/jeremyyuAWS/acp
+sources:
+  - https://github.com/jeremyyuAWS/acp
+
+keywords:
+  - accessibility
+  - wcag
+  - compliance
+
+annotations:
+  # NO SUBCHART DEPENDENCIES, AND THAT IS A DECISION RATHER THAN AN OMISSION.
+  #
+  # `acpctl values` names bitnami/postgresql, bitnami/redis and minio for in-cluster data
+  # services. Vendoring them here would make the ACP application package depend on three
+  # third-party charts whose release cadence, image registries and licensing ACP does not
+  # control — and Bitnami's own chart README now points readers at a separate "Bitnami Legacy"
+  # registry for the previous image generation, which is the kind of change that breaks an
+  # install months after it was reviewed.
+  #
+  # More importantly it would blur the boundary ADR 0048 is built on: the APPLICATION package is
+  # what is identical across clouds; data services are what the ADAPTER supplies. A chart that
+  # ships its own Postgres has quietly answered the question the adapter exists to answer.
+  #
+  # So this chart consumes an ENDPOINT. When the deployment document asks for in-cluster data
+  # services, `templates/_dataservices.tpl` fails the render with a message saying so, rather
+  # than rendering an application pointed at a database nobody created.
+  acp.mova.io/data-services: adapter-supplied
+  acp.mova.io/values-contract: acpctl-values-v1alpha1

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { aiProvenance, getCopilotGuidance, getFileGeometry, getFileRemediationDiffs, getScanAiCalls, suggestFix, validateAlt } from './api.js'
+import { aiProvenance, getCopilotGuidance, getFileGeometry, getFileRemediationDiffs, getScanAiCalls, getSourceLink, suggestFix, validateAlt } from './api.js'
 import Thumbnail from './Thumbnail.jsx'
 import BeforeAfterEvidence from './BeforeAfterEvidence.jsx'
 import RiskChip from './RiskChip.jsx'
@@ -163,6 +163,15 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
   // undescribed images across several slides; the pager steps the large preview + its bounding box
   // through each one, so a reviewer verifies every finding in place, not just the first.
   const [heroIdx, setHeroIdx] = useState(0)
+  const [sourceLink, setSourceLink] = useState(null)   // {url, label} or null
+  useEffect(() => {
+    setSourceLink(null)
+    if (!item?.scan_id || !item?.file) return
+    let live = true
+    getSourceLink(item.scan_id, item.file, item.page || 1)
+      .then((d) => { if (live && d?.url) setSourceLink(d) })
+    return () => { live = false }
+  }, [item?.scan_id, item?.file, item?.page])
   // Page heatmap (#121 / vision §17): which pages/slides the flagged objects live on, from
   // MEASURED geometry only (the same bbox lookup the hero overlay uses — never guessed). A
   // multi-image finding renders a clickable page strip; a page the geometry can't attribute
@@ -792,6 +801,15 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
           ) : (
             <Thumbnail scanId={card.scanId} file={card.file} page={card.page || 1} locator={heroLocator} maxHeight={360}
                        kindLabel={imgKind?.label?.toLowerCase() || null} />
+          )}
+          {sourceLink?.url && (
+            <div style={{ marginTop: 6, textAlign: 'right' }}>
+              <a href={sourceLink.url} target="_blank" rel="noopener noreferrer"
+                 className="evcard-source-link"
+                 style={{ fontSize: 12, color: 'var(--link-color, #1a56db)', textDecoration: 'none' }}>
+                ↗ {sourceLink.label || 'Open source'}
+              </a>
+            </div>
           )}
         </div>
       )}

@@ -24,6 +24,7 @@ vi.mock('./api.js', () => ({
   getFileThumbnail: () => Promise.resolve(null),
   getFilePage: () => Promise.resolve(null),
   getFileGeometry: () => Promise.resolve(null),
+  getSourceLink: () => Promise.resolve({ url: null }),
   getScanAiCalls: () => Promise.resolve([]),
   validateAlt: () => Promise.resolve({}),
   getFileContentBlob: vi.fn(() => Promise.resolve(new Blob(['fake'], { type: 'video/mp4' }))),

@@ -120,6 +120,7 @@ _map_many([
     ("GET", "/scans/{scan_id}/files/{filename:path}/thumbnail"),
     ("GET", "/scans/{scan_id}/files/{filename:path}/page/{page}"),
     ("GET", "/scans/{scan_id}/files/{filename:path}/geometry"),
+    ("GET", "/scans/{scan_id}/files/{filename:path}/source_link"),
     ("GET", "/scans/{scan_id}/files/{filename:path}/heading-outline"),
     ("GET", "/scans/{scan_id}/files/{filename:path}/table-structure"),
     ("GET", "/scans/{scan_id}/files/{filename:path}/verify-contrast"),

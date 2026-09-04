@@ -6305,6 +6305,19 @@ class Store:
                 (scan_id, file))
             return self._db.fetchone(cur)
 
+    def get_source_link_data(self, scan_id: str, file: str, owner: str | None = None) -> dict | None:
+        """Return the scan source system and inventory identifiers needed to construct a deep link
+        back to the source document. Returns None when scan not found or not owned by `owner`.
+        Keys: source ('drive'|'sharepoint'|'local'), drive_file_id, drive_id (SharePoint only)."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT s.source, i.drive_file_id, i.drive_id "
+                "FROM scans s "
+                "LEFT JOIN scan_inventory i ON i.scan_id = s.id AND i.file = %s "
+                "WHERE s.id = %s" + (" AND s.owner = %s" if owner else ""),
+                (file, scan_id) + ((owner,) if owner else ()))
+            return self._db.fetchone(cur)
+
     def record_remediation(self, scan_id: str, file: str, drive_write_url: str | None = None,
                            blob_url: str | None = None) -> str:
         from datetime import datetime, timezone

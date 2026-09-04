@@ -189,6 +189,16 @@ jobs:
         # between "we render an accessible PDF" and "we render a PDF". If it cannot install,
         # the honest outcome is a red job rather than a green one that skipped the check.
 
+      - name: Install helm (packaging chart render gate)
+        run: bash scripts/install_helm.sh
+        # Same rule as veraPDF above, for the packaging chart. tests/test_packaging_chart.py
+        # renders the chart for four platforms and compares the manifests — that comparison IS
+        # ADR 0048's "one application package, per-cloud adapters" claim, and without helm every
+        # one of those tests skips and the suite stays green with the chart unverified.
+        #
+        # test_ci_has_helm fails (rather than skipping) when CI is set and helm is missing, so
+        # deleting this step turns one test red instead of quietly disarming twenty.
+
       - name: Backend suite (shard ${{ matrix.group }}/4)
         # --splits/--group (pytest-split) runs a quarter of the suite on this shard; -n auto +
         # loadfile parallelise within it. Cross-shard file splits are safe — each shard is its own

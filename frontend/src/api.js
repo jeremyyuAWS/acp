@@ -1523,6 +1523,14 @@ export const getFileGeometry = (scanId, file, locator) => (SIM || !scanId || !fi
       .then(d => (d && d.bbox) || null)
       .catch(() => null))
 
+// Deep link back to the source document at the given slide/page. Returns {url, label} on success,
+// {url: null} when no link is possible (local, missing SP token, Graph error). Non-blocking.
+export const getSourceLink = (scanId, file, page = 1) => (SIM || !scanId || !file
+  ? sim({ url: null })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/source_link?page=${page}`, { headers: headers() })
+      .then(r => (r.ok ? r.json() : { url: null }))
+      .catch(() => ({ url: null })))
+
 // The docx heading outline {before,after} for a heading finding's Structure evidence — computed on
 // demand from the document (mirrors getFileGeometry). null when unavailable (non-docx, <2 headings,
 // already-clean outline, or any failure), so the card degrades to the honest generic note.

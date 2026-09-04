@@ -83,8 +83,11 @@ don't just generate text.
   red overlay on the exact object, renders that object's own page, and offers a CSS-crop close-up
   toggle. `EvidenceCard.jsx` passes `kindLabel={imgKind?.label?.toLowerCase()}` so the toggle reads
   "⤢ Zoom to chart" / "Hide chart" instead of generic text. **Remaining sub-item:** "Open slide"
-  deep-link (source file + page anchor) — deferred; requires per-source-system URL construction
-  (SharePoint / Drive / local).
+  deep-link (source file + page anchor) — **shipped**: `GET /scans/{id}/files/{f}/source_link?page=N`
+  returns `{url, label}` for Drive (constructed from stored `drive_file_id`) and SharePoint (live
+  Graph call with caller-supplied `x-sp-token`, `?web=1&slide=N` appended for pptx), `{url:null}`
+  for local uploads. `EvidenceCard.jsx` renders "↗ Open in Drive/SharePoint" anchor beneath the
+  hero thumbnail when `url` is non-null.
 - [x] **"Help me" copilot (premium models).** *(shipped #1301)* A "✨ Help me understand this image"
   button on 1.1.1 evidence-only cards (gated on `cloudEnabled`): calls `GET /ai/copilot` →
   `copilot_guidance()` in `ai.py` (cloud-only, traces via `_trace_ai("copilot", ...)`), returns

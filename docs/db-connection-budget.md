@@ -97,6 +97,25 @@ down, or the database tier has to go up.
 
 ## 3. Proposal
 
+> **Everything in this section acts on the CONNECTION dimension, and that may not be the binding
+> one.** Read it together with the tier, which §1 records and which nothing below accounts for:
+> both environments run `Standard_B1ms`, a **burstable** SKU, and at the incident minute the
+> CPU-credit metric reported **1 remaining credit**. A burstable instance out of credits is
+> throttled to its baseline whatever `max_connections` says and however many replicas are running.
+> The observed connection peak was 74 of 150 — the ceiling this section lowers was never reached.
+>
+> **The two decisions are coupled, and that is the part most easily missed.** PRD H-16
+> (`docs/prd-reliability-hardening.md`): Azure's built-in PgBouncer is **not supported on the
+> Burstable tier**, so "put a pooler in front of it" and "change the tier" are one decision rather
+> than two independent options. The same PRD lists "database tier/proxy cost" as unresolved before
+> release and asks for a tier proposal with cost and rollout for separate approval.
+>
+> Tracked as issue #1307. This note exists because a reader acting from THIS document would
+> otherwise never encounter the constraint: the tier is specified in the reliability PRD and was
+> absent from the proposal that reached implementation. Nothing below is withdrawn — lowering a
+> ceiling the fleet can exceed is still worth doing — but do not read it as addressing the
+> saturation.
+
 Role-specific and explicit, because one formula for every role is what took the worker tier from
 20 to 28 as a side effect of fixing the API. `ACP_DB_MAX_CONN` is the override that breaks the
 coupling between a tier's thread count and its connection budget; #1045 deliberately preserved it
@@ -149,9 +168,13 @@ and therefore the owner's, not this document's.
 
 ## 4. What must happen before any of this is applied
 
-1. **Re-read live configuration from Azure** — replica minima/maxima, `ACP_WORKERS`, and
-   `max_connections` for both environments. §1 says which numbers are carried rather than
-   verified; do not apply a budget on top of stale inputs.
+1. **Re-read live configuration from Azure** — replica minima/maxima, `ACP_WORKERS`,
+   `max_connections`, and the **SKU plus `cpu_credits_remaining`** for both environments. §1 says
+   which numbers are carried rather than verified; do not apply a budget on top of stale inputs.
+   `docs/runbooks/verify-connection-budget-inputs.md` has the read-only commands, including the
+   two for the tier. The tier is not an afterthought in this list: if the server is a burstable
+   instance running out of credits, every other number here is describing a constraint that is not
+   the one binding.
 2. **Confirm the reserve** by counting real non-application clients rather than accepting 15/8.
 3. **Validate in staging first**, after its `max_connections` is raised — otherwise the validation
    environment is the constraint.
