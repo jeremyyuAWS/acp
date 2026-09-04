@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildTrafficGraph, queueConcentration, workerServiceRows } from './AdminLiveTraffic.jsx'
+import { buildTrafficGraph, queueConcentration, trendToggleLabel, workerServiceRows } from './AdminLiveTraffic.jsx'
 
 const run = {
   scan_id: 's1', owner: 'operator@example.org', source: 'drive', stage: 'assess',
@@ -22,6 +22,11 @@ describe('Admin live traffic graph', () => {
     }
     expect(history.get('s1:assess')).toHaveLength(25)
     expect(history.get('s1:assess').at(-1)).toMatchObject({ completed: 24, running: 2, queued: 10 })
+  })
+
+  it('gives every input method a clear way to reveal live trends', () => {
+    expect(trendToggleLabel(false)).toBe('Show live trends')
+    expect(trendToggleLabel(true)).toBe('Hide live trends')
   })
 
   it('identifies when one user dominates the shared waiting queue', () => {

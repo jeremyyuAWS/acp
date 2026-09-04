@@ -83,6 +83,10 @@ export function MetricChart({ values = [], field, label, color }) {
   </div>
 }
 
+export function trendToggleLabel(expanded) {
+  return expanded ? 'Hide live trends' : 'Show live trends'
+}
+
 function RunNode({ data }) {
   const cfg = STAGE[data.run.stage] || { label: data.run.stage, color: '#6B7280' }
   const pct = data.run.total ? Math.round((data.run.completed / data.run.total) * 100) : 0
@@ -214,9 +218,13 @@ export default function AdminLiveTraffic() {
       </ReactFlow> : <div className="muted" style={{ padding: 28 }}>No active or recently completed processing. Start a scan and this map will populate automatically.</div>}
     </div>
     {selected && <div className="panel" style={{ marginTop: 12, padding: 14, borderLeft: `4px solid ${STAGE[selected.stage]?.color || '#6B7280'}` }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between' }}><b>{STAGE[selected.stage]?.label || selected.stage} run details</b>
-        <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>Double-click a run tile for live trends.</span>
-        <button className="ghost small" style={{ marginLeft: 'auto' }} onClick={() => setSelectedKey(null)}>Close</button></div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <b>{STAGE[selected.stage]?.label || selected.stage} run details</b>
+        <span className="muted" style={{ fontSize: 12 }}>Live updates from this run</span>
+        <button className="ghost small" aria-expanded={expanded} aria-controls="live-run-trends"
+          onClick={() => setExpanded((value) => !value)}>{trendToggleLabel(expanded)}</button>
+        <button className="ghost small" onClick={() => setSelectedKey(null)}>Close</button>
+      </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 8, marginTop: 8, fontSize: 13 }}>
         <span><b>User</b><br />{selected.owner}</span><span><b>Source</b><br />{selected.source}</span>
         <span><b>Progress</b><br />{selected.completed} of {selected.total}</span><span><b>Queue</b><br />{selected.running} active · {selected.queued} waiting</span>
@@ -227,7 +235,7 @@ export default function AdminLiveTraffic() {
       </div>
       {selected.current_file && <div style={{ marginTop: 10 }}><b>Processing now</b><br /><code>{selected.current_file}</code></div>}
       {selected.current_rule_id && <div style={{ marginTop: 8 }}><b>WCAG criterion</b><br />{selected.current_rule_id}</div>}
-      {expanded && <div style={{ marginTop: 14 }}>
+      {expanded && <div id="live-run-trends" style={{ marginTop: 14 }}>
         <div style={{ marginBottom: 8 }}><b>Live run trends</b><span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>SSE samples · oldest to newest</span></div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 10 }}>
           <MetricChart values={selectedHistory} field="completed" label="Completed documents" color={STAGE[selected.stage]?.color} />
