@@ -9500,6 +9500,64 @@ class Store:
                 (self._now(), owner) if owner else (self._now(),))
             return self._db.fetchone(cur)
 
+    def queue_composition(self, *, window_s: int = 900) -> dict:
+        """The shared queue as the four states a job is actually in, plus the two rates, for the
+        Live Operations queue visualization. Global (not owner-scoped) like `oldest_queued_job`:
+        the question it answers is whether the SHARED queue is draining, which scoping to one
+        caller would answer wrongly the moment that caller has nothing queued. No payload, error
+        text or filename is read, so nothing crosses tenants.
+
+        `waiting` and `retrying` split the same `status='queued'` rows by `attempts`: a job with
+        attempts > 0 has already failed at least once and been requeued in place by fail_job (it
+        does not insert a new row). Counting the two together is what makes a retry storm read as
+        demand for more capacity, which is the opposite of what it is.
+
+        `failed` is dead-lettered jobs within the window, and EXCLUDES deliberate stops via the
+        same _FAILED split dead_letter_breakdown uses — pressing Stop on a 200-document scan marks
+        200 jobs 'dead' and those are not faults. It is windowed rather than all-time because this
+        is a composition bar next to live counts: an all-time total would dwarf them and would not
+        describe the queue as it is now.
+
+        `arrived` / `completed` are counts over the window, not per-minute rates — the caller
+        divides by `window_s`, which is returned so it cannot be assumed.
+        """
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+        cutoff = (_dt.now(_tz.utc) - _td(seconds=max(0, window_s))).isoformat()
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE status='running'", ())
+            running = int((self._db.fetchone(cur) or {}).get("n") or 0)
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE status='queued' AND COALESCE(attempts,0)=0", ())
+            waiting = int((self._db.fetchone(cur) or {}).get("n") or 0)
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE status='queued' AND COALESCE(attempts,0)>0", ())
+            retrying = int((self._db.fetchone(cur) or {}).get("n") or 0)
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE status='dead'" + self._FAILED
+                + " AND updated_at>=%s", (cutoff,))
+            failed = int((self._db.fetchone(cur) or {}).get("n") or 0)
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE created_at>=%s", (cutoff,))
+            arrived = int((self._db.fetchone(cur) or {}).get("n") or 0)
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE status='done' AND updated_at>=%s", (cutoff,))
+            completed = int((self._db.fetchone(cur) or {}).get("n") or 0)
+            # The longest-waiting CLAIMABLE job, using claim_job's own run_after<=now gate so a job
+            # parked behind retry backoff is not counted as evidence the queue is stalled.
+            self._db.execute(cur,
+                "SELECT created_at FROM jobs WHERE status='queued' AND run_after<=%s "
+                "ORDER BY created_at ASC LIMIT 1", (now,))
+            oldest = (self._db.fetchone(cur) or {}).get("created_at")
+        # The oldest wait is returned as the INSTANT, not as elapsed seconds. The activity SSE
+        # stream emits only when its payload changes (routes/system.py), and a seconds counter
+        # changes on every two-second build — which would turn a queue with one waiting job into a
+        # frame every two seconds forever. The reader computes the elapsed time from this.
+        return {"running": running, "waiting": waiting, "retrying": retrying, "failed": failed,
+                "arrived": arrived, "completed": completed, "window_s": int(max(0, window_s)),
+                "oldest_queued_at": oldest}
+
     def list_jobs(self, status: str | None = None, limit: int = 200, owner: str | None = None) -> list[dict]:
         clauses, params = [], []
         if status:

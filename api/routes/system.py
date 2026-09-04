@@ -1292,6 +1292,16 @@ def _admin_activity_snapshot() -> dict:
         stage_row["runs"] += 1
         for field in ("running", "queued", "completed", "total"):
             stage_row[field] += int(run.get(field) or 0)
+    # The queue's own composition and rates, for the Live Operations queue visualization. Guarded
+    # because an older store may not carry it: the drawer renders a missing row as "Not reported"
+    # rather than as zero, so degrading to absent is honest and degrading to {} would not be.
+    composition = None
+    _qc = getattr(core.store, "queue_composition", None)
+    if callable(_qc):
+        try:
+            composition = _qc()
+        except Exception:
+            composition = None
     if queued and not wt.get("alive"):
         pressure = "stalled"
     elif queued and slots and running >= slots:
@@ -1319,6 +1329,8 @@ def _admin_activity_snapshot() -> dict:
             "worker_tier_alive": bool(wt.get("alive")),
             "worker_roles": worker_roles,
             "by_stage": by_stage,
+            # Absent, not empty, when the store cannot answer — see the guard above.
+            **({"queue": composition} if composition else {}),
         },
     }
 

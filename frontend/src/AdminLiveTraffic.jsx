@@ -3,6 +3,8 @@ import { Background, Controls, Handle, MiniMap, Position, ReactFlow } from '@xyf
 import '@xyflow/react/dist/style.css'
 import { getAdminActivity, getWorkerCapacity, openAdminActivityStream } from './api.js'
 import { ensureResizeObserver } from './resizeObserverFallback.js'
+import LiveOpsDrawer from './LiveOpsDrawer.jsx'
+import { appendSample, deriveEvents, formatDuration, mergeEvents, sampleForNode, secondsSince } from './liveOpsDrawer.js'
 
 ensureResizeObserver(typeof window === 'undefined' ? globalThis : window)
 
@@ -65,6 +67,15 @@ function MiniTrend({ values = [], color }) {
   </svg>
 }
 
+/**
+ * RETIRED 2026-09-04, kept per the repo's retired-feature policy — no screen renders it.
+ *
+ * It was the old drawer's trend chart; `LiveOpsDrawer`'s trend strip replaced it with labelled
+ * axes, a 15-minute window, focus/hover tooltips and deployment markers. Do NOT re-mount it as it
+ * stands: `Number(...) || 0` turns an unreported measurement into a plotted zero, which is the one
+ * thing the new drawer exists not to do. `liveOpsDrawer.chartModel` is the honest replacement.
+ * `adminLiveTraffic.test.jsx` asserts nothing mounts it, so this comment cannot quietly go stale.
+ */
 export function MetricChart({ values = [], field, label, color }) {
   const points = values.map((value) => Number(typeof value === 'number' ? value : value[field]) || 0)
   const max = Math.max(...points, 1)
@@ -86,6 +97,8 @@ export function MetricChart({ values = [], field, label, color }) {
   </div>
 }
 
+/** RETIRED 2026-09-04 with MetricChart above: the trend strip is always visible in the redesigned
+ *  drawer, so there is no show/hide toggle to label. Kept per the retired-feature policy. */
 export function trendToggleLabel(expanded) {
   return expanded ? 'Hide live trends' : 'Show live trends'
 }
@@ -279,6 +292,28 @@ export function infrastructureDetail(data, snapshot = {}, capacity = null) {
   return details[data.kind] || { title: data.label, subtitle: data.detail, color: data.color, facts: [] }
 }
 
+/**
+ * The detailed run facts the drawer keeps for inspection. These were the drawer's PRIMARY content
+ * before the redesign; they are retained verbatim under "Operational facts" so replacing the fact
+ * wall with a visualization removes nothing an operator was relying on (PRD goal: "Preserve
+ * detailed operational facts for inspection").
+ */
+export function runFacts(run = {}, nowMs = Date.now()) {
+  const wait = secondsSince(run.oldest_queued_at, nowMs)
+  const updated = secondsSince(run.updated_at, nowMs)
+  return [
+    ['User', run.owner || 'Not reported'],
+    ['Source', run.source || 'Not reported'],
+    ['Progress', `${run.completed ?? 0} of ${run.total ?? 0}`],
+    ['Queue', `${run.running ?? 0} active · ${run.queued ?? 0} waiting`],
+    ['Status', run.status === 'recent' ? 'Recently completed'
+      : (run.queue_position ? `Queue position ${run.queue_position}` : 'Running now')],
+    ['Oldest wait', wait == null ? 'Not reported' : formatDuration(wait)],
+    ['Job type', run.current_job_type?.replaceAll('_', ' ') || 'Not reported'],
+    ['Last activity', updated == null ? 'Not reported' : `${formatDuration(updated)} ago`],
+  ]
+}
+
 export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = null, connection = 'connecting') {
   const runs = snapshot?.runs || []
   const services = workerServiceRows(snapshot?.summary || {})
@@ -361,11 +396,17 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
 export default function AdminLiveTraffic() {
   const [snapshot, setSnapshot] = useState(null)
   const [selectedKey, setSelectedKey] = useState(null)
-  const [expanded, setExpanded] = useState(false)
   const [connection, setConnection] = useState('connecting')
   const [capacity, setCapacity] = useState(null)
   const [capacityState, setCapacityState] = useState('loading')
   const history = useRef(new Map())
+  // Per-node metric samples over the drawer's 15-minute window, and the operational events derived
+  // from the differences between consecutive live snapshots. Both are session state: there is no
+  // events endpoint, and Azure Monitor is not queried per node, so what the drawer can honestly
+  // show is what this browser has actually observed since the tab opened.
+  const trends = useRef(new Map())
+  const eventLog = useRef([])
+  const lastContext = useRef(null)
 
   useEffect(() => {
     let active = true
@@ -388,18 +429,43 @@ export default function AdminLiveTraffic() {
     return () => { active = false; window.clearInterval(timer) }
   }, [])
 
-  useEffect(() => {
-    if (!selectedKey) return undefined
-    const onKey = (event) => { if (event.key === 'Escape') setSelectedKey(null) }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [selectedKey])
+  // Escape, focus trapping and focus restoration are the drawer's own (a11y.useDialog), so there
+  // is no second keydown listener here to fight it.
 
   const graph = useMemo(() => buildTrafficGraph(snapshot, history.current, capacity, connection), [snapshot, capacity, connection])
+
+  // One pass per live snapshot: sample every node for the trend strip, and diff this snapshot
+  // against the previous one for the timeline. Both write into refs the same way the sparkline
+  // history above already does, so the drawer reads the series the map was drawn from rather than
+  // one snapshot behind it.
+  const observedAt = snapshot?.generated_at || null
+  useMemo(() => {
+    if (!snapshot) return null
+    const now = Date.now()
+    for (const node of graph.nodes) {
+      const sample = sampleForNode(node.data, { snapshot, capacity, at: observedAt || new Date(now).toISOString() })
+      trends.current.set(node.id, appendSample(trends.current.get(node.id) || [], sample, { nowMs: now }))
+    }
+    const context = { snapshot, capacity, connection }
+    eventLog.current = mergeEvents(eventLog.current,
+      deriveEvents(lastContext.current, context, { nowIso: observedAt || new Date(now).toISOString() }))
+    lastContext.current = context
+    return null
+  }, [graph, snapshot, capacity, connection, observedAt])
+
+  // One capacity value for the whole drawer. Passing the last good reading to the fact tiles while
+  // telling the visualizations it is unavailable would put a measured figure and "Not reported"
+  // side by side in the same panel, describing the same thing.
+  const liveCapacity = capacityState === 'unavailable' ? null : capacity
   const selectedNode = graph.nodes.find((node) => node.id === selectedKey)?.data
   const selected = selectedNode?.run
-  const selectedInfrastructure = selectedNode && !selected ? infrastructureDetail(selectedNode, snapshot, capacity) : null
-  const selectedHistory = selectedNode?.history || []
+  const selectedFacts = selectedNode
+    ? (selected ? runFacts(selected) : infrastructureDetail(selectedNode, snapshot, liveCapacity).facts)
+    : []
+  const selectedAccent = selected
+    ? (STAGE[selected.stage]?.color || '#6B7280')
+    : (selectedNode?.kind === 'worker' ? (STAGE[selectedNode.service?.stage]?.color || selectedNode.color)
+      : selectedNode?.color) || 'var(--plum)'
 
   const summary = snapshot?.summary || {}
   const concentration = queueConcentration(snapshot?.runs)
@@ -450,72 +516,17 @@ export default function AdminLiveTraffic() {
       <ReactFlow nodes={graph.nodes} edges={graph.edges} nodeTypes={nodeTypes}
         defaultEdgeOptions={{ type: 'smoothstep', pathOptions: { borderRadius: 12, offset: 18 } }}
         fitView minZoom={0.35} maxZoom={1.5}
-        onNodeClick={(_, node) => { setSelectedKey(node.id); setExpanded(false) }}
-        onNodeDoubleClick={(_, node) => { setSelectedKey(node.id); setExpanded(true) }}>
+        onNodeClick={(_, node) => setSelectedKey(node.id)}
+        onNodeDoubleClick={(_, node) => setSelectedKey(node.id)}>
         <Background gap={18} size={1} /><MiniMap pannable zoomable /><Controls showInteractive={false} />
         {!snapshot?.runs?.length && <div className="chip" style={{ position: 'absolute', zIndex: 3, left: 12, bottom: 12 }}>
           Idle · select any tile to inspect the ready processing path
         </div>}
       </ReactFlow>
     </div>
-    {(selected || selectedInfrastructure) && <>
-      <button type="button" aria-label="Close run details" onClick={() => setSelectedKey(null)}
-        style={{ position: 'fixed', inset: 0, zIndex: 79, border: 0, padding: 0,
-          background: 'rgba(28,22,32,.28)', cursor: 'default' }} />
-      <aside role="dialog" aria-modal="true" aria-label={selected ? `${STAGE[selected.stage]?.label || selected.stage} run details` : selectedInfrastructure.title}
-      style={{ position: 'fixed', zIndex: 80, top: 0, right: 0, bottom: 0,
-        width: 'clamp(360px, 38vw, 560px)', maxWidth: '100vw', overflowY: 'auto',
-        overflowX: 'hidden', boxSizing: 'border-box', padding: '0 20px 24px',
-        background: 'var(--card, #fff)', color: 'var(--ink, #2b2330)',
-        borderLeft: `5px solid ${selected ? (STAGE[selected.stage]?.color || '#6B7280') : selectedInfrastructure.color}`,
-        boxShadow: '-12px 0 35px rgba(24,20,28,.22)', isolation: 'isolate' }}>
-      <div style={{ position: 'sticky', top: 0, zIndex: 1, display: 'grid',
-        gridTemplateColumns: 'minmax(0,1fr) auto', alignItems: 'start', gap: 12,
-        margin: '0 -20px', padding: '18px 20px 14px', background: 'var(--card, #fff)',
-        borderBottom: '1px solid var(--border)' }}>
-        <div style={{ minWidth: 0 }}>
-          <h2 style={{ margin: 0, fontSize: 18, overflowWrap: 'anywhere' }}>{selected ? `${STAGE[selected.stage]?.label || selected.stage} run details` : selectedInfrastructure.title}</h2>
-          <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>{selected ? 'Live SSE updates from this run' : selectedInfrastructure.subtitle}</div>
-        </div>
-        <button className="ghost small" aria-label="Close run details" onClick={() => setSelectedKey(null)}>Close</button>
-      </div>
-      {selected ? <><div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(155px,1fr))', gap: 10, marginTop: 14, fontSize: 13 }}>
-        {[['User', selected.owner], ['Source', selected.source],
-          ['Progress', `${selected.completed} of ${selected.total}`],
-          ['Queue', `${selected.running} active · ${selected.queued} waiting`],
-          ['Status', selected.status === 'recent' ? 'Recently completed' : (selected.queue_position ? `Queue position ${selected.queue_position}` : 'Running now')],
-          ['Oldest wait', age(selected.oldest_queued_at)],
-          ['Job type', selected.current_job_type?.replaceAll('_', ' ') || '—'],
-          ['Last activity', `${age(selected.updated_at)} ago`]].map(([label, value]) =>
-            <div className="panel" key={label} style={{ minWidth: 0, padding: 10, overflowWrap: 'anywhere' }}>
-              <b style={{ display: 'block', fontSize: 11, marginBottom: 3 }}>{label}</b>{value}
-            </div>)}
-      </div>
-      {selected.current_file && <div className="panel" style={{ minWidth: 0, marginTop: 12, padding: 12 }}>
-        <b>Processing now</b><br /><code style={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{selected.current_file}</code>
-      </div>}
-      {selected.current_rule_id && <div style={{ marginTop: 10 }}><b>WCAG criterion</b><br />{selected.current_rule_id}</div>}
-      <button className="ghost" style={{ width: '100%', marginTop: 14 }} aria-expanded={expanded} aria-controls="live-run-trends"
-        onClick={() => setExpanded((value) => !value)}>{trendToggleLabel(expanded)}</button>
-      {expanded && <div id="live-run-trends" style={{ marginTop: 14 }}>
-        <div style={{ marginBottom: 8 }}><b>Live run trends</b><div className="muted" style={{ fontSize: 12 }}>SSE samples · oldest to newest</div></div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10 }}>
-          <MetricChart values={selectedHistory} field="completed" label="Completed documents" color={STAGE[selected.stage]?.color} />
-          <MetricChart values={selectedHistory} field="running" label="Active workers" color="#287C45" />
-          <MetricChart values={selectedHistory} field="queued" label="Queued jobs" color="#A66A16" />
-        </div>
-      </div>}</> : <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(175px,1fr))', gap: 10, marginTop: 14, fontSize: 13 }}>
-        {selectedInfrastructure.facts.map(([label, value]) => <div className="panel" key={label}
-          style={{ minWidth: 0, padding: 11, overflowWrap: 'anywhere' }}>
-          <b style={{ display: 'block', fontSize: 11, marginBottom: 4 }}>{label}</b>{value}
-        </div>)}
-        <div className="panel" style={{ gridColumn: '1 / -1', padding: 12 }}>
-          <b>Live transparency</b><div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
-            This view continues updating from ACP and Azure while the drawer is open. Values marked “Not reported” are never estimated.
-          </div>
-        </div>
-      </div>}
-      </aside>
-    </>}
+    {selectedNode && <LiveOpsDrawer nodeId={selectedKey} node={selectedNode} snapshot={snapshot}
+      capacity={liveCapacity} connection={connection}
+      samples={trends.current.get(selectedKey) || []} events={eventLog.current}
+      facts={selectedFacts} accent={selectedAccent} onClose={() => setSelectedKey(null)} />}
   </section>
 }

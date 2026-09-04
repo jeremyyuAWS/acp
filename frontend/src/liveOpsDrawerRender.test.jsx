@@ -1,0 +1,290 @@
+/**
+ * The redesigned Live Operations drawer, asserted at the DOM level.
+ *
+ * DOM rather than a browser screenshot on purpose: this repo's preview server serves the SHARED
+ * checkout whatever worktree the change is in (CLAUDE.md), so a screenshot is evidence about main,
+ * not about this branch. What is rendered here is what this branch actually produces.
+ */
+import { afterEach, describe, expect, it } from 'vitest'
+
+globalThis.IS_REACT_ACT_ENVIRONMENT = true
+import { createElement } from 'react'
+import { act } from 'react-dom/test-utils'
+import { createTestRoot, unmountAll } from './testRoots.js'
+import LiveOpsDrawer from './LiveOpsDrawer.jsx'
+
+const NOW = Date.parse('2026-09-04T14:32:00Z')
+const iso = (offsetS) => new Date(NOW + offsetS * 1000).toISOString()
+
+const service = { role: 'assess', stage: 'assess', active: 2, slots: 3, available: 1, alive: true, age_s: 4, version: 'v25' }
+const capacity = { configured: true, worker_app_name: 'acp-assess', current_replicas: 2,
+  metrics_available: true, cpu_percent: 54, memory_percent: 67,
+  active_revision_name: 'acp-assess--v25', revision_provisioning_state: 'Provisioned' }
+
+const snapshot = {
+  generated_at: iso(-3),
+  runs: [{ scan_id: 's1', stage: 'assess', source: 'drive', owner: 'operator@example.org',
+    completed: 8, total: 20, running: 2, queued: 10, status: 'active',
+    current_file: 'Mediation Record 11.13.2022.xlsx', current_rule_id: 'WCAG 1.3.1',
+    oldest_queued_at: iso(-200), updated_at: iso(-4), started_at: iso(-600) }],
+  summary: {
+    active_runs: 1, recent_runs: 0, active_users: 1, waiting_users: 2, queued: 10, running: 2,
+    completed_jobs: 140, worker_slots: 7, available_slots: 5, utilization_pct: 28,
+    pressure: 'busy', scheduling_policy: 'tenant_fair_least_loaded', worker_tier_alive: true,
+    by_stage: { assess: { running: 2, queued: 10, completed: 8, total: 20 },
+      remediate: { completed: 12, running: 1 }, release: { completed: 9, running: 0 } },
+    worker_roles: { assess: { alive: true, pool_size: 3, age_s: 4, version: 'v25' } },
+    queue: { running: 2, waiting: 8, retrying: 2, failed: 1, arrived: 30, completed: 45,
+      window_s: 900, oldest_queued_at: iso(-200) },
+  },
+}
+
+const samples = [
+  { at: iso(-240), active_jobs: 1, queue_depth: 12, completed: 2, cpu_pct: 40, memory_pct: 55, replicas: 1, failure_pct: null, oldest_wait_s: 40 },
+  { at: iso(-120), active_jobs: 2, queue_depth: 11, completed: 5, cpu_pct: 50, memory_pct: 60, replicas: 2, failure_pct: null, oldest_wait_s: 90 },
+  { at: iso(-3), active_jobs: 2, queue_depth: 10, completed: 8, cpu_pct: 54, memory_pct: 67, replicas: 2, failure_pct: null, oldest_wait_s: 200 },
+]
+
+const events = [
+  { id: 'e3', at: iso(-3), kind: 'activity', stage: 'assess', nodes: ['stage:assess', 's1:assess'],
+    text: 'Worker claimed Mediation Record 11.13.2022.xlsx', outcome: 'Claimed', correlation: 's1' },
+  { id: 'e2', at: iso(-40), kind: 'capacity', nodes: ['stage:assess'],
+    text: 'assess worker slots changed from 2 to 3', outcome: 'Scaled up', correlation: 'assess' },
+  { id: 'e1', at: iso(-90), kind: 'error', nodes: ['infra:queue'],
+    text: '1 job dead-lettered', outcome: 'Failed', correlation: 'shared-queue' },
+]
+
+afterEach(unmountAll)
+
+const mount = async (props) => {
+  const { container, root } = createTestRoot()
+  await act(async () => {
+    root.render(createElement(LiveOpsDrawer, {
+      snapshot, capacity, connection: 'live', samples, events, nowMs: NOW,
+      onClose: () => {}, ...props,
+    }))
+  })
+  return container
+}
+
+const click = async (element) => { await act(async () => { element.click() }) }
+const buttonNamed = (container, text) =>
+  [...container.querySelectorAll('button')].find((b) => b.textContent.trim() === text)
+
+describe('Live header', () => {
+  it('names the component, its type, its state in words, and when it last updated', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: { kind: 'worker', label: 'Assess workers', service } })
+    const dialog = container.querySelector('[role="dialog"]')
+    expect(dialog.getAttribute('aria-modal')).toBe('true')
+    expect(dialog.textContent).toContain('Assess workers')
+    expect(dialog.textContent).toContain('Worker service')
+    expect(dialog.textContent).toContain('Online')
+    expect(dialog.textContent).toContain('Updated 3s ago')
+    expect(dialog.textContent).toContain('Live stream connected')
+    expect(dialog.textContent).toContain('Deployment revision: acp-assess--v25')
+    expect(buttonNamed(container, 'View full Live Operations')).toBeTruthy()
+  })
+
+  it('animates the live indicator only while the stream is actually connected', async () => {
+    const live = await mount({ nodeId: 'stage:assess', node: { kind: 'worker', label: 'Assess workers', service } })
+    expect(live.querySelector('.liveops-pulse')).toBeTruthy()
+    const dropped = await mount({ nodeId: 'stage:assess', connection: 'reconnecting',
+      node: { kind: 'worker', label: 'Assess workers', service } })
+    expect(dropped.querySelector('.liveops-pulse')).toBe(null)
+    expect(dropped.textContent).toContain('Live stream reconnecting')
+  })
+
+  it('states an offline service in text, not by colour alone', async () => {
+    const container = await mount({ nodeId: 'stage:assess',
+      node: { kind: 'worker', label: 'Assess workers', service: { ...service, alive: false } } })
+    expect(container.textContent).toContain('Offline')
+    expect(container.textContent).toContain('No heartbeat within the liveness window')
+  })
+})
+
+describe('Primary visualization per node', () => {
+  it('draws a worker utilization gauge with its text equivalent and its threshold rule', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: { kind: 'worker', label: 'Assess workers', service } })
+    const gauge = container.querySelector('svg[aria-label*="worker slots active"]')
+    expect(gauge).toBeTruthy()
+    expect(gauge.getAttribute('aria-label')).toBe('2 of 3 worker slots active (67%), 1 available')
+    // 2 of 3 is 67%, below the documented 75% amber band — the gauge says capacity is available.
+    expect(container.textContent).toContain('Capacity available')
+    expect(container.textContent).toContain('Amber from 75% of slots, red at 100%')
+  })
+
+  it('bands the gauge amber once the documented threshold is crossed', async () => {
+    const container = await mount({ nodeId: 'stage:assess',
+      node: { kind: 'worker', label: 'Assess workers', service: { ...service, active: 3, slots: 4 } } })
+    expect(container.textContent).toContain('Approaching capacity')
+  })
+
+  it('draws the queue as its four states with the rates and the tenant warning', async () => {
+    const container = await mount({ nodeId: 'infra:queue', node: { kind: 'queue', label: 'Shared queue' } })
+    const bar = container.querySelector('[aria-label*="running"]')
+    expect(bar.getAttribute('aria-label')).toBe('2 running, 8 waiting, 2 retrying, 1 failed / dead-lettered')
+    expect(container.textContent).toContain('Retrying')
+    expect(container.textContent).toContain('3m 20s')          // oldest wait
+    expect(container.textContent).toContain('2/min')            // arrivals
+    expect(container.textContent).toContain('3/min')            // completions
+    expect(container.textContent).toContain('USERS WAITING')
+    expect(container.textContent).toContain('Tenant concentration')
+  })
+
+  it('draws run progress radially, with an estimate only when the samples support one', async () => {
+    const node = { kind: 'run', run: snapshot.runs[0] }
+    const container = await mount({ nodeId: 's1:assess', node })
+    expect(container.querySelector('svg[aria-label="8 of 20 documents complete"]')).toBeTruthy()
+    expect(container.textContent).toContain('40%')
+    expect(container.textContent).toContain('Mediation Record 11.13.2022.xlsx')
+    expect(container.textContent).toContain('WCAG 1.3.1')
+    // 6 documents over 237s with 12 remaining → about 8 minutes.
+    expect(container.textContent).toMatch(/ESTIMATED REMAINING\s*7m/)
+    const thin = await mount({ nodeId: 's1:assess', node, samples: samples.slice(-1) })
+    expect(thin.textContent).toContain('Not enough evidence')
+  })
+
+  it('shows a source connector health and names what it cannot measure', async () => {
+    const container = await mount({ nodeId: 'source:drive',
+      node: { kind: 'source', label: 'Google Drive', source: 'drive', active: 1 } })
+    expect(container.textContent).toContain('Connection health')
+    expect(container.textContent).toContain('ACTIVE RUNS')
+    expect(container.textContent).toContain('RECENT THROTTLING')
+    expect(container.textContent).toContain('AUTHENTICATION FRESHNESS')
+    expect(container.textContent).toContain('Not reported')
+  })
+
+  it('shows durable output counts and refuses a total size Azure did not report', async () => {
+    const container = await mount({ nodeId: 'infra:output', node: { kind: 'output', label: 'Durable outputs' } })
+    expect(container.textContent).toContain('CORRECTED COPIES PRODUCED')
+    expect(container.textContent).toMatch(/TOTAL OUTPUT SIZE\s*Not reported/)
+    expect(container.textContent).toContain('Original source documents are never modified')
+  })
+})
+
+describe('Trend strip', () => {
+  const workerNode = { kind: 'worker', label: 'Assess workers', service }
+
+  it('plots the last fifteen minutes with labelled axes and the current value', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode })
+    const chart = container.querySelector('svg[aria-label*="over the last 15 minutes"]')
+    expect(chart).toBeTruthy()
+    expect(chart.textContent).toContain('15 min ago')
+    expect(chart.textContent).toContain('now')
+    expect(container.textContent).toContain('Last 15 minutes')
+    expect(chart.querySelectorAll('polyline').length).toBeGreaterThan(0)
+  })
+
+  it('switches metric, and says so rather than plotting a metric this node does not report', async () => {
+    const container = await mount({ nodeId: 'infra:queue', node: { kind: 'queue', label: 'Shared queue' } })
+    await click(buttonNamed(container, 'Failure rate'))
+    expect(container.textContent).toContain('Failure rate is not reported for this component.')
+    expect(container.querySelector('svg[aria-label*="over the last 15 minutes"]')).toBe(null)
+  })
+
+  it('refuses a line when only one sample has arrived', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode, samples: samples.slice(-1) })
+    expect(container.textContent).toContain('Collecting samples — one measurement so far')
+  })
+
+  it('gives every point a focusable tooltip with its timestamp and value', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode })
+    const points = [...container.querySelectorAll('circle[tabindex="0"]')]
+    expect(points.length).toBe(3)
+    expect(points.at(-1).getAttribute('aria-label')).toMatch(/^\d{2}:\d{2}:\d{2}: 2$/)
+    await act(async () => { points[0].dispatchEvent(new window.FocusEvent('focus', { bubbles: true })) })
+    expect(container.querySelector('[aria-live="polite"]').textContent).toMatch(/— 1$/)
+  })
+
+  it('marks the scaling moment it observed on the timeline', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode })
+    expect(container.textContent).toContain('Dashed markers: deployment and scaling moments')
+    expect(container.querySelectorAll('line[stroke-dasharray]').length).toBe(1)
+  })
+})
+
+describe('Event timeline', () => {
+  const workerNode = { kind: 'worker', label: 'Assess workers', service }
+
+  it('lists this component events newest first, with time, icon, outcome and correlation', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode })
+    const items = [...container.querySelectorAll('ol li')]
+    expect(items).toHaveLength(2)
+    expect(items[0].textContent).toContain('Worker claimed Mediation Record 11.13.2022.xlsx')
+    expect(items[0].textContent).toContain('Claimed')
+    expect(items[1].textContent).toContain('Scaled up')
+    // The dead-letter event belongs to the queue, not to this worker service.
+    expect(container.textContent).not.toContain('dead-lettered')
+  })
+
+  it('filters by category', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode })
+    await click(buttonNamed(container, 'Capacity'))
+    const items = [...container.querySelectorAll('ol li')]
+    expect(items).toHaveLength(1)
+    expect(items[0].textContent).toContain('slots changed from 2 to 3')
+  })
+
+  it('pauses and resumes visual updates without stopping the data behind them', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode })
+    await click(buttonNamed(container, 'Pause visual updates'))
+    const resume = buttonNamed(container, 'Resume visual updates')
+    expect(resume.getAttribute('aria-pressed')).toBe('true')
+    expect(container.textContent).toContain('the list below is frozen')
+    await click(resume)
+    expect(buttonNamed(container, 'Pause visual updates')).toBeTruthy()
+  })
+
+  it('copies a correlation identifier on request', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode })
+    await click(buttonNamed(container, 'Copy correlation ID'))
+    expect(container.textContent).toContain('Copied')
+  })
+
+  it('says where its events come from, and shows no document contents', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode })
+    expect(container.textContent).toContain('derived from changes observed between live snapshots')
+    expect(container.textContent).toContain('Document contents, tokens and credentials are never shown')
+  })
+
+  it('explains an empty timeline rather than looking broken', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode, events: [] })
+    expect(container.textContent).toContain('No events observed for this component yet')
+  })
+})
+
+describe('Dialog behaviour', () => {
+  it('closes on Escape, on the scrim, and on the close button', async () => {
+    for (const dismiss of ['escape', 'scrim', 'button']) {
+      let closed = false
+      const container = await mount({ nodeId: 'stage:assess',
+        node: { kind: 'worker', label: 'Assess workers', service }, onClose: () => { closed = true } })
+      if (dismiss === 'escape') {
+        await act(async () => {
+          window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+        })
+      } else if (dismiss === 'scrim') {
+        await click(container.querySelector('button[aria-label="Close component details"]'))
+      } else {
+        await click(buttonNamed(container, 'Close'))
+      }
+      expect(closed, dismiss).toBe(true)
+    }
+  })
+
+  it('moves focus into the dialog so a keyboard user is not left behind on the map', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: { kind: 'worker', label: 'Assess workers', service } })
+    expect(container.querySelector('[role="dialog"]').contains(document.activeElement)).toBe(true)
+  })
+})
+
+describe('Detailed facts are preserved, not discarded', () => {
+  it('keeps the operational fact tiles available for inspection', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: { kind: 'worker', label: 'Assess workers', service },
+      facts: [['Service health', 'Online'], ['Replica size', '2 vCPU · 4Gi RAM · 8Gi temporary disk']] })
+    const details = container.querySelector('details')
+    expect(details.textContent).toContain('Operational facts')
+    expect(details.textContent).toContain('2 vCPU · 4Gi RAM · 8Gi temporary disk')
+    expect(details.textContent).toContain('are never estimated')
+  })
+})

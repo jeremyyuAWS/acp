@@ -2815,3 +2815,12 @@ html[data-wcag="on"] .wcag-toggle--on {
   border: 1px solid #E5C875; font-size: 12px; line-height: 1.5; }
 .people-role-cell { display: grid; gap: 4px; }
 .people-role-impact { font-size: 11.5px; line-height: 1.45; }
+
+/* Live Operations drawer — the "this is live" indicator. A slow opacity pulse on a dot that is
+   already legible without it: the connection state is also spelled out in text beside it, so the
+   animation carries no information of its own (WCAG 1.4.1). The global prefers-reduced-motion rule
+   at the top of this file neutralizes it, and LiveOpsDrawer additionally drops the class entirely
+   under reduced motion rather than relying on a 0.001ms duration. */
+@keyframes liveops-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+.liveops-pulse { animation: liveops-pulse 1.8s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .liveops-pulse { animation: none; opacity: 1; } }

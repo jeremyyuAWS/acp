@@ -1,0 +1,740 @@
+/**
+ * Live Operations detail drawer — every derivation the drawer draws from, kept out of the
+ * component so each one is testable without a DOM (PRD "Visual, Real-Time Live Operations
+ * Detail Drawer").
+ *
+ * THE ONE INVARIANT. A measurement ACP does not have is `null` here and renders as
+ * "Not reported" — never 0, never a line drawn through a gap, never an average standing in for a
+ * sample. The drawer's whole claim is that it shows what is happening right now; a plausible
+ * number in place of a missing one is the failure mode that claim cannot survive. Every function
+ * below that can fail to measure returns null rather than a substitute, and the chart refuses to
+ * draw a line through fewer than two real samples rather than implying a trend from one.
+ *
+ * `nowMs` / `nowIso` are injected everywhere rather than read from the clock, so a drawer state is
+ * reproducible in a test and a 15-minute window means the same thing on every run.
+ */
+
+const MINUTE_MS = 60000
+export const TREND_WINDOW_MS = 15 * MINUTE_MS
+export const NOT_REPORTED = 'Not reported'
+
+/** Finite number or null. Anything else — undefined, '', NaN, a string from JSON — is not a
+ *  measurement and must not become 0. */
+export function num(value) {
+  if (value === null || value === undefined || value === '') return null
+  const n = Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
+export function reported(value, suffix = '') {
+  const n = num(value)
+  return n == null ? NOT_REPORTED : `${n}${suffix}`
+}
+
+/* ─────────────────────────── A. Live header ─────────────────────────── */
+
+/** Status is icon + text, never colour alone (WCAG 1.4.1). The glyphs are deliberately
+ *  different SHAPES rather than different colours of the same dot. */
+export const STATES = {
+  online: { label: 'Online', icon: '●', tone: 'ok' },
+  degraded: { label: 'Degraded', icon: '▲', tone: 'warn' },
+  offline: { label: 'Offline', icon: '■', tone: 'bad' },
+  provisioning: { label: 'Provisioning', icon: '◇', tone: 'info' },
+  waiting: { label: 'Waiting', icon: '◔', tone: 'warn' },
+  idle: { label: 'Idle', icon: '○', tone: 'idle' },
+  unavailable: { label: 'Unavailable', icon: '—', tone: 'idle' },
+}
+
+export const TONE = {
+  ok: 'var(--success-fg)', warn: 'var(--warn-fg)', bad: 'var(--error-fg)',
+  info: 'var(--info-fg)', idle: 'var(--muted)',
+}
+
+const NODE_TYPE = {
+  worker: 'Worker service', queue: 'Shared queue', run: 'Active run',
+  source: 'Source connector', output: 'Durable output', intake: 'Intake and orchestration',
+}
+
+export function nodeTypeLabel(kind) {
+  return NODE_TYPE[kind] || 'Component'
+}
+
+/** Heartbeats older than this are stale: the role beat is written far more often, so a beat this
+ *  old means the service stopped reporting rather than that it is merely quiet. Matches the
+ *  backend's own 120s liveness window (store.worker_roles_status). */
+export const STALE_HEARTBEAT_S = 120
+
+/**
+ * Which of the six states the selected component is in, with the words a reader needs. Derived
+ * only from what the snapshot actually reports — a component whose evidence is missing is
+ * `unavailable`, not assumed healthy.
+ */
+export function componentState(data = {}, ctx = {}) {
+  const { snapshot = {}, capacity = null, connection = 'connecting' } = ctx
+  const summary = snapshot?.summary || {}
+  const withLabel = (key, label, detail) => ({ key, ...STATES[key], ...(label ? { label } : {}), detail })
+
+  if (data.kind === 'worker') {
+    const service = data.service || {}
+    if (!service.alive) {
+      return withLabel('offline', 'Offline', 'No heartbeat within the liveness window — this service is not claiming work.')
+    }
+    const age = num(service.age_s)
+    if (age != null && age > STALE_HEARTBEAT_S) {
+      return withLabel('degraded', 'Degraded', `Last heartbeat ${Math.round(age)}s ago.`)
+    }
+    const provisioningState = capacity?.revision_provisioning_state
+    if (provisioningState && !/^(provisioned|succeeded)$/i.test(String(provisioningState))) {
+      return withLabel('provisioning', 'Provisioning', `Active revision is ${provisioningState}.`)
+    }
+    if (num(service.active) === 0) {
+      return withLabel('idle', 'Idle', 'Online with no work claimed — healthy, not stalled.')
+    }
+    return withLabel('online', 'Online', 'Claiming and processing work.')
+  }
+
+  if (data.kind === 'queue') {
+    const queued = num(summary.queued) || 0
+    if (summary.pressure === 'stalled') {
+      return withLabel('offline', 'Stalled', 'Work is waiting and no worker tier is alive to claim it.')
+    }
+    if (summary.pressure === 'saturated') {
+      return withLabel('degraded', 'At capacity', 'Every worker slot is busy while work waits.')
+    }
+    if (queued > 0) return withLabel('waiting', 'Work waiting', 'Waiting work with capacity still available.')
+    return withLabel('idle', 'Idle', 'Nothing waiting for a worker.')
+  }
+
+  if (data.kind === 'run') {
+    const run = data.run || {}
+    if (run.status === 'recent') return withLabel('idle', 'Completed', 'Finished within the last 15 minutes.')
+    if ((num(run.running) || 0) > 0) return withLabel('online', 'Processing', 'A worker is on this run now.')
+    if ((num(run.queued) || 0) > 0) return withLabel('waiting', 'Waiting for capacity', 'Queued and not yet claimed.')
+    return withLabel('idle', 'Idle', 'No queued or running work on this run.')
+  }
+
+  if (data.kind === 'source') {
+    return (num(data.active) || 0) > 0
+      ? withLabel('online', 'Active', 'Enumerating documents for at least one run.')
+      : withLabel('idle', 'Ready', 'Connected with no run reading from it.')
+  }
+
+  if (data.kind === 'intake') {
+    if (connection === 'live') return withLabel('online', 'Online', 'Live event stream connected.')
+    if (connection === 'reconnecting') return withLabel('degraded', 'Reconnecting', 'The live event stream dropped and is retrying.')
+    if (connection === 'unavailable') return withLabel('offline', 'Offline', 'The live event stream could not be established.')
+    return withLabel('provisioning', 'Connecting', 'Opening the live event stream.')
+  }
+
+  if (data.kind === 'output') {
+    return (num(summary.running) || 0) > 0
+      ? withLabel('online', 'Writing', 'Corrected copies and results are being stored now.')
+      : withLabel('idle', 'Ready', 'No writes in flight.')
+  }
+
+  return withLabel('unavailable', 'Unavailable', 'This component reports no state.')
+}
+
+/** "Updated 3s ago" — or the truth that we do not know when, which is different from "0s ago". */
+export function updatedAgo(generatedAt, nowMs = Date.now()) {
+  if (!generatedAt) return 'Update time unavailable'
+  const then = new Date(generatedAt).getTime()
+  if (!Number.isFinite(then)) return 'Update time unavailable'
+  return `Updated ${formatDuration(Math.max(0, Math.round((nowMs - then) / 1000)))} ago`
+}
+
+export function formatDuration(seconds) {
+  const s = num(seconds)
+  if (s == null) return NOT_REPORTED
+  if (s < 60) return `${Math.round(s)}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`
+}
+
+/** Deployment revision for the selected component. The worker capacity reading covers ONE
+ *  container app (WORKER_APP_NAME), so its revision is only this service's revision when the app
+ *  IS this service — otherwise the honest answer is the heartbeat's own version. */
+export function revisionLabel(data = {}, capacity = null) {
+  if (data.kind === 'worker') {
+    const service = data.service || {}
+    if (capacityMatchesService(capacity, service) && capacity?.active_revision_name) {
+      return capacity.active_revision_name
+    }
+    return service.version || NOT_REPORTED
+  }
+  return capacity?.active_revision_name || NOT_REPORTED
+}
+
+/** True when the single container app Azure measured IS the service being shown. Production runs
+ *  three differently sized worker apps, so a reading from one is not the others' — the same
+ *  scoping AdminLiveTraffic.sizeScopeNote applies to the size figure, applied here to CPU, memory
+ *  and replica counts before they are charted as this service's own. */
+export function capacityMatchesService(capacity, service = {}) {
+  const app = capacity?.worker_app_name
+  const role = service?.role
+  if (!app || !role) return false
+  return app === `acp-${role}` || app.endsWith(`-${role}`)
+}
+
+/* ──────────────────── B. Primary visualization models ──────────────────── */
+
+/**
+ * Capacity thresholds. These are the SAME rule the backend uses to classify queue pressure
+ * (`api/routes/system.py::_admin_activity_snapshot`: saturated once running >= slots), extended
+ * with one documented amber band so "approaching capacity" is a stated rule rather than a colour
+ * chosen to look right: amber from 75% of slots, red at 100% or when work waits with no capacity.
+ */
+export const CAPACITY_RULES = { approachingAt: 0.75, saturatedAt: 1 }
+
+export function gaugeModel(service = {}, options = {}) {
+  const slots = num(service.slots)
+  const active = num(service.active)
+  const provisioning = num(options.provisioning)
+  if (!service.alive && slots == null) {
+    return { available: false, reason: 'This service is not reporting worker slots.', tone: 'idle', state: 'unavailable' }
+  }
+  if (slots == null || active == null) {
+    return { available: false, reason: 'Worker slot counts are not reported by this service.', tone: 'idle', state: 'unavailable' }
+  }
+  const fraction = slots > 0 ? Math.min(1, active / slots) : 0
+  const pct = slots > 0 ? Math.round((active / slots) * 100) : null
+  const availableSlots = Math.max(0, slots - active)
+  let state = 'available'
+  if (!service.alive) state = 'unavailable'
+  else if (options.stalled) state = 'saturated'
+  else if (slots > 0 && active >= slots * CAPACITY_RULES.saturatedAt) state = 'saturated'
+  else if (slots > 0 && active >= slots * CAPACITY_RULES.approachingAt) state = 'approaching'
+  else if (active === 0) state = 'idle'
+  const tone = { available: 'ok', approaching: 'warn', saturated: 'bad', idle: 'idle', unavailable: 'idle' }[state]
+  return {
+    available: true, active, slots, availableSlots, provisioning, fraction, pct, state, tone,
+    // The accessible equivalent the PRD requires: the gauge is decorative, this sentence is the data.
+    text: `${active} of ${slots} worker slots active`
+      + (pct == null ? '' : ` (${pct}%)`)
+      + `, ${availableSlots} available`
+      + (provisioning == null ? '' : `, ${provisioning} provisioning`),
+    stateLabel: { available: 'Capacity available', approaching: 'Approaching capacity',
+      saturated: 'At capacity', idle: 'Idle — capacity available', unavailable: 'Capacity unavailable' }[state],
+  }
+}
+
+/** Semicircular arc path, 180° (left) through 270° (top) to 360° (right). */
+export function arcPath(cx, cy, r, fraction) {
+  const clamped = Math.max(0, Math.min(1, num(fraction) ?? 0))
+  const end = 180 + 180 * clamped
+  const p = (deg) => {
+    const rad = (deg * Math.PI) / 180
+    return [cx + r * Math.cos(rad), cy + r * Math.sin(rad)]
+  }
+  const [x0, y0] = p(180)
+  const [x1, y1] = p(end)
+  const large = 180 * clamped > 180 ? 1 : 0
+  return `M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${r} ${r} 0 ${large} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`
+}
+
+/**
+ * The shared queue as its four real states, plus the rates. `waiting` and `retrying` split the
+ * same 'queued' status by whether the job has already failed at least once — counting a retry
+ * storm as capacity demand is what makes a queue look busy when it is actually failing.
+ *
+ * Every field degrades to null when the backend does not report it (an older API, or a store that
+ * cannot answer): `segments` then carries only what IS measured and `partial` says so.
+ */
+export function queueModel(summary = {}, { nowMs = Date.now() } = {}) {
+  const queue = summary.queue || {}
+  const running = num(queue.running) ?? num(summary.running)
+  const waiting = num(queue.waiting)
+  const retrying = num(queue.retrying)
+  const failed = num(queue.failed)
+  // Older snapshots report only a single `queued` total. Show it as waiting rather than
+  // inventing a split that was never measured.
+  const waitingFallback = waiting == null && retrying == null ? num(summary.queued) : waiting
+  const rows = [
+    { key: 'running', label: 'Running', count: running, tone: 'ok' },
+    { key: 'waiting', label: 'Waiting', count: waitingFallback, tone: 'info' },
+    { key: 'retrying', label: 'Retrying', count: retrying, tone: 'warn' },
+    { key: 'failed', label: 'Failed / dead-lettered', count: failed, tone: 'bad' },
+  ]
+  const segments = rows.filter((row) => row.count != null)
+  const total = segments.reduce((sum, row) => sum + row.count, 0)
+  const windowMinutes = (num(queue.window_s) ?? 900) / 60
+  const perMinute = (value) => {
+    const n = num(value)
+    return n == null || !windowMinutes ? null : Math.round((n / windowMinutes) * 10) / 10
+  }
+  return {
+    rows, segments, total,
+    partial: segments.length < rows.length,
+    arrivalPerMin: perMinute(queue.arrived),
+    completionPerMin: perMinute(queue.completed),
+    windowMinutes,
+    // Elapsed from the instant the backend reports, not from a server-side seconds counter — a
+    // counter would change on every two-second snapshot and defeat the stream's emit-on-change rule.
+    oldestWaitS: secondsSince(queue.oldest_queued_at, nowMs),
+    waitingUsers: num(summary.waiting_users),
+    schedulingPolicy: summary.scheduling_policy || null,
+  }
+}
+
+/** One user holding most of the waiting work — the tenant-concentration warning. */
+export function tenantConcentration(runs = [], threshold = 70) {
+  const byOwner = new Map()
+  let total = 0
+  for (const run of runs) {
+    const queued = num(run.queued) || 0
+    if (!queued) continue
+    total += queued
+    byOwner.set(run.owner, (byOwner.get(run.owner) || 0) + queued)
+  }
+  const [owner, count] = [...byOwner.entries()].sort((a, b) => b[1] - a[1])[0] || []
+  const pct = total ? Math.round(((count || 0) / total) * 100) : 0
+  return { owner: owner || null, count: count || 0, total, pct, concentrated: pct >= threshold && total > 1 }
+}
+
+/**
+ * Radial progress for one run, and an ETA only when the samples can carry one.
+ *
+ * `failed` is deliberately null rather than 0: `admin_live_activity` groups jobs by queued /
+ * running / done and does not report a per-run failure count, so a 0 here would be a claim the
+ * snapshot cannot make.
+ */
+export function runModel(run = {}, samples = [], options = {}) {
+  const completed = num(run.completed) ?? 0
+  const total = num(run.total)
+  const running = num(run.running) ?? 0
+  const queued = num(run.queued) ?? 0
+  const pct = total ? Math.min(100, Math.round((completed / total) * 100)) : null
+  return {
+    completed, total, running, queued,
+    failed: num(run.failed),
+    pct,
+    fraction: total ? Math.min(1, completed / total) : 0,
+    currentFile: run.current_file || null,
+    ruleId: run.current_rule_id || null,
+    jobType: run.current_job_type ? String(run.current_job_type).replaceAll('_', ' ') : null,
+    eta: etaSeconds(samples, total == null ? null : Math.max(0, total - completed), options),
+    oldestWaitS: run.oldest_queued_at ? secondsSince(run.oldest_queued_at, options.nowMs) : null,
+  }
+}
+
+export function secondsSince(iso, nowMs = Date.now()) {
+  if (!iso) return null
+  const then = new Date(iso).getTime()
+  if (!Number.isFinite(then)) return null
+  return Math.max(0, Math.round((nowMs - then) / 1000))
+}
+
+/**
+ * Remaining time, or null. "Enough evidence" is stated, not felt: at least two samples, spanning
+ * at least `minSpanS` of real time, with completed work actually increasing over that span. One
+ * sample is a reading, not a rate; a 4-second span turns a single document into an hour-long
+ * projection.
+ */
+export function etaSeconds(samples = [], remaining, { minSpanS = 30, nowMs } = {}) {
+  const left = num(remaining)
+  if (left == null) return null
+  if (left === 0) return 0
+  const points = samples.filter((s) => num(s?.completed) != null)
+  if (points.length < 2) return null
+  const first = points[0]
+  const last = points[points.length - 1]
+  const spanS = (new Date(last.at).getTime() - new Date(first.at).getTime()) / 1000
+  if (!Number.isFinite(spanS) || spanS < minSpanS) return null
+  const done = num(last.completed) - num(first.completed)
+  if (done <= 0) return null
+  return Math.round(left / (done / spanS))
+}
+
+/** Source connector health. Request rate, throttling and auth freshness are NOT measured by the
+ *  activity snapshot, so they are named as unavailable rather than filled with plausible numbers. */
+export function sourceModel(data = {}, snapshot = {}) {
+  const runs = (snapshot?.runs || []).filter((run) => run.source === data.source)
+  const active = runs.filter((run) => run.status !== 'recent')
+  const latest = runs.map((run) => run.updated_at).filter(Boolean).sort().at(-1) || null
+  return {
+    activeRuns: active.length,
+    recentRuns: runs.length - active.length,
+    latestRead: latest,
+    // Named, never estimated — the connector layer does not publish these to the activity snapshot.
+    requestsPerMin: null,
+    throttling: null,
+    authFreshness: null,
+    unavailable: ['Requests per minute', 'Recent throttling', 'Authentication freshness'],
+  }
+}
+
+/** Durable output. Corrected copies and verification counts come from completed remediate/release
+ *  work; total output size is Azure's to report and is not in this snapshot. */
+export function outputModel(snapshot = {}) {
+  const summary = snapshot?.summary || {}
+  const stages = summary.by_stage || {}
+  const queue = summary.queue || {}
+  return {
+    correctedCopies: num(stages.remediate?.completed),
+    verified: num(stages.release?.completed),
+    awaitingWrite: (num(stages.remediate?.running) ?? 0) + (num(stages.release?.running) ?? 0),
+    storageFailures: num(queue.failed),
+    totalSize: null,
+    unavailable: ['Total output size'],
+  }
+}
+
+/* ─────────────────────── C. Real-time trend strip ─────────────────────── */
+
+export const TREND_METRICS = {
+  active_jobs: { key: 'active_jobs', label: 'Active jobs', field: 'active_jobs', unit: '' },
+  queue_depth: { key: 'queue_depth', label: 'Queue depth', field: 'queue_depth', unit: '' },
+  throughput: { key: 'throughput', label: 'Throughput', field: 'completed', rate: true, unit: '/min' },
+  cpu: { key: 'cpu', label: 'CPU utilization', field: 'cpu_pct', unit: '%' },
+  memory: { key: 'memory', label: 'Memory utilization', field: 'memory_pct', unit: '%' },
+  failure_rate: { key: 'failure_rate', label: 'Failure rate', field: 'failure_pct', unit: '%' },
+  replicas: { key: 'replicas', label: 'Replica count', field: 'replicas', unit: '' },
+  oldest_wait: { key: 'oldest_wait', label: 'Oldest queue wait', field: 'oldest_wait_s', unit: 's' },
+}
+
+const METRICS_BY_KIND = {
+  worker: ['active_jobs', 'queue_depth', 'throughput', 'cpu', 'memory', 'replicas'],
+  queue: ['queue_depth', 'oldest_wait', 'throughput', 'failure_rate', 'active_jobs'],
+  run: ['throughput', 'active_jobs', 'queue_depth'],
+  source: ['active_jobs', 'throughput'],
+  output: ['throughput', 'failure_rate'],
+  intake: ['active_jobs', 'queue_depth', 'throughput'],
+}
+
+export function metricsForKind(kind) {
+  return (METRICS_BY_KIND[kind] || ['active_jobs', 'queue_depth', 'throughput']).map((key) => TREND_METRICS[key])
+}
+
+export function defaultMetricFor(kind) {
+  return metricsForKind(kind)[0].key
+}
+
+/**
+ * The per-node metric sample for this snapshot. Anything the snapshot cannot measure for THIS
+ * node is null, so the chart shows a gap rather than a zero.
+ *
+ * CPU, memory and replica counts are only this service's when the one container app Azure
+ * measured is this service's app — see capacityMatchesService. Charting another app's utilization
+ * on a service's own trend is the specific lie this guard exists to prevent.
+ */
+export function sampleForNode(data = {}, ctx = {}) {
+  const { snapshot = {}, capacity = null, at } = ctx
+  const summary = snapshot?.summary || {}
+  const stages = summary.by_stage || {}
+  const queue = summary.queue || {}
+  const base = { at: at || snapshot?.generated_at || null }
+  const blank = {
+    active_jobs: null, queue_depth: null, completed: null, cpu_pct: null,
+    memory_pct: null, failure_pct: null, replicas: null, oldest_wait_s: null,
+  }
+  if (data.kind === 'worker') {
+    const service = data.service || {}
+    const stage = stages[service.stage] || {}
+    const mine = capacityMatchesService(capacity, service)
+    return { ...blank, ...base,
+      active_jobs: num(service.active), queue_depth: num(stage.queued),
+      completed: num(stage.completed),
+      cpu_pct: mine && capacity?.metrics_available ? num(capacity.cpu_percent) : null,
+      memory_pct: mine && capacity?.metrics_available ? num(capacity.memory_percent) : null,
+      replicas: mine ? num(capacity.current_replicas) : null }
+  }
+  if (data.kind === 'queue' || data.kind === 'intake') {
+    const failed = num(queue.failed)
+    const done = num(queue.completed)
+    const denominator = (failed ?? 0) + (done ?? 0)
+    return { ...blank, ...base,
+      active_jobs: num(summary.running), queue_depth: num(summary.queued),
+      completed: num(summary.completed_jobs),
+      failure_pct: failed == null || done == null || !denominator
+        ? null : Math.round((failed / denominator) * 1000) / 10,
+      oldest_wait_s: queue.oldest_queued_at
+        ? secondsSince(queue.oldest_queued_at, new Date(base.at || Date.now()).getTime())
+        : null }
+  }
+  if (data.kind === 'run') {
+    const run = data.run || {}
+    return { ...blank, ...base,
+      active_jobs: num(run.running), queue_depth: num(run.queued), completed: num(run.completed) }
+  }
+  if (data.kind === 'source') {
+    const runs = (snapshot?.runs || []).filter((run) => run.source === data.source)
+    return { ...blank, ...base,
+      active_jobs: runs.filter((run) => run.status !== 'recent').length,
+      completed: runs.reduce((sum, run) => sum + (num(run.completed) || 0), 0) }
+  }
+  if (data.kind === 'output') {
+    const failed = num(queue.failed)
+    const done = num(queue.completed)
+    const denominator = (failed ?? 0) + (done ?? 0)
+    return { ...blank, ...base,
+      completed: num(summary.completed_jobs),
+      failure_pct: failed == null || done == null || !denominator
+        ? null : Math.round((failed / denominator) * 1000) / 10 }
+  }
+  return { ...blank, ...base }
+}
+
+/**
+ * Append a sample and drop everything older than the 15-minute window. Consecutive identical
+ * samples are collapsed onto the newest timestamp so a quiet system does not fill the buffer with
+ * duplicate points — the retained line still spans the window.
+ */
+export function appendSample(series = [], sample, { nowMs = Date.now(), windowMs = TREND_WINDOW_MS } = {}) {
+  if (!sample?.at) return series
+  const next = series.slice()
+  const last = next[next.length - 1]
+  const fields = Object.keys(sample).filter((key) => key !== 'at')
+  const same = last && fields.every((key) => last[key] === sample[key])
+  if (same) next[next.length - 1] = { ...last, at: sample.at }
+  else next.push(sample)
+  const cutoff = nowMs - windowMs
+  const kept = next.filter((point) => {
+    const t = new Date(point.at).getTime()
+    return !Number.isFinite(t) || t >= cutoff
+  })
+  return kept.length ? kept : next.slice(-1)
+}
+
+/**
+ * Chart geometry for one metric over the retained window.
+ *
+ * `insufficient` is true with fewer than two real values, and the caller must not draw a line:
+ * a single sample joined to the axis reads as a trend that was never measured. Gaps (null
+ * samples) break the polyline into segments rather than being interpolated across.
+ */
+export function chartModel(series = [], metricKey, { nowMs = Date.now(), windowMs = TREND_WINDOW_MS,
+  width = 300, height = 110, padLeft = 34, padRight = 8, padTop = 10, padBottom = 22 } = {}) {
+  const metric = TREND_METRICS[metricKey] || TREND_METRICS.active_jobs
+  const raw = series.map((point) => ({ at: point.at, t: new Date(point.at).getTime(), value: num(point[metric.field]) }))
+    .filter((point) => Number.isFinite(point.t))
+  const values = metric.rate ? rateSeries(raw) : raw
+  const withValues = values.filter((point) => point.value != null)
+  const insufficient = withValues.length < 2
+  const max = withValues.length ? Math.max(...withValues.map((p) => p.value)) : null
+  const top = niceCeiling(max)
+  const start = nowMs - windowMs
+  const x = (t) => padLeft + ((Math.min(Math.max(t, start), nowMs) - start) / windowMs) * (width - padLeft - padRight)
+  const y = (value) => {
+    const span = top || 1
+    return padTop + (1 - Math.min(1, value / span)) * (height - padTop - padBottom)
+  }
+  const points = values.map((point) => ({ ...point,
+    x: x(point.t), y: point.value == null ? null : y(point.value) }))
+  const segments = []
+  let current = []
+  for (const point of points) {
+    if (point.value == null) { if (current.length > 1) segments.push(current); current = []; continue }
+    current.push(point)
+  }
+  if (current.length > 1) segments.push(current)
+  return {
+    metric, points, insufficient,
+    segments: segments.map((seg) => seg.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')),
+    max: top, current: withValues.at(-1)?.value ?? null,
+    currentLabel: withValues.length ? `${withValues.at(-1).value}${metric.unit}` : NOT_REPORTED,
+    sampleCount: withValues.length,
+    geometry: { width, height, padLeft, padRight, padTop, padBottom },
+    xFor: x, yFor: y,
+    axis: {
+      yTop: top == null ? NOT_REPORTED : `${top}${metric.unit}`,
+      yZero: '0',
+      xStart: `${Math.round(windowMs / MINUTE_MS)} min ago`,
+      xEnd: 'now',
+    },
+  }
+}
+
+/** Cumulative counter → per-minute rate. The first point has no predecessor and is therefore
+ *  null, not zero; a counter reset (redeploy, window roll-off) is also null rather than a
+ *  negative rate. */
+export function rateSeries(points = []) {
+  return points.map((point, index) => {
+    if (index === 0 || point.value == null) return { ...point, value: null }
+    const prev = points[index - 1]
+    if (prev.value == null) return { ...point, value: null }
+    const minutes = (point.t - prev.t) / MINUTE_MS
+    if (minutes <= 0) return { ...point, value: null }
+    const delta = point.value - prev.value
+    if (delta < 0) return { ...point, value: null }
+    return { ...point, value: Math.round((delta / minutes) * 10) / 10 }
+  })
+}
+
+export function niceCeiling(value) {
+  const n = num(value)
+  if (n == null) return null
+  if (n <= 0) return 1
+  const magnitude = 10 ** Math.floor(Math.log10(n))
+  for (const step of [1, 2, 2.5, 5, 10]) {
+    const candidate = step * magnitude
+    if (n <= candidate) return Math.round(candidate * 10) / 10
+  }
+  return Math.ceil(n)
+}
+
+/* ─────────────────────── D. Live event timeline ─────────────────────── */
+
+export const EVENT_FILTERS = [
+  { key: 'all', label: 'All events' },
+  { key: 'activity', label: 'Activity' },
+  { key: 'capacity', label: 'Capacity' },
+  { key: 'deployment', label: 'Deployment' },
+  { key: 'warning', label: 'Warning' },
+  { key: 'error', label: 'Error' },
+]
+
+export const EVENT_ICONS = { activity: '▸', capacity: '⇅', deployment: '⬆', warning: '▲', error: '■' }
+
+/**
+ * Every operational event the drawer shows is DERIVED FROM AN OBSERVED CHANGE between two live
+ * snapshots — there is no event log endpoint, and inventing one would mean inventing its
+ * contents. So an event here means "these two consecutive snapshots differed in this way", which
+ * is a fact, and the timeline says so in the UI.
+ *
+ * Document contents, tokens and credentials never appear: the only document-identifying value is
+ * `current_file`, the filename the authorized activity endpoint already returns for the drawer.
+ */
+export function deriveEvents(prev, next, { nowIso } = {}) {
+  if (!prev || !next) return []
+  const at = nowIso || next.snapshot?.generated_at || new Date().toISOString()
+  const events = []
+  const push = (event) => events.push({ id: `${at}:${events.length}:${event.key}`, at, ...event })
+
+  const prevRuns = new Map((prev.snapshot?.runs || []).map((run) => [`${run.scan_id}:${run.stage}`, run]))
+  for (const run of next.snapshot?.runs || []) {
+    const key = `${run.scan_id}:${run.stage}`
+    const before = prevRuns.get(key)
+    if (!before) continue
+    const nodes = [key, `stage:${run.stage}`, 'infra:queue', `source:${run.source}`, 'infra:intake']
+    const done = (num(run.completed) || 0) - (num(before.completed) || 0)
+    if (done > 0) {
+      push({ key: `${key}:done`, kind: 'activity', stage: run.stage, nodes,
+        text: `${done} document${done === 1 ? '' : 's'} completed`, outcome: 'Completed',
+        correlation: run.scan_id })
+      push({ key: `${key}:stored`, kind: 'activity', stage: run.stage, nodes: [...nodes, 'infra:output'],
+        text: `${done} result${done === 1 ? '' : 's'} stored`, outcome: 'Durable', correlation: run.scan_id })
+    }
+    if (run.current_file && run.current_file !== before.current_file) {
+      push({ key: `${key}:claim`, kind: 'activity', stage: run.stage, nodes,
+        text: `Worker claimed ${run.current_file}`, outcome: 'Claimed', correlation: run.scan_id })
+    }
+    if (run.current_rule_id && run.current_rule_id !== before.current_rule_id) {
+      push({ key: `${key}:rule`, kind: 'activity', stage: run.stage, nodes,
+        text: `Working on ${run.current_rule_id}`, outcome: 'In progress', correlation: run.scan_id })
+    }
+    if (before.status !== 'recent' && run.status === 'recent') {
+      push({ key: `${key}:finish`, kind: 'activity', stage: run.stage, nodes,
+        text: `Run finished — ${run.completed} of ${run.total} documents`, outcome: 'Finished',
+        durationS: secondsSinceIso(run.started_at, run.updated_at), correlation: run.scan_id })
+    }
+  }
+
+  const prevRoles = prev.snapshot?.summary?.worker_roles || {}
+  const nextRoles = next.snapshot?.summary?.worker_roles || {}
+  for (const [role, beat] of Object.entries(nextRoles)) {
+    const before = prevRoles[role]
+    if (!before) continue
+    const stage = role === 'discovery' ? 'discover' : role
+    const nodes = [`stage:${stage}`]
+    if (!before.alive && beat.alive) {
+      push({ key: `${role}:online`, kind: 'capacity', stage, nodes,
+        text: `${role} worker service came online`, outcome: 'Online', correlation: role })
+    }
+    if (before.alive && !beat.alive) {
+      push({ key: `${role}:offline`, kind: 'warning', stage, nodes,
+        text: `${role} worker service stopped reporting a heartbeat`, outcome: 'Offline', correlation: role })
+    }
+    const beforeSlots = num(before.pool_size)
+    const slots = num(beat.pool_size)
+    if (beforeSlots != null && slots != null && slots !== beforeSlots) {
+      push({ key: `${role}:slots`, kind: 'capacity', stage, nodes,
+        text: `${role} worker slots changed from ${beforeSlots} to ${slots}`,
+        outcome: slots > beforeSlots ? 'Scaled up' : 'Scaled down', correlation: role })
+    }
+    if (before.version && beat.version && before.version !== beat.version) {
+      push({ key: `${role}:version`, kind: 'deployment', stage, nodes,
+        text: `${role} worker service now running ${beat.version}`, outcome: 'Deployed', correlation: role })
+    }
+  }
+
+  const beforePressure = prev.snapshot?.summary?.pressure
+  const pressure = next.snapshot?.summary?.pressure
+  if (beforePressure && pressure && beforePressure !== pressure) {
+    const nodes = ['infra:queue', 'infra:intake']
+    const text = pressure === 'healthy'
+      ? 'Queue returned below capacity'
+      : `Queue pressure changed from ${beforePressure} to ${pressure}`
+    push({ key: 'queue:pressure', kind: pressure === 'stalled' ? 'error' : 'capacity', nodes,
+      text, outcome: pressure, correlation: 'shared-queue' })
+  }
+
+  const beforeFailed = num(prev.snapshot?.summary?.queue?.failed)
+  const failed = num(next.snapshot?.summary?.queue?.failed)
+  if (beforeFailed != null && failed != null && failed > beforeFailed) {
+    push({ key: 'queue:failed', kind: 'error', nodes: ['infra:queue', 'infra:output'],
+      text: `${failed - beforeFailed} job${failed - beforeFailed === 1 ? '' : 's'} dead-lettered`,
+      outcome: 'Failed', correlation: 'shared-queue' })
+  }
+
+  const beforeReplicas = num(prev.capacity?.current_replicas)
+  const replicas = num(next.capacity?.current_replicas)
+  const workerNodes = ['stage:discover', 'stage:assess', 'stage:remediate']
+  if (beforeReplicas != null && replicas != null && replicas !== beforeReplicas) {
+    push({ key: 'azure:replicas', kind: 'capacity', nodes: workerNodes,
+      text: `${next.capacity?.worker_app_name || 'Worker app'} replicas changed from ${beforeReplicas} to ${replicas}`,
+      outcome: replicas > beforeReplicas ? 'New replica ready' : 'Replica removed',
+      correlation: next.capacity?.worker_app_name || null })
+  }
+  if (prev.capacity?.active_revision_name && next.capacity?.active_revision_name
+      && prev.capacity.active_revision_name !== next.capacity.active_revision_name) {
+    push({ key: 'azure:revision', kind: 'deployment', nodes: workerNodes,
+      text: `Active revision is now ${next.capacity.active_revision_name}`, outcome: 'Deployed',
+      correlation: next.capacity.active_revision_name })
+  }
+  if (prev.connection !== next.connection && next.connection) {
+    push({ key: 'sse:connection', kind: next.connection === 'live' ? 'capacity' : 'warning',
+      nodes: ['infra:intake'], text: `Live event stream ${next.connection}`,
+      outcome: next.connection, correlation: 'activity-stream' })
+  }
+  return events
+}
+
+function secondsSinceIso(from, to) {
+  if (!from || !to) return null
+  const a = new Date(from).getTime()
+  const b = new Date(to).getTime()
+  if (!Number.isFinite(a) || !Number.isFinite(b) || b < a) return null
+  return Math.round((b - a) / 1000)
+}
+
+/** Newest first, deduped by id, bounded so a long session cannot grow without limit. */
+export function mergeEvents(log = [], incoming = [], cap = 200) {
+  if (!incoming.length) return log
+  const seen = new Set(log.map((event) => event.id))
+  const fresh = incoming.filter((event) => !seen.has(event.id))
+  return [...fresh.reverse(), ...log].slice(0, cap)
+}
+
+export function eventsForNode(log = [], nodeId) {
+  if (!nodeId) return log
+  return log.filter((event) => !event.nodes || event.nodes.includes(nodeId))
+}
+
+export function filterEvents(log = [], filter = 'all') {
+  return filter === 'all' ? log : log.filter((event) => event.kind === filter)
+}
+
+/** Timeline timestamps are wall-clock, second-resolution — the format the PRD's examples use. */
+export function eventClock(iso) {
+  const t = new Date(iso)
+  if (!Number.isFinite(t.getTime())) return '--:--:--'
+  return t.toTimeString().slice(0, 8)
+}
+
+/** Markers for deployment and scaling moments on the trend timeline. */
+export function trendMarkers(log = [], { start, end } = {}) {
+  return log
+    .filter((event) => event.kind === 'deployment' || event.kind === 'capacity')
+    .map((event) => ({ ...event, t: new Date(event.at).getTime() }))
+    .filter((event) => Number.isFinite(event.t) && (start == null || event.t >= start) && (end == null || event.t <= end))
+}

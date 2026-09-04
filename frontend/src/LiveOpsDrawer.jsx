@@ -1,0 +1,468 @@
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { prefersReducedMotion, useDialog } from './a11y.js'
+import {
+  EVENT_FILTERS, EVENT_ICONS, NOT_REPORTED, TONE, arcPath, capacityMatchesService, chartModel, componentState,
+  defaultMetricFor, eventClock, eventsForNode, filterEvents, formatDuration, gaugeModel,
+  metricsForKind, nodeTypeLabel, outputModel, queueModel, reported, revisionLabel, runModel,
+  sourceModel, tenantConcentration, trendMarkers, updatedAgo,
+} from './liveOpsDrawer.js'
+
+/**
+ * The Live Operations detail drawer: what is happening now, whether it is healthy, how it has
+ * changed over the last 15 minutes, and whether capacity is sufficient — as visualizations rather
+ * than a wall of fact tiles (PRD "Visual, Real-Time Live Operations Detail Drawer").
+ *
+ * Every number here comes from `liveOpsDrawer.js`, which returns null for anything ACP cannot
+ * measure. This file renders null as "Not reported" and NEVER substitutes a zero, an average, or
+ * a line drawn between fewer than two real samples. That is the whole point of the redesign: a
+ * drawer that reads as live has to be trustworthy when the telemetry behind it is not there.
+ *
+ * Accessibility: status is icon + text (1.4.1), the live indicator is static under reduced motion
+ * (2.3.3), the gauge and chart carry text equivalents (1.1.1), updates can be paused (2.2.2), and
+ * focus is moved into the dialog, trapped, and restored on close (2.4.3 / 2.1.2 via useDialog).
+ */
+
+const PANEL = { minWidth: 0, padding: 12, border: '1px solid var(--line)', borderRadius: 10, background: 'var(--card, #fff)' }
+const LABEL = { display: 'block', fontSize: 11, letterSpacing: '.02em', color: 'var(--muted)', marginBottom: 3 }
+
+function Value({ children }) {
+  return <b style={{ fontSize: 15, overflowWrap: 'anywhere' }}>{children}</b>
+}
+
+function Tile({ label, value, detail }) {
+  return <div style={PANEL}>
+    <span style={LABEL}>{label}</span>
+    <Value>{value}</Value>
+    {detail && <div className="muted" style={{ fontSize: 11, marginTop: 3, overflowWrap: 'anywhere' }}>{detail}</div>}
+  </div>
+}
+
+function StateChip({ state }) {
+  return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700,
+    color: TONE[state.tone], border: `1px solid ${TONE[state.tone]}`, borderRadius: 8, padding: '3px 9px' }}>
+    <span aria-hidden="true">{state.icon}</span>{state.label}
+  </span>
+}
+
+/* ─────────────────────────── A. Live header ─────────────────────────── */
+
+function LiveHeader({ name, kind, state, connection, generatedAt, revision, nowMs, onClose, onViewAll }) {
+  const still = prefersReducedMotion()
+  const connected = connection === 'live'
+  return <div style={{ position: 'sticky', top: 0, zIndex: 1, display: 'grid',
+    gridTemplateColumns: 'minmax(0,1fr) auto', alignItems: 'start', gap: 12,
+    margin: '0 -20px', padding: '18px 20px 12px', background: 'var(--card, #fff)',
+    borderBottom: '1px solid var(--line)' }}>
+    <div style={{ minWidth: 0 }}>
+      <h2 style={{ margin: 0, fontSize: 18, overflowWrap: 'anywhere' }}>{name}</h2>
+      <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>{nodeTypeLabel(kind)}</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 8 }}>
+        <StateChip state={state} />
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--muted)' }}>
+          <span aria-hidden="true" className={connected && !still ? 'liveops-pulse' : undefined}
+            style={{ width: 8, height: 8, borderRadius: '50%', display: 'inline-block',
+              background: connected ? 'var(--success-fg)' : 'var(--muted)' }} />
+          {connected ? 'Live stream connected' : `Live stream ${connection}`}
+        </span>
+        <span className="muted" style={{ fontSize: 12 }}>{updatedAgo(generatedAt, nowMs)}</span>
+      </div>
+      <div className="muted" style={{ fontSize: 11, marginTop: 5, overflowWrap: 'anywhere' }}>
+        Deployment revision: {revision}
+      </div>
+    </div>
+    <div style={{ display: 'grid', gap: 6, justifyItems: 'end' }}>
+      <button className="ghost small" aria-label="Close component details" onClick={onClose}>Close</button>
+      <button className="ghost small" onClick={onViewAll}>View full Live Operations</button>
+    </div>
+  </div>
+}
+
+/* ─────────────── B. Primary operational visualization ─────────────── */
+
+function WorkerGauge({ gauge, service, capacity }) {
+  if (!gauge.available) {
+    return <div style={{ ...PANEL, padding: 14 }} role="status">
+      <b>Worker utilization unavailable</b>
+      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{gauge.reason}</div>
+    </div>
+  }
+  const color = TONE[gauge.tone]
+  return <section aria-label="Worker slot utilization" style={{ ...PANEL, padding: 14 }}>
+    <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+      <svg viewBox="0 0 200 118" style={{ width: 200, height: 118, flex: '0 0 auto' }} role="img"
+        aria-label={gauge.text}>
+        <path d={arcPath(100, 100, 78, 1)} fill="none" stroke="var(--line)" strokeWidth="16" strokeLinecap="round" />
+        {gauge.fraction > 0 && <path d={arcPath(100, 100, 78, gauge.fraction)} fill="none" stroke={color}
+          strokeWidth="16" strokeLinecap="round" />}
+        <text x="100" y="86" textAnchor="middle" fontSize="30" fontWeight="700" fill="var(--ink)">
+          {gauge.pct == null ? '—' : `${gauge.pct}%`}
+        </text>
+        <text x="100" y="104" textAnchor="middle" fontSize="11" fill="var(--muted)">
+          {gauge.active} of {gauge.slots} slots
+        </text>
+        <text x="14" y="114" fontSize="10" fill="var(--muted)">0</text>
+        <text x="176" y="114" fontSize="10" fill="var(--muted)">{gauge.slots}</text>
+      </svg>
+      <div style={{ minWidth: 160, flex: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontWeight: 700, color }}>
+          <span aria-hidden="true">{{ available: '●', approaching: '▲', saturated: '■', idle: '○', unavailable: '—' }[gauge.state]}</span>
+          {gauge.stateLabel}
+        </div>
+        <p style={{ margin: '6px 0 0', fontSize: 13 }}>{gauge.text}.</p>
+        <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+          Amber from 75% of slots, red at 100% — the documented capacity rule, not a colour range.
+        </div>
+        <div className="muted" style={{ fontSize: 11, marginTop: 4, overflowWrap: 'anywhere' }}>
+          Heartbeat {service?.age_s == null ? NOT_REPORTED : `${Math.round(service.age_s)}s ago`}
+        </div>
+        <div className="muted" style={{ fontSize: 11, marginTop: 2, overflowWrap: 'anywhere' }}>
+          Provisioning capacity: {capacityMatchesService(capacity, service) && capacity?.revision_provisioning_state
+            ? `revision ${capacity.revision_provisioning_state}`
+            : NOT_REPORTED}
+        </div>
+      </div>
+    </div>
+  </section>
+}
+
+const SEGMENT_GLYPH = { running: '●', waiting: '◐', retrying: '▲', failed: '■' }
+
+function QueueBar({ queue, concentration }) {
+  const total = queue.total
+  return <section aria-label="Shared queue composition" style={{ ...PANEL, padding: 14 }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+      <b>Queue composition</b>
+      <span className="muted" style={{ fontSize: 12 }}>{total} job{total === 1 ? '' : 's'} counted</span>
+    </div>
+    <div role="img" aria-label={queue.segments.map((s) => `${s.count} ${s.label.toLowerCase()}`).join(', ') || 'No queue composition reported'}
+      style={{ display: 'flex', height: 22, borderRadius: 6, overflow: 'hidden', marginTop: 9,
+        border: '1px solid var(--line)', background: 'var(--bg)' }}>
+      {total > 0 ? queue.segments.filter((s) => s.count > 0).map((segment) => <div key={segment.key}
+        title={`${segment.label}: ${segment.count}`}
+        style={{ width: `${(segment.count / total) * 100}%`, background: TONE[segment.tone],
+          display: 'grid', placeItems: 'center', color: '#fff', fontSize: 11, fontWeight: 700 }}>
+        {(segment.count / total) > 0.12 ? segment.count : ''}
+      </div>) : <div className="muted" style={{ display: 'grid', placeItems: 'center', width: '100%', fontSize: 11 }}>
+        Nothing queued, running, retrying or failed
+      </div>}
+    </div>
+    <ul style={{ listStyle: 'none', margin: '10px 0 0', padding: 0, display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 6, fontSize: 12 }}>
+      {queue.rows.map((row) => <li key={row.key} style={{ display: 'flex', gap: 7, alignItems: 'baseline' }}>
+        <span aria-hidden="true" style={{ color: TONE[row.tone] }}>{SEGMENT_GLYPH[row.key]}</span>
+        <span style={{ flex: 1 }}>{row.label}</span>
+        <b>{row.count == null ? NOT_REPORTED : row.count}</b>
+      </li>)}
+    </ul>
+    {queue.partial && <p className="muted" style={{ fontSize: 11, margin: '8px 0 0' }}>
+      Rows marked “{NOT_REPORTED}” are not published by this deployment’s activity snapshot. They are
+      never estimated from the counts that are.
+    </p>}
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 8, marginTop: 11 }}>
+      <Tile label="OLDEST WAIT" value={queue.oldestWaitS == null ? NOT_REPORTED : formatDuration(queue.oldestWaitS)} />
+      <Tile label="ARRIVAL RATE" value={queue.arrivalPerMin == null ? NOT_REPORTED : `${queue.arrivalPerMin}/min`}
+        detail={queue.arrivalPerMin == null ? undefined : `Over the last ${Math.round(queue.windowMinutes)} min`} />
+      <Tile label="COMPLETION RATE" value={queue.completionPerMin == null ? NOT_REPORTED : `${queue.completionPerMin}/min`}
+        detail={queue.completionPerMin == null ? undefined : `Over the last ${Math.round(queue.windowMinutes)} min`} />
+      <Tile label="USERS WAITING" value={queue.waitingUsers == null ? NOT_REPORTED : queue.waitingUsers}
+        detail={queue.schedulingPolicy ? queue.schedulingPolicy.replaceAll('_', ' ') : undefined} />
+    </div>
+    {concentration.concentrated && <p role="status" style={{ margin: '10px 0 0', padding: '9px 11px', fontSize: 12,
+      borderLeft: `4px solid ${TONE.warn}`, background: 'var(--warn-bg)', color: 'var(--ink)' }}>
+      <b>▲ Tenant concentration:</b> one user holds {concentration.pct}% of the {concentration.total} waiting
+      jobs. Tenant-fair scheduling gives other waiting users the next equally prioritized capacity.
+    </p>}
+  </section>
+}
+
+function RunRadial({ model, run, accent }) {
+  const radius = 46
+  const circumference = 2 * Math.PI * radius
+  const dash = model.total ? circumference * model.fraction : 0
+  const label = model.total == null
+    ? 'Run progress is not reported'
+    : `${model.completed} of ${model.total} documents complete`
+  return <section aria-label="Run progress" style={{ ...PANEL, padding: 14 }}>
+    <div style={{ display: 'flex', gap: 14, alignItems: 'center', flexWrap: 'wrap' }}>
+      <svg viewBox="0 0 120 120" style={{ width: 120, height: 120, flex: '0 0 auto' }} role="img" aria-label={label}>
+        <circle cx="60" cy="60" r={radius} fill="none" stroke="var(--line)" strokeWidth="12" />
+        {dash > 0 && <circle cx="60" cy="60" r={radius} fill="none" stroke={accent} strokeWidth="12"
+          strokeLinecap="round" strokeDasharray={`${dash.toFixed(1)} ${(circumference - dash).toFixed(1)}`}
+          transform="rotate(-90 60 60)" />}
+        <text x="60" y="58" textAnchor="middle" fontSize="24" fontWeight="700" fill="var(--ink)">
+          {model.pct == null ? '—' : `${model.pct}%`}
+        </text>
+        <text x="60" y="76" textAnchor="middle" fontSize="10" fill="var(--muted)">
+          {model.completed}/{model.total ?? '—'}
+        </text>
+      </svg>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(128px,1fr))', gap: 8, flex: 1, minWidth: 200 }}>
+        <Tile label="COMPLETED" value={`${model.completed} of ${model.total ?? NOT_REPORTED}`} />
+        <Tile label="PROCESSING NOW" value={model.running} />
+        <Tile label="WAITING" value={model.queued}
+          detail={run.queue_position ? `Queue position ${run.queue_position}` : undefined} />
+        <Tile label="FAILED" value={model.failed == null ? NOT_REPORTED : model.failed}
+          detail={model.failed == null ? 'Per-run failures are not published by the activity snapshot' : undefined} />
+        <Tile label="ESTIMATED REMAINING"
+          value={model.eta == null ? 'Not enough evidence' : formatDuration(model.eta)}
+          detail={model.eta == null ? 'Needs 30s of samples with completions' : 'From this run’s own completion rate'} />
+        <Tile label="OLDEST WAIT" value={model.oldestWaitS == null ? NOT_REPORTED : formatDuration(model.oldestWaitS)} />
+      </div>
+    </div>
+    {model.currentFile && <div style={{ ...PANEL, marginTop: 10 }}>
+      <span style={LABEL}>PROCESSING NOW</span>
+      <code style={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{model.currentFile}</code>
+      {model.ruleId && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>WCAG criterion {model.ruleId}</div>}
+      {model.jobType && <div className="muted" style={{ fontSize: 12 }}>{model.jobType}</div>}
+    </div>}
+  </section>
+}
+
+function SourceHealth({ model, state, nowMs }) {
+  return <section aria-label="Source connector health" style={{ ...PANEL, padding: 14 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+      <b>Connection health</b><StateChip state={state} />
+    </div>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 8, marginTop: 10 }}>
+      <Tile label="ACTIVE RUNS" value={model.activeRuns} detail={`${model.recentRuns} finished in the last 15 min`} />
+      <Tile label="LATEST SUCCESSFUL READ"
+        value={model.latestRead ? `${formatDuration(Math.max(0, Math.round((nowMs - new Date(model.latestRead).getTime()) / 1000)))} ago` : NOT_REPORTED} />
+      {model.unavailable.map((label) => <Tile key={label} label={label.toUpperCase()} value={NOT_REPORTED}
+        detail="The connector layer does not publish this to the activity snapshot" />)}
+    </div>
+  </section>
+}
+
+function OutputSummary({ model }) {
+  return <section aria-label="Durable output" style={{ ...PANEL, padding: 14 }}>
+    <b>Durable output</b>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 8, marginTop: 10 }}>
+      <Tile label="CORRECTED COPIES PRODUCED" value={model.correctedCopies == null ? NOT_REPORTED : model.correctedCopies}
+        detail="Completed remediation work in view" />
+      <Tile label="RESULTS VERIFIED" value={model.verified == null ? NOT_REPORTED : model.verified}
+        detail="Completed release work in view" />
+      <Tile label="WRITES AWAITING COMPLETION" value={model.awaitingWrite} />
+      <Tile label="STORAGE FAILURES" value={model.storageFailures == null ? NOT_REPORTED : model.storageFailures}
+        detail={model.storageFailures == null ? undefined : 'Dead-lettered jobs in the reporting window'} />
+      <Tile label="TOTAL OUTPUT SIZE" value={NOT_REPORTED} detail="Azure does not report this to the activity snapshot" />
+    </div>
+    <p className="muted" style={{ fontSize: 11, margin: '9px 0 0' }}>
+      Original source documents are never modified; corrected copies and their evidence are written alongside.
+    </p>
+  </section>
+}
+
+function IntakeSummary({ snapshot, state }) {
+  const summary = snapshot?.summary || {}
+  return <section aria-label="Intake and orchestration" style={{ ...PANEL, padding: 14 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
+      <b>Intake health</b><StateChip state={state} />
+    </div>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 8, marginTop: 10 }}>
+      <Tile label="ACTIVE RUNS" value={reported(summary.active_runs)} />
+      <Tile label="RECENTLY FINISHED" value={reported(summary.recent_runs)} />
+      <Tile label="ACTIVE USERS" value={reported(summary.active_users)} />
+    </div>
+  </section>
+}
+
+/* ─────────────────── C. Real-time trend strip ─────────────────── */
+
+function TrendStrip({ metrics, metricKey, onMetric, chart, markers, paused }) {
+  const [active, setActive] = useState(null)
+  const point = active == null ? null : chart.points[active]
+  const { width, height, padLeft, padBottom, padTop } = chart.geometry
+  return <section aria-label="Fifteen minute trend" style={{ ...PANEL, padding: 14 }}>
+    <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap' }}>
+      <b>Last 15 minutes</b>
+      <span style={{ fontSize: 18, fontWeight: 700 }}>{chart.currentLabel}</span>
+    </div>
+    <div role="group" aria-label="Trend metric" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '9px 0' }}>
+      {metrics.map((metric) => <button key={metric.key} type="button" className="ghost small"
+        aria-pressed={metric.key === metricKey} onClick={() => { setActive(null); onMetric(metric.key) }}
+        style={metric.key === metricKey ? { borderColor: 'var(--plum)', fontWeight: 700 } : undefined}>
+        {metric.label}
+      </button>)}
+    </div>
+    {chart.insufficient
+      ? <div className="muted" role="status" style={{ height, display: 'grid', placeItems: 'center', fontSize: 12,
+        border: '1px dashed var(--line)', borderRadius: 8, textAlign: 'center', padding: 10 }}>
+        {chart.sampleCount === 0
+          ? `${chart.metric.label} is not reported for this component.`
+          : `Collecting samples — one measurement so far. A line needs at least two.`}
+      </div>
+      : <svg viewBox={`0 0 ${width} ${height}`} style={{ width: '100%', height }} role="group"
+        aria-label={`${chart.metric.label} over the last 15 minutes, currently ${chart.currentLabel}`}>
+        <line x1={padLeft} y1={padTop} x2={padLeft} y2={height - padBottom} stroke="var(--line)" />
+        <line x1={padLeft} y1={height - padBottom} x2={width - 6} y2={height - padBottom} stroke="var(--line)" />
+        <text x="2" y={padTop + 4} fontSize="9" fill="var(--muted)">{chart.axis.yTop}</text>
+        <text x="2" y={height - padBottom} fontSize="9" fill="var(--muted)">{chart.axis.yZero}</text>
+        <text x={padLeft} y={height - 6} fontSize="9" fill="var(--muted)">{chart.axis.xStart}</text>
+        <text x={width - 24} y={height - 6} fontSize="9" fill="var(--muted)">{chart.axis.xEnd}</text>
+        {markers.map((marker) => <g key={marker.id}>
+          <line x1={chart.xFor(marker.t)} y1={padTop} x2={chart.xFor(marker.t)} y2={height - padBottom}
+            stroke="var(--info-fg)" strokeDasharray="3 3" />
+          <title>{`${eventClock(marker.at)} ${marker.text}`}</title>
+        </g>)}
+        {chart.segments.map((segment, index) => <polyline key={index} points={segment} fill="none"
+          stroke="var(--plum)" strokeWidth="2" vectorEffect="non-scaling-stroke" />)}
+        {chart.points.map((sample, index) => sample.value == null ? null : <circle key={index}
+          cx={sample.x} cy={sample.y} r={active === index ? 4 : 2.5} fill="var(--plum)" tabIndex={0}
+          role="img" aria-label={`${eventClock(sample.at)}: ${sample.value}${chart.metric.unit}`}
+          onFocus={() => setActive(index)} onBlur={() => setActive(null)}
+          onMouseEnter={() => setActive(index)} onMouseLeave={() => setActive(null)} />)}
+      </svg>}
+    <div aria-live="polite" className="muted" style={{ fontSize: 12, minHeight: 18, marginTop: 4 }}>
+      {point ? `${eventClock(point.at)} — ${point.value}${chart.metric.unit}`
+        : `${chart.metric.label}: ${chart.currentLabel} now${paused ? ' · updates paused' : ''}`}
+    </div>
+    {!!markers.length && <div className="muted" style={{ fontSize: 11 }}>
+      Dashed markers: deployment and scaling moments observed during this session.
+    </div>}
+  </section>
+}
+
+/* ─────────────────── D. Live event timeline ─────────────────── */
+
+function EventTimeline({ events, filter, onFilter, paused, onPause, showAll, onShowAll, copied, onCopy }) {
+  const visible = showAll ? events : events.slice(0, 12)
+  return <section aria-label="Live event timeline" style={{ ...PANEL, padding: 14 }}>
+    <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap' }}>
+      <b>Live events</b>
+      <button type="button" className="ghost small" aria-pressed={paused} onClick={onPause}>
+        {paused ? 'Resume visual updates' : 'Pause visual updates'}
+      </button>
+    </div>
+    <div role="group" aria-label="Filter events" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '9px 0' }}>
+      {EVENT_FILTERS.map((option) => <button key={option.key} type="button" className="ghost small"
+        aria-pressed={option.key === filter} onClick={() => onFilter(option.key)}
+        style={option.key === filter ? { borderColor: 'var(--plum)', fontWeight: 700 } : undefined}>
+        {option.label}
+      </button>)}
+    </div>
+    {paused && <p role="status" className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>
+      Updates paused — the list below is frozen. Live data keeps arriving and appears on resume.
+    </p>}
+    {visible.length === 0
+      ? <p className="muted" style={{ fontSize: 12, margin: 0 }}>
+        No {filter === 'all' ? '' : `${filter} `}events observed for this component yet. Events appear as the
+        live stream reports a change.
+      </p>
+      : <ol style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 7 }}>
+        {visible.map((event) => <li key={event.id} style={{ display: 'grid',
+          gridTemplateColumns: 'auto auto minmax(0,1fr)', gap: 9, alignItems: 'baseline', fontSize: 12,
+          borderTop: '1px solid var(--line)', paddingTop: 7 }}>
+          <span style={{ fontVariantNumeric: 'tabular-nums', color: 'var(--muted)' }}>{eventClock(event.at)}</span>
+          <span aria-hidden="true" style={{ color: TONE[{ activity: 'ok', capacity: 'info', deployment: 'info', warning: 'warn', error: 'bad' }[event.kind] || 'idle'] }}>
+            {EVENT_ICONS[event.kind] || '·'}
+          </span>
+          <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+            <b style={{ fontWeight: 600 }}>{event.text}</b>
+            <span className="muted"> · {event.stage ? `${event.stage} · ` : ''}{event.kind}
+              {event.outcome ? ` · ${event.outcome}` : ''}
+              {event.durationS == null ? '' : ` · ${formatDuration(event.durationS)}`}</span>
+            {event.correlation && <button type="button" className="ghost small" style={{ marginLeft: 6 }}
+              onClick={() => onCopy(event.correlation)}>
+              {copied === event.correlation ? 'Copied' : 'Copy correlation ID'}
+            </button>}
+          </span>
+        </li>)}
+      </ol>}
+    {events.length > visible.length && <button type="button" className="ghost small"
+      style={{ marginTop: 9 }} onClick={onShowAll}>Show all events ({events.length})</button>}
+    <p className="muted" style={{ fontSize: 11, margin: '9px 0 0' }}>
+      Events are derived from changes observed between live snapshots in this session. Document
+      contents, tokens and credentials are never shown.
+    </p>
+  </section>
+}
+
+/* ─────────────────────────── The drawer ─────────────────────────── */
+
+export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connection = 'connecting',
+  samples = [], events = [], facts = [], accent = 'var(--plum)', onClose, nowMs = Date.now() }) {
+  const panelRef = useRef(null)
+  const [metricKey, setMetricKey] = useState(() => defaultMetricFor(node?.kind))
+  const [filter, setFilter] = useState('all')
+  const [showAll, setShowAll] = useState(false)
+  const [copied, setCopied] = useState(null)
+  // Pause holds the samples and events the reader was looking at (WCAG 2.2.2). Live data keeps
+  // arriving into props; freezing a copy rather than stopping the stream is what lets resume show
+  // everything that happened while paused instead of a gap.
+  const [frozen, setFrozen] = useState(null)
+  const paused = frozen != null
+  const shown = frozen || { samples, events }
+
+  useDialog(panelRef, onClose)
+  useEffect(() => { setMetricKey(defaultMetricFor(node?.kind)); setShowAll(false) }, [nodeId, node?.kind])
+
+  const state = componentState(node, { snapshot, capacity, connection })
+  const name = node?.kind === 'run'
+    ? `${node.run?.stage || 'Run'} run · ${node.run?.owner || 'unknown user'}`
+    : node?.label || 'Component'
+  const metrics = metricsForKind(node?.kind)
+  const chart = useMemo(() => chartModel(shown.samples, metricKey, { nowMs }), [shown.samples, metricKey, nowMs])
+  const nodeEvents = useMemo(() => filterEvents(eventsForNode(shown.events, nodeId), filter), [shown.events, nodeId, filter])
+  const markers = useMemo(() => trendMarkers(eventsForNode(shown.events, nodeId),
+    { start: nowMs - 15 * 60000, end: nowMs }), [shown.events, nodeId, nowMs])
+
+  const copy = (value) => {
+    setCopied(value)
+    navigator?.clipboard?.writeText?.(value)?.catch?.(() => {})
+  }
+
+  let primary = null
+  if (node?.kind === 'worker') {
+    primary = <WorkerGauge service={node.service} capacity={capacity}
+      gauge={gaugeModel(node.service, { stalled: snapshot?.summary?.pressure === 'stalled' })} />
+  } else if (node?.kind === 'queue') {
+    primary = <QueueBar queue={queueModel(snapshot?.summary, { nowMs })}
+      concentration={tenantConcentration(snapshot?.runs)} />
+  } else if (node?.kind === 'run') {
+    primary = <RunRadial run={node.run || {}} accent={accent}
+      model={runModel(node.run, shown.samples, { nowMs })} />
+  } else if (node?.kind === 'source') {
+    primary = <SourceHealth model={sourceModel(node, snapshot)} state={state} nowMs={nowMs} />
+  } else if (node?.kind === 'output') {
+    primary = <OutputSummary model={outputModel(snapshot)} />
+  } else {
+    primary = <IntakeSummary snapshot={snapshot} state={state} />
+  }
+
+  return <>
+    <button type="button" aria-label="Close component details" onClick={onClose}
+      style={{ position: 'fixed', inset: 0, zIndex: 79, border: 0, padding: 0,
+        background: 'rgba(28,22,32,.28)', cursor: 'default' }} />
+    <aside role="dialog" aria-modal="true" aria-label={`${name} live details`} ref={panelRef} tabIndex={-1}
+      style={{ position: 'fixed', zIndex: 80, top: 0, right: 0, bottom: 0,
+        width: 'clamp(360px, 38vw, 560px)', maxWidth: '100vw', overflowY: 'auto',
+        overflowX: 'hidden', boxSizing: 'border-box', padding: '0 20px 24px',
+        background: 'var(--card, #fff)', color: 'var(--ink, #2b2330)',
+        borderLeft: `5px solid ${accent}`, display: 'grid', alignContent: 'start', gap: 12,
+        boxShadow: '-12px 0 35px rgba(24,20,28,.22)', isolation: 'isolate' }}>
+      <LiveHeader name={name} kind={node?.kind} state={state} connection={connection}
+        generatedAt={snapshot?.generated_at} revision={revisionLabel(node, capacity)} nowMs={nowMs}
+        onClose={onClose} onViewAll={onClose} />
+      {state.detail && <p className="muted" style={{ fontSize: 12, margin: 0 }}>{state.detail}</p>}
+      {primary}
+      <TrendStrip metrics={metrics} metricKey={metricKey} onMetric={setMetricKey} chart={chart}
+        markers={markers} paused={paused} />
+      <EventTimeline events={nodeEvents} filter={filter} onFilter={setFilter} paused={paused}
+        onPause={() => setFrozen((held) => (held ? null : { samples, events }))}
+        showAll={showAll} onShowAll={() => setShowAll(true)}
+        copied={copied} onCopy={copy} />
+      {!!facts.length && <details style={{ ...PANEL, padding: 12 }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Operational facts</summary>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(175px,1fr))', gap: 8, marginTop: 10 }}>
+          {facts.map(([label, value]) => <div key={label} style={{ ...PANEL, padding: 11, overflowWrap: 'anywhere' }}>
+            <b style={{ display: 'block', fontSize: 11, marginBottom: 4 }}>{label}</b>{value}
+          </div>)}
+        </div>
+        <p className="muted" style={{ fontSize: 11, margin: '9px 0 0' }}>
+          This view keeps updating from ACP and Azure while the drawer is open. Values marked
+          “{NOT_REPORTED}” are never estimated.
+        </p>
+      </details>}
+    </aside>
+  </>
+}
