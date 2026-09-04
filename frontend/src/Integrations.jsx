@@ -89,6 +89,23 @@ const CONNECTABLE = [
   { id: 'sp-root', type: 'onedrive',     name: 'OneDrive'     },
 ]
 
+// A provider link is navigation, not an ACP management action. Prefer the exact HTTPS URL a
+// connector supplies; otherwise use the provider's signed-in landing page. Never interpolate an
+// item id into a guessed tenant URL — Microsoft site ids are compound identifiers, not web hosts.
+export function sourceManagementDestination(source = {}) {
+  const exact = source.management_url || source.web_url || source.webUrl || source.site_url
+  if (typeof exact === 'string' && /^https:\/\//i.test(exact)) {
+    return { url: exact, label: source.providerType === 'sharepoint' || source.type === 'sharepoint'
+      ? 'Open SharePoint' : source.type === 'google_drive' ? 'Open Google Drive' : 'Open OneDrive' }
+  }
+  if (source.type === 'google_drive') return { url: 'https://drive.google.com/drive/my-drive', label: 'Open Google Drive' }
+  if (source.providerType === 'sharepoint' || source.type === 'sharepoint') {
+    return { url: 'https://www.microsoft365.com/launch/sharepoint', label: 'Open SharePoint' }
+  }
+  if (source.type === 'onedrive') return { url: 'https://www.microsoft365.com/launch/onedrive', label: 'Open OneDrive' }
+  return null
+}
+
 const FUTURE = [
   { name: 'SharePoint',  logo: <Tile bg="#036C70"><b style={{ fontSize: 15 }}>S</b></Tile> },
   { name: 'File Shares', logo: <Tile bg="#E8A400">{G('M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z')}</Tile> },
@@ -340,7 +357,7 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
   const connectedSources = CONNECTABLE.filter((s) => (s.type === 'google_drive' ? hasDriveToken : hasSPToken))
     .map((s) => {
       if (s.type === 'google_drive') return hasDriveToken ? (driveBackend || s) : s
-      return spBackend ? { ...spBackend, ...s } : s
+      return spBackend ? { ...spBackend, ...s, providerType: spBackend.type } : s
     })
 
   // One dominant health state per source — never more than one badge (see plan §4).
@@ -405,6 +422,7 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
               // this is what ACP has actually seen. Both are shown, labelled differently, because
               // a gap between them is a scope fact worth noticing rather than a rounding error.
               const inv       = inventoryFacts(filesForSource(files, src))
+              const providerDestination = sourceManagementDestination(src)
               return (
                 <div className="srccard srccard--on" key={src.id}>
                   <div className="srccard-logo" aria-hidden="true">{LOGO[src.type] || LOGO.web}</div>
@@ -488,6 +506,12 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
                     <button disabled={busy} onClick={() => onScan(cardScanArg(src))}>
                       {busy ? 'Scanning…' : lastRun ? 'New scan' : 'Run first discovery'}
                     </button>
+                    {providerDestination && <a className="ghost small" href={providerDestination.url}
+                      target="_blank" rel="noopener noreferrer"
+                      aria-label={`${providerDestination.label} in a new tab`}
+                      style={{ display: 'inline-flex', alignItems: 'center', textDecoration: 'none' }}>
+                      {providerDestination.label} ↗
+                    </a>}
                     <button className="ghost small" onClick={() => openSrc(src)}>Manage</button>
                     <details className="srccard-ovf">
                       <summary aria-label="More actions" title="More actions">⋯</summary>

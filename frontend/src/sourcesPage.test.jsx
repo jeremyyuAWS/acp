@@ -34,7 +34,7 @@ vi.mock('./api.js', () => ({
   listSpFolders: vi.fn(async () => ({ drive_id: 'd', folders: [] })),
 }))
 
-const { default: Integrations } = await import('./Integrations.jsx')
+const { default: Integrations, sourceManagementDestination } = await import('./Integrations.jsx')
 
 const DRIVE_BACKEND = { id: '_gdrive', type: 'google_drive', name: 'My Drive',
   user: 'alex@example.com', files: 50 }
@@ -133,6 +133,23 @@ describe('the Sources page', () => {
     const details = card.querySelector('.srccard-conn')
     expect(details.querySelector('summary').textContent).toMatch(/Connection details/)
     expect(details.textContent).toMatch(/read-only/)
+  })
+
+  it('links a connected card to the real provider without replacing ACP management', async () => {
+    const c = await mount(baseProps())
+    const card = c.querySelector('.srccard--on')
+    const provider = card.querySelector('a[aria-label="Open Google Drive in a new tab"]')
+    expect(provider?.getAttribute('href')).toBe('https://drive.google.com/drive/my-drive')
+    expect(provider?.getAttribute('target')).toBe('_blank')
+    expect(provider?.getAttribute('rel')).toContain('noopener')
+    expect(btn(card, /^Manage$/)).toBeTruthy()
+  })
+
+  it('prefers an exact saved SharePoint URL and rejects unsafe connector URLs', () => {
+    expect(sourceManagementDestination({ type: 'sharepoint', web_url: 'https://movate.sharepoint.com/sites/ACP' }))
+      .toEqual({ url: 'https://movate.sharepoint.com/sites/ACP', label: 'Open SharePoint' })
+    expect(sourceManagementDestination({ type: 'onedrive', web_url: 'javascript:alert(1)' }))
+      .toEqual({ url: 'https://www.microsoft365.com/launch/onedrive', label: 'Open OneDrive' })
   })
 
   it('lists OneDrive under AVAILABLE SOURCES and the future connectors as a muted line', async () => {
