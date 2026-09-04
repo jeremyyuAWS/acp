@@ -4,6 +4,7 @@ import '@xyflow/react/dist/style.css'
 import { getAdminActivity, getWorkerCapacity, openAdminActivityStream } from './api.js'
 import { ensureResizeObserver } from './resizeObserverFallback.js'
 import LiveOpsDrawer from './LiveOpsDrawer.jsx'
+import LiveOpsCostSummary from './LiveOpsCostSummary.jsx'
 import { appendSample, deriveEvents, formatDuration, mergeEvents, sampleForNode, secondsSince } from './liveOpsDrawer.js'
 
 ensureResizeObserver(typeof window === 'undefined' ? globalThis : window)
@@ -512,6 +513,7 @@ export default function AdminLiveTraffic() {
         <b style={{ fontSize: 20 }}>{summary.utilization_pct ?? '—'}%</b><div className="muted">{summary.worker_tier_alive ? 'Worker tier online' : 'Worker tier unavailable'}</div></div>
     </div>
     <AzureCapacity capacity={capacity} state={capacityState} />
+    <LiveOpsCostSummary />
     {!!stageRows.length && <div aria-label="Load by processing stage" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
       {stageRows.map(([stage, row]) => <span className="chip" key={stage} style={{ borderColor: STAGE[stage]?.color }}>
         <b>{STAGE[stage]?.label || stage}</b>&nbsp; {row.running} active · {row.queued} waiting

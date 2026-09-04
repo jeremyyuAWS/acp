@@ -35,6 +35,11 @@ def test_cost_endpoint_is_truthful_when_not_configured(open_client, monkeypatch)
     assert body["billing"]["freshness_label"] == "Azure billing feed not configured"
 
 
+def test_cost_endpoint_is_mapped_to_live_operations_access():
+    import workspace_capability_map as capmap
+    assert capmap.ROUTE_CAPABILITIES[("GET", "/control/costs")] == frozenset({"operations.view"})
+
+
 def test_cost_endpoint_reports_each_service_and_total(open_client, monkeypatch):
     from routes import costs
     resources = SimpleNamespace(cpu=2, memory="4Gi")
