@@ -1,0 +1,83 @@
+{
+  "report": {
+    "buildInformation": {
+      "releaseDetails": [
+        {
+          "id": "verapdf-library",
+          "version": "1.30.2",
+          "buildDate": "2026-01-01T00:00:00Z"
+        }
+      ]
+    },
+    "jobs": [
+      {
+        "itemDetails": {
+          "name": "pdf-accessibility-demo.pdf",
+          "size": 45678
+        },
+        "validationResult": {
+          "details": {
+            "passedChecks": 47,
+            "failedChecks": 5
+          },
+          "statement": "PDF file is not compliant with Validation Profile requirements.",
+          "profileName": "PDF/UA-1 Validation Profile",
+          "compliant": false,
+          "ruleSummaries": [
+            {
+              "clause": "6.2",
+              "testNumber": "1",
+              "status": "FAILED",
+              "failedChecks": 1,
+              "description": "A conforming file shall have a MarkInfo dictionary whose Marked entry has a value of true.",
+              "checks": [
+                {"status": "FAILED", "location": {"level": "CosDocument", "context": "root/document[0]"}}
+              ]
+            },
+            {
+              "clause": "7.1",
+              "testNumber": "3",
+              "status": "FAILED",
+              "failedChecks": 53,
+              "description": "All content shall be either Artifact or tagged as real content.",
+              "checks": [
+                {"status": "FAILED", "location": {"level": "PDPage", "context": "root/document[0]/pages[0](3 0 obj PDPage)/contentStream[0]"}},
+                {"status": "FAILED", "location": {"level": "PDPage", "context": "root/document[0]/pages[0](3 0 obj PDPage)/contentStream[1]"}}
+              ]
+            },
+            {
+              "clause": "7.1",
+              "testNumber": "8",
+              "status": "FAILED",
+              "failedChecks": 1,
+              "description": "The document catalog shall include a Metadata stream containing the XMP document metadata.",
+              "checks": [
+                {"status": "FAILED", "location": {"level": "CosDocument", "context": "root/document[0]"}}
+              ]
+            },
+            {
+              "clause": "7.2",
+              "testNumber": "2",
+              "status": "FAILED",
+              "failedChecks": 51,
+              "description": "The natural language for each passage of text in the document shall be determinable.",
+              "checks": [
+                {"status": "FAILED", "location": {"level": "PDContentStream", "context": "root/document[0]/pages[0](3 0 obj PDPage)/contentStream[0]/operators[5]"}}
+              ]
+            },
+            {
+              "clause": "7.1",
+              "testNumber": "11",
+              "status": "FAILED",
+              "failedChecks": 1,
+              "description": "The ViewerPreferences dictionary of the document catalog shall include the DisplayDocTitle entry with a value of true.",
+              "checks": [
+                {"status": "FAILED", "location": {"level": "CosDocument", "context": "root/document[0]"}}
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
