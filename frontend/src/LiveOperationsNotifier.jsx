@@ -31,15 +31,18 @@ function ding() {
 export function LiveOperationsToast({ run, onOpen, onDismiss }) {
   if (!run) return null
   const label = LABEL[run.stage] || run.stage
-  return <button type="button" role="status" aria-live="polite" onClick={() => onOpen?.(run)}
+  return <div role="status" aria-live="polite"
     style={{ position: 'fixed', right: 18, top: 18, zIndex: 10000, width: 'min(360px,calc(100vw - 36px))',
       textAlign: 'left', padding: 14, borderRadius: 10, border: '1px solid #8BBE60', borderLeft: '5px solid #4F7F2A',
-      background: 'var(--panel)', color: 'var(--text)', boxShadow: '0 10px 30px rgba(20,16,24,.22)', cursor: 'pointer' }}>
+      background: 'var(--panel)', color: 'var(--text)', boxShadow: '0 10px 30px rgba(20,16,24,.22)' }}>
     <span style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}><b>{label} started</b>
-      <span role="button" aria-label="Dismiss notification" onClick={(event) => { event.stopPropagation(); onDismiss?.() }}>×</span></span>
-    <span className="muted" style={{ display: 'block', marginTop: 4 }}>{run.owner} · {run.total || 0} documents</span>
-    <span style={{ display: 'block', marginTop: 8, color: '#4F7F2A', fontWeight: 700 }}>Open Live Operations →</span>
-  </button>
+      <button type="button" className="ghost small" aria-label="Dismiss notification" onClick={() => onDismiss?.()}>×</button></span>
+    <button type="button" className="ghost" onClick={() => onOpen?.(run)}
+      style={{ display: 'block', width: '100%', textAlign: 'left', padding: 0, border: 0, background: 'transparent' }}>
+      <span className="muted" style={{ display: 'block', marginTop: 4 }}>{run.owner} · {run.total || 0} documents</span>
+      <span style={{ display: 'block', marginTop: 8, color: 'var(--success-fg)', fontWeight: 700 }}>Open Live Operations →</span>
+    </button>
+  </div>
 }
 
 export default function LiveOperationsNotifier({ onOpen }) {

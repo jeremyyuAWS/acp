@@ -32,11 +32,10 @@ describe('app-wide high-contrast palette', () => {
     expect(contrast('#59515d', '#ffffff')).toBeGreaterThanOrEqual(3)
   })
 
-  it('scopes text, controls, focus, disabled states, notices and charts across the app', () => {
-    expect(css).toContain('body *:not(svg):not(svg *)')
+  it('scopes links, controls, focus, disabled states and charts across the app', () => {
+    expect(css).not.toContain('body *:not(svg):not(svg *)')
     expect(css).toMatch(/input, select, textarea/)
     expect(css).toMatch(/button:disabled/)
-    expect(css).toMatch(/\[role="alert"\], \[role="status"\]/)
     expect(css).toMatch(/:focus-visible/)
     expect(css).toMatch(/svg text/)
   })

@@ -36,7 +36,7 @@ export const DEPARTMENTS = [
 export const PERSONAS = [
   { id: 'admin', name: 'Sam Devlin', role: 'Platform Admin', email: 'sam.devlin@utsouthwestern.edu', sso: 'Okta',
     scope: { label: 'Platform configuration · all sources', departments: 'all' },
-    allow: ['overview', 'integrations', 'monitor', 'settings'] },
+    allow: ['overview', 'integrations', 'monitor', 'settings', 'liveops', 'analytics'] },
   { id: 'compliance', name: 'Alex Rivera', role: 'Compliance Officer', email: 'alex.rivera@utsouthwestern.edu', sso: 'Okta',
     scope: { label: 'Full estate · all 10 departments', departments: 'all' },
     // `integrations` (the Sources tab) added 2026-09-02. Discover's own scan buttons were removed

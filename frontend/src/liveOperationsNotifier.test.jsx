@@ -19,8 +19,12 @@ describe('Live Operations notifications', () => {
     const onOpen = vi.fn()
     const run = { stage: 'remediate', owner: 'admin@example.com', total: 24 }
     const toast = LiveOperationsToast({ run, onOpen })
-    toast.props.onClick()
+    const openButton = toast.props.children[1]
+    openButton.props.onClick()
     expect(onOpen).toHaveBeenCalledOnce()
-    expect(renderToStaticMarkup(<LiveOperationsToast run={run} />)).toContain('Remediation started')
+    const markup = renderToStaticMarkup(<LiveOperationsToast run={run} />)
+    expect(markup).toContain('Remediation started')
+    expect(markup).toContain('aria-label="Dismiss notification"')
+    expect(markup.match(/<button/g)).toHaveLength(2)
   })
 })
