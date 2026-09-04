@@ -29,6 +29,7 @@ import VersionToast from './VersionToast.jsx'
 // the main chunk entirely.
 const KnowledgeGraph = lazy(() => import('./KnowledgeGraph.jsx'))
 const AdminLiveTraffic = lazy(() => import('./AdminLiveTraffic.jsx'))
+const LiveOperationsNotifier = lazy(() => import('./LiveOperationsNotifier.jsx'))
 import SignIn from './SignIn.jsx'
 import Settings from './Settings.jsx'
 import Monitor from './Monitor.jsx'
@@ -2219,6 +2220,9 @@ export default function App() {
           onCancel={() => setPendingScan(null)} />
       )}
       <ConfirmDialog />
+      {view !== 'liveops' && me?.allow?.includes('liveops') && <Suspense fallback={null}>
+        <LiveOperationsNotifier onOpen={() => { setView('liveops'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
+      </Suspense>}
       <VersionToast currentVersion={platformVersion} />
     </div>
     </>
