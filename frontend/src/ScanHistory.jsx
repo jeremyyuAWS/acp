@@ -110,10 +110,13 @@ export default function ScanHistory({ scanId }) {
         did. Kept in the database, so it survives a restart or a deploy that ends the live view.
       </p>
 
-      {open && loading && <p style={{ ...muted, marginTop: 8 }}>Loading…</p>}
+      {open && loading && (
+        <p className="run-history-loading" role="status" aria-live="polite"
+           style={{ ...muted, marginTop: 8 }}>Loading run history…</p>
+      )}
 
       {open && err && (
-        <p className="run-history-error" style={{ ...muted, marginTop: 8 }}>
+        <p className="run-history-error" role="alert" style={{ ...muted, marginTop: 8 }}>
           This run’s history {err}. That is a problem reaching the server, not a statement about
           the run — it does not mean nothing happened.
         </p>
