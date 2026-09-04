@@ -1591,7 +1591,18 @@ def _sp_content_type(token: str, base: str, item_id: str) -> str | None:
         return None
 
 
-def _sp_enrich_content_types(token: str, files: list[dict]) -> None:
+def _sp_content_type_budget() -> int:
+    """How many per-document content-type calls one listing may make. Read at call time, never
+    latched at import, for the same reason every other knob here is: a module-level read wins over
+    an env var set afterwards, and the failure is silent. Floored at 0 so a nonsense value
+    disables the fallback rather than crashing the scan it is an optimisation for."""
+    try:
+        return max(0, int(os.environ.get("ACP_SP_CONTENT_TYPE_MAX", "1000")))
+    except (TypeError, ValueError):
+        return 1000
+
+
+def _sp_enrich_content_types(token: str, files: list[dict]) -> dict:
     """Best-effort content-type enrichment over the SCANNABLE set, in place.
 
     Bounded to `files` (the analysis set — docx/pptx/xlsx/pdf/html), not the whole raw estate: an
@@ -1611,10 +1622,34 @@ def _sp_enrich_content_types(token: str, files: list[dict]) -> None:
     failure is pure waste. Disabled only for the REST of this listing; the next scan tries again,
     so a transient outage does not turn this off permanently. Gated by ACP_SP_CONTENT_TYPE=0 for
     an operator who wants it off without a code change, matching ACP_SP_ENUMERATE's precedent.
+
+    AND A BUDGET, because the circuit breaker does not bound the case that actually costs. It
+    trips on three consecutive FAILURES; a tenant that refuses the inline `$expand` on a
+    collection but happily answers `/items/{id}/listItem` on a single resource succeeds every
+    time, resets the counter every time, and pays one round trip per scannable document forever.
+    Measured on a 30-site fixture: the walk cost 90 Graph calls whether the estate held 150
+    documents or 1,500, and this function cost 150 and 1,500 — O(folders) beside O(documents), on
+    the one path where the document count is the customer's, not ours. At the FANOUT_MAX_FILES
+    default that is 50,000 serial round trips against a tenant that throttles, appended to a walk
+    that took ninety.
+
+    So: at most `ACP_SP_CONTENT_TYPE_MAX` (default 1,000) documents per listing. A single-library
+    or small-tenant scan — where this fallback was designed and is genuinely useful — is
+    unaffected, and a large estate degrades to a bounded sample instead of an outage.
+
+    THE CAP IS REPORTED, not absorbed. Returns `{"attempted", "enriched", "skipped", "capped"}`
+    and _sp_list puts it on the scan's scope. A document the budget did not reach keeps the
+    `unavailable` state the walk already stamped on it (the tier reason), which stays true — but
+    an operator seeing content types on 1,000 of 12,000 documents needs to know the other 11,000
+    were not asked rather than not configured, and that the fix is the tenant's refusal of the
+    inline expansion rather than a bigger budget.
     """
     if os.environ.get("ACP_SP_CONTENT_TYPE", "1").strip() == "0":
-        return
+        return {"attempted": 0, "enriched": 0, "skipped": 0, "capped": False, "disabled": True}
+    budget = _sp_content_type_budget()
+    attempted = enriched = 0
     failures = 0
+    capped = False
     for rec in files:
         if failures >= 3:
             break
@@ -1628,14 +1663,30 @@ def _sp_enrich_content_types(token: str, files: list[dict]) -> None:
         item_id = rec.get("id")
         if not item_id:
             continue
+        if attempted >= budget:
+            # Checked HERE, after the already-read skip, so the budget is spent only on documents
+            # that would actually cost a round trip. Counting the skips against it would make the
+            # cap bite on a tenant that answers the expansion and costs nothing at all.
+            capped = True
+            break
         drive_id = rec.get("driveId")
         base = f"{GRAPH}/drives/{drive_id}" if drive_id else f"{GRAPH}/me/drive"
+        attempted += 1
         ct = _sp_content_type(token, base, item_id)
         if ct:
             rec["content_type"] = ct
+            enriched += 1
             failures = 0
         else:
             failures += 1
+    skipped = sum(1 for r in files if not r.get("content_type"))
+    if capped:
+        print(f"[scan] SharePoint content-type fallback stopped at {budget} documents "
+              f"(ACP_SP_CONTENT_TYPE_MAX); {skipped} document(s) were not asked. This tenant "
+              f"refuses the inline listItem expansion, so the walk cannot read the content type "
+              f"off the listing page and each document costs its own Graph call — fixing the "
+              f"expansion is the remedy, not a larger budget.", flush=True)
+    return {"attempted": attempted, "enriched": enriched, "skipped": skipped, "capped": capped}
 
 
 def _sp_walk_folder(token: str, drive_id: str, item_id: str, max_files: int,
@@ -2706,7 +2757,12 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
     result = files[:max_files]
     # Content-type enrichment LAST, over the FINAL scannable set only — after truncation, so a
     # capped listing never pays for classification on files it is about to drop.
-    _sp_enrich_content_types(token, result)
+    _ct = _sp_enrich_content_types(token, result)
+    if scope_out is not None and _ct and (_ct.get("attempted") or _ct.get("capped")):
+        # Only when it actually ran. A tenant that answers the inline expansion pays nothing here
+        # and gets no key, so the presence of this block on a scan is itself the signal that the
+        # expansion was refused — see _sp_enrich_content_types for why that is the thing to fix.
+        scope_out["content_type_fallback"] = _ct
     return result
 
 
