@@ -187,6 +187,20 @@ function InfraNode({ data }) {
 
 const nodeTypes = { run: RunNode, infra: InfraNode }
 
+// React Flow's `animated` flag renders a moving dashed stroke. At the fitView zoom those dashes
+// repeatedly land between device pixels, which makes an otherwise healthy path look fuzzy. Keep
+// every route solid and communicate activity with a slightly stronger, non-scaling stroke; the
+// nodes already state active/online status in text, so motion is not carrying information.
+export function trafficEdgeStyle(color, active = false) {
+  return {
+    stroke: color,
+    strokeWidth: active ? 2 : 1.35,
+    opacity: active ? 0.95 : 0.72,
+    vectorEffect: 'non-scaling-stroke',
+    shapeRendering: 'geometricPrecision',
+  }
+}
+
 // THE SCOPE OF THIS NUMBER IS NOT THE STAGE IT IS DRAWN ON. api/routes/control.py reads ONE
 // container app — WORKER_APP_NAME, defaulting to `acp-worker` — so this is a tier-wide reading,
 // and it is attached to every stage node. Without the qualifier, Discover, Assess and Remediate
@@ -316,13 +330,15 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
       { id: 'discover', top: '22%' }, { id: 'assess', top: '50%' }, { id: 'remediate', top: '78%' },
     ] } })
   const edges = [
-    ...sourceKinds.map((source) => ({ id: `${source}:intake`, source: `source:${source}`, target: 'infra:intake', style: { stroke: '#246B79' } })),
-    { id: 'intake:queue', source: 'infra:intake', target: 'infra:queue', animated: Boolean(snapshot?.summary?.active_runs), style: { stroke: '#51404E' } },
+    ...sourceKinds.map((source) => ({ id: `${source}:intake`, source: `source:${source}`, target: 'infra:intake',
+      style: trafficEdgeStyle('#246B79', runs.some((run) => run.source === source && run.status !== 'recent')) })),
+    { id: 'intake:queue', source: 'infra:intake', target: 'infra:queue',
+      style: trafficEdgeStyle('#51404E', Boolean(snapshot?.summary?.active_runs)) },
     ...['discover', 'assess', 'remediate'].flatMap((stage) => [
       { id: `queue:${stage}`, source: 'infra:queue', sourceHandle: stage, target: `stage:${stage}`,
-        animated: Boolean(serviceByStage.get(stage)?.active), style: { stroke: STAGE[stage].color } },
+        style: trafficEdgeStyle(STAGE[stage].color, Boolean(serviceByStage.get(stage)?.active)) },
       { id: `${stage}:output`, source: `stage:${stage}`, target: 'infra:output', targetHandle: stage,
-        animated: Boolean(serviceByStage.get(stage)?.active), style: { stroke: STAGE[stage].color } },
+        style: trafficEdgeStyle(STAGE[stage].color, Boolean(serviceByStage.get(stage)?.active)) },
     ]),
   ]
   runs.forEach((run, i) => {
@@ -335,9 +351,9 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
     historyMap.set(key, series.slice(-30))
     nodes.push({ id: key, type: 'run', position: { x: 335 + (i % 3) * 255, y: 455 + Math.floor(i / 3) * 145 }, data: { kind: 'run', run, history: series } })
     edges.push({ id: `in:${key}`, source: sourceKinds.includes(run.source) ? `source:${run.source}` : 'infra:intake', target: key,
-      animated: run.running > 0, style: { stroke: STAGE[run.stage]?.color || '#6B7280' } })
+      style: trafficEdgeStyle(STAGE[run.stage]?.color || '#6B7280', run.running > 0) })
     edges.push({ id: `out:${key}`, source: key, target: `stage:${run.stage}`,
-      animated: run.running > 0, style: { stroke: STAGE[run.stage]?.color || '#6B7280' } })
+      style: trafficEdgeStyle(STAGE[run.stage]?.color || '#6B7280', run.running > 0) })
   })
   return { nodes, edges }
 }

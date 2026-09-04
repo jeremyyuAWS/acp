@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { buildTrafficGraph, capacityValue, infrastructureDetail, queueConcentration, sizeScopeNote, trendToggleLabel, workerServiceRows } from './AdminLiveTraffic.jsx'
+import { buildTrafficGraph, capacityValue, infrastructureDetail, queueConcentration, sizeScopeNote, trafficEdgeStyle, trendToggleLabel, workerServiceRows } from './AdminLiveTraffic.jsx'
 
 const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'AdminLiveTraffic.jsx'), 'utf8')
 
@@ -25,8 +25,18 @@ describe('Admin live traffic graph', () => {
   it('connects each live run to its worker stage within the persistent topology', () => {
     const graph = buildTrafficGraph({ runs: [run] })
     expect(graph.nodes.map((node) => node.id)).toContain('s1:assess')
-    expect(graph.edges.find((edge) => edge.id === 'out:s1:assess').animated).toBe(true)
+    expect(graph.edges.find((edge) => edge.id === 'out:s1:assess').style.strokeWidth).toBe(2)
     expect(graph.nodes.find((node) => node.id === 's1:assess').data.run.current_file).toBe('Report.docx')
+  })
+
+  it('uses crisp solid non-scaling paths instead of fuzzy dashed animation', () => {
+    expect(trafficEdgeStyle('#123456', true)).toMatchObject({
+      stroke: '#123456', strokeWidth: 2, opacity: 0.95,
+      vectorEffect: 'non-scaling-stroke', shapeRendering: 'geometricPrecision',
+    })
+    const graph = buildTrafficGraph({ runs: [run], summary: { active_runs: 1 } })
+    expect(graph.edges.every((edge) => edge.animated == null)).toBe(true)
+    expect(graph.edges.every((edge) => edge.style.vectorEffect === 'non-scaling-stroke')).toBe(true)
   })
 
   it('builds a bounded sparkline history from successive SSE snapshots', () => {
