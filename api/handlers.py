@@ -1147,6 +1147,45 @@ def _count_inventory_classes(scan_id: str) -> dict:
 # (routes/disposition.list_conflicts) so both make the same call from one place.
 
 
+def _sp_site_delta_plan(user: str, token: str, folder, folders) -> dict | None:
+    """Phase 3: the per-library incremental plan for a SITE-scoped SharePoint request.
+
+    Resolving it needs the libraries, and the libraries need one Graph call per selected site —
+    the same `_sp_drives` call the walk is about to make anyway. Paying it here buys the chance
+    to not walk those libraries at all, which on an estate where most documents have not changed
+    is the entire point of the feature.
+
+    Returns None — meaning "walk everything, as before" — for any request this cannot answer for:
+    a folder-narrowed scan (Graph's delta query has no folder filter, so a reconstruction could
+    not honour the narrowing), no sites, or a Graph failure while listing them. Uncertainty
+    resolves to the full, already-correct listing every time; that is the same contract
+    `_sp_delta_check` keeps one level down, and it is why this feature cannot under-report.
+    """
+    try:
+        from scanner import _sp_drives, _sp_locations
+        roots = [f for f in (list(folders) if folders else ([folder] if folder else []))
+                 if f and f != "root"]
+        locs, sites = _sp_locations(roots)
+        if locs or not sites:
+            return None
+        drive_ids: list[str] = []
+        for site in sites:
+            drive_ids += [d["id"] for d in _sp_drives(token, site) if d.get("id")]
+        if not drive_ids:
+            return None
+        plan = core.sp_multi_sync_plan(user, token, drive_ids)
+        return plan if plan.get("delta") or plan.get("full") else None
+    except Exception:  # noqa: BLE001
+        # THE WHOLE BODY, not just the Graph call. This function's only job is to decide whether
+        # a shortcut is available; every failure mode of that decision — a Graph error, a shape
+        # this code did not expect, a cursor row it could not read — has the same correct answer,
+        # which is the full listing that would have run anyway. An optimisation that can fail a
+        # scan is worse than no optimisation, and the failure would land on the largest estates
+        # first.
+        logger.debug("sharepoint site delta plan unavailable; walking in full", exc_info=True)
+        return None
+
+
 def _sp_scannable_metadata(it: dict) -> dict:
     """The inventory columns a SCANNABLE SharePoint item's normalized metadata contributes.
 
@@ -2094,6 +2133,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
         # eligibility here is the whole-source shape check alone, independent of `incremental`.
         drive_delta = None
         sp_delta = None
+        sp_delta_plan = None
         if user:
             if source == "drive" and drive_token and not folder and not folders:
                 drive_delta = core._interactive_drive_sync_plan(user, svc)
@@ -2102,13 +2142,25 @@ def _scan_discover(payload: dict, job: dict) -> None:
                 eligible, sp_drive_id = _sp_whole_library_target(folder, folders)
                 if eligible:
                     sp_delta = core._interactive_sp_sync_plan(user, sp_tok, sp_drive_id)
+                else:
+                    # PHASE 3. `_sp_whole_library_target` answers only for the one shape a
+                    # single-drive delta can serve — the whole of exactly one library. A SITE
+                    # request covers several, and until now every one of them fell through to a
+                    # complete re-walk on every scan: the case the incremental feature was built
+                    # for and the only one a 30-site estate is ever in.
+                    #
+                    # The plan is per LIBRARY, so a site whose libraries are individually fresh,
+                    # expired, never-synced and due-for-reconciliation gets the right answer for
+                    # each instead of one answer for all of them.
+                    sp_delta_plan = _sp_site_delta_plan(user, sp_tok, folder, folders)
         try:
             items = _list(source, svc, folder=effective_folder, sp_token=sp_tok,
                           max_files=FANOUT_MAX_FILES, **({"folders": folders} if folders else {}),
                           **({"exclude_folders": exclude_folders} if exclude_folders else {}),
                           exclude_remediated=bool(payload.get("exclude_remediated", False)),
                           scope_out=scope, scope_files=_scope_for_listing(user), inventory_out=inventory,
-                          progress_cb=_listing_progress, drive_delta=drive_delta, sp_delta=sp_delta)
+                          progress_cb=_listing_progress, drive_delta=drive_delta, sp_delta=sp_delta,
+                          **({"sp_delta_plan": sp_delta_plan} if sp_delta_plan else {}))
         except JobCancelledError:
             # A user pressed Stop. Before this clause existed the blanket handler below caught it
             # and recorded scan_runs.status='failed' with a 'listing_failed' event — so the one

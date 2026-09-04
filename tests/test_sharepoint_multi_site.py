@@ -459,8 +459,11 @@ def test_the_scope_carries_auditable_per_site_totals(monkeypatch):
     scope = _list_sharepoint(monkeypatch, ["S1", "S2"])
     assert [(s["id"], s["listed"], s["status"]) for s in scope["sites"]] == [
         ("S1", 2, "complete"), ("S2", 2, "complete")]
-    assert scope["sites"][0]["libraries"] == [{"id": "d1", "name": "A"}]
-    assert scope["sites"][1]["libraries"] == [{"id": "d2", "name": "B"}]
+    # `mode` rides along from Phase 3: every library records whether it was WALKED or
+    # reconstructed from its delta cursor, because the two produce the same documents and
+    # different costs, and an estate report that cannot say which cannot be checked.
+    assert scope["sites"][0]["libraries"] == [{"id": "d1", "name": "A", "mode": "full"}]
+    assert scope["sites"][1]["libraries"] == [{"id": "d2", "name": "B", "mode": "full"}]
     assert sum(s["listed"] for s in scope["sites"]) == scope["kept"], \
         "the per-site totals must add up to the run's own count"
 

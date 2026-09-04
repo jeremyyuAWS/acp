@@ -1677,6 +1677,68 @@ def _sp_skip_folders(exclude_remediated: bool) -> set[str]:
     return skip_folders
 
 
+def _sp_metadata_from_carried(carried: dict, *, site_id: str | None, site_name: str | None,
+                              library_name: str | None) -> dict:
+    """Rebuild a metadata record from the columns a prior scan stored (see _SP_CARRIED_METADATA).
+
+    A stored value becomes `present` — it was read from SharePoint, and a delta that does not
+    mention the item is what makes it still current. A stored NULL becomes `not_configured`
+    rather than `unavailable`, and that is the one judgement worth stating: the earlier run DID
+    read the container, and wrote NULL because there was nothing in it. Calling it `unavailable`
+    now would invent a read failure that never happened, and would make an estate look
+    progressively less readable the longer delta sync ran.
+
+    The availability map the prior run recorded is preserved where it exists, so a field that was
+    genuinely unread THEN still reads as unread now — the carry-forward must not launder a gap
+    into an answer.
+    """
+    import json as _json
+    blob = {}
+    raw = carried.get("sp_metadata")
+    if raw:
+        try:
+            parsed = _json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(parsed, dict):
+                blob = parsed
+        except Exception:  # noqa: BLE001 — a stale blob must not fail a reconstruction
+            blob = {}
+    prior_states = blob.get("availability") or {}
+    prior_reasons = blob.get("reasons") or {}
+
+    def _field(name, value, *, applicable=True):
+        if not applicable:
+            return {"value": None, "state": sp_metadata.NOT_APPLICABLE, "reason": None}
+        was = prior_states.get(name)
+        if value is None and was in (sp_metadata.UNAVAILABLE, sp_metadata.NOT_APPLICABLE):
+            return {"value": None, "state": was, "reason": prior_reasons.get(name)}
+        if value is None or value == "" or value == {} or value == []:
+            return {"value": None, "state": sp_metadata.NOT_CONFIGURED, "reason": None}
+        return {"value": value, "state": sp_metadata.PRESENT, "reason": None}
+
+    on_a_site = bool(site_id or carried.get("site_id"))
+    fields = {
+        "site_id": _field("site_id", site_id or carried.get("site_id"), applicable=on_a_site),
+        "site_name": _field("site_name", site_name or carried.get("site_name"),
+                            applicable=on_a_site),
+        "library_name": _field("library_name", library_name or carried.get("library_name"),
+                               applicable=on_a_site),
+        "content_type": _field("content_type", carried.get("content_type")),
+        "managed_columns": _field("managed_columns", blob.get("managed_columns") or None),
+        "retention_label": _field("retention_label", carried.get("retention_label")),
+        "sensitivity_label": _field("sensitivity_label", carried.get("sensitivity_label")),
+        "compliance_tag": _field("compliance_tag", None),
+        "is_record": _field("is_record", None),
+        "created_by": _field("created_by", None),
+        "modified_by": _field("modified_by", carried.get("modified_by")),
+        "sharing_scope": _field("sharing_scope", carried.get("sharing_scope")),
+        "permissions": _field("permissions", None),
+        "version": _field("version", carried.get("sp_version")),
+        "checked_out_by": _field("checked_out_by", carried.get("checked_out_by")),
+        "item_kind": _field("item_kind", carried.get("item_kind")),
+    }
+    return {"fields": fields}
+
+
 def _sp_item_metadata(item: dict, *, site_id: str | None, site_name: str | None,
                       library_name: str | None) -> dict:
     """One item's SharePoint-native metadata, with the CONTAINERS built from what the walk
@@ -1692,6 +1754,16 @@ def _sp_item_metadata(item: dict, *, site_id: str | None, site_name: str | None,
     Its container is missing, with that as the reason, so a delta-reconstructed row says "not
     re-read this run" instead of claiming the tenant configures nothing.
     """
+    # A REPLAYED item whose metadata was read on an earlier run. Rebuilt from the stored record
+    # rather than reported unread, because "unread" would be false: these values WERE read from
+    # SharePoint, and the delta feed not mentioning the item is what says they are still current.
+    #
+    # Reporting them `unavailable` here would be the erasure this carry-forward exists to stop,
+    # wearing an honest-looking label: every unchanged file would show "Not read" for a retention
+    # label ACP holds, and every rule keyed on it would stop matching on the first delta sync.
+    if "_acp_sp_carried" in item:
+        return _sp_metadata_from_carried(item["_acp_sp_carried"], site_id=site_id,
+                                         site_name=site_name, library_name=library_name)
     if "_acp_list_item" in item:
         li = sp_metadata.Container(item["_acp_list_item"])
     else:
@@ -1852,7 +1924,8 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
              locations: list[tuple[str, str]] | None = None,
              exclude_ids: set | None = None,
              sites: list[str] | None = None,
-             progress_cb=None) -> list[dict]:
+             progress_cb=None,
+             delta_plan: dict | None = None) -> list[dict]:
     """List scannable files from OneDrive, or from every document library on a SharePoint site.
 
     The RETURN value is the scannable analysis set (the six supported extensions) — unchanged, so
@@ -1869,6 +1942,15 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
     one-site spelling and is folded into `sites` here, so a caller that has never heard of the
     plural form is unaffected. The two are not different modes — there is one loop, and a single
     site is a list of one.
+
+    `delta_plan` is Phase 3's per-LIBRARY incremental plan (core.sp_multi_sync_plan):
+    `{"delta": {drive_id: {...}}, "full": {drive_id: "why"}}`. A library in `delta` is
+    RECONSTRUCTED from its stored cursor and prior inventory instead of walked; every other
+    library is walked exactly as before, in the same loop, against the same budget. That hybrid
+    is the point: a 30-site estate has no single answer to "can this scan skip walking?" — one
+    library's cursor is fresh, another's expired last week, a third has never been synced — and
+    collapsing it to one yes/no means either walking everything because one library needs it, or
+    reconstructing everything and quietly serving a stale estate for the one that did not.
 
     WHY ONE SHARED BUDGET rather than max_files per site. `max_files` bounds the work a scan is
     allowed to do; per-site budgets would multiply it by the number of sites selected, so a
@@ -2069,7 +2151,27 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
             # can let a token read a site's drives while refusing its metadata.
             rep["name"] = _sp_site_name(token, s_id)
             rep["libraries"] = [{"id": d["id"], "name": d.get("name")} for d in drives]
+            lib_by_id = {lib["id"]: lib for lib in rep["libraries"]}
             for d in drives:
+                # RECONSTRUCTED, not walked. The merged prior+delta set becomes this library's
+                # one batch and feeds the identical per-item loop below — same dedupe, same
+                # classification, same inventory split — so a reconstructed library is
+                # indistinguishable downstream from a walked one, which is what makes the
+                # estate-wide totals comparable across the two modes.
+                plan = (delta_plan or {}).get("delta", {}).get(d["id"])
+                if plan is not None and not use_search:
+                    merged = apply_sp_delta(plan["prior_files"], plan["changed"],
+                                            plan["removed_ids"])
+                    lib_by_id[d["id"]]["mode"] = "delta"
+                    lib_by_id[d["id"]]["changed"] = len(plan["changed"])
+                    lib_by_id[d["id"]]["removed"] = len(plan["removed_ids"])
+                    budget -= len(merged)
+                    targets.append((d["id"], iter([merged]), s_id, rep["name"], d.get("name")))
+                    continue
+                lib_by_id[d["id"]]["mode"] = "full"
+                why = (delta_plan or {}).get("full", {}).get(d["id"])
+                if why:
+                    lib_by_id[d["id"]]["full_reason"] = why
                 if use_search:
                     targets.append((d["id"], _pages(f"{GRAPH}/drives/{d['id']}/root/search(q='')"
                                                     f"?$select={_SP_ITEM_SELECT}&$top=200"),
@@ -2102,6 +2204,13 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
               "recent changes may be missing", flush=True)
         targets = [(None, _pages(f"{GRAPH}/me/drive/root/search(q='')"
                                  f"?$select={_SP_ITEM_SELECT}&$top=200"), None, None, None)]
+    elif (delta_plan or {}).get("delta", {}).get(None) is not None:
+        # The signed-in user's whole OneDrive, reconstructed. Keyed by None because that is the
+        # drive id a OneDrive listing carries throughout (see _sp_base) — the same key the
+        # cursor and the prior inventory partition use, so the three cannot drift.
+        _p = delta_plan["delta"][None]
+        targets = [(None, iter([apply_sp_delta(_p["prior_files"], _p["changed"],
+                                               _p["removed_ids"])]), None, None, None)]
     else:
         # `/me/drive` as the BASE, and `drive_id` stays None on purpose. Resolving the real id
         # would be an extra round trip and would change what is stored on every item; the download
@@ -2188,6 +2297,19 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
             # was never opened produce the same contribution to the grand total and different
             # rows here.
             scope_out["sites"] = [dict(v) for v in site_report.values()]
+        if delta_plan:
+            # WHICH libraries were reconstructed and which were re-walked, and why. The Phase 3
+            # exit gate is that an incremental scan produces the SAME inventory a full one does —
+            # a claim nobody can check from a file count, because the two are supposed to be
+            # equal. What distinguishes them is this: how much of the estate was carried forward
+            # rather than re-read, and which libraries had to be reconciled anyway.
+            libs = [lib for rep in site_report.values() for lib in (rep.get("libraries") or [])]
+            scope_out["incremental"] = {
+                "delta_libraries": sorted(l["id"] for l in libs if l.get("mode") == "delta"),
+                "full_libraries": sorted(l["id"] for l in libs if l.get("mode") == "full"),
+                "reconciled": {l["id"]: l["full_reason"] for l in libs if l.get("full_reason")},
+                "carried_documents": int((delta_plan or {}).get("carried") or 0),
+            }
     result = files[:max_files]
     # Content-type enrichment LAST, over the FINAL scannable set only — after truncation, so a
     # capped listing never pays for classification on files it is about to drop.
@@ -2238,12 +2360,34 @@ def sp_delta_since(token: str, drive_id: str | None, delta_link: str | None
     error on an invalidated delta link (Graph 410 Gone — a link expires after roughly 30 days
     unused, or when the drive itself resets); the caller decides how to degrade
     (core._sp_delta_check always falls back to a full scan rather than trusting a failed check)."""
-    url = delta_link or f"{_sp_base(drive_id)}/root/delta?$select={_SP_ITEM_SELECT}"
+    # The listItem expansion on the delta feed too, for the same reason the walk asks for it:
+    # a CHANGED file is replaced wholly by its fresh raw item (apply_sp_delta), so without the
+    # expansion every file the delta reports would come back stripped of its content type and
+    # managed columns — an edit to a document would silently blank the metadata a rule keys on,
+    # which is worse than not syncing incrementally at all.
+    #
+    # Same discipline as the walk: try it, and on refusal fall back to the plain feed rather than
+    # losing the delta. A delta link ALREADY carries its own query, so the expansion is only
+    # added when starting fresh; a persisted deltaLink is passed through untouched, which is what
+    # Graph requires of it.
+    expand = _SP_LIST_EXPAND if sp_metadata.expand_enabled() else ""
+    url = delta_link or f"{_sp_base(drive_id)}/root/delta?$select={_SP_ITEM_SELECT}{expand}"
     items: list[dict] = []
     removed: set[tuple[str | None, str]] = set()
     new_delta_link = None
+    expand_error = None if expand else _SP_TIER_REASON[3]
     while url:
-        data = _sp_get(token, url)
+        try:
+            data = _sp_get(token, url)
+        except PermissionError:
+            raise
+        except Exception:                 # noqa: BLE001 — a refused ASK, not a refused drive
+            if not expand or expand not in url:
+                raise                     # the plain feed failed: that is a real failure
+            expand_error = _SP_TIER_REASON[2]
+            print(f"[scan] SharePoint drive {drive_id or 'me'} delta: {expand_error}", flush=True)
+            url = url.replace(expand, "")
+            continue
         for item in data.get("value", []):
             if item.get("deleted"):
                 if item.get("id"):
@@ -2253,6 +2397,22 @@ def sp_delta_since(token: str, drive_id: str | None, delta_link: str | None
                 continue   # a delta feed reports folder changes too; not user content
             if estate_inventory.is_os_metadata(item.get("name", "") or ""):
                 continue
+            # The same container stamps the walk applies, so a delta-sourced item classifies
+            # through _sp_classify_item byte-identically to a walked one — including reporting
+            # its metadata unread, with the reason, when the expansion was refused.
+            if expand_error:
+                item["_acp_list_item_error"] = expand_error
+            elif "listItem" in item:
+                item["_acp_list_item"] = item.get("listItem") or {}
+            else:
+                item["_acp_list_item_error"] = (
+                    "this drive has no backing SharePoint list, so it carries no content "
+                    "type, managed columns or version (a personal OneDrive)")
+            # The delta feed never carries the wider driveItem $select, so retention labels are
+            # not in it. Said as unread rather than left to read as unset.
+            item["_acp_rich_error"] = (
+                "Graph's delta feed does not carry the wider driveItem $select, so a retention "
+                "label is not re-read on an incremental sync")
             items.append(item)
         url = data.get("@odata.nextLink")
         if "@odata.deltaLink" in data:
@@ -2266,6 +2426,15 @@ def sp_delta_since(token: str, drive_id: str | None, delta_link: str | None
 # own (site/library iteration and budget tracking live inline in its loop), so this replays
 # _sp_classify_item — the same per-item classification _sp_list's live loop uses — over a
 # merged prior+changed set instead of sharing a finishing function the way the Drive path does.
+
+#: The scan_inventory columns a delta reconstruction carries forward onto an unchanged file.
+#: Every one is a value that was READ from SharePoint on an earlier run and that re-reading would
+#: cost a Graph call per document. Kept as a list rather than "everything on the row" so a column
+#: added for some other purpose does not silently start travelling through the delta path.
+_SP_CARRIED_METADATA = ("site_id", "site_name", "library_name", "content_type",
+                        "retention_label", "sensitivity_label", "sharing_scope", "item_kind",
+                        "checked_out_by", "sp_version", "modified_by", "sp_metadata")
+
 
 def _sp_file_from_inventory_row(row: dict) -> dict:
     """The inverse of _sp_inventory_row/the scannable `rec` _sp_classify_item builds: reconstruct
@@ -2308,6 +2477,23 @@ def _sp_file_from_inventory_row(row: dict) -> dict:
     # shape exactly what it was before this.
     if row.get("content_type"):
         out["_acp_content_type"] = row["content_type"]
+    # THE PHASE 2 METADATA, carried forward on the same `_acp_` convention and for the same
+    # reason: re-reading it live is a Graph call per file, which is exactly the cost delta sync
+    # exists to avoid, and the stored value is CORRECT for a file the delta did not mention —
+    # an unchanged file's retention label is still its retention label.
+    #
+    # Without this, every delta sync would re-inventory each unchanged file with no content type,
+    # no retention label and no managed columns: the identical silent erasure that cost the
+    # Content Type on every sync until store.latest_scan_inventory_items was fixed to select it,
+    # now on the wider set of fields lifecycle rules are actually written against.
+    #
+    # The honest limit, recorded rather than glossed: a managed-column edit that does not touch
+    # the driveItem may never appear in Graph's delta feed, so a carried-forward column can go
+    # stale silently. That is what periodic full reconciliation is for (ACP_SP_RECONCILE_DAYS) —
+    # a correctness control, not a performance knob.
+    carried = {k: row.get(k) for k in _SP_CARRIED_METADATA if row.get(k) is not None}
+    if carried:
+        out["_acp_sp_carried"] = carried
     return out
 
 
@@ -2674,7 +2860,8 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
           folders: list[str] | None = None,
           exclude_folders: list[str] | None = None,
           progress_cb=None, drive_delta: dict | None = None,
-          sp_delta: dict | None = None) -> list[dict]:
+          sp_delta: dict | None = None,
+          sp_delta_plan: dict | None = None) -> list[dict]:
     """List the source. `scope_out`, when given, is filled in with WHAT WAS COVERED.
 
     `inventory_out`, when given, is filled with per-file inventory rows for the NON-scannable
@@ -2813,6 +3000,13 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
                 # per-site breakdown as skipped-with-a-reason rather than dropping them before
                 # anything could record them — which is the omission the exit gate is about.
                 extra["sites"] = sp_all_sites
+            if sp_delta_plan is not None:
+                # Phase 3's per-LIBRARY plan, distinct from `sp_delta` above: that one replaces
+                # the whole listing with a reconstruction of exactly one drive, this one lets the
+                # walk reconstruct some libraries and re-walk others in the same pass. Passed
+                # only when a caller built one, so a scan that has not opted in calls _sp_list
+                # with the arguments it always did.
+                extra["delta_plan"] = sp_delta_plan
             if progress_cb is not None:
                 # Per-site progress out to the job/SSE stream. Passed only when a caller supplied
                 # one, so a test stub pinning the old signature is unaffected — the same
