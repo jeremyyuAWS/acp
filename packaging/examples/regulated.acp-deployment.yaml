@@ -1,0 +1,85 @@
+# Regulated / Private (PRD S8) — private networking, customer-managed keys, no external AI, no
+# external telemetry. PRD S20.11: this profile must run with neither.
+apiVersion: packaging.acp.mova.io/v1alpha1
+kind: ACPDeployment
+metadata:
+  name: acp-regulated
+  environment: production
+  region: us-south
+runtime:
+  version: "2026.9"
+  profile: regulated
+  platform: kubernetes
+  publicUrl: "https://acp.internal.example.org"
+  imageRegistry: "registry.internal.example.org/acp"
+api:
+  replicas: { min: 2, max: 4 }
+  resources: { preset: standard }
+  autoscale:
+    signals: [concurrent-requests]
+workers:
+  discover:
+    replicas: { min: 1, max: 3 }
+    resources: { preset: standard }
+    autoscale:
+      signals: [queue-depth, oldest-job-age]
+  assess:
+    replicas: { min: 3, max: 10 }
+    resources: { preset: large }
+    autoscale:
+      signals: [queue-depth, oldest-job-age]
+  remediate:
+    replicas: { min: 3, max: 10 }
+    resources: { preset: large }
+    autoscale:
+      signals: [queue-depth, oldest-job-age]
+data:
+  postgres:
+    mode: self-hosted
+    backupRetentionDays: 35
+    highAvailability: true
+    storage: 1Ti
+    maxConnections: 800
+  redis:
+    mode: self-hosted
+    highAvailability: true
+  objectStorage:
+    mode: self-hosted
+    encryption: customer-managed
+    retentionDays: 2555
+ai:
+  mode: local-only
+  ollama:
+    enabled: true
+    modelVolume: 500Gi
+    gpu: true
+observability:
+  openTelemetry: true
+  exporter: local
+  grafana: true
+  langfuse:
+    mode: self-hosted
+network:
+  privateWorkers: true
+  publicIngress: true
+  # Deliberately narrow. SharePoint is the only connected source; nothing else may be reached.
+  allowedEgress:
+    - graph.microsoft.com
+    - login.microsoftonline.com
+secrets:
+  provider: external-secrets
+  refs:
+    database-url: { name: acp-vault, key: database-url }
+    redis-url: { name: acp-vault, key: redis-url }
+    object-storage: { name: acp-vault, key: object-storage }
+    langfuse-secret-key: { name: acp-vault, key: langfuse-secret-key }
+    microsoft-oauth-client-secret: { name: acp-vault, key: microsoft-oauth-client-secret }
+    smb-credentials: { name: acp-vault, key: smb-credentials }
+sources:
+  - sharepoint
+  - smb
+  - local-upload
+capacity:
+  maxSourceFileSizeMb: 250
+  concurrentFilesPerWorker: 4
+  expectedDocumentsPerDay: 50000
