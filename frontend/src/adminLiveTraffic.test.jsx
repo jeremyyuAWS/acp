@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { buildTrafficGraph, capacityValue, infrastructureDetail, queueConcentration, sizeScopeNote, trendToggleLabel, workerServiceRows } from './AdminLiveTraffic.jsx'
 
-const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'AdminLiveTraffic.jsx'), 'utf8')
+const here = dirname(fileURLToPath(import.meta.url))
+const source = readFileSync(join(here, 'AdminLiveTraffic.jsx'), 'utf8')
+// The drawer moved to its own module in the 2026-09-04 redesign; these assertions follow the
+// markup they were written to protect rather than the file it used to live in.
+const drawer = readFileSync(join(here, 'LiveOpsDrawer.jsx'), 'utf8')
+const a11y = readFileSync(join(here, 'a11y.js'), 'utf8')
 
 const run = {
   scan_id: 's1', owner: 'operator@example.org', source: 'drive', stage: 'assess',
@@ -46,13 +51,17 @@ describe('Admin live traffic graph', () => {
   it('opens run tiles in a non-overlapping right drawer with single and double-click detail', () => {
     expect(source).toMatch(/onNodeClick=.*setSelectedKey/)
     expect(source).toMatch(/onNodeDoubleClick=.*setSelectedKey/)
-    expect(source).toMatch(/<aside role="dialog" aria-modal="true"/)
-    expect(source).toContain("background: 'var(--card, #fff)'")
-    expect(source).toContain("width: 'clamp(360px, 38vw, 560px)'")
-    expect(source).toMatch(/position: 'sticky', top: 0/)
-    expect(source).toMatch(/rgba\(28,22,32,.28\)/)
-    expect(source).toMatch(/overflowWrap: 'anywhere'/)
-    expect(source).toContain("event.key === 'Escape'")
+    expect(drawer).toMatch(/<aside role="dialog" aria-modal="true"/)
+    expect(drawer).toContain("background: 'var(--card, #fff)'")
+    expect(drawer).toContain("width: 'clamp(360px, 38vw, 560px)'")
+    expect(drawer).toMatch(/position: 'sticky', top: 0/)
+    expect(drawer).toMatch(/rgba\(28,22,32,.28\)/)
+    expect(drawer).toMatch(/overflowWrap: 'anywhere'/)
+    // Escape now comes with focus trapping and focus restoration, from the shared dialog hook —
+    // and AdminLiveTraffic no longer keeps a second listener that would double-handle it.
+    expect(drawer).toContain('useDialog(panelRef, onClose)')
+    expect(a11y).toContain("e.key === 'Escape'")
+    expect(source).not.toContain("event.key === 'Escape'")
   })
 
   it('identifies when one user dominates the shared waiting queue', () => {
@@ -117,8 +126,26 @@ describe('Admin live traffic graph', () => {
   it('opens both run and infrastructure tiles through the same accessible drawer', () => {
     expect(source).toContain("type: 'infra'")
     expect(source).toMatch(/onNodeClick=.*setSelectedKey/)
-    expect(source).toContain('selectedInfrastructure.facts.map')
+    expect(source).toContain('infrastructureDetail(selectedNode, snapshot, capacity).facts')
+    expect(drawer).toContain('facts.map(([label, value])')
     expect(source).toContain('Idle · select any tile to inspect the ready processing path')
+  })
+})
+
+describe('The old drawer chart is retired, and stays unmounted', () => {
+  // CLAUDE.md's retired-feature policy: keep the code so restoring it is one commit, but assert
+  // the orphan so it cannot be mistaken for live code. This one matters more than most — it plots
+  // `Number(...) || 0`, so an unreported measurement becomes a drawn zero, which is exactly what
+  // the redesigned drawer exists not to do.
+  it('is not rendered by any screen', () => {
+    const screens = readdirSync(here).filter((f) => f.endsWith('.jsx') && !f.includes('.test.'))
+    const mounts = screens.filter((f) => /<MetricChart[\s/>]/.test(readFileSync(join(here, f), 'utf8')))
+    expect(mounts).toEqual([])
+  })
+
+  it('is marked retired where it lives, with the reason not to re-mount it', () => {
+    expect(source).toMatch(/RETIRED 2026-09-04/)
+    expect(source).toMatch(/turns an unreported measurement into a plotted zero/)
   })
 })
 
