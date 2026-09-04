@@ -379,10 +379,11 @@ def bootstrap_workspace_roles(request: Request, body: dict | None = None):
     reassigned, so a second call after an administrator has tightened somebody's role does not
     undo it (tests/test_workspace_roles_store.py pins both).
 
-    NOTHING ENFORCES THESE ROWS YET. Enforcement arrives in later slices behind
-    ACP_WORKSPACE_RBAC_ENABLED, which is reported in the response so the caller can see whether
-    what they just wrote is inert — writing roles and believing they took effect is the one
-    misreading this endpoint could invite.
+    WHETHER THESE ROWS ENFORCE ANYTHING DEPENDS ON THE ROLLOUT RUNG, which is reported in the
+    response as `rollout` so the caller can see whether what they just wrote is inert — writing
+    roles and believing they took effect is the one misreading this endpoint could invite. See
+    api/workspace_rollout.py for the ladder, and GET /admin/workspace-roles/preflight for whether
+    it is safe to climb it.
     """
     _require_owner(request)
     import workspace_roles as wr
@@ -398,6 +399,26 @@ def bootstrap_workspace_roles(request: Request, body: dict | None = None):
                                 detail=f"seeded {len(out['roles_created'])} role(s), "
                                        f"assigned {sum(1 for a in out['assignments'] if a['applied'])}")
     return out
+
+
+@router.get("/admin/workspace-roles/preflight")
+def workspace_roles_preflight(request: Request):
+    """Would advancing the rollout one rung break anybody? (PRD §15.)
+
+    OWNER-ONLY, AND NOT BECAUSE IT WRITES — it writes nothing. It reports every managed person's
+    email next to the capabilities they are about to lose, which is a personnel-shaped answer, and
+    it is read at exactly the moment somebody is deciding whether to narrow other people's access.
+    The person making that decision is the owner; `roles.manage` is the wrong gate because a role
+    holding it could use this to enumerate the whole workspace's standing.
+
+    READ IT, DO NOT POLL IT. It walks every person and resolves each one's role, so its cost is
+    linear in headcount — fine once before a deployment, wasteful on a dashboard refresh.
+    """
+    _require_owner(request)
+    import workspace_preflight as preflight
+    return preflight.report(core.store, owner_email=core.OWNER_EMAIL,
+                            routes=core.enumerate_api_routes(request.app),
+                            is_suspended=_is_suspended)
 
 
 @router.put("/workers")

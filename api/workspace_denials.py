@@ -55,11 +55,12 @@ _lock = threading.Lock()
 _seen: dict[tuple[str, tuple[str, ...]], list] = {}
 
 
-def _key(email: str | None, required) -> tuple[str, tuple[str, ...]]:
-    return ((email or "anonymous").strip().lower(), tuple(sorted(required or ())))
+def _key(email: str | None, required, kind: str) -> tuple[str, str, tuple[str, ...]]:
+    return (kind, (email or "anonymous").strip().lower(), tuple(sorted(required or ())))
 
 
-def should_record(email: str | None, required, *, now: float | None = None) -> tuple[bool, int]:
+def should_record(email: str | None, required, *, kind: str = "denied",
+                  now: float | None = None) -> tuple[bool, int]:
     """Should this denial be written, and how many were suppressed before it?
 
     Returns (record, suppressed_count). `record` is True for the first denial of a kind and again
@@ -69,9 +70,14 @@ def should_record(email: str | None, required, *, now: float | None = None) -> t
     Both halves matter. Recording only the first would tell an operator that Jane was refused once
     when she was refused four hundred times, which is a different situation — the first reads as a
     misclick, the second as a role that is wrong.
+
+    `kind` SEPARATES THE WINDOWS, and slice 6 needs it to. Observe mode records what enforcement
+    WOULD have refused; enforce mode records what it DID. Sharing one window across both would let
+    a suppressed observation swallow the first real refusal after an operator advances the rung —
+    the single most important row in the whole rollout, lost to a counter that was already warm.
     """
     now = time.time() if now is None else now
-    k = _key(email, required)
+    k = _key(email, required, kind)
     with _lock:
         entry = _seen.get(k)
         if entry is None or (now - entry[0]) >= WINDOW_SECONDS:
@@ -92,8 +98,13 @@ def _evict_if_needed(now: float) -> None:
 
 
 def detail(email: str | None, required, *, role: str | None, method: str, path: str,
-           suppressed: int) -> str:
+           suppressed: int, prospective: bool = False) -> str:
     """The audit row's text.
+
+    `prospective` is observe mode: the request SUCCEEDED and this row records that enforcement
+    would have stopped it. The wording is not cosmetic — an auditor reading "was refused" about a
+    call that actually returned 200 has been told something false, and the two rows sit side by
+    side in the same log.
 
     NAMES THE ROUTE PATTERN, NOT THE URL. `/scans/{sid}/status` rather than
     `/scans/9f2c.../status`: the concrete id is the customer's data, the pattern is the
@@ -103,8 +114,10 @@ def detail(email: str | None, required, *, role: str | None, method: str, path: 
     who = (email or "anonymous").strip().lower()
     as_role = f" as {role}" if role else " with no workspace role"
     also = f" (+{suppressed} more in the last {int(WINDOW_SECONDS)}s)" if suppressed else ""
-    return (f"{who}{as_role} was refused {method} {path} — needs "
-            f"{' or '.join(sorted(required or ())) or 'an unknown capability'}{also}")
+    verb = "would be refused" if prospective else "was refused"
+    tail = " — allowed, rollout is not enforcing yet" if prospective else ""
+    return (f"{who}{as_role} {verb} {method} {path} — needs "
+            f"{' or '.join(sorted(required or ())) or 'an unknown capability'}{also}{tail}")
 
 
 def reset() -> None:
