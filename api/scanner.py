@@ -1447,11 +1447,27 @@ def _sp_get(token: str, url: str, timeout: int = 30):
             _sp_sleep(_sp_retry_delay(None, attempt))
             continue
         if r.status_code in (401, 403):
+            # WHOSE PROBLEM, not just that there is one. This used to say "grant Sites.Read.All
+            # with tenant admin consent" for every refusal, including a 401 — where the token
+            # itself was rejected and no consent can help — and including a 403 on a tenant where
+            # the scope is already granted and the signed-in account simply is not a member of
+            # that site. Both wrong answers point at an admin who cannot fix them, which costs a
+            # pilot more than no answer would. sp_readiness reads the token's own claims to pick
+            # between the explanations; see its docstring for why that is diagnostic only.
+            #
+            # NO `on_site` HERE, deliberately. This function is handed Graph-issued deltaLinks
+            # whose target cannot be recovered from their shape, so it does not know whether the
+            # refusal was about a site or a personal drive — and the owner verdict does not
+            # depend on that anyway (it turns on what the token carries). An earlier version
+            # passed the answer in as a keyword; ~29 test stubs replace `_sp_get` with
+            # `lambda token, url:` and every one of them broke, with _sp_site_name's own swallow
+            # turning the TypeError into a plausible `None` site name rather than an error.
+            # Callers that genuinely know their target — the readiness endpoint and the discovery
+            # preflight — pass `on_site` to diagnose_refusal directly.
+            import sp_readiness
             raise PermissionError(
-                f"Microsoft Graph refused this request ({r.status_code}). SharePoint SITES need "
-                "the Sites.Read.All delegated permission on the Azure app registration, granted "
-                "with tenant admin consent; Files.Read.All alone only reaches the signed-in "
-                "user's OneDrive. URL: " + url.split("?")[0])
+                sp_readiness.diagnose_refusal(r.status_code, token=token)["message"]
+                + " URL: " + url.split("?")[0])
         if (r.status_code == 429 or r.status_code >= 500) and attempt <= attempts:
             _sp_note_retry(r.status_code)
             delay = _sp_retry_delay(r, attempt)

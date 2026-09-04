@@ -60,6 +60,10 @@ _map_many([
     ("GET", "/sources"), ("GET", "/sources/locations"), ("GET", "/folders"),
     ("GET", "/sharepoint/sites"), ("GET", "/sharepoint/folders"),
     ("GET", "/sharepoint/sites/{site_id:path}/drives"),
+    # Reading a tenant's onboarding readiness is the same right as reading its sites: it names
+    # which permissions this sign-in carries and which metadata the tenant will answer, and it
+    # issues nothing but the bounded read-only probes the picker beside it already makes.
+    ("GET", "/sharepoint/readiness"),
     ("GET", "/drive/folder-name"), ("GET", "/drive/adc-scopes"),
 ], _SOURCES_READ)
 # Changing where ACP looks is `sources.manage` (PRD §5), not merely seeing the tab.
