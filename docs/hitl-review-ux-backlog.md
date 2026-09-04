@@ -87,17 +87,22 @@ don't just generate text.
 
 ## Dependency — unblocks P1/P2 premium-model items (ADR 0019 Phase 2)
 
-- [ ] **Ship the OpenAI + Anthropic vision adapters.** The Settings → AI Providers tab already lists
-  them and stores keys as secret-refs, but `ADAPTER_READY = {azure_openai}` — only Azure is wired.
-  Add `OpenAIVisionProvider` / `AnthropicVisionProvider` behind the existing `VisionProvider`
-  Protocol (`api/providers.py`) + the `active_vision_provider` / `cloud_vision_provider` selectors,
-  as opt-in `pyproject.toml` extras. Then OpenAI/Anthropic keys entered in the UI actually route
-  vision + power auto-escalation and the "Help me" copilot.
+- [x] **Ship the OpenAI + Anthropic vision adapters.** *(shipped — #1246, polished #1258/#1260)*
+  `OpenAIVisionProvider`, `AnthropicVisionProvider`, and `HuggingFaceVisionProvider` are all wired
+  behind the `VisionProvider` Protocol in `api/providers.py`. `ADAPTER_READY` in `Settings.jsx` is
+  now `{azure_openai, openai, anthropic, huggingface}`. Keys entered in the UI route vision through
+  `active_vision_provider` / `cloud_vision_provider`. HuggingFace supports private
+  OpenAI-compatible Inference Endpoints with bearer auth, secret-ref handling, safe synthetic
+  connection testing, and Langfuse attribution. **Not yet proven in production** — an admin still
+  needs to provision the endpoint, model, and secret, then enable and test in Settings → AI
+  Providers. The active cloud-vision path remains Azure-hosted Ollama.
 
 ---
 
 ### Sequencing note
-P0 is almost entirely **frontend reorganisation of data the card already receives** — highest
-leverage, lowest risk, shippable without the GPU or any new provider. P1's auto-escalation and P2's
-copilot depend on a reachable premium model (the adapter dependency). So: land P0 first (the card
-*feels* like a copilot), then the adapters, then P1/P2 light up the escalation + copilot on top.
+P0 is complete. P1's auto-escalation and P2's copilot depended on wired adapters (the former
+dependency above) — those are now shipped. **The adapter blocker is cleared.** Next: wire
+assess-time auto-escalation (P1 item 1) through `describe_image_structured` so the HuggingFace /
+OpenAI / Anthropic adapters actually drive pre-drafting, with transparent provenance
+("✓ local attempted → escalated to {provider} → grounded"). Then the one-click Improve palette
+and the "Help me" copilot (P2) follow directly on top.
