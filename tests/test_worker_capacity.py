@@ -72,12 +72,14 @@ def test_open_to_a_non_admin_caller(open_client, monkeypatch):
 
 
 def _fake_app(min_replicas=1, max_replicas=5, latest_revision="acp-worker--rev1", app_id="/subs/x/app",
-              traffic=None):
+              traffic=None, cpu=2.0, memory="4Gi", storage="8Gi", profile="Consumption"):
     scale = SimpleNamespace(min_replicas=min_replicas, max_replicas=max_replicas)
-    template = SimpleNamespace(scale=scale)
+    resources = SimpleNamespace(cpu=cpu, memory=memory, ephemeral_storage=storage)
+    template = SimpleNamespace(scale=scale, containers=[SimpleNamespace(resources=resources)])
     ingress = SimpleNamespace(traffic=traffic) if traffic is not None else None
     configuration = SimpleNamespace(ingress=ingress)
     properties = SimpleNamespace(template=template, latest_ready_revision_name=latest_revision,
+                                 workload_profile_name=profile,
                                  configuration=configuration)
     return SimpleNamespace(properties=properties, id=app_id)
 
@@ -119,6 +121,11 @@ def test_returns_min_max_and_current_replicas_when_everything_succeeds(open_clie
     assert body["memory_percent"] == 40.0
     assert body["metrics_available"] is True
     assert body["measured_at"] is not None
+    assert body["cpu_cores_per_replica"] == 2.0
+    assert body["memory_per_replica"] == "4Gi"
+    assert body["ephemeral_storage_per_replica"] == "8Gi"
+    assert body["workload_profile_name"] == "Consumption"
+    assert body["active_revision_name"] == "acp-worker--rev1"
 
 
 def test_min_max_still_returned_when_the_replica_list_call_fails(open_client, monkeypatch):
