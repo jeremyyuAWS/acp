@@ -1457,6 +1457,64 @@ def _mark_discovered(scan_id: str) -> None:
                            scan_id, exc_info=True)
 
 
+def _scope_collapse(current_count: int, baseline_count: int) -> dict | None:
+    """Describe a material suspicious non-zero listing collapse, if one occurred."""
+    import os as _os
+    min_baseline = max(1, int(_os.getenv("ACP_DISCOVERY_COLLAPSE_MIN_BASELINE", "100")))
+    min_drop = max(1, int(_os.getenv("ACP_DISCOVERY_COLLAPSE_MIN_DROP", "50")))
+    ratio_limit = float(_os.getenv("ACP_DISCOVERY_COLLAPSE_RATIO", "0.25"))
+    if baseline_count < min_baseline or baseline_count - current_count < min_drop:
+        return None
+    ratio = current_count / baseline_count if baseline_count else 1.0
+    if ratio >= ratio_limit:
+        return None
+    return {"status": "blocked", "code": "unexpected_scope_collapse",
+            "current_count": current_count, "baseline_count": baseline_count,
+            "retained_ratio": round(ratio, 6), "threshold_ratio": ratio_limit}
+
+
+def _enforce_scope_collapse_guard(scan_id: str, user: str | None, scope: dict,
+                                  items: list[dict], inventory: list[dict] | None = None) -> None:
+    """Fail a severely collapsed whole-source discovery before its inventory is published."""
+    whole_source = (scope.get("kind") == "drive" or
+                    (scope.get("kind") == "sharepoint" and not scope.get("folders")))
+    if not (whole_source and user and items and not scope.get("truncated")):
+        return
+    current_account = next(
+        (it.get("drive_account_id") for it in items if it.get("drive_account_id")), None)
+    baseline = core.store.last_published_whole_source_baseline(
+        scan_id, owner=user, current_scope=scope, drive_account_id=current_account)
+    if not baseline:
+        return
+    # Compare the same grain on both sides: baseline count_inventory includes assessable AND
+    # unsupported/media rows. Drive's raw listing count is ideal; other adapters fall back to
+    # the two collections that together form the inventory.
+    raw_count = scope.get("raw")
+    current_count = (int(raw_count) if isinstance(raw_count, (int, float))
+                     else len(items) + len(inventory or []))
+    integrity = _scope_collapse(current_count, baseline["count"])
+    if not integrity:
+        return
+    integrity["baseline_scan_id"] = baseline["scan_id"]
+    message = (f"Discovery found {current_count} files, down from {baseline['count']} in the last "
+               "verified whole-source scan; refusing to publish or assess this likely "
+               "permissions/scope collapse. Reconnect the source or verify its access, then "
+               "run Discovery again.")
+    integrity["message"] = message
+    scope["integrity"] = integrity
+    scope.setdefault("enumeration", {})["complete"] = False
+    core.store.set_scan_files(scan_id, len(items))
+    core.store.merge_scan_scope(scan_id, scope)
+    core.store.set_scan_status(scan_id, "failed")
+    core.store.log_decision("system", "scan.scope_collapse", scan_id=scan_id, detail=message)
+    try:
+        core.store.release_discovery_guard(scan_id)
+    except Exception:
+        logger.warning("_scan_discover: could not release guard after scope collapse for %s",
+                       scan_id, exc_info=True)
+    raise RuntimeError(message)
+
+
 def persist_discovery_inventory(scan_id: str, inv: list[dict], source: str, actor: str | None,
                                 progress_cb=None) -> dict:
     """Persist the per-file discovery inventory and evaluate the lifecycle (archival/deletion) rules
@@ -1814,6 +1872,10 @@ def _scan_discover(payload: dict, job: dict) -> None:
         _existing_inv_count = core.store.count_inventory(scan_id)
         if _existing_inv_count > 0:
             _checkpoint_resume = True
+            # The listing boundary and enumeration evidence were persisted before inventory.
+            # Reload them so retry-time integrity checks do not silently see an empty scope.
+            scope = (((core.store.get_scan(scan_id, owner=user) or {}).get("run") or {})
+                     .get("scope") or {})
 
     if not _checkpoint_resume:
         # Create the scan_runs row NOW, before the file listing, so GET /scans/{id} returns a
@@ -1860,6 +1922,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
         inv = core.store.list_inventory(scan_id)
         items = [r for r in inv if r.get("doc_class") not in (None, "unsupported", "media")]
         norm = items
+        _enforce_scope_collapse_guard(scan_id, user, scope, items, inv)
         core.store.set_scan_files(scan_id, len(items))
         _jid = job.get("id")
         if _jid:
@@ -2214,6 +2277,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
                     # and owns its job state precisely because nothing else will touch it.
                     raise RuntimeError(_msg)
 
+        _enforce_scope_collapse_guard(scan_id, user, scope, items, inventory)
         core.store.set_scan_files(scan_id, len(items))
         core.store.merge_scan_scope(scan_id, scope)
         # ADR 0042, ordered AFTER both durable writes above rather than after _list() returned:
