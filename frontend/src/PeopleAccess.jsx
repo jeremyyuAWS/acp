@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { addPerson, getPeople, removePerson, updatePerson } from './api.js'
+import { addPerson, getPeople, removePerson, updatePerson, getWorkspaceRoles, assignWorkspaceRole, roleImpact } from './api.js'
 
 const statusCopy = {
   active: ['Active', '#287D3C', '#EDF8F0'],
@@ -28,8 +28,35 @@ export default function PeopleAccess() {
   const dialogRef = useRef(null)
   const addButtonRef = useRef(null)
 
+  const [roles, setRoles] = useState([])
+  // The role change awaiting confirmation (PRD §9). Held rather than applied immediately because
+  // the confirmation has to say what CHANGES, and that answer comes from the server.
+  const [roleChange, setRoleChange] = useState(null)
+
   const load = () => getPeople().then(setData).catch((e) => setError(e.message || 'Could not load people.'))
   useEffect(() => { load() }, [])
+  // Best-effort: a caller without roles.manage gets a 403 here, and that is not an error worth
+  // showing them — it means the role column is simply not theirs to use, and the People screen
+  // still does everything else it did before.
+  useEffect(() => { getWorkspaceRoles().then((r) => setRoles(r.roles || [])).catch(() => setRoles([])) }, [])
+
+  const askToChangeRole = (person, roleId) => {
+    setError('')
+    roleImpact(person.email, roleId)
+      .then((impact) => setRoleChange({ person, roleId, impact }))
+      // Without the preview the change is still legitimate — the confirmation is a courtesy, and
+      // refusing to proceed because the PREVIEW failed would make a broken read block a working
+      // write. The dialog says the impact is unavailable rather than inventing one.
+      .catch(() => setRoleChange({ person, roleId, impact: null }))
+  }
+
+  const confirmRoleChange = () => {
+    const { person, roleId } = roleChange
+    setRoleChange(null)
+    assignWorkspaceRole(person.email, roleId)
+      .then(() => { setMessage(`${person.email}'s role was updated.`); load() })
+      .catch((e) => setError(e.message || 'Could not change this role.'))
+  }
   useEffect(() => {
     if (!open) return undefined
     emailRef.current?.focus()
@@ -93,6 +120,25 @@ export default function PeopleAccess() {
         <div><b style={{ fontSize: 13 }}>{person.email}</b><div className="muted" style={{ fontSize: 12, marginTop: 3 }}>{person.provider === 'microsoft' ? 'Microsoft · SharePoint / OneDrive' : person.provider === 'google' ? 'Google · Drive' : person.role === 'owner' ? 'Workspace owner' : 'Provider not recorded'}</div></div>
         <Badge status={person.status} />
         {person.protected ? <b style={{ fontSize: 12 }}>Owner</b> : data.can_manage ? <select aria-label={`Access level for ${person.email}`} value={person.role || 'user'} onChange={(e) => change(person, { role: e.target.value })}><option value="user">User</option><option value="admin">Platform Admin</option></select> : <span style={{ fontSize: 12 }}>{person.role === 'admin' ? 'Platform Admin' : 'User'}</span>}
+        {/* The WORKSPACE role (PRD §9), a different thing from the platform access level beside
+            it: that one decides whether they can touch platform settings, this one decides which
+            tabs they see. Shown only when roles exist — on a deployment that has not been
+            migrated there is nothing to choose from, and an empty select reads as a broken
+            control rather than an absent feature. */}
+        {roles.length > 0 && (
+          <div className="people-role-cell">
+            {person.protected ? (
+              <span style={{ fontSize: 12 }}>Owner — full access</span>
+            ) : (
+              <select aria-label={`Workspace role for ${person.email}`}
+                      value={person.workspace_role_id || ''}
+                      onChange={(e) => askToChangeRole(person, e.target.value)}>
+                <option value="">No role</option>
+                {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+              </select>
+            )}
+          </div>
+        )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           {person.status === 'setup_required' && <a href="https://entra.microsoft.com/#view/Microsoft_AAD_UsersAndTenants/UserManagementMenuBlade/~/GuestUsers" target="_blank" rel="noreferrer">Invite in Entra ↗</a>}
           {person.failure && <span title={person.failure} style={{ fontSize: 12, color: 'var(--error-fg-strong)' }}>Invitation needs attention</span>}
@@ -101,6 +147,46 @@ export default function PeopleAccess() {
       </div>)}
     </div>
     <p className="muted" style={{ fontSize: 12, lineHeight: 1.5 }}>People sign in with their existing Google or Microsoft identity. Their Drive, OneDrive, and SharePoint access remains governed by that provider; adding them here does not grant access to source documents.</p>
+
+    {/* PRD §9's impact confirmation. It names what is GAINED and what is LOST, because "change
+        Jane's role?" is a question nobody can answer — the consequential half is which of today's
+        abilities disappear, and that is the half an administrator cannot work out from two role
+        names. */}
+    {roleChange && <div role="presentation" onMouseDown={(e) => e.target === e.currentTarget && setRoleChange(null)} style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(24,18,25,.42)', display: 'grid', placeItems: 'center', padding: 20 }}>
+      <div role="dialog" aria-modal="true" aria-labelledby="role-change-title" style={{ width: 'min(480px, 100%)', padding: 22, borderRadius: 12, background: 'var(--surface)', boxShadow: '0 20px 60px rgba(0,0,0,.25)' }}>
+        <h3 id="role-change-title" style={{ marginTop: 0 }}>Change this role?</h3>
+        <p style={{ fontSize: 13, lineHeight: 1.5 }}>
+          {roleChange.person.email} will become <b>{roles.find((r) => r.id === roleChange.roleId)?.name || 'unassigned'}</b>.
+        </p>
+        {roleChange.impact === null ? (
+          <p className="muted people-role-impact">
+            The exact effect could not be previewed just now. The change itself is unaffected.
+          </p>
+        ) : (
+          <>
+            {roleChange.impact.loses?.length > 0 && (
+              <p className="people-role-impact"><b>They will lose:</b> {roleChange.impact.loses.join(', ')}</p>
+            )}
+            {roleChange.impact.gains?.length > 0 && (
+              <p className="people-role-impact"><b>They will gain:</b> {roleChange.impact.gains.join(', ')}</p>
+            )}
+            {!roleChange.impact.loses?.length && !roleChange.impact.gains?.length && (
+              <p className="muted people-role-impact">Nothing they can do today changes.</p>
+            )}
+            {roleChange.impact.enforced === false && (
+              <p className="muted people-role-impact">
+                Roles are not being enforced yet, so this takes effect only once
+                <code> ACP_WORKSPACE_RBAC_ENABLED</code> is on.
+              </p>
+            )}
+          </>
+        )}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
+          <button type="button" className="ghost" onClick={() => setRoleChange(null)}>Cancel</button>
+          <button type="button" onClick={confirmRoleChange}>Change role</button>
+        </div>
+      </div>
+    </div>}
 
     {open && <div role="presentation" onMouseDown={(e) => e.target === e.currentTarget && close()} style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(24,18,25,.42)', display: 'grid', placeItems: 'center', padding: 20 }}>
       <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="add-person-title" style={{ width: 'min(500px, 100%)', padding: 22, borderRadius: 12, background: 'var(--surface)', boxShadow: '0 20px 60px rgba(0,0,0,.25)' }}>

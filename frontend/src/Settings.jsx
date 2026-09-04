@@ -4,6 +4,7 @@ import { SIM } from './sim.js'
 import WorkerReplicaControl from './WorkerReplicaControl.jsx'
 import ReviewMemory from './ReviewMemory.jsx'
 import PeopleAccess from './PeopleAccess.jsx'
+import WorkspaceRoles from './WorkspaceRoles.jsx'
 
 // What a write is allowed to claim when the API layer marked its own answer `simulated`.
 // A simulated response never reached a server, so it is neither a success nor a failure — the
@@ -894,6 +895,10 @@ export default function Settings({ onClose, files = [], onDelegationChange, me =
         <div className="subtabs" role="tablist" aria-label="Settings sections">
           <button role="tab" aria-selected={tab === 'owners'} className={tab === 'owners' ? 'fchip on' : 'fchip'} onClick={() => setTab('owners')}>Owners</button>
           <button role="tab" aria-selected={tab === 'users'} className={tab === 'users' ? 'fchip on' : 'fchip'} onClick={() => setTab('users')}>Users</button>
+          {/* Beside People, per PRD §8's "a dedicated Roles tab beside People". They are two
+              halves of one job — a role is designed here and handed out there — and separating
+              them across screens is how an administrator assigns a role they have not read. */}
+          <button role="tab" aria-selected={tab === 'roles'} className={tab === 'roles' ? 'fchip on' : 'fchip'} onClick={() => setTab('roles')}>Roles</button>
           <button role="tab" aria-selected={tab === 'mydata'} className={tab === 'mydata' ? 'fchip on' : 'fchip'} onClick={() => setTab('mydata')}>My Data</button>
           <button role="tab" aria-selected={tab === 'myscope'} className={tab === 'myscope' ? 'fchip on' : 'fchip'} onClick={() => setTab('myscope')}>My Scope</button>
           <button role="tab" aria-selected={tab === 'workers'} className={tab === 'workers' ? 'fchip on' : 'fchip'} onClick={() => setTab('workers')}>Worker Configuration</button>
@@ -906,6 +911,7 @@ export default function Settings({ onClose, files = [], onDelegationChange, me =
         <div className="setbody">
           {tab === 'owners' && <OwnerDelegate files={files} onChanged={onDelegationChange} />}
           {tab === 'users' && <PeopleAccess />}
+          {tab === 'roles' && <WorkspaceRoles />}
           {tab === 'mydata' && <><ResetMyData /><CopyToken /></>}
           {tab === 'myscope' && <MyScanScope />}
           {tab === 'workers' && <WorkerConfiguration me={me} />}

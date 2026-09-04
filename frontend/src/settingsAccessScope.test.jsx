@@ -58,9 +58,13 @@ const setValue = (el, v) => {
 }
 
 describe('the settings panel is access-only, plus self-service My Data and My Scope', () => {
-  it('shows exactly the Owners, Users, My Data, My Scope, Worker Configuration and Review Memory tabs, in that order', async () => {
+  it('shows exactly the Owners, Users, Roles, My Data, My Scope, Worker Configuration and Review Memory tabs, in that order', async () => {
+    // `Roles` was added here by workspace RBAC slice 3 (PRD §8: "a dedicated Roles tab beside
+    // People"). This assertion is deliberately exact, which is why adding a tab has to be a
+    // decision recorded in a diff rather than something that quietly appears — the tab list is
+    // the whole navigation of the admin panel.
     expect(tabTexts(await render())).toEqual(
-      ['Owners', 'Users', 'My Data', 'My Scope', 'Worker Configuration', 'Review Memory'])
+      ['Owners', 'Users', 'Roles', 'My Data', 'My Scope', 'Worker Configuration', 'Review Memory'])
   })
 
   it('no longer offers any of the removed ADMIN-ONLY tabs', async () => {
