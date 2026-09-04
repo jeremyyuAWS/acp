@@ -1,0 +1,77 @@
+{{- if .Values.preflight.enabled }}
+{{/*
+Post-install verification — a report, deliberately not a gate.
+
+WHY IT DOES NOT BLOCK. A post-install hook that fails the release triggers a rollback of a
+deployment whose application is already running and already serving requests. So a check that is
+itself broken — a probe with the wrong URL, a dependency that is slow on first boot — takes down
+a working install. The gate that matters ran BEFORE the new code was admitted: the migration
+hook, which does block.
+
+What this reports is what a human should read after an install: whether the API can reach its
+database, its object storage and its renderer. `acpctl status` (phase 2) is the on-demand version
+of the same question; this is the one that runs whether or not anybody remembers to ask.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "acp.fullname" . }}-preflight
+  labels:
+    {{- include "acp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: preflight
+  annotations:
+    "helm.sh/hook": {{ .Values.preflight.hook | quote }}
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.preflight.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "acp.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: preflight
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "acp.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: preflight
+          image: {{ include "acp.image" (dict "root" $ "component" "api") | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          {{- /*
+            Reads the application's OWN readiness endpoint through the Service, rather than
+            re-implementing the checks. /readyz already knows what ACP needs to serve — the
+            database, the renderer, the queue — and a second list here would be a second opinion
+            that drifts from the first. Read-only: it asks the running deployment a question.
+          */}}
+          command:
+            - python
+            - -c
+            - |
+              import json, sys, urllib.request
+              url = "http://{{ include "acp.fullname" . }}-api:{{ .Values.api.service.port }}/readyz"
+              try:
+                  with urllib.request.urlopen(url, timeout=20) as r:
+                      body = json.loads(r.read() or b"{}")
+              except Exception as exc:
+                  print(f"preflight: could not reach {url}: {exc}")
+                  sys.exit(1)
+              print(json.dumps(body, indent=2, sort_keys=True))
+              print("preflight: readyz reachable")
+          env:
+            {{- include "acp.commonEnv" . | nindent 12 }}
+          resources:
+            requests:
+              cpu: "100m"
+              memory: 256Mi
+            limits:
+              cpu: "500m"
+              memory: 512Mi
+{{- end }}

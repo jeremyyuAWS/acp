@@ -24,6 +24,7 @@ from typing import Any
 from . import presets
 from .inventory import (
     API_HEADROOM_CONN,
+    LANE_JOB_TYPES,
     TIER_ROLE,
     build_inventory,
     connection_budget,
@@ -81,6 +82,10 @@ def _tier_values(tier: dict, *, role: str | None, threads: int) -> dict[str, Any
             values["autoscaling"]["queueDepthTarget"] = auto["queueDepthTarget"]
         if "oldestJobAgeSeconds" in auto:
             values["autoscaling"]["oldestJobAgeSeconds"] = auto["oldestJobAgeSeconds"]
+        if queue_signals and role:
+            # The chart builds its scaler query from THIS, rather than holding its own copy of
+            # the lane lists in YAML where nothing can check them. See inventory.LANE_JOB_TYPES.
+            values["autoscaling"]["queueJobTypes"] = list(LANE_JOB_TYPES[role])
     return values
 
 
