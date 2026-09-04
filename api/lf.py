@@ -731,7 +731,12 @@ def discover_run_trace(scan_id: str, source: str, *, listed: int, inventoried: i
     label = _SOURCE_LABEL.get(source, source)
     # The boundary, carried WITH the count. "12,486 files" and "12,486 files in /Finance" are
     # different facts, and a trace that records only the first cannot tell them apart later.
+    # `sites` alongside `site` because a MULTI-site run has no singular site — recording only the
+    # singular field would put "12,486 files" in the trace with the boundary blank, which is the
+    # one shape this dict exists to prevent.
     boundary = {"kind": sc.get("kind"), "folder": sc.get("folder"), "site": sc.get("site"),
+                "sites": [s.get("id") for s in (sc.get("sites") or []) if isinstance(s, dict)]
+                         or None,
                 "truncated": bool(sc.get("truncated"))}
     try:
         trace = lf.trace(

@@ -770,6 +770,7 @@ def config(request: Request = None):
     import lf as _lf
     lf_project = _lf._project_id()
     import ai as _ai   # AI provenance (ADR 0019 Phase 0): active model + local/cloud zone
+    import scanner
     return {"google_client_id": core.GOOGLE_CLIENT_ID,
             "drive_scope": core.DRIVE_SCOPES[0],
             # Entra app for the SharePoint/OneDrive connect — runtime so the tenant can be set per
@@ -784,6 +785,13 @@ def config(request: Request = None):
             # source does not change who is allowed to use the app. [] when unconfigured — same
             # "hide the button" contract as the singular fields.
             "microsoft_tenants": core.MICROSOFT_TENANTS,
+            # How many SharePoint sites one scan may span (ACP_SP_MAX_SITES, default 30). Served
+            # rather than hardcoded in the SPA because the enforcement is the SERVER's — the scan
+            # route refuses a larger selection and the walk caps itself — and a picker holding its
+            # own copy of the number would disagree with the deployment the moment an operator
+            # raised it: the UI would either block a selection the server would accept, or wave
+            # through one it will refuse after the operator has finished choosing.
+            "sharepoint_max_sites": scanner._sp_max_sites(),
             "auth": "gis" if core.GOOGLE_CLIENT_ID else "demo",
             **_build_info(),
             "ai": _ai.provenance(),

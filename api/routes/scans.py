@@ -14,6 +14,7 @@ from fastapi.responses import RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 import core
+import scanner
 from scanner import run_scan
 from report import build_report
 from report_tagged import build_tagged_report
@@ -105,6 +106,31 @@ def _supersede_replaced_run(prior: dict | None, new_scan_id: str, owner: str) ->
                        new_scan_id, prior["id"], exc)
 
 
+def sharepoint_site_overflow(folder: str | None, folders: list[str] | None) -> str | None:
+    """The message to refuse a SharePoint request with when it names more sites than one scan
+    may span, or None when it is within the cap.
+
+    REFUSED AT THE EDGE rather than silently trimmed. scanner._sp_list caps the walk too, and
+    that cap stays — a job queued before this check existed still has to be bounded somewhere —
+    but a cap that only truncates hands the operator a floor and an explanation after the fact,
+    while refusing here gives them the choice before the scan spends an hour against a customer's
+    tenant. Both read the same number from the same helper, so raising ACP_SP_MAX_SITES moves
+    them together and they cannot drift.
+
+    A site is a root with no "/" (scanner._sp_locations makes the same split); "root" is Drive's
+    no-narrowing sentinel and is not a site. Counted as a SET, because selecting one site twice
+    is one site — the listing collapses the duplicate, so refusing it here would reject a request
+    the scanner would have handled correctly.
+    """
+    roots = [f for f in (list(folders) if folders else ([folder] if folder else []))
+             if f and f != "root" and "/" not in f]
+    n, cap = len(set(roots)), scanner._sp_max_sites()
+    if n <= cap:
+        return None
+    return (f"{n} SharePoint sites selected; one scan covers at most {cap}. Run them as "
+            f"separate scans, or raise ACP_SP_MAX_SITES on the deployment.")
+
+
 @router.post("/scans")
 def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive|sharepoint)$"),
                sync: bool = False, folder: str | None = Query(None),
@@ -140,6 +166,10 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
         raise HTTPException(401, "sign in with Google to scan your Drive")
     if source == "sharepoint" and not sp_token:
         raise HTTPException(401, "sign in with Microsoft to scan OneDrive")
+    if source == "sharepoint":
+        over = sharepoint_site_overflow(folder, folders)
+        if over:
+            raise HTTPException(400, over)
     # Admin deterministic-only mode is a HARD override: if AI is disabled platform-wide,
     # no scan runs AI regardless of the per-scan ?ai= request.
     effective_ai = ai and core.store.get_ai_enabled()

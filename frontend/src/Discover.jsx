@@ -1166,11 +1166,22 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         )}
       </div>
 
-      {/* The site id travels as `folder`, which is what the backend reads it as — _list treats
-          `folder` as the site for source='sharepoint' (#156). One parameter, not two. */}
+      {/* ONE site travels as `folder`, which is what the backend reads it as — _list treats
+          `folder` as the site for source='sharepoint' (#156). One parameter, not two.
+
+          SEVERAL travel as `folders`, the repeatable multi-root form the same call already
+          accepts: scanner._sp_locations splits those roots into folder pairs (`<drive>/<item>`)
+          and bare site ids, so a list of site ids needs no third parameter either. The single
+          case keeps the old shape deliberately — a saved link, a queued job and every existing
+          test still name one site the way they always did. */}
       {showSites && (
         <SitePicker
-          onScan={(siteId) => { setShowSites(false); onScan('sharepoint', siteId) }}
+          onScan={(siteIds) => {
+            setShowSites(false)
+            const ids = Array.isArray(siteIds) ? siteIds : [siteIds]
+            if (ids.length <= 1) onScan('sharepoint', ids[0] || null)
+            else onScan('sharepoint', null, { folders: ids })
+          }}
           onClose={() => setShowSites(false)} />
       )}
 

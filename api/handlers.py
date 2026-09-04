@@ -1944,7 +1944,8 @@ def _scan_discover(payload: dict, job: dict) -> None:
         # for the full duration. Throttled to one DB write every 2 s — the scanner does the timing
         # inside _search_drive/_search_folder; this callback just persists whatever count arrived.
         def _listing_progress(count: int, folders: int | None = None,
-                               active: list | None = None, recent: list | None = None) -> None:
+                               active: list | None = None, recent: list | None = None,
+                               sites: list | None = None) -> None:
             try:
                 core.store.set_scan_files(scan_id, count)
                 _jid = job.get("id")
@@ -1976,6 +1977,15 @@ def _scan_discover(payload: dict, job: dict) -> None:
                     # None for the flat Drive-query path, same "omit rather than clobber" rule as
                     # folders_found above. A frontend without this field yet (or a scan predating
                     # it) simply never sees `active`/`recent` — nothing downstream requires them.
+                    # Per-SITE progress for a multi-site SharePoint run: which sites are done,
+                    # which are still queued, which are blocked and why. Emitted as each site
+                    # resolves rather than per file — a thirty-site walk is otherwise one silent
+                    # bar, and "which site is it on, and did any fail?" is the question an
+                    # operator watching a long estate scan actually has. Same "omit rather than
+                    # clobber" rule as folders_found: a later tick with nothing to report must
+                    # not blank a breakdown an earlier one produced.
+                    if sites is not None:
+                        patch["sites"] = sites
                     if active is not None:
                         patch["active_folders"] = active
                     if recent is not None:
@@ -2295,6 +2305,11 @@ def _scan_discover(payload: dict, job: dict) -> None:
         norm = [{"file": it["name"], "drive_file_id": it.get("id"), "mime": it.get("mime"),
                  "path": it.get("path"), "checksum": it.get("checksum"),
                  "drive_id": it.get("driveId"),
+                 # WHICH SharePoint site and library this document came from. Carried on the
+                 # scannable record by the walk (scanner._sp_classify_item) and persisted per
+                 # row: a run now spans a SET of sites, so the scan's scope can no longer answer
+                 # "which site is this file in" for any individual document.
+                 "site_id": it.get("siteId"), "library_name": it.get("libraryName"),
                  "drive_account_id": it.get("drive_account_id"),
                  "source_modified": it.get("source_modified"),
                  "source_mime": it.get("source_mime"), "created_at": it.get("created_at"),
@@ -2312,6 +2327,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
                     "created_at": it.get("created_at"), "source_modified": it.get("source_modified"),
                     "owner": it.get("owner"), "parent_folder": it.get("parent_folder"),
                     "drive_id": it.get("drive_id"),
+                    "site_id": it.get("site_id"), "library_name": it.get("library_name"),
                     "drive_account_id": it.get("drive_account_id"),
                     "content_type": it.get("content_type")}
                    for it in norm] + inventory

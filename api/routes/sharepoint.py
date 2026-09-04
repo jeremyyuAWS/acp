@@ -121,6 +121,9 @@ def describe_sharepoint_readiness(request: Request, roots: list[str] | None) -> 
     folder size. `roots` are `<driveId>/<itemId>` pairs — the same form /sharepoint/folders hands
     out and start_scan's `folders` param expects — split the same way sp_folders splits `parent`.
     An empty/None roots means the signed-in user's whole OneDrive, checked via its default drive.
+
+    A root with NO "/" is a SITE id, and is checked as one (its libraries listed) rather than as
+    an item — see the branch below for what the item path did with a site id before this.
     """
     token = request.headers.get("x-sp-token")
     if not token:
@@ -129,10 +132,37 @@ def describe_sharepoint_readiness(request: Request, roots: list[str] | None) -> 
     checked = roots or [None]
     root_results = []
     for r in checked:
+        if r and "/" not in r:
+            # A BARE root is a SITE id, not an item id — the same split scanner._sp_locations
+            # makes, and the reason this branch exists at all. Without it the id fell through to
+            # the item path below, which resolves a missing drive to the signed-in user's
+            # OneDrive and then asks it for an item whose id is a site: Graph answers 404, and a
+            # perfectly readable site was reported "unreachable" by a check that had looked in
+            # somebody's OneDrive for it. Every multi-site scan starts with roots of exactly this
+            # shape, so the wrong answer would have been the ordinary case.
+            #
+            # Readiness for a site is "can this token list its libraries" — one Graph call, the
+            # same bounded cost as an item lookup, and the same call the scan itself makes first.
+            try:
+                libs = scanner._sp_drives(token, r)
+            except PermissionError as e:
+                root_results.append({"id": r, "kind": "site", "exists": False, "error": str(e)})
+                continue
+            except Exception as e:  # noqa: BLE001 — a transport failure is not a missing site
+                root_results.append({"id": r, "kind": "site", "exists": False,
+                                     "error": f"Microsoft Graph error: {e}"})
+                continue
+            # A site with NO visible library scans to zero. Reporting it ready would hand the
+            # operator an empty run and no way to tell the site from the product — the same
+            # judgement SitePicker makes when it says so before the scan starts.
+            root_results.append({"id": r, "kind": "site", "exists": bool(libs),
+                                 "name": scanner._sp_site_name(token, r),
+                                 "libraries": len(libs),
+                                 **({} if libs else
+                                    {"error": "no document libraries visible on this site"})})
+            continue
         if r:
-            drive_id, _, item_id = r.partition("/") if "/" in r else ("", "", r)
-            if not drive_id:
-                drive_id = scanner._sp_default_drive(token) or ""
+            drive_id, _, item_id = r.partition("/")
         else:
             drive_id, item_id = scanner._sp_default_drive(token) or "", "root"
         if not drive_id:

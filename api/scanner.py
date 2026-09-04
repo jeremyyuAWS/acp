@@ -163,19 +163,26 @@ def _estate_doc_class(name: str, mime: str | None) -> str:
 
 def _inv_row(*, file: str, drive_file_id=None, mime=None, size=None, checksum=None, path=None,
              created_at=None, source_modified=None, owner=None, parent_folder=None,
-             drive_id=None) -> dict:
+             drive_id=None, site_id=None, library_name=None) -> dict:
     """One store.add_inventory row, with size normalised to KiB and doc_class derived.
 
     `drive_id` is the Graph DRIVE a SharePoint/OneDrive item was listed from. It is part of the
     item's identity, not decoration: Graph item ids are unique only within a drive, so a row
     carrying `drive_file_id` alone cannot be fetched back reliably (_sp_download). None for every
     other source, and None for a OneDrive listing, which legitimately has no drive to name.
+
+    `site_id` and `library_name` complete that identity for SharePoint. A scan can span up to 30
+    sites now, so "which site is this document in" is no longer answerable from the run's scope —
+    the scope holds a SET. Recorded per row rather than derived, because a drive id names nothing
+    to a reader and does not say which site it belongs to, and because every later phase (per-site
+    metadata, per-library deltas, per-site exception reports, write-back targeting) needs the
+    boundary this preserves. None for OneDrive, which has no site, and for every other source.
     """
     return {"file": file, "drive_file_id": drive_file_id, "mime": mime or None,
             "size_kb": _inv_size_kb(size), "doc_class": _estate_doc_class(file, mime),
             "checksum": checksum, "path": path, "created_at": created_at,
             "source_modified": source_modified, "owner": owner, "parent_folder": parent_folder,
-            "drive_id": drive_id}
+            "drive_id": drive_id, "site_id": site_id, "library_name": library_name}
 
 
 def _drive_inventory_row(f: dict) -> dict:
@@ -188,8 +195,13 @@ def _drive_inventory_row(f: dict) -> dict:
                     parent_folder=parents[0] if parents else None)
 
 
-def _sp_inventory_row(item: dict) -> dict:
-    """Inventory row from a raw MS Graph driveItem (any type)."""
+def _sp_inventory_row(item: dict, *, site_id: str | None = None,
+                      library_name: str | None = None) -> dict:
+    """Inventory row from a raw MS Graph driveItem (any type).
+
+    `site_id`/`library_name` come from the WALK, not from the item: a driveItem names its drive
+    (parentReference.driveId) but never the site or the library's display name, so an item that
+    travelled alone could not be attributed to the site the operator selected."""
     fmeta = item.get("file") or {}
     cb = (item.get("createdBy") or {}).get("user") or {}
     lb = (item.get("lastModifiedBy") or {}).get("user") or {}
@@ -207,7 +219,8 @@ def _sp_inventory_row(item: dict) -> dict:
                     owner=owner, parent_folder=parent,
                     # The drive half of the item's identity. Absent on a OneDrive listing, which
                     # has no driveId to give — read downstream as /me/drive, which is right there.
-                    drive_id=(item.get("parentReference") or {}).get("driveId"))
+                    drive_id=(item.get("parentReference") or {}).get("driveId"),
+                    site_id=site_id, library_name=library_name)
 
 
 def _local_stat_meta(p: Path, corpus: Path) -> dict:
@@ -1520,7 +1533,8 @@ def _sp_skip_folders(exclude_remediated: bool) -> set[str]:
 
 
 def _sp_classify_item(item: dict, *, drive_id: str | None, skip_folders: set[str],
-                      exts: set[str]) -> dict | None:
+                      exts: set[str], site_id: str | None = None,
+                      library_name: str | None = None) -> dict | None:
     """Classify ONE Graph driveItem KNOWN to be a file (the caller has already checked
     "file" in item and deduped it by (drive_id, id)) — skip-folder + OS-metadata exclusion,
     then split into the whole-estate triage row, and either a scannable record or a
@@ -1529,6 +1543,10 @@ def _sp_classify_item(item: dict, *, drive_id: str | None, skip_folders: set[str
     classifies each item byte-identically to a fresh listing — not a close approximation of
     one. Returns None for an item neither listing should count (in a skip-folder, or OS
     metadata like .DS_Store/Thumbs.db).
+
+    `site_id`/`library_name` are the walk's knowledge of WHERE this item was found, stamped onto
+    both output shapes. They default to None so sp_reconstructed_listing — which replays items
+    from a prior inventory and has no walk to ask — classifies exactly as it always did.
 
     Return shape: {"est_row": ..., "scannable": {...} or None, "inventory_row": {...} or None}
     — est_row is built for every kept file (scannable or not), the SharePoint analogue of
@@ -1586,6 +1604,13 @@ def _sp_classify_item(item: dict, *, drive_id: str | None, skip_folders: set[str
                     "parent_folder": (item.get("parentReference") or {}).get("path")}
         if drive_id:
             scannable["driveId"] = drive_id
+        # Carried on the scannable record too, not only the inventory row: the scannable set is
+        # what _scan_discover inventories for ANALYSED files, so omitting it here would give a
+        # site id to every media file and none to the documents the assessment is about.
+        if site_id:
+            scannable["siteId"] = site_id
+        if library_name:
+            scannable["libraryName"] = library_name
         # A Content Type carried forward from a prior scan's inventory
         # (_sp_file_from_inventory_row). Live Graph items never carry this key, so a fresh
         # listing classifies byte-identically to before — the property this function's
@@ -1594,15 +1619,47 @@ def _sp_classify_item(item: dict, *, drive_id: str | None, skip_folders: set[str
         if item.get("_acp_content_type"):
             scannable["content_type"] = item["_acp_content_type"]
     else:
-        inventory_row = _sp_inventory_row(item)
+        inventory_row = _sp_inventory_row(item, site_id=site_id, library_name=library_name)
     return {"est_row": est_row, "scannable": scannable, "inventory_row": inventory_row}
+
+
+# The most SharePoint sites one scan may span. An estate assessment routinely covers a few dozen
+# team sites, so the picker lets an operator select several — and the walk below is bounded here
+# rather than by however many the tenant happens to have. 30 sites x every library on each is
+# already a long Graph traversal; an unbounded selection is a scan that does not finish against a
+# large tenant.
+#
+# SITES PAST THE CAP ARE DROPPED AND THE LISTING IS MARKED TRUNCATED. That distinction is the
+# whole point of the cap being here: the single-site version kept the FIRST bare root and ignored
+# every other one with no signal at all (see _sp_locations), so selecting five sites reported one
+# site's documents as the estate. A floor that says it is a floor is a usable answer; a floor
+# presented as a total is not.
+def _sp_max_sites() -> int:
+    """Read at call time, not import time, so a deployment can raise the ceiling with an env var
+    and a test can lower it without reloading the module."""
+    try:
+        n = int(os.environ.get("ACP_SP_MAX_SITES", "30") or 30)
+    except ValueError:
+        return 30
+    return n if n > 0 else 30
+
+
+def _sp_cap_sites(sites: list[str]) -> tuple[list[str], list[str]]:
+    """(kept, dropped) for a selected site list. One function, called by both _list (so the
+    recorded scope names exactly the sites that were walked) and _sp_list (so a direct caller
+    cannot exceed the cap either) — two independent caps would drift, and the scope blob would
+    then disagree with the listing it describes."""
+    cap = _sp_max_sites()
+    return list(sites[:cap]), list(sites[cap:])
 
 
 def _sp_list(token: str, max_files: int = 200, site: str | None = None,
              exclude_remediated: bool = False, inventory_out: list | None = None,
              scope_out: dict | None = None,
              locations: list[tuple[str, str]] | None = None,
-             exclude_ids: set | None = None) -> list[dict]:
+             exclude_ids: set | None = None,
+             sites: list[str] | None = None,
+             progress_cb=None) -> list[dict]:
     """List scannable files from OneDrive, or from every document library on a SharePoint site.
 
     The RETURN value is the scannable analysis set (the six supported extensions) — unchanged, so
@@ -1613,6 +1670,19 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
 
     `site` is a Graph site id. Absent, this behaves exactly as it always has (the signed-in
     user's OneDrive), so an existing scan is unchanged by this function growing a second mode.
+
+    `sites` is the MULTI-site form and is what an estate-wide run passes: every document library
+    on every listed site, walked into one listing under ONE shared budget. `site` remains the
+    one-site spelling and is folded into `sites` here, so a caller that has never heard of the
+    plural form is unaffected. The two are not different modes — there is one loop, and a single
+    site is a list of one.
+
+    WHY ONE SHARED BUDGET rather than max_files per site. `max_files` bounds the work a scan is
+    allowed to do; per-site budgets would multiply it by the number of sites selected, so a
+    30-site run would quietly cost 30x its cap against a customer's tenant. The consequence is
+    that a large first site can exhaust the budget before a later one is reached — which is
+    TRUNCATION, and is recorded as such (hit_cap), never returned as though the estate ended
+    there.
 
     EVERY ITEM CARRIES ITS driveId, and that is not cosmetic. Graph item ids are unique only
     WITHIN a drive, so two libraries can legitimately hand back the same id — and the download
@@ -1629,6 +1699,14 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
     between different items."""
     exts = _sp_scannable_exts()
     skip_folders = _sp_skip_folders(exclude_remediated)
+    # One list, order preserved, duplicates collapsed: selecting the same site twice must not
+    # walk it twice (every item would be deduped by `seen` anyway, but the Graph calls would be
+    # spent and the budget consumed before that check ever runs).
+    site_ids: list[str] = []
+    for _s in ([*(sites or []), *([site] if site else [])]):
+        if _s and _s not in site_ids:
+            site_ids.append(_s)
+    site_ids, _over_cap = _sp_cap_sites(site_ids)
     files: list[dict] = []
     # Keyed by (drive, item) — an item id is unique only within its drive, so a bare id would
     # collapse two genuinely different documents from two libraries into one.
@@ -1682,55 +1760,136 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
     # the default and it is not silent — the scan logs which mode produced the inventory, so a
     # count can always be attributed to the method that produced it.
     use_search = os.environ.get("ACP_SP_ENUMERATE", "walk").strip().lower() == "search"
+    # A TARGET is one document library's worth of work: (drive_id, batches, site_id, library_name).
+    # The last two are the WALK's knowledge of where these items were found — a Graph driveItem
+    # names its drive and nothing else, so an item that travelled alone could never be attributed
+    # to the site an operator selected. Carried here rather than looked up later because a scan
+    # now spans a SET of sites and the run's scope can no longer answer it per document.
+    targets: list[tuple] = []
+    # Per SITE: what was covered, what it cost, and whether it finished. The exit gate for a
+    # multi-site run is "no site silently omitted", and a total with no per-site breakdown cannot
+    # show that — a missing site and a site that legitimately held nothing produce the same
+    # number. Keyed by site id, in selection order.
+    site_report: dict[str, dict] = {s_id: {"id": s_id, "libraries": [], "listed": 0, "estate": 0,
+                                           "status": "queued", "error": None}
+                                    for s_id in site_ids}
+    # Sites the CAP refused are in the report too, as skipped-with-a-reason. The exit gate is "no
+    # site silently omitted"; a site dropped before the loop and absent from the breakdown is
+    # exactly the omission the gate is about, and the count on its own does not name it.
+    for s_id in _over_cap:
+        site_report[s_id] = {"id": s_id, "libraries": [], "listed": 0, "estate": 0,
+                             "status": "skipped",
+                             "error": f"over the {_sp_max_sites()}-site limit for one scan"}
+    drive_site: dict[str, str] = {}          # drive id -> the site it belongs to
+
+    def _tick():
+        """Per-site progress out to the job/SSE stream. Emitted as each SITE resolves rather than
+        per file: a thirty-site walk is otherwise a single silent bar, and "which site is it on"
+        is the question an operator watching a long estate scan actually has."""
+        if progress_cb:
+            try:
+                progress_cb(len(files), sites=[dict(v) for v in site_report.values()])
+            except TypeError:
+                # An older callback that does not accept `sites` still gets the count. A progress
+                # diagnostic must never be the thing that fails a scan.
+                progress_cb(len(files))
+
     if locations:
         # Chosen folders. Each location is (drive_id, item_id) — never a bare item id, because a
         # Graph item id is unique only within its drive (see _sp_folders).
-        targets = []
         for drive_id, item_id in locations:
             walked, cut = _sp_walk_folder(token, drive_id, item_id, max_files, exts,
                                           inventory_out=None, exclude_ids=exclude_ids,
                                           skip_names=skip_folders)
             hit_cap = hit_cap or cut
-            targets.append((drive_id, iter([walked])))
-    elif site:
-        drives = _sp_drives(token, site)
-        if not drives:
-            print(f"[scan] SharePoint site {site} has no document libraries visible to this "
-                  f"token — nothing to scan", flush=True)
+            targets.append((drive_id, iter([walked]), None, None))
+    elif site_ids:
+        if _over_cap:
+            # Sites the cap refused. Named in the log rather than counted, because "which site did
+            # you not read?" is the operator's next question and an id is what answers it.
+            print(f"[scan] {len(site_ids) + len(_over_cap)} SharePoint sites selected; scanning "
+                  f"the first {len(site_ids)} (ACP_SP_MAX_SITES). Not listed: "
+                  f"{', '.join(_over_cap)} — the estate below is a floor, not a total.", flush=True)
+            hit_cap = True
         if use_search:
-            print(f"[scan] SharePoint site {site} listed via the SEARCH INDEX "
+            print(f"[scan] {len(site_ids)} SharePoint site(s) listed via the SEARCH INDEX "
                   f"(ACP_SP_ENUMERATE=search) — recent changes may be missing", flush=True)
-            targets = [(d["id"], _pages(f"{GRAPH}/drives/{d['id']}/root/search(q='')"
-                                        f"?$select={_SP_ITEM_SELECT}&$top=200")) for d in drives]
-        else:
-            # Each library walked from its own root, sharing ONE budget across the site.
-            #
-            # The budget is what the lazy `search` generator gave for free and an eager walk does
-            # not: the old loop stopped requesting pages the moment the cap filled, so a site whose
-            # first library exhausts it never touched the second. Walking every library up front
-            # would spend real Graph calls on an estate that is already a floor — slower, and
-            # against a customer's tenant.
-            #
-            # A library left unwalked is TRUNCATION, and it is recorded as such. Silently returning
-            # library A as though it were the site is the exact failure this whole change is about,
-            # reached from the other direction.
-            targets = []
-            budget = max_files
+        # ONE BUDGET across every selected site. max_files bounds the work a scan may do; a
+        # per-site budget would multiply it by the number of sites chosen, so a 30-site run would
+        # quietly cost 30x its cap against a customer's tenant. The consequence — a large early
+        # site can exhaust it before a later one is reached — is truncation, and is recorded as
+        # such per site rather than left to look like an empty site.
+        budget = max_files
+        for s_id in site_ids:
+            rep = site_report[s_id]
+            if budget <= 0 and not use_search:
+                rep["status"] = "skipped"       # never reached → the estate is a floor
+                hit_cap = True
+                continue
+            # ONE SITE'S FAILURE IS NOT THE SCAN'S. A tenant of thirty sites reliably contains one
+            # the token has lost access to, one mid-migration, and one that throttles; letting any
+            # of them raise discards every site already walked and returns nothing. The failure is
+            # recorded against the site that had it — with the message, because "Sites.Read.All"
+            # and "429" are different problems with different owners — the listing is marked a
+            # floor, and the walk carries on.
+            try:
+                drives = _sp_drives(token, s_id)
+            except PermissionError as e:
+                rep.update(status="blocked", error=str(e))
+                print(f"[scan] SharePoint site {s_id} unreadable: {e} — continuing with the "
+                      f"remaining sites; this estate is a floor", flush=True)
+                hit_cap = True
+                _tick()
+                continue
+            except Exception as e:  # noqa: BLE001 — a Graph/transport failure is one site's, not the run's
+                rep.update(status="blocked", error=f"Microsoft Graph error: {e}")
+                print(f"[scan] SharePoint site {s_id} failed to list its libraries: {e} — "
+                      f"continuing with the remaining sites; this estate is a floor", flush=True)
+                hit_cap = True
+                _tick()
+                continue
+            if not drives:
+                print(f"[scan] SharePoint site {s_id} has no document libraries visible to "
+                      f"this token — nothing to scan", flush=True)
+                rep["status"] = "complete"
+                _tick()
+                continue
+            rep["status"] = "scanning"
+            rep["libraries"] = [{"id": d["id"], "name": d.get("name")} for d in drives]
             for d in drives:
+                drive_site[d["id"]] = s_id
+                if use_search:
+                    targets.append((d["id"], _pages(f"{GRAPH}/drives/{d['id']}/root/search(q='')"
+                                                    f"?$select={_SP_ITEM_SELECT}&$top=200"),
+                                    s_id, d.get("name")))
+                    continue
                 if budget <= 0:
-                    hit_cap = True          # libraries left unlisted → the estate is a floor
+                    rep["status"] = "partial"   # libraries left unlisted → the estate is a floor
+                    hit_cap = True
                     break
-                walked, cut = _sp_walk_folder(token, d["id"], "root", budget, exts,
-                                              inventory_out=None, exclude_ids=exclude_ids,
-                                              skip_names=skip_folders)
+                try:
+                    walked, cut = _sp_walk_folder(token, d["id"], "root", budget, exts,
+                                                  inventory_out=None, exclude_ids=exclude_ids,
+                                                  skip_names=skip_folders)
+                except Exception as e:  # noqa: BLE001 — same isolation, one library down
+                    rep.update(status="partial", error=f"library {d.get('name') or d['id']}: {e}")
+                    print(f"[scan] SharePoint library {d.get('name') or d['id']} on site {s_id} "
+                          f"failed: {e} — continuing", flush=True)
+                    hit_cap = True
+                    continue
                 hit_cap = hit_cap or cut
+                if cut:
+                    rep["status"] = "partial"
                 budget -= len(walked)
-                targets.append((d["id"], iter([walked])))
+                targets.append((d["id"], iter([walked]), s_id, d.get("name")))
+            if rep["status"] == "scanning":
+                rep["status"] = "complete"
+            _tick()
     elif use_search:
         print("[scan] OneDrive listed via the SEARCH INDEX (ACP_SP_ENUMERATE=search) — "
               "recent changes may be missing", flush=True)
         targets = [(None, _pages(f"{GRAPH}/me/drive/root/search(q='')"
-                                 f"?$select={_SP_ITEM_SELECT}&$top=200"))]
+                                 f"?$select={_SP_ITEM_SELECT}&$top=200"), None, None)]
     else:
         # `/me/drive` as the BASE, and `drive_id` stays None on purpose. Resolving the real id
         # would be an extra round trip and would change what is stored on every item; the download
@@ -1740,9 +1899,9 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                                       inventory_out=None, exclude_ids=exclude_ids,
                                       base=f"{GRAPH}/me/drive", skip_names=skip_folders)
         hit_cap = hit_cap or cut
-        targets = [(None, iter([walked]))]
+        targets = [(None, iter([walked]), None, None)]
 
-    for i, (drive_id, pages) in enumerate(targets):
+    for i, (drive_id, pages, target_site, library_name) in enumerate(targets):
         for batch in pages:
             if len(files) >= max_files:
                 break
@@ -1757,12 +1916,17 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                         continue
                     seen.add(key)
                 classified = _sp_classify_item(item, drive_id=drive_id,
-                                               skip_folders=skip_folders, exts=exts)
+                                               skip_folders=skip_folders, exts=exts,
+                                               site_id=target_site, library_name=library_name)
                 if classified is None:
                     continue
                 est_files.append(classified["est_row"])
+                if target_site and target_site in site_report:
+                    site_report[target_site]["estate"] += 1
                 if classified["scannable"] is not None:
                     files.append(classified["scannable"])
+                    if target_site and target_site in site_report:
+                        site_report[target_site]["listed"] += 1
                 elif inventory_out is not None and classified["inventory_row"] is not None:
                     # Non-scannable item — inventoried with metadata, never analysed.
                     inventory_out.append(classified["inventory_row"])
@@ -1772,16 +1936,44 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
             # the distinction the whole scope contract turns on.
             if next(pages, None) is not None or i < len(targets) - 1:
                 hit_cap = True
+                # The site whose listing the cap cut off, and every site after it, did not
+                # complete. Left as-is they would read "complete" beside a total that stopped
+                # mid-library — a per-site breakdown that agrees with a truncated grand total is
+                # worse than none, because it looks like corroboration.
+                for j in range(i, len(targets)):
+                    later = targets[j][2]
+                    if later and later in site_report:
+                        rep = site_report[later]
+                        rep["status"] = "partial" if j == i else "skipped"
             break
 
     if relisted:
-        where = f"site {site}" if site else "OneDrive"
+        where = (f"site {site_ids[0]}" if len(site_ids) == 1
+                 else f"{len(site_ids)} sites" if site_ids else "OneDrive")
         print(f"[scan] {relisted} duplicate listing(s) of the same {where} item id collapsed "
               f"(paged /search overlap) — not extra documents", flush=True)
+    if site_report:
+        # Anything still 'queued' or 'scanning' at this point was never resolved by the loop —
+        # the search-index path builds its targets up front and resolves them here, and a break
+        # can leave a status mid-flight. Left alone they would read as an in-progress scan on a
+        # finished run.
+        for rep in site_report.values():
+            if rep["status"] == "scanning":
+                rep["status"] = "complete"
+            elif rep["status"] == "queued":
+                rep["status"] = "skipped"
+                hit_cap = True
+        _tick()
     if scope_out is not None:
         # Parity with _search_drive: the whole-estate three-denominator summary, so SharePoint's
         # coverage dashboard is populated and its truncation is honest (a floor when hit_cap).
         scope_out["inventory"] = estate_inventory.summarize(est_files, truncated=hit_cap)
+        if site_report:
+            # AUDITABLE PER-SITE TOTALS, which is what makes "no site was silently omitted" a
+            # checkable claim rather than an assurance: a site that held nothing and a site that
+            # was never opened produce the same contribution to the grand total and different
+            # rows here.
+            scope_out["sites"] = [dict(v) for v in site_report.values()]
     result = files[:max_files]
     # Content-type enrichment LAST, over the FINAL scannable set only — after truncation, so a
     # capped listing never pays for classification on files it is about to drop.
@@ -2201,23 +2393,33 @@ def _dedupe_names(items: list[dict]) -> list[dict]:
     return out
 
 
-def _sp_locations(roots: list[str]) -> tuple[list[tuple[str, str]], str | None]:
-    """Split chosen SharePoint roots into (drive, item) folder locations and a bare site id.
+def _sp_locations(roots: list[str]) -> tuple[list[tuple[str, str]], list[str]]:
+    """Split chosen SharePoint roots into (drive, item) folder locations and site ids.
 
     A folder location is written `<driveId>/<itemId>` — the pair, because a Graph item id is
     unique only within its drive. A root with no "/" is a site id, which is what the site picker
     has always sent, so an existing caller is unchanged.
+
+    SITES ARE A LIST, and that is the fix rather than a generalisation for its own sake. This
+    returned a single `site` and kept the FIRST bare root — `elif site is None` — so a request
+    naming five sites was answered with one, silently: no error, no truncation flag, a scan that
+    reported one site's documents as the estate and a compliance number computed from it. Every
+    caller now gets all of them, and the bound on how many are actually walked is stated in one
+    place (_sp_cap_sites) where it can be recorded on the scope.
+
+    Duplicates collapse. Selecting the same site twice is the same estate, not twice the estate,
+    and the budget spent re-walking it would come out of the sites that were not walked yet.
     """
     locs: list[tuple[str, str]] = []
-    site: str | None = None
+    sites: list[str] = []
     for r in roots:
         if "/" in r:
             drive_id, _, item_id = r.partition("/")
             if drive_id and item_id:
                 locs.append((drive_id, item_id))
-        elif site is None:
-            site = r
-    return locs, site
+        elif r and r not in sites:
+            sites.append(r)
+    return locs, sites
 
 
 def _sp_whole_library_target(folder: str | None,
@@ -2244,8 +2446,8 @@ def _sp_whole_library_target(folder: str | None,
         return True, None
     if len(roots) > 1:
         return False, None
-    locs, site = _sp_locations(roots)
-    if site or not locs:
+    locs, sites = _sp_locations(roots)
+    if sites or not locs:
         return False, None
     [(drive_id, item_id)] = locs
     return (True, drive_id) if item_id == "root" else (False, None)
@@ -2355,7 +2557,18 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         # library or OneDrive, a bare id is a site. Folder narrowing is what makes OneDrive
         # scopeable at all — before this, "SharePoint" could only ever mean a whole site or the
         # whole of the signed-in user's OneDrive.
-        sp_locs, site = _sp_locations(roots)
+        sp_locs, sp_all_sites = _sp_locations(roots)
+        # Capped HERE as well as inside _sp_list, through the same helper, so the scope recorded
+        # below names exactly the sites that were walked. A scope blob listing 40 sites next to a
+        # listing that covered 30 is worse than either number alone: it is a boundary the reader
+        # can check the count against, and it would be wrong.
+        sp_sites, sp_dropped_sites = _sp_cap_sites(sp_all_sites)
+        # `site` stays the SINGLE-site spelling and stays None for a multi-site run. Everything
+        # downstream that keys off it — the incremental baseline match, the inventory-diff
+        # boundary, the UI's scope chip — reads one site id, and quietly handing it the first of
+        # several would re-create the exact defect _sp_locations just stopped. Multi-site callers
+        # read `sites` instead.
+        site = sp_sites[0] if len(sp_sites) == 1 else None
         if sp_delta is not None:
             # PRD Phase 3: reconstruct the estate from the prior scan's inventory + a Graph
             # delta instead of walking SharePoint — see core._sp_sync_plan for how `sp_delta`
@@ -2375,6 +2588,22 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
             extra = {"locations": sp_locs} if sp_locs else {}
             if excl:
                 extra["exclude_ids"] = excl
+            if len(sp_all_sites) > 1:
+                # Same reasoning as `locations` above, and the same discipline: a single-site or
+                # OneDrive run calls _sp_list with EXACTLY the arguments it always did, so a test
+                # stub pinning the old signature keeps passing. A caller that has not opted into
+                # multi-site must not be able to tell the parameter exists.
+                #
+                # The UNCAPPED list is passed on purpose. _sp_list applies the same cap through
+                # the same helper, and doing it there is what puts the refused sites in the
+                # per-site breakdown as skipped-with-a-reason rather than dropping them before
+                # anything could record them — which is the omission the exit gate is about.
+                extra["sites"] = sp_all_sites
+            if progress_cb is not None:
+                # Per-site progress out to the job/SSE stream. Passed only when a caller supplied
+                # one, so a test stub pinning the old signature is unaffected — the same
+                # discipline `locations` and `sites` follow above.
+                extra["progress_cb"] = progress_cb
             result = _sp_list(sp_token, max_files or 200, site=site,
                               exclude_remediated=exclude_remediated, inventory_out=inventory_out,
                               scope_out=scope_out, **extra)
@@ -2387,9 +2616,46 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
             # `truncated` now comes from the estate inventory's honest hit_cap (set by _sp_list) — the
             # old `len(result) >= max_files` flagged a fully-listed estate whose analysis set merely
             # equalled the cap. `inventory` was already placed on scope_out by _sp_list.
+            # One name lookup per selected site, reused for `site_name` below rather than paid
+            # for twice. Bounded by the site cap, so this is at most _sp_max_sites() metadata
+            # reads however many sites the tenant has.
+            site_names = {s_id: _sp_site_name(sp_token, s_id) for s_id in sp_sites}
             scope_out.update({"kind": "sharepoint", "site": site, "kept": len(result),
-                              "site_name": _sp_site_name(sp_token, site) if site else None,
-                              "truncated": bool((scope_out.get("inventory") or {}).get("truncated"))})
+                              "site_name": site_names.get(site) if site else None,
+                              # `or sp_dropped_sites` because the cap is applied HERE, before
+                              # _sp_list ever sees the refused sites — so its own hit_cap cannot
+                              # know about them and the estate would read as complete. Truncation
+                              # that the layer which caused it does not report is the failure this
+                              # whole change exists to stop.
+                              "truncated": bool((scope_out.get("inventory") or {}).get("truncated")
+                                                or sp_dropped_sites)})
+            if sp_sites:
+                # THE MULTI-SITE BOUNDARY, and it is load-bearing for the same reason `folders`
+                # below is: a two-site run has no `site`, so without this the count renders with
+                # no boundary at all and reads as the whole tenant. Always written when any site
+                # was chosen — including the single-site case — so every consumer can read one
+                # field instead of branching on how many there were.
+                #
+                # _sp_list already wrote the per-site rows (ids, libraries, listed/estate totals,
+                # status, error). Only the NAME is added here, because naming a site is a Graph
+                # metadata read and the walk should not pay for one per site while it is walking.
+                # A site the cap refused keeps name=None rather than costing a lookup for an
+                # estate nobody read.
+                recorded = scope_out.get("sites")
+                if isinstance(recorded, list) and recorded:
+                    scope_out["sites"] = [{**row, "name": site_names.get(row.get("id"))}
+                                          for row in recorded]
+                else:
+                    # The delta-reconstruction path never calls _sp_list, so there are no rows to
+                    # decorate. Record the boundary anyway — a scope with a site set and no sites
+                    # listed is the shape that renders a count with no boundary.
+                    scope_out["sites"] = [{"id": s_id, "name": site_names.get(s_id)}
+                                          for s_id in sp_sites]
+            if sp_dropped_sites:
+                # Sites the cap refused. `truncated` already says the estate is a floor; this
+                # says WHY, which is the difference between "we hit a cap" and "raise
+                # ACP_SP_MAX_SITES or run these in a second scan".
+                scope_out["sites_omitted"] = len(sp_dropped_sites)
             if sp_locs:
                 # THIS IS LOAD-BEARING, not decoration. isNarrowScope() fired on `site` for
                 # SharePoint — and a OneDrive folder scan has NO site, so without `folders` here
