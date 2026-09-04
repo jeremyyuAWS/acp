@@ -255,12 +255,29 @@ stated rather than glossed: a managed-column edit that does not touch the driveI
 surface in the delta feed, so a carried-forward column can go stale silently. That is precisely
 what `ACP_SP_RECONCILE_DAYS` exists for.
 
-### Still open in Phase 3
+### SharePoint-native freshness
 
-**SharePoint-native freshness reporting.** `GET /scans/{sid}/source-status` answers per file with a
-live Drive `files().get()`, and returns `untracked` for every SharePoint file. The SharePoint
-answer should not be a per-file poll at all — SharePoint has something Drive does not, a delta
-cursor, which makes freshness one Graph call per LIBRARY instead of one per document. Doing it
-properly means recording each scan's own cursor so "changed since THIS scan" is answerable rather
-than "changed since the last sync". That is a schema field and its own change; it is not in this
-one, and `source-status` is unchanged for SharePoint until it lands.
+`GET /scans/{sid}/source-status` used to return `untracked` for every SharePoint file, and the
+reason was cost rather than oversight: Drive answers "has this drifted?" with one metadata read
+**per file**, which on a 30-site estate is thousands of Graph calls to render one screen.
+
+SharePoint has something Drive does not — a delta cursor — so the same question costs **one call
+per library**. Two things make that correct rather than merely cheap:
+
+- The replay starts from the cursor **this scan** recorded (`scope.sp_cursors`, written by
+  `handlers._sp_scan_cursors` right after the plan advanced each library to "now"). The live
+  cursor would answer "changed since the last sync", which becomes a different question the moment
+  a second scan runs — and its answer is indistinguishable from the right one.
+- The replay does **not** save the new deltaLink. Advancing it here would move the scan's recorded
+  position every time somebody opened the screen, so the second viewing would report "nothing
+  changed" however much had: a read that quietly destroys what it reads.
+
+No schema change was needed — the cursors live in the scan's own scope blob, which is already
+persisted per run and is already where a run records what it covered.
+
+A file the delta mentions is `stale`, one it reports deleted is `unavailable` with
+`error: deleted`, and everything else is `unchanged`. The classification is the *same*
+`source_staleness` comparison Drive gets: what differs between the sources is how `current` was
+obtained, not what the timestamps then mean. When the replay itself fails, the response carries
+`sharepoint_freshness_error` — an operator seeing a wall of `untracked` deserves to know it is a
+Graph problem this endpoint hit rather than a scan that recorded nothing.

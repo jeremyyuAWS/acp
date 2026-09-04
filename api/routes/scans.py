@@ -1519,6 +1519,53 @@ async def stream_remediation_status(sid: str, request: Request):
     })
 
 
+def _sp_freshness(run: dict, request: Request):
+    """What has changed in this scan's SharePoint libraries since it listed them.
+
+    Returns `(changed_by_key, removed_keys, error)`, or `(None, set(), None)` when this is not a
+    SharePoint scan that can be asked — no recorded cursors (a scan from before this shipped, or
+    one whose shape the delta query cannot serve), or no Microsoft token on the request. None is
+    "cannot answer", and the caller renders those files `untracked`, which is the honest state
+    and never a false `unchanged`.
+
+    ONE GRAPH CALL PER LIBRARY. That is the whole design: Drive answers this per file, which on a
+    thousands-of-documents estate is thousands of calls to render one screen, and is why
+    SharePoint has never had a freshness answer at all rather than a slow one.
+
+    The cursor is replayed and NOT saved. Advancing it here would move the scan's recorded
+    position every time somebody opened the screen, so the second viewing would report "nothing
+    changed" no matter what had — a read that quietly destroys the thing it reads.
+    """
+    if (run.get("source") != "sharepoint"):
+        return None, set(), None
+    scope = run.get("scope")
+    if isinstance(scope, str):
+        try:
+            scope = _json.loads(scope)
+        except Exception:  # noqa: BLE001
+            scope = {}
+    cursors = (scope or {}).get("sp_cursors") if isinstance(scope, dict) else None
+    if not cursors:
+        return None, set(), None
+    token = request.headers.get("x-sp-token")
+    if not token:
+        return None, set(), None
+    from scanner import sp_delta_since
+    changed: dict = {}
+    removed: set = set()
+    for raw_drive, link in cursors.items():
+        drive_id = raw_drive or None          # "" is the OneDrive/no-drive key (see handlers)
+        try:
+            items, gone, _ = sp_delta_since(token, drive_id, link)
+        except Exception as e:  # noqa: BLE001 — one library's failure is not the screen's
+            return None, set(), f"could not read changes for library {raw_drive or 'OneDrive'}: {e}"
+        removed |= set(gone)
+        for it in items:
+            if it.get("id"):
+                changed[(drive_id, it["id"])] = it.get("lastModifiedDateTime")
+    return changed, removed, None
+
+
 @router.get("/scans/{sid}/source-status")
 def source_status(sid: str, request: Request):
     """Has each file's SOURCE changed since ACP scanned it, and — PRD Phase 3 — where does ACP's
@@ -1538,17 +1585,39 @@ def source_status(sid: str, request: Request):
     if scan is None:
         raise HTTPException(404, "scan not found")
     files = scan.get("files") or []
-    run_status = (scan.get("run") or {}).get("status")
-    source_is_drive = (scan.get("run") or {}).get("source") == "drive"
+    run = scan.get("run") or {}
+    run_status = run.get("status")
+    source_is_drive = run.get("source") == "drive"
+    # SHAREPOINT ANSWERS THIS A DIFFERENT WAY, and the difference is the whole reason it can
+    # answer at all. Drive's answer is one metadata read per FILE; on a 30-site estate that is
+    # thousands of Graph calls to render one screen. SharePoint has a delta cursor, so the same
+    # question costs one call per LIBRARY — replayed from the position the scan itself recorded
+    # (handlers._sp_scan_cursors), which is what makes it "changed since THIS scan" rather than
+    # "changed since the last sync", a different question with an indistinguishable answer.
+    sp_changed, sp_removed, sp_error = _sp_freshness(run, request)
+    source_tracked = source_is_drive or sp_changed is not None
     trackable = source_is_drive and any(f.get("source_modified") and f.get("drive_file_id") for f in files)
     svc = core.drive_service(request) if trackable else None   # 401 in GIS mode without X-Drive-Token
     from googleapiclient.errors import HttpError
     rows = []
     for f in files:
         baseline, drive_id = f.get("source_modified"), f.get("drive_file_id")
-        if not source_is_drive or not drive_id or not baseline:
+        if sp_changed is not None and drive_id and baseline:
+            # A file the delta mentions changed; one it does not, did not. `current` is the
+            # item's own new timestamp so the SAME comparison Drive uses produces the state —
+            # a second classification path would be a second thing to keep true.
+            key = (f.get("drive_id"), drive_id)
+            if key in sp_removed:
+                row = _ss.classify_sync_state(f, None, source_is_drive=False,
+                                              source_tracked=True, fetch_error="deleted",
+                                              run_status=run_status)
+            else:
+                row = _ss.classify_sync_state(f, sp_changed.get(key, baseline),
+                                              source_is_drive=False, source_tracked=True,
+                                              run_status=run_status)
+        elif not source_is_drive or not drive_id or not baseline:
             row = _ss.classify_sync_state(f, None, source_is_drive=source_is_drive,
-                                          run_status=run_status)
+                                          source_tracked=source_tracked, run_status=run_status)
         else:
             current, err = None, None
             try:
@@ -1563,6 +1632,17 @@ def source_status(sid: str, request: Request):
                                           fetch_error=err, run_status=run_status)
         rows.append({"file": f["file"], "drive_file_id": drive_id, **row})
     count = lambda st: sum(1 for r in rows if r["state"] == st)
+    if sp_error:
+        # Named, not swallowed. Every SharePoint file reads `untracked` when the delta replay
+        # fails, and an operator seeing a wall of "untracked" deserves to know it is a Graph
+        # problem this endpoint hit rather than a scan that recorded nothing.
+        return {"scan_id": sid, "sharepoint_freshness_error": sp_error,
+                "stale_count": count("stale"), "untracked_count": count("untracked"),
+                "unavailable_count": count("unavailable"), "importing_count": count("importing"),
+                "import_failed_count": count("import_failed"),
+                "publish_pending_count": count("publish_pending"),
+                "conflict_count": count("conflict"), "acp_newer_count": count("acp_newer"),
+                "files": rows}
     return {"scan_id": sid, "stale_count": count("stale"), "untracked_count": count("untracked"),
             "unavailable_count": count("unavailable"), "importing_count": count("importing"),
             "import_failed_count": count("import_failed"),
