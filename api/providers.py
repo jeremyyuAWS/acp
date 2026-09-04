@@ -514,6 +514,90 @@ class GeminiVisionProvider:
                        completion_tokens=usage.get("completion_tokens"))
 
 
+class BedrockVisionProvider:
+    """AWS Bedrock vision via the Bedrock Runtime invoke_model API with SigV4 signing (boto3).
+
+    Targets Claude models on Bedrock (payload: Anthropic Messages format, bedrock-2023-05-31
+    version). `zone='cloud'` — Bedrock is AWS infrastructure, bytes leave the network (ADR 0016).
+    The AWS secret access key rides only through boto3's SigV4 layer (never stored/logged/returned);
+    `aws_access_key_id` is an identifier, not the secret. `key_secret_ref` resolves the secret key.
+    Never raises → ok=False on failure.
+    """
+
+    def __init__(self, aws_access_key_id: str, aws_secret_access_key: str, *,
+                 region: str, model: str):
+        self._key_id = aws_access_key_id
+        self._secret = aws_secret_access_key
+        self.region = region
+        self.model = model
+        self.name = "bedrock"
+        self.zone = "cloud"   # Bedrock is always a public AWS endpoint
+
+    def generate(self, prompt: str, image_bytes: bytes, *, model: str | None = None,
+                 timeout: float = 120.0) -> dict:
+        import base64, json
+        mdl = model or self.model
+        t0 = time.monotonic()
+        url = f"https://bedrock-runtime.{self.region}.amazonaws.com/model/{mdl}/invoke"
+
+        def _fail(reason: str) -> dict:
+            return _result(text=None, model=mdl, provider=self.name, zone=self.zone,
+                           latency_ms=int((time.monotonic() - t0) * 1000), ok=False, reason=reason)
+
+        try:
+            import boto3, botocore.exceptions
+            client = boto3.client(
+                "bedrock-runtime",
+                region_name=self.region,
+                aws_access_key_id=self._key_id,
+                aws_secret_access_key=self._secret,
+            )
+            b64 = base64.b64encode(image_bytes).decode("ascii")
+            body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 128,
+                "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image", "source": {
+                        "type": "base64", "media_type": "image/png", "data": b64,
+                    }},
+                ]}],
+            }
+            resp = client.invoke_model(
+                modelId=mdl,
+                body=json.dumps(body),
+                contentType="application/json",
+                accept="application/json",
+            )
+            data = json.loads(resp["body"].read()) or {}
+            content = data.get("content") or []
+            text = ""
+            for block in content:
+                if block.get("type") == "text":
+                    text = (block.get("text") or "").strip()
+                    break
+        except Exception as e:
+            reason, detail = _classify(e)
+            _log_failure(self.name, mdl, url, detail)
+            return _fail(reason)
+        if not text:
+            _log_failure(self.name, mdl, url,
+                         "model returned empty — invoke_model 200 with no text block "
+                         f"(stop_reason={data.get('stop_reason')!r}, "
+                         f"usage={data.get('usage') or {}}).")
+            return _fail(REASON_EMPTY)
+        usage = data.get("usage") or {}
+        price = _price_for(mdl)
+        cost = 0.0
+        if price:
+            cost = round(usage.get("input_tokens", 0) / 1e6 * price[0]
+                         + usage.get("output_tokens", 0) / 1e6 * price[1], 6)
+        return _result(text=text, model=mdl, provider=self.name, zone=self.zone,
+                       latency_ms=int((time.monotonic() - t0) * 1000), ok=True, cost_usd=cost,
+                       prompt_tokens=usage.get("input_tokens"),
+                       completion_tokens=usage.get("output_tokens"))
+
+
 class AnthropicVisionProvider:
     """Anthropic (Claude) vision via the Messages API (api.anthropic.com). `zone='cloud'`: a
     third-party host, so bytes leave the network and the 🟡 badge stays honest (ADR 0016). Thinking
@@ -763,6 +847,7 @@ _REQUIRED_FIELDS = {
     "openai": ("model",),
     "anthropic": ("model",),
     "gemini": ("model",),
+    "bedrock": ("model", "region", "aws_access_key_id"),
     "huggingface": ("endpoint", "model"),
 }
 
@@ -924,6 +1009,12 @@ def _adapter_for(provider: str, cfg: dict) -> VisionProvider | None:
         if not (key and cfg.get("model")):
             return None
         return GeminiVisionProvider(key, model=cfg.get("model"), endpoint=cfg.get("endpoint"))
+    if provider == "bedrock":
+        region = cfg.get("region")
+        key_id = cfg.get("aws_access_key_id")
+        if not (key and region and key_id and cfg.get("model")):
+            return None
+        return BedrockVisionProvider(key_id, key, region=region, model=cfg.get("model"))
     if provider == "huggingface":
         endpoint = cfg.get("endpoint")
         if not (key and endpoint and cfg.get("model")):
