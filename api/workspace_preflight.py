@@ -161,17 +161,47 @@ def report(store, *, owner_email: str | None, routes=None, is_suspended=None) ->
             ", ".join(unknown) + ". No role can hold one, so those routes refuse everybody.",
             capabilities=unknown))
 
+    # THE DEFAULT ROLE AGAINST ITS OWN DEFINITION, which is a different question from "does
+    # anybody lose anything" and the reason this check was rewritten.
+    #
+    # The first version blocked whenever an unassigned person would lose a capability. It fired in
+    # EVERY workspace, because Platform User deliberately grants the tabs and not the seven
+    # administrative grants that OPEN_ACCESS hands everybody today — so the blocker was structural,
+    # unfixable, and would have taught operators to advance past blockers as a matter of routine.
+    # A check that always fails is worse than no check: it removes the meaning from the ones that
+    # fail for a reason.
+    #
+    # What is actually worth blocking is the STORED default having drifted BELOW the catalog's
+    # definition of it — somebody narrowed the role every unassigned person depends on, or a
+    # partial write left it short. That is the case nobody chose, and the one §15's "must not
+    # unexpectedly remove access" is about.
+    if rbac.PLATFORM_USER in seeded:
+        intended = rbac.builtin_capabilities(rbac.PLATFORM_USER)
+        stored = wr._stored_access(store, tenant_id=tenant, role_id=rbac.PLATFORM_USER)
+        short = sorted(intended - set(stored[1] if stored else ()))
+        if short:
+            holders = [p["email"] for p in people["people"]
+                       if not p["assigned_role"] and not p["owner"]]
+            findings.append(_blocker(
+                "default_role_narrowed",
+                "The default role grants less than its definition: missing " + ", ".join(short) +
+                f". Every unassigned person ({len(holders)} here) resolves through it, so this "
+                "narrows people nobody narrowed on purpose. Re-run the bootstrap or restore the "
+                "role before advancing.",
+                missing=short, affects=holders[:25]))
+
     # The §15 rule, checked as two different facts rather than one.
     unchosen = [p for p in people["people"]
                 if p["loses"] and not p["assigned_role"] and not p["owner"]]
     chosen = [p for p in people["people"]
               if p["loses"] and p["assigned_role"] and not p["owner"]]
     if unchosen:
-        findings.append(_blocker(
+        findings.append(_warning(
             "unassigned_people_lose_access",
-            f"{len(unchosen)} person/people with no assigned role would LOSE access — nobody "
-            "chose that. They resolve through the default role, so either it has been narrowed "
-            "or it is missing. PRD §15: migration must not unexpectedly remove access.",
+            f"{len(unchosen)} person/people with no assigned role will resolve through the "
+            "default role and lose what it does not include. Today every signed-in user holds "
+            "everything (OPEN_ACCESS), so this is expected — listed because 'expected' should "
+            "still be something somebody read once.",
             people=[{"email": p["email"], "loses": p["loses"]} for p in unchosen[:25]]))
     if chosen:
         findings.append(_warning(

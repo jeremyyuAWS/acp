@@ -146,10 +146,22 @@ describe('changing a role asks first', () => {
   })
 
   it('warns that the change is inert while enforcement is off', async () => {
-    IMPACT = { gains: [], loses: [], enforced: false }
+    IMPACT = { gains: [], loses: [], enforced: false, mode: 'observe' }
     const c = await mount()
     await pick(c, 'analyst')
-    expect(c.querySelector('[role="dialog"]').textContent).toContain('ACP_WORKSPACE_RBAC_ENABLED')
+    expect(c.querySelector('[role="dialog"]').textContent).toContain('changes nothing for them')
+  })
+
+  it('does NOT call the change inert at the navigation stage, because it is not', async () => {
+    // The tabs disappear for them on their next load while the server still answers a direct
+    // request. Reusing the "changes nothing" copy here would tell an administrator they had not
+    // altered somebody's access at the exact moment they did.
+    IMPACT = { gains: [], loses: ['operations.view'], enforced: false, mode: 'navigation' }
+    const c = await mount()
+    await pick(c, 'analyst')
+    const text = c.querySelector('[role="dialog"]').textContent
+    expect(text).toContain('hide tabs for them')
+    expect(text).not.toContain('changes nothing for them')
   })
 })
 

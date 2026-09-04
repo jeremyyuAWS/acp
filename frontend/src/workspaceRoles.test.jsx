@@ -116,12 +116,51 @@ describe('the roles list', () => {
 
 describe('when roles are not being enforced', () => {
   it('says so, in the place an administrator is designing them', async () => {
-    ROLES = { ...ROLES, enforced: false }
+    ROLES = {
+      ...ROLES,
+      enforced: false,
+      rollout: { mode: 'observe', next: 'navigation', invalid_mode: null,
+                 means: 'Roles are resolved and refusals are recorded, but every user keeps '
+                      + "today's access." },
+    }
     const c = await mount()
     const note = c.querySelector('.roles-not-enforced')
     expect(note).toBeTruthy()
     expect(note.textContent).toContain('not being enforced')
-    expect(note.textContent).toContain('ACP_WORKSPACE_RBAC_ENABLED')
+    expect(note.textContent).toContain('refusals are recorded')
+    expect(note.textContent).toContain('navigation')
+  })
+
+  it('says what the CURRENT stage does, not one sentence for all of them', async () => {
+    // The banner used to name an environment variable and claim nothing changed for anyone. At
+    // the `navigation` stage that is false — the tabs ARE hidden — and an administrator reading
+    // it would change somebody's access believing they had not. The wording comes from the
+    // server so it cannot drift from what the rung actually does.
+    ROLES = {
+      ...ROLES,
+      enforced: false,
+      rollout: { mode: 'navigation', next: 'enforce', invalid_mode: null,
+                 means: 'Tabs a role does not grant are hidden. The server still allows the calls.' },
+    }
+    const c = await mount()
+    const note = c.querySelector('.roles-not-enforced')
+    expect(note.textContent).toContain('still allows the calls')
+    expect(note.textContent).not.toContain('nothing changes for anyone')
+  })
+
+  it('raises an alert when the stage is misconfigured', async () => {
+    // The one configuration that looks identical to a workspace nobody has got to yet: the
+    // operator set the variable, believes it took effect, and it did not.
+    ROLES = {
+      ...ROLES,
+      enforced: false,
+      rollout: { mode: 'off', next: 'observe', invalid_mode: 'enfoce', means: 'No user is affected.' },
+    }
+    const c = await mount()
+    const alert = c.querySelector('[role="alert"]')
+    expect(alert).toBeTruthy()
+    expect(alert.textContent).toContain('enfoce')
+    expect(alert.textContent).toContain('misconfigured')
   })
 
   it('does not say it once enforcement is on', async () => {

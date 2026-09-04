@@ -125,12 +125,16 @@ if _pg_pool is not None:
 # table and how tests/test_capability_map_is_complete.py makes "100% of routes mapped" (PRD §18)
 # a checkable claim rather than an assertion.
 #
-# COST, STATED PLAINLY: when enforcement is ON this resolves the caller's role per request, which
-# is a settings read (the people record) plus a role read. There is deliberately NO cache —
-# PRD §9 requires a changed role to take effect on the user's NEXT request, and any TTL is a
-# window in which a revoked permission still works. With the flag OFF the middleware returns
-# before touching the store at all, so the default path pays nothing. Whether that per-request
-# cost is acceptable under real load is a slice-6 question, and it is not answered here.
+# COST, STATED PLAINLY: from the `observe` rung upward this resolves the caller's role per
+# request, which is a settings read (the people record) plus a role read. There is deliberately NO
+# cache — PRD §9 requires a changed role to take effect on the user's NEXT request, and any TTL is
+# a window in which a revoked permission still works. At `off` the middleware returns before
+# touching the store at all, so the default path pays nothing.
+#
+# Whether that per-request cost is acceptable under real load was left open in slice 4 and is now
+# ANSWERABLE rather than answered: `observe` pays exactly the same cost as `enforce` while changing
+# nobody's access, so a workspace measures it on its own traffic before anything depends on it.
+# That is a second reason to run the rung, beyond the permission evidence it was added for.
 @app.middleware("http")
 async def _workspace_capability_gate(request, call_next):
     import workspace_capability_map as capmap

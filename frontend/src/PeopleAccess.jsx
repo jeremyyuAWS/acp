@@ -173,10 +173,18 @@ export default function PeopleAccess() {
             {!roleChange.impact.loses?.length && !roleChange.impact.gains?.length && (
               <p className="muted people-role-impact">Nothing they can do today changes.</p>
             )}
+            {/* WHAT "NOT ENFORCED" MEANS DEPENDS ON THE RUNG, and saying the wrong one here is
+                worse than saying nothing. At `navigation` this assignment DOES take effect — the
+                tabs disappear for them on their next load — while the server still answers a
+                direct request. Telling an administrator it "takes no effect" at that rung would
+                have them change somebody's access believing they had not. */}
             {roleChange.impact.enforced === false && (
               <p className="muted people-role-impact">
-                Roles are not being enforced yet, so this takes effect only once
-                <code> ACP_WORKSPACE_RBAC_ENABLED</code> is on.
+                {roleChange.impact.mode === 'navigation'
+                  ? 'This will hide tabs for them on their next page load, but the server still '
+                    + 'allows direct requests until the rollout reaches the enforce stage.'
+                  : 'Roles are not being enforced yet, so this changes nothing for them until the '
+                    + 'rollout advances.'}
               </p>
             )}
           </>

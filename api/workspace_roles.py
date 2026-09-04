@@ -7,12 +7,17 @@ deployment into one with roles:
     seed_builtin_roles()   put the six built-in roles into a tenant, idempotently
     migrate_people()       give every existing person the role PRD §15 maps them to
 
-THE FLAG IS OFF BY DEFAULT AND THAT IS A SECURITY DECISION, not caution about polish. Seeding and
-migrating are safe (they only write rows nothing reads yet); ENFORCEMENT is what changes who can
-do what, and it arrives in later slices behind the same flag. api/core.py already carries the
-lesson in TEST_BYPASS_ENABLED's comment: a control must not depend on a variable being absent.
-Here the same rule points the other way round — the feature is the new thing, so its ABSENCE must
-leave today's behaviour exactly as it is.
+THE ROLLOUT IS OFF BY DEFAULT AND THAT IS A SECURITY DECISION, not caution about polish. Seeding
+and migrating are safe (they only write rows nothing reads yet); ENFORCEMENT is what changes who
+can do what. api/core.py already carries the lesson in TEST_BYPASS_ENABLED's comment: a control
+must not depend on a variable being absent. Here the same rule points the other way round — the
+feature is the new thing, so its ABSENCE must leave today's behaviour exactly as it is.
+
+SINCE SLICE 6 THERE ARE FOUR STATES, NOT TWO. api/workspace_rollout.py owns the ladder
+(off → observe → navigation → enforce) and this module asks it rather than reading an environment
+variable directly. The distinction that matters here: `rbac_enabled()` means the SERVER REFUSES,
+and rollout.navigation_active() — true one rung lower — means a role's tabs govern what the SPA
+shows. access_for_email below turns on the second, not the first.
 
 MIGRATION MUST NOT REMOVE ACCESS (PRD §15). An existing standard user becomes a Compliance
 Manager, not a Viewer, because today every admitted user sees every workflow tab (core.py's
