@@ -56,14 +56,15 @@ don't just generate text.
 
 ## P1 — auto-escalation + copilot rewriting (needs the gateway + the refine palette)
 
-- [ ] **Auto-escalation before the card is shown.** Wire the existing `describe_image_structured`
-  escalation (local → cloud when a customer provider is configured) into the **assess-time batch
-  pre-draft** path, so "manual authoring required" becomes rare. Card shows the transparent numbered
-  path ("✓ local attempted → no grounded description → escalated to {provider} → grounded"), never
-  the failed attempt as a dead end.
-- [ ] **One-click "Improve" palette** (extend the #131 refine, which already has Shorter / More
-  detail / Regenerate): add **Mention the numbers · Ignore colours · Professional tone · Plain
-  language**. Local model handles these today; premium models when configured.
+- [x] **Auto-escalation before the card is shown.** *(shipped PR #1292)* `_propose_text_findings`
+  is now called inside `_analyse_and_persist_one_impl` immediately after a fresh download of
+  `.docx`/`.pptx`/`.xlsx`/`.pdf` with AI enabled. It calls `describe_image_structured`, which
+  escalates local → cloud when a customer provider is configured, so HITL cards arrive pre-populated
+  before any remediation job runs. Dedup/reuse/error/skipped paths are excluded. 14 new tests.
+- [x] **One-click "Improve" palette** *(shipped in ProposalEditors.jsx)* (extend the #131 refine,
+  which already has Shorter / More detail / Regenerate): added **Mention the numbers · Ignore colours
+  · Professional tone · Plain language**. `ai.py` maps each key to a distinct vision prompt; unknown
+  keys fall back to the default. Local model handles these today; premium models when configured.
 - [ ] **LLM-written guidance instead of the terse system string.** Replace "No faithful alt-text
   source in the document…" with a natural, generated sentence: "This slide has a comparison chart
   that screen-reader users currently can't perceive. ACP couldn't verify a grounded description, so

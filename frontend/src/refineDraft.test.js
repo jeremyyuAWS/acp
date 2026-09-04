@@ -26,3 +26,26 @@ describe('#131 — refine the AI draft (shorter / more detail / regenerate)', ()
     expect(src).toMatch(/suggestFix\(item\.scan_id, item\.file, item\.rule_id, instances\[i\]\?\.locator, style \|\| null\)/)
   })
 })
+
+describe('P1 — one-click "Improve" palette (Mention the numbers · Ignore colours · Professional tone · Plain language)', () => {
+  it('ProposalEditors includes all four content/tone steer buttons', () => {
+    const src = read('ProposalEditors.jsx')
+    expect(src).toMatch(/\['numbers', 'Mention the numbers'\]/)
+    expect(src).toMatch(/\['no_colour', 'Ignore colours'\]/)
+    expect(src).toMatch(/\['professional', 'Professional tone'\]/)
+    expect(src).toMatch(/\['plain', 'Plain language'\]/)
+  })
+
+  it('ai.py maps all four steer keys to distinct vision prompts', () => {
+    const src = read('../../api/ai.py')
+    expect(src).toMatch(/"numbers":/)
+    expect(src).toMatch(/"no_colour":/)
+    expect(src).toMatch(/"professional":/)
+    expect(src).toMatch(/"plain":/)
+  })
+
+  it('unknown style keys fall back to the default prompt, not an error', () => {
+    const src = read('../../api/ai.py')
+    expect(src).toMatch(/\.get\(style,/)
+  })
+})
