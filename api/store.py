@@ -5054,6 +5054,60 @@ class Store:
             row = self._db.fetchone(cur)
             return row["id"] if row else None
 
+    def last_published_whole_source_baseline(self, scan_id: str, *, owner: str,
+                                             current_scope: dict,
+                                             drive_account_id: str | None = None) -> dict | None:
+        """Return the newest trustworthy whole-source baseline before ``scan_id``.
+
+        Published is the durable proof that enumeration completed. Matching the scope kind
+        keeps folder runs out of a whole-estate comparison. For Google Drive, a known account
+        identity must also match; switching connectors is a new source boundary, not collapse.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT source, started_at FROM scan_runs WHERE id=%s AND owner_email=%s",
+                (scan_id, owner))
+            me = self._db.fetchone(cur)
+            if not me:
+                return None
+            self._db.execute(cur,
+                "SELECT id,scope FROM scan_runs "
+                "WHERE owner_email=%s AND source=%s AND started_at < %s "
+                "AND published_at IS NOT NULL AND status != 'superseded' "
+                "ORDER BY published_at DESC",
+                (owner, me["source"], me["started_at"]))
+            for candidate in self._db.fetchall(cur):
+                raw_scope = candidate.get("scope")
+                if isinstance(raw_scope, str):
+                    try:
+                        raw_scope = json.loads(raw_scope)
+                    except Exception:
+                        continue
+                prior_scope = raw_scope if isinstance(raw_scope, dict) else {}
+                scope_kind = current_scope.get("kind")
+                if prior_scope.get("kind") != scope_kind:
+                    continue
+                if scope_kind == "sharepoint" and prior_scope.get("site") != current_scope.get("site"):
+                    continue
+                if not (prior_scope.get("enumeration") or {}).get("complete"):
+                    continue
+                baseline_id = candidate["id"]
+                if scope_kind == "drive" and drive_account_id:
+                    self._db.execute(cur,
+                        "SELECT DISTINCT drive_account_id FROM scan_inventory "
+                        "WHERE scan_id=%s AND drive_account_id IS NOT NULL",
+                        (baseline_id,))
+                    accounts = {r.get("drive_account_id") for r in self._db.fetchall(cur)}
+                    if accounts and accounts != {drive_account_id}:
+                        continue
+                self._db.execute(cur,
+                    "SELECT COUNT(*) AS n FROM scan_inventory WHERE scan_id=%s",
+                    (baseline_id,))
+                count = int((self._db.fetchone(cur) or {}).get("n") or 0)
+                if count:
+                    return {"scan_id": baseline_id, "count": count, "scope": prior_scope}
+        return None
+
     def get_inventory_diff(self, cur_id: str, prev_id: str, owner: str | None = None) -> dict | None:
         """Diff two runs' DISCOVERY inventories → what the estate gained, lost and changed.
 

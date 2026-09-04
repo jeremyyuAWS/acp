@@ -1122,6 +1122,10 @@ def assess(sid: str, request: Request, level: str = Query("AA"),
     scan = core.store.get_scan(sid, owner=_owner(request))
     if scan is None:
         raise HTTPException(404, "scan not found")
+    integrity = ((scan.get("run", {}).get("scope") or {}).get("integrity") or {})
+    if integrity.get("status") == "blocked":
+        raise HTTPException(409, integrity.get("message") or
+                            "Discovery integrity check failed; run Discovery again before Assessment")
     import datetime as _dt
     # Deferred: analysis hasn't run yet (inventory present, no assessed rows, scan 'discovered').
     # Start it; do NOT mark assessed here — that happens at finalize when results actually exist.
