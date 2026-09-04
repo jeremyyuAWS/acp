@@ -338,7 +338,7 @@ class HostedCandidate(HttpModelCandidate):
 
 def resolve(spec: str) -> Candidate:
     """Turn a CLI string into a candidate. `rules-only`, `stub:*`, `ollama:<model>`,
-    `hosted:<model>@<endpoint>[#price-tier]`."""
+    `anthropic:<model>[#price-tier]`, `hosted:<model>@<endpoint>[#price-tier]`."""
     price = None
     if "#" in spec and not spec.startswith("hosted:"):
         spec, price = spec.rsplit("#", 1)
@@ -355,6 +355,9 @@ def resolve(spec: str) -> Candidate:
         model = spec.split(":", 1)[1]
         tier_hint = "local-cpu" if os.environ.get("EVALS_LOCAL_CPU") else "local-gpu"
         return OllamaCandidate(model, price_tier=tier_hint)
+    if spec.startswith("anthropic:"):
+        model = spec.split(":", 1)[1]
+        return AnthropicCandidate(model, price_tier=price)
     if spec.startswith("hosted:"):
         rest = spec.split(":", 1)[1]
         price = "hosted-small"
@@ -365,3 +368,76 @@ def resolve(spec: str) -> Candidate:
         model, endpoint = rest.split("@", 1)
         return HostedCandidate(model, endpoint=endpoint, price_tier=price)
     raise ValueError(f"unknown candidate spec {spec!r}")
+
+
+# Model id -> the price-book entry for it. A candidate priced from a generic rung reports a
+# number nobody can check against an invoice, so the named tiers are matched first and an
+# unknown model is an explicit argument rather than a silent default.
+ANTHROPIC_PRICE_TIERS = {
+    "claude-opus-5": "anthropic-opus-5",
+    "claude-sonnet-5": "anthropic-sonnet-5",
+    "claude-haiku-4-5": "anthropic-haiku-4-5",
+}
+
+
+class AnthropicCandidate(Candidate):
+    """Claude through the official `anthropic` SDK.
+
+    NOT the OpenAI-shaped path: the Messages API has its own request and response shape, and
+    routing it through `HostedCandidate` would mean maintaining a translation layer that is
+    wrong in ways only a live call reveals. The SDK is imported INSIDE respond(), so the kit
+    keeps its no-dependency default run and only a Claude candidate needs the package.
+
+    NO SERVER-SIDE FALLBACK, deliberately. A refusal here is a measurement — this model, on this
+    case, declined — and a fallback would answer it with a different model under this
+    candidate's name. That is the one thing an eval harness must not do, so a refusal is
+    recorded as an unusable output with its category, and the report counts it.
+    """
+
+    def __init__(self, model: str, *, tier: int = 3, price_tier: str | None = None,
+                 max_tokens: int = 4096, effort: str | None = None):
+        self.model = model
+        self.name = f"anthropic:{model}"
+        self.tier = tier
+        key = price_tier or ANTHROPIC_PRICE_TIERS.get(model)
+        if key is None:
+            raise ValueError(
+                f"no price tier known for {model!r}: pass one explicitly "
+                f"(anthropic:{model}#<tier>) or add it to evals.cost.PRICE_BOOK")
+        self.pricing = PRICE_BOOK[key]
+        self.max_tokens = max_tokens
+        self.effort = effort or os.environ.get("EVALS_ANTHROPIC_EFFORT") or None
+
+    def respond(self, case: Case) -> Response:      # pragma: no cover - network
+        try:
+            import anthropic
+        except ImportError:
+            return Response(plan=[], parse_error="the `anthropic` package is not installed")
+        t0 = time.perf_counter()
+        client = anthropic.Anthropic()
+        kwargs: dict[str, Any] = {"model": self.model, "max_tokens": self.max_tokens,
+                                  "messages": [{"role": "user",
+                                                "content": build_prompt(case)}]}
+        if self.effort:
+            kwargs["output_config"] = {"effort": self.effort}
+        try:
+            msg = client.messages.create(**kwargs)
+        except Exception as e:
+            return Response(plan=[], parse_error=f"{type(e).__name__}: {e}",
+                            latency_s=time.perf_counter() - t0)
+        latency = time.perf_counter() - t0
+        tokens_in = getattr(msg.usage, "input_tokens", 0) or 0
+        tokens_out = getattr(msg.usage, "output_tokens", 0) or 0
+        if getattr(msg, "stop_reason", None) == "refusal":
+            cat = getattr(getattr(msg, "stop_details", None), "category", None)
+            return Response(plan=[], parse_error=f"refusal ({cat})", latency_s=latency,
+                            tokens_in=tokens_in, tokens_out=tokens_out)
+        text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
+        obj, err = parse_envelope(text)
+        return Response(
+            detected=list(obj.get("detected", []) or []),
+            diagnosis=dict(obj.get("diagnosis", {}) or {}),
+            plan=[a for a in (obj.get("plan", []) or []) if isinstance(a, dict)],
+            text=text, parse_error=err, latency_s=latency,
+            tokens_in=tokens_in, tokens_out=tokens_out,
+        )

@@ -576,6 +576,28 @@ def _enqueue_proposals(scan_id: str, filename: str, sc: str, rule_name: str,
     except Exception:
         swallowed("_enqueue_proposals: store.enqueue_proposals failed — EVERY proposal for this (file, "
                    "criterion) is lost, and the reviewer sees a document with no suggested fixes", scan_id)
+        return
+    # ADR 0041 auto-apply gate: skip human review for Group A SCs whose fix was already written
+    # inline AND confirmed by structural re-scan (validated=True). The gate is at this choke
+    # point because every proposal for every SC passes through here — one gate, not one per caller.
+    if validated and sc in {"2.4.4", "2.4.9", "4.1.2"}:
+        try:
+            item_id = core.store.auto_approve_proposals(scan_id, filename, sc)
+            if item_id:
+                core.store.log_decision(
+                    "system", "hitl.auto_approved", scan_id=scan_id, file=filename,
+                    detail=f"{sc}: validated fix auto-approved by ADR 0041 gate (no human review)")
+                try:
+                    if core.store.mark_file_compliant_if_reviewed(scan_id, filename):
+                        core.store.log_decision(
+                            "system", "revalidate.certified", scan_id=scan_id, file=filename,
+                            detail="all findings resolved — certified & advanced to Publish "
+                                   "(ADR 0041 auto-approve)")
+                except Exception:
+                    swallowed("_enqueue_proposals: certify after auto-approve failed", scan_id)
+        except Exception:
+            swallowed("_enqueue_proposals: ADR 0041 auto-approve gate failed — "
+                      "proposal stays pending for human review", scan_id)
 
 
 # Media extensions the remediation lane admits. A SUBSET of scan_formats' "av" list, and
@@ -1145,6 +1167,32 @@ def _count_inventory_classes(scan_id: str) -> dict:
 # in precedence order; nothing here needs to re-sort. The archive-vs-delete precedence decision
 # itself lives in disposition.resolve_candidate — shared with the conflicts report
 # (routes/disposition.list_conflicts) so both make the same call from one place.
+
+
+def _sp_scan_cursors(user: str, plan: dict) -> dict:
+    """The Graph deltaLink each library stood at when this scan listed it.
+
+    Read from the store AFTER the plan ran, because that is when they are correct: building the
+    plan advances (or seeds) every library's cursor to "now", immediately before the walk. So the
+    stored value is the position this scan's estate describes, and replaying the delta from it
+    later answers "what has changed since ACP listed this" — one Graph call per LIBRARY, not one
+    per document, which is the only reason freshness is affordable for SharePoint at all.
+
+    Best-effort per library: a cursor that cannot be read is simply absent, and freshness for that
+    library reports `untracked` rather than a guess. Never raises — this is a diagnostic recorded
+    on the way past, and it must not be able to fail a scan that has already listed its estate.
+    """
+    out: dict = {}
+    for drive_id in list((plan.get("delta") or {}).keys()) + list((plan.get("full") or {}).keys()):
+        try:
+            cur = core.store.get_sync_cursor(core._sp_interactive_cursor_key(user, drive_id))
+            if cur and cur.get("page_token"):
+                # "" is the OneDrive/no-drive key: JSON object keys must be strings, and the
+                # reader maps it back (routes/scans._sp_freshness).
+                out[drive_id or ""] = cur["page_token"]
+        except Exception:  # noqa: BLE001
+            logger.debug("could not record the delta cursor for drive %s", drive_id, exc_info=True)
+    return out
 
 
 def _sp_site_delta_plan(user: str, token: str, folder, folders) -> dict | None:
@@ -2398,6 +2446,17 @@ def _scan_discover(payload: dict, job: dict) -> None:
                     # and owns its job state precisely because nothing else will touch it.
                     raise RuntimeError(_msg)
 
+        # THE DELTA POSITION THIS SCAN LISTED FROM, recorded on the scan's own scope so freshness
+        # is answerable later. Without it, "has SharePoint changed since this scan?" can only be
+        # asked as "since the LAST sync", which is a different question the moment a second scan
+        # runs — and the answer to the wrong question is indistinguishable from the answer to the
+        # right one.
+        #
+        # In the scope blob rather than a new column: the scope is already persisted per scan
+        # (merge_scan_scope, below), already the place a run records what it covered, and a
+        # migration for a per-scan JSON fact would be a schema change bought for nothing.
+        if source == "sharepoint" and sp_delta_plan:
+            scope["sp_cursors"] = _sp_scan_cursors(user, sp_delta_plan)
         _enforce_scope_collapse_guard(scan_id, user, scope, items, inventory)
         core.store.set_scan_files(scan_id, len(items))
         core.store.merge_scan_scope(scan_id, scope)

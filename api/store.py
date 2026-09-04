@@ -6838,6 +6838,44 @@ class Store:
                 (item_id, now, scan_id, file, sc, rule_name or sc, count, blob, vflag))
         return item_id
 
+    def auto_approve_proposals(self, scan_id: str, file: str, sc: str) -> str | None:
+        """Auto-approve a validated hitl_queue row for a Group A SC (ADR 0041 gate).
+
+        Stamps each proposal's proposed_value as its approved_value, sets status='approved'
+        and applied=1. The fix is already in the document — validated=True is only set when
+        _applied_any=True (the fix was written inline) AND the structural re-scan confirmed
+        the criterion cleared. applied=1 prevents apply_approved_values from re-running it.
+
+        Returns the item_id, or None when no pending row exists for this (scan, file, sc).
+        """
+        import json as _json
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id, proposals FROM hitl_queue WHERE scan_id=%s AND file=%s AND rule_id=%s "
+                "AND status='pending'", (scan_id, file, sc))
+            row = self._db.fetchone(cur)
+            if not row:
+                return None
+            item_id = row["id"]
+            try:
+                props = _json.loads(row["proposals"] or "[]")
+            except (ValueError, TypeError):
+                props = []
+            for p in props:
+                if isinstance(p, dict):
+                    pv = (p.get("proposed_value") or "").strip()
+                    if pv:
+                        p["approved_value"] = pv
+            note = ("auto-approved: fix applied inline and confirmed by structural re-scan "
+                    "(ADR 0041 auto-apply gate)")
+            self._db.execute(cur,
+                "UPDATE hitl_queue SET status='approved', reviewed_at=%s, reviewer_note=%s, "
+                "proposals=%s, applied=1 WHERE id=%s",
+                (now, note, _json.dumps(props), item_id))
+        return item_id
+
     def attach_hitl_evidence(self, scan_id: str, file: str, sc: str,
                              evidence: list[dict]) -> str | None:
         """Attach the images a HITL row asks a human to describe: [{locator, thumb}, …].

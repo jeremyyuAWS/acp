@@ -27,7 +27,8 @@ from evals.cost import (PRICE_BOOK, TARGET_CALLS_PER_DOLLAR, TARGET_USD_PER_CALL
 from evals.graders import grade_case                     # noqa: E402
 from evals.harness import run                            # noqa: E402
 from evals.judge import Calibration, JudgeVerdict, calibrate  # noqa: E402
-from evals.report import Gates, build_candidate_report, build_ladder, metrics_for  # noqa: E402
+from evals.report import (Gates, build_candidate_report, build_ladder,  # noqa: E402
+                          metrics_for, render_markdown)
 from evals.schema import CaseError, from_dict, load_cases, validate  # noqa: E402
 
 from remediation_capability import ASSISTED, AUTO, HUMAN, REMEDIATION  # noqa: E402
@@ -290,6 +291,37 @@ def test_no_model_tier_clears_the_budget_uncached_on_a_realistic_prompt():
         usd = PRICE_BOOK[name].usd(tokens_in=700, tokens_out=60, latency_s=2.0)
         assert usd > TARGET_USD_PER_CALL, f"{name} now clears the budget uncached — recheck"
     assert PRICE_BOOK["free"].usd(tokens_in=700, tokens_out=60) == 0.0
+
+
+def test_named_vendor_tiers_price_from_the_book_not_a_generic_rung():
+    """A cost figure a reader cannot check against an invoice is not a cost figure."""
+    c = cand.resolve("anthropic:claude-haiku-4-5")
+    assert c.pricing is PRICE_BOOK["anthropic-haiku-4-5"]
+    assert "list 2026-06-24" in c.pricing.note
+    with pytest.raises(ValueError) as e:
+        cand.resolve("anthropic:claude-not-a-model")
+    assert "no price tier known" in str(e.value)
+
+
+def test_even_the_cheapest_named_claude_tier_is_far_over_the_budget_per_call():
+    """At a realistic prompt, Haiku 4.5 is 1,000 calls/$ — 100x the target. Routing can still
+    use it, but only for ~1% of traffic; this pins the number that constraint comes from."""
+    usd = PRICE_BOOK["anthropic-haiku-4-5"].usd(tokens_in=700, tokens_out=60)
+    assert usd == pytest.approx(1e-3)
+    assert usd / TARGET_USD_PER_CALL == pytest.approx(100.0)
+
+
+def test_a_ladder_that_automates_nothing_reports_zero_coverage():
+    """$0/call with everything on a human meets the budget and is not a result. The report has
+    to say so, or a run against two useless models reads as a success."""
+    cases = [c for c in CASES if c.must_abstain][:5]
+    lad = build_ladder([run(cand.resolve("stub:overeager"), cases, repeats=1)], cases)
+    assert lad["meets_target"] and lad["autonomous_coverage"] == 0.0
+    md = render_markdown({"gates": {}, "corpus": {"cases": len(cases), "suites": {}, 
+                                                  "risk_tiers": {}, "must_abstain": len(cases)},
+                          "candidates": [], "ladder": lad})
+    assert "0% autonomous coverage" in md
+    assert "met by NOT automating" in md
 
 
 def test_required_cache_hit_rate_is_the_gap_not_a_guess():
