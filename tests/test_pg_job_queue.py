@@ -237,6 +237,49 @@ def test_priority_then_run_after_ordering_holds_on_postgres(pg):
     assert second["id"] == low
 
 
+def test_tenant_fair_ordering_runs_on_postgres_claim_sql(pg):
+    """The production claim is one UPDATE around a joined/correlated subquery. SQLite proving
+    the policy is not evidence that this SQL composes on Postgres, so pin the real branch too."""
+    with pg._db.cursor() as cur:
+        pg._db.execute(cur, "INSERT INTO scan_runs(id,owner_email) VALUES(%s,%s)",
+                       ("scan-a", "a@example.org"))
+        pg._db.execute(cur, "INSERT INTO scan_runs(id,owner_email) VALUES(%s,%s)",
+                       ("scan-b", "b@example.org"))
+    a1 = pg.enqueue_job("t_pg", {"n": "a1"}, scan_id="scan-a")
+    pg.enqueue_job("t_pg", {"n": "a2"}, scan_id="scan-a")
+    b1 = pg.enqueue_job("t_pg", {"n": "b1"}, scan_id="scan-b")
+
+    assert pg.claim_job("w1")["id"] == a1
+    assert pg.claim_job("w2")["id"] == b1
+
+
+def test_simultaneous_claims_give_competing_tenants_one_slot_each(pg):
+    """Two workers must not both read the same pre-claim tenant load. The transaction advisory
+    lock serializes only selection, making the second claimant observe the first one's slot."""
+    with pg._db.cursor() as cur:
+        pg._db.execute(cur, "INSERT INTO scan_runs(id,owner_email) VALUES(%s,%s)",
+                       ("scan-a", "a@example.org"))
+        pg._db.execute(cur, "INSERT INTO scan_runs(id,owner_email) VALUES(%s,%s)",
+                       ("scan-b", "b@example.org"))
+    for i in range(4):
+        pg.enqueue_job("t_pg", {"i": i}, scan_id="scan-a")
+        pg.enqueue_job("t_pg", {"i": i}, scan_id="scan-b")
+
+    start = threading.Barrier(2)
+    claimed = []
+    lock = threading.Lock()
+
+    def take(worker):
+        start.wait()
+        job = pg.claim_job(worker)
+        with lock:
+            claimed.append(job["scan_id"])
+
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        list(ex.map(take, ("w1", "w2")))
+    assert set(claimed) == {"scan-a", "scan-b"}
+
+
 def test_a_job_still_in_backoff_is_not_claimed_on_postgres(pg):
     """run_after gating, inside the same subquery. A job claimed before its backoff elapses
     retries immediately and defeats the retry policy."""

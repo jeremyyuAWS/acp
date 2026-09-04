@@ -1212,6 +1212,7 @@ def _admin_activity_snapshot() -> dict:
             "available_slots": max(0, int(slots or 0) - running),
             "utilization_pct": min(100, round((running / slots) * 100)) if slots else None,
             "pressure": pressure,
+            "scheduling_policy": "tenant_fair_least_loaded",
             "worker_tier_alive": bool(wt.get("alive")),
             "by_stage": by_stage,
         },

@@ -387,6 +387,12 @@ _SCHEMA = [
       last_error TEXT, created_at TEXT, updated_at TEXT,
       phase TEXT
     )""",
+    # Durable least-recently-served cursor for work-conserving tenant fairness. It contains no
+    # document data, only ACP's existing owner_email tenant key and the last claim instant.
+    """CREATE TABLE IF NOT EXISTS tenant_queue_state (
+      tenant_key TEXT NOT NULL, lane_key TEXT NOT NULL, last_claimed_at TEXT NOT NULL,
+      PRIMARY KEY(tenant_key, lane_key)
+    )""",
     # What the job is doing RIGHT NOW, written by the handler as it works. The queue panel
     # used to render a hardcoded list of WCAG criteria cycled by a timer, which had nothing
     # to do with the running job. Nullable: a handler that reports nothing shows nothing.
@@ -394,11 +400,12 @@ _SCHEMA = [
     # Cooperative cancellation (ADR 0004 step 4): caller sets this; running handler calls
     # worker.check_cancel() at checkpoints and raises JobCancelledError when set.
     "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS cancel_requested_at TEXT",
-    # Column order matches the claim ORDER BY (priority, run_after) so Postgres reads the
-    # top queued job index-only instead of sorting all queued rows every poll (audit P2).
-    # New name + drop-old so this migrates once, not a rebuild every boot.
+    # Priority/run_after remains the eligibility spine for claims. Tenant-fair selection also
+    # counts active claims and reads the most recent locked_at for the candidate's scan owner;
+    # this companion index keeps those correlated reads bounded to the relevant status/scan.
     "DROP INDEX IF EXISTS idx_jobs_claim",
     "CREATE INDEX IF NOT EXISTS idx_jobs_claim2 ON jobs(status, priority, run_after)",
+    "CREATE INDEX IF NOT EXISTS idx_jobs_tenant_fair ON jobs(status, scan_id, locked_at)",
     # Inspectable lease expiry: set at claim time to now + ACP_JOB_LEASE_S, refreshed by
     # touch_job heartbeat. reclaim_stuck_jobs uses this instead of the opaque locked_at
     # arithmetic so operators can see exactly when a lease will expire.
@@ -1596,8 +1603,10 @@ class _PgAdapter:
     # Still additive, and additive in BEHAVIOUR on every half. For the ACR tables the argument is
     # simpler than v4's fence: a replica without ACR code never reads or writes them — they are
     # inert until a replica carrying api/acr_*.py serves a request against them.
-    _SCHEMA_VERSION = 9
-    _SCHEMA_CHECKSUM_AT_VERSION = "8ebbf79add42bcd3893081808a66dc83"
+    # v10 adds tenant_queue_state plus idx_jobs_tenant_fair. Older replicas ignore both and keep
+    # their original FIFO claim; newer replicas can use them immediately, so rollout is safe.
+    _SCHEMA_VERSION = 10
+    _SCHEMA_CHECKSUM_AT_VERSION = "8091f4bbbfa936017e8d54f9d17ee930"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -1831,6 +1840,12 @@ def job_priority(job_type: str) -> int:
 # ── Store ────────────────────────────────────────────────────────────────────
 
 class Store:
+    # Serializes the tiny Postgres claim *decision*, not job execution. Without this transaction
+    # lock, two workers beginning at the same instant can both observe tenant A at zero active
+    # claims and each select one of A's rows via SKIP LOCKED. The jobs still run concurrently;
+    # only the few-millisecond selection step is ordered so the fairness promise is real.
+    _FAIR_CLAIM_ADVISORY_KEY = 0x4143500002       # 'ACP' + slot 2
+
     def __init__(self) -> None:
         self._db: _SQLiteAdapter | _PgAdapter = (
             _PgAdapter(_DATABASE_URL) if _DATABASE_URL else _SQLiteAdapter(str(_SQLITE_PATH))
@@ -3487,6 +3502,7 @@ class Store:
                          "file_stage_timings", "scan_file_manifests", "scan_inventory", "file_tags",
                          "scan_decisions", "pii_findings", "hitl_queue", "hitl_events",
                          "disposition_audit", "decision_log", "inventory", "jobs", "documents",
+                         "tenant_queue_state",
                          "lifecycle_evaluation", "effective_disposition",
                          "org_memory", "remediation_state", "remediation_diff", "applied_fixes",
                          "ai_calls", "finding_comments",
@@ -3617,6 +3633,8 @@ class Store:
                 cleared.append(t)
             self._db.execute(cur, "DELETE FROM scan_decisions WHERE owner_email=%s", (owner_email,))
             cleared.append("scan_decisions")
+            self._db.execute(cur, "DELETE FROM tenant_queue_state WHERE tenant_key=%s", (owner_email,))
+            cleared.append("tenant_queue_state")
             self._db.execute(cur, "DELETE FROM documents WHERE owner_email=%s", (owner_email,))
             cleared.append("documents")
             self._db.execute(cur, "DELETE FROM org_memory WHERE org=%s", (owner_email,))
@@ -8148,6 +8166,11 @@ class Store:
         """Atomically claim the next eligible job. Returns the claimed job (with
         attempts already incremented), or None if the queue is empty.
 
+        Within one priority class, candidates are tenant-fair: the owner with the fewest active
+        jobs goes first, then the owner least recently served, then the oldest job. This is
+        deliberately work-conserving — a sole tenant may use every slot — while preventing a
+        large fan-out from continually winning over another tenant's equally-prioritized work.
+
         Postgres: single-statement UPDATE...WHERE id=(SELECT...FOR UPDATE SKIP LOCKED)
         RETURNING * — each worker atomically grabs a distinct row with no round-trip race.
         SQLite: two-step optimistic CAS — SELECT then conditional UPDATE on status='queued'
@@ -8155,23 +8178,54 @@ class Store:
         if job_types is not None and not job_types:
             return None
         types = tuple(job_types or ())
-        clause = " AND type IN (" + ",".join(["%s"] * len(types)) + ") " if types else " "
+        lane_key = ",".join(sorted(types)) if types else "*"
+        clause = " AND qj.type IN (" + ",".join(["%s"] * len(types)) + ") " if types else " "
+        active_types = " AND aj.type IN (" + ",".join(["%s"] * len(types)) + ") " if types else " "
+        fair_params = (*types, *types)
         now = self._now()
         expires = self._lease_expiry()
+        # owner_email is ACP's current tenant boundary (ADR 0044). Jobs without a scan are
+        # deliberately their own scheduling key, so maintenance/system work does not collapse
+        # into one fictional tenant. Priority precedes fairness: a finalizer or control job may
+        # be correctness-critical, while ordinary per-file jobs share the same priority and are
+        # the population this interleaves.
+        owner_key = "COALESCE(qsr.owner_email,qj.scan_id,qj.id)"
+        active_key = "COALESCE(asr.owner_email,aj.scan_id,aj.id)"
+        fair_order = (
+            " ORDER BY qj.priority, "
+            "(SELECT COUNT(*) FROM jobs aj LEFT JOIN scan_runs asr ON asr.id=aj.scan_id "
+            f" WHERE aj.status='running' AND {active_key}={owner_key}" + active_types + "), "
+            "COALESCE(tqs.last_claimed_at,''), "
+            "qj.run_after,qj.created_at,qj.id "
+        )
+        candidate_from = (
+            " FROM jobs qj LEFT JOIN scan_runs qsr ON qsr.id=qj.scan_id "
+            f" LEFT JOIN tenant_queue_state tqs ON tqs.tenant_key={owner_key} AND tqs.lane_key=%s "
+        )
+        record_claim = (
+            "INSERT INTO tenant_queue_state(tenant_key,lane_key,last_claimed_at) "
+            "SELECT COALESCE(sr.owner_email,j.scan_id,j.id),%s,%s FROM jobs j "
+            "LEFT JOIN scan_runs sr ON sr.id=j.scan_id WHERE j.id=%s "
+            "ON CONFLICT(tenant_key,lane_key) DO UPDATE SET last_claimed_at=EXCLUDED.last_claimed_at"
+        )
         if self._db.supports_skip_locked:
             # Postgres path: atomic single-statement claim with SKIP LOCKED.
             with self._db.cursor() as cur:
+                self._db.execute(cur, "SELECT pg_advisory_xact_lock(%s)",
+                                 (self._FAIR_CLAIM_ADVISORY_KEY,))
                 self._db.execute(cur,
                     "UPDATE jobs SET status='running', locked_at=%s, locked_by=%s, "
                     "attempts=attempts+1, updated_at=%s, lease_expires_at=%s, phase=NULL "
                     "WHERE id = ("
-                    "  SELECT id FROM jobs "
-                    "  WHERE status='queued' AND run_after<=%s "
-                    + clause + "  ORDER BY priority, run_after "
+                    "  SELECT qj.id" + candidate_from +
+                    "  WHERE qj.status='queued' AND qj.run_after<=%s "
+                    + clause + fair_order +
                     "  FOR UPDATE SKIP LOCKED LIMIT 1"
                     ") RETURNING id",
-                    (now, worker_id, now, expires, now, *types))
+                    (now, worker_id, now, expires, lane_key, now, *fair_params))
                 row = self._db.fetchone(cur)
+                if row:
+                    self._db.execute(cur, record_claim, (lane_key, now, row["id"]))
             if not row:
                 return None
             return self.get_job(row["id"])
@@ -8179,8 +8233,9 @@ class Store:
             # SQLite path: optimistic two-step CAS.
             with self._db.cursor() as cur:
                 self._db.execute(cur,
-                    "SELECT id FROM jobs WHERE status='queued' AND run_after<=%s "
-                    + clause + "ORDER BY priority, run_after LIMIT 1", (now, *types))
+                    "SELECT qj.id" + candidate_from +
+                    "WHERE qj.status='queued' AND qj.run_after<=%s "
+                    + clause + fair_order + "LIMIT 1", (lane_key, now, *fair_params))
                 row = self._db.fetchone(cur)
                 if not row:
                     return None
@@ -8191,6 +8246,8 @@ class Store:
                     "WHERE id=%s AND status='queued'",
                     (now, worker_id, now, expires, jid))
                 claimed = getattr(cur, "rowcount", 1) == 1
+                if claimed:
+                    self._db.execute(cur, record_claim, (lane_key, now, jid))
             return self.get_job(jid) if claimed else None
 
     def set_job_phase(self, job_id: str, phase: str | None) -> None:
