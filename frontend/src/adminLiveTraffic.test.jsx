@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { buildTrafficGraph, queueConcentration, trendToggleLabel, workerServiceRows } from './AdminLiveTraffic.jsx'
+import { buildTrafficGraph, capacityValue, queueConcentration, trendToggleLabel, workerServiceRows } from './AdminLiveTraffic.jsx'
 
 const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'AdminLiveTraffic.jsx'), 'utf8')
 
@@ -72,5 +72,15 @@ describe('Admin live traffic graph', () => {
       { role: 'assess', stage: 'assess', active: 2, slots: 2, available: 0, alive: true, age_s: 4.6, version: 'v10' },
       { role: 'remediate', stage: 'remediate', active: 0, slots: 2, available: 2, alive: false, age_s: 130, version: 'v9' },
     ])
+  })
+
+  it('shows authoritative Azure sizing without turning missing data into zero', () => {
+    expect(capacityValue(2, ' vCPU')).toBe('2 vCPU')
+    expect(capacityValue('4Gi')).toBe('4Gi')
+    expect(capacityValue(null, '%')).toBe('Not reported')
+    expect(source).toContain('Azure worker infrastructure')
+    expect(source).toContain('EPHEMERAL STORAGE / REPLICA')
+    expect(source).toContain('getWorkerCapacity')
+    expect(source).toContain('window.setInterval(refresh, 30000)')
   })
 })
