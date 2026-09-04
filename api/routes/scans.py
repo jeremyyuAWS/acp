@@ -2775,6 +2775,21 @@ def list_file_dispositions(scan_id: str, filename: str, request: Request):
     return core.store.list_criterion_dispositions(scan_id, filename, owner=owner)
 
 
+@router.get("/scans/{scan_id}/files/{filename:path}/scanned-layout")
+def get_scanned_pdf_layout(scan_id: str, filename: str, request: Request):
+    """ADR 0027 Tier A — vision layout model for a scanned/untagged PDF.
+
+    Returns per-page descriptions extracted during scanning when ACP_SCANNED_PDF_TIER_A is on
+    and the file was detected as scanned. ``detected`` is True only when at least one page was
+    assessed. Returns ``{"detected": false, "pages": []}`` for all other cases (structured files,
+    flag off, scan not found)."""
+    owner = _owner(request)
+    if core.store.get_scan(scan_id, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    rows = core.store.get_scanned_pdf_layouts(scan_id, filename)
+    return {"detected": bool(rows), "pages": rows}
+
+
 @router.get("/scans/{scan_id}/files/{filename:path}/heading-outline")
 def get_heading_outline(scan_id: str, filename: str, request: Request):
     """The docx heading outline `{before,after}` for a heading finding's Structure evidence — the

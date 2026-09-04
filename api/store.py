@@ -1287,6 +1287,19 @@ _SCHEMA = [
     "ON criterion_disposition(scan_id, file)",
     "CREATE INDEX IF NOT EXISTS idx_criterion_disposition_sc "
     "ON criterion_disposition(scan_id, file, sc)",
+    # ADR 0027 Tier A — scanned-PDF vision layout results. One row per (scan_id, file, page);
+    # upsert on re-scan. description and evidence are model-generated text: they MUST NEVER
+    # contain tokens, image bytes, prompts, or PHI — only the structured layout description.
+    """CREATE TABLE IF NOT EXISTS scanned_pdf_layouts (
+      scan_id TEXT NOT NULL,
+      file TEXT NOT NULL,
+      page INT NOT NULL,
+      description TEXT,
+      evidence TEXT,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (scan_id, file, page)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_scanned_pdf_layouts_scan ON scanned_pdf_layouts(scan_id, file)",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -8187,6 +8200,33 @@ class Store:
                     "SELECT id,sc,kind,reason,actor,ts FROM criterion_disposition "
                     "WHERE scan_id=%s AND file=%s ORDER BY ts DESC",
                     (scan_id, file))
+            return self._db.fetchall(cur)
+
+    # ── ADR 0027 Tier A — scanned-PDF layout store ──────────────────────────────
+
+    def save_scanned_pdf_layout(self, scan_id: str, file: str, pages: list[dict]) -> None:
+        """Upsert vision-layout rows for a scanned PDF. One row per page; idempotent on re-scan."""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        with self._db.cursor() as cur:
+            for p in pages:
+                self._db.execute(cur,
+                    "INSERT INTO scanned_pdf_layouts"
+                    "(scan_id,file,page,description,evidence,created_at)"
+                    " VALUES(%s,%s,%s,%s,%s,%s)"
+                    " ON CONFLICT(scan_id,file,page) DO UPDATE SET"
+                    " description=EXCLUDED.description,"
+                    " evidence=EXCLUDED.evidence,"
+                    " created_at=EXCLUDED.created_at",
+                    (scan_id, file, p.get("page"), p.get("description"), p.get("evidence"), now))
+
+    def get_scanned_pdf_layouts(self, scan_id: str, file: str) -> list[dict]:
+        """Return per-page vision layout rows for a file, ordered by page number."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT page,description,evidence,created_at FROM scanned_pdf_layouts"
+                " WHERE scan_id=%s AND file=%s ORDER BY page",
+                (scan_id, file))
             return self._db.fetchall(cur)
 
     # ── Durable scan-lifecycle event log (ADR 0042) ───────────────────────────
