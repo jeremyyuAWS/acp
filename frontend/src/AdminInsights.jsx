@@ -200,7 +200,7 @@ export function AdminInsights({ me }) {
         <button className="chip" style={{ opacity: 0.5, cursor: 'default' }} disabled title="Scope filter — coming soon">
           Scope: All
         </button>
-        <select className="chip" value={period} onChange={(e) => setPeriod(e.target.value)}
+        <select className="chip" aria-label="Analytics reporting period" value={period} onChange={(e) => setPeriod(e.target.value)}
                 style={{ border: 'none', background: 'transparent', cursor: 'pointer' }}>
           {PERIOD_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
         </select>

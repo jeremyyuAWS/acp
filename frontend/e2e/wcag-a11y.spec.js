@@ -237,6 +237,36 @@ test.describe('Monitor tab', () => {
   })
 })
 
+test.describe('Live Operations tab', () => {
+  test.beforeEach(async ({ page }) => {
+    await signInAsAdmin(page)
+    await clickTab(page, /Live Operations/)
+    await expect(page.locator('[role="tabpanel"]')).toBeVisible()
+    await expect(page.getByText(/Live Azure traffic/)).toBeVisible({ timeout: 10_000 })
+  })
+
+  test('no WCAG 2.1 A/AA violations', async ({ page }) => {
+    const v = await runAxe(page)
+    expect(v, fmt(v)).toHaveLength(0)
+  })
+})
+
+test.describe('Scan Analytics tab', () => {
+  test.beforeEach(async ({ page }) => {
+    await signInAsAdmin(page)
+    await clickTab(page, /Scan Analytics/)
+    await expect(page.locator('[role="tabpanel"]')).toBeVisible()
+    await page.waitForFunction(() =>
+      document.querySelector('[role="tabpanel"]')?.textContent?.length > 50
+    , { timeout: 10_000 })
+  })
+
+  test('no WCAG 2.1 A/AA violations', async ({ page }) => {
+    const v = await runAxe(page)
+    expect(v, fmt(v)).toHaveLength(0)
+  })
+})
+
 // ── Global shell ──────────────────────────────────────────────────────────────
 
 test.describe('Global shell (nav + header)', () => {

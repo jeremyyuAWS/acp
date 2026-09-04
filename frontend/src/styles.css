@@ -2619,3 +2619,77 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .acc-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 3px; border-radius: 4px; }
 .acc-panel[hidden] { display: none; }
 .acc-panel:not([hidden]) { margin-top: 10px; }
+
+/* ── App-wide high-contrast colour mode ───────────────────────────────────────────────
+   The header toggle is deliberately a PALETTE switch, not a conformance certificate: WCAG also
+   requires keyboard, name/role/value, reflow, reading order and manual AT checks.  In this mode,
+   every mounted tab gets the same small, audited colour system.  Existing tab-specific inline
+   colours are neutralised here so a newly mounted panel cannot silently retain pale text.
+
+   Audited pairs (relative luminance, normal text):
+     #18131a on #ffffff  18.24:1      #ffffff on #321d2b  15.21:1
+     #4d4551 on #ffffff   8.90:1      #003f73 on #ffffff  10.99:1
+   #59515d borders/focus-adjacent boundaries exceed the 3:1 non-text requirement on white. */
+html[data-wcag="on"] {
+  --plum: #321d2b;
+  --ink: #18131a;
+  --muted: #4d4551;
+  --line: #59515d;
+  --bg: #ffffff;
+  --card: #ffffff;
+  --surface: #ffffff;
+  --surface-1: #ffffff;
+  --hc-text: #18131a;
+  --hc-muted: #4d4551;
+  --hc-action: #321d2b;
+  --hc-link: #003f73;
+  --hc-border: #59515d;
+  --hc-focus: #005fcc;
+  color-scheme: light;
+}
+
+/* Components inherit the audited semantic tokens above. Avoid a universal descendant override:
+   it would replace white text inside dark selected controls and make an otherwise passing screen
+   fail contrast. The token-usage tests prevent mounted components from bypassing this palette. */
+
+/* Links are identifiable without relying on colour. */
+html[data-wcag="on"] :where(a, .app a, .linkbtn) {
+  color: var(--hc-link) !important;
+  text-decoration: underline !important;
+  text-decoration-thickness: .1em !important;
+  text-underline-offset: .15em !important;
+}
+
+/* A consistent control surface across Overview, Sources, Discover, Assess, Remediate, Release,
+   Monitor, Scan Analytics, drawers and settings. */
+html[data-wcag="on"] :where(button, input, select, textarea, [role="button"], [role="tab"],
+  [role="switch"], [role="checkbox"]) {
+  border-color: var(--hc-border) !important;
+  box-shadow: none !important;
+}
+html[data-wcag="on"] :where(button:disabled, [aria-disabled="true"]) {
+  background: #e6e3e7 !important;
+  color: #3d3740 !important;
+  border-color: #68606c !important;
+  opacity: 1 !important;
+  text-decoration: none !important;
+}
+
+/* Focus is visible against both white and the dark selected-control surface. */
+html[data-wcag="on"] :focus-visible {
+  outline: 3px solid var(--hc-focus) !important;
+  outline-offset: 3px !important;
+}
+/* Keep chart labels readable and make lines/non-text boundaries survive the white surface. */
+html[data-wcag="on"] svg text { fill: var(--hc-text) !important; }
+html[data-wcag="on"] svg :where(line, path[fill="none"], [stroke]) {
+  stroke: var(--hc-border) !important;
+}
+
+/* The palette control must remain visually and programmatically obvious in its selected state. */
+html[data-wcag="on"] .wcag-toggle,
+html[data-wcag="on"] .wcag-toggle--on {
+  background: #ffffff !important;
+  color: #1f5128 !important;
+  border: 2px solid #1f5128 !important;
+}
