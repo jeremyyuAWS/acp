@@ -35,6 +35,7 @@ import AccordionSection from './AccordionSection.jsx'
 import LastSuccessfulScanSummary from './LastSuccessfulScanSummary.jsx'
 import DiscoveryLifecycleResults from './DiscoveryLifecycleResults.jsx'
 import DiscoveryLifecycleEstateSummary from './DiscoveryLifecycleEstateSummary.jsx'
+import DiscoveryIntegrityRecovery from './DiscoveryIntegrityRecovery.jsx'
 
 const STATUS_TAGS = new Set(['certified', 'needs-review', 'auto-fixable', 'remediation-queued'])
 const classTags = (f) => (f.tags || []).filter((t) => !STATUS_TAGS.has(t))
@@ -142,7 +143,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // classification claim MUST be checked against these and not against `files`. Checking the
   // annotated array is the 2026-08-21 defect: annotate() gives every real file a department, so
   // the check read "classified" on every real scan.
-  rawFiles = null, onStop = null, onViewMonitor = null,
+  rawFiles = null, onStop = null, onViewMonitor = null, onViewLiveOps = null,
   onOpenSource = null, pendingScanLoad = false }) {
   // discoverRunTime resolves the snapshot instant from run.discovered_at / completed_at, and this
   // component is given neither — Discover takes scanId and scope, not the run. The pieces it needs
@@ -474,6 +475,8 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
     [errLog, estateFiles],
   )
   const failureReason = useMemo(() => discoveryFailureReason(errLog), [errLog])
+  const discoveryIntegrity = scope?.integrity ?? null
+  const integrityBlocked = discoveryIntegrity?.status === 'blocked'
 
   // The folder portion of a file's path, when it carries one — real scans name files by path
   // (`HR/policies/leave.docx`), SIM by bare filename. Empty string when there is no folder.
@@ -976,7 +979,17 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           banner can never say something the log does not back up. Falls back to the old generic
           text only when nothing was recorded (e.g. a transient DB error mid-check logs no
           decision at all) — never fabricated. */}
-      {run?.status === 'failed' && !busy && (
+      {integrityBlocked && !busy && (
+        <DiscoveryIntegrityRecovery
+          integrity={discoveryIntegrity}
+          source={run?.source}
+          onReconnect={onOpenSource ? () => onOpenSource(run?.source || 'drive') : undefined}
+          onReviewScope={onScan ? () => onScan(run?.source || 'drive') : undefined}
+          onRetry={onScan ? () => onScan(run?.source || 'drive', null, { allFolders: true }) : undefined}
+          onViewLiveOps={onViewLiveOps}
+        />
+      )}
+      {run?.status === 'failed' && !busy && !integrityBlocked && (
         <div className="err" role="alert" style={{ marginBottom: 12 }}>
           {failureReason
             ? <>Discovery did not finish: {failureReason}.</>

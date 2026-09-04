@@ -18,6 +18,7 @@ const FAILURE_KINDS = new Set([
   'scan.discover_failed',
   'scan.suspicious_zero',
   'scan.unreachable_zero',
+  'scan.scope_collapse',
 ])
 
 /**
