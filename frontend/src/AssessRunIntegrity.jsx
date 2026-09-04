@@ -35,7 +35,7 @@ const TONE = {
   [INCOMPLETE]: { c: '#B3261E', bar: '#B3261E' },
   [UNAVAILABLE]: { c: '#B07A00', bar: '#B07A00' },
   [STALE]: { c: '#B07A00', bar: '#B07A00' },
-  [PENDING]: { c: '#6c6470', bar: '#9A93A0' },
+  [PENDING]: { c: 'var(--muted)', bar: '#9A93A0' },
 }
 const cellNum = { fontVariantNumeric: 'tabular-nums', textAlign: 'right' }
 

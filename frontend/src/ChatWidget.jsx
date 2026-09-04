@@ -5,7 +5,7 @@ import { remediableCount } from './sim.js'
 import ChatChart from './ChatChart.jsx'
 import { SIM } from './sim.js'
 
-const PLUM = '#7a5c8e'
+const PLUM = 'var(--focus-ring)'
 
 function chartAnswer(q, files, run, trend, trendDates) {
   if (!files.length || !run) return null

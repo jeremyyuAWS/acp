@@ -26,7 +26,7 @@ const TONE = {
   failed: { c: '#B3261E', bar: '#B3261E' },
   awaiting_review: { c: '#8a5a00', bar: '#B07A00' },
   clear: { c: '#2F7D32', bar: '#2F7D32' },
-  empty: { c: '#6c6470', bar: '#9A93A0' },
+  empty: { c: 'var(--muted)', bar: '#9A93A0' },
 }
 const SEV_COLOR = { CRITICAL: '#8E1B14', SERIOUS: '#B3261E', MODERATE: '#B07A00', MINOR: '#B9B3BE' }
 

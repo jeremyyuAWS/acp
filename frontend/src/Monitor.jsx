@@ -109,7 +109,7 @@ function useProgramBatches(files, decisions) {
       { label: 'Batch 1 · CRITICAL auto-fix',    count: sim ? 47  : b1.length, done: sim ? 38 : decided(b1), color: '#7B1D1D', bg: '#FDECEA', note: 'auto-fix eligible · one click' },
       { label: 'Batch 2 · SERIOUS HITL review',  count: sim ? 189 : b2.length, done: sim ? 44 : decided(b2), color: 'var(--warn-fg)', bg: 'var(--warn-bg)', note: 'human approval needed' },
       { label: 'Batch 3 · MODERATE sweep',       count: sim ? 521 : b3.length, done: sim ? 0  : decided(b3), color: 'var(--info-fg)', bg: 'var(--info-bg)', note: 'auto-fix + spot-check' },
-      { label: 'N/A · excluded from plan',       count: sim ? 490 : na.length, done: sim ? 490: na.length,  color: '#9a948f', textColor: '#6c6470', bg: '#EFEDEA', note: 'internal / compliant / junk' },
+      { label: 'N/A · excluded from plan',       count: sim ? 490 : na.length, done: sim ? 490: na.length,  color: '#9a948f', textColor: 'var(--muted)', bg: '#EFEDEA', note: 'internal / compliant / junk' },
     ],
   }
 }

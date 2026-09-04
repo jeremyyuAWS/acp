@@ -205,7 +205,7 @@ export default function Overview({ run, files, trend, trendDates, onGo, scanList
 
   // inventory distributions
   const countBy = (fn, pop = files) => Object.entries(pop.reduce((m, f) => { const k = fn(f); if (k != null) m[k] = (m[k] || 0) + 1; return m }, {})).sort((a, b) => b[1] - a[1])
-  const PLUM = '#7a5c8e'
+  const PLUM = 'var(--focus-ring)'
   const NA_GREY = '#9a948f'   // "not measured" — never a score band, so it reads as absent, not bad
   const bySource = countBy((f) => f.sourceName).map(([label, value]) => ({ label, value, color: PLUM }))
   // Over estateFiles, not files: an estate that is mostly images/video must not render this panel
