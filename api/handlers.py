@@ -1348,6 +1348,14 @@ def _sp_rule_inputs(row: dict) -> dict:
     if not isinstance(blob, dict):
         return out
     out["managed_columns"] = blob.get("managed_columns") or {}
+    # SMART ARCHIVAL. `collaborator_count` is what a rule keys on — "archive if older than seven
+    # years AND at most one person was ever involved" — and `collaborator_basis` is what stops it
+    # being read as more than it is: under `authorship` the count is a FLOOR off the listing page
+    # (creator + last editor), under `permissions` it is everyone with access. A rule written as
+    # `<= 1` is correct under both, which is the shape to recommend.
+    collab = blob.get("collaborators") or {}
+    out["collaborator_count"] = collab.get("count")
+    out["collaborator_basis"] = collab.get("basis")
     out["sp_availability"] = blob.get("availability") or {}
     out["sp_reasons"] = blob.get("reasons") or {}
     return out
