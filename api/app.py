@@ -162,9 +162,34 @@ async def _workspace_capability_gate(request, call_next):
     role = (access.get("role") or {}).get("name")
     detail = (f"your {role} role does not include this action" if role
               else "you have no workspace role, so this action is not available")
+    _record_denial(email, needed, role=role, method=request.method, path=route.path)
     return Response(status_code=403, media_type="application/json",
                     content=json.dumps({"detail": detail,
                                         "required": sorted(needed), "capability_denied": True}))
+
+
+def _record_denial(email, needed, *, role, method, path) -> None:
+    """PRD §12's `role.access_denied`, coalesced — see api/workspace_denials.py for why writing
+    one row per refusal is the wrong shape.
+
+    BEST-EFFORT, AND THAT IS THE POINT OF THE try/except. The refusal has already been decided;
+    this only records it. If the audit write fails — the database is busy, the pool is exhausted —
+    the user must still get their 403. An exception escaping here would turn a correct denial into
+    a 500, which reads to the client as "the server broke" rather than "you may not do this", and
+    would make the gate itself the outage.
+    """
+    try:
+        import workspace_denials as denials
+        record, suppressed = denials.should_record(email, needed)
+        if not record:
+            return
+        core.store.log_decision(
+            (email or "anonymous"), "role.access_denied",
+            detail=denials.detail(email, needed, role=role, method=method, path=path,
+                                  suppressed=suppressed))
+    except Exception:
+        from swallowed import swallowed
+        swallowed("app._record_denial: recording a capability denial failed", path)
 
 
 def _capability_gate_suspended(email: str) -> bool:

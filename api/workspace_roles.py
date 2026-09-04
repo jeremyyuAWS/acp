@@ -109,8 +109,14 @@ def assign_role(store, *, email: str, role_id: str, actor: str | None = None) ->
     previous = (current or {}).get(ROLE_FIELD)
     record = store.upsert_person({"email": target, ROLE_FIELD: role_id,
                                   ASSIGNED_BY_FIELD: actor, ASSIGNED_AT_FIELD: now})
-    store.log_decision(actor or "system", "role.assigned",
-                       detail=f"{target} · {previous or 'none'} → {role_id}")
+    # PRD §12 asks for `role.assigned` AND `role.unassigned`, and they are not the same event to
+    # somebody reading the log: assigning is a grant, removing the last role is a REVOCATION, and
+    # an auditor scanning for revocations should not have to notice that the arrow on an
+    # `role.assigned` row happens to point at "none". Recorded under the action that names what
+    # happened, with both values either way.
+    action = "role.unassigned" if not role_id else "role.assigned"
+    store.log_decision(actor or "system", action,
+                       detail=f"{target} · {previous or 'none'} → {role_id or 'none'}")
     return record
 
 
