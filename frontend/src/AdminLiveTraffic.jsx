@@ -168,14 +168,20 @@ function InfraNode({ data }) {
   return <div title="Select for infrastructure details; double-click for telemetry"
     style={{ width: data.wide ? 205 : 175, minHeight: 68, padding: 11, background: 'var(--panel)',
       border: `2px solid ${color}`, borderRadius: 10, boxShadow: '0 2px 8px rgba(24,20,28,.08)' }}>
-    {data.hasInput !== false && <Handle type="target" position={Position.Left} />}
+    {data.inputPorts?.length
+      ? data.inputPorts.map(({ id, top }) => <Handle key={id} id={id} type="target"
+          position={Position.Left} style={{ top }} />)
+      : data.hasInput !== false && <Handle type="target" position={Position.Left} />}
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 7, alignItems: 'start' }}>
       <b style={{ overflowWrap: 'anywhere' }}>{data.label}</b>
       <span style={{ color, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap' }}>{data.status}</span>
     </div>
     <div className="muted" style={{ fontSize: 11, marginTop: 4, lineHeight: 1.3, overflowWrap: 'anywhere' }}>{data.detail}</div>
     {data.metric && <div style={{ fontSize: 11, marginTop: 5, fontWeight: 700, overflowWrap: 'anywhere' }}>{data.metric}</div>}
-    {data.hasOutput !== false && <Handle type="source" position={Position.Right} />}
+    {data.outputPorts?.length
+      ? data.outputPorts.map(({ id, top }) => <Handle key={id} id={id} type="source"
+          position={Position.Right} style={{ top }} />)
+      : data.hasOutput !== false && <Handle type="source" position={Position.Right} />}
   </div>
 }
 
@@ -265,27 +271,30 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
   const serviceByStage = new Map(services.map((service) => [service.stage, service]))
   const sourceKinds = ['drive', 'sharepoint']
   const sourceLabel = { drive: 'Google Drive', sharepoint: 'SharePoint' }
-  const nodes = sourceKinds.map((source, index) => ({ id: `source:${source}`, type: 'infra', position: { x: 0, y: 30 + index * 105 },
+  const nodes = sourceKinds.map((source, index) => ({ id: `source:${source}`, type: 'infra', position: { x: 0, y: 70 + index * 135 },
     ariaLabel: `${sourceLabel[source]} connector, ${runs.some((run) => run.source === source) ? 'active' : 'ready'}. Select for details.`,
     data: { kind: 'source', label: sourceLabel[source], status: runs.some((run) => run.source === source) ? 'active' : 'ready',
       detail: 'Authorized document connector', color: '#246B79', hasInput: false,
       active: runs.filter((run) => run.source === source && run.status !== 'recent').length } }))
   nodes.push(
-    { id: 'infra:intake', type: 'infra', position: { x: 225, y: 82 },
+    { id: 'infra:intake', type: 'infra', position: { x: 230, y: 138 },
       ariaLabel: `ACP intake and orchestration, ${connection}. Select for details.`,
       data: { kind: 'intake', label: 'ACP intake', status: connection,
       detail: 'Authentication · scope · orchestration', color: '#51404E', connection } },
-    { id: 'infra:queue', type: 'infra', position: { x: 455, y: 82 },
+    { id: 'infra:queue', type: 'infra', position: { x: 470, y: 138 },
       ariaLabel: `Shared queue, ${snapshot?.summary?.queued || 0} waiting. Select for details.`,
       data: { kind: 'queue', label: 'Shared queue',
-      status: `${snapshot?.summary?.queued || 0} waiting`, detail: 'Durable · tenant-fair scheduling', color: '#A66A16' } },
+      status: `${snapshot?.summary?.queued || 0} waiting`, detail: 'Durable · tenant-fair scheduling', color: '#A66A16',
+      outputPorts: [
+        { id: 'discover', top: '22%' }, { id: 'assess', top: '50%' }, { id: 'remediate', top: '78%' },
+      ] } },
   )
   ;['discover', 'assess', 'remediate'].forEach((stage, index) => {
     const service = serviceByStage.get(stage) || { stage, active: 0, available: 0, slots: 0, alive: false }
     // ariaLabel sits on the NODE, not in `data` — ReactFlow reads node.ariaLabel when it renders
     // the wrapper (index.js: "aria-label": node.ariaLabel). Nested in data it is silently ignored,
     // which is how this was first written and what the announcement test caught.
-    nodes.push({ id: `stage:${stage}`, type: 'infra', position: { x: 690, y: index * 105 },
+    nodes.push({ id: `stage:${stage}`, type: 'infra', position: { x: 720, y: 20 + index * 145 },
       ariaLabel: `${STAGE[stage].label} workers, ${service.alive ? 'online' : 'standby'}, `
         + `${service.active} active of ${service.slots} slots. Select for details.`,
       data: { kind: 'worker',
@@ -299,16 +308,21 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
         : reportedWorkerSize(capacity),
       color: STAGE[stage].color, service } })
   })
-  nodes.push({ id: 'infra:output', type: 'infra', position: { x: 935, y: 82 },
+  nodes.push({ id: 'infra:output', type: 'infra', position: { x: 1000, y: 158 },
     ariaLabel: 'Durable outputs, protected. Select for details.',
     data: { kind: 'output', label: 'Durable outputs',
-    status: 'protected', detail: 'Results · corrected copies · audit trail', color: '#287C45', hasOutput: false, wide: true } })
+    status: 'protected', detail: 'Results · corrected copies · audit trail', color: '#287C45', hasOutput: false, wide: true,
+    inputPorts: [
+      { id: 'discover', top: '22%' }, { id: 'assess', top: '50%' }, { id: 'remediate', top: '78%' },
+    ] } })
   const edges = [
     ...sourceKinds.map((source) => ({ id: `${source}:intake`, source: `source:${source}`, target: 'infra:intake', style: { stroke: '#246B79' } })),
     { id: 'intake:queue', source: 'infra:intake', target: 'infra:queue', animated: Boolean(snapshot?.summary?.active_runs), style: { stroke: '#51404E' } },
     ...['discover', 'assess', 'remediate'].flatMap((stage) => [
-      { id: `queue:${stage}`, source: 'infra:queue', target: `stage:${stage}`, animated: Boolean(serviceByStage.get(stage)?.active), style: { stroke: STAGE[stage].color } },
-      { id: `${stage}:output`, source: `stage:${stage}`, target: 'infra:output', animated: Boolean(serviceByStage.get(stage)?.active), style: { stroke: STAGE[stage].color } },
+      { id: `queue:${stage}`, source: 'infra:queue', sourceHandle: stage, target: `stage:${stage}`,
+        animated: Boolean(serviceByStage.get(stage)?.active), style: { stroke: STAGE[stage].color } },
+      { id: `${stage}:output`, source: `stage:${stage}`, target: 'infra:output', targetHandle: stage,
+        animated: Boolean(serviceByStage.get(stage)?.active), style: { stroke: STAGE[stage].color } },
     ]),
   ]
   runs.forEach((run, i) => {
@@ -319,7 +333,7 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
     const last = series.at(-1)
     if (!last || ['completed', 'running', 'queued'].some((field) => Number(last[field] || 0) !== sample[field])) series.push(sample)
     historyMap.set(key, series.slice(-30))
-    nodes.push({ id: key, type: 'run', position: { x: 335 + (i % 3) * 255, y: 345 + Math.floor(i / 3) * 135 }, data: { kind: 'run', run, history: series } })
+    nodes.push({ id: key, type: 'run', position: { x: 335 + (i % 3) * 255, y: 455 + Math.floor(i / 3) * 145 }, data: { kind: 'run', run, history: series } })
     edges.push({ id: `in:${key}`, source: sourceKinds.includes(run.source) ? `source:${run.source}` : 'infra:intake', target: key,
       animated: run.running > 0, style: { stroke: STAGE[run.stage]?.color || '#6B7280' } })
     edges.push({ id: `out:${key}`, source: key, target: `stage:${run.stage}`,
@@ -415,9 +429,10 @@ export default function AdminLiveTraffic() {
       borderLeft: `4px solid ${PRESSURE.busy.color}`, background: 'var(--page)', fontSize: 12 }}>
       <b>Queue concentration:</b> one user holds {concentration.pct}% of waiting jobs. Tenant-fair scheduling gives other waiting users the next equally prioritized capacity.
     </div>}
-    <div style={{ height: Math.max(430, 385 + Math.ceil((snapshot?.runs?.length || 0) / 3) * 135), maxHeight: 720,
+    <div style={{ height: Math.max(540, 495 + Math.ceil((snapshot?.runs?.length || 0) / 3) * 145), maxHeight: 760,
       border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden', background: 'var(--page)' }}>
       <ReactFlow nodes={graph.nodes} edges={graph.edges} nodeTypes={nodeTypes}
+        defaultEdgeOptions={{ type: 'smoothstep', pathOptions: { borderRadius: 12, offset: 18 } }}
         fitView minZoom={0.35} maxZoom={1.5}
         onNodeClick={(_, node) => { setSelectedKey(node.id); setExpanded(false) }}
         onNodeDoubleClick={(_, node) => { setSelectedKey(node.id); setExpanded(true) }}>
