@@ -56,18 +56,20 @@ don't just generate text.
 
 ## P1 — auto-escalation + copilot rewriting (needs the gateway + the refine palette)
 
-- [ ] **Auto-escalation before the card is shown.** Wire the existing `describe_image_structured`
-  escalation (local → cloud when a customer provider is configured) into the **assess-time batch
-  pre-draft** path, so "manual authoring required" becomes rare. Card shows the transparent numbered
-  path ("✓ local attempted → no grounded description → escalated to {provider} → grounded"), never
-  the failed attempt as a dead end.
-- [ ] **One-click "Improve" palette** (extend the #131 refine, which already has Shorter / More
-  detail / Regenerate): add **Mention the numbers · Ignore colours · Professional tone · Plain
-  language**. Local model handles these today; premium models when configured.
-- [ ] **LLM-written guidance instead of the terse system string.** Replace "No faithful alt-text
-  source in the document…" with a natural, generated sentence: "This slide has a comparison chart
-  that screen-reader users currently can't perceive. ACP couldn't verify a grounded description, so
-  it needs your wording." (Deterministic template first; premium-model phrasing when available.)
+- [x] **Auto-escalation before the card is shown.** *(shipped #1292)* Wired the existing
+  `describe_image_structured` escalation (local → cloud when a customer provider is configured) into
+  the **assess-time batch pre-draft** path, so "manual authoring required" becomes rare. Card shows
+  the transparent numbered path ("✓ local attempted → no grounded description → escalated to
+  {provider} → grounded"), never the failed attempt as a dead end.
+- [x] **One-click "Improve" palette** *(shipped #1294)* — Shorter / More detail / Regenerate already
+  in `ProposalEditors.jsx`; added **Mention the numbers · Ignore colours · Professional tone · Plain
+  language**. `ai.py` maps all seven steer keys to distinct vision prompts; unknown keys fall back to
+  the default prompt, not an error. Local model handles these today; premium models when configured.
+- [x] **LLM-written guidance instead of the terse system string.** *(shipped #1296)* `guidanceSentence(card)`
+  in `reviewCard.js` replaces "No faithful alt-text source in the document…" with a natural sentence:
+  noun from file extension (slide/worksheet/page), image kind from `describedImageType`, draft status
+  from proposals. "This slide has a comparison chart that screen-reader users cannot perceive. ACP
+  drafted a description — review and approve it below." Deterministic; no model call.
 - [ ] **Empty-state honesty tie-in.** When escalation is OFF and local produced nothing, the card
   says *why* it's manual (not "Ollama not running") and links the admin to enable a governed cloud
   provider (Settings → AI Providers).
