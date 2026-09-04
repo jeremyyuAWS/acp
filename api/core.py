@@ -663,6 +663,51 @@ def _drive_delta_check(cursor_key: str, owner: str | None,
         return None
 
 
+def _whole_drive_prior_inventory_for_account(
+        owner: str | None, account_id: str | None) -> tuple[str, list[dict]] | None:
+    """Return the newest trustworthy whole-Drive inventory for this Google account.
+
+    A Drive delta describes changes to the account-wide corpus.  It can therefore only be
+    applied to an account-wide baseline.  In particular, the newest completed Drive scan may
+    be a folder run; using that inventory as the baseline manufactures a tiny result and then
+    labels it ``kind=drive``.  Production did exactly that on 2026-09-03 (986-file whole Drive,
+    then a 37-file folder run, then a "whole Drive" reconstruction containing 37 files).
+
+    A Discovery-only run is deliberately not used for delta reconstruction yet: the existing
+    inventory reader is tied to ``completed_at``.  Falling back to a fresh listing is slower but
+    safe; pretending an older completed folder inventory belongs to that newer run is not.
+    """
+    if not owner:
+        return None
+    store = get_store()
+    try:
+        candidates = [r for r in store.list_finished_scans(owner)
+                      if r.get("source") == "drive"]
+    except AttributeError:
+        # Compatibility for small store doubles and older deployments during a rolling update.
+        # Production Store implements list_finished_scans; the conservative path there is the
+        # scope-aware loop below.
+        prior = store.latest_scan_inventory_items(owner, "drive")
+        if prior is None or any(r.get("drive_account_id") != account_id for r in prior):
+            return None
+        return "legacy-unknown-scope", prior
+
+    if not candidates:
+        return None
+    # Load-bearing: inspect the NEWEST finished Drive boundary; never skip past a newer folder
+    # run and silently pair an old whole-Drive scope with some other inventory.
+    run = candidates[0]
+    scope = run.get("scope") if isinstance(run.get("scope"), dict) else {}
+    enumeration = scope.get("enumeration") or {}
+    if (scope.get("kind") != "drive" or not run.get("completed_at")
+            or not enumeration.get("complete") or scope.get("truncated")):
+        return None
+    prior = store.latest_scan_inventory_items(owner, "drive")
+    if prior is None or any(r.get("drive_account_id") != account_id for r in prior):
+        return None
+    return run["id"], prior
+
+
 def _drive_prior_inventory_for_account(owner: str | None, account_id: str | None) -> list[dict] | None:
     """The most recent completed Drive scan's inventory, but ONLY if it was actually run as
     THIS Google account. store.latest_scan_inventory_items has no account-scoped query of its
@@ -683,12 +728,8 @@ def _drive_prior_inventory_for_account(owner: str | None, account_id: str | None
     that still participates in the comparison rather than skipping it: None only matches other
     Nones, so an unverifiable CURRENT identity checked against a KNOWN prior one is correctly
     treated as a mismatch, never a silent pass."""
-    prior = get_store().latest_scan_inventory_items(owner, "drive")
-    if prior is None:
-        return None
-    if any(r.get("drive_account_id") != account_id for r in prior):
-        return None
-    return prior
+    match = _whole_drive_prior_inventory_for_account(owner, account_id)
+    return match[1] if match else None
 
 
 def _drive_sync_plan(owner: str | None) -> tuple[bool, dict | None]:

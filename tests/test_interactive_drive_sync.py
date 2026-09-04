@@ -278,6 +278,48 @@ def test_matching_account_id_uses_the_prior_scan_as_baseline(core_mod, monkeypat
     assert [f["id"] for f in result["prior_files"]] == ["F0"]
 
 
+def test_a_folder_scan_can_never_seed_a_whole_drive_reconstruction(core_mod, monkeypatch):
+    """Production regression: whole Drive 986 -> folder 37 -> whole Drive must list fresh."""
+    import scanner
+    core, store, calls = core_mod
+    store.sync_cursors["drive:alice@x.com"] = {"page_token": "tok-1"}
+    folder_row = {**PRIOR_ROW, "drive_account_id": "alice.work@gmail.com"}
+    # The legacy lookup would return the newest inventory without checking its boundary.
+    store.prior_inventory["alice@x.com"] = [folder_row]
+    store.list_finished_scans = lambda owner: [{
+        "id": "folder-37", "source": "drive",
+        "scope": {"kind": "folder", "folder_id": "FOLDER",
+                  "enumeration": {"complete": True}},
+    }]
+    store.count_inventory = lambda scan_id: 1
+    store.list_inventory_page = lambda *a, **k: [folder_row]
+    monkeypatch.setattr(scanner, "drive_changes_since",
+                        lambda svc, tok: ([{"id": "CHANGED"}], set(), "tok-2"))
+    monkeypatch.setattr(scanner, "drive_account_id", lambda svc: "alice.work@gmail.com")
+
+    assert core._interactive_drive_sync_plan("alice@x.com", SVC_ALICE) is None
+
+
+def test_a_completed_whole_drive_scan_can_seed_reconstruction(core_mod, monkeypatch):
+    import scanner
+    core, store, calls = core_mod
+    store.sync_cursors["drive:alice@x.com"] = {"page_token": "tok-1"}
+    prior = {**PRIOR_ROW, "drive_account_id": "alice.work@gmail.com"}
+    store.prior_inventory["alice@x.com"] = [prior]
+    store.list_finished_scans = lambda owner: [{
+        "id": "whole-986", "source": "drive", "completed_at": "2026-01-01T00:00:00Z",
+        "scope": {"kind": "drive", "truncated": False,
+                  "enumeration": {"complete": True}},
+    }]
+    monkeypatch.setattr(scanner, "drive_changes_since",
+                        lambda svc, tok: ([], set(), "tok-2"))
+    monkeypatch.setattr(scanner, "drive_account_id", lambda svc: "alice.work@gmail.com")
+
+    result = core._interactive_drive_sync_plan("alice@x.com", SVC_ALICE)
+    assert result is not None
+    assert [f["id"] for f in result["prior_files"]] == ["F0"]
+
+
 def test_an_unverifiable_current_identity_against_a_known_prior_one_is_a_mismatch(
         core_mod, monkeypatch):
     """scanner.drive_account_id's own best-effort failure mode returns None on any error — that
