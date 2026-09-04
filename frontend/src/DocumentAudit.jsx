@@ -106,10 +106,12 @@ export default function DocumentAudit({ scanId, file, changesOnly = false }) {
   // an empty one before the request returns is the strongest wrong claim this component could make.
   if (!rows) {
     return err
-      ? <section className="panel documentaudit" role="region" aria-label="Audit trail">
-          <div style={kicker}>Audit trail</div>
-          <p style={{ ...muted, marginTop: 6 }}>The trail for this document could not be loaded: {err}.</p>
-        </section>
+      ? <details className="panel documentaudit" aria-label="Audit trail" style={{ marginBottom: 14 }}>
+          <summary style={{ cursor: 'pointer', padding: 14, fontWeight: 700 }}>Audit trail · unavailable</summary>
+          <div style={{ padding: '0 14px 14px' }}>
+            <p style={{ ...muted, margin: 0 }}>The trail for this document could not be loaded: {err}.</p>
+          </div>
+        </details>
       : null
   }
 
@@ -117,9 +119,16 @@ export default function DocumentAudit({ scanId, file, changesOnly = false }) {
   const shown = onlyChanges ? rows.filter((r) => r.changed) : rows
 
   return (
-    <section className="panel documentaudit" role="region" aria-label="Audit trail"
-             style={{ marginBottom: 14 }}>
-      <div style={kicker}>Audit trail</div>
+    <details className="panel documentaudit" aria-label="Audit trail" style={{ marginBottom: 14 }}>
+      <summary style={{ cursor: 'pointer', padding: 14, display: 'flex', gap: 10,
+        alignItems: 'baseline', justifyContent: 'space-between', listStylePosition: 'inside' }}>
+        <span><b>Audit trail</b> <span className="muted" style={{ fontSize: 12 }}>· {file}</span></span>
+        <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+          {s.events} {s.events === 1 ? 'event' : 'events'} · {s.changes} {s.changes === 1 ? 'change' : 'changes'}
+        </span>
+      </summary>
+      <div className="documentaudit-body" style={{ padding: '0 14px 14px', borderTop: '1px solid var(--line)' }}>
+      <div style={{ ...kicker, marginTop: 12 }}>Recorded history</div>
       <h2 style={{ margin: '4px 0 0', fontSize: 18, wordBreak: 'break-word' }}>{file}</h2>
 
       {rows.length === 0 ? (
@@ -161,6 +170,7 @@ export default function DocumentAudit({ scanId, file, changesOnly = false }) {
           )}
         </>
       )}
-    </section>
+      </div>
+    </details>
   )
 }

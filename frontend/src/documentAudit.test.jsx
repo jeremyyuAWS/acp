@@ -155,6 +155,15 @@ describe('DocumentAudit rendering', () => {
     expect(empty).toMatch(/not evidence that nothing happened/)
   })
 
+  it('keeps the audit trail as a collapsed summary until the user opens it', async () => {
+    getDocumentTimeline.mockResolvedValue([EV.scan, EV.fix])
+    const c = await mount({ scanId: 's1', file: 'a.docx' })
+    const trail = c.querySelector('details[aria-label="Audit trail"]')
+    expect(trail).toBeTruthy()
+    expect(trail.hasAttribute('open')).toBe(false)
+    expect(trail.querySelector('summary').textContent).toMatch(/Audit trail.*a\.docx.*2 events.*1 change/)
+  })
+
   it('a FAILED read says so, and does NOT fall through to the empty-trail sentence', async () => {
     // The distinction this component exists to keep. `getDocumentTimeline` rejects on a transport
     // failure rather than resolving to [], so "we could not read the trail" and "this document has
