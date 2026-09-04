@@ -199,8 +199,14 @@ td { padding: 10px 0; border-top: 1px solid var(--line); }
 .scorecell { display: inline-flex; align-items: center; gap: 8px; }
 .scorecell > span:first-child { min-width: 22px; }
 
-.tabs { display: flex; gap: 6px; margin: 22px 0 4px; }
-.tab { background: #fff; color: var(--muted); border: 1px solid var(--line); border-radius: 9px; padding: 7px 14px; font-size: 14px; }
+.tabs { display: flex; gap: 6px; margin: 22px 0 4px; padding: 2px 2px 8px;
+  max-width: 100%; overflow-x: auto; overflow-y: hidden; overscroll-behavior-inline: contain;
+  scrollbar-width: thin; scrollbar-color: var(--plum) var(--line); scroll-snap-type: inline proximity;
+  -webkit-overflow-scrolling: touch; }
+.tabs::-webkit-scrollbar { height: 7px; }
+.tabs::-webkit-scrollbar-track { background: var(--line); border-radius: 999px; }
+.tabs::-webkit-scrollbar-thumb { background: var(--plum); border-radius: 999px; }
+.tab { flex: 0 0 auto; scroll-snap-align: start; background: #fff; color: var(--muted); border: 1px solid var(--line); border-radius: 9px; padding: 7px 14px; font-size: 14px; }
 .tab.on { background: var(--plum); color: #fff; border-color: var(--plum); }
 .tab.locked, .tab:disabled { opacity: 0.45; cursor: not-allowed; }
 
@@ -2744,3 +2750,46 @@ html[data-wcag="on"] .wcag-toggle--on {
 .rem-worker-line{display:flex;gap:16px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:10px;margin-top:12px;font-size:12.5px;color:var(--muted)}
 @media(max-width:800px){.rem-live-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(prefers-reduced-motion:reduce){.rem-live-delta{animation:none}}
+
+/* Access restricted (PRD §10) — the panel a user sees in place of a tab their role does not
+   include. Deliberately plain: it is an explanation, not an error, and styling it as a failure
+   would tell people something has gone wrong when nothing has. */
+.access-restricted { display: block; max-width: 560px; margin: 32px auto; padding: 24px;
+  border: 1px solid var(--line); border-radius: 10px; text-align: center; }
+.access-restricted-hd { margin: 0 0 8px; font-size: 17px; }
+.access-restricted-why { margin: 0 0 16px; font-size: 13.5px; line-height: 1.5;
+  color: var(--fg, #1c1620); }
+.access-restricted-none { margin: 0; font-size: 12.5px; line-height: 1.5; }
+
+/* Roles administration (PRD §8). */
+.roles-not-enforced { margin-top: 14px; padding: 12px; border: 1px solid #E5C875;
+  border-radius: 9px; background: #FFF8E7; font-size: 13px; line-height: 1.5; }
+.roles-table { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.roles-row { display: grid; grid-template-columns: minmax(220px, 2fr) 90px 150px minmax(210px, 1fr);
+  gap: 12px; align-items: center; padding: 13px 14px; }
+.roles-chip { display: inline-block; margin-left: 7px; padding: 1px 6px; border-radius: 4px;
+  background: #ECE7EC; color: var(--plum); font-size: 10.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .03em; }
+.roles-drawer-scrim { position: fixed; inset: 0; z-index: 1000; background: rgba(24,18,25,.42);
+  display: flex; justify-content: flex-end; }
+/* A right-side drawer, per the PRD's own sketch — it keeps the role list visible behind it, so an
+   administrator comparing two roles does not lose their place. */
+.roles-drawer { width: min(560px, 100%); height: 100%; overflow-y: auto; padding: 24px;
+  background: var(--surface); box-shadow: -14px 0 44px rgba(0,0,0,.22); }
+.roles-field { display: grid; gap: 6px; margin-top: 14px; font-size: 13px; font-weight: 700; }
+.roles-field input { padding: 8px; font: inherit; font-size: 13px; font-weight: 400;
+  border: 1px solid var(--line); border-radius: 6px; }
+.roles-fieldset { border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px;
+  margin: 20px 0 0; }
+.roles-fieldset legend { font-size: 12px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .04em; padding: 0 6px; }
+.roles-grid { width: 100%; border-collapse: collapse; font-size: 13px; }
+.roles-grid th[scope="col"] { font-size: 11.5px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .03em; padding: 4px 6px; text-align: center; }
+.roles-grid th[scope="row"] { text-align: left; font-weight: 400; padding: 5px 6px; }
+.roles-grid td { text-align: center; padding: 5px 6px; }
+.roles-grant { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; }
+.roles-warn { margin: 10px 0 0; padding: 9px 11px; border-radius: 7px; background: #FFF8E7;
+  border: 1px solid #E5C875; font-size: 12px; line-height: 1.5; }
+.people-role-cell { display: grid; gap: 4px; }
+.people-role-impact { font-size: 11.5px; line-height: 1.45; }

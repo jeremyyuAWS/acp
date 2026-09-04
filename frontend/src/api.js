@@ -691,6 +691,17 @@ export const addFindingComment = (scanId, { findingKey, body, file = '', ruleId 
                  body: JSON.stringify({ finding_key: findingKey, body, file, rule_id: ruleId }) }).then(j)
 }
 export const getMe = () => (SIM ? sim(simIdentity()) : fetch(`${BASE}/me`, { headers: headers() }).then(j))
+// Workspace access (PRD §13). The first copy arrives on /workspace/bootstrap so the navigation can
+// draw correctly on its first render; this is for re-reading it after an administrator changes a
+// role — §9: "Users whose permissions change during an active session receive the new permissions
+// on their next API request. Navigation refreshes automatically."
+//
+// Resolves to `null` in SIM and on any failure, and null means NOT TOLD, which leaves every tab
+// visible (see frontend/src/access.js). A failed refresh must not narrow a working session: the
+// server is the control, and a network blip is not a permission decision.
+export const getMyAccess = () => (SIM
+  ? sim(null)
+  : fetch(`${BASE}/me/access`, { headers: headers() }).then(j).catch(() => null))
 export const getAdminAnalytics = (period = '30d', source = null) =>
   fetch(`${BASE}/admin/analytics/overview?period=${period}${source ? `&source=${encodeURIComponent(source)}` : ''}`,
         { headers: headers() }).then(j)
@@ -922,6 +933,39 @@ export const updatePerson = (email, change) => (SIM
 export const removePerson = (email) => (SIM
   ? sim({ people: [] })
   : fetch(`${BASE}/admin/people/${encodeURIComponent(email)}`, { method: 'DELETE', headers: headers() }).then(j))
+
+// ── workspace roles (PRD §13) ───────────────────────────────────────────────
+// SIM returns empty rather than a fabricated role set. A demo that invents roles would let the
+// Roles screen look finished while nothing behind it works — and this is the screen where
+// believing a permission took effect, when it did not, is the whole risk.
+export const getWorkspaceRoles = () => (SIM
+  ? sim({ roles: [], enforced: false })
+  : fetch(`${BASE}/admin/roles`, { headers: headers() }).then(j))
+export const getRoleCapabilities = () => (SIM
+  ? sim({ tabs: [], levels: [], grants: [], mine: [], ungoverned_tabs: [] })
+  : fetch(`${BASE}/admin/capabilities`, { headers: headers() }).then(j))
+export const createWorkspaceRole = (body) => (SIM
+  ? sim(body)
+  : fetch(`${BASE}/admin/roles`, { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) }).then(j))
+// `version` travels in the body, not as a header, because it is part of what is being saved:
+// PRD §14's concurrency check refuses a stale one, and the server rejects the request outright if
+// it is missing rather than treating absence as "no check".
+export const updateWorkspaceRole = (roleId, body) => (SIM
+  ? sim(body)
+  : fetch(`${BASE}/admin/roles/${encodeURIComponent(roleId)}`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) }).then(j))
+export const deleteWorkspaceRole = (roleId) => (SIM
+  ? sim({ deleted: roleId })
+  : fetch(`${BASE}/admin/roles/${encodeURIComponent(roleId)}`, { method: 'DELETE', headers: headers() }).then(j))
+export const assignWorkspaceRole = (email, roleId) => (SIM
+  ? sim({ person: { email, workspace_role_id: roleId } })
+  : fetch(`${BASE}/admin/people/${encodeURIComponent(email)}/role`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({ role_id: roleId }) }).then(j))
+// What changes if this person is given this role — PRD §9's confirmation. Computed by the server
+// from the same resolver the gate uses, NOT diffed in the browser from two capability lists: a
+// confirmation that disagrees with what actually happens is worse than none, because it is read
+// and approved before the change.
+export const roleImpact = (email, roleId) => (SIM
+  ? sim({ gains: [], loses: [] })
+  : fetch(`${BASE}/admin/people/${encodeURIComponent(email)}/role-impact?role_id=${encodeURIComponent(roleId || '')}`, { headers: headers() }).then(j))
 // The immutable decision log for one scan (system.py GET /decisions). The drawer reads the
 // `scan.file_error` rows out of it to say WHY a document failed, instead of guessing "unreadable"
 // — handlers records the verbatim exception per file and nothing was showing it.

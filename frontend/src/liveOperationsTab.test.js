@@ -16,7 +16,7 @@ describe('Live Operations navigation', () => {
 
   it('shows every top-level tab to every signed-in user for the temporary open-view policy', () => {
     expect(app).toContain('const ALL_TAB_KEYS = TABS.map')
-    expect(app).toContain('{TABS.map(([k, label, rg, step]) => {')
+    expect(app).toContain('visibleTabs(access, TABS).map(([k, label, rg, step]) => {')
     expect(app).toContain('...ALL_TAB_KEYS')
     expect(app).not.toContain("view === 'liveops' && me.allow?.includes('liveops')")
   })

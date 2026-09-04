@@ -333,6 +333,73 @@ def set_admins(body: dict, request: Request):
     return {"owner": core.OWNER_EMAIL, "env_admins": sorted(core.ADMIN_EMAILS), "admins": saved}
 
 
+@router.get("/me/access")
+def my_access(request: Request):
+    """What this identity may see and do (PRD §13).
+
+    NOT AUTHORIZATION — a description of it. The SPA reads this to decide which tabs to render and
+    whether a button says "Start" or "View"; every route still enforces its own capability
+    (slice 4). If this endpoint and a route ever disagree, the route wins and the UI was merely
+    wrong about what it offered. That ordering is the whole reason PRD §11 exists: "Hiding a tab
+    alone is not considered a security control."
+
+    Unauthenticated callers get an empty identity's answer rather than a 401, because the SPA
+    calls this during sign-in bootstrapping — and with the flag off that answer is today's access,
+    which is what it must be for a signed-out shell to render exactly as it does now.
+    """
+    import workspace_roles as wr
+    email = getattr(request.state, "user_email", None)
+    return wr.access_for_email(core.store, email, owner_email=core.OWNER_EMAIL,
+                               is_suspended=_is_suspended)
+
+
+def _is_suspended(email: str) -> bool:
+    """Is this person suspended? PRD §14: a suspended user has no effective permissions.
+
+    Read from the managed-person record, which is where the People screen already writes it —
+    rather than inferred from absence in the allowlist, which would also be true of somebody who
+    was never added and of the demo path where no allowlist is configured at all.
+    """
+    target = (email or "").strip().lower()
+    person = next((p for p in core.store.get_people() if p.get("email") == target), None)
+    return (person or {}).get("status") == "suspended"
+
+
+@router.post("/admin/workspace-roles/bootstrap")
+def bootstrap_workspace_roles(request: Request, body: dict | None = None):
+    """Seed the six built-in workspace roles and map existing people onto them (PRD §15 step 1).
+
+    OWNER-ONLY, and DRY BY DEFAULT. Pass {"apply": true} to write; anything else previews. The
+    default is the safe direction because this is the migration's "Observe" step: an administrator
+    is meant to read the generated assignments — who becomes Platform Admin, who becomes
+    Compliance Manager — BEFORE those rows mean anything, and a preview you have to remember to
+    ask for is one somebody skips.
+
+    Safe to run repeatedly. Existing roles are not overwritten and already-assigned people are not
+    reassigned, so a second call after an administrator has tightened somebody's role does not
+    undo it (tests/test_workspace_roles_store.py pins both).
+
+    NOTHING ENFORCES THESE ROWS YET. Enforcement arrives in later slices behind
+    ACP_WORKSPACE_RBAC_ENABLED, which is reported in the response so the caller can see whether
+    what they just wrote is inert — writing roles and believing they took effect is the one
+    misreading this endpoint could invite.
+    """
+    _require_owner(request)
+    import workspace_roles as wr
+    # `is True`, not truthiness. A bare `bool(...)` applies on ANY non-empty value, so a client
+    # that serialises booleans as strings would migrate a live deployment by sending
+    # {"apply": "false"} — the request that most clearly says do not. The only value that writes
+    # is a JSON `true`.
+    apply = (body or {}).get("apply") is True
+    actor = getattr(request.state, "user_email", None) or "owner"
+    out = wr.bootstrap(core.store, owner_email=core.OWNER_EMAIL, actor=actor, dry_run=not apply)
+    if apply:
+        core.store.log_decision(actor, "role.migration",
+                                detail=f"seeded {len(out['roles_created'])} role(s), "
+                                       f"assigned {sum(1 for a in out['assignments'] if a['applied'])}")
+    return out
+
+
 @router.put("/workers")
 def set_workers(request: Request, count: int = Query(..., ge=0, le=16)):
     """Admin: live-scale the in-process worker pool (0–16). Persisted + audited.
