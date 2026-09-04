@@ -170,6 +170,25 @@ def _parent_folder(path: str | None) -> str | None:
     return posixpath.dirname(path)
 
 
+def _recorded_folder(value: str | None) -> str | None:
+    """A folder the LISTING recorded, normalised to the shape a rule is written against.
+
+    SharePoint rows carry no `path` — Graph gives a driveItem no document path, only its parent's
+    (`parentReference.path`), which the scanner stores verbatim as `parent_folder` and which looks
+    like `/drives/<id>/root:/Finance/Archive`. Stripping everything up to and including the
+    `root:` marker leaves `/Finance/Archive`: exactly the shape a Drive row derives from its path,
+    so one folder rule means the same thing on both sources.
+
+    The same split scanner._sp_classify_item already makes on the same field (`parent.split(":",
+    1)[-1]`) when it decides whether a folder is excluded — this is that convention read once
+    more, not a new one invented here. A value with no marker is returned unchanged, which is
+    what a Drive-shaped folder already is.
+    """
+    if not value:
+        return None
+    return value.split(":", 1)[-1] or None
+
+
 def _values(doc: dict) -> dict:
     """The doc plus its derived fields — one place, so matches() and evaluate() cannot disagree
     about what a condition was tested against."""
@@ -180,7 +199,23 @@ def _values(doc: dict) -> dict:
         "age_days": _days_since(doc.get("created_at")),
         "modified_age_days": _days_since(doc.get("source_modified")),
         "modified_at": doc.get("source_modified"),
-        "parent_folder": _parent_folder(doc.get("path")),
+        # DERIVED FROM `path` FIRST, then the folder the listing itself recorded. The derivation
+        # alone is what shipped, and it silently blanked every SharePoint row: Graph gives a
+        # driveItem no path, so `path` is None, `_parent_folder(None)` is None, and the real
+        # folder sitting in the row's own `parent_folder` was overwritten with it. A
+        # folder-based archival rule — one of the three rule shapes the pilot SOW names —
+        # therefore matched nothing on SharePoint while matching correctly on Drive, with no
+        # error anywhere: the rule validated, saved, and quietly never fired.
+        #
+        # Keyed on WHETHER THERE IS A PATH, not on whether the derivation produced anything, so
+        # DRIVE IS BYTE-IDENTICAL to before: any row with a path uses the derivation and only the
+        # derivation. Written first as `derived or recorded`, which read the same and was not —
+        # a bare filename derives `""` (posixpath.dirname has no directory to give), the `or`
+        # took that as absent and fell through, and `test_parent_folder_no_dir`'s documented
+        # "no directory portion is the empty string" became None. The fallback is for rows with
+        # NO path at all, which is every SharePoint row and nothing else.
+        "parent_folder": (_parent_folder(doc["path"]) if doc.get("path")
+                          else _recorded_folder(doc.get("parent_folder"))),
     }
 
 
