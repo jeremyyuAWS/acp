@@ -37,14 +37,50 @@ export function queueConcentration(runs = []) {
   return { owner, count: count || 0, total, pct: total ? Math.round((count / total) * 100) : 0 }
 }
 
+export function workerServiceRows(summary = {}) {
+  const roles = summary.worker_roles || {}
+  const load = summary.by_stage || {}
+  return ['discovery', 'assess', 'remediate'].filter((role) => roles[role]).map((role) => {
+    const heartbeat = roles[role]
+    const stage = role === 'discovery' ? 'discover' : role
+    const active = Number(load[stage]?.running || 0)
+    const slots = Number(heartbeat.pool_size || 0)
+    return {
+      role, stage, active, slots, available: Math.max(0, slots - active),
+      alive: Boolean(heartbeat.alive), age_s: heartbeat.age_s, version: heartbeat.version,
+    }
+  })
+}
+
 function MiniTrend({ values = [], color }) {
-  const points = values.slice(-18)
+  const points = values.slice(-18).map((value) => typeof value === 'number' ? value : value.completed)
   if (points.length < 2) return <span className="muted" style={{ fontSize: 11 }}>collecting activity…</span>
   const max = Math.max(...points, 1)
   const coords = points.map((v, i) => `${(i / (points.length - 1)) * 92},${25 - (v / max) * 22}`).join(' ')
   return <svg aria-label="Recent completed-item activity" viewBox="0 0 92 28" style={{ width: 92, height: 28 }}>
     <polyline points={coords} fill="none" stroke={color} strokeWidth="2" vectorEffect="non-scaling-stroke" />
   </svg>
+}
+
+export function MetricChart({ values = [], field, label, color }) {
+  const points = values.map((value) => Number(typeof value === 'number' ? value : value[field]) || 0)
+  const max = Math.max(...points, 1)
+  const coords = points.length > 1
+    ? points.map((value, index) => `${24 + (index / (points.length - 1)) * 246},${12 + (1 - value / max) * 82}`).join(' ')
+    : ''
+  return <div className="panel" style={{ padding: 10 }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}><b style={{ fontSize: 12 }}>{label}</b>
+      <span style={{ color, fontWeight: 700 }}>{points.at(-1) ?? 0}</span></div>
+    {points.length > 1 ? <svg role="img" aria-label={`${label} over recent live updates`} viewBox="0 0 282 116" style={{ width: '100%', height: 116 }}>
+      <line x1="24" y1="12" x2="24" y2="94" stroke="var(--border)" />
+      <line x1="24" y1="94" x2="270" y2="94" stroke="var(--border)" />
+      <text x="2" y="17" fontSize="9" fill="var(--muted)">{max}</text>
+      <text x="10" y="96" fontSize="9" fill="var(--muted)">0</text>
+      <text x="24" y="109" fontSize="9" fill="var(--muted)">earlier</text>
+      <text x="248" y="109" fontSize="9" fill="var(--muted)">now</text>
+      <polyline points={coords} fill="none" stroke={color} strokeWidth="2" vectorEffect="non-scaling-stroke" />
+    </svg> : <div className="muted" style={{ height: 116, display: 'grid', placeItems: 'center', fontSize: 12 }}>Collecting live samples…</div>}
+  </div>
 }
 
 function RunNode({ data }) {
@@ -88,8 +124,11 @@ export function buildTrafficGraph(snapshot, historyMap = new Map()) {
   runs.forEach((run, i) => {
     const key = `${run.scan_id}:${run.stage}`
     const series = historyMap.get(key) || []
-    if (series.at(-1) !== run.completed) series.push(run.completed)
-    historyMap.set(key, series.slice(-18))
+    const sample = { at: snapshot?.generated_at || new Date().toISOString(), completed: Number(run.completed || 0),
+      running: Number(run.running || 0), queued: Number(run.queued || 0) }
+    const last = series.at(-1)
+    if (!last || ['completed', 'running', 'queued'].some((field) => Number(last[field] || 0) !== sample[field])) series.push(sample)
+    historyMap.set(key, series.slice(-30))
     nodes.push({ id: key, type: 'run', position: { x: 310, y: i * 125 + 10 }, data: { run, history: series } })
     edges.push({ id: `in:${key}`, source: `source:${run.source || 'unknown'}`, target: key,
       animated: run.running > 0, style: { stroke: STAGE[run.stage]?.color || '#6B7280' } })
@@ -101,7 +140,8 @@ export function buildTrafficGraph(snapshot, historyMap = new Map()) {
 
 export default function AdminLiveTraffic() {
   const [snapshot, setSnapshot] = useState(null)
-  const [selected, setSelected] = useState(null)
+  const [selectedKey, setSelectedKey] = useState(null)
+  const [expanded, setExpanded] = useState(false)
   const [connection, setConnection] = useState('connecting')
   const history = useRef(new Map())
 
@@ -117,11 +157,15 @@ export default function AdminLiveTraffic() {
   }, [])
 
   const graph = useMemo(() => buildTrafficGraph(snapshot, history.current), [snapshot])
+  const selectedNode = graph.nodes.find((node) => node.id === selectedKey)?.data
+  const selected = selectedNode?.run
+  const selectedHistory = selectedNode?.history || []
 
   const summary = snapshot?.summary || {}
   const concentration = queueConcentration(snapshot?.runs)
   const pressure = PRESSURE[summary.pressure] || PRESSURE.healthy
   const stageRows = Object.entries(summary.by_stage || {})
+  const services = workerServiceRows(summary)
   return <section className="panel" style={{ padding: 16, marginBottom: 20 }} aria-label="Live Azure processing traffic">
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
       <div><b>Live Azure traffic</b><div className="muted" style={{ fontSize: 12 }}>Active worker flow plus the last 15 minutes</div></div>
@@ -142,6 +186,20 @@ export default function AdminLiveTraffic() {
         <b>{STAGE[stage]?.label || stage}</b>&nbsp; {row.running} active · {row.queued} waiting
       </span>)}
     </div>}
+    {!!services.length && <div className="panel" aria-label="Worker services" style={{ padding: 0, marginBottom: 12, overflow: 'hidden' }}>
+      <div className="muted" style={{ fontSize: 11, padding: '9px 12px 5px' }}>WORKER SERVICES</div>
+      {services.map((service) => <div key={service.role} style={{ display: 'grid',
+        gridTemplateColumns: 'minmax(110px,1fr) minmax(180px,2fr) minmax(130px,1fr)', gap: 12,
+        alignItems: 'center', padding: '8px 12px', borderTop: '1px solid var(--border)', fontSize: 12 }}>
+        <span><b>{STAGE[service.stage]?.label || service.role}</b><br />
+          <span style={{ color: service.alive ? PRESSURE.healthy.color : PRESSURE.stalled.color }}>
+            ● {service.alive ? 'Online' : 'Offline'}
+          </span>
+        </span>
+        <span>{service.active} active · {service.available} available of {service.slots}</span>
+        <span className="muted">{service.version || 'Version unknown'} · heartbeat {service.age_s == null ? '—' : `${Math.round(service.age_s)}s ago`}</span>
+      </div>)}
+    </div>}
     {concentration.pct >= 70 && concentration.total > 1 && <div role="status" style={{ padding: '9px 11px', marginBottom: 12,
       borderLeft: `4px solid ${PRESSURE.busy.color}`, background: 'var(--page)', fontSize: 12 }}>
       <b>Queue concentration:</b> one user holds {concentration.pct}% of waiting jobs. Tenant-fair scheduling gives other waiting users the next equally prioritized capacity.
@@ -149,13 +207,16 @@ export default function AdminLiveTraffic() {
     <div style={{ height: Math.max(330, (snapshot?.runs?.length || 1) * 125 + 45), maxHeight: 650,
       border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden', background: 'var(--page)' }}>
       {snapshot?.runs?.length ? <ReactFlow nodes={graph.nodes} edges={graph.edges} nodeTypes={nodeTypes}
-        fitView minZoom={0.35} maxZoom={1.5} onNodeClick={(_, node) => node.type === 'run' && setSelected(node.data.run)}>
+        fitView minZoom={0.35} maxZoom={1.5}
+        onNodeClick={(_, node) => { if (node.type === 'run') { setSelectedKey(node.id); setExpanded(false) } }}
+        onNodeDoubleClick={(_, node) => { if (node.type === 'run') { setSelectedKey(node.id); setExpanded(true) } }}>
         <Background gap={18} size={1} /><MiniMap pannable zoomable /><Controls showInteractive={false} />
       </ReactFlow> : <div className="muted" style={{ padding: 28 }}>No active or recently completed processing. Start a scan and this map will populate automatically.</div>}
     </div>
     {selected && <div className="panel" style={{ marginTop: 12, padding: 14, borderLeft: `4px solid ${STAGE[selected.stage]?.color || '#6B7280'}` }}>
       <div style={{ display: 'flex', justifyContent: 'space-between' }}><b>{STAGE[selected.stage]?.label || selected.stage} run details</b>
-        <button className="ghost small" onClick={() => setSelected(null)}>Close</button></div>
+        <span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>Double-click a run tile for live trends.</span>
+        <button className="ghost small" style={{ marginLeft: 'auto' }} onClick={() => setSelectedKey(null)}>Close</button></div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 8, marginTop: 8, fontSize: 13 }}>
         <span><b>User</b><br />{selected.owner}</span><span><b>Source</b><br />{selected.source}</span>
         <span><b>Progress</b><br />{selected.completed} of {selected.total}</span><span><b>Queue</b><br />{selected.running} active · {selected.queued} waiting</span>
@@ -166,6 +227,14 @@ export default function AdminLiveTraffic() {
       </div>
       {selected.current_file && <div style={{ marginTop: 10 }}><b>Processing now</b><br /><code>{selected.current_file}</code></div>}
       {selected.current_rule_id && <div style={{ marginTop: 8 }}><b>WCAG criterion</b><br />{selected.current_rule_id}</div>}
+      {expanded && <div style={{ marginTop: 14 }}>
+        <div style={{ marginBottom: 8 }}><b>Live run trends</b><span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>SSE samples · oldest to newest</span></div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 10 }}>
+          <MetricChart values={selectedHistory} field="completed" label="Completed documents" color={STAGE[selected.stage]?.color} />
+          <MetricChart values={selectedHistory} field="running" label="Active workers" color="#287C45" />
+          <MetricChart values={selectedHistory} field="queued" label="Queued jobs" color="#A66A16" />
+        </div>
+      </div>}
     </div>}
   </section>
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildTrafficGraph, queueConcentration } from './AdminLiveTraffic.jsx'
+import { buildTrafficGraph, queueConcentration, workerServiceRows } from './AdminLiveTraffic.jsx'
 
 const run = {
   scan_id: 's1', owner: 'operator@example.org', source: 'drive', stage: 'assess',
@@ -20,8 +20,8 @@ describe('Admin live traffic graph', () => {
     for (let completed = 0; completed < 25; completed += 1) {
       buildTrafficGraph({ runs: [{ ...run, completed }] }, history)
     }
-    expect(history.get('s1:assess')).toHaveLength(18)
-    expect(history.get('s1:assess').at(-1)).toBe(24)
+    expect(history.get('s1:assess')).toHaveLength(25)
+    expect(history.get('s1:assess').at(-1)).toMatchObject({ completed: 24, running: 2, queued: 10 })
   })
 
   it('identifies when one user dominates the shared waiting queue', () => {
@@ -35,5 +35,20 @@ describe('Admin live traffic graph', () => {
     const graph = buildTrafficGraph({ runs: [{ ...run, status: 'recent', completed: 20, running: 0, queued: 0 }] })
     expect(graph.nodes.find((node) => node.type === 'run').data.run.status).toBe('recent')
     expect(graph.edges.every((edge) => !edge.animated)).toBe(true)
+  })
+
+  it('shows dedicated worker capacity by service rather than one last-writer heartbeat', () => {
+    expect(workerServiceRows({
+      by_stage: { discover: { running: 1 }, assess: { running: 2 }, remediate: { running: 0 } },
+      worker_roles: {
+        discovery: { alive: true, pool_size: 3, age_s: 1.2, version: 'v10' },
+        assess: { alive: true, pool_size: 2, age_s: 4.6, version: 'v10' },
+        remediate: { alive: false, pool_size: 2, age_s: 130, version: 'v9' },
+      },
+    })).toEqual([
+      { role: 'discovery', stage: 'discover', active: 1, slots: 3, available: 2, alive: true, age_s: 1.2, version: 'v10' },
+      { role: 'assess', stage: 'assess', active: 2, slots: 2, available: 0, alive: true, age_s: 4.6, version: 'v10' },
+      { role: 'remediate', stage: 'remediate', active: 0, slots: 2, available: 2, alive: false, age_s: 130, version: 'v9' },
+    ])
   })
 })

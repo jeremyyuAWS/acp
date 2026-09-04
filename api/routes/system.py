@@ -1176,9 +1176,16 @@ def jobs(request: Request, status: str | None = None, limit: int = 100):
 
 def _admin_activity_snapshot() -> dict:
     wt = core.store.worker_tier_status()
+    worker_roles = core.store.worker_roles_status()
     stats = core.store.job_stats(owner=None)
     runs = core.store.admin_live_activity()
-    slots = wt.get("pool_size") if wt.get("pool_size") is not None else core.WORKERS
+    # The shared heartbeat is last-writer-wins. In production each dedicated service writes its
+    # own role heartbeat, so summing the live role pools is the only honest total capacity.
+    # Fall back to the legacy shared heartbeat for older/single-pool deployments.
+    live_role_slots = sum(int(row.get("pool_size") or 0) for row in worker_roles.values()
+                          if row.get("alive"))
+    slots = live_role_slots or (wt.get("pool_size") if wt.get("pool_size") is not None
+                                else core.WORKERS)
     running = sum(int(r.get("running") or 0) for r in runs)
     queued = sum(int(r.get("queued") or 0) for r in runs)
     by_stage: dict[str, dict] = {}
@@ -1214,6 +1221,7 @@ def _admin_activity_snapshot() -> dict:
             "pressure": pressure,
             "scheduling_policy": "tenant_fair_least_loaded",
             "worker_tier_alive": bool(wt.get("alive")),
+            "worker_roles": worker_roles,
             "by_stage": by_stage,
         },
     }

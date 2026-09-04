@@ -63,6 +63,14 @@ def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(mo
         def worker_tier_status(self):
             return {"alive": True, "pool_size": 4}
 
+        def worker_roles_status(self):
+            return {
+                "discovery": {"alive": True, "pool_size": 3, "age_s": 1, "version": "v10"},
+                "assess": {"alive": True, "pool_size": 2, "age_s": 2, "version": "v10"},
+                "remediate": {"alive": True, "pool_size": 2, "age_s": 3, "version": "v10"},
+                "processing": {"alive": False, "pool_size": 4, "age_s": 999, "version": "v9"},
+            }
+
         def job_stats(self, owner=None):
             assert owner is None
             return {"done": 12}
@@ -80,9 +88,15 @@ def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(mo
     assert snapshot["summary"] == {
         "active_runs": 1, "recent_runs": 1, "active_users": 2, "waiting_users": 2,
         "queued": 10, "running": 4, "completed_jobs": 12,
-        "worker_slots": 4, "available_slots": 0, "utilization_pct": 100,
-        "pressure": "saturated", "worker_tier_alive": True,
+        "worker_slots": 7, "available_slots": 3, "utilization_pct": 57,
+        "pressure": "busy", "worker_tier_alive": True,
         "scheduling_policy": "tenant_fair_least_loaded",
+        "worker_roles": {
+            "discovery": {"alive": True, "pool_size": 3, "age_s": 1, "version": "v10"},
+            "assess": {"alive": True, "pool_size": 2, "age_s": 2, "version": "v10"},
+            "remediate": {"alive": True, "pool_size": 2, "age_s": 3, "version": "v10"},
+            "processing": {"alive": False, "pool_size": 4, "age_s": 999, "version": "v9"},
+        },
         "by_stage": {
             "assess": {"runs": 1, "running": 3, "queued": 8, "completed": 2, "total": 13},
             "remediate": {"runs": 1, "running": 1, "queued": 2, "completed": 4, "total": 7},
