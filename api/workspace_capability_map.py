@@ -153,7 +153,8 @@ _map_many([
     ("POST", "/hitl/queue/{scan_id}/auto"), ("POST", "/hitl/queue/{scan_id}/verify"),
 ], {"remediate.review"})
 # AI drafting assists a reviewer; it writes nothing to a document on its own.
-_map_many([("GET", "/ai/suggest"), ("GET", "/ai/explain"), ("GET", "/ai/validate")],
+_map_many([("GET", "/ai/suggest"), ("GET", "/ai/explain"), ("GET", "/ai/validate"),
+           ("GET", "/ai/copilot")],
           {"remediate.review", "remediate.run"})
 
 # ── Release ───────────────────────────────────────────────────────────────────

@@ -85,9 +85,12 @@ don't just generate text.
   "⤢ Zoom to chart" / "Hide chart" instead of generic text. **Remaining sub-item:** "Open slide"
   deep-link (source file + page anchor) — deferred; requires per-source-system URL construction
   (SharePoint / Drive / local).
-- [ ] **"Help me" copilot (premium models).** A button that returns *guidance*, not another alt
-  draft: "This chart compares compliance scores across departments — focus on the trend, not the
-  colours." A better use of Claude/GPT than a second text generator. Requires a customer cloud
+- [x] **"Help me" copilot (premium models).** *(shipped #1301)* A "✨ Help me understand this image"
+  button on 1.1.1 evidence-only cards (gated on `cloudEnabled`): calls `GET /ai/copilot` →
+  `copilot_guidance()` in `ai.py` (cloud-only, traces via `_trace_ai("copilot", ...)`), returns
+  1–2 sentences of interpretive guidance rendered in a clearly-distinct italic callout ("AI
+  guidance — not a draft"). Never writes to the proposal value. Cloud status fetched eagerly for
+  these cards so the button appears without a prior draft failure. Requires a customer cloud
   provider (BYOAI) — governed, opt-in, provenance-logged.
 - [ ] **Reviewer-behaviour → automation-mode migration.** Feed HITL edit-rate / acceptance
   (`hitl_events`) back so a criterion with consistently low edit-distance surfaces as ready to move
