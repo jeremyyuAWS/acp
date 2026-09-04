@@ -19,7 +19,7 @@ from typing import Sequence
 from . import __version__, spec as spec_mod
 from .inventory import inventory_as_dict
 from .plan import render as render_plan
-from .values import render_values_yaml
+from .values import build_values, render_values_yaml
 
 # PRD S10's full command list. Unimplemented commands are REJECTED with a message naming the
 # phase they belong to, never accepted-and-ignored.
@@ -27,7 +27,6 @@ NOT_YET_IMPLEMENTED = {
     "init": "guided configuration (PRD S10) — phase 2",
     "install": "provisioning — phase 3+, deliberately out of the first slice (PRD S23.6)",
     "status": "reads a live installation — phase 2",
-    "doctor": "reads a live installation — phase 2",
     "upgrade": "phase 5",
     "rollback": "phase 5",
     "backup": "phase 5",
@@ -106,6 +105,66 @@ def cmd_values(args) -> int:
     return 0
 
 
+def cmd_doctor(args) -> int:
+    """Can this cluster run what the document describes?
+
+    EXIT CODES ARE THE SCRIPTABLE PART, so they are chosen for what a pipeline should do:
+
+        0  no blockers. Warnings may still be printed and are worth reading.
+        1  at least one blocker, OR a blocking check that could not be run. The second is not a
+           softer case than the first: the checks that cannot run are the ones whose failures are
+           silent, so "we could not tell whether KEDA is installed" must not exit 0 next to
+           "KEDA is installed".
+        2  the cluster could not be reached at all, so NOTHING was established. Distinct from 1
+           because a pipeline should retry this and must not retry a real blocker.
+    """
+    from . import cluster as cluster_mod
+    from . import doctor as doctor_mod
+
+    document, result = _load_and_validate(args.spec)
+    if not result.ok:
+        _print_findings("Errors", result.errors, sys.stderr)
+        print(f"\nrefusing to diagnose: {args.spec} is invalid", file=sys.stderr)
+        return 1
+
+    values = build_values(document)
+    namespace = args.namespace or (document.get("metadata") or {}).get("name") or "acp"
+    facts = cluster_mod.gather(namespace=namespace, context=args.context)
+    report = doctor_mod.diagnose(values, facts, namespace=namespace)
+
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        _print_doctor(report, spec=args.spec)
+
+    if not report["reachable"]:
+        return 2
+    return 0 if report["ok"] else 1
+
+
+def _print_doctor(report: dict, *, spec: str) -> None:
+    print(f"acpctl doctor — {spec}")
+    if report["reachable"]:
+        print(f"cluster: Kubernetes {report.get('kubernetes', '?')}  "
+              f"namespace: {report['namespace']}")
+    print()
+    for check in report["checks"]:
+        from .doctor import Check
+        print(Check(**check).render())
+    print()
+    if not report["reachable"]:
+        print("NOTHING WAS CHECKED — the cluster could not be reached. This is not a pass.")
+        return
+    summary = (f"{report['blockers']} blocker(s), {report['warnings']} warning(s), "
+               f"{report['unknown']} could not be determined")
+    print(summary)
+    if report["ok"]:
+        print("No blockers. Read the warnings before installing.")
+    else:
+        print("Do not install until the blockers are cleared. A check that could not run counts "
+              "as a blocker when what it guards fails silently.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="acpctl", description=__doc__,
@@ -131,6 +190,15 @@ def build_parser() -> argparse.ArgumentParser:
         "values", help="render Helm values for the shared ACP release (writes nothing)")
     p.add_argument("spec")
     p.set_defaults(func=cmd_values)
+
+    p = sub.add_parser(
+        "doctor", help="check a live cluster can run this document (reads only, changes nothing)")
+    p.add_argument("spec")
+    p.add_argument("--namespace", "-n", default=None,
+                   help="namespace to check (default: the document's metadata.name)")
+    p.add_argument("--context", default=None, help="kubeconfig context to use")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
+    p.set_defaults(func=cmd_doctor)
 
     for name, why in sorted(NOT_YET_IMPLEMENTED.items()):
         p = sub.add_parser(name, help=f"not yet implemented — {why}")

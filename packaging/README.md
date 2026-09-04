@@ -60,8 +60,8 @@ three cases **Kubernetes reports nothing when it cannot**:
 | `NetworkPolicy` | a CNI that enforces them | no error; pod networking stays open |
 | `ExternalSecret` | External Secrets Operator | pods stay in `CreateContainerConfigError` |
 
-Only the third is loud. `acpctl doctor` is where these become a checkable precondition, and it is
-not built yet — until then they are in the chart's NOTES and here.
+Only the third is loud. **`acpctl doctor` is where these become checkable** — run it against
+the target cluster before installing (see below).
 
 ## Using it
 
@@ -72,11 +72,55 @@ python -m acpctl validate  packaging/examples/standard-production.acp-deployment
 python -m acpctl plan      packaging/examples/standard-production.acp-deployment.yaml
 python -m acpctl inventory packaging/examples/regulated.acp-deployment.yaml --json
 python -m acpctl values    packaging/examples/regulated.acp-deployment.yaml
+python -m acpctl doctor    packaging/examples/standard-production.acp-deployment.yaml
 ```
 
-`validate` exits 0 on success and 1 on any error; warnings are printed and never fail. The other
-eight commands from the PRD's command list exit 2 and name the phase they belong to, rather than
-accepting arguments and doing nothing.
+`validate` exits 0 on success and 1 on any error; warnings are printed and never fail. The
+remaining commands from the PRD's command list exit 2 and name the phase they belong to, rather
+than accepting arguments and doing nothing.
+
+## `doctor` — can this cluster run it?
+
+The only command that leaves the machine. It reads a live cluster through `kubectl`, so it
+inherits your kubeconfig, context and credentials, and it **changes nothing**: an allow-list
+refuses any kubectl verb that is not `version`, `api-resources` or `get`, and that refusal is
+tested against a dozen mutating verbs. Phase 0 kept the read-only promise by patching `open` in a
+test, which cannot see a subprocess — this is the replacement, not an addition to it.
+
+```bash
+python -m acpctl doctor packaging/examples/standard-production.acp-deployment.yaml -n acp-prod
+python -m acpctl doctor <spec> --context staging --json
+```
+
+| Exit | Meaning |
+|---|---|
+| 0 | no blockers (warnings may still be printed, and are worth reading) |
+| 1 | a blocker, **or** a blocking check that could not be run |
+| 2 | the cluster could not be reached, so nothing was established — retryable |
+
+### It exists for two silent failures
+
+Most misconfigurations announce themselves. These two do not, and the chart renders both:
+
+- **A `ScaledObject` with no KEDA** is an object nothing reconciles. No error, no event, no
+  status. The worker tiers sit at their floor while the queue grows, and it looks like ACP being
+  slow.
+- **A `NetworkPolicy` under a CNI that does not implement them** is accepted by the API server and
+  enforces nothing. A regulated install can pass review with completely open pod networking.
+
+Everything else `doctor` checks is ordinary preflight. Those two are why there is a command.
+
+### Three outcomes, not two
+
+`pass`, `fail`, and **`unknown`** — and the third is what keeps the report honest. A check that
+could not run has established nothing, so folding it into "pass" because nothing went wrong is how
+a report comes to mean the opposite of what it says. An `unknown` on a check guarding a silent
+failure counts as a blocker.
+
+`doctor` cannot prove NetworkPolicy enforcement — no API reports it — so it infers from the CNI
+and says so in the finding rather than implying certainty. It does not connect to Postgres, Redis
+or object storage either; that would mean shipping credentials to a laptop. The connection-budget
+rule in `spec.py` is the static half of that question.
 
 ## The four profiles
 
