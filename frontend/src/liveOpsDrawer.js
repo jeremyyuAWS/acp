@@ -213,6 +213,77 @@ export function capacityMatchesService(capacity, service = {}) {
   return app === `acp-${role}` || app.endsWith(`-${role}`)
 }
 
+/* ─────────────────────── Scaling activity ─────────────────────── */
+
+/**
+ * Why capacity has not grown, answered from the configuration rather than guessed.
+ *
+ * Every branch below is a FACT Azure or the scale rule reports, not an inference about what
+ * Azure "probably" did: the app is at its configured maximum; the active revision is not
+ * Provisioned so nothing can come up; replicas are still starting; or there is no scale rule at
+ * all so the app sits between min and max and nothing will trigger. When none of those hold, the
+ * honest answer is that Azure has not scaled YET and the reason is not reported — Container Apps
+ * publishes the rules and the replica count, never a decision log.
+ *
+ * `null` means there is nothing to explain: the queue is empty, or capacity is in fact growing.
+ */
+export function scaleExplanation({ capacity = null, saturation = null, lifecycle = null,
+  queueDepth = null } = {}) {
+  const depth = num(queueDepth)
+  if (!depth) return null
+  const scale = capacity?.scale || null
+  const replicas = saturation?.replicas || {}
+  if (lifecycle?.blocked) {
+    return { kind: 'revision', text: `The active revision is ${lifecycle.blocked.state}, so Azure `
+      + 'cannot bring up more capacity until it resolves.', detail: lifecycle.blocked.error }
+  }
+  if (replicas.atMax) {
+    return { kind: 'at_max', text: `Running ${replicas.running} replicas, the configured maximum. `
+      + 'Azure will not add more until the scale rule\u2019s maximum is raised.' }
+  }
+  const starting = lifecycle?.counts?.find((row) => row.state === 'starting')?.count
+  const allocating = lifecycle?.counts?.find((row) => row.state === 'allocating')?.count
+  if ((starting || 0) + (allocating || 0) > 0) {
+    return { kind: 'starting', text: `${(starting || 0) + (allocating || 0)} replica(s) are still `
+      + 'coming up — capacity is being added and is not ready yet.' }
+  }
+  if (scale && scale.rules_reported && scale.rules.length === 0) {
+    return { kind: 'no_rule', text: 'This app has no scale rule, so it stays between its minimum '
+      + 'and maximum and nothing will trigger a scale-out from queue depth.' }
+  }
+  if (scale?.rules?.length) {
+    const names = scale.rules.map((rule) => rule.name || rule.type).filter(Boolean)
+    return { kind: 'not_yet',
+      text: `Azure has not scaled out yet. ${names.length === 1 ? 'The rule that could' : 'The rules that could'} `
+        + `is ${names.join(', ')}` + (scale.polling_interval_s
+          ? `, polled every ${scale.polling_interval_s}s.` : '.'),
+      detail: scale.attribution }
+  }
+  return { kind: 'unreported',
+    text: 'Azure has not scaled out, and the scale rule for this app could not be read, so why is '
+      + 'not reported.' }
+}
+
+/**
+ * Scale-out and scale-in moments observed in Azure's own replica series. Azure reports the count
+ * over time, never a scale event, so a change between two one-minute samples is the event — and
+ * it is described as an observation rather than as something Azure announced.
+ */
+export function scaleEvents(capacity = null) {
+  const series = capacity?.metrics?.replicas?.series
+  if (!Array.isArray(series) || series.length < 2) return []
+  const events = []
+  for (let index = 1; index < series.length; index += 1) {
+    const before = num(series[index - 1].value)
+    const after = num(series[index].value)
+    if (before == null || after == null || before === after) continue
+    events.push({ at: series[index].at, from: before, to: after,
+      direction: after > before ? 'out' : 'in',
+      text: `Replicas ${after > before ? 'rose' : 'fell'} from ${before} to ${after}` })
+  }
+  return events
+}
+
 /* ─────────────────────── Per-worker job health ─────────────────────── */
 
 /** The closed vocabulary the backend classifies failures into, in the words an operator uses.

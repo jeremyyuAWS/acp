@@ -340,7 +340,7 @@ def _empty_capacity(configured: bool) -> dict:
         "metrics_interval": _AZ_METRIC_INTERVAL,
         # Per-replica and per-revision lifecycle. Empty here rather than absent, for the same
         # reason as `metrics`: a caller should never have to test for the key before the values.
-        "replicas": [], "revisions": [], "replica_lifecycle": None,
+        "replicas": [], "revisions": [], "replica_lifecycle": None, "scale": None,
     }
 
 
@@ -416,6 +416,7 @@ def get_capacity():
         result["min_replicas"] = scale.min_replicas
         result["max_replicas"] = scale.max_replicas
         result["workload_profile_name"] = getattr(app.properties, "workload_profile_name", None)
+        result["scale"] = _scale_block(app)
         result["active_revision_name"] = getattr(app.properties, "latest_ready_revision_name", None)
         containers = getattr(app.properties.template, "containers", None) or []
         if containers:
@@ -546,6 +547,76 @@ def get_capacity():
         swallowed("routes.control.get_capacity: reading a replica's capacity fields failed")
 
     return result
+
+
+# ── Scale rules ─────────────────────────────────────────────────────────────────────────────
+#
+# `app.properties.template.scale` carries the KEDA configuration: minReplicas, maxReplicas,
+# pollingInterval, cooldownPeriod, and the rules themselves. A ScaleRule is one of azureQueue,
+# custom, http or tcp, each with its own `metadata` map (Container Apps REST reference, Scale and
+# ScaleRule definitions).
+#
+# WHICH RULE CAUSED A GIVEN SCALE IS NOT REPORTED. Azure exposes the rules that are configured and
+# the replica count over time; it does not say "rule X fired at 14:31". So this names the rules
+# that COULD be responsible and never claims one was — an operator can read the thresholds against
+# the metrics beside them, which is the honest form of the question.
+_SECRETISH = ("connection", "secret", "key", "token", "password", "sas", "credential")
+
+
+def _scrub_metadata(metadata) -> dict:
+    """A scale rule's metadata minus anything that looks like a credential.
+
+    KEDA metadata is configuration — queue names, thresholds, poll intervals — and is genuinely
+    useful next to the live metric it thresholds on. But it is a free-form map an operator fills
+    in, so a key that reads like a credential is dropped rather than published on a screen any
+    signed-in workspace user can open. Auth blocks (`auth`, `identity`) are never included at all;
+    they are references, not values, and still name secrets.
+    """
+    if not isinstance(metadata, dict):
+        try:
+            metadata = dict(metadata or {})
+        except (TypeError, ValueError):
+            return {}
+    return {k: v for k, v in metadata.items()
+            if not any(marker in str(k).lower() for marker in _SECRETISH)}
+
+
+def _scale_block(app) -> dict | None:
+    """The scale rule as configured, or None when it cannot be read."""
+    try:
+        scale = app.properties.template.scale
+    except AttributeError:
+        return None
+    rules = []
+    for rule in (getattr(scale, "rules", None) or []):
+        # One of these four is populated per rule; the populated one names the trigger type.
+        for kind in ("azure_queue", "custom", "http", "tcp"):
+            body = getattr(rule, kind, None)
+            if body is None:
+                continue
+            rules.append({
+                "name": getattr(rule, "name", None),
+                "type": getattr(body, "type", None) or kind.replace("_", ""),
+                "metadata": _scrub_metadata(getattr(body, "metadata", None)),
+                # A queue rule carries its threshold as a field rather than in metadata.
+                "queue_length": getattr(body, "queue_length", None),
+                "queue_name": getattr(body, "queue_name", None),
+            })
+            break
+    return {
+        "min_replicas": getattr(scale, "min_replicas", None),
+        "max_replicas": getattr(scale, "max_replicas", None),
+        "polling_interval_s": getattr(scale, "polling_interval", None),
+        "cooldown_period_s": getattr(scale, "cooldown_period", None),
+        "rules": rules,
+        # Named rather than omitted: an empty rules list means the app scales only between min and
+        # max with no trigger, which is a real configuration and a different answer from "the
+        # rules could not be read".
+        "rules_reported": True,
+        # Azure reports the rules and the replica count over time, never which rule fired when.
+        "attribution": "Azure Container Apps does not report which scale rule caused a given "
+                       "change; the rules below are the ones that could be responsible.",
+    }
 
 
 # ── Replica lifecycle ───────────────────────────────────────────────────────────────────────

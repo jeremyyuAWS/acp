@@ -4,7 +4,7 @@ import {
   EVENT_FILTERS, EVENT_ICONS, NOT_REPORTED, TONE, arcPath, capacityMatchesService, chartModel,
   componentState, defaultMetricFor, eventClock, eventsForNode, filterEvents, formatDuration,
   REPLICA_STATES, gaugeModel, metricGroups, nodeTypeLabel, outputModel, provenance, queueModel,
-  replicaLifecycle, reported, saturationModel, workerJobHealth,
+  replicaLifecycle, reported, saturationModel, scaleEvents, scaleExplanation, workerJobHealth,
   revisionLabel, runModel, seriesForMetric, sourceModel, tenantConcentration, trendMarkers,
   updatedAgo,
 } from './liveOpsDrawer.js'
@@ -92,7 +92,7 @@ function LiveHeader({ name, kind, state, connection, generatedAt, revision, nowM
 
 /* ─────────────── B. Primary operational visualization ─────────────── */
 
-function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health }) {
+function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queueDepth }) {
   if (!gauge.available) {
     return <div style={{ ...PANEL, padding: 14 }} role="status">
       <b>Worker utilization unavailable</b>
@@ -136,6 +136,8 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health }) {
       </div>
     </div>
     <Saturation saturation={saturation} nowMs={nowMs} measuredAt={capacity?.measured_at} />
+    <ScalingActivity capacity={capacity} saturation={saturation} queueDepth={queueDepth}
+      lifecycle={replicaLifecycle(capacity, service)} nowMs={nowMs} />
     <JobHealth health={health} />
     <ReplicaLifecycle lifecycle={replicaLifecycle(capacity, service)} nowMs={nowMs}
       measuredAt={capacity?.measured_at} />
@@ -213,6 +215,55 @@ function ReplicaLifecycle({ lifecycle, nowMs, measuredAt }) {
       </li>)}
     </ul>}
     <Source kind="azure" at={measuredAt} nowMs={nowMs} detail="Container Apps control plane" />
+  </section>
+}
+
+/**
+ * Scaling: what changed, what the rules are, and — when work is waiting and capacity has not
+ * grown — why not, answered from the configuration rather than guessed. Azure publishes the rules
+ * and the replica count, never a decision log, so "which rule fired" is not claimed.
+ */
+function ScalingActivity({ capacity, saturation, queueDepth, lifecycle, nowMs }) {
+  const scale = capacity?.scale
+  const why = scaleExplanation({ capacity, saturation, lifecycle, queueDepth })
+  const events = scaleEvents(capacity)
+  if (!scale && !why && !events.length) return null
+  return <section aria-label="Scaling activity" style={{ marginTop: 12 }}>
+    <b style={{ fontSize: 13 }}>Scaling</b>
+    {why && <p role="status" style={{ margin: '7px 0 0', padding: '9px 11px', fontSize: 12,
+      borderLeft: `4px solid ${TONE.warn}`, background: 'var(--warn-bg)', color: 'var(--ink)' }}>
+      <b>▲ Work is waiting.</b> {why.text}
+      {why.detail && <><br /><span className="muted">{why.detail}</span></>}
+    </p>}
+    {scale ? <>
+      <div className="muted" style={{ fontSize: 11, marginTop: 7 }}>
+        {reported(scale.min_replicas)} min · {reported(scale.max_replicas)} max
+        {scale.polling_interval_s ? ` · polled every ${scale.polling_interval_s}s` : ''}
+        {scale.cooldown_period_s ? ` · ${scale.cooldown_period_s}s cooldown` : ''}
+      </div>
+      {scale.rules.length === 0
+        ? <p className="muted" style={{ fontSize: 11, margin: '4px 0 0' }}>
+          No scale rule configured — this app stays between its minimum and maximum.
+        </p>
+        : <ul style={{ listStyle: 'none', margin: '6px 0 0', padding: 0, display: 'grid', gap: 4, fontSize: 11 }}>
+          {scale.rules.map((rule, index) => <li key={rule.name || index} className="muted"
+            style={{ overflowWrap: 'anywhere' }}>
+            <b>{rule.name || 'unnamed rule'}</b> · {rule.type || 'type not reported'}
+            {rule.queue_length == null ? '' : ` · queue length ${rule.queue_length}`}
+            {Object.entries(rule.metadata || {}).map(([key, value]) => ` · ${key} ${value}`).join('')}
+          </li>)}
+        </ul>}
+      <p className="muted" style={{ fontSize: 10.5, margin: '6px 0 0' }}>{scale.attribution}</p>
+    </> : <p className="muted" style={{ fontSize: 11, marginTop: 7 }}>
+      The scale rule for this app is not reported.
+    </p>}
+    {!!events.length && <ul style={{ listStyle: 'none', margin: '7px 0 0', padding: 0,
+      display: 'grid', gap: 3, fontSize: 11 }}>
+      {events.slice(-5).map((event) => <li key={event.at} className="muted">
+        {eventClock(event.at)} — {event.text} (scale {event.direction})
+      </li>)}
+    </ul>}
+    <Source kind="azure" at={capacity?.measured_at} nowMs={nowMs} detail="Container Apps control plane" />
   </section>
 }
 
@@ -642,7 +693,8 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
       gauge={gaugeModel(node.service, { stalled: snapshot?.summary?.pressure === 'stalled' })}
       saturation={saturationModel(node.service, capacity, { samples: shown.samples,
         queueDepth: snapshot?.summary?.by_stage?.[node.service?.stage]?.queued })}
-      health={workerJobHealth(snapshot, node.service?.stage, { nowMs })} />
+      health={workerJobHealth(snapshot, node.service?.stage, { nowMs })}
+      queueDepth={snapshot?.summary?.by_stage?.[node.service?.stage]?.queued} />
   } else if (node?.kind === 'queue') {
     primary = <QueueBar queue={queueModel(snapshot?.summary, { nowMs })} nowMs={nowMs}
       generatedAt={snapshot?.generated_at} concentration={tenantConcentration(snapshot?.runs)} />

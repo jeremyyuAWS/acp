@@ -9,8 +9,9 @@ import {
   chartModel, componentState, defaultMetricFor, deriveEvents, etaSeconds, eventClock,
   eventsForNode, filterEvents, formatDuration, gaugeModel, mergeEvents, metricsForKind,
   PROVENANCE, metricGroups, niceCeiling, num, outputModel, provenance, queueModel, rateSeries,
-  replicaLifecycle, reported, revisionLabel, runModel, sampleForNode, saturationModel, secondsSince,
-  seriesForMetric, sourceModel, tenantConcentration, trendMarkers, updatedAgo,
+  replicaLifecycle, reported, revisionLabel, runModel, sampleForNode, saturationModel, scaleEvents,
+  scaleExplanation, secondsSince, seriesForMetric, sourceModel, tenantConcentration, trendMarkers,
+  updatedAgo, workerJobHealth,
 } from './liveOpsDrawer.js'
 
 const NOW = Date.parse('2026-09-04T14:32:00Z')
@@ -558,5 +559,126 @@ describe('Replica lifecycle is scoped to the service Azure measured', () => {
     expect(replicaLifecycle(capacity, { role: 'discovery' }).available).toBe(false)
     expect(replicaLifecycle(capacity, { role: 'discovery' }).reason).toMatch(/not this service/)
     expect(replicaLifecycle({ configured: false }, service).reason).toMatch(/not configured/)
+  })
+})
+
+
+describe('Why Azure has not scaled, answered from the configuration', () => {
+  const scale = (over = {}) => ({ min_replicas: 1, max_replicas: 4, polling_interval_s: 30,
+    cooldown_period_s: 300, rules_reported: true,
+    rules: [{ name: 'queue-depth', type: 'azure-servicebus', metadata: { queueLength: '5' } }],
+    attribution: 'Azure Container Apps does not report which scale rule caused a given change; '
+      + 'the rules below are the ones that could be responsible.', ...over })
+  const counts = (over = {}) => ['ready', 'starting', 'allocating', 'draining', 'not_running', 'unknown']
+    .map((state) => ({ state, count: over[state] ?? 0 }))
+
+  it('has nothing to explain when nothing is waiting', () => {
+    expect(scaleExplanation({ queueDepth: 0 })).toBe(null)
+    expect(scaleExplanation({ queueDepth: null })).toBe(null)
+  })
+
+  it('names the configured ceiling when the app is at it', () => {
+    const why = scaleExplanation({ queueDepth: 10, capacity: { scale: scale() },
+      saturation: { replicas: { running: 4, max: 4, atMax: true } } })
+    expect(why.kind).toBe('at_max')
+    expect(why.text).toContain('Running 4 replicas, the configured maximum')
+  })
+
+  it('blames a revision that cannot come up before it blames the scale rule', () => {
+    const why = scaleExplanation({ queueDepth: 10, capacity: { scale: scale() },
+      saturation: { replicas: { atMax: true } },
+      lifecycle: { blocked: { state: 'Failed', error: 'ImagePullFailure' } } })
+    expect(why.kind).toBe('revision')
+    expect(why.detail).toBe('ImagePullFailure')
+  })
+
+  it('says capacity is arriving when replicas are still coming up', () => {
+    const why = scaleExplanation({ queueDepth: 10, capacity: { scale: scale() },
+      saturation: { replicas: { running: 2, max: 4, atMax: false } },
+      lifecycle: { counts: counts({ ready: 2, starting: 1, allocating: 1 }) } })
+    expect(why.kind).toBe('starting')
+    expect(why.text).toContain('2 replica(s) are still coming up')
+  })
+
+  it('says so when the app has no scale rule at all', () => {
+    // A real configuration, and a different answer from "the rules could not be read".
+    const why = scaleExplanation({ queueDepth: 10, capacity: { scale: scale({ rules: [] }) },
+      saturation: { replicas: { running: 1, max: 4, atMax: false } }, lifecycle: { counts: counts() } })
+    expect(why.kind).toBe('no_rule')
+    expect(why.text).toContain('no scale rule')
+  })
+
+  it('names the rules that could be responsible without claiming one fired', () => {
+    // Azure publishes the rules and the replica count, never a decision log.
+    const why = scaleExplanation({ queueDepth: 10, capacity: { scale: scale() },
+      saturation: { replicas: { running: 1, max: 4, atMax: false } }, lifecycle: { counts: counts() } })
+    expect(why.kind).toBe('not_yet')
+    expect(why.text).toContain('queue-depth')
+    expect(why.text).toContain('polled every 30s')
+    expect(why.detail).toMatch(/does not report which scale rule caused/)
+  })
+
+  it('admits it cannot say why when the scale rule could not be read', () => {
+    const why = scaleExplanation({ queueDepth: 10, capacity: {},
+      saturation: { replicas: { atMax: false } }, lifecycle: { counts: counts() } })
+    expect(why.kind).toBe('unreported')
+    expect(why.text).toMatch(/could not be read, so why is not reported/)
+  })
+})
+
+describe('Scale events are observations of Azure own replica series', () => {
+  const withSeries = (values) => ({ metrics: { replicas: { available: true,
+    series: values.map(([offsetS, value]) => ({ at: iso(offsetS), value })) } } })
+
+  it('reads a change between two samples as the event', () => {
+    // Azure reports the count over time, never a scale event, so the change IS the event.
+    const events = scaleEvents(withSeries([[-180, 1], [-120, 1], [-60, 3], [0, 2]]))
+    expect(events.map((e) => [e.from, e.to, e.direction]))
+      .toEqual([[1, 3, 'out'], [3, 2, 'in']])
+  })
+
+  it('reports nothing from a series too short or too flat to contain a change', () => {
+    expect(scaleEvents(withSeries([[0, 2]]))).toEqual([])
+    expect(scaleEvents(withSeries([[-60, 2], [0, 2]]))).toEqual([])
+    expect(scaleEvents(null)).toEqual([])
+    expect(scaleEvents({ metrics: {} })).toEqual([])
+  })
+
+  it('skips a gap rather than reading it as a scale to zero', () => {
+    const events = scaleEvents(withSeries([[-120, 2], [-60, null], [0, 4]]))
+    expect(events).toEqual([])
+  })
+})
+
+describe('Per-worker job health', () => {
+  const snapshot = { summary: { worker_instance_attribution: { available: false, reason: 'no writer yet' } },
+    runs: [{ scan_id: 's1', stage: 'assess', owner: 'a@example.org', current_file: 'Report.docx',
+      current_rule_id: 'WCAG 1.3.1', current_job_type: 'scan_file', current_job_started_at: iso(-45),
+      last_error_class: 'source_rate_limit', max_attempts_seen: 2 },
+      { scan_id: 's2', stage: 'remediate', current_file: 'Other.docx' }] }
+
+  it('reads runtime from the claim instant and scopes to the stage', () => {
+    const health = workerJobHealth(snapshot, 'assess', { nowMs: NOW })
+    expect(health.jobs).toHaveLength(1)
+    expect(health.jobs[0]).toMatchObject({ file: 'Report.docx', ruleId: 'WCAG 1.3.1', runtimeS: 45 })
+    expect(health.jobs[0].jobType).toBe('scan file')
+  })
+
+  it('translates the closed error vocabulary into an operator words', () => {
+    const health = workerJobHealth(snapshot, 'assess', { nowMs: NOW })
+    expect(health.failing[0]).toMatchObject({ kind: 'source_rate_limit', label: 'Source rate limit', attempts: 2 })
+    expect(health.retrying).toBe(true)
+  })
+
+  it('carries the reason ACP cannot attribute a job to a replica', () => {
+    const health = workerJobHealth(snapshot, 'assess', { nowMs: NOW })
+    expect(health.perReplica).toBe(false)
+    expect(health.attributionReason).toBe('no writer yet')
+  })
+
+  it('gives no runtime when no worker has claimed the job', () => {
+    const unclaimed = { ...snapshot,
+      runs: [{ ...snapshot.runs[0], current_job_started_at: null }] }
+    expect(workerJobHealth(unclaimed, 'assess', { nowMs: NOW }).jobs[0].runtimeS).toBe(null)
   })
 })

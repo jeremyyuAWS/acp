@@ -219,3 +219,58 @@ def test_the_unconfigured_shape_carries_the_keys_empty_rather_than_absent(contro
     assert body["replicas"] == []
     assert body["revisions"] == []
     assert body["replica_lifecycle"] is None
+
+
+# ── Scale rules ─────────────────────────────────────────────────────────────────────────────
+
+def _scale(rules=None, min_replicas=1, max_replicas=4, polling=30, cooldown=300):
+    return SimpleNamespace(min_replicas=min_replicas, max_replicas=max_replicas,
+                           polling_interval=polling, cooldown_period=cooldown, rules=rules or [])
+
+
+def _app_with_scale(scale):
+    return SimpleNamespace(id="/subs/x/app", properties=SimpleNamespace(
+        template=SimpleNamespace(scale=scale, containers=[]),
+        latest_ready_revision_name="acp-assess--v25", workload_profile_name="Consumption",
+        configuration=SimpleNamespace(ingress=None)))
+
+
+def test_the_configured_scale_rules_are_reported_with_their_thresholds(control):
+    rule = SimpleNamespace(name="queue-depth", azure_queue=None, http=None, tcp=None,
+                           custom=SimpleNamespace(type="azure-servicebus",
+                                                  metadata={"queueLength": "5", "namespace": "acp"}))
+    block = control._scale_block(_app_with_scale(_scale([rule])))
+    assert block["min_replicas"] == 1 and block["max_replicas"] == 4
+    assert block["polling_interval_s"] == 30 and block["cooldown_period_s"] == 300
+    assert block["rules"] == [{"name": "queue-depth", "type": "azure-servicebus",
+                               "metadata": {"queueLength": "5", "namespace": "acp"},
+                               "queue_length": None, "queue_name": None}]
+
+
+def test_anything_that_reads_like_a_credential_is_dropped_from_rule_metadata(control):
+    """KEDA metadata is a free-form map an operator fills in, and this panel is open to any
+    signed-in workspace user. Thresholds and queue names are useful next to the live metric;
+    a connection string is not published."""
+    rule = SimpleNamespace(name="q", azure_queue=None, http=None, tcp=None,
+                           custom=SimpleNamespace(type="azure-queue", metadata={
+                               "queueLength": "5", "connectionFromEnv": "QUEUE_CONN",
+                               "accountKey": "abc", "apiToken": "xyz", "topicName": "t"}))
+    block = control._scale_block(_app_with_scale(_scale([rule])))
+    assert block["rules"][0]["metadata"] == {"queueLength": "5", "topicName": "t"}
+
+
+def test_an_app_with_no_scale_rule_reports_an_empty_list_not_a_missing_one(control):
+    """No rule is a real configuration — the app stays between min and max — and a different
+    answer from "the rules could not be read"."""
+    block = control._scale_block(_app_with_scale(_scale([])))
+    assert block["rules"] == []
+    assert block["rules_reported"] is True
+
+
+def test_the_block_never_claims_azure_said_which_rule_fired(control):
+    block = control._scale_block(_app_with_scale(_scale([])))
+    assert "does not report which scale rule caused" in block["attribution"]
+
+
+def test_an_unreadable_scale_section_is_none_rather_than_an_empty_configuration(control):
+    assert control._scale_block(SimpleNamespace(properties=SimpleNamespace(template=None))) is None
