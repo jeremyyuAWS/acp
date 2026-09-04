@@ -32,9 +32,19 @@ class _Resp:
 
 
 def _pages_by_url(pages: dict[str, dict], calls: list | None = None):
+    """A Graph stand-in that answers the mapped URLs and REFUSES the rest with a 400.
+
+    400 rather than a raised KeyError, because that is what Graph actually does with a `$select`
+    or `$expand` it does not accept — and the difference is now behaviour-visible: `_sp_get`
+    retries transport exceptions (a connection reset is transient) and does NOT retry a 400 (a
+    refused ask will be refused again). A stub that raised would make every tier fallback in this
+    file pay four retries to learn something Graph says immediately.
+    """
     def fake_get(url, **kw):
         if calls is not None:
             calls.append(url)
+        if url not in pages:
+            return _Resp(400, {"error": {"message": "unsupported query"}})
         return _Resp(200, pages[url])
     return fake_get
 
