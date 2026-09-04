@@ -3,7 +3,8 @@ import { prefersReducedMotion, useDialog } from './a11y.js'
 import {
   EVENT_FILTERS, EVENT_ICONS, NOT_REPORTED, TONE, arcPath, capacityMatchesService, chartModel,
   componentState, defaultMetricFor, eventClock, eventsForNode, filterEvents, formatDuration,
-  gaugeModel, metricGroups, nodeTypeLabel, outputModel, provenance, queueModel, reported,
+  REPLICA_STATES, gaugeModel, metricGroups, nodeTypeLabel, outputModel, provenance, queueModel,
+  replicaLifecycle, reported,
   revisionLabel, runModel, seriesForMetric, sourceModel, tenantConcentration, trendMarkers,
   updatedAgo,
 } from './liveOpsDrawer.js'
@@ -134,7 +135,82 @@ function WorkerGauge({ gauge, service, capacity, nowMs }) {
         </div>
       </div>
     </div>
+    <ReplicaLifecycle lifecycle={replicaLifecycle(capacity, service)} nowMs={nowMs}
+      measuredAt={capacity?.measured_at} />
     <AzureMetrics capacity={capacity} service={service} nowMs={nowMs} />
+  </section>
+}
+
+/**
+ * Where this service's capacity actually is: how many replicas are serving, coming up or going
+ * away, the active revision and its share of traffic, and — when a revision is not Provisioned —
+ * Azure's own error string, which is the only place a failed rollout surfaces at all.
+ */
+function ReplicaLifecycle({ lifecycle, nowMs, measuredAt }) {
+  if (!lifecycle.available) {
+    return <p className="muted" style={{ fontSize: 11, marginTop: 10 }}>{lifecycle.reason}</p>
+  }
+  return <section aria-label="Replica lifecycle" style={{ marginTop: 12 }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+      <b style={{ fontSize: 13 }}>Replica lifecycle</b>
+      <span className="muted" style={{ fontSize: 11 }}>
+        {lifecycle.total} replica{lifecycle.total === 1 ? '' : 's'} reported
+      </span>
+    </div>
+    {lifecycle.blocked && <p role="status" style={{ margin: '8px 0 0', padding: '9px 11px', fontSize: 12,
+      borderLeft: `4px solid ${TONE.bad}`, background: 'var(--error-bg)', color: 'var(--ink)' }}>
+      <b>■ Active revision is {lifecycle.blocked.state}</b>
+      {lifecycle.blocked.ageS == null ? '' : ` · created ${formatDuration(lifecycle.blocked.ageS)} ago`}
+      {lifecycle.blocked.error && <><br /><code style={{ overflowWrap: 'anywhere' }}>{lifecycle.blocked.error}</code></>}
+    </p>}
+    <ul style={{ listStyle: 'none', margin: '9px 0 0', padding: 0, display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(120px,1fr))', gap: 6, fontSize: 12 }}>
+      {lifecycle.counts.map((row) => <li key={row.state} style={{ display: 'flex', gap: 7, alignItems: 'baseline' }}>
+        <span aria-hidden="true" style={{ color: TONE[row.tone] }}>{row.icon}</span>
+        <span style={{ flex: 1 }}>{row.label}</span><b>{row.count}</b>
+      </li>)}
+    </ul>
+    {!!lifecycle.unreported.length && <p className="muted" style={{ fontSize: 11, margin: '8px 0 0' }}>
+      Not counted: {lifecycle.unreported.join(' and ')}. {lifecycle.unreportedReason}
+    </p>}
+    {!!lifecycle.replicas.length && <ul style={{ listStyle: 'none', margin: '9px 0 0', padding: 0,
+      display: 'grid', gap: 6, fontSize: 12 }}>
+      {lifecycle.replicas.map((replica) => {
+        const state = REPLICA_STATES[replica.state] || REPLICA_STATES.unknown
+        return <li key={`${replica.revision}:${replica.name}`} style={{ ...PANEL, padding: 9 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+            <span aria-hidden="true" style={{ color: TONE[state.tone] }}>{state.icon}</span>
+            <b style={{ overflowWrap: 'anywhere' }}>{replica.name || 'unnamed replica'}</b>
+            <span style={{ color: TONE[state.tone], fontWeight: 700 }}>{state.label}</span>
+            <span className="muted" style={{ marginLeft: 'auto' }}>
+              {replica.age_s == null ? NOT_REPORTED : `up ${formatDuration(replica.age_s)}`}
+            </span>
+          </div>
+          <div className="muted" style={{ fontSize: 11, marginTop: 3, overflowWrap: 'anywhere' }}>
+            {replica.containers_ready}/{replica.containers} containers ready ·{' '}
+            {replica.restarts == null ? 'restarts not reported' : `${replica.restarts} restart${replica.restarts === 1 ? '' : 's'}`}
+            {replica.revision ? ` · ${replica.revision}` : ''}
+          </div>
+          {replica.image && <div className="muted" style={{ fontSize: 11, overflowWrap: 'anywhere' }}>
+            <code>{replica.image}</code>
+          </div>}
+          {replica.state_detail && <div style={{ fontSize: 11, marginTop: 3, color: TONE.bad, overflowWrap: 'anywhere' }}>
+            {replica.state_detail}
+          </div>}
+        </li>
+      })}
+    </ul>}
+    {!!lifecycle.revisions.length && <ul style={{ listStyle: 'none', margin: '9px 0 0', padding: 0,
+      display: 'grid', gap: 4, fontSize: 11 }}>
+      {lifecycle.revisions.map((revision) => <li key={revision.name} className="muted"
+        style={{ overflowWrap: 'anywhere' }}>
+        {revision.active ? '▶ ' : '· '}{revision.name} — {revision.health || NOT_REPORTED} ·{' '}
+        {revision.provisioning_state || NOT_REPORTED} ·{' '}
+        {revision.traffic_percent == null ? 'traffic not reported' : `${revision.traffic_percent}% traffic`} ·{' '}
+        {revision.replicas == null ? 'replicas not reported' : `${revision.replicas} replicas`}
+      </li>)}
+    </ul>}
+    <Source kind="azure" at={measuredAt} nowMs={nowMs} detail="Container Apps control plane" />
   </section>
 }
 

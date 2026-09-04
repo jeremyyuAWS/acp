@@ -338,6 +338,9 @@ def _empty_capacity(configured: bool) -> dict:
         # (empty here) so a caller never has to test for the key's existence before the values.
         "metrics": {}, "metrics_window_minutes": _AZ_METRIC_WINDOW_MIN,
         "metrics_interval": _AZ_METRIC_INTERVAL,
+        # Per-replica and per-revision lifecycle. Empty here rather than absent, for the same
+        # reason as `metrics`: a caller should never have to test for the key before the values.
+        "replicas": [], "revisions": [], "replica_lifecycle": None,
     }
 
 
@@ -476,17 +479,53 @@ def get_capacity():
             rev_list = list(revisions)
         draining = 0
         active_revision_name = None
+        rows = []
         for rev in rev_list:
-            if _rev_field(rev, "active", False):
+            active = bool(_rev_field(rev, "active", False))
+            # "name" is a standard Azure Resource field (like id/type), not part of
+            # RevisionProperties — _rev_field's nested-first lookup correctly falls through
+            # to the flat rev.name here, same dual-path safety as the fields below.
+            name = _rev_field(rev, "name")
+            created = _rev_field(rev, "created_time")
+            rows.append({
+                "name": name, "active": active,
+                "health": _rev_field(rev, "health_state"),
+                "provisioning_state": _rev_field(rev, "provisioning_state"),
+                # The platform's own error string for a Failed revision. This is where a
+                # deployment failure actually surfaces — a failed replica is simply absent from
+                # list_replicas, so without this a rollout that never came up reads as an app
+                # that merely has fewer replicas than expected.
+                "provisioning_error": _rev_field(rev, "provisioning_error"),
+                "running_state": _rev_field(rev, "running_state"),
+                "replicas": _rev_field(rev, "replicas"),
+                "traffic_percent": _rev_field(rev, "traffic_weight"),
+                "created_at": _iso(created) if created is not None else None,
+                # Elapsed since the revision was created. NOT a provisioning duration: Azure
+                # reports when a revision was created and what state it is in now, but never when
+                # it BECAME ready, so "how long did provisioning take" is not answerable from this
+                # API and is not invented. For a revision still Provisioning this elapsed time is
+                # the honest form of the question.
+                "age_s": _age_seconds(created),
+            })
+            if active:
                 result["revision_health"] = _rev_field(rev, "health_state")
                 result["revision_provisioning_state"] = _rev_field(rev, "provisioning_state")
-                # "name" is a standard Azure Resource field (like id/type), not part of
-                # RevisionProperties — _rev_field's nested-first lookup correctly falls through
-                # to the flat rev.name here, same dual-path safety as the fields above.
-                active_revision_name = _rev_field(rev, "name")
+                active_revision_name = name
             else:
                 draining += _rev_field(rev, "replicas", 0) or 0
         result["draining_replicas"] = draining
+        result["revisions"] = rows
+        # Per-replica lifecycle for the active revision, plus whatever is still draining on the
+        # superseded ones — the two together are what "is capacity actually there" means during a
+        # rollout, and the active revision alone would show a drain as though it were finished.
+        replicas = []
+        for row in rows:
+            if row["active"] and row["name"]:
+                replicas.extend(_replica_rows(client, row["name"], draining=False))
+            elif row["name"] and (row["replicas"] or 0) > 0:
+                replicas.extend(_replica_rows(client, row["name"], draining=True))
+        result["replicas"] = replicas
+        result["replica_lifecycle"] = _lifecycle_summary(replicas)
     except Exception:  # noqa: BLE001 — revision health stays None; everything gathered above
         pass           # is still returned rather than lost.
         active_revision_name = None
@@ -507,6 +546,135 @@ def get_capacity():
         swallowed("routes.control.get_capacity: reading a replica's capacity fields failed")
 
     return result
+
+
+# ── Replica lifecycle ───────────────────────────────────────────────────────────────────────
+#
+# WHAT AZURE ACTUALLY REPORTS, which is less than the lifecycle a reader wants.
+#
+# `Replica.properties.runningState` is a three-value enum — Running, NotRunning, Unknown
+# (ContainerAppReplicaRunningState in azure-mgmt-appcontainers). It does not distinguish a replica
+# that is allocating from one that is starting from one that is serving. What DOES distinguish
+# them is the container level: each `ReplicaContainer` carries `started` and `ready` booleans plus
+# `restartCount` and a `runningStateDetails` string. So the finer states below are DERIVED from
+# those two booleans and named for what they are, rather than read off a field that does not
+# exist.
+#
+# Two states in the operator's wish list are NOT derivable here and are not faked:
+#
+#   · REQUESTED — the gap between a scale rule asking for a replica and a replica existing. Azure
+#     exposes no pending-replica list; an unsatisfied request is visible only as replicas < the
+#     scale rule's target, which is a different statement and is reported separately.
+#   · FAILED — a replica that failed and was removed is simply absent from list_replicas. What IS
+#     reported is the REVISION's provisioningState ("Failed") and its provisioningError string,
+#     which is where a failure actually surfaces, so that is what the revision rows carry.
+#
+# Verified against Microsoft's Container Apps REST reference (Revision and Replica definitions,
+# 2025-01-01 and later) rather than assumed — the same reason _AZ_METRICS names are quoted from
+# the metrics reference.
+_REPLICA_STATES = ("ready", "starting", "allocating", "not_running", "draining", "unknown")
+
+
+def _replica_state(replica, draining: bool) -> tuple[str, str | None]:
+    """(state, detail) for one replica, derived from what Azure reports about its containers."""
+    running = str(_rev_field(replica, "running_state", "") or "").strip().lower()
+    detail = _rev_field(replica, "running_state_details")
+    containers = _rev_field(replica, "containers", None) or []
+    # A replica still up on a superseded revision is draining, whatever its own running state:
+    # that is the practical signal a rollout is mid-drain rather than done, and it is a fact about
+    # which revision it belongs to, not about the replica's health.
+    if draining:
+        return "draining", detail
+    if running in ("notrunning", "not_running"):
+        return "not_running", detail
+    if running == "unknown" or not running:
+        return "unknown", detail
+    if containers:
+        # `ready` is the container reporting it can take work; `started` is only that the process
+        # launched. Started-but-not-ready is the startup window a reader is looking for when they
+        # ask why capacity has not arrived yet.
+        if all(bool(_rev_field(c, "ready", False)) for c in containers):
+            return "ready", detail
+        if any(bool(_rev_field(c, "started", False)) for c in containers):
+            return "starting", detail
+        return "allocating", detail
+    return "ready", detail
+
+
+def _replica_rows(client, revision_name: str, draining: bool = False) -> list[dict]:
+    """Per-replica lifecycle rows for one revision. Never raises: a revision whose replicas cannot
+    be listed contributes nothing rather than failing the whole reading."""
+    try:
+        answer = client.container_apps_revision_replicas.list_replicas(_AZ_RG, _AZ_APP, revision_name)
+    except Exception:  # noqa: BLE001
+        swallowed("routes.control._replica_rows: listing replicas for a revision failed")
+        return []
+    replicas = getattr(answer, "value", None)
+    if replicas is None:
+        try:
+            replicas = list(answer)
+        except Exception:  # noqa: BLE001
+            return []
+    rows = []
+    for replica in replicas:
+        state, detail = _replica_state(replica, draining)
+        created = _rev_field(replica, "created_time")
+        containers = _rev_field(replica, "containers", None) or []
+        # Summed across containers, because a replica's restarts are its containers' restarts and
+        # a reader asking "has this replica been crashing" means the pod, not one process in it.
+        restarts = [int(_rev_field(c, "restart_count", 0) or 0) for c in containers]
+        rows.append({
+            "name": getattr(replica, "name", None) or _rev_field(replica, "name"),
+            "revision": revision_name,
+            "state": state,
+            "state_detail": detail,
+            "created_at": _iso(created) if created is not None else None,
+            "age_s": _age_seconds(created),
+            "restarts": sum(restarts) if restarts else None,
+            "containers_ready": sum(1 for c in containers if _rev_field(c, "ready", False)),
+            "containers": len(containers),
+            # The image the replica is actually running, which is the version question a
+            # deployment reader is really asking. Absent when Azure does not report it.
+            "image": next((_rev_field(c, "image", None) for c in containers
+                           if _rev_field(c, "image", None)), None),
+        })
+    return rows
+
+
+def _age_seconds(value) -> int | None:
+    """Seconds since an Azure timestamp, or None. Tolerates a datetime, an ISO string, or a
+    malformed value — never raises and never returns a fabricated 0."""
+    if value is None:
+        return None
+    try:
+        if isinstance(value, str):
+            stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        else:
+            stamp = value
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        return max(0, int((datetime.now(timezone.utc) - stamp).total_seconds()))
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _lifecycle_summary(replicas: list[dict]) -> dict:
+    """The replica counts by state, with the two states Azure does not report named rather than
+    silently missing — a reader counting six states and seeing four should be told why."""
+    counts = {state: 0 for state in _REPLICA_STATES}
+    for row in replicas:
+        counts[row["state"]] = counts.get(row["state"], 0) + 1
+    return {
+        "counts": counts,
+        "total": len(replicas),
+        # Not zero: Azure exposes no pending-replica list and a failed replica is simply absent
+        # from list_replicas. Reported as unavailable so the UI can say so instead of showing a
+        # confident 0 for states it never measured.
+        "unreported_states": ["requested", "failed"],
+        "unreported_reason": "Azure Container Apps does not list pending or removed replicas; a "
+                             "failure surfaces on the revision's provisioningState and "
+                             "provisioningError instead.",
+    }
 
 
 # ── One Azure reading, shared by every SSE client ───────────────────────────────────────────

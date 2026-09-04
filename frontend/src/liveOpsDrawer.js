@@ -213,6 +213,62 @@ export function capacityMatchesService(capacity, service = {}) {
   return app === `acp-${role}` || app.endsWith(`-${role}`)
 }
 
+/* ─────────────────────── Replica lifecycle ─────────────────────── */
+
+/** Each state's word, its shape, and its tone. Shapes again, not colours alone (1.4.1). */
+export const REPLICA_STATES = {
+  ready: { label: 'Ready', icon: '●', tone: 'ok' },
+  starting: { label: 'Starting', icon: '◐', tone: 'warn' },
+  allocating: { label: 'Allocating', icon: '◇', tone: 'info' },
+  draining: { label: 'Draining', icon: '◑', tone: 'info' },
+  not_running: { label: 'Not running', icon: '■', tone: 'bad' },
+  unknown: { label: 'Unknown', icon: '—', tone: 'idle' },
+}
+
+/**
+ * The replica lifecycle for the service being shown, or a stated reason there is none.
+ *
+ * Scoped by the same one-app guard as every other Azure figure: `WORKER_APP_NAME` names one
+ * container app and production runs three, so another app's replicas are not this service's and
+ * are not shown as though they were.
+ *
+ * `unreported` carries the states Azure does not report — requested and failed — so the UI can
+ * say why a reader counting six states sees four, rather than showing a confident zero for
+ * something never measured.
+ */
+export function replicaLifecycle(capacity, service = null) {
+  if (!capacity?.configured) {
+    return { available: false, reason: 'Azure Monitor is not configured, so replica lifecycle is unavailable.' }
+  }
+  if (service && !capacityMatchesService(capacity, service)) {
+    return { available: false,
+      reason: `Azure measured ${capacity.worker_app_name || 'another container app'}, not this service, `
+        + 'so its replicas would not describe this one.' }
+  }
+  const replicas = Array.isArray(capacity.replicas) ? capacity.replicas : []
+  const lifecycle = capacity.replica_lifecycle || null
+  const revisions = Array.isArray(capacity.revisions) ? capacity.revisions : []
+  const active = revisions.find((revision) => revision.active) || null
+  return {
+    available: true,
+    replicas,
+    // Ordered as a rollout reads: what is serving, what is coming up, what is going away.
+    counts: ['ready', 'starting', 'allocating', 'draining', 'not_running', 'unknown']
+      .map((state) => ({ state, ...REPLICA_STATES[state], count: num(lifecycle?.counts?.[state]) }))
+      .filter((row) => row.count != null),
+    total: num(lifecycle?.total) ?? replicas.length,
+    unreported: lifecycle?.unreported_states || [],
+    unreportedReason: lifecycle?.unreported_reason || null,
+    active,
+    revisions,
+    // A revision that is not Provisioned is the answer to "where is my capacity"; its own error
+    // string is the answer to "why". Both come from Azure, neither is inferred.
+    blocked: active && active.provisioning_state && !/^provisioned$/i.test(active.provisioning_state)
+      ? { state: active.provisioning_state, error: active.provisioning_error || null, ageS: num(active.age_s) }
+      : null,
+  }
+}
+
 /* ──────────────────── B. Primary visualization models ──────────────────── */
 
 /**

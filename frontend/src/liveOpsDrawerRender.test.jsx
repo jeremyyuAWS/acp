@@ -234,13 +234,94 @@ describe('Provenance', () => {
     expect(output.textContent).toContain('Not reported · no measurement available')
   })
 
-  it('never labels an Azure sample as live', async () => {
+  it('never labels an Azure reading as live, and says which Azure surface it came from', async () => {
     const container = await mount({ nodeId: 'stage:assess',
       node: { kind: 'worker', label: 'Assess workers', service } })
     const azureLines = [...container.querySelectorAll('div')]
       .filter((el) => el.textContent.startsWith('Azure Monitor ·'))
+      .map((el) => el.textContent)
     expect(azureLines.length).toBeGreaterThan(0)
-    expect(azureLines.every((el) => el.textContent.includes('1 min interval'))).toBe(true)
+    expect(azureLines.some((text) => text.includes('Live ·'))).toBe(false)
+    // Two different Azure surfaces with two different cadences: metrics are sampled at PT1M,
+    // while replica and revision state is a control-plane read taken when the reading is. Giving
+    // both the metric interval would overstate how often the lifecycle is resampled.
+    expect(azureLines.some((text) => text.includes('1 min interval'))).toBe(true)
+    expect(azureLines.some((text) => text.includes('Container Apps control plane'))).toBe(true)
+  })
+})
+
+describe('Replica lifecycle', () => {
+  const workerNode = { kind: 'worker', label: 'Assess workers', service }
+  const lifecycleCapacity = { ...capacity,
+    replicas: [
+      { name: 'r1', revision: 'acp-assess--v25', state: 'ready', age_s: 3600, restarts: 0,
+        containers_ready: 1, containers: 1, image: 'acr.io/acp-assess:v25', state_detail: null },
+      { name: 'r2', revision: 'acp-assess--v25', state: 'starting', age_s: 20, restarts: 2,
+        containers_ready: 0, containers: 1, image: 'acr.io/acp-assess:v25', state_detail: null },
+      { name: 'r0', revision: 'acp-assess--v24', state: 'draining', age_s: 7200, restarts: 0,
+        containers_ready: 1, containers: 1, image: 'acr.io/acp-assess:v24', state_detail: null },
+    ],
+    revisions: [
+      { name: 'acp-assess--v25', active: true, health: 'Healthy', provisioning_state: 'Provisioned',
+        provisioning_error: null, traffic_percent: 100, replicas: 2, age_s: 1800 },
+      { name: 'acp-assess--v24', active: false, health: 'Healthy', provisioning_state: 'Provisioned',
+        provisioning_error: null, traffic_percent: 0, replicas: 1, age_s: 7200 },
+    ],
+    replica_lifecycle: {
+      counts: { ready: 1, starting: 1, allocating: 0, not_running: 0, draining: 1, unknown: 0 },
+      total: 3, unreported_states: ['requested', 'failed'],
+      unreported_reason: "Azure Container Apps does not list pending or removed replicas; a failure surfaces on the revision's provisioningState and provisioningError instead.",
+    } }
+
+  it('shows what each replica is doing, how long it has been up, and what it is running', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode, capacity: lifecycleCapacity })
+    expect(container.textContent).toContain('Replica lifecycle')
+    expect(container.textContent).toContain('3 replicas reported')
+    expect(container.textContent).toContain('Starting')
+    expect(container.textContent).toContain('Draining')
+    expect(container.textContent).toContain('up 1h 0m')
+    expect(container.textContent).toContain('2 restarts')
+    expect(container.textContent).toContain('acr.io/acp-assess:v25')
+  })
+
+  it('says which states Azure does not report, instead of showing them as zero', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode, capacity: lifecycleCapacity })
+    expect(container.textContent).toContain('Not counted: requested and failed')
+    expect(container.textContent).toContain('does not list pending or removed replicas')
+  })
+
+  it('lists every revision with its traffic share, so a stuck rollout is visible', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode, capacity: lifecycleCapacity })
+    expect(container.textContent).toContain('acp-assess--v25')
+    expect(container.textContent).toContain('100% traffic')
+    expect(container.textContent).toContain('0% traffic')
+  })
+
+  it('surfaces a failed rollout with Azure own error string', async () => {
+    // A failed replica is simply absent from list_replicas, so without this the app reads as one
+    // that merely has fewer replicas than expected.
+    const failed = { ...lifecycleCapacity, replicas: [],
+      replica_lifecycle: { ...lifecycleCapacity.replica_lifecycle, total: 0,
+        counts: { ready: 0, starting: 0, allocating: 0, not_running: 0, draining: 0, unknown: 0 } },
+      revisions: [{ name: 'acp-assess--v26', active: true, health: 'Unhealthy',
+        provisioning_state: 'Failed', provisioning_error: 'ImagePullFailure: manifest unknown',
+        traffic_percent: 100, replicas: 0, age_s: 240 }] }
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode, capacity: failed })
+    expect(container.textContent).toContain('Active revision is Failed')
+    expect(container.textContent).toContain('ImagePullFailure: manifest unknown')
+    expect(container.textContent).toContain('created 4m 0s ago')
+  })
+
+  it('refuses to show another container app replicas as this service own', async () => {
+    const container = await mount({ nodeId: 'stage:discover', capacity: lifecycleCapacity,
+      node: { kind: 'worker', label: 'Discover workers', service: { ...service, role: 'discovery', stage: 'discover' } } })
+    expect(container.textContent).toContain('not this service')
+    expect(container.textContent).not.toContain('acr.io/acp-assess:v25')
+  })
+
+  it('says so when Azure is not configured rather than showing an empty lifecycle', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode, capacity: { configured: false } })
+    expect(container.textContent).toContain('replica lifecycle is unavailable')
   })
 })
 
