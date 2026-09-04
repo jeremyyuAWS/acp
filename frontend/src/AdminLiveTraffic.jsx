@@ -90,7 +90,8 @@ export function trendToggleLabel(expanded) {
 function RunNode({ data }) {
   const cfg = STAGE[data.run.stage] || { label: data.run.stage, color: '#6B7280' }
   const pct = data.run.total ? Math.round((data.run.completed / data.run.total) * 100) : 0
-  return <div style={{ width: 225, padding: 12, background: 'var(--panel)', border: `2px solid ${cfg.color}`,
+  return <div title="Select for live run details; double-click to open charts"
+    style={{ width: 225, padding: 12, background: 'var(--panel)', border: `2px solid ${cfg.color}`,
     borderRadius: 10, boxShadow: '0 3px 10px rgba(24,20,28,.10)' }}>
     <Handle type="target" position={Position.Left} />
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
@@ -160,6 +161,13 @@ export default function AdminLiveTraffic() {
     return () => { active = false; stream.close() }
   }, [])
 
+  useEffect(() => {
+    if (!selectedKey) return undefined
+    const onKey = (event) => { if (event.key === 'Escape') setSelectedKey(null) }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [selectedKey])
+
   const graph = useMemo(() => buildTrafficGraph(snapshot, history.current), [snapshot])
   const selectedNode = graph.nodes.find((node) => node.id === selectedKey)?.data
   const selected = selectedNode?.run
@@ -217,32 +225,45 @@ export default function AdminLiveTraffic() {
         <Background gap={18} size={1} /><MiniMap pannable zoomable /><Controls showInteractive={false} />
       </ReactFlow> : <div className="muted" style={{ padding: 28 }}>No active or recently completed processing. Start a scan and this map will populate automatically.</div>}
     </div>
-    {selected && <div className="panel" style={{ marginTop: 12, padding: 14, borderLeft: `4px solid ${STAGE[selected.stage]?.color || '#6B7280'}` }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <b>{STAGE[selected.stage]?.label || selected.stage} run details</b>
-        <span className="muted" style={{ fontSize: 12 }}>Live updates from this run</span>
-        <button className="ghost small" aria-expanded={expanded} aria-controls="live-run-trends"
-          onClick={() => setExpanded((value) => !value)}>{trendToggleLabel(expanded)}</button>
-        <button className="ghost small" onClick={() => setSelectedKey(null)}>Close</button>
+    {selected && <aside role="complementary" aria-label={`${STAGE[selected.stage]?.label || selected.stage} run details`}
+      style={{ position: 'fixed', zIndex: 80, inset: '0 0 0 auto', width: 'min(520px,100vw)',
+        height: '100dvh', overflowY: 'auto', overflowX: 'hidden', boxSizing: 'border-box',
+        padding: 20, background: 'var(--panel)', borderLeft: `5px solid ${STAGE[selected.stage]?.color || '#6B7280'}`,
+        boxShadow: '-12px 0 35px rgba(24,20,28,.18)' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto', alignItems: 'start', gap: 12,
+        paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
+        <div style={{ minWidth: 0 }}>
+          <h2 style={{ margin: 0, fontSize: 18, overflowWrap: 'anywhere' }}>{STAGE[selected.stage]?.label || selected.stage} run details</h2>
+          <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>Live SSE updates from this run</div>
+        </div>
+        <button className="ghost small" aria-label="Close run details" onClick={() => setSelectedKey(null)}>Close</button>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 8, marginTop: 8, fontSize: 13 }}>
-        <span><b>User</b><br />{selected.owner}</span><span><b>Source</b><br />{selected.source}</span>
-        <span><b>Progress</b><br />{selected.completed} of {selected.total}</span><span><b>Queue</b><br />{selected.running} active · {selected.queued} waiting</span>
-        <span><b>Status</b><br />{selected.status === 'recent' ? 'Recently completed' : (selected.queue_position ? `Queue position ${selected.queue_position}` : 'Running now')}</span>
-        <span><b>Oldest wait</b><br />{age(selected.oldest_queued_at)}</span>
-        <span><b>Job type</b><br />{selected.current_job_type?.replaceAll('_', ' ') || '—'}</span>
-        <span><b>Last activity</b><br />{age(selected.updated_at)} ago</span>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: 10, marginTop: 14, fontSize: 13 }}>
+        {[['User', selected.owner], ['Source', selected.source],
+          ['Progress', `${selected.completed} of ${selected.total}`],
+          ['Queue', `${selected.running} active · ${selected.queued} waiting`],
+          ['Status', selected.status === 'recent' ? 'Recently completed' : (selected.queue_position ? `Queue position ${selected.queue_position}` : 'Running now')],
+          ['Oldest wait', age(selected.oldest_queued_at)],
+          ['Job type', selected.current_job_type?.replaceAll('_', ' ') || '—'],
+          ['Last activity', `${age(selected.updated_at)} ago`]].map(([label, value]) =>
+            <div className="panel" key={label} style={{ minWidth: 0, padding: 10, overflowWrap: 'anywhere' }}>
+              <b style={{ display: 'block', fontSize: 11, marginBottom: 3 }}>{label}</b>{value}
+            </div>)}
       </div>
-      {selected.current_file && <div style={{ marginTop: 10 }}><b>Processing now</b><br /><code>{selected.current_file}</code></div>}
-      {selected.current_rule_id && <div style={{ marginTop: 8 }}><b>WCAG criterion</b><br />{selected.current_rule_id}</div>}
+      {selected.current_file && <div className="panel" style={{ minWidth: 0, marginTop: 12, padding: 12 }}>
+        <b>Processing now</b><br /><code style={{ whiteSpace: 'normal', overflowWrap: 'anywhere' }}>{selected.current_file}</code>
+      </div>}
+      {selected.current_rule_id && <div style={{ marginTop: 10 }}><b>WCAG criterion</b><br />{selected.current_rule_id}</div>}
+      <button className="ghost" style={{ width: '100%', marginTop: 14 }} aria-expanded={expanded} aria-controls="live-run-trends"
+        onClick={() => setExpanded((value) => !value)}>{trendToggleLabel(expanded)}</button>
       {expanded && <div id="live-run-trends" style={{ marginTop: 14 }}>
-        <div style={{ marginBottom: 8 }}><b>Live run trends</b><span className="muted" style={{ marginLeft: 8, fontSize: 12 }}>SSE samples · oldest to newest</span></div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))', gap: 10 }}>
+        <div style={{ marginBottom: 8 }}><b>Live run trends</b><div className="muted" style={{ fontSize: 12 }}>SSE samples · oldest to newest</div></div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10 }}>
           <MetricChart values={selectedHistory} field="completed" label="Completed documents" color={STAGE[selected.stage]?.color} />
           <MetricChart values={selectedHistory} field="running" label="Active workers" color="#287C45" />
           <MetricChart values={selectedHistory} field="queued" label="Queued jobs" color="#A66A16" />
         </div>
       </div>}
-    </div>}
+    </aside>}
   </section>
 }

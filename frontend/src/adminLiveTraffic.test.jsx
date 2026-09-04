@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 import { buildTrafficGraph, queueConcentration, trendToggleLabel, workerServiceRows } from './AdminLiveTraffic.jsx'
+
+const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'AdminLiveTraffic.jsx'), 'utf8')
 
 const run = {
   scan_id: 's1', owner: 'operator@example.org', source: 'drive', stage: 'assess',
@@ -27,6 +32,15 @@ describe('Admin live traffic graph', () => {
   it('gives every input method a clear way to reveal live trends', () => {
     expect(trendToggleLabel(false)).toBe('Show live trends')
     expect(trendToggleLabel(true)).toBe('Hide live trends')
+  })
+
+  it('opens run tiles in a non-overlapping right drawer with single and double-click detail', () => {
+    expect(source).toMatch(/onNodeClick=.*setSelectedKey/)
+    expect(source).toMatch(/onNodeDoubleClick=.*setSelectedKey/)
+    expect(source).toMatch(/<aside role="complementary"/)
+    expect(source).toMatch(/inset: '0 0 0 auto'/)
+    expect(source).toMatch(/overflowWrap: 'anywhere'/)
+    expect(source).toContain("event.key === 'Escape'")
   })
 
   it('identifies when one user dominates the shared waiting queue', () => {
