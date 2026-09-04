@@ -5,19 +5,42 @@
 // which tabs to render, what number each carries, where to send someone who has landed somewhere
 // they may not be, and whether a call to action says "Start" or "View".
 //
-// THIS IS NOT A SECURITY CONTROL AND MUST NOT BE READ AS ONE. Every route enforces its own
-// capability server-side (PRD §11); this only decides what to OFFER. The PRD opens by saying so —
-// "Hiding a tab alone is not considered a security control" — and the practical consequence is
-// the direction this file fails in:
+// THIS IS NOT A SECURITY CONTROL AND MUST NOT BE READ AS ONE. This module decides what to
+// OFFER. The PRD opens by saying so — "Hiding a tab alone is not considered a security control."
+//
+// THE ROUTE GATE THAT WOULD ENFORCE IT IS SLICE 4, AND IS NOT BUILT YET. This paragraph replaces
+// an earlier one that asserted the routes already enforced their own capabilities server-side —
+// a description of the intended design, not of the tree it was committed to. As of this commit:
+//
+//   * `WorkspaceForbidden` (api/workspace_rbac.py) is DECLARED AND NEVER RAISED — its own
+//     docstring says "raised by the route gate (slice 4)".
+//   * No route module calls a capability check. Of the 22 modules under api/routes/, four name
+//     workspace RBAC at all: the admin API for roles itself, the two that REPORT access in a
+//     payload (system.py, workspace.py), and __init__.py, which only lists the router.
+//   * api/app.py installs no middleware and no global dependency for it.
+//
+// So the data behind a tab this file hides is still served to any signed-in caller. Privileged
+// mutations stay admin-gated by the older `is_admin` check — a different, coarser mechanism that
+// predates roles and is not capability enforcement.
+//
+// `ACP_WORKSPACE_RBAC_ENABLED` does not change that either. It gates what the access payload
+// REPORTS, not what any route serves, so turning it on hides tabs in this SPA while the APIs
+// behind them stay open. Read "enforcement is on" in the tests as "the payload is computed from
+// roles", which is what they assert.
+//
+// The practical consequence is the direction this file fails in:
 //
 //     NO ACCESS PAYLOAD  ->  EVERYTHING IS VISIBLE.
 //
-// which looks like fail-open and is the correct behaviour for a surface that is not the control.
-// `access` is absent for a signed-out shell, during the first render before bootstrap answers, in
-// SIM mode, and against a server built before this feature. Blanking the navigation in any of
-// those would be a UI that breaks itself while protecting nothing — the server still refuses
-// whatever the user clicks. The fail-CLOSED direction lives where it can actually deny: the
-// resolver in api/workspace_roles.py, which answers "nothing" when it cannot establish a role.
+// which is the correct behaviour for a surface that is not the control, and would still be
+// correct once slice 4 lands. `access` is absent for a signed-out shell, during the first render
+// before bootstrap answers, in SIM mode, and against a server built before this feature. Blanking
+// the navigation in any of those would be a UI that breaks itself while protecting nothing.
+//
+// The fail-CLOSED direction lives in the resolver in api/workspace_roles.py, which answers
+// "nothing" when it cannot establish a role. Note what that does and does not buy today: it fails
+// closed about what the payload REPORTS. Until slice 4 exists, nothing fails closed about what a
+// route SERVES.
 //
 // The distinction that makes both correct: an ABSENT payload means "not told", a payload with a
 // tab set to `hidden` means "told: no". Only the second hides anything here.
