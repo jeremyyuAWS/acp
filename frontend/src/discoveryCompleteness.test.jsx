@@ -200,8 +200,8 @@ describe('and speaks up when it does', () => {
 })
 
 
-describe('the caveat sits ABOVE the numbers it qualifies', () => {
-  it('DiscoveryCompleteness is restored ahead of the latest-scan figures', async () => {
+describe('the retired completeness panel', () => {
+  it('keeps the component available but deliberately mounts it nowhere', async () => {
     const { readFileSync } = await import('node:fs')
     const { fileURLToPath } = await import('node:url')
     const { dirname, join } = await import('node:path')
@@ -210,7 +210,7 @@ describe('the caveat sits ABOVE the numbers it qualifies', () => {
       .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
       .replace(/^\s*\/\/.*$/gm, '')
 
-    expect(src).toMatch(/<DiscoveryCompleteness\b/)
-    expect(src.indexOf('<DiscoveryCompleteness')).toBeLessThan(src.indexOf('<LastSuccessfulScanSummary'))
+    expect(src).not.toMatch(/<DiscoveryCompleteness\b/)
+    expect(src).not.toMatch(/import DiscoveryCompleteness/)
   })
 })

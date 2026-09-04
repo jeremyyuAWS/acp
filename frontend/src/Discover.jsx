@@ -33,7 +33,6 @@ import QueueJobDetails from './QueueJobDetails.jsx'
 import DiscoveryQueuedPlaceholder from './DiscoveryQueuedPlaceholder.jsx'
 import AccordionSection from './AccordionSection.jsx'
 import LastSuccessfulScanSummary from './LastSuccessfulScanSummary.jsx'
-import DiscoveryCompleteness from './DiscoveryCompleteness.jsx'
 import DiscoveryLifecycleResults from './DiscoveryLifecycleResults.jsx'
 import DiscoveryLifecycleEstateSummary from './DiscoveryLifecycleEstateSummary.jsx'
 
@@ -907,19 +906,13 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           the full tree view. */}
       <FolderActivity active={progress?.active_folders} recent={progress?.recent_folders} />
 
-      {/* Discovery leads with facts from THIS listing. Completeness renders only when the source
-          or the prior run gives us something material to qualify; the tiles remain the stable,
-          scan-specific summary. */}
+      {/* Discovery leads with facts from THIS listing. */}
       {!busy && (run?.discovered_at || run?.status === 'discovered') && (
         <AccordionSection id="discover-latest" title="Latest discovery results"
                           ariaLabel="Latest discovery results" defaultOpen
                           style={{ marginBottom: 14 }}>
-          <>
-            <DiscoveryCompleteness run={run} scanList={scanList}
-              onRelist={() => onScan?.(run?.source === 'sharepoint' ? 'sharepoint' : 'drive')} />
-            <LastSuccessfulScanSummary run={run} scope={scope} runAt={runAt}
-                                       files={estateFiles} inventory={scope?.inventory || null} />
-          </>
+          <LastSuccessfulScanSummary run={run} scope={scope} runAt={runAt}
+                                     files={estateFiles} inventory={scope?.inventory || null} />
         </AccordionSection>
       )}
 
@@ -1193,16 +1186,6 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           so, the acknowledgement that gates Assess, and the reconciliation that shows every
           discovered file landing in exactly one bucket. Sections whose data has not reached this
           screen render NOTHING — never a zero. */}
-      {/* IS THIS THE WHOLE ESTATE? ABOVE the results, not below them.
-          
-          It sat under the export first, reasoning that a reader should meet the caveat before the
-          download button. That was the wrong reader: the one who matters reads the COUNTS, and by
-          the time a caveat appears beneath them they have already believed the numbers. A caveat
-          under the figure it qualifies is decoration.
-
-          Self-guarding: it renders nothing when it has nothing to say. A panel appearing on every
-          run to announce "this might be incomplete" would be true of all software, useful to
-          nobody, and would train the reader to skip the box that one day carries a real signal. */}
       {showQueuedPlaceholder && showPreviousResults && (
         <div role="status" className="muted">
           Previous scan results — not results from the active discovery.
