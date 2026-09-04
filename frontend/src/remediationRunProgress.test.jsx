@@ -45,7 +45,7 @@ describe('RemediationRunProgress', () => {
     expect(html).toContain('slides.pptx · applying eligible WCAG fixes')
     expect(html).toContain('Processing now')
     expect(html).toContain('13 documents remaining')
-    expect(html).toContain('Fix throughput')
+    expect(html).toContain('Remediation throughput')
     expect(html).toContain('1 document could not be remediated')
     expect(html).toContain('live')
     expect(html).toContain('aria-live="polite"')

@@ -150,7 +150,7 @@ export default function RemediationRunProgress({ progress, updateMode = 'idle', 
 
         <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 10, marginTop: 12 }}>
           <LiveThroughput points={throughput.points} ratePerMin={throughput.ratePerMin}
-                          label="Fix throughput" />
+                          label="Remediation throughput" unitLabel="processed" />
         </div>
 
         {finished && (
