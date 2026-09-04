@@ -1264,6 +1264,29 @@ _SCHEMA = [
       access_level TEXT NOT NULL,
       PRIMARY KEY (tenant_id, role_id, capability)
     )""",
+    # W4 criterion disposition — a human's recorded resolution for a criterion that would
+    # otherwise dead-end (UNCHECKED / GAP / AT). Immutable once written: correcting a wrong
+    # disposition means adding a new row (the most-recent row wins via list order), never
+    # updating an old one — same append-only discipline as decision_log. `sc` is the success
+    # criterion id ("1.1.1"), `kind` is 'attested' or 'out_of_scope', `reason` is the required
+    # human note, `actor` is who submitted it, `owner_email` is the scan owner for tenant
+    # isolation. Indexed on (scan_id, file) for the per-file reads and on (scan_id, file, sc)
+    # for exact-criterion lookups.
+    """CREATE TABLE IF NOT EXISTS criterion_disposition (
+      id TEXT PRIMARY KEY,
+      scan_id TEXT NOT NULL,
+      file TEXT NOT NULL,
+      sc TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      actor TEXT,
+      ts TEXT NOT NULL,
+      owner_email TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_criterion_disposition_file "
+    "ON criterion_disposition(scan_id, file)",
+    "CREATE INDEX IF NOT EXISTS idx_criterion_disposition_sc "
+    "ON criterion_disposition(scan_id, file, sc)",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -1729,8 +1752,12 @@ class _PgAdapter:
     # an older replica's re-list cannot erase a richer read, and every consumer treats them as
     # optional. A replica that has not rolled forward keeps discovering and inventorying exactly
     # as it does today, it simply records no SharePoint-native metadata.
-    _SCHEMA_VERSION = 13
-    _SCHEMA_CHECKSUM_AT_VERSION = "33426639e7bd3bb229a2d4fa58c66ab5"
+    # v14 adds criterion_disposition — the W4 per-criterion human disposition table plus its two
+    # indexes. Additive on the usual terms: an older replica never reads or writes this table, and
+    # every route behind it is guarded by the new capability-map entries, so a replica without
+    # this code keeps serving all existing surfaces unchanged.
+    _SCHEMA_VERSION = 14
+    _SCHEMA_CHECKSUM_AT_VERSION = "063d03f78cc45848512a665cc7d773ac"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -7983,6 +8010,47 @@ class Store:
             else:
                 self._db.execute(cur,
                     "SELECT * FROM decision_log ORDER BY ts DESC LIMIT %s", (limit,))
+            return self._db.fetchall(cur)
+
+    # ── W4 criterion disposition ──────────────────────────────────────────────
+
+    _DISPOSITION_KINDS = frozenset({"attested", "out_of_scope"})
+
+    def record_criterion_disposition(self, scan_id: str, file: str, sc: str, kind: str,
+                                     reason: str, actor: str, owner: str | None = None) -> dict:
+        """Append one disposition record for a criterion. Immutable once written — correct by
+        adding a new row, not updating. Returns the row that was just inserted."""
+        if kind not in self._DISPOSITION_KINDS:
+            raise ValueError(f"unknown disposition kind {kind!r}")
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        row_id = uuid.uuid4().hex[:12]
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO criterion_disposition"
+                "(id,scan_id,file,sc,kind,reason,actor,ts,owner_email) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (row_id, scan_id, file, sc, kind, reason, actor, now, owner))
+        return {"id": row_id, "scan_id": scan_id, "file": file, "sc": sc,
+                "kind": kind, "reason": reason, "actor": actor, "ts": now}
+
+    def list_criterion_dispositions(self, scan_id: str, file: str,
+                                    owner: str | None = None) -> list[dict]:
+        """Most-recent disposition per criterion for this file. Owner-scoped when owner is given.
+        Returns one row per (sc, kind) pair, ordered most-recent-first so the caller can take
+        the head entry per sc as the effective disposition."""
+        with self._db.cursor() as cur:
+            if owner:
+                self._db.execute(cur,
+                    "SELECT id,sc,kind,reason,actor,ts FROM criterion_disposition "
+                    "WHERE scan_id=%s AND file=%s AND owner_email=%s "
+                    "ORDER BY ts DESC",
+                    (scan_id, file, owner))
+            else:
+                self._db.execute(cur,
+                    "SELECT id,sc,kind,reason,actor,ts FROM criterion_disposition "
+                    "WHERE scan_id=%s AND file=%s ORDER BY ts DESC",
+                    (scan_id, file))
             return self._db.fetchall(cur)
 
     # ── Durable scan-lifecycle event log (ADR 0042) ───────────────────────────

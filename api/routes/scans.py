@@ -2578,6 +2578,54 @@ def get_file_source_link(scan_id: str, filename: str, request: Request,
     return {"url": None}
 
 
+_DISPOSITION_KINDS = frozenset({"attested", "out_of_scope"})
+
+
+@router.post("/scans/{scan_id}/files/{filename:path}/dispose")
+async def dispose_criterion(scan_id: str, filename: str, request: Request):
+    """W4 — record a human disposition for one criterion in a file.
+
+    Body: {"sc": "<criterion-id>", "kind": "attested"|"out_of_scope", "reason": "<text>"}
+
+    Append-only: correcting a wrong disposition means calling again with the updated kind/reason —
+    the most-recent row wins in /dispositions. Guarded to the dispositionable outcome types
+    (UNCHECKED, GAP, AT) on the frontend; the backend trusts the kind value and validates only that
+    it is a recognised kind and that reason is non-empty."""
+    owner = _owner(request)
+    if core.store.get_scan(scan_id, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(422, "JSON body required")
+    sc = (body.get("sc") or "").strip()
+    kind = (body.get("kind") or "").strip()
+    reason = (body.get("reason") or "").strip()
+    if not sc:
+        raise HTTPException(422, "sc is required")
+    if kind not in _DISPOSITION_KINDS:
+        raise HTTPException(422, f"kind must be one of {sorted(_DISPOSITION_KINDS)}")
+    if not reason:
+        raise HTTPException(422, "reason is required")
+    row = core.store.record_criterion_disposition(
+        scan_id, filename, sc, kind, reason, actor=owner, owner=owner)
+    core.store.log_decision(owner, "criterion.disposed", scan_id=scan_id,
+                            file=filename, rule_id=sc, detail=f"{kind}: {reason}")
+    return row
+
+
+@router.get("/scans/{scan_id}/files/{filename:path}/dispositions")
+def list_file_dispositions(scan_id: str, filename: str, request: Request):
+    """W4 — all recorded criterion dispositions for one file, most-recent-first.
+
+    The caller takes the first row per sc as the effective disposition. Returns an empty list
+    when the scan is found but no dispositions have been recorded for this file."""
+    owner = _owner(request)
+    if core.store.get_scan(scan_id, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    return core.store.list_criterion_dispositions(scan_id, filename, owner=owner)
+
+
 @router.get("/scans/{scan_id}/files/{filename:path}/heading-outline")
 def get_heading_outline(scan_id: str, filename: str, request: Request):
     """The docx heading outline `{before,after}` for a heading finding's Structure evidence — the
