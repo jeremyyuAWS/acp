@@ -316,8 +316,11 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
   const hasProposedValue = f.after != null && f.after !== ''
   const sectionLabel = { fontSize: 11.5, letterSpacing: '.08em', textTransform: 'uppercase' }
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div style={{ flex: '1 1 auto', overflowY: 'auto', padding: '18px 22px' }}>
+    <div className="remediation-detail" style={{ display: 'flex', flexDirection: 'column' }}>
+      {/* Keep this content-sized. The workspace owns scrolling; making this child 100% tall
+          pushed the decision bar to the bottom of a tall review canvas and left a large blank
+          region between the evidence accordions and their actions. */}
+      <div className="remediation-detail-content" style={{ padding: '18px 22px' }}>
         {/* 1 · What is this — and what do I need to DO about it? */}
         <p className="muted" style={{ ...sectionLabel, margin: 0 }}>{eyebrow}</p>
         <h3 style={{ margin: '4px 0 6px', fontSize: 19 }}>{r.issue}</h3>
@@ -401,8 +404,8 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingCou
         )}
       </div>
 
-      {/* 4 · Sticky decision bar */}
-      <div style={{ flex: '0 0 auto', borderTop: '1px solid var(--line,#e2dce4)', background: 'var(--bg, #fff)' }}>
+      {/* 4 · Decision bar — follows the evidence so actions stay visually connected to it. */}
+      <div className="remediation-detail-actions" style={{ borderTop: '1px solid var(--line,#e2dce4)', background: 'var(--bg, #fff)' }}>
         {/* W8 — batch a decision across every other queued finding of the same rule/SC. Explicit and
             reversible-feeling: it names the count, and each target routes through the same onDecide
             (so approvals re-validate and rejections hand off) as if the reviewer acted on them one by

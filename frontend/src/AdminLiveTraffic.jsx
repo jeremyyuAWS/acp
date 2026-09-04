@@ -225,20 +225,28 @@ export default function AdminLiveTraffic() {
         <Background gap={18} size={1} /><MiniMap pannable zoomable /><Controls showInteractive={false} />
       </ReactFlow> : <div className="muted" style={{ padding: 28 }}>No active or recently completed processing. Start a scan and this map will populate automatically.</div>}
     </div>
-    {selected && <aside role="complementary" aria-label={`${STAGE[selected.stage]?.label || selected.stage} run details`}
-      style={{ position: 'fixed', zIndex: 80, inset: '0 0 0 auto', width: 'min(520px,100vw)',
-        height: '100dvh', overflowY: 'auto', overflowX: 'hidden', boxSizing: 'border-box',
-        padding: 20, background: 'var(--panel)', borderLeft: `5px solid ${STAGE[selected.stage]?.color || '#6B7280'}`,
-        boxShadow: '-12px 0 35px rgba(24,20,28,.18)' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto', alignItems: 'start', gap: 12,
-        paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
+    {selected && <>
+      <button type="button" aria-label="Close run details" onClick={() => setSelectedKey(null)}
+        style={{ position: 'fixed', inset: 0, zIndex: 79, border: 0, padding: 0,
+          background: 'rgba(28,22,32,.28)', cursor: 'default' }} />
+      <aside role="dialog" aria-modal="true" aria-label={`${STAGE[selected.stage]?.label || selected.stage} run details`}
+      style={{ position: 'fixed', zIndex: 80, top: 0, right: 0, bottom: 0,
+        width: 'clamp(360px, 38vw, 560px)', maxWidth: '100vw', overflowY: 'auto',
+        overflowX: 'hidden', boxSizing: 'border-box', padding: '0 20px 24px',
+        background: 'var(--card, #fff)', color: 'var(--ink, #2b2330)',
+        borderLeft: `5px solid ${STAGE[selected.stage]?.color || '#6B7280'}`,
+        boxShadow: '-12px 0 35px rgba(24,20,28,.22)', isolation: 'isolate' }}>
+      <div style={{ position: 'sticky', top: 0, zIndex: 1, display: 'grid',
+        gridTemplateColumns: 'minmax(0,1fr) auto', alignItems: 'start', gap: 12,
+        margin: '0 -20px', padding: '18px 20px 14px', background: 'var(--card, #fff)',
+        borderBottom: '1px solid var(--border)' }}>
         <div style={{ minWidth: 0 }}>
           <h2 style={{ margin: 0, fontSize: 18, overflowWrap: 'anywhere' }}>{STAGE[selected.stage]?.label || selected.stage} run details</h2>
           <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>Live SSE updates from this run</div>
         </div>
         <button className="ghost small" aria-label="Close run details" onClick={() => setSelectedKey(null)}>Close</button>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,minmax(0,1fr))', gap: 10, marginTop: 14, fontSize: 13 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(155px,1fr))', gap: 10, marginTop: 14, fontSize: 13 }}>
         {[['User', selected.owner], ['Source', selected.source],
           ['Progress', `${selected.completed} of ${selected.total}`],
           ['Queue', `${selected.running} active · ${selected.queued} waiting`],
@@ -264,6 +272,7 @@ export default function AdminLiveTraffic() {
           <MetricChart values={selectedHistory} field="queued" label="Queued jobs" color="#A66A16" />
         </div>
       </div>}
-    </aside>}
+      </aside>
+    </>}
   </section>
 }
