@@ -143,6 +143,22 @@ describe('normalizeEvent', () => {
 // ── the component ────────────────────────────────────────────────────────────
 
 describe('ScanHistory rendering', () => {
+  it('announces loading and failed reads to assistive technology', async () => {
+    let reject
+    getScanHistory.mockImplementation(() => new Promise((_, fail) => { reject = fail }))
+    const { container } = await mount()
+    const btn = container.querySelector('button[aria-expanded]')
+    await act(async () => { btn.click() })
+
+    const loading = container.querySelector('.run-history-loading')
+    expect(loading?.getAttribute('role')).toBe('status')
+    expect(loading?.getAttribute('aria-live')).toBe('polite')
+    expect(loading?.textContent).toMatch(/Loading run history/)
+
+    await act(async () => { reject(new Error('network')); await Promise.resolve() })
+    expect(container.querySelector('.run-history-error')?.getAttribute('role')).toBe('alert')
+  })
+
   it('is collapsed by default and does not fetch until opened', async () => {
     const { container } = await mount()
     expect(getScanHistory).not.toHaveBeenCalled()
