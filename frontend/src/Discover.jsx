@@ -43,7 +43,7 @@ const classTags = (f) => (f.tags || []).filter((t) => !STATUS_TAGS.has(t))
 // bucket off `label.startsWith('Archive')` meant the badge TEXT was load-bearing: rewording it
 // silently re-bucketed every row, and there was no `unassessed` string to match on at all.
 const RET_BUCKET = retentionBucket
-const RET_COLOR = { keep: '#639922', archive: '#7a5c8e', retain: '#D85A30', locked: '#9a948f', delete: 'var(--info-fg)', unassessed: '#9a948f' }
+const RET_COLOR = { keep: '#639922', archive: 'var(--focus-ring)', retain: '#D85A30', locked: '#9a948f', delete: 'var(--info-fg)', unassessed: '#9a948f' }
 const RET_ORDER = ['keep', 'archive', 'retain']
 const RET_BADGE = { keep: ['Keep', 'var(--success-bg)', 'var(--success-fg)'], archive: ['Archive', '#EEEDFE', '#3C3489'], retain: ['Retain · legal hold', 'var(--warn-bg)', 'var(--warn-fg)'], locked: ['🔒 Could not open', '#EEEDEA', '#5F5E5A'], delete: ['Delete', 'var(--info-bg)', 'var(--info-fg)'],
   // Grey, and it says the thing rather than implying it. No lifecycle rule matched and no age
@@ -51,7 +51,7 @@ const RET_BADGE = { keep: ['Keep', 'var(--success-bg)', 'var(--success-fg)'], ar
   // estate looks like today, and what a hardcoded 'Keep' was hiding.
   unassessed: ['Not assessed', '#F1EFF3', '#5F5E5A'] }
 const RISK_COLOR = { PII: 'var(--info-fg)', 'legal-hold': 'var(--warn-fg)', 'high-traffic': '#A56814' }
-const TYPE_COLOR = { PDF: '#C2410C', DOCX: '#2563EB', PPTX: '#D97706', XLSX: '#15803D', HTML: '#7A5C8E', VIDEO: '#9333EA', AUDIO: '#0891B2' }
+const TYPE_COLOR = { PDF: '#C2410C', DOCX: '#2563EB', PPTX: '#D97706', XLSX: '#15803D', HTML: 'var(--focus-ring)', VIDEO: '#9333EA', AUDIO: '#0891B2' }
 const CLASS_TAGS = ['PII', 'legal-hold', 'public-facing', 'high-traffic']
 const CLASS_COLOR = { PII: 'var(--info-fg)', 'legal-hold': 'var(--warn-fg)', 'public-facing': '#D85A30', 'high-traffic': '#A56814' }
 const OVERRIDE_ACTIONS = ['keep', 'archive', 'retain', 'delete']
@@ -593,7 +593,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   const isUnreadable = (f) => f.locked || f.status === 'error'
   const lockedCount = visibleFiles.filter(isUnreadable).length
 
-  const PLUM = '#7a5c8e'
+  const PLUM = 'var(--focus-ring)'
   const tagsOf = (f) => classState[f.file]?.tags ?? classTags(f).filter((t) => CLASS_TAGS.includes(t))
   const byType = Object.entries(visibleFiles.reduce((m, f) => { const k = (f.type || '').toUpperCase(); m[k] = (m[k] || 0) + 1; return m }, {})).sort((a, b) => b[1] - a[1]).map(([label, value]) => ({ label, value, color: TYPE_COLOR[label] || PLUM }))
   const internalDocs = visibleFiles.filter((f) => !tagsOf(f).includes('public-facing'))

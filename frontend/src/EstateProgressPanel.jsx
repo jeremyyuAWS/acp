@@ -16,9 +16,9 @@ const pctLabel = (a, b) => `${pct(a, b)}%`
 
 // ── 1. Horizontal estate progress funnel ─────────────────────────────────────
 
-const STAGE_COLOR = ['#46303F', '#7a5c8e', 'var(--info-fg)', '#067647']
+const STAGE_COLOR = ['var(--plum)', 'var(--focus-ring)', 'var(--info-fg)', '#067647']
 const STAGE_LIGHT = ['#f3eef6', '#ede7f6', '#eff8ff', '#ecfdf3']
-const STAGE_FG    = ['#46303F', '#4B3460', '#0B3A7A', '#074D31']
+const STAGE_FG    = ['var(--plum)', '#4B3460', '#0B3A7A', '#074D31']
 
 function FunnelStage({ label, count, ofDiscovered, pending, pendingLabel, color, lightColor, fgColor, onClick, isLast }) {
   const pctNum = pct(count, ofDiscovered)
@@ -100,14 +100,14 @@ function DocTypeRow({ label, total, eligible, assessed, ineligible }) {
       {/* Stacked bar: eligible (plum) + ineligible (grey) */}
       <div style={{ height: 10, borderRadius: 5, background: '#ece8ee', overflow: 'hidden',
                     display: 'flex' }}>
-        <div style={{ width: `${Math.max(0, pct(elig, maxW))}%`, background: '#7a5c8e',
+        <div style={{ width: `${Math.max(0, pct(elig, maxW))}%`, background: 'var(--focus-ring)',
                       borderRadius: '5px 0 0 5px', transition: 'width .5s ease' }} />
         <div style={{ width: `${Math.max(0, pct(inelig, maxW))}%`, background: '#c8b8d0',
                       transition: 'width .5s ease' }} />
       </div>
       <div style={{ display: 'flex', gap: 16, marginTop: 5, fontSize: 11.5, color: 'var(--muted)' }}>
         <span><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2,
-                              background: '#7a5c8e', marginRight: 4, verticalAlign: 'middle' }} />
+                              background: 'var(--focus-ring)', marginRight: 4, verticalAlign: 'middle' }} />
           {nf.format(elig)} eligible</span>
         {inelig > 0 && (
           <span><span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: 2,
