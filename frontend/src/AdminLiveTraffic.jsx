@@ -148,20 +148,96 @@ function RunNode({ data }) {
   </div>
 }
 
-const nodeTypes = { run: RunNode }
+function InfraNode({ data }) {
+  const color = data.color || '#51606D'
+  return <div title="Select for infrastructure details; double-click for telemetry"
+    style={{ width: data.wide ? 205 : 175, minHeight: 68, padding: 11, background: 'var(--panel)',
+      border: `2px solid ${color}`, borderRadius: 10, boxShadow: '0 2px 8px rgba(24,20,28,.08)' }}>
+    {data.hasInput !== false && <Handle type="target" position={Position.Left} />}
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 7, alignItems: 'start' }}>
+      <b style={{ overflowWrap: 'anywhere' }}>{data.label}</b>
+      <span style={{ color, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap' }}>{data.status}</span>
+    </div>
+    <div className="muted" style={{ fontSize: 11, marginTop: 4, lineHeight: 1.3, overflowWrap: 'anywhere' }}>{data.detail}</div>
+    {data.metric && <div style={{ fontSize: 11, marginTop: 5, fontWeight: 700, overflowWrap: 'anywhere' }}>{data.metric}</div>}
+    {data.hasOutput !== false && <Handle type="source" position={Position.Right} />}
+  </div>
+}
 
-export function buildTrafficGraph(snapshot, historyMap = new Map()) {
+const nodeTypes = { run: RunNode, infra: InfraNode }
+
+function reportedWorkerSize(capacity) {
+  if (!capacity?.configured) return 'Size telemetry not configured'
+  const cpu = capacityValue(capacity.cpu_cores_per_replica, ' vCPU')
+  const memory = capacityValue(capacity.memory_per_replica)
+  const storage = capacityValue(capacity.ephemeral_storage_per_replica)
+  return `${cpu} · ${memory} RAM · ${storage} temporary disk`
+}
+
+export function infrastructureDetail(data, snapshot = {}, capacity = null) {
+  const summary = snapshot?.summary || {}
+  if (data.kind === 'worker') {
+    const service = data.service || {}
+    return {
+      title: `${data.label} infrastructure`, subtitle: 'Live worker capacity and Azure configuration', color: data.color,
+      facts: [
+        ['Service health', service.alive ? 'Online' : 'Offline'],
+        ['Worker slots', `${service.active || 0} active · ${service.available || 0} available of ${service.slots || 0}`],
+        ['Replica size', reportedWorkerSize(capacity)],
+        ['Replicas', capacity?.configured ? `${capacityValue(capacity.current_replicas)} running · ${capacityValue(capacity.min_replicas)} min · ${capacityValue(capacity.max_replicas)} max` : 'Not reported'],
+        ['Live utilization', capacity?.metrics_available ? `${capacityValue(capacity.cpu_percent, '%')} CPU · ${capacityValue(capacity.memory_percent, '%')} memory` : 'Not reported'],
+        ['Active revision', capacity?.active_revision_name || 'Not reported'],
+        ['Revision health', capacity?.configured ? `${capacityValue(capacity.revision_health)} · ${capacityValue(capacity.revision_traffic_percent, '%')} traffic` : 'Not reported'],
+        ['Heartbeat', service.age_s == null ? 'Not reported' : `${Math.round(service.age_s)}s ago · ${service.version || 'version unknown'}`],
+      ],
+    }
+  }
+  const details = {
+    source: { title: `${data.label} connector`, subtitle: 'Authenticated source path into ACP', color: data.color,
+      facts: [['Role', 'Enumerates authorized documents without changing source files'], ['Live runs', `${data.active || 0}`], ['Connection path', data.label]] },
+    intake: { title: 'ACP intake and orchestration', subtitle: 'Validates requests and routes durable work', color: data.color,
+      facts: [['Active runs', `${summary.active_runs || 0}`], ['Recent runs', `${summary.recent_runs || 0}`], ['SSE connection', data.connection || 'Connecting']] },
+    queue: { title: 'Shared tenant-fair queue', subtitle: 'Durable work waiting for worker capacity', color: data.color,
+      facts: [['Queued jobs', `${summary.queued || 0}`], ['Users waiting', `${summary.waiting_users || 0}`], ['Scheduling', 'Tenant-fair'], ['Pressure', PRESSURE[summary.pressure]?.label || PRESSURE.healthy.label]] },
+    output: { title: 'Durable outputs and audit trail', subtitle: 'Corrected copies, conformance results, and provenance', color: data.color,
+      facts: [['Storage class', 'Durable application storage'], ['Source safety', 'Original source documents remain unchanged'], ['Traceability', 'Run, rule, decision, and validation evidence retained']] },
+  }
+  return details[data.kind] || { title: data.label, subtitle: data.detail, color: data.color, facts: [] }
+}
+
+export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = null, connection = 'connecting') {
   const runs = snapshot?.runs || []
-  const sources = [...new Set(runs.map((r) => r.source || 'unknown'))]
-  const stages = [...new Set(runs.map((r) => r.stage))]
-  const nodes = []
-  const edges = []
-  sources.forEach((source, i) => nodes.push({ id: `source:${source}`, position: { x: 10, y: i * 135 + 30 },
-    data: { label: source === 'drive' ? 'Google Drive' : source === 'sharepoint' ? 'SharePoint' : source },
-    style: { borderRadius: 20, border: '1px solid var(--border)', fontWeight: 700 } }))
-  stages.forEach((stage, i) => nodes.push({ id: `stage:${stage}`, position: { x: 720, y: i * 115 + 30 },
-    data: { label: `${STAGE[stage]?.label || stage} workers` }, style: { borderRadius: 20,
-      border: `2px solid ${STAGE[stage]?.color || '#6B7280'}`, fontWeight: 700 } }))
+  const services = workerServiceRows(snapshot?.summary || {})
+  const serviceByStage = new Map(services.map((service) => [service.stage, service]))
+  const sourceKinds = ['drive', 'sharepoint']
+  const sourceLabel = { drive: 'Google Drive', sharepoint: 'SharePoint' }
+  const nodes = sourceKinds.map((source, index) => ({ id: `source:${source}`, type: 'infra', position: { x: 0, y: 30 + index * 105 },
+    data: { kind: 'source', label: sourceLabel[source], status: runs.some((run) => run.source === source) ? 'active' : 'ready',
+      detail: 'Authorized document connector', color: '#246B79', hasInput: false,
+      active: runs.filter((run) => run.source === source && run.status !== 'recent').length } }))
+  nodes.push(
+    { id: 'infra:intake', type: 'infra', position: { x: 225, y: 82 }, data: { kind: 'intake', label: 'ACP intake', status: connection,
+      detail: 'Authentication · scope · orchestration', color: '#51404E', connection } },
+    { id: 'infra:queue', type: 'infra', position: { x: 455, y: 82 }, data: { kind: 'queue', label: 'Shared queue',
+      status: `${snapshot?.summary?.queued || 0} waiting`, detail: 'Durable · tenant-fair scheduling', color: '#A66A16' } },
+  )
+  ;['discover', 'assess', 'remediate'].forEach((stage, index) => {
+    const service = serviceByStage.get(stage) || { stage, active: 0, available: 0, slots: 0, alive: false }
+    nodes.push({ id: `stage:${stage}`, type: 'infra', position: { x: 690, y: index * 105 }, data: { kind: 'worker',
+      label: `${STAGE[stage].label} workers`, status: service.alive ? 'online' : 'standby',
+      detail: `${service.active} active · ${service.available} available of ${service.slots}`,
+      metric: reportedWorkerSize(capacity), color: STAGE[stage].color, service } })
+  })
+  nodes.push({ id: 'infra:output', type: 'infra', position: { x: 935, y: 82 }, data: { kind: 'output', label: 'Durable outputs',
+    status: 'protected', detail: 'Results · corrected copies · audit trail', color: '#287C45', hasOutput: false, wide: true } })
+  const edges = [
+    ...sourceKinds.map((source) => ({ id: `${source}:intake`, source: `source:${source}`, target: 'infra:intake', style: { stroke: '#246B79' } })),
+    { id: 'intake:queue', source: 'infra:intake', target: 'infra:queue', animated: Boolean(snapshot?.summary?.active_runs), style: { stroke: '#51404E' } },
+    ...['discover', 'assess', 'remediate'].flatMap((stage) => [
+      { id: `queue:${stage}`, source: 'infra:queue', target: `stage:${stage}`, animated: Boolean(serviceByStage.get(stage)?.active), style: { stroke: STAGE[stage].color } },
+      { id: `${stage}:output`, source: `stage:${stage}`, target: 'infra:output', animated: Boolean(serviceByStage.get(stage)?.active), style: { stroke: STAGE[stage].color } },
+    ]),
+  ]
   runs.forEach((run, i) => {
     const key = `${run.scan_id}:${run.stage}`
     const series = historyMap.get(key) || []
@@ -170,8 +246,8 @@ export function buildTrafficGraph(snapshot, historyMap = new Map()) {
     const last = series.at(-1)
     if (!last || ['completed', 'running', 'queued'].some((field) => Number(last[field] || 0) !== sample[field])) series.push(sample)
     historyMap.set(key, series.slice(-30))
-    nodes.push({ id: key, type: 'run', position: { x: 310, y: i * 125 + 10 }, data: { run, history: series } })
-    edges.push({ id: `in:${key}`, source: `source:${run.source || 'unknown'}`, target: key,
+    nodes.push({ id: key, type: 'run', position: { x: 335 + (i % 3) * 255, y: 345 + Math.floor(i / 3) * 135 }, data: { kind: 'run', run, history: series } })
+    edges.push({ id: `in:${key}`, source: sourceKinds.includes(run.source) ? `source:${run.source}` : 'infra:intake', target: key,
       animated: run.running > 0, style: { stroke: STAGE[run.stage]?.color || '#6B7280' } })
     edges.push({ id: `out:${key}`, source: key, target: `stage:${run.stage}`,
       animated: run.running > 0, style: { stroke: STAGE[run.stage]?.color || '#6B7280' } })
@@ -216,9 +292,10 @@ export default function AdminLiveTraffic() {
     return () => document.removeEventListener('keydown', onKey)
   }, [selectedKey])
 
-  const graph = useMemo(() => buildTrafficGraph(snapshot, history.current), [snapshot])
+  const graph = useMemo(() => buildTrafficGraph(snapshot, history.current, capacity, connection), [snapshot, capacity, connection])
   const selectedNode = graph.nodes.find((node) => node.id === selectedKey)?.data
   const selected = selectedNode?.run
+  const selectedInfrastructure = selectedNode && !selected ? infrastructureDetail(selectedNode, snapshot, capacity) : null
   const selectedHistory = selectedNode?.history || []
 
   const summary = snapshot?.summary || {}
@@ -265,37 +342,40 @@ export default function AdminLiveTraffic() {
       borderLeft: `4px solid ${PRESSURE.busy.color}`, background: 'var(--page)', fontSize: 12 }}>
       <b>Queue concentration:</b> one user holds {concentration.pct}% of waiting jobs. Tenant-fair scheduling gives other waiting users the next equally prioritized capacity.
     </div>}
-    <div style={{ height: Math.max(330, (snapshot?.runs?.length || 1) * 125 + 45), maxHeight: 650,
+    <div style={{ height: Math.max(430, 385 + Math.ceil((snapshot?.runs?.length || 0) / 3) * 135), maxHeight: 720,
       border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden', background: 'var(--page)' }}>
-      {snapshot?.runs?.length ? <ReactFlow nodes={graph.nodes} edges={graph.edges} nodeTypes={nodeTypes}
+      <ReactFlow nodes={graph.nodes} edges={graph.edges} nodeTypes={nodeTypes}
         fitView minZoom={0.35} maxZoom={1.5}
-        onNodeClick={(_, node) => { if (node.type === 'run') { setSelectedKey(node.id); setExpanded(false) } }}
-        onNodeDoubleClick={(_, node) => { if (node.type === 'run') { setSelectedKey(node.id); setExpanded(true) } }}>
+        onNodeClick={(_, node) => { setSelectedKey(node.id); setExpanded(false) }}
+        onNodeDoubleClick={(_, node) => { setSelectedKey(node.id); setExpanded(true) }}>
         <Background gap={18} size={1} /><MiniMap pannable zoomable /><Controls showInteractive={false} />
-      </ReactFlow> : <div className="muted" style={{ padding: 28 }}>No active or recently completed processing. Start a scan and this map will populate automatically.</div>}
+        {!snapshot?.runs?.length && <div className="chip" style={{ position: 'absolute', zIndex: 3, left: 12, bottom: 12 }}>
+          Idle · select any tile to inspect the ready processing path
+        </div>}
+      </ReactFlow>
     </div>
-    {selected && <>
+    {(selected || selectedInfrastructure) && <>
       <button type="button" aria-label="Close run details" onClick={() => setSelectedKey(null)}
         style={{ position: 'fixed', inset: 0, zIndex: 79, border: 0, padding: 0,
           background: 'rgba(28,22,32,.28)', cursor: 'default' }} />
-      <aside role="dialog" aria-modal="true" aria-label={`${STAGE[selected.stage]?.label || selected.stage} run details`}
+      <aside role="dialog" aria-modal="true" aria-label={selected ? `${STAGE[selected.stage]?.label || selected.stage} run details` : selectedInfrastructure.title}
       style={{ position: 'fixed', zIndex: 80, top: 0, right: 0, bottom: 0,
         width: 'clamp(360px, 38vw, 560px)', maxWidth: '100vw', overflowY: 'auto',
         overflowX: 'hidden', boxSizing: 'border-box', padding: '0 20px 24px',
         background: 'var(--card, #fff)', color: 'var(--ink, #2b2330)',
-        borderLeft: `5px solid ${STAGE[selected.stage]?.color || '#6B7280'}`,
+        borderLeft: `5px solid ${selected ? (STAGE[selected.stage]?.color || '#6B7280') : selectedInfrastructure.color}`,
         boxShadow: '-12px 0 35px rgba(24,20,28,.22)', isolation: 'isolate' }}>
       <div style={{ position: 'sticky', top: 0, zIndex: 1, display: 'grid',
         gridTemplateColumns: 'minmax(0,1fr) auto', alignItems: 'start', gap: 12,
         margin: '0 -20px', padding: '18px 20px 14px', background: 'var(--card, #fff)',
         borderBottom: '1px solid var(--border)' }}>
         <div style={{ minWidth: 0 }}>
-          <h2 style={{ margin: 0, fontSize: 18, overflowWrap: 'anywhere' }}>{STAGE[selected.stage]?.label || selected.stage} run details</h2>
-          <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>Live SSE updates from this run</div>
+          <h2 style={{ margin: 0, fontSize: 18, overflowWrap: 'anywhere' }}>{selected ? `${STAGE[selected.stage]?.label || selected.stage} run details` : selectedInfrastructure.title}</h2>
+          <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>{selected ? 'Live SSE updates from this run' : selectedInfrastructure.subtitle}</div>
         </div>
         <button className="ghost small" aria-label="Close run details" onClick={() => setSelectedKey(null)}>Close</button>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(155px,1fr))', gap: 10, marginTop: 14, fontSize: 13 }}>
+      {selected ? <><div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(155px,1fr))', gap: 10, marginTop: 14, fontSize: 13 }}>
         {[['User', selected.owner], ['Source', selected.source],
           ['Progress', `${selected.completed} of ${selected.total}`],
           ['Queue', `${selected.running} active · ${selected.queued} waiting`],
@@ -319,6 +399,16 @@ export default function AdminLiveTraffic() {
           <MetricChart values={selectedHistory} field="completed" label="Completed documents" color={STAGE[selected.stage]?.color} />
           <MetricChart values={selectedHistory} field="running" label="Active workers" color="#287C45" />
           <MetricChart values={selectedHistory} field="queued" label="Queued jobs" color="#A66A16" />
+        </div>
+      </div>}</> : <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(175px,1fr))', gap: 10, marginTop: 14, fontSize: 13 }}>
+        {selectedInfrastructure.facts.map(([label, value]) => <div className="panel" key={label}
+          style={{ minWidth: 0, padding: 11, overflowWrap: 'anywhere' }}>
+          <b style={{ display: 'block', fontSize: 11, marginBottom: 4 }}>{label}</b>{value}
+        </div>)}
+        <div className="panel" style={{ gridColumn: '1 / -1', padding: 12 }}>
+          <b>Live transparency</b><div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+            This view continues updating from ACP and Azure while the drawer is open. Values marked “Not reported” are never estimated.
+          </div>
         </div>
       </div>}
       </aside>
