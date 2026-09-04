@@ -231,6 +231,28 @@ def _resolve_key(cfg: dict) -> str | None:
     return os.environ.get(ref) if ref else None
 
 
+def credential_for(provider: str) -> tuple[str | None, str]:
+    """A provider's API key and the NAME it was read from — the supported way for code outside
+    this module to reach an ops-provisioned credential.
+
+    Returns `(key_or_None, source)` where source is the secret's reference name, or
+    `"not_configured"` when the Settings page has no `key_secret_ref` for this provider, or
+    `"secret_absent:<REF>"` when it names one that is not present in this environment. The
+    SOURCE is always safe to print; the key never is.
+
+    Exists because the evals kit (evals/candidates.py) needs the same credential the product
+    uses, and the alternative was a second place to configure a key — one that fails silently
+    when an ops team provisions it under a name of their own choosing, which is exactly what
+    `key_secret_ref` exists to allow. Callers must not log or persist the first element.
+    """
+    cfg = _config_for(provider)
+    ref = (cfg.get("key_secret_ref") or "").strip()
+    if not ref:
+        return None, "not_configured"
+    val = os.environ.get(ref)
+    return (val, ref) if val else (None, f"secret_absent:{ref}")
+
+
 def provider_view(cfg: dict) -> dict:
     """A browser/route-SAFE view of one provider's config: never the key, only whether the
     referenced secret is present. `credential_source` tells an enterprise admin who owns the

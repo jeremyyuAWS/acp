@@ -22,9 +22,11 @@ from __future__ import annotations
 import json
 import os
 import time
+import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 from .cost import PRICE_BOOK, Pricing
@@ -56,6 +58,11 @@ class Candidate:
 
     def respond(self, case: Case) -> Response:      # pragma: no cover - abstract
         raise NotImplementedError
+
+    def key_source(self) -> str:
+        """Where this candidate's credential comes from, for the pre-flight line. Free and local
+        candidates need none; the ones that do override this."""
+        return "no key needed"
 
     def prompt_key(self, case: Case) -> str:
         """Cache key. Deliberately the case's SIGNAL, not its id: two cases that present the
@@ -377,15 +384,20 @@ class HostedCandidate(HttpModelCandidate):
     id and price tier are inputs. The kit never hard-codes a provider's route."""
 
     def __init__(self, model: str, *, endpoint: str, api_key_env: str = "EVALS_API_KEY",
-                 tier: int = 2, price_tier: str = "hosted-small"):
+                 tier: int = 2, price_tier: str = "hosted-small",
+                 provider: str = "openai"):
         super().__init__(f"hosted:{model}", tier=tier, pricing=PRICE_BOOK[price_tier])
         self.model, self.endpoint, self.api_key_env = model, endpoint, api_key_env
+        self.provider = provider
+
+    def key_source(self) -> str:
+        return resolve_api_key(self.provider, self.api_key_env)[1]
 
     def _request(self, case: Case):   # pragma: no cover - network
         body = json.dumps({"model": self.model, "temperature": 0,
                            "messages": [{"role": "user", "content": build_prompt(case)}]}).encode()
         headers = {"Content-Type": "application/json"}
-        key = os.environ.get(self.api_key_env)
+        key, _ = resolve_api_key(self.provider, self.api_key_env)
         if key:
             headers["Authorization"] = f"Bearer {key}"
         req = urllib.request.Request(self.endpoint, data=body, headers=headers)
@@ -436,6 +448,48 @@ def resolve(spec: str) -> Candidate:
     raise ValueError(f"unknown candidate spec {spec!r}")
 
 
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def _provider_credential(provider: str) -> tuple[str | None, str]:
+    """Ask the PRODUCT where this provider's key lives (Settings -> AI providers stores the
+    secret's reference NAME, never its value; api/providers.credential_for reads it).
+
+    Imported lazily and behind a try: the kit's default run must stay stdlib-only and must not
+    touch the product's database, and on a CI runner there is no database to touch. Any failure
+    degrades to "no key from the product", never to an exception.
+    """
+    try:
+        if str(ROOT / "api") not in sys.path:
+            sys.path.insert(0, str(ROOT / "api"))
+        import providers  # noqa: PLC0415 - deliberately lazy; see the docstring
+        return providers.credential_for(provider)
+    except Exception as e:
+        return None, f"provider_config_unavailable:{type(e).__name__}"
+
+
+def resolve_api_key(provider: str, env_var: str, *,
+                    lookup: Callable[[str], tuple[str | None, str]] = _provider_credential,
+                    ) -> tuple[str | None, str]:
+    """The key for a provider, and a printable name for where it came from — never the value.
+
+    ENV FIRST, then the product's provider config. Env-first because the SDKs themselves read
+    the standard variable, so anything else would make an exported key mysteriously not the one
+    in use; the config path then covers the case this whole seam exists for — an ops team that
+    provisioned the credential under a name of its own choosing, which the Settings page records
+    as `key_secret_ref`. Reading the env var first also means the common case never opens the
+    product's database at all.
+
+    Both sources are reported, so "which key did this run use" is answerable from the log rather
+    than from assumption.
+    """
+    val = os.environ.get(env_var)
+    if val:
+        return val, f"env:{env_var}"
+    key, source = lookup(provider)
+    return key, (f"provider_config:{source}" if key else f"missing ({source})")
+
+
 # Model id -> the price-book entry for it. A candidate priced from a generic rung reports a
 # number nobody can check against an invoice, so the named tiers are matched first and an
 # unknown model is an explicit argument rather than a silent default.
@@ -474,13 +528,20 @@ class AnthropicCandidate(Candidate):
         self.max_tokens = max_tokens
         self.effort = effort or os.environ.get("EVALS_ANTHROPIC_EFFORT") or None
 
+    def key_source(self) -> str:
+        return resolve_api_key("anthropic", "ANTHROPIC_API_KEY")[1]
+
     def respond(self, case: Case) -> Response:      # pragma: no cover - network
         try:
             import anthropic
         except ImportError:
             return Response(plan=[], parse_error="the `anthropic` package is not installed")
         t0 = time.perf_counter()
-        client = anthropic.Anthropic()
+        key, _ = resolve_api_key("anthropic", "ANTHROPIC_API_KEY")
+        # A bare client when nothing resolved is NOT a bug: the SDK also honours an `ant auth
+        # login` profile, so an unset variable does not mean "no credentials". Passing None
+        # explicitly would defeat that.
+        client = anthropic.Anthropic(api_key=key) if key else anthropic.Anthropic()
         kwargs: dict[str, Any] = {"model": self.model, "max_tokens": self.max_tokens,
                                   "messages": [{"role": "user",
                                                 "content": build_prompt(case)}]}
