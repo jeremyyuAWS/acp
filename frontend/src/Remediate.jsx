@@ -1414,7 +1414,19 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             ESTATE, so the "N could not be analysed" caveat is appended to whichever one renders
             rather than living inside one of them — which is how the original defect happened. */}
         {inboxQueue.length === 0 ? (
-          <p className="muted">{reviewEmptyLine(files, { totalHitl, acted })}</p>
+          <div className="remediation-complete" role="status">
+            <h3>All review items are complete.</h3>
+            <p className="muted">{reviewEmptyLine(files, { totalHitl, acted })}</p>
+            <div className="remediation-complete-counts" aria-label="Remediation completion summary">
+              <span><b>{acted.approved || 0}</b> approved</span>
+              <span><b>{revalidated.length}</b> verified</span>
+              <span><b>{acted.deferred || 0}</b> manual or deferred</span>
+              <span><b>{blockedCount || 0}</b> blocked</span>
+            </div>
+            {verifyState === 'complete' || revalidated.length > 0
+              ? <button className="primary" onClick={() => onNavigate?.('publish')}>Continue to Release</button>
+              : <p className="muted remediation-release-blocked">Release is not available yet because no corrected copy has completed verification.</p>}
+          </div>
         ) : (
           // R4, R7 and R10 ride in the detail pane, beside the finding they describe. `sel` is
           // null when nothing is selected and each component self-guards on that, so an empty

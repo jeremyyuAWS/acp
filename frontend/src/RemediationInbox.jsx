@@ -336,8 +336,10 @@ function taskLineOf(f, lane) {
 function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFindings = [], onApplyToMatching, cluster = null, draft = null, onDraftChange, saving = false, error = null, headingRef = null, detailExtra = null, emptyState = null }) {
   const [applyMatching, setApplyMatching] = useState(false)
   const [matchingPreviewOpen, setMatchingPreviewOpen] = useState(false)
+  const [copiedValue, setCopiedValue] = useState('')
   useEffect(() => { setApplyMatching(false) }, [f?.id])
   useEffect(() => { setMatchingPreviewOpen(false) }, [f?.id])
+  useEffect(() => { setCopiedValue('') }, [f?.id])
   if (!f) {
     return (
       <div style={{ display: 'grid', placeItems: 'center', height: '100%', textAlign: 'center', padding: 24 }}>
@@ -370,6 +372,11 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
   const hasProposedValue = f.after != null && f.after !== ''
   const currentValue = displayText(f.before || f.observed || 'Not recorded')
   const proposedValue = displayText(draftValue || f.after || '')
+  const copyValue = async (kind, value) => {
+    if (!navigator.clipboard?.writeText) return
+    await navigator.clipboard.writeText(value)
+    setCopiedValue(kind)
+  }
   const why = whyOf(f)
   const decide = (decision) => {
     if (applyMatching && matchingCount > LARGE_BATCH_THRESHOLD) {
@@ -385,15 +392,17 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
           region between the evidence accordions and their actions. */}
       <div className="remediation-detail-content" style={{ padding: '18px 22px' }}>
         {/* 1 · What is this — and what do I need to DO about it? */}
-        <p className="muted" style={{ margin: 0, fontSize: 12, fontWeight: 600 }}>{eyebrow}</p>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
-          <div style={{ minWidth: 0 }}>
-            <h3 ref={headingRef} tabIndex="-1" style={{ margin: '4px 0 4px', fontSize: 20 }}>{displayText(r.issue)}</h3>
-            <p className="muted" style={{ margin: 0, fontSize: 13, overflowWrap: 'anywhere' }}>{displayText(r.file)}</p>
+        <div className="remediation-review-header">
+          <p className="muted" style={{ margin: 0, fontSize: 12, fontWeight: 600 }}>{eyebrow}</p>
+          <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+            <div style={{ minWidth: 0 }}>
+              <h3 ref={headingRef} tabIndex="-1" style={{ margin: '4px 0 4px', fontSize: 20 }}>{displayText(r.issue)}</h3>
+              <p className="muted" style={{ margin: 0, fontSize: 13, overflowWrap: 'anywhere' }}>{displayText(r.file)}</p>
+            </div>
+            {onOpenWord && <button className="ghost" onClick={() => onOpenWord(f)}>View full document</button>}
           </div>
-          {onOpenWord && <button className="ghost" onClick={() => onOpenWord(f)}>View full document</button>}
+          <Meta row={{ ...r, wcag: (f.rule_id || f.ruleId || '') }} />
         </div>
-        <Meta row={{ ...r, wcag: (f.rule_id || f.ruleId || '') }} />
         <p style={{ fontSize: 15, lineHeight: 1.55, margin: '18px 0 0' }}>{problemOf(f, r.issue)}</p>
 
         {/* Your task — the imperative, so the reviewer is never left guessing what to do here. Hidden
@@ -410,8 +419,8 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
         ) : (
           <>
             <div className="remediation-comparison" aria-label="Current and proposed values">
-              <div><b>Current</b><span aria-label={`Current value: ${currentValue}`}>{currentValue}</span></div>
-              <div><b>Proposed</b><span aria-label={`Proposed value: ${proposedValue}`}><ChangedValue from={currentValue} to={proposedValue} /></span></div>
+              <div><b>Current</b><span aria-label={`Current value: ${currentValue}`}>{currentValue}</span><button type="button" className="linklike remediation-copy-value" onClick={() => copyValue('current', currentValue)}>{copiedValue === 'current' ? 'Copied' : 'Copy current'}</button></div>
+              <div><b>Proposed</b><span aria-label={`Proposed value: ${proposedValue}`}><ChangedValue from={currentValue} to={proposedValue} /></span><button type="button" className="linklike remediation-copy-value" onClick={() => copyValue('proposed', proposedValue)}>{copiedValue === 'proposed' ? 'Copied' : 'Copy proposed'}</button></div>
             </div>
             {changed && <p style={{ fontSize: 13.5, lineHeight: 1.5, margin: '10px 0 0' }}>{displayText(changed)}</p>}
 
@@ -579,6 +588,8 @@ const LS = 'acp.remediate.'
 function readLS(k, dflt) { try { const v = localStorage.getItem(LS + k); return v == null ? dflt : v } catch { return dflt } }
 function readNum(k, dflt) { const n = parseFloat(readLS(k, '')); return Number.isFinite(n) ? n : dflt }
 function writeLS(k, v) { try { localStorage.setItem(LS + k, String(v)) } catch { /* storage unavailable — keep the in-memory value */ } }
+function readSession(k, dflt) { try { return sessionStorage.getItem(k) ?? dflt } catch { return dflt } }
+function writeSession(k, v) { try { sessionStorage.setItem(k, String(v)) } catch { /* keep in-memory state */ } }
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n))
 
 // A keyboard-operable resize handle. Pointer drag resizes in the browser; Arrow keys nudge it,
@@ -625,6 +636,11 @@ export default function RemediationInbox({
   const [tab, setTab] = useState(initialTab)
   const [sort, setSort] = useState(initialSort)
   const [search, setSearch] = useState('')
+  const filterKey = `acp.remediate.filters.${scanId || 'current'}`
+  const [priorityFilter, setPriorityFilter] = useState(() => readSession(`${filterKey}.priority`, 'all'))
+  const [formatFilter, setFormatFilter] = useState(() => readSession(`${filterKey}.format`, 'all'))
+  useEffect(() => { writeSession(`${filterKey}.priority`, priorityFilter) }, [filterKey, priorityFilter])
+  useEffect(() => { writeSession(`${filterKey}.format`, formatFilter) }, [filterKey, formatFilter])
   const [collapsed, setCollapsed] = useState({}) // file -> true when a document group is collapsed
   const [drafts, setDrafts] = useState({}) // finding id -> reviewer-edited proposed value (null until edited)
   const [assignedOnly, setAssignedOnly] = useState(false) // "Assigned to me" filter — files whose assignee is myEmail
@@ -680,9 +696,11 @@ export default function RemediationInbox({
     const q = search.trim().toLowerCase()
     const filtered = queue.filter((f) => matchesWorkflow(f, tab, decisions) &&
       (!assignedOnly || assignedToMe(f)) &&
+      (priorityFilter === 'all' || String(f.severity || 'unrated').toLowerCase() === priorityFilter) &&
+      (formatFilter === 'all' || fmtOf(f.file) === formatFilter) &&
       (!q || rowModel(f, decisions).issue.toLowerCase().includes(q) || String(f.file).toLowerCase().includes(q)))
     return sortQueue(filtered, sort)
-  }, [queue, tab, sort, search, decisions, assignedOnly, assignees, myEmail]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [queue, tab, sort, search, decisions, assignedOnly, assignees, myEmail, priorityFilter, formatFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Keep a valid selection: default to the first unresolved visible row.
   useEffect(() => {
@@ -695,6 +713,9 @@ export default function RemediationInbox({
   // only ever show a busy or failed state against the finding it actually belongs to.
   const [savingId, setSavingId] = useState(null)
   const [saveError, setSaveError] = useState(null)
+  const [savedMessage, setSavedMessage] = useState('')
+  const savedTimerRef = useRef(null)
+  useEffect(() => () => clearTimeout(savedTimerRef.current), [])
   // Findings the parent has optimistically removed from `queue` while their write is in flight. Kept
   // only until the write settles, so the review pane never blanks mid-decision.
   const heldRef = useRef(new Map())
@@ -789,6 +810,9 @@ export default function RemediationInbox({
     // `visible` is the list as it was when this handler was created, i.e. BEFORE the parent removed
     // the decided row — which is exactly the ordering the "next" finding should be taken from.
     const nextDecisions = { ...decisions, [f.id]: decision }
+    setSavedMessage(`${rowModel(f, decisions).issue} saved. Moving to the next finding.`)
+    clearTimeout(savedTimerRef.current)
+    savedTimerRef.current = setTimeout(() => setSavedMessage(''), 2400)
     focusReviewRef.current = true
     setSelectedId(nextUnresolvedId(visible, f.id, nextDecisions))
   }
@@ -817,6 +841,10 @@ export default function RemediationInbox({
       setSelectedId(failed[0].id)
       return
     }
+    setSavedMessage(`${targets.length} matching findings saved. Moving to the next finding.`)
+    clearTimeout(savedTimerRef.current)
+    savedTimerRef.current = setTimeout(() => setSavedMessage(''), 2400)
+    focusReviewRef.current = true
     setSelectedId(nextUnresolvedId(visible, f.id, nextDecisions))
   }
 
@@ -892,6 +920,7 @@ export default function RemediationInbox({
            style={{ position: 'absolute', width: 1, height: 1, padding: 0, margin: -1, overflow: 'hidden', clip: 'rect(0 0 0 0)', whiteSpace: 'nowrap', border: 0 }}>
         {announce}
       </div>
+      {savedMessage && <div className="remediation-saved" role="status" aria-live="polite">✓ {savedMessage}</div>}
       {/* Dark app header (mockup): the section title + the workflow-status tabs as the page's top
           chrome — one lens on where every finding sits in the pipeline (Inbox → In progress →
           Ready to validate → Blocked → Done), spanning the three panes below. */}
@@ -933,6 +962,24 @@ export default function RemediationInbox({
                     style={{ flex: '0 0 auto', fontSize: 11.5, padding: '5px 6px', borderRadius: 6, border: '1px solid var(--line,#e2dce4)' }}>
               {SORTS.map((s) => <option key={s} value={s}>{SORT_LABEL[s]}</option>)}
             </select>
+          </div>
+          <div className="remediation-filters" aria-label="Filter remediation inbox">
+            <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} aria-label="Filter by priority">
+              <option value="all">All priorities</option>
+              <option value="critical">Critical</option><option value="serious">Serious</option>
+              <option value="moderate">Moderate</option><option value="minor">Minor</option><option value="unrated">Unrated</option>
+            </select>
+            <select value={formatFilter} onChange={(e) => setFormatFilter(e.target.value)} aria-label="Filter by file format">
+              <option value="all">All formats</option><option value="docx">DOCX</option><option value="pdf">PDF</option>
+              <option value="pptx">PPTX</option><option value="xlsx">XLSX</option>
+            </select>
+            {(priorityFilter !== 'all' || formatFilter !== 'all') && (
+              <button className="linklike" onClick={() => { setPriorityFilter('all'); setFormatFilter('all') }}>Clear filters</button>
+            )}
+            <details className="remediation-shortcuts">
+              <summary>Keyboard help</summary>
+              <span>↑/↓ or J/K: move · Home/End: first/last · Enter: open selected item</span>
+            </details>
           </div>
           {/* "Assigned to me" filter + a context assign chip for the selected document. Mirrors the
               #417 backend (files_assigned_to); shown only for a signed-in reviewer with an assign
@@ -977,6 +1024,8 @@ export default function RemediationInbox({
                 ? <><b style={{ color: 'var(--ink)' }}>All review items are complete.</b><p style={{ margin: '6px 0 0' }}>{prog.resolved} resolved · {counts.completed || 0} completed</p></>
                 : search.trim()
                 ? <>No findings match “{displayText(search.trim())}”. <button className="linklike" onClick={() => setSearch('')}>Clear search</button></>
+                : priorityFilter !== 'all' || formatFilter !== 'all'
+                ? <>No findings match these filters. <button className="linklike" onClick={() => { setPriorityFilter('all'); setFormatFilter('all') }}>Clear filters</button></>
                 : assignedOnly
                 ? <>Nothing in this view is assigned to you. <button className="linklike" onClick={() => setAssignedOnly(false)}>Show all</button></>
                 : <>No items in {WORKFLOW_LABELS[tab]}. {tab !== 'needs-review' && <button className="linklike" onClick={() => setTab('needs-review')}>Review AI suggestions</button>}</>}
