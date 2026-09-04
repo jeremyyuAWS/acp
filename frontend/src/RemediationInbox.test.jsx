@@ -21,7 +21,7 @@ const QUEUE = [
 let container, root
 // The workspace layout + pane sizes persist in localStorage; clear it so each test starts from the
 // two-panel default rather than inheriting a previous test's choice.
-beforeEach(() => { try { localStorage.clear() } catch {} ;({ container, root } = createTestRoot()) })
+beforeEach(() => { try { localStorage.clear(); sessionStorage.clear() } catch {} ;({ container, root } = createTestRoot()) })
 
 // Interaction tests use a deterministic document sort so the queue order is stable;
 // the priority-default ordering (critical-first) is covered by remediationInboxModel.test.js.
@@ -485,6 +485,21 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(container.textContent).toContain('Not recorded')
     expect(container.textContent).toContain('Proposed')
     expect(container.textContent).toContain('A bar chart of Q3 revenue')
+    expect(btnByText('Copy current')).toBeTruthy()
+    expect(btnByText('Copy proposed')).toBeTruthy()
+  })
+
+  it('filters by priority and format, and remembers the choices for the scan', async () => {
+    await render({ scanId: 'scan-filter', queue: QUEUE, decisions: {} })
+    const priority = container.querySelector('[aria-label="Filter by priority"]')
+    const format = container.querySelector('[aria-label="Filter by file format"]')
+    const setSelect = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set
+    await act(async () => { setSelect.call(priority, 'critical'); priority.dispatchEvent(new Event('change', { bubbles: true })) })
+    expect([...container.querySelectorAll('.rinbox-row')].every((r) => r.textContent.includes('Image needs alt text'))).toBe(true)
+    await act(async () => { setSelect.call(format, 'docx'); format.dispatchEvent(new Event('change', { bubbles: true })) })
+    expect(sessionStorage.getItem('acp.remediate.filters.scan-filter.priority')).toBe('critical')
+    expect(sessionStorage.getItem('acp.remediate.filters.scan-filter.format')).toBe('docx')
+    expect(btnByText('Clear filters')).toBeTruthy()
   })
 
   it('shows the proposed document title without an empty field', async () => {
