@@ -4642,6 +4642,18 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
     raw["issues"] = [i for i in raw["issues"] if i["ruleId"] not in rb.disabled]
     raw["errors"] = [e for e in raw["errors"]
                      if (e.get("rule") if isinstance(e, dict) else None) not in rb.disabled]
+    # veraPDF Phase 0 corroboration (ADR 0028). Feature-flagged via ACP_VERAPDF_REST env var.
+    # Only runs for PDF files; annotates existing 1.3.1/2.4.2/3.1.1 findings in-place with
+    # per-content-item counts from veraPDF/ua1. Never raises; absent corroboration is not an error.
+    if ext == ".pdf":
+        try:
+            import verapdf_corroborate as _vcr
+            _pdf_path = tmp / name
+            if _pdf_path.exists():
+                _vcr_result = _vcr.corroborate_pdf(_pdf_path.read_bytes())
+                _vcr.annotate_issues(raw["issues"], _vcr_result)
+        except Exception:
+            swallowed("scanner.analyse_and_assess: veraPDF corroboration failed", scan_id)
     # Score over the IN-SCOPE findings, but keep every finding on the record. `Rubric.assess`
     # computes `100 - sum(penalty(severity))` over whatever it is handed and knows nothing about
     # scope, so scoring the full list gave a scoped scan unscoped scores — a document with no

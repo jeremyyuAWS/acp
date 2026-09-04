@@ -1,0 +1,31 @@
+{
+  "report": {
+    "buildInformation": {
+      "releaseDetails": [
+        {
+          "id": "verapdf-library",
+          "version": "1.30.2",
+          "buildDate": "2026-01-01T00:00:00Z"
+        }
+      ]
+    },
+    "jobs": [
+      {
+        "itemDetails": {
+          "name": "conformant-tagged.pdf",
+          "size": 12345
+        },
+        "validationResult": {
+          "details": {
+            "passedChecks": 52,
+            "failedChecks": 0
+          },
+          "statement": "PDF file meets all the requirements of the validation profile.",
+          "profileName": "PDF/UA-1 Validation Profile",
+          "compliant": true,
+          "ruleSummaries": []
+        }
+      }
+    ]
+  }
+}
