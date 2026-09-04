@@ -3026,6 +3026,20 @@ def _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _l
                 _emit_realtime_file_assess(scan_id, name, _assess_level(scan_id), user=user)
         except Exception:
             swallowed("_analyse_and_persist_one_impl: emitting the per-file assess event failed", scan_id)
+        # Assess-time pre-draft: run _propose_text_findings now so HITL review cards
+        # arrive pre-populated with AI image descriptions before any remediation job runs.
+        # Mirrors the remediation-time call in _remediate_file. Fresh downloads only —
+        # the dedup/reuse paths never write the file bytes to `tmp`.
+        if (not dedup
+                and fdict is not None
+                and fdict.get("status") not in ("error", "skipped", "unanalysable")
+                and _Path(name).suffix.lower() in (".docx", ".pptx", ".xlsx", ".pdf")
+                and core.store.get_ai_enabled()):
+            try:
+                _pre_bytes = (tmp / name).read_bytes()
+                _propose_text_findings(scan_id, name, _pre_bytes, True)
+            except Exception:
+                swallowed("_analyse_and_persist_one_impl: assess-time pre-draft failed", scan_id)
     finally:
         _shutil.rmtree(tmp, ignore_errors=True)
 
