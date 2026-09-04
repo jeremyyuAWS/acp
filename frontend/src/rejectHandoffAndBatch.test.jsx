@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
@@ -94,12 +94,14 @@ describe('W8 — apply a decision to every matching finding in the same cluster'
     expect(container.textContent).toContain('covers more than one document format')
     const optIn = container.querySelector('input[type=checkbox]')
     expect(optIn).toBeTruthy()
+    expect(optIn.disabled).toBe(true)
     expect(optIn.parentElement.textContent).toContain('Apply this decision to 2 matching WCAG 1.1.1 findings')
   })
 
   it('applies the decision to its cluster only — every format of that rule, and no other rule', async () => {
     const calls = []
     await render({ queue: QUEUE, decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })
+    await click(btnByText('Review matching items'))
     await click(container.querySelector('input[type=checkbox]'))
     await click(btnByText('Approve & next'))
     // ids 1,2,3 (every 1.1.1 in the actionable lane, both formats) approved. id4 is a different
@@ -114,5 +116,21 @@ describe('W8 — apply a decision to every matching finding in the same cluster'
     // 2.4.2 is selected first (document sort → d.docx before e.pdf); it has no 2.4.2 sibling.
     expect(detailHeading()).toBe('Document has no title')
     expect(container.textContent).not.toContain('share this issue')
+  })
+
+  it('requires a second confirmation before a decision reaches a large group', async () => {
+    const queue = Array.from({ length: 12 }, (_, i) => ({
+      id: i + 20, file: `doc-${i + 1}.docx`, title: 'DOCX · Image needs alt text',
+      rule_id: '1.1.1', hasProposal: true, after: `alt ${i + 1}`,
+    }))
+    const calls = []
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    await render({ queue, decisions: {}, onDecide: (f) => calls.push(f.id) })
+    await click(btnByText('Review matching items'))
+    await click(container.querySelector('input[type=checkbox]'))
+    await click(btnByText('Approve & next'))
+    expect(confirm).toHaveBeenCalledWith('Apply this decision to 12 findings across 12 documents?')
+    expect(calls).toEqual([])
+    confirm.mockRestore()
   })
 })

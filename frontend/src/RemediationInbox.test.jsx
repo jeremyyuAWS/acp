@@ -183,8 +183,11 @@ describe('RemediationInbox — workflow-status queue', () => {
     await render({ queue: q, decisions: {} })
     const batch = container.querySelector('input[type=checkbox]')
     expect(batch).toBeTruthy()
+    expect(batch.disabled).toBe(true)
     // ONE other actionable finding, not two — the manual one is not batchable.
     expect(batch.parentElement.textContent).toContain('Apply this decision to 1 matching WCAG 1.1.1 finding')
+    await click(btnByText('Review matching items'))
+    expect(batch.disabled).toBe(false)
     expect(container.textContent).toContain('manual, blocked and already-decided findings are excluded')
   })
 
@@ -205,6 +208,7 @@ describe('RemediationInbox — workflow-status queue', () => {
     // The second write is refused; the first succeeds.
     await render({ queue: q, decisions: {},
       onDecide: (f) => (f.id === 21 ? Promise.reject(new Error('conflict')) : Promise.resolve()) })
+    await click(btnByText('Review matching items'))
     await click(container.querySelector('input[type=checkbox]'))
     await click(btnByText('Approve & next'))
     const alert = container.querySelector('[role=alert]')
@@ -497,5 +501,17 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(container.textContent).toContain('Current')
     expect(container.textContent).toContain('Proposed')
     expect(container.textContent).not.toContain('Issue found')
+  })
+
+  it('distinguishes an empty queue from a filtered view with no matches', async () => {
+    await render({ queue: [], decisions: {} })
+    expect(container.textContent).toContain('All review items are complete')
+    await unmountAll(); ({ container, root } = createTestRoot())
+    await render({ queue: QUEUE, decisions: {} })
+    const input = container.querySelector('input[type=search]')
+    const setValue = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set
+    await act(async () => { setValue.call(input, 'definitely absent'); input.dispatchEvent(new Event('input', { bubbles: true })) })
+    expect(container.textContent).toContain('No findings match “definitely absent”')
+    expect(btnByText('Clear search')).toBeTruthy()
   })
 })

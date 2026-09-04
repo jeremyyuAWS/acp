@@ -99,6 +99,12 @@ describe('Guided pane — decision-first ordering + grounded evidence', () => {
     expect(container.textContent).toContain('Text color changed from #EEEEEE to #767676')
     expect(container.textContent).toContain('Contrast increased from 1.2:1 to 4.5:1')
     expect(container.textContent).toContain('No text or layout changed')
+    expect(container.querySelector('mark.remediation-change')?.textContent).toBe('767676')
+  })
+
+  it('uses criterion-specific impact guidance when the finding has no custom rationale', async () => {
+    await renderInbox({ queue: [CONTRAST_APPLY], decisions: {} })
+    expect(container.textContent).toContain('Sufficient contrast makes text easier to read')
   })
 })
 
