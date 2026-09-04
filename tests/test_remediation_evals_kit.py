@@ -359,6 +359,17 @@ def test_a_ladder_that_automates_nothing_reports_zero_coverage():
     assert "met by NOT automating" in md
 
 
+def test_the_spend_estimate_errs_high_because_the_other_direction_greenlights_overspend():
+    from evals.cost import ESTIMATE_TOKENS_IN, ESTIMATE_TOKENS_OUT, estimate_run_usd
+    assert ESTIMATE_TOKENS_IN > 760 and ESTIMATE_TOKENS_OUT > 200, \
+        "the estimate must sit above what the local runs measured, or the guard under-quotes"
+    p = PRICE_BOOK["anthropic-haiku-4-5"]
+    assert estimate_run_usd(p, 300) == pytest.approx(300 * p.usd(tokens_in=ESTIMATE_TOKENS_IN,
+                                                                tokens_out=ESTIMATE_TOKENS_OUT))
+    assert estimate_run_usd(PRICE_BOOK["free"], 10_000) == 0.0
+    assert estimate_run_usd(p, 0) == 0.0
+
+
 def test_required_cache_hit_rate_is_the_gap_not_a_guess():
     assert required_cache_hit_rate(1e-5) == 0.0
     assert required_cache_hit_rate(1e-4) == pytest.approx(0.9)
