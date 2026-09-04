@@ -34,6 +34,17 @@ describe('Admin live traffic graph', () => {
     expect(graph.nodes.find((node) => node.id === 's1:assess').data.run.current_file).toBe('Report.docx')
   })
 
+  it('visually and verbally separates active jobs from worker services', () => {
+    expect(source).toContain('>ACTIVE JOB</div>')
+    expect(source).toContain(">SERVICE</div>")
+    expect(source).toContain('color-mix(in srgb, ${cfg.color} 8%, var(--panel))')
+    expect(source).toContain('borderRadius: 6')
+    expect(source).toContain('SERVICE</b> · capacity')
+    expect(source).toContain('ACTIVE JOB</b> · document progress')
+    expect(source).toContain('DATA</b> · sources and outputs')
+    expect(source).toContain('aria-label="Map key"')
+  })
+
   it('uses crisp non-scaling paths at every zoom', () => {
     // #1329's subject, kept: a line's GEOMETRY should not blur or thicken as the map scales.
     //

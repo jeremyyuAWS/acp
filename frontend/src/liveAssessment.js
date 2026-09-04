@@ -49,7 +49,8 @@ function normalizeQueue(q) {
   return {
     inFlight, queued,
     workers: { busy: n(w.busy), max: typeof w.max === 'number' ? n(w.max) : null,
-               idle: typeof w.idle === 'number' ? n(w.idle) : null },
+               idle: typeof w.idle === 'number' ? n(w.idle) : null,
+               capacityScope: w.capacity_scope === 'per_replica' ? 'per_replica' : null },
     current: stale ? null : cur,
     processing: !!q.processing && !stale,
     stale,

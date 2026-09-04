@@ -190,9 +190,13 @@ function RunNode({ data }) {
   const cfg = STAGE[data.run.stage] || { label: data.run.stage, color: '#6B7280' }
   const pct = data.run.total ? Math.round((data.run.completed / data.run.total) * 100) : 0
   return <div title="Select for live run details; double-click to open charts"
-    style={{ width: 225, padding: 12, background: 'var(--panel)', border: `2px solid ${cfg.color}`,
-    borderRadius: 10, boxShadow: '0 3px 10px rgba(24,20,28,.10)' }}>
+    style={{ width: 225, padding: 12,
+      background: `color-mix(in srgb, ${cfg.color} 8%, var(--panel))`,
+      border: `2px solid ${cfg.color}`, borderRadius: 6,
+      boxShadow: `0 4px 12px color-mix(in srgb, ${cfg.color} 18%, transparent)` }}>
     <Handle type="target" position={Position.Left} />
+    <div style={{ color: cfg.color, fontSize: 9.5, fontWeight: 800, letterSpacing: '.09em',
+      marginBottom: 4 }}>ACTIVE JOB</div>
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
       <b>{cfg.label}</b><span style={{ color: cfg.color, fontWeight: 700 }}>{data.run.status === 'recent' ? 'Complete' : `${pct}%`}</span>
     </div>
@@ -290,6 +294,8 @@ function InfraNode({ data }) {
       ? data.inputPorts.map(({ id, top }) => <Handle key={id} id={id} type="target"
           position={Position.Left} style={{ top }} />)
       : data.hasInput !== false && <Handle type="target" position={Position.Left} />}
+    {data.kind === 'worker' && <div style={{ color, fontSize: 9.5, fontWeight: 800,
+      letterSpacing: '.09em', marginBottom: 4 }}>SERVICE</div>}
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 7, alignItems: 'start' }}>
       <b style={{ overflowWrap: 'anywhere' }}>{data.label}</b>
       <span style={{ color, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap' }}>{data.status}</span>
@@ -705,6 +711,14 @@ export default function AdminLiveTraffic() {
         onNodeDoubleClick={(_, node) => setSelectedKey(node.id)}
         onEdgeClick={(_, edge) => setSelectedKey(edge.data?.detail || edge.target)}>
         <Background gap={18} size={1} /><MiniMap pannable zoomable /><Controls showInteractive={false} />
+        <div aria-label="Map key" style={{ position: 'absolute', zIndex: 3, right: 12, top: 12,
+          display: 'flex', gap: 12, padding: '6px 9px', border: '1px solid var(--border)',
+          borderRadius: 7, background: 'var(--panel)', boxShadow: '0 2px 7px rgba(24,20,28,.07)',
+          color: 'var(--muted)', fontSize: 10.5 }}>
+          <span><b style={{ color: 'var(--ink)' }}>SERVICE</b> · capacity</span>
+          <span><b style={{ color: 'var(--ink)' }}>ACTIVE JOB</b> · document progress</span>
+          <span><b style={{ color: 'var(--ink)' }}>DATA</b> · sources and outputs</span>
+        </div>
         {!snapshot?.runs?.length && <div className="chip" style={{ position: 'absolute', zIndex: 3, left: 12, bottom: 12 }}>
           Idle · select any tile to inspect the ready processing path
         </div>}
