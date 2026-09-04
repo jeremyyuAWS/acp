@@ -1147,6 +1147,61 @@ def _count_inventory_classes(scan_id: str) -> dict:
 # (routes/disposition.list_conflicts) so both make the same call from one place.
 
 
+def _sp_scannable_metadata(it: dict) -> dict:
+    """The inventory columns a SCANNABLE SharePoint item's normalized metadata contributes.
+
+    scanner builds the full row itself for the non-scannable half (_sp_inventory_row); the
+    scannable half comes back as an analysis record and is reshaped here. Both must land the same
+    columns from the same normalized record, or one inventory ends up describing its media and
+    its documents in different vocabularies.
+
+    Reuses scanner._inv_row rather than re-deriving the mapping: a second copy of "which field of
+    the metadata record becomes which column" is the drift this repo keeps paying for.
+    """
+    meta = it.get("sp_metadata")
+    if not isinstance(meta, dict):
+        return {}
+    from scanner import _inv_row
+    row = _inv_row(file=it.get("name") or "", sp_meta=meta)
+    return {k: row.get(k) for k in ("content_type", "retention_label", "sensitivity_label",
+                                    "sharing_scope", "item_kind", "checked_out_by",
+                                    "sp_version", "modified_by", "sp_metadata")}
+
+
+def _sp_rule_inputs(row: dict) -> dict:
+    """The SharePoint-native half of a lifecycle rule's input document, from one inventory row.
+
+    Two kinds of thing come out of `sp_metadata`, and they are not the same kind:
+
+      * the tenant's own MANAGED COLUMNS, which a `managed:<Column>` condition reads;
+      * the per-field AVAILABILITY and its reasons, which no condition reads — they exist so the
+        rule's EVIDENCE can say "'retention_label' was not read from SharePoint" instead of
+        "'retention_label' not recorded". A rule matches nothing either way; only the human
+        reading why can act on the difference, and only if it reaches them.
+
+    Never raises on a malformed blob: `sp_metadata` is JSON written by an older build or a
+    partially-rolled-forward replica, and a lifecycle evaluation that died on it would take the
+    whole Discover run with it for a field nothing had to have.
+    """
+    import json as _json
+    out = {k: row.get(k) for k in ("content_type", "retention_label", "sensitivity_label",
+                                   "sharing_scope", "item_kind", "checked_out_by",
+                                   "site_name", "library_name")}
+    raw = row.get("sp_metadata")
+    if not raw:
+        return out
+    try:
+        blob = _json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:  # noqa: BLE001 — a rule input must never fail a scan
+        return out
+    if not isinstance(blob, dict):
+        return out
+    out["managed_columns"] = blob.get("managed_columns") or {}
+    out["sp_availability"] = blob.get("availability") or {}
+    out["sp_reasons"] = blob.get("reasons") or {}
+    return out
+
+
 def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | None,
                                        progress_cb=None, tick_every: int = 10) -> dict:
     """Evaluate enabled disposition policies against the freshly persisted inventory and record
@@ -1270,6 +1325,10 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
                 # `size_kb`) read a key this dict never set. Both are already on the inventory row.
                 "doc_class": r.get("doc_class"),
                 "size_kb": r.get("size_kb"),
+                # SharePoint-native rule inputs (Phase 2). Same wiring lesson as doc_class and
+                # size_kb above: a field in disposition.FIELDS that this dict never sets is a
+                # rule that validates, saves, and then silently matches nothing forever.
+                **_sp_rule_inputs(r),
             }
             matched = []
             evaluated = []
@@ -2310,6 +2369,13 @@ def _scan_discover(payload: dict, job: dict) -> None:
                  # row: a run now spans a SET of sites, so the scan's scope can no longer answer
                  # "which site is this file in" for any individual document.
                  "site_id": it.get("siteId"), "library_name": it.get("libraryName"),
+                 "site_name": it.get("siteName"),
+                 # The SharePoint-native metadata for the ANALYSED half of the estate. The
+                 # non-scannable half already carries it (scanner._sp_inventory_row builds the
+                 # row itself); without this the two halves of one inventory would disagree —
+                 # a retention label on every video and none on any document, which reads as a
+                 # tenant that labels media and is in fact a wiring gap.
+                 **_sp_scannable_metadata(it),
                  "drive_account_id": it.get("drive_account_id"),
                  "source_modified": it.get("source_modified"),
                  "source_mime": it.get("source_mime"), "created_at": it.get("created_at"),
@@ -2328,6 +2394,10 @@ def _scan_discover(payload: dict, job: dict) -> None:
                     "owner": it.get("owner"), "parent_folder": it.get("parent_folder"),
                     "drive_id": it.get("drive_id"),
                     "site_id": it.get("site_id"), "library_name": it.get("library_name"),
+                    "site_name": it.get("site_name"),
+                    **{k: it.get(k) for k in ("retention_label", "sensitivity_label",
+                                              "sharing_scope", "item_kind", "checked_out_by",
+                                              "sp_version", "modified_by", "sp_metadata")},
                     "drive_account_id": it.get("drive_account_id"),
                     "content_type": it.get("content_type")}
                    for it in norm] + inventory

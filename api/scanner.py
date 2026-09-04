@@ -12,6 +12,7 @@ from pathlib import Path
 import lf as _lf_mod
 import provenance
 import estate_inventory
+import sp_metadata
 # Module level is safe in this direction and only this direction: worker imports nothing from
 # this package but joblog, so scanner -> worker is not a cycle (handlers -> worker and
 # handlers -> scanner are the edges that exist). _cancel_checkpoint() still imports check_cancel
@@ -163,7 +164,8 @@ def _estate_doc_class(name: str, mime: str | None) -> str:
 
 def _inv_row(*, file: str, drive_file_id=None, mime=None, size=None, checksum=None, path=None,
              created_at=None, source_modified=None, owner=None, parent_folder=None,
-             drive_id=None, site_id=None, library_name=None) -> dict:
+             drive_id=None, site_id=None, library_name=None, site_name=None,
+             sp_meta=None) -> dict:
     """One store.add_inventory row, with size normalised to KiB and doc_class derived.
 
     `drive_id` is the Graph DRIVE a SharePoint/OneDrive item was listed from. It is part of the
@@ -177,12 +179,52 @@ def _inv_row(*, file: str, drive_file_id=None, mime=None, size=None, checksum=No
     to a reader and does not say which site it belongs to, and because every later phase (per-site
     metadata, per-library deltas, per-site exception reports, write-back targeting) needs the
     boundary this preserves. None for OneDrive, which has no site, and for every other source.
+
+    `sp_meta` is the normalized SharePoint-native metadata record (api/sp_metadata.normalize).
+    The fields a lifecycle rule keys on are promoted to their own columns so a rule preview can
+    SELECT them; the rest — the tenant's own managed columns, and the per-field availability —
+    ride in one JSON column, because ACP cannot know in advance what a tenant calls its columns
+    and a schema that tried to would need a migration per customer.
+
+    THE AVAILABILITY MAP IS PERSISTED, not just the values. An empty `retention_label` cell in an
+    export is uninterpretable without it: the reader cannot tell an estate with no retention plan
+    from one whose labels ACP was refused. That distinction is the Phase 2 exit gate, and it only
+    survives to the auditor if it is written down at the row.
     """
+    import json as _json
+    _f = (sp_meta or {}).get("fields") or {}
+
+    def _v(name):
+        """The value, but only when the field is actually PRESENT — a `not_configured` or
+        `unavailable` field must write NULL, never a placeholder that reads as a real answer."""
+        f = _f.get(name) or {}
+        return f.get("value") if f.get("state") == "present" else None
+
+    _extra = {}
+    if sp_meta:
+        managed = _v("managed_columns")
+        _extra = {"availability": {k: (f or {}).get("state") for k, f in _f.items()},
+                  "managed_columns": managed or {},
+                  # The reasons, kept only where there IS one: an export cell that says "not
+                  # read because the tenant refused the listItem expansion" is actionable in a
+                  # way that a blank is not.
+                  "reasons": {k: (f or {}).get("reason") for k, f in _f.items()
+                              if (f or {}).get("reason")}}
     return {"file": file, "drive_file_id": drive_file_id, "mime": mime or None,
             "size_kb": _inv_size_kb(size), "doc_class": _estate_doc_class(file, mime),
             "checksum": checksum, "path": path, "created_at": created_at,
             "source_modified": source_modified, "owner": owner, "parent_folder": parent_folder,
-            "drive_id": drive_id, "site_id": site_id, "library_name": library_name}
+            "drive_id": drive_id, "site_id": site_id, "library_name": library_name,
+            "site_name": site_name,
+            "content_type": _v("content_type"),
+            "retention_label": _v("retention_label"),
+            "sensitivity_label": _v("sensitivity_label"),
+            "sharing_scope": _v("sharing_scope"),
+            "item_kind": _v("item_kind"),
+            "checked_out_by": _v("checked_out_by"),
+            "sp_version": _v("version"),
+            "modified_by": _v("modified_by"),
+            "sp_metadata": _json.dumps(_extra, separators=(",", ":")) if _extra else None}
 
 
 def _drive_inventory_row(f: dict) -> dict:
@@ -196,7 +238,8 @@ def _drive_inventory_row(f: dict) -> dict:
 
 
 def _sp_inventory_row(item: dict, *, site_id: str | None = None,
-                      library_name: str | None = None) -> dict:
+                      library_name: str | None = None, site_name: str | None = None,
+                      meta: dict | None = None) -> dict:
     """Inventory row from a raw MS Graph driveItem (any type).
 
     `site_id`/`library_name` come from the WALK, not from the item: a driveItem names its drive
@@ -220,7 +263,8 @@ def _sp_inventory_row(item: dict, *, site_id: str | None = None,
                     # The drive half of the item's identity. Absent on a OneDrive listing, which
                     # has no driveId to give — read downstream as /me/drive, which is right there.
                     drive_id=(item.get("parentReference") or {}).get("driveId"),
-                    site_id=site_id, library_name=library_name)
+                    site_id=site_id, library_name=library_name, site_name=site_name,
+                    sp_meta=meta)
 
 
 def _local_stat_meta(p: Path, corpus: Path) -> dict:
@@ -1232,6 +1276,55 @@ GRAPH = "https://graph.microsoft.com/v1.0"
 # `shared`) lights up. It is a list-level facet, so this costs no extra call.
 _SP_ITEM_SELECT = "id,name,file,parentReference,size,createdDateTime,lastModifiedDateTime,createdBy,lastModifiedBy,shared"
 
+# The driveItem properties Phase 2 wants that are NOT in the base select above, and that a tenant
+# or a Graph version can refuse. Kept separate rather than appended, because `$select` is
+# all-or-nothing: one unrecognised property 400s the entire page, and the page is the listing.
+# The walk asks for these first and falls back (see _sp_children_url), so the worst case is
+# metadata this scan does not carry — never a listing it does not return.
+_SP_ITEM_SELECT_RICH = _SP_ITEM_SELECT + ",retentionLabel"
+
+# The managed columns, the content type, the version and the check-out state all live on the
+# item's backing LIST item, not on the driveItem. Expanded inline with the page so a library of
+# 6,000 documents costs the same number of round trips it costs today — the alternative, and what
+# the pre-Phase-2 content-type read actually did, is one extra Graph call per document.
+_SP_LIST_EXPAND = "&$expand=listItem($expand=fields)"
+
+
+def _sp_children_url(root: str, seg: str, tier: int) -> str:
+    """The `/children` request for one folder page, at one fallback tier.
+
+    THREE TIERS, tried in order, because the two risky asks fail independently and collapsing
+    them would throw away a working one:
+
+      0  rich select + list-item expansion — everything Phase 2 reads
+      1  base select + list-item expansion — a tenant that refuses `retentionLabel` but keeps
+         its managed columns, which is the ordinary case for a tenant with no retention plan
+      2  base select alone — exactly the request that shipped before Phase 2
+
+    Tier 2 is the floor and it is the pre-existing behaviour, which is the property that matters:
+    a metadata feature nobody could test against a live tenant must not be able to break scanning
+    itself. The old code bought that safety by never touching the listing call at all and paying
+    one Graph call per document for a single field; this buys it with a retry, and gets the whole
+    column bag for free when the tenant allows it.
+    """
+    if tier <= 0:
+        return f"{root}/{seg}/children?$select={_SP_ITEM_SELECT_RICH},folder&$top=200{_SP_LIST_EXPAND}"
+    if tier == 1:
+        return f"{root}/{seg}/children?$select={_SP_ITEM_SELECT},folder&$top=200{_SP_LIST_EXPAND}"
+    return f"{root}/{seg}/children?$select={_SP_ITEM_SELECT},folder&$top=200"
+
+
+#: Why a field sourced from a tier this walk could not reach is unavailable. Phrased for the
+#: operator reading an export cell, not for the developer reading the traceback: it names the ask
+#: that was refused, so "no retention labels" and "we never got to ask" stay distinguishable.
+_SP_TIER_REASON = {
+    1: "Microsoft Graph refused the wider driveItem $select on this drive, so retention labels "
+       "were not read (the listing itself is unaffected)",
+    2: "Microsoft Graph refused the listItem expansion on this drive, so content types, managed "
+       "columns, versions and check-out state were not read (the listing itself is unaffected)",
+    3: "the listItem expansion is disabled for this deployment (ACP_SP_LIST_FIELDS=0)",
+}
+
 
 def _sp_get(token: str, url: str, timeout: int = 30):
     """One Graph GET, with the permission failure translated into something actionable.
@@ -1369,6 +1462,12 @@ def _sp_enrich_content_types(token: str, files: list[dict]) -> None:
     those would be real cost spent on files nobody classifies. The scannable set is already the
     set Assess is about to download, so the added cost is proportional to work already committed.
 
+    A FALLBACK NOW, not the ordinary path. The walk reads the content type off the listing page
+    it already fetches (see _sp_children_url's tiers), so this only runs for the items that came
+    back without one — a tenant that refuses the listItem expansion, a personal OneDrive with no
+    backing list, or a replayed delta row. An item that already has one is skipped, which is what
+    keeps Phase 2 from being one extra Graph call per document on top of everything else.
+
     THREE-STRIKE CIRCUIT BREAKER, scoped to this one call. If a tenant does not support this shape
     at all — wrong Graph API version, a permission gap, a personal OneDrive with no backing list —
     every attempt fails the same way, and burning one call per remaining file for a guaranteed
@@ -1382,6 +1481,13 @@ def _sp_enrich_content_types(token: str, files: list[dict]) -> None:
     for rec in files:
         if failures >= 3:
             break
+        # ALREADY READ ON THE WALK — skip. This is the whole cost argument for Phase 2: the
+        # listing page now carries the content type (sp_metadata reads the expanded listItem), so
+        # the per-document call this function exists to make is a FALLBACK for the tenants that
+        # refuse the expansion, not the ordinary path. Without this line the new read would be
+        # pure addition: one Graph call per scannable document, for a value already in hand.
+        if rec.get("content_type"):
+            continue
         item_id = rec.get("id")
         if not item_id:
             continue
@@ -1423,18 +1529,39 @@ def _sp_walk_folder(token: str, drive_id: str, item_id: str, max_files: int,
     seen: set[str] = set()
     raw: list[dict] = []
     truncated = False
+    # The fallback tier this DRIVE settled on (see _sp_children_url). Held across the whole walk,
+    # not per folder: a drive that refuses the expansion refuses it everywhere, and re-attempting
+    # the wider ask on every folder of a deep library would spend a failed round trip per folder
+    # to learn the same thing. Tier 3 is the operator's own opt-out and is never retried upward.
+    tier = 0 if sp_metadata.expand_enabled() else 3
     while queue:
         cur = queue.pop(0)
         if cur in seen:
             continue                          # a shortcut/cycle must not walk forever
         seen.add(cur)
         seg = "root" if cur in (None, "", "root") else f"items/{cur}"
-        url = f"{root}/{seg}/children?$select={_SP_ITEM_SELECT},folder&$top=200"
+        url = _sp_children_url(root, seg, tier)
         while url:
             if len(raw) >= max_files:
                 truncated = True
                 break
-            data = _sp_get(token, url)
+            # ONE STEP DOWN PER FAILURE, and the listing is never the thing that is lost. A
+            # PermissionError is re-raised rather than demoted: that is a missing scope on the
+            # drive itself, which the caller must see (site-level isolation reads it, Phase 1),
+            # and stepping down would turn a 403 into a silently metadata-less success.
+            while True:
+                try:
+                    data = _sp_get(token, url)
+                    break
+                except PermissionError:
+                    raise
+                except Exception:             # noqa: BLE001 — a refused ASK, not a refused drive
+                    if tier >= 2:
+                        raise                 # the base request failed: that is a real failure
+                    tier += 1
+                    print(f"[scan] SharePoint drive {drive_id or 'me'}: {_SP_TIER_REASON[tier]}",
+                          flush=True)
+                    url = _sp_children_url(root, seg, tier)
             for it in data.get("value", []):
                 if it.get("folder") is not None:
                     # Excluded subtree — pruned at enqueue, same rule as the Drive walker.
@@ -1448,6 +1575,24 @@ def _sp_walk_folder(token: str, drive_id: str, item_id: str, max_files: int,
                     queue.append(it.get("id"))
                     continue
                 it["_acp_drive_id"] = drive_id
+                # The listItem CONTAINER's read outcome, stamped per item rather than inferred
+                # later from whether a lookup came back empty — that inference is precisely the
+                # bug sp_metadata exists to prevent, because it cannot tell a column the tenant
+                # never set from a container nobody ever fetched.
+                #
+                # Note the three-way split: expansion refused for the drive (tier), expansion
+                # granted but THIS item has no backing list item (a personal OneDrive file — the
+                # key is absent from the payload), and a real list item.
+                if tier >= 2:
+                    it["_acp_list_item_error"] = _SP_TIER_REASON[tier]
+                elif "listItem" in it:
+                    it["_acp_list_item"] = it.get("listItem") or {}
+                else:
+                    it["_acp_list_item_error"] = (
+                        "this drive has no backing SharePoint list, so it carries no content "
+                        "type, managed columns or version (a personal OneDrive)")
+                if tier >= 1:
+                    it["_acp_rich_error"] = _SP_TIER_REASON[1]
                 raw.append(it)
             url = data.get("@odata.nextLink")
         if truncated:
@@ -1532,8 +1677,36 @@ def _sp_skip_folders(exclude_remediated: bool) -> set[str]:
     return skip_folders
 
 
+def _sp_item_metadata(item: dict, *, site_id: str | None, site_name: str | None,
+                      library_name: str | None) -> dict:
+    """One item's SharePoint-native metadata, with the CONTAINERS built from what the walk
+    recorded rather than inferred from whether a lookup came back empty.
+
+    That inference is the whole bug sp_metadata exists to prevent: `fields.get("ContentType")`
+    returning None cannot tell a library with no content types from an expansion Graph refused,
+    and the two call for opposite responses. `_sp_walk_folder` stamps which happened; this reads
+    the stamp.
+
+    An item with NEITHER stamp was not produced by that walk — sp_reconstructed_listing replays
+    rows from a prior scan's inventory, which stores the metadata but not the raw Graph payload.
+    Its container is missing, with that as the reason, so a delta-reconstructed row says "not
+    re-read this run" instead of claiming the tenant configures nothing.
+    """
+    if "_acp_list_item" in item:
+        li = sp_metadata.Container(item["_acp_list_item"])
+    else:
+        li = sp_metadata.Container.missing(
+            item.get("_acp_list_item_error")
+            or "replayed from a prior scan's inventory — the list item was not re-read this run")
+    rich = (sp_metadata.Container.missing(item["_acp_rich_error"]) if "_acp_rich_error" in item
+            else sp_metadata.Container(item))
+    return sp_metadata.normalize(item, list_item=li, rich=rich, site_id=site_id,
+                                 site_name=site_name, library_name=library_name)
+
+
 def _sp_classify_item(item: dict, *, drive_id: str | None, skip_folders: set[str],
                       exts: set[str], site_id: str | None = None,
+                      site_name: str | None = None,
                       library_name: str | None = None) -> dict | None:
     """Classify ONE Graph driveItem KNOWN to be a file (the caller has already checked
     "file" in item and deduped it by (drive_id, id)) — skip-folder + OS-metadata exclusion,
@@ -1544,9 +1717,15 @@ def _sp_classify_item(item: dict, *, drive_id: str | None, skip_folders: set[str
     one. Returns None for an item neither listing should count (in a skip-folder, or OS
     metadata like .DS_Store/Thumbs.db).
 
-    `site_id`/`library_name` are the walk's knowledge of WHERE this item was found, stamped onto
-    both output shapes. They default to None so sp_reconstructed_listing — which replays items
-    from a prior inventory and has no walk to ask — classifies exactly as it always did.
+    `site_id`/`site_name`/`library_name` are the walk's knowledge of WHERE this item was found,
+    stamped onto both output shapes. They default to None so sp_reconstructed_listing — which
+    replays items from a prior inventory and has no walk to ask — classifies exactly as it did.
+
+    Both shapes also carry `sp_metadata`: the SharePoint-native metadata record (content type,
+    managed columns, retention label, version, check-out state, page-vs-document) WITH per-field
+    availability. Built for the non-scannable half too, deliberately — an estate report that can
+    say which retention label covers a video is worth as much to a records manager as one about
+    a Word document, and the metadata costs nothing extra there (it rides the same page).
 
     Return shape: {"est_row": ..., "scannable": {...} or None, "inventory_row": {...} or None}
     — est_row is built for every kept file (scannable or not), the SharePoint analogue of
@@ -1574,6 +1753,8 @@ def _sp_classify_item(item: dict, *, drive_id: str | None, skip_folders: set[str
     lb = (item.get("lastModifiedBy") or {}).get("user") or {}
     owner = (cb.get("displayName") or cb.get("email")
              or lb.get("displayName") or lb.get("email"))
+    meta = _sp_item_metadata(item, site_id=site_id, site_name=site_name,
+                             library_name=library_name)
     est_row = {"id": item.get("id"), "name": name,
               "mimeType": (item.get("file") or {}).get("mimeType"),
               "owners": ([{"displayName": owner}] if owner else []),
@@ -1611,15 +1792,27 @@ def _sp_classify_item(item: dict, *, drive_id: str | None, skip_folders: set[str
             scannable["siteId"] = site_id
         if library_name:
             scannable["libraryName"] = library_name
+        if site_name:
+            scannable["siteName"] = site_name
+        scannable["sp_metadata"] = meta
         # A Content Type carried forward from a prior scan's inventory
         # (_sp_file_from_inventory_row). Live Graph items never carry this key, so a fresh
         # listing classifies byte-identically to before — the property this function's
         # docstring is built on — and _sp_enrich_content_types, which only ever runs on a live
         # listing, is the sole writer of the same field there.
-        if item.get("_acp_content_type"):
+        #
+        # The LIVE content type now arrives on the walk itself (sp_metadata reads the expanded
+        # listItem), so this replay path and the walk both populate the same field from their own
+        # honest source, and the per-item enrichment call below is only the fallback.
+        ct_now = (meta["fields"]["content_type"]["value"]
+                  if meta["fields"]["content_type"]["state"] == sp_metadata.PRESENT else None)
+        if ct_now:
+            scannable["content_type"] = ct_now
+        elif item.get("_acp_content_type"):
             scannable["content_type"] = item["_acp_content_type"]
     else:
-        inventory_row = _sp_inventory_row(item, site_id=site_id, library_name=library_name)
+        inventory_row = _sp_inventory_row(item, site_id=site_id, library_name=library_name,
+                                          site_name=site_name, meta=meta)
     return {"est_row": est_row, "scannable": scannable, "inventory_row": inventory_row}
 
 
@@ -1760,7 +1953,8 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
     # the default and it is not silent — the scan logs which mode produced the inventory, so a
     # count can always be attributed to the method that produced it.
     use_search = os.environ.get("ACP_SP_ENUMERATE", "walk").strip().lower() == "search"
-    # A TARGET is one document library's worth of work: (drive_id, batches, site_id, library_name).
+    # A TARGET is one document library's worth of work:
+    # (drive_id, batches, site_id, site_name, library_name).
     # The last two are the WALK's knowledge of where these items were found — a Graph driveItem
     # names its drive and nothing else, so an item that travelled alone could never be attributed
     # to the site an operator selected. Carried here rather than looked up later because a scan
@@ -1814,7 +2008,7 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                                           inventory_out=None, exclude_ids=exclude_ids,
                                           skip_names=skip_folders)
             hit_cap = hit_cap or cut
-            targets.append((drive_id, iter([walked]), None, None))
+            targets.append((drive_id, iter([walked]), None, None, None))
     elif site_ids:
         if _over_cap:
             # Sites the cap refused. Named in the log rather than counted, because "which site did
@@ -1867,12 +2061,19 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                 _tick()
                 continue
             rep["status"] = "scanning"
+            # Resolved HERE, once per site, and reused by _list rather than looked up a second
+            # time. The name is not decoration any more: sp_metadata records it as a field on
+            # every document, so a report can say "Finance" where it used to say
+            # "contoso.sharepoint.com,<guid>,<guid>" — and a per-DOCUMENT lookup for that would
+            # be one Graph call per file. Best-effort, like _sp_site_name always was: a tenant
+            # can let a token read a site's drives while refusing its metadata.
+            rep["name"] = _sp_site_name(token, s_id)
             rep["libraries"] = [{"id": d["id"], "name": d.get("name")} for d in drives]
             for d in drives:
                 if use_search:
                     targets.append((d["id"], _pages(f"{GRAPH}/drives/{d['id']}/root/search(q='')"
                                                     f"?$select={_SP_ITEM_SELECT}&$top=200"),
-                                    s_id, d.get("name")))
+                                    s_id, rep["name"], d.get("name")))
                     continue
                 if budget <= 0:
                     rep["status"] = "partial"   # libraries left unlisted → the estate is a floor
@@ -1892,7 +2093,7 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                 if cut:
                     rep["status"] = "partial"
                 budget -= len(walked)
-                targets.append((d["id"], iter([walked]), s_id, d.get("name")))
+                targets.append((d["id"], iter([walked]), s_id, rep["name"], d.get("name")))
             if rep["status"] == "scanning":
                 rep["status"] = "complete"
             _tick()
@@ -1900,7 +2101,7 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
         print("[scan] OneDrive listed via the SEARCH INDEX (ACP_SP_ENUMERATE=search) — "
               "recent changes may be missing", flush=True)
         targets = [(None, _pages(f"{GRAPH}/me/drive/root/search(q='')"
-                                 f"?$select={_SP_ITEM_SELECT}&$top=200"), None, None)]
+                                 f"?$select={_SP_ITEM_SELECT}&$top=200"), None, None, None)]
     else:
         # `/me/drive` as the BASE, and `drive_id` stays None on purpose. Resolving the real id
         # would be an extra round trip and would change what is stored on every item; the download
@@ -1910,9 +2111,9 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                                       inventory_out=None, exclude_ids=exclude_ids,
                                       base=f"{GRAPH}/me/drive", skip_names=skip_folders)
         hit_cap = hit_cap or cut
-        targets = [(None, iter([walked]), None, None)]
+        targets = [(None, iter([walked]), None, None, None)]
 
-    for i, (drive_id, pages, target_site, library_name) in enumerate(targets):
+    for i, (drive_id, pages, target_site, target_site_name, library_name) in enumerate(targets):
         for batch in pages:
             if len(files) >= max_files:
                 break
@@ -1928,7 +2129,9 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                     seen.add(key)
                 classified = _sp_classify_item(item, drive_id=drive_id,
                                                skip_folders=skip_folders, exts=exts,
-                                               site_id=target_site, library_name=library_name)
+                                               site_id=target_site,
+                                               site_name=target_site_name,
+                                               library_name=library_name)
                 if classified is None:
                     continue
                 est_files.append(classified["est_row"])
@@ -2630,7 +2833,15 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
             # One name lookup per selected site, reused for `site_name` below rather than paid
             # for twice. Bounded by the site cap, so this is at most _sp_max_sites() metadata
             # reads however many sites the tenant has.
-            site_names = {s_id: _sp_site_name(sp_token, s_id) for s_id in sp_sites}
+            # Names _sp_list already resolved during the walk (it needs them per document now,
+            # for sp_metadata's site_name field), looked up again ONLY for the sites it never
+            # reached — a site the cap refused has no walk to have named it. Recomputing all of
+            # them would be a second Graph call per site for an answer already in hand.
+            _recorded = {r.get("id"): r.get("name") for r in (scope_out.get("sites") or [])
+                         if isinstance(r, dict)}
+            site_names = {s_id: (_recorded.get(s_id) if _recorded.get(s_id) is not None
+                                 else _sp_site_name(sp_token, s_id))
+                          for s_id in sp_sites}
             scope_out.update({"kind": "sharepoint", "site": site, "kept": len(result),
                               "site_name": site_names.get(site) if site else None,
                               # `or sp_dropped_sites` because the cap is applied HERE, before

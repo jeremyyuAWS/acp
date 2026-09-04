@@ -1675,6 +1675,38 @@ def lifecycle_file_detail(sid: str, document_id: str, request: Request):
             "data_version": core.store.lifecycle_data_version(sid)}
 
 
+def _sp_export_cells(raw) -> dict:
+    """The three export cells that come out of the `sp_metadata` JSON rather than a column.
+
+    `managed_columns` flattens the tenant's own columns to "Name=Value; Name=Value" — a sheet
+    cell an information architect can read, rather than JSON they have to parse to check one
+    value. `sp_availability` names only the fields that are NOT present, because listing thirty
+    "present" states per row would bury the two that matter under noise; a field absent from this
+    cell was read and had a value. `sp_unread_reason` carries the explanations.
+
+    Never raises: this blob is written by a scan and read by an export, and a malformed one from
+    a partially-rolled-forward replica must cost that row its metadata cells, not the whole
+    auditor's export.
+    """
+    if not raw:
+        return {}
+    try:
+        blob = _json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:  # noqa: BLE001
+        return {}
+    if not isinstance(blob, dict):
+        return {}
+    managed = blob.get("managed_columns") or {}
+    availability = blob.get("availability") or {}
+    reasons = blob.get("reasons") or {}
+    return {
+        "managed_columns": "; ".join(f"{k}={v}" for k, v in managed.items()) or None,
+        "sp_availability": "; ".join(f"{k}={v}" for k, v in availability.items()
+                                     if v and v != "present") or None,
+        "sp_unread_reason": "; ".join(f"{k}: {v}" for k, v in reasons.items()) or None,
+    }
+
+
 @router.get("/scans/{sid}/inventory.csv")
 def scan_inventory_csv(sid: str, request: Request):
     """The whole per-file estate inventory as CSV (owner-scoped) — every discovered file, source
@@ -1690,10 +1722,24 @@ def scan_inventory_csv(sid: str, request: Request):
     # THAT a file was tagged (lifecycle_status) but not WHICH rule tagged it, WHY, or whether a
     # human overrode the recommendation (lifecycle rules #8). Added alongside lifecycle_status,
     # not in place of it.
+    # SharePoint-native columns (Phase 2) sit beside the lifecycle ones because they are what an
+    # auditor checks a lifecycle decision AGAINST: "archived under the Superseded content type"
+    # is checkable from this sheet, "archived because a rule said so" is not.
+    #
+    # `sp_availability` is the column that makes the rest readable. Every other SharePoint cell
+    # can be empty for two opposite reasons — the tenant sets nothing, or ACP was refused — and
+    # an export that cannot tell them apart invites the wrong conclusion in the more damaging
+    # direction: an estate whose sensitivity labels nobody ever requested reads as an estate with
+    # no sensitivity labels. This column carries the per-field state, and `sp_unread_reason` the
+    # explanation where there is one.
     cols = ["file", "owner", "size_kb", "mime", "format", "status", "doc_class",
             "lifecycle_status", "lifecycle_rule_id", "lifecycle_reason",
             "policy_version", "evaluation_result", "evidence_json",
             "lifecycle_override_reason", "lifecycle_overridden_by", "lifecycle_overridden_at",
+            "site_name", "library_name", "content_type", "retention_label",
+            "sensitivity_label", "sharing_scope", "item_kind", "checked_out_by",
+            "sp_version", "modified_by", "managed_columns",
+            "sp_availability", "sp_unread_reason",
             "path", "parent_folder", "created_at", "source_modified",
             "discovered_at", "drive_file_id"]
     buf = io.StringIO()
@@ -1713,6 +1759,7 @@ def scan_inventory_csv(sid: str, request: Request):
             e["policy_version"] = winning.get("policy_version")
             e["evaluation_result"] = winning.get("result")
             e["evidence_json"] = _json.dumps(winning.get("evidence") or {}, separators=(",", ":"))
+        e.update(_sp_export_cells(r.get("sp_metadata")))
         w.writerow([e.get(c, "") if e.get(c) is not None else "" for c in cols])
     return Response(buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="inventory-{sid}.csv"'})
