@@ -1229,8 +1229,8 @@ def _admin_activity_snapshot() -> dict:
 
 @router.get("/admin/activity")
 def admin_activity(request: Request, response: Response):
-    """Payload-sanitized cross-user processing topology for platform administrators."""
-    _require_admin(request)
+    """Payload-sanitized cross-user processing topology for signed-in workspace users."""
+    _require_user(request)
     response.headers["Cache-Control"] = "no-store"
     return _admin_activity_snapshot()
 
@@ -1240,7 +1240,7 @@ async def admin_activity_stream(request: Request):
     """Authenticated SSE snapshots for the live multi-user traffic map."""
     import asyncio
 
-    _require_admin(request)
+    _require_user(request)
 
     async def _gen():
         last = None
