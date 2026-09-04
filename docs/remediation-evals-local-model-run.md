@@ -9,6 +9,9 @@ and predates the coverage field described below, which the renderer derives from
 gate, and the routing ladder sent 50% of the corpus to a human and the other 50% to rule code —
 **0% of cases went to a model**.
 
+A second run added **constrained decoding** as the control for the format failures below. It
+fixed the format completely and changed no gate: [jump to it](#constrained-decoding--the-control-run).
+
 ---
 
 ## Setup
@@ -89,6 +92,49 @@ it fires the 1.3.1 table-header playbook on a *pseudo-heading* case and writes `
 outside that case's scope. A rule tier keyed on criterion without root cause writes the wrong
 element.
 
+## Constrained decoding — the control run
+
+62 of 100 `llama3.2:1b` responses carried no usable JSON. Scoring that as a capability failure
+would be a mistake, so the obvious control was run: the same prompt, byte-identical, with the
+envelope sent as Ollama's `format` so the decoder cannot emit anything else
+(`ollama:<model>+schema`). One changed request field; everything else held.
+
+Report: [`evals/reports/2026-09-04-local-models-constrained.json`](../evals/reports/2026-09-04-local-models-constrained.json).
+All four variants ran in one pass, so the comparison is internal.
+
+| candidate | VARR | fix rate | critical | rollback | abstention | unusable | detect F1 | diagnosis | Brier | planning | c/call |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| `qwen2.5:0.5b` | 0% | 20% | 48 | 100% | 61% | 12 | 0.11 | 1% | 0.415 | 41% | 0.01772 |
+| `qwen2.5:0.5b+schema` | 0% | 25% | **86** | 100% | 76% | **0** | **0.03** | 17% | **0.696** | 48% | 0.01422 |
+| `llama3.2:1b` | 0% | 7% | 9 | 95% | 18% | 62 | 0.21 | 5% | 0.184 | 18% | 0.03034 |
+| `llama3.2:1b+schema` | 0% | 22% | **6** | **87%** | **67%** | **0** | **0.55** | 19% | **0.018** | **85%** | 0.01765 |
+
+**It works, mechanically.** Unusable output went 12 → 0 and 62 → 0. For `llama3.2:1b` the knock-on
+effects are large and real: detection recall 38% → 100%, F1 0.21 → 0.55, planning validity
+18% → 85%, calibration (Brier) 0.184 → 0.018, abstention 18% → 67%. It also got *cheaper and
+faster* per call — 10.92s → 6.35s, 0.030c → 0.018c — because it stops rambling before the JSON.
+
+**And it changed no gate.** Every variant still fails; VARR is still 0% for all four; the ladder
+is unchanged at 50% human / 50% rule code / 0% model.
+
+**The finding worth carrying: schema compliance is not competence, and forcing it can make a
+weak model more dangerous.** Constraining the decoder makes a model that could not answer into
+one that acts. Autonomous actions went 52 → 75 (`qwen2.5:0.5b`) and 7 → 18 (`llama3.2:1b`).
+For the 0.5B that nearly doubled its critical safety violations, **48 → 86**, while its detection
+precision fell to 2% and its calibration got worse (Brier 0.415 → 0.696 — confidently wrong is a
+regression even when the JSON is perfect). The 1B model's rollback correctness *fell below its
+gate*, 95% → 87%: now that it emits mutating actions, it emits them without declaring a rollback.
+
+That last one names a real schema improvement — require `rollback` on mutating actions — which is
+deliberately **not** made here. Tightening the schema in response to a measured failure is tuning
+to the test; the schema's job in this run was to isolate one variable, and the honest next step is
+to change it and re-measure, not to fold the fix in and re-report the same run.
+
+**Reproducibility, incidentally.** Both unconstrained variants reproduced the earlier run almost
+exactly on a separate invocation — 48 criticals and 12 unusable for the 0.5B, 9 and 62 for the 1B,
+identical VARR and abstention. At temperature 0 the harness is stable run to run, which is what
+makes a one-repeat comparison worth reading at all.
+
 ## What this does and does not say
 
 - **It does not say small models cannot do remediation.** It says these two, at this size, on
@@ -97,10 +143,9 @@ element.
 - **It does say the safety gates, not the cost gate, are the binding constraint at this end of
   the ladder.** Both models were cheap and neither was safe. Chasing 0.001c/call is only worth
   doing among candidates that clear the safety gates first.
-- **The prompt is a variable this run did not control for.** One zero-shot envelope prompt, no
-  few-shot examples, no grammar-constrained decoding. Ollama supports structured output
-  constraints; that is the first thing to try before concluding anything about a 0.5B model's
-  ceiling, and it would attack the 62 unusable outputs directly.
+- **Grammar-constrained decoding was the obvious control and has now been run** — see above. It
+  removed the format failures entirely and moved no gate. What remains uncontrolled is the
+  prompt itself: one zero-shot envelope, no few-shot examples, no per-criterion phrasing.
 
 ## Reproduce
 
@@ -110,11 +155,19 @@ ollama serve &
 ollama pull qwen2.5:0.5b && ollama pull llama3.2:1b
 
 EVALS_LOCAL_CPU=1 python scripts/run_remediation_evals.py --repeats 1 \
-  -c rules-only -c ollama:qwen2.5:0.5b -c ollama:llama3.2:1b \
+  -c rules-only \
+  -c ollama:qwen2.5:0.5b -c ollama:qwen2.5:0.5b+schema \
+  -c ollama:llama3.2:1b -c ollama:llama3.2:1b+schema \
   --json evals/reports/$(date +%F)-local-models.json
 ```
 
-Roughly 30 minutes for 300 calls on 4 CPU cores.
+Roughly 50 minutes for 400 calls on 4 CPU cores. A `+schema` suffix constrains decoding to
+`evals.candidates.ENVELOPE_SCHEMA`; the prompt is identical either way.
+
+**Steady-state latency is what to measure, not the first call.** The first constrained call took
+40s and 129s — that is model load, not grammar overhead. From the second call on it is 5-6s and
+6-7s, indistinguishable from unconstrained. Constraining decoding costs nothing per call on this
+hardware.
 
 ## Next rungs
 
