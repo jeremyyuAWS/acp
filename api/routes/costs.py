@@ -107,7 +107,14 @@ def get_costs():
     if not response["configured"]:
         return response
 
-    client = _az_client()
+    try:
+        client = _az_client()
+    except Exception:
+        response["services"] = [
+            estimate_service(app_name, None, None, None, rates.get(app_name))
+            for app_name in apps
+        ]
+        return response
     for app_name in apps:
         try:
             app = client.container_apps.get(_AZ_RG, app_name)

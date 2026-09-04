@@ -87,3 +87,20 @@ def test_one_unavailable_app_does_not_fabricate_or_hide_other_costs(open_client,
     assert body["services"][0]["estimated_hourly_usd"] == .12
     assert body["services"][1]["status"] == "not_reported"
     assert body["estimated_hourly_usd"] is None
+
+
+def test_azure_client_failure_returns_not_reported_instead_of_breaking_live_ops(open_client, monkeypatch):
+    from routes import costs
+    monkeypatch.setattr(costs, "_AZ_SUB", "sub")
+    monkeypatch.setattr(costs, "_app_names", lambda: ["acp-assess"])
+    monkeypatch.setattr(costs, "_rate_card", lambda: ({
+        "acp-assess": {"vcpu_hour": .1, "gib_hour": .01},
+    }, "rates"))
+    monkeypatch.setattr(costs, "_az_client", lambda: (_ for _ in ()).throw(RuntimeError("credential unavailable")))
+
+    response = open_client.get("/control/costs")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["services"][0]["status"] == "not_reported"
+    assert body["estimated_hourly_usd"] is None
