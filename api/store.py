@@ -8220,7 +8220,9 @@ class Store:
                     "  SELECT qj.id" + candidate_from +
                     "  WHERE qj.status='queued' AND qj.run_after<=%s "
                     + clause + fair_order +
-                    "  FOR UPDATE SKIP LOCKED LIMIT 1"
+                    # Only qj is claimable. The LEFT JOIN rows provide scheduling metadata and
+                    # may be absent, so PostgreSQL must not try to lock their nullable sides.
+                    "  FOR UPDATE OF qj SKIP LOCKED LIMIT 1"
                     ") RETURNING id",
                     (now, worker_id, now, expires, lane_key, now, *fair_params))
                 row = self._db.fetchone(cur)
