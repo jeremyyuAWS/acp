@@ -1345,6 +1345,28 @@ def _sp_max_retries() -> int:
 #: second is the one an operator can act on (fewer sites per run, a different window, a support
 #: case with Microsoft).
 _SP_RETRIES: dict = {}
+#: `d[k] = d.get(k, 0) + 1` is a read-modify-write, and with libraries walking on several threads
+#: two of them can read the same value and both write back the same increment. A diagnostic that
+#: undercounts throttling is a diagnostic that tells an operator their tenant is fine.
+_SP_RETRIES_LOCK = threading.Lock()
+
+#: Per-THREAD retry count, armed by whoever wants to attribute throttling to one unit of work.
+#:
+#: The global counter above cannot do that once libraries walk concurrently: a snapshot taken
+#: around site A's turn also catches every retry that sites B and C spent in parallel, so the
+#: number lands on whichever site happened to be in the loop — an operator chasing a throttled
+#: library would be sent to the wrong one. `None` means nobody is counting on this thread, which
+#: is the case for every caller that has not opted in.
+_SP_RETRY_LOCAL = threading.local()
+
+
+def _sp_note_retry(kind) -> None:
+    """Record one retry, globally and (when armed) against the calling thread's own tally."""
+    with _SP_RETRIES_LOCK:
+        _SP_RETRIES[kind] = _SP_RETRIES.get(kind, 0) + 1
+    n = getattr(_SP_RETRY_LOCAL, "n", None)
+    if n is not None:
+        _SP_RETRY_LOCAL.n = n + 1
 
 
 def _sp_sleep(seconds: float) -> None:
@@ -1421,7 +1443,7 @@ def _sp_get(token: str, url: str, timeout: int = 30):
             last_exc = e
             if attempt > attempts:
                 raise
-            _SP_RETRIES["transport"] = _SP_RETRIES.get("transport", 0) + 1
+            _sp_note_retry("transport")
             _sp_sleep(_sp_retry_delay(None, attempt))
             continue
         if r.status_code in (401, 403):
@@ -1431,7 +1453,7 @@ def _sp_get(token: str, url: str, timeout: int = 30):
                 "with tenant admin consent; Files.Read.All alone only reaches the signed-in "
                 "user's OneDrive. URL: " + url.split("?")[0])
         if (r.status_code == 429 or r.status_code >= 500) and attempt <= attempts:
-            _SP_RETRIES[r.status_code] = _SP_RETRIES.get(r.status_code, 0) + 1
+            _sp_note_retry(r.status_code)
             delay = _sp_retry_delay(r, attempt)
             print(f"[scan] Microsoft Graph returned {r.status_code}; waiting {delay:.1f}s and "
                   f"retrying ({attempt}/{attempts}) — {url.split('?')[0]}", flush=True)
@@ -2017,6 +2039,135 @@ def _sp_cap_sites(sites: list[str]) -> tuple[list[str], list[str]]:
     return list(sites[:cap]), list(sites[cap:])
 
 
+def _sp_concurrency() -> int:
+    """How many document libraries may be walked at once.
+
+    ONE BY DEFAULT — serial, byte-identical to the walk that shipped before this, and that is a
+    deliberate refusal rather than caution. Overlapping the walks means dispatching a library
+    BEFORE the budget that decides whether its result is wanted has been spent, so a scan with a
+    tight cap walks libraries whose documents are then discarded: real Graph calls, against a
+    customer's tenant, for an estate that is already a floor. Phase 1 rejected exactly that when
+    it chose to walk libraries lazily rather than up front, and gaining wall-clock by overriding
+    it is the operator's trade to make, not one to make silently on their behalf.
+
+    Raise it when the cap is comfortably above the estate — the ordinary case for a scheduled
+    30-site run — where nothing is ever discarded and the whole win is free. The look-ahead is
+    bounded to this number, so at 4 at most three libraries are ever walked speculatively.
+
+    1 also takes the identical code path, so anything that reproduces at 1 is not a concurrency
+    problem.
+    """
+    try:
+        n = int(os.environ.get("ACP_SP_CONCURRENCY", "1") or 1)
+    except ValueError:
+        return 1
+    return max(1, min(n, 16))
+
+
+class _SpWalkPipeline:
+    """Walks libraries ahead of the consumer, by at most `concurrency - 1` of them.
+
+    A SLIDING WINDOW, not a full dispatch. Submitting every library up front would walk all
+    thirty of a truncated estate to use the first three — the cost Phase 1 avoided by walking
+    lazily — so the window advances only as the consumer asks for results, and never further
+    ahead than the concurrency allows.
+
+    At concurrency 1 this submits exactly the unit being consumed and waits for it: the same
+    Graph calls, in the same order, as the serial walk. That is what makes the setting a genuine
+    diagnostic — a failure that survives ACP_SP_CONCURRENCY=1 is not about concurrency.
+    """
+
+    def __init__(self, units, run, concurrency):
+        self._units = list(units)
+        self._at = {u: i for i, u in enumerate(self._units)}
+        self._run = run
+        self._conc = max(1, concurrency)
+        self._futures: dict = {}
+        self._pool = (_cf.ThreadPoolExecutor(max_workers=min(self._conc, len(self._units)),
+                                             thread_name_prefix="sp-walk")
+                      if self._units and self._conc > 1 else None)
+
+    def result(self, unit):
+        """This library's (items, truncated), walking up to `concurrency - 1` later ones in
+        parallel. Raises whatever the walk raised — the caller's per-library isolation is what
+        turns that into a partial site, and swallowing it here would hide a broken library as an
+        empty one."""
+        import joblog as _jl_bind
+        i = self._at.get(unit)
+        if i is None:                      # not a walk unit (delta-reconstructed, or search mode)
+            raise KeyError(unit)
+        if self._pool is None:
+            return self._run(unit)         # serial: no thread, no look-ahead, no window
+        for j in range(i, min(i + self._conc, len(self._units))):
+            u = self._units[j]
+            if u not in self._futures:
+                # BOUND, like every other thread start on the scan path. contextvars do not
+                # cross ThreadPoolExecutor.submit, so an unbound walk thread starts from an empty
+                # context: check_cancel() cannot see the job it belongs to, and every joblog
+                # record a library walk emits loses its job identity. A Stop pressed during a
+                # thirty-site walk would then be honoured by the consumer and ignored by the
+                # walkers still in flight. tests/test_cancel_crosses_threads.py guards the whole
+                # scan path for exactly this and caught it in CI.
+                self._futures[u] = self._pool.submit(_jl_bind.bind(self._run), u)
+        return self._futures[unit].result()
+
+    def close(self):
+        """Drop the walks still in flight for libraries the budget never reached. Cancelled
+        rather than waited on: their results are already destined to be discarded, and holding
+        the scan open for them would spend the wall-clock this exists to save."""
+        if self._pool is None:
+            return
+        for f in self._futures.values():
+            f.cancel()
+        self._pool.shutdown(wait=False)
+
+
+def _sp_walk_pipeline(token, site_ids, resolved, site_report, delta_plan, use_search,
+                      max_files, exts, exclude_ids, skip_folders):
+    """The pipeline over every library this scan will actually WALK, in the operator's own order.
+
+    Only walk-eligible libraries: one the delta plan can reconstruct costs no Graph call at all,
+    and one listed through the search index is a lazy generator the consumer pages itself.
+
+    Every walk is given `max_files` — the whole budget, as an UPPER BOUND, never a share. A share
+    would reintroduce the per-site budget this connector deliberately does not have; the real cap
+    is enforced on the scannable set by the consumer, in site order.
+
+    The one visible consequence, stated rather than hidden: the library where the budget runs out
+    may walk a page or two further than a `budget`-capped walk would have. Its extra items land
+    in the estate DENOMINATOR (they are discovered, and reported as such) and never in the
+    analysis set, so the effect is a slightly more complete floor for one library — and one
+    consistent code path at every concurrency, which is what makes ACP_SP_CONCURRENCY=1 a real
+    diagnostic rather than a different program.
+    """
+    units = []
+    for s_id in site_ids:
+        for d in (resolved.get(s_id) or []):
+            if use_search:
+                continue
+            if (delta_plan or {}).get("delta", {}).get(d["id"]) is not None:
+                continue
+            units.append((s_id, d["id"]))
+
+    throttled: dict = {}
+
+    def run(unit):
+        # Armed per walk, so the retries THIS library spent are attributable to it however many
+        # other libraries are in flight beside it.
+        _SP_RETRY_LOCAL.n = 0
+        try:
+            return _sp_walk_folder(token, unit[1], "root", max_files, exts,
+                                   inventory_out=None, exclude_ids=exclude_ids,
+                                   skip_names=skip_folders)
+        finally:
+            throttled[unit] = getattr(_SP_RETRY_LOCAL, "n", 0)
+            _SP_RETRY_LOCAL.n = None
+
+    pipeline = _SpWalkPipeline(units, run, _sp_concurrency())
+    pipeline.throttled = throttled
+    return pipeline
+
+
 def _sp_list(token: str, max_files: int = 200, site: str | None = None,
              exclude_remediated: bool = False, inventory_out: list | None = None,
              scope_out: dict | None = None,
@@ -2206,13 +2357,27 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
         # quietly cost 30x its cap against a customer's tenant. The consequence — a large early
         # site can exhaust it before a later one is reached — is truncation, and is recorded as
         # such per site rather than left to look like an empty site.
-        budget = max_files
+        # ── PASS 1: resolve each site's libraries, and start walking them ────────────────────
+        #
+        # Split out from the consumption loop below ONLY so the walks can overlap. A 30-site
+        # estate spends nearly all of its wall-clock inside _sp_walk_folder, one library at a
+        # time, waiting on Graph — and Graph is perfectly happy to serve several at once.
+        #
+        # THE ESTATE MUST NOT DEPEND ON WHICH WALK FINISHES FIRST. That is the trap concurrency
+        # sets here: the budget is shared, so with results consumed as they arrive, WHICH sites
+        # get skipped when it runs out becomes whichever library happened to return first, and
+        # the same tenant scanned twice reports a different estate. A count an operator cannot
+        # reproduce is worse than a slow scan.
+        #
+        # So: dispatch concurrently, CONSUME IN SELECTION ORDER. Each walk is given `max_files`
+        # as an upper bound (never a share of the budget), the loop below consumes results in the
+        # order the operator chose their sites, and the budget is spent there. A library that
+        # walked more than the budget left for it is truncated at consumption — to exactly the
+        # items the serial walk would have kept, because the walk order is deterministic. The
+        # only cost is work done and discarded, and only when the budget runs out mid-flight.
+        resolved: dict = {}
         for s_id in site_ids:
             rep = site_report[s_id]
-            if budget <= 0 and not use_search:
-                rep["status"] = "skipped"       # never reached → the estate is a floor
-                hit_cap = True
-                continue
             # ONE SITE'S FAILURE IS NOT THE SCAN'S. A tenant of thirty sites reliably contains one
             # the token has lost access to, one mid-migration, and one that throttles; letting any
             # of them raise discards every site already walked and returns nothing. The failure is
@@ -2220,21 +2385,35 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
             # and "429" are different problems with different owners — the listing is marked a
             # floor, and the walk carries on.
             try:
-                drives = _sp_drives(token, s_id)
+                resolved[s_id] = _sp_drives(token, s_id)
             except PermissionError as e:
                 rep.update(status="blocked", error=str(e))
                 print(f"[scan] SharePoint site {s_id} unreadable: {e} — continuing with the "
                       f"remaining sites; this estate is a floor", flush=True)
                 hit_cap = True
                 _tick()
-                continue
             except Exception as e:  # noqa: BLE001 — a Graph/transport failure is one site's, not the run's
                 rep.update(status="blocked", error=f"Microsoft Graph error: {e}")
                 print(f"[scan] SharePoint site {s_id} failed to list its libraries: {e} — "
                       f"continuing with the remaining sites; this estate is a floor", flush=True)
                 hit_cap = True
                 _tick()
+
+        _walks = _sp_walk_pipeline(
+            token, site_ids, resolved, site_report, delta_plan, use_search,
+            max_files, exts, exclude_ids, skip_folders)
+
+        # ── PASS 2: consume, in the operator's own order ─────────────────────────────────────
+        budget = max_files
+        for s_id in site_ids:
+            rep = site_report[s_id]
+            if rep["status"] == "blocked":
+                continue                        # pass 1 already recorded it and ticked
+            if budget <= 0 and not use_search:
+                rep["status"] = "skipped"       # never reached → the estate is a floor
+                hit_cap = True
                 continue
+            drives = resolved.get(s_id) or []
             if not drives:
                 print(f"[scan] SharePoint site {s_id} has no document libraries visible to "
                       f"this token — nothing to scan", flush=True)
@@ -2242,7 +2421,6 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                 _tick()
                 continue
             rep["status"] = "scanning"
-            _throttle_before = sum(_SP_RETRIES.values())
             # Resolved HERE, once per site, and reused by _list rather than looked up a second
             # time. The name is not decoration any more: sp_metadata records it as a field on
             # every document, so a report can say "Finance" where it used to say
@@ -2282,9 +2460,7 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                     hit_cap = True
                     break
                 try:
-                    walked, cut = _sp_walk_folder(token, d["id"], "root", budget, exts,
-                                                  inventory_out=None, exclude_ids=exclude_ids,
-                                                  skip_names=skip_folders)
+                    walked, cut = _walks.result((s_id, d["id"]))
                 except Exception as e:  # noqa: BLE001 — same isolation, one library down
                     rep.update(status="partial", error=f"library {d.get('name') or d['id']}: {e}")
                     print(f"[scan] SharePoint library {d.get('name') or d['id']} on site {s_id} "
@@ -2294,6 +2470,13 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                 hit_cap = hit_cap or cut
                 if cut:
                     rep["status"] = "partial"
+                # NOT truncated here, and that is deliberate. `budget` counts raw items as a
+                # cheap proxy for deciding whether to walk the NEXT library; the real cap is
+                # enforced on the SCANNABLE set by the consumption loop below (`len(files) >=
+                # max_files`), which is what `max_files` has always meant. Trimming the raw list
+                # to `budget` would shrink the estate DENOMINATOR — the count of everything
+                # discovered, media included — and report a smaller estate than the scan actually
+                # saw, which is the one number this connector must never understate.
                 budget -= len(walked)
                 targets.append((d["id"], iter([walked]), s_id, rep["name"], d.get("name")))
             if rep["status"] == "scanning":
@@ -2302,10 +2485,17 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
             # hour because Graph throttled us 240 times" are the same wall-clock and completely
             # different problems, and only the second is one an operator can act on — fewer sites
             # per run, a different window, a support case with Microsoft.
-            _throttled = sum(_SP_RETRIES.values()) - _throttle_before
+            #
+            # Summed from each LIBRARY's own tally rather than snapshotted around this site's turn
+            # in the loop: with libraries walking concurrently a snapshot also catches whatever
+            # other sites spent in parallel, and would send an operator chasing a throttled
+            # library to the wrong site.
+            _throttled = sum(n for (site_of, _drive), n in _walks.throttled.items()
+                             if site_of == s_id)
             if _throttled:
                 rep["throttled"] = _throttled
             _tick()
+        _walks.close()
     elif use_search:
         print("[scan] OneDrive listed via the SEARCH INDEX (ACP_SP_ENUMERATE=search) — "
               "recent changes may be missing", flush=True)

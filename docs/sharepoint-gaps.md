@@ -120,6 +120,14 @@ the read-only posture.
   existed, and `/config` serves it so the site picker stops the operator at the same number the
   server will accept. Sites past the cap are recorded as `skipped` with a reason and the estate is
   marked truncated — never dropped silently.
+- **`ACP_SP_CONCURRENCY`** (default `1`, capped at 16) — how many document libraries may be
+  walked at once. **Serial by default, and that is a refusal rather than caution**: overlapping
+  walks dispatch a library *before* the budget that decides whether its result is wanted has been
+  spent, so a scan with a tight cap walks libraries whose documents are then discarded — real
+  Graph calls against a customer's tenant for an estate that is already a floor. Phase 1 rejected
+  exactly that when it chose to walk libraries lazily. Raise it when the cap is comfortably above
+  the estate (the ordinary scheduled 30-site run), where nothing is discarded and the win is free.
+  `1` takes the identical code path, so anything reproducing at `1` is not a concurrency problem.
 - **`ACP_SP_MAX_RETRIES`** (default `4`, hard-capped at 10) — how many times a **throttled or
   transiently-failed** Graph GET is retried. Small on purpose: `scanner._sp_get` is the single
   door every SharePoint call goes through — the walk, the delta feed, the site list, the drives
@@ -327,3 +335,48 @@ it held — an empty library is an answer about the tenant, and listing it would
 need action under the ones that are simply small. **An all-clear scan returns a header row and no
 data**, never a 404: a report that 404s when nothing failed is indistinguishable from one that
 could not be produced, and that difference is exactly what the reader is asking about.
+
+
+---
+
+## Walking libraries concurrently (Phase 4b)
+
+**The trap.** `_sp_list` spends one shared budget across every selected site, and two Phase 1
+properties depend on the order it is spent in: "one budget, not one per site", and "a site the
+budget never reached is truncation, recorded as skipped". Consume results as they arrive and
+*which* sites get skipped becomes whichever library happened to return first — the same tenant,
+scanned twice, reports a different estate. A count an operator cannot reproduce is worse than a
+slow scan, and a lock around the budget removes the race without removing that.
+
+**The resolution: dispatch concurrently, consume in selection order.** A bounded look-ahead walks
+up to `ACP_SP_CONCURRENCY - 1` libraries beyond the one being consumed; the budget is spent by the
+consumer, in the order the operator chose their sites. The estate is identical at every
+concurrency — `tests/test_sp_concurrency.py` asserts exactly that, running the same fixture at 1
+and at 4 and comparing the analysis set, the inventory, the truncation flag and every per-site
+status, **including the truncation boundary**, which is the half that actually depends on order.
+
+The look-ahead is a **sliding window, not a full dispatch**: submitting every library up front
+would walk all thirty of a truncated estate to use the first three, which is the cost the serial
+default exists to avoid.
+
+**Throttling is attributed per library, not per turn in the loop.** A snapshot taken around one
+site's turn also catches whatever the other sites spent in parallel, which would send an operator
+chasing a throttled library to the wrong site. Each walk counts its own retries on its own thread.
+
+### Site coverage on Live Operations
+
+A 30-site walk is one long "discovering" bar on the operations map: the file count ticks and
+nothing says which sites are done, which are queued, or that one is blocked on a consent that
+lapsed this morning. The per-site report is already checkpointed on the run, so the map now reads
+it — "12 of 30 sites, 41 libraries · 3 not read", summed across concurrent runs because that map
+is cross-tenant. A source reporting no site data (Drive, OneDrive, a scan before its first site)
+shows nothing rather than "0 of 0 sites", which would be a fact about the screen.
+
+### Still open in Phase 4
+
+**Per-site checkpoints and resumable scans.** A 30-site scan that dies at site 28 currently
+re-lists all thirty: `handlers`' existing checkpoint resume is all-or-nothing (it skips listing
+only when the whole inventory was already persisted, and inventory is written *after* the listing
+completes). True per-site resume means persisting each site's rows as it finishes and skipping
+completed sites on retry — a streaming-inventory change to the discover path rather than a
+connector change, and worth its own PR rather than being smuggled into this one.

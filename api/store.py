@@ -2006,6 +2006,40 @@ def sharepoint_scope_sites(scope: dict | None) -> tuple[str, ...]:
     return (str(one),) if one else ()
 
 
+def _sp_coverage(live_checkpoint) -> dict:
+    """Per-site coverage counts from a run's checkpointed listing progress, for the live map.
+
+    Returns an EMPTY dict — not zeros — when the run has no site data: a Drive scan, a OneDrive
+    run, a SharePoint scan that has not reached its first site yet. Zeros would render as "0 of 0
+    sites" on every non-SharePoint run in the operations map, which is a fact about the map
+    rather than about the estate.
+
+    Never raises. This is a JSON blob written by a worker and read by an admin screen; one that a
+    partially-rolled-forward replica wrote in a shape this code does not expect must cost the
+    coverage counts, never the map.
+    """
+    if not live_checkpoint:
+        return {}
+    try:
+        state = json.loads(live_checkpoint) if isinstance(live_checkpoint, str) else live_checkpoint
+    except Exception:  # noqa: BLE001
+        return {}
+    sites = (state or {}).get("sites") if isinstance(state, dict) else None
+    if not isinstance(sites, list) or not sites:
+        return {}
+    rows = [s for s in sites if isinstance(s, dict)]
+    return {
+        "sites_total": len(rows),
+        "sites_done": sum(1 for s in rows if s.get("status") == "complete"),
+        # Blocked and skipped are counted together as "not read": on this screen the operator is
+        # asking how much of the estate is covered, and both answer "not this bit". WHICH of the
+        # two, and why, is the exception report's job (/scans/{sid}/exceptions.csv).
+        "sites_unread": sum(1 for s in rows
+                            if s.get("status") in ("blocked", "skipped")),
+        "libraries_total": sum(len(s.get("libraries") or []) for s in rows),
+    }
+
+
 def job_priority(job_type: str) -> int:
     """Queue precedence for a job type. Callers may still pass `priority=` explicitly to
     override — this only decides what happens when they say nothing, which is every caller
@@ -9592,7 +9626,7 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "SELECT j.scan_id,j.type,j.status,j.created_at,j.updated_at,j.payload,"
-                "sr.owner_email,sr.source,sr.files,sr.files_done "
+                "sr.owner_email,sr.source,sr.files,sr.files_done,sr.live_checkpoint "
                 "FROM jobs j JOIN scan_runs sr ON sr.id=j.scan_id "
                 "WHERE j.scan_id IN (SELECT DISTINCT scan_id FROM jobs "
                 "WHERE status IN ('queued','running')) OR "
@@ -9615,6 +9649,13 @@ class Store:
                 "started_at": row.get("created_at"), "updated_at": row.get("updated_at"),
                 "oldest_queued_at": None, "current_file": None,
                 "current_job_type": None, "current_rule_id": None,
+                # SharePoint COVERAGE, for the operations map. A 30-site walk is one long
+                # "discovering" bar there today: the file count ticks and nothing says which
+                # sites are done, which are queued, or that one is blocked on a consent that
+                # lapsed this morning. The per-site report is already checkpointed on the run
+                # (core._maybe_checkpoint accumulates the listing's own progress patches), so
+                # this is a read of something already written, not new instrumentation.
+                **_sp_coverage(row.get("live_checkpoint")),
             })
             status = row.get("status")
             item["total"] += 1
