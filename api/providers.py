@@ -447,6 +447,73 @@ class OpenAIVisionProvider:
                        completion_tokens=usage.get("completion_tokens"))
 
 
+class GeminiVisionProvider:
+    """Google Gemini vision via Gemini's OpenAI-compatible chat-completions endpoint.
+
+    Gemini exposes the same request/response shape as OpenAI's `/v1/chat/completions`, so this
+    class is structurally identical to OpenAIVisionProvider — the difference is the default
+    endpoint and the provider name used in metrics. `zone='cloud'` because
+    generativelanguage.googleapis.com is a public Google service (ADR 0016). The key rides only
+    in the Authorization header; no secret is stored, logged, or returned.
+    """
+
+    def __init__(self, api_key: str, *, model: str, endpoint: str | None = None):
+        self.endpoint = (endpoint or "https://generativelanguage.googleapis.com/v1beta/openai").rstrip("/")
+        self._key = api_key
+        self.model = model
+        self.name = "gemini"
+        self.zone = zone_for_url(self.endpoint)
+
+    def generate(self, prompt: str, image_bytes: bytes, *, model: str | None = None,
+                 timeout: float = 120.0) -> dict:
+        import base64
+        mdl = model or self.model
+        t0 = time.monotonic()
+        url = f"{self.endpoint}/chat/completions"
+
+        def _fail(reason: str) -> dict:
+            return _result(text=None, model=mdl, provider=self.name, zone=self.zone,
+                           latency_ms=int((time.monotonic() - t0) * 1000), ok=False, reason=reason)
+
+        try:
+            import httpx
+            b64 = base64.b64encode(image_bytes).decode("ascii")
+            body = {
+                "model": mdl,
+                "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                ]}],
+                "max_tokens": 128, "temperature": 0.2,
+            }
+            r = httpx.post(url, json=body, headers={"Authorization": f"Bearer {self._key}"},
+                           timeout=timeout)
+            r.raise_for_status()
+            data = r.json() or {}
+            choice = (data.get("choices") or [{}])[0]
+            text = ((choice.get("message") or {}).get("content", "") or "").strip()
+        except Exception as e:
+            reason, detail = _classify(e)
+            _log_failure(self.name, mdl, url, detail)
+            return _fail(reason)
+        if not text:
+            _log_failure(self.name, mdl, url,
+                         "model returned empty — HTTP 200 with empty content "
+                         f"(finish_reason={choice.get('finish_reason')!r}, "
+                         f"usage={data.get('usage') or {}}).")
+            return _fail(REASON_EMPTY)
+        usage = data.get("usage") or {}
+        price = _price_for(mdl)
+        cost = 0.0
+        if price:
+            cost = round(usage.get("prompt_tokens", 0) / 1e6 * price[0]
+                         + usage.get("completion_tokens", 0) / 1e6 * price[1], 6)
+        return _result(text=text, model=mdl, provider=self.name, zone=self.zone,
+                       latency_ms=int((time.monotonic() - t0) * 1000), ok=True, cost_usd=cost,
+                       prompt_tokens=usage.get("prompt_tokens"),
+                       completion_tokens=usage.get("completion_tokens"))
+
+
 class AnthropicVisionProvider:
     """Anthropic (Claude) vision via the Messages API (api.anthropic.com). `zone='cloud'`: a
     third-party host, so bytes leave the network and the 🟡 badge stays honest (ADR 0016). Thinking
@@ -695,6 +762,7 @@ _REQUIRED_FIELDS = {
     "azure_openai": ("endpoint", "deployment"),
     "openai": ("model",),
     "anthropic": ("model",),
+    "gemini": ("model",),
     "huggingface": ("endpoint", "model"),
 }
 
@@ -852,6 +920,10 @@ def _adapter_for(provider: str, cfg: dict) -> VisionProvider | None:
         if not (key and cfg.get("model")):
             return None
         return AnthropicVisionProvider(key, model=cfg.get("model"), endpoint=cfg.get("endpoint"))
+    if provider == "gemini":
+        if not (key and cfg.get("model")):
+            return None
+        return GeminiVisionProvider(key, model=cfg.get("model"), endpoint=cfg.get("endpoint"))
     if provider == "huggingface":
         endpoint = cfg.get("endpoint")
         if not (key and endpoint and cfg.get("model")):
