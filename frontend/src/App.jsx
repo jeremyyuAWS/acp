@@ -1756,9 +1756,16 @@ export default function App() {
 
       <nav aria-label="Compliance workflow">
         <div className="tabs" role="tablist" aria-label="Compliance workflow">
-          {/* The temporary open-tab policy gives every signed-in persona the complete TABS input.
-              `visibleTabs` changes it only when workspace RBAC is explicitly enforced; that
-              preserves the staged RBAC work without reintroducing the legacy persona filter. */}
+          {/* ONE MECHANISM, NOT TWO. #1287 opened every tab to every signed-in user by deleting
+              the legacy `me.allow` persona filter from this line; the owner's 2026-09-04 decision
+              replaces that blanket opening with a REASON — every signed-in user holds the default
+              Platform User role, which grants every current tab (api/workspace_rbac.py).
+
+              So the filter stays gone and this reads only the server's answer. The difference is
+              that the openness is now something a role says and an administrator can narrow,
+              rather than a property of the navigation nobody can change; and it is enforced
+              server-side, which a tab filter never was. With RBAC off, `access` is null and
+              everything renders — the same as today. */}
           {visibleTabs(access, TABS).map(([k, label, rg, step]) => {
             const stageDone = {
               // A scan record existing is not the same as discovery having FINISHED — `run` is

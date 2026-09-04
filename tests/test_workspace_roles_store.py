@@ -221,11 +221,15 @@ def test_the_migration_maps_people_the_way_section_15_says(isolated_store):
     wr.seed_builtin_roles(st, tenant_id=TENANT)
     plan = {row["email"]: row["to"] for row in
             wr.migrate_people(st, tenant_id=TENANT, owner_email=TENANT)}
+    # PLATFORM USER, not Compliance Manager, since the owner's 2026-09-04 decision: "All
+    # signed-in users receive a default Platform User RBAC role... Existing users should be
+    # backfilled automatically." Compliance Manager would have been a NARROWING — it has Live
+    # Operations at View and Settings hidden — which §15 forbids a migration from doing.
     assert plan == {
         TENANT: rbac.OWNER,
         "admin2@acp.test": rbac.PLATFORM_ADMIN,
-        "user1@acp.test": rbac.COMPLIANCE_MANAGER,
-        "user2@acp.test": rbac.COMPLIANCE_MANAGER,
+        "user1@acp.test": rbac.PLATFORM_USER,
+        "user2@acp.test": rbac.PLATFORM_USER,
     }
 
 
@@ -236,9 +240,11 @@ def test_a_standard_user_keeps_the_workflow_rather_than_being_narrowed(isolated_
     Today every admitted user sees every workflow tab (core.OPEN_ACCESS). Mapping them to Viewer
     or Analyst would remove access on the morning the flag is turned on, which is exactly what
     §15 forbids; Compliance Manager is the narrowest built-in that keeps the whole workflow."""
-    caps = rbac.builtin_capabilities(rbac.COMPLIANCE_MANAGER)
+    caps = rbac.builtin_capabilities(rbac.PLATFORM_USER)
     for workflow in ("discover.run", "assess.run", "remediate.run", "release.view", "monitor.view"):
         assert workflow in caps, f"a migrated standard user lost {workflow}"
+    # And the two Compliance Manager would have taken away, which is why the target changed.
+    assert "operations.view" in caps and "settings.view" in caps
 
 
 def test_a_dry_run_writes_nothing_and_reports_the_same_shape(isolated_store):
@@ -333,4 +339,4 @@ def test_seeding_and_migrating_are_safe_with_the_flag_off(isolated_store, monkey
     out = wr.bootstrap(st, owner_email=TENANT)
     assert out["enabled"] is False
     assert set(out["roles_created"]) == set(rbac.BUILTIN_ROLES)
-    assert wr.role_id_for_email(st, "user1@acp.test") == rbac.COMPLIANCE_MANAGER
+    assert wr.role_id_for_email(st, "user1@acp.test") == rbac.PLATFORM_USER

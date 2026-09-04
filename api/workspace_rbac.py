@@ -188,6 +188,7 @@ def tab_access_from_rows(rows) -> dict[str, str]:
 # ── built-in roles (PRD §4 and §7) ────────────────────────────────────────────
 OWNER = "owner"
 PLATFORM_ADMIN = "platform-admin"
+PLATFORM_USER = "platform-user"
 COMPLIANCE_MANAGER = "compliance-manager"
 REMEDIATION_REVIEWER = "remediation-reviewer"
 ANALYST = "analyst"
@@ -228,6 +229,33 @@ BUILTIN_ROLES: dict[str, dict] = {
         "description": "Full operational and administrative access.",
         "tabs": _all_tabs(OPERATE),
         "grants": frozenset(GRANT_CAPABILITIES),
+        "is_protected": False,
+    },
+    # THE DEFAULT EVERY SIGNED-IN USER GETS. Owner decision, 2026-09-04: "All signed-in users
+    # receive a default Platform User RBAC role... That role grants visibility and access to every
+    # current tab... Administrators can later create restricted roles and reassign users."
+    #
+    # ITS TABS ARE WRITTEN OUT, NOT `_all_tabs(OPERATE)`, and that is the whole point of the same
+    # decision's last clause: "New tabs should require an explicit capability decision rather than
+    # silently inheriting access." Spelled as a comprehension, a governed tab added next year
+    # would join this role the moment it was defined — nobody would decide anything, and the first
+    # person to notice would be whoever it should have been hidden from.
+    # test_a_new_tab_does_not_silently_join_the_default_role pins the list against TAB_KEYS: add a
+    # tab and that test fails until somebody says, here, whether Platform User gets it.
+    #
+    # NOT the same role as Platform Admin, which also holds the seven administrative grants.
+    # Platform User is "everything the workflow does", not "everything ACP does": Settings stays
+    # visible (it is a current tab) but managing people, roles, workers and publishing remain
+    # separate permissions, exactly as PRD §5 requires.
+    PLATFORM_USER: {
+        "name": "Platform User",
+        "description": "The default for everyone who signs in — every workflow tab, no "
+                       "administrative permissions.",
+        "tabs": {"overview": OPERATE, "integrations": OPERATE, "discover": OPERATE,
+                 "assess": OPERATE, "remediate": OPERATE, "publish": OPERATE,
+                 "monitor": OPERATE, "liveops": OPERATE, "analytics": OPERATE,
+                 "settings": OPERATE},
+        "grants": frozenset(),
         "is_protected": False,
     },
     COMPLIANCE_MANAGER: {

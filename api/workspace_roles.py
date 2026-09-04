@@ -136,17 +136,25 @@ def planned_role_for(person: dict, *, owner_email: str, store_admins: set[str]) 
     Three inputs decide it, and all three are how ACP already describes the person today:
       * the protected ACP_OWNER_EMAIL                    → Owner
       * role=='admin' on the record, or a store admin    → Platform Admin
-      * everyone else                                    → Compliance Manager
+      * everyone else                                    → Platform User
 
-    Compliance Manager rather than a narrower role is the §15 "must not unexpectedly remove
-    access" rule; see this module's docstring.
+    PLATFORM USER, NOT COMPLIANCE MANAGER, since the owner's 2026-09-04 decision: "All signed-in
+    users receive a default Platform User RBAC role... Existing users should be backfilled
+    automatically."
+
+    It is also the stronger reading of §15's "must not unexpectedly remove access". Compliance
+    Manager has Live Operations at View and Settings HIDDEN (PRD §7), so migrating a standard user
+    onto it would have taken away two surfaces they can reach today under the OPEN_ACCESS model —
+    a narrowing nobody asked for, applied on the morning the flag went on. Platform User takes
+    away nothing, which is what a backfill should do; narrowing is then an administrator's
+    deliberate act in the Roles screen rather than a side effect of the migration.
     """
     email = (person.get("email") or "").strip().lower()
     if owner_email and email == owner_email:
         return rbac.OWNER
     if (person.get("role") or "").strip().lower() == "admin" or email in store_admins:
         return rbac.PLATFORM_ADMIN
-    return rbac.COMPLIANCE_MANAGER
+    return rbac.PLATFORM_USER
 
 
 def migrate_people(store, *, tenant_id: str, owner_email: str | None,
@@ -261,8 +269,64 @@ def access_for_email(store, email: str | None, *, owner_email: str | None,
 
     # 3/4. Enforcing. A suspended user has no effective permissions (PRD §14) and is checked
     #      before the role, because a suspended person may still carry a perfectly valid one.
-    resolved = None if (is_suspended and is_suspended(who)) else (
-        _stored_access(store, tenant_id=tenant, role_id=role_id) if role_id else None)
+    if is_suspended and is_suspended(who):
+        return {"role": role, "tabs": rbac.tabs_payload({}), "capabilities": [],
+                "version": version, "enforced": True, "owner": False}
+
+    # AN UNASSIGNED SIGNED-IN USER GETS THE DEFAULT ROLE, NOT NOTHING. Owner decision,
+    # 2026-09-04: "All signed-in users receive a default Platform User RBAC role... Existing users
+    # should be backfilled automatically."
+    #
+    # This deliberately REVERSES what slices 1–3 did for the unassigned case, and the reversal is
+    # narrow enough to be worth stating precisely, because "fail closed" is why the rest of this
+    # file is shaped the way it is:
+    #
+    #   unassigned            -> Platform User. Being signed in is itself an authorization
+    #                            decision — core.email_allowed already admitted them — so a user
+    #                            with no role is not an unknown, they are a known user nobody has
+    #                            narrowed yet. Refusing them would mean turning the flag on locks
+    #                            the entire company out until an administrator assigns every
+    #                            person by hand, which is the outcome PRD §15 forbids in the
+    #                            migration and would be no better here.
+    #   suspended             -> nothing, checked above. Access was deliberately withdrawn.
+    #   assigned a role that
+    #   does not resolve      -> nothing, below. Somebody DID narrow them, and the row that says
+    #                            how is missing; falling back to full access would silently undo
+    #                            an administrator's decision, which is the fail-open this file
+    #                            exists to prevent.
+    #
+    # The distinction that makes both halves right is the one this codebase keeps having to
+    # relearn: "nobody has decided yet" and "a decision was recorded and cannot be read" are
+    # different facts, and only the second is a failure.
+    # "All SIGNED-IN users" — an empty identity is not one, and this guard is the difference
+    # between a default and a hole. Found by test_an_anonymous_caller_gets_nothing_when_enforcing,
+    # which was written for slice 2's contract and kept failing after the default was added: with
+    # `who` empty, role_id_for_email returns None, which fell straight into the default branch
+    # below and handed Platform User to a caller with no identity at all. In production the access
+    # gate 401s first, so the reachable surface was the exempt endpoints (/me/access,
+    # /workspace/bootstrap) — but "the other gate happens to stop it" is not a reason for this one
+    # to be wrong, and those two are precisely what a signed-out browser calls.
+    if not who:
+        return {"role": None, "tabs": rbac.tabs_payload({}), "capabilities": [],
+                "version": 0, "enforced": True, "owner": False}
+
+    if not role_id:
+        default = _stored_access(store, tenant_id=tenant, role_id=rbac.PLATFORM_USER)
+        if default is None:
+            # The default role has not been seeded in this tenant. Fail CLOSED rather than
+            # inventing it from the catalog: a tenant whose roles were never seeded is one where
+            # nothing else can be trusted either, and the recovery (run the bootstrap) is one
+            # owner-only call away — the owner having been let through above.
+            return {"role": None, "tabs": rbac.tabs_payload({}), "capabilities": [],
+                    "version": 0, "enforced": True, "owner": False, "default_missing": True}
+        tabs, caps = default
+        row = store.get_workspace_role(tenant_id=tenant, role_id=rbac.PLATFORM_USER)
+        return {"role": {"id": rbac.PLATFORM_USER, "name": row.get("name") or "Platform User"},
+                "tabs": rbac.tabs_payload(tabs), "capabilities": sorted(caps),
+                "version": int(row.get("version") or 1), "enforced": True, "owner": False,
+                "defaulted": True}
+
+    resolved = _stored_access(store, tenant_id=tenant, role_id=role_id)
     if resolved is None:
         return {"role": role, "tabs": rbac.tabs_payload({}), "capabilities": [],
                 "version": version, "enforced": True, "owner": False}
