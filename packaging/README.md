@@ -68,6 +68,7 @@ the target cluster before installing (see below).
 ```bash
 export PYTHONPATH=packaging/cli
 
+python -m acpctl init      --profile standard --platform azure --name acp-prod
 python -m acpctl validate  packaging/examples/standard-production.acp-deployment.yaml
 python -m acpctl plan      packaging/examples/standard-production.acp-deployment.yaml
 python -m acpctl inventory packaging/examples/regulated.acp-deployment.yaml --json
@@ -79,6 +80,43 @@ python -m acpctl status    packaging/examples/standard-production.acp-deployment
 `validate` exits 0 on success and 1 on any error; warnings are printed and never fail. The
 remaining commands from the PRD's command list exit 2 and name the phase they belong to, rather
 than accepting arguments and doing nothing.
+
+## `init` — start from something valid
+
+```bash
+python -m acpctl init --profile regulated --platform azure --name acp-prod \
+  --region eastus2 --registry acr.example.org/acp -o acp.yaml
+```
+
+Writes to **stdout** unless you pass `-o`, so `acpctl init > acp.yaml` is the ordinary use and the
+read-only guarantee holds by default. With `-o` it **refuses to overwrite** an existing file —
+that file is the record of a deployment and may describe something already installed. There is
+deliberately no `--force`.
+
+### Why this is more than a template
+
+The contract has 37 semantic rules on top of its schema, and they interact: `regulated` needs
+local-only AI *and* local telemetry *and* customer-managed keys *and* ≥30-day retention;
+`evaluation` is Compose-only, and Compose has no managed data services; which secret providers are
+legal depends on the platform; which secret refs are *required* depends on which data services are
+external and which connectors are on. Starting from a copied example means meeting those rules one
+validation error at a time.
+
+So the defaults are **derived from the same policy tables the validator enforces** —
+`presets.PLATFORM_DATA_MODES`, `PLATFORM_SECRET_PROVIDERS`, `PROFILE_MIN_REPLICAS` — and the
+required secret refs come from `spec.required_secret_names`, the function `validate` itself uses.
+A generator with its own idea of what `regulated` means would drift from the validator, and the
+result would be a document that init produced and validate rejects.
+
+**Every document `init` emits passes `validate`, for every legal (profile, platform) pair**, and
+`tests/test_packaging_init.py` checks all sixteen. That is not a formality: the first draft failed
+12 of the 16 twice over — once for invented telemetry exporter names, once for evaluation replica
+ceilings that needed 372 Postgres connections against a server declared at 100. Both were found by
+running the real validator over the real output.
+
+The generated file is **commented**, because it is the one an operator reads and keeps. It is also
+valid-but-not-finished: `runtime.publicUrl`, `runtime.imageRegistry` and every entry under
+`secrets.refs` are placeholders, and the file says so at the top.
 
 ## `doctor` — can this cluster run it?
 

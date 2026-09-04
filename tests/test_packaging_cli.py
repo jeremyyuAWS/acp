@@ -84,6 +84,11 @@ def test_no_command_writes_anything(path, capsys, monkeypatch):
     monkeypatch.setattr(builtins, "open", guarded)
     for command in ("validate", "plan", "inventory", "values"):
         assert run([command, str(path)], capsys)[0] == 0
+    # `init` takes no spec and CAN write — but only with -o. Included here rather than exempted,
+    # because "the command that may write a file writes nothing when you do not ask it to" is a
+    # stronger statement than leaving it outside the sweep. tests/test_packaging_init.py owns the
+    # -o path and the refusal to overwrite.
+    assert run(["init", "--profile", "standard", "--platform", "azure"], capsys)[0] == 0
 
 
 @pytest.mark.parametrize("path", EXAMPLES, ids=EXAMPLE_IDS)
@@ -94,6 +99,12 @@ def test_no_command_prints_a_secret_value(path, capsys):
         text = out.out + out.err
         for marker in ("hunter2", "-----BEGIN", "sk-lf-", "AKIA"):
             assert marker not in text, f"{command} printed {marker}"
+    # init GENERATES a document, so it is the command most able to invent a credential — a
+    # placeholder password in generated output is one that gets committed with it.
+    _, out = run(["init", "--profile", "standard", "--platform", "azure"], capsys)
+    generated = out.out + out.err
+    for marker in ("hunter2", "-----BEGIN", "sk-lf-", "AKIA"):
+        assert marker not in generated, f"init printed {marker}"
 
 
 def _unimplemented_commands():
