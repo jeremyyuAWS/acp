@@ -1187,6 +1187,13 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 [data-wcag="on"] .loadingbox-preview {
   opacity: 1;
 }
+/* .activedot pulses amber — #BF8C00 on #faf8fb = 2.85:1 (FAIL); darken to match .livedot fix */
+[data-wcag="on"] .activedot {
+  background: #7A5000;  /* #7A5000 on #faf8fb = 6.68:1 */
+}
+/* Rule-breakdown bars: pass bar #5FA83C = 2.78:1 (FAIL 1.4.11); skip bar #C7CCD6 = 1.53:1 (FAIL) */
+[data-wcag="on"] .rb-pass { background: #3D7527; } /* 5.27:1 on --bg */
+[data-wcag="on"] .rb-skip { background: #6B7280; } /* 4.58:1 on --bg */
 .setoverlay { position: fixed; inset: 0; background: rgba(40, 30, 48, 0.38); backdrop-filter: blur(2px); z-index: 80; display: flex; align-items: flex-start; justify-content: center; padding: 36px 20px; overflow-y: auto; }
 .setpanel { background: var(--bg); border-radius: 16px; width: min(1360px, 97vw); box-shadow: 0 24px 64px rgba(30, 22, 34, 0.4); overflow: hidden; }
 .sethead { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 22px; background: var(--card); border-bottom: 1px solid var(--line); font-size: 15px; position: sticky; top: 0; }
