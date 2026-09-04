@@ -271,11 +271,35 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
   const serviceByStage = new Map(services.map((service) => [service.stage, service]))
   const sourceKinds = ['drive', 'sharepoint']
   const sourceLabel = { drive: 'Google Drive', sharepoint: 'SharePoint' }
-  const nodes = sourceKinds.map((source, index) => ({ id: `source:${source}`, type: 'infra', position: { x: 0, y: 70 + index * 135 },
-    ariaLabel: `${sourceLabel[source]} connector, ${runs.some((run) => run.source === source) ? 'active' : 'ready'}. Select for details.`,
-    data: { kind: 'source', label: sourceLabel[source], status: runs.some((run) => run.source === source) ? 'active' : 'ready',
-      detail: 'Authorized document connector', color: '#246B79', hasInput: false,
-      active: runs.filter((run) => run.source === source && run.status !== 'recent').length } }))
+  const nodes = sourceKinds.map((source, index) => {
+    const mine = runs.filter((run) => run.source === source)
+    // SHAREPOINT COVERAGE, when a run is actually reporting it. A 30-site walk is one long
+    // "discovering" bar on this map otherwise: the file count ticks and nothing says which sites
+    // are done, which are still queued, or that one is blocked on a consent that lapsed this
+    // morning. Summed across concurrent runs because this map is cross-tenant — it answers "what
+    // is the estate doing", not "what is my scan doing".
+    //
+    // Only when at least one run carries the fields. A Drive run has none, and rendering "0 of 0
+    // sites" under Google Drive would be a fact about this component rather than about anything
+    // an operator could act on.
+    const covered = mine.filter((run) => Number.isFinite(run.sites_total))
+    const sitesTotal = covered.reduce((n, r) => n + (r.sites_total || 0), 0)
+    const sitesDone = covered.reduce((n, r) => n + (r.sites_done || 0), 0)
+    const sitesUnread = covered.reduce((n, r) => n + (r.sites_unread || 0), 0)
+    const libraries = covered.reduce((n, r) => n + (r.libraries_total || 0), 0)
+    const coverage = sitesTotal
+      ? `${sitesDone} of ${sitesTotal} site${sitesTotal === 1 ? '' : 's'}`
+        + `${libraries ? `, ${libraries} librar${libraries === 1 ? 'y' : 'ies'}` : ''}`
+        + `${sitesUnread ? ` · ${sitesUnread} not read` : ''}`
+      : null
+    return { id: `source:${source}`, type: 'infra', position: { x: 0, y: 70 + index * 135 },
+      ariaLabel: `${sourceLabel[source]} connector, ${mine.length ? 'active' : 'ready'}.`
+        + `${coverage ? ` ${coverage}.` : ''} Select for details.`,
+      data: { kind: 'source', label: sourceLabel[source], status: mine.length ? 'active' : 'ready',
+        detail: coverage || 'Authorized document connector', color: '#246B79', hasInput: false,
+        coverage,
+        active: mine.filter((run) => run.status !== 'recent').length } }
+  })
   nodes.push(
     { id: 'infra:intake', type: 'infra', position: { x: 230, y: 138 },
       ariaLabel: `ACP intake and orchestration, ${connection}. Select for details.`,
