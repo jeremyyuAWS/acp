@@ -1,5 +1,6 @@
 import { useThroughput } from './useThroughput.js'
 import LiveThroughput from './LiveThroughput.jsx'
+import SourceVisibility from './SourceVisibility.jsx'
 
 const n = (value) => Number(value || 0).toLocaleString()
 
@@ -37,7 +38,7 @@ function Step({ status, label, detail, sublines = [] }) {
   )
 }
 
-export default function RemediationRunProgress({ progress, updateMode = 'idle', runId = 'remediation' }) {
+export default function RemediationRunProgress({ progress, updateMode = 'idle', runId = 'remediation', source = null, scope = null }) {
   const totalForRate = Math.max(0, Number(progress?.total || 0))
   const doneForRate = Math.max(0, Number(progress?.done || 0))
   const throughput = useThroughput(runId, doneForRate, Math.max(0, totalForRate - doneForRate))
@@ -74,6 +75,7 @@ export default function RemediationRunProgress({ progress, updateMode = 'idle', 
             {finished ? 'complete' : updateMode === 'live' ? 'live' : 'updating'}
           </span>
         </div>
+        <SourceVisibility source={source} scope={scope} />
 
         <progress value={done} max={Math.max(1, total)}
                   aria-label={`Automated remediation: ${n(done)} of ${n(total)} documents complete`}

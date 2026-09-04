@@ -59,6 +59,17 @@ def test_denominator_comes_from_the_estate_funnel_when_recorded():
     assert snap["totals"]["eligible"] == 60           # funnel assessable — same figure as ScopeFunnel
 
 
+def test_live_snapshot_carries_compact_sharepoint_visibility_scope():
+    scope = {"kind": "sharepoint", "inventory": {"discovered": 800}, "sites": [
+        {"id": "s1", "name": "Clinical", "status": "complete",
+         "libraries": [{"id": "l1", "name": "Documents"}]},
+    ]}
+    snap = _snap({"status": "running", "source": "sharepoint", "files": 10,
+                  "files_done": 1, "scope": scope})
+    assert snap["scope"] == {"kind": "sharepoint", "sites": scope["sites"]}
+    assert "inventory" not in snap["scope"]
+
+
 def test_phase_progression():
     base = {"status": "running", "files": 10, "certifiable": 0, "uncertain": 0, "error": 0}
     assert _snap({**base, "files": 0})["phase"] == "preparing"          # eligible not yet known
