@@ -277,9 +277,9 @@ describe('App composes the Assess tab the way the board specifies', () => {
     // Mounted OUTSIDE that banner now (matches assess-related source found anywhere in the file,
     // not just before <main> — a stricter "immediately before <main>" anchor would break the
     // moment an unrelated line is added between them) with active covering assessPhase === 'running'
-    // and suppressed only when view === 'assess' (AssessRunner owns that panel and shows
-    // authoritative progress). Every away tab gets the resilient live card. scanId falls back to
-    // run?.id when liveScanId is null.
+    // and remains visible on every view, including Assess. AssessRunner's file list is detailed
+    // activity, not a replacement for the compact stage card. scanId falls back to run?.id when
+    // liveScanId is null.
     const s = app()
     // Asserted by SHAPE rather than by the exact gate text. The clause list grew when Discover was
     // excluded too (see discoverNoAssessCard.test.js, which owns the per-view truth table and
@@ -291,7 +291,8 @@ describe('App composes the Assess tab the way the board specifies', () => {
     // it signals a DISCOVERY run, not an assessment run, and its presence caused the assess panel
     // to activate (showing "Preparing assessment") on all non-Discover tabs during discovery.
     expect(s).toMatch(/assessPhase === 'running'/)
-    expect(s).toMatch(/assessPhase === 'running'[\s\S]{0,100}?view !== 'assess'/)
+    expect(s).toMatch(/active=\{assessPhase === 'running'\}/)
+    expect(s).not.toMatch(/active=\{assessPhase === 'running'[\s\S]{0,80}?view !== 'assess'/)
   })
 })
 

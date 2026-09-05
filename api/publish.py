@@ -143,18 +143,31 @@ def publication_key(release_id: str, source_id: str, corrected_checksum: str) ->
     return hashlib.sha256(f"{release_id}\0{source_id}\0{corrected_checksum}".encode()).hexdigest()
 
 
+def _sp_find_child(token: str, url: str, name: str, *, folder_only: bool = False) -> dict | None:
+    """Find an exact Graph child across every page, stopping safely on a repeated nextLink."""
+    import scanner
+    seen: set[str] = set()
+    while url and url not in seen:
+        seen.add(url)
+        page = scanner._sp_get(token, url)
+        for item in page.get("value", []):
+            if item.get("name") == name and (not folder_only or item.get("folder") is not None):
+                return item
+        url = page.get("@odata.nextLink")
+    return None
+
+
 def ensure_sharepoint_release_folder(token: str, drive_id: str | None, release_id: str,
                                      folder_name: str) -> dict:
     """Create a distinct ``Remediated/<timestamp>`` root in one Graph drive/library."""
     import scanner
     root_id = scanner._sp_folder_id(token, drive_id, RELEASE_ROOT)
     base = scanner._sp_base(drive_id)
-    listing = scanner._sp_get(
-        token, f"{base}/items/{root_id}/children?$select=id,name,folder,webUrl&$top=200")
-    names = {item.get("name") for item in listing.get("value", []) if item.get("folder") is not None}
+    children_url = f"{base}/items/{root_id}/children?$select=id,name,folder,webUrl&$top=200"
+    collision = _sp_find_child(token, children_url, folder_name, folder_only=True)
     # Graph enforces sibling-name uniqueness. Preserve the clean timestamp normally and add a
     # stable release suffix only when another execution began in the same minute.
-    actual_name = folder_name if folder_name not in names else f"{folder_name} · {release_id[:8]}"
+    actual_name = folder_name if collision is None else f"{folder_name} · {release_id[:8]}"
     folder_id = scanner._sp_folder_id(token, drive_id, actual_name, parent_id=root_id)
     item = scanner._sp_get(token, f"{base}/items/{folder_id}?$select=id,name,webUrl")
     return {"id": folder_id, "name": item.get("name") or actual_name,
@@ -163,10 +176,9 @@ def ensure_sharepoint_release_folder(token: str, drive_id: str | None, release_i
 
 def _sp_child(token: str, drive_id: str | None, folder_id: str, name: str) -> dict | None:
     import scanner
-    listing = scanner._sp_get(
+    return _sp_find_child(
         token, f"{scanner._sp_base(drive_id)}/items/{folder_id}/children?"
-               "$select=id,name,file,size,webUrl&$top=200")
-    return next((item for item in listing.get("value", []) if item.get("name") == name), None)
+               "$select=id,name,file,size,webUrl&$top=200", name)
 
 
 def _sp_content_matches(token: str, drive_id: str | None, item_id: str,

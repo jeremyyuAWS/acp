@@ -167,6 +167,61 @@ def test_sharepoint_relative_path_removes_graph_locator_and_preserves_hierarchy(
     assert leaf == "Leave Plan.docx"
 
 
+def test_sharepoint_child_lookup_follows_nextlink_before_deciding_name_is_free(monkeypatch):
+    import scanner
+    pages = {
+        "https://graph/items/folder/children?$select=id,name,file,size,webUrl&$top=200": {
+            "value": [{"id": str(i), "name": f"other-{i}.pdf"} for i in range(200)],
+            "@odata.nextLink": "https://graph/second",
+        },
+        "https://graph/second": {
+            "value": [{"id": "existing", "name": "report.pdf", "webUrl": "https://sp/report"}]
+        },
+    }
+    calls = []
+    monkeypatch.setattr(scanner, "_sp_get",
+                        lambda token, url: calls.append(url) or pages[url])
+    monkeypatch.setattr(scanner, "_sp_base", lambda drive: "https://graph")
+
+    found = publish._sp_child("token", "drive", "folder", "report.pdf")
+
+    assert found["id"] == "existing"
+    assert calls == [
+        "https://graph/items/folder/children?$select=id,name,file,size,webUrl&$top=200",
+        "https://graph/second",
+    ]
+
+
+def test_sharepoint_release_root_collision_on_later_page_gets_stable_suffix(monkeypatch):
+    import scanner
+    folder_calls = []
+    monkeypatch.setattr(scanner, "_sp_folder_id",
+                        lambda token, drive, name, parent_id="":
+                        folder_calls.append((name, parent_id)) or
+                        ("root" if not parent_id else "release-folder"))
+    monkeypatch.setattr(scanner, "_sp_base", lambda drive: "https://graph")
+    pages = {
+        "https://graph/items/root/children?$select=id,name,folder,webUrl&$top=200": {
+            "value": [{"id": str(i), "name": f"older-{i}", "folder": {}} for i in range(200)],
+            "@odata.nextLink": "https://graph/roots-page-2",
+        },
+        "https://graph/roots-page-2": {
+            "value": [{"id": "same-minute", "name": "2026-09-05 10-00 UTC", "folder": {}}]
+        },
+        "https://graph/items/release-folder?$select=id,name,webUrl": {
+            "id": "release-folder", "name": "2026-09-05 10-00 UTC · abcdef12",
+            "webUrl": "https://sp/release",
+        },
+    }
+    monkeypatch.setattr(scanner, "_sp_get", lambda token, url: pages[url])
+
+    result = publish.ensure_sharepoint_release_folder(
+        "token", "drive", "abcdef123456", "2026-09-05 10-00 UTC")
+
+    assert folder_calls[-1] == ("2026-09-05 10-00 UTC · abcdef12", "root")
+    assert result["id"] == "release-folder"
+
+
 def test_sharepoint_publish_reuses_identical_copy_without_writing(monkeypatch):
     data = b"corrected"
     digest = __import__("hashlib").sha256(data).hexdigest()

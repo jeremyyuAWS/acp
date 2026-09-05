@@ -1121,6 +1121,9 @@ export const getAiCosts = () => (SIM
 export const getAiProviders = () => (SIM
   ? sim({ providers: [] })
   : fetch(`${BASE}/ai/providers`, { headers: headers() }).then(j))
+export const getAiProvidersHealth = (windowHours = 24) => (SIM
+  ? sim({ window_hours: windowHours, providers: {} })
+  : fetch(`${BASE}/ai/providers/health?window_hours=${windowHours}`, { headers: headers() }).then(j))
 export const putAiProvider = (patch) => (SIM
   ? sim({ providers: [], simulated: true })
   : fetch(`${BASE}/ai/providers`, {

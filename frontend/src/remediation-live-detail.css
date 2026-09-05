@@ -1,0 +1,13 @@
+/* Optional live detail follows ACP's existing semantic tokens and stays visually subordinate. */
+.remops-segments{overflow:visible}.remops-segment{position:relative}
+.remops-segment:focus{outline:2px solid var(--focus,#2563eb);outline-offset:2px;z-index:2}
+.remops-segment:hover:after,.remops-segment:focus:after{content:attr(data-detail);position:absolute;left:50%;bottom:18px;z-index:4;transform:translateX(-50%);padding:4px 7px;border:1px solid var(--line);border-radius:5px;color:var(--text);background:var(--surface);box-shadow:0 2px 8px rgba(0,0,0,.12);font-size:10.5px;white-space:nowrap}
+.remops-flow{color:var(--muted);animation:none}.remops-pipeline-moving .remops-flow{color:var(--info-fg);animation:remops-flow 1.6s ease-in-out infinite}
+.remops-phase-docs{display:flex;flex-direction:column;gap:3px;margin-top:7px}.remops-phase-docs>span{overflow:hidden;padding:2px 5px;border:1px solid var(--line);border-radius:4px;background:var(--surface);font-size:9.5px;text-overflow:ellipsis;white-space:nowrap;animation:remops-doc-enter .3s ease both}
+.remops-trail-step{display:contents}
+.remops-retry{display:flex;gap:6px;margin:10px 18px 0;padding:8px 10px;border:1px solid var(--line);border-radius:6px;color:var(--warn-fg,#7a5800);background:var(--warn-bg);font-size:11.5px}
+.remops-milestones{display:flex;flex-wrap:wrap;gap:7px;padding:10px 18px 0}.remops-milestones>div{display:flex;align-items:center;gap:7px;padding:5px 6px 5px 8px;border:1px solid var(--success-fg);border-radius:6px;color:var(--success-fg);background:var(--success-bg);font-size:11px}
+.remops-milestones button{padding:0 3px;border:0;color:inherit;background:transparent;font-size:14px;line-height:1}
+.remops-pulse-strip{display:flex;align-items:center;gap:10px;padding:7px 18px;border-bottom:1px solid var(--line);color:var(--muted);font-size:10.5px}
+.remops-pulse-bars{display:flex;align-items:flex-end;gap:2px;height:12px}.remops-pulse-bars i{width:4px;border-radius:1px;background:var(--info-fg)}
+@keyframes remops-doc-enter{from{transform:translateX(-4px);opacity:.35}}

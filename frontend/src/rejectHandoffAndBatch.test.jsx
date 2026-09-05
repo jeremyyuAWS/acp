@@ -92,18 +92,17 @@ describe('W8 — apply a decision to every matching finding in the same cluster'
     expect(container.textContent).toContain('You are looking at one of 3 findings that share this issue')
     expect(container.textContent).toContain('WCAG 1.1.1 in DOCX and PDF files')
     expect(container.textContent).toContain('covers more than one document format')
-    const optIn = container.querySelector('input[type=checkbox]')
-    expect(optIn).toBeTruthy()
-    expect(optIn.disabled).toBe(true)
-    expect(optIn.parentElement.textContent).toContain('Apply this decision to 2 matching WCAG 1.1.1 findings')
+    const bulk = btnByText('Approve & apply to all 3')
+    expect(bulk).toBeTruthy()
+    expect(bulk.disabled).toBe(false)
+    expect(bulk.parentElement.textContent).toContain('this item and 2 similar findings')
+    expect(bulk.parentElement.textContent).toContain('across 3 files')
   })
 
   it('applies the decision to its cluster only — every format of that rule, and no other rule', async () => {
     const calls = []
     await render({ queue: QUEUE, decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })
-    await click(btnByText('Review matching items'))
-    await click(container.querySelector('input[type=checkbox]'))
-    await click(btnByText('Approve & next'))
+    await click(btnByText('Approve & apply to all 3'))
     // ids 1,2,3 (every 1.1.1 in the actionable lane, both formats) approved. id4 is a different
     // criterion, so it is not in the cluster and is not touched.
     expect(calls.map((c) => c[0]).sort()).toEqual([1, 2, 3])
@@ -126,9 +125,7 @@ describe('W8 — apply a decision to every matching finding in the same cluster'
     const calls = []
     const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
     await render({ queue, decisions: {}, onDecide: (f) => calls.push(f.id) })
-    await click(btnByText('Review matching items'))
-    await click(container.querySelector('input[type=checkbox]'))
-    await click(btnByText('Approve & next'))
+    await click(btnByText('Approve & apply to all 12'))
     expect(confirm).toHaveBeenCalledWith('Apply this decision to 12 findings across 12 documents?')
     expect(calls).toEqual([])
     confirm.mockRestore()

@@ -181,13 +181,13 @@ describe('RemediationInbox — workflow-status queue', () => {
       { id: 12, file: 'c.pdf', title: 'PDF \u00b7 Scanned page, no text', rule_id: '1.1.1' },   // manual — excluded
     ]
     await render({ queue: q, decisions: {} })
-    const batch = container.querySelector('input[type=checkbox]')
+    const batch = btnByText('Approve & apply to all 2')
     expect(batch).toBeTruthy()
-    expect(batch.disabled).toBe(true)
-    // ONE other actionable finding, not two — the manual one is not batchable.
-    expect(batch.parentElement.textContent).toContain('Apply this decision to 1 matching WCAG 1.1.1 finding')
-    await click(btnByText('Review matching items'))
     expect(batch.disabled).toBe(false)
+    // ONE other actionable finding, not two — the manual one is not batchable.
+    expect(batch.parentElement.textContent).toContain('this item and 1 similar finding')
+    expect(batch.parentElement.textContent).toContain('across 2 files')
+    await click(btnByText('Review matching items'))
     expect(container.textContent).toContain('manual, blocked and already-decided findings are excluded')
   })
 
@@ -200,6 +200,21 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(labels.some((l) => /^(Approve|Accept) everything/i.test(l))).toBe(false)
   })
 
+  it('offers a scoped visible-view bulk action with an impact summary', async () => {
+    const q = [
+      { id: 30, file: 'a.docx', title: 'DOCX · Image needs alt text', rule_id: '1.1.1', hasProposal: true, after: 'A chart' },
+      { id: 31, file: 'b.docx', title: 'DOCX · Document has no title', rule_id: '2.4.2', hasProposal: true, after: 'Annual report' },
+      { id: 32, file: 'c.pdf', title: 'PDF · Scanned page, no text', rule_id: '1.1.1' },
+    ]
+    const calls = []
+    await render({ queue: q, decisions: {}, onDecide: (f, d) => calls.push([f.id, d.value]) })
+    await click(btnByText('Bulk actions · 2 visible fixes'))
+    expect(container.querySelector('[aria-label="Bulk approval summary"]').textContent).toContain('2 fixes · 2 files · 2 WCAG criteria')
+    expect(container.textContent).toContain('Manual, blocked, handed-off, and decided work is excluded')
+    await click(btnByText('Approve & apply all 2'))
+    expect(calls).toEqual([[30, 'A chart'], [31, 'Annual report']])
+  })
+
   it('reports a partial batch failure instead of claiming the whole cluster landed', async () => {
     const q = [
       { id: 20, file: 'a.docx', title: 'DOCX \u00b7 Image needs alt text', rule_id: '1.1.1', hasProposal: true, after: 'A chart' },
@@ -208,9 +223,7 @@ describe('RemediationInbox — workflow-status queue', () => {
     // The second write is refused; the first succeeds.
     await render({ queue: q, decisions: {},
       onDecide: (f) => (f.id === 21 ? Promise.reject(new Error('conflict')) : Promise.resolve()) })
-    await click(btnByText('Review matching items'))
-    await click(container.querySelector('input[type=checkbox]'))
-    await click(btnByText('Approve & next'))
+    await click(btnByText('Approve & apply to all 2'))
     const alert = container.querySelector('[role=alert]')
     expect(alert).toBeTruthy()
     expect(alert.textContent).toContain('1 of 2 saved')
