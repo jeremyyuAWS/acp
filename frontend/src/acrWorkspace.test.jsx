@@ -83,12 +83,15 @@ const EMPTY_GAPS = {
 }
 
 let container
-const mount = async ({ reports = [{ id: 'acr_1', report_title: 'ACP ACR', status: 'draft' }] } = {}) => {
+const mount = async ({
+  reports = [{ id: 'acr_1', report_title: 'ACP ACR', status: 'draft' }],
+  gaps = EMPTY_GAPS,
+} = {}) => {
   api.listAcrReports.mockReset().mockResolvedValue({ reports })
   api.getAcrReport.mockReset().mockResolvedValue(REPORT)
   api.listAcrCriteria.mockReset().mockResolvedValue({ criteria: CRITERIA })
   if (!api.getAcrValidation.getMockImplementation()) api.getAcrValidation.mockResolvedValue(EMPTY_VALIDATION)
-  api.getAcrGaps.mockReset().mockResolvedValue(EMPTY_GAPS)
+  api.getAcrGaps.mockReset().mockResolvedValue(gaps)
   const created = createTestRoot()
   container = created.container
   await act(async () => { created.root.render(createElement(AcrWorkspace)) })
@@ -157,6 +160,72 @@ describe('the empty state explains the feature honestly', () => {
     expect(text()).toMatch(/PAC 2024Independent PDF accessibility validationNot run/)
     expect(text()).toMatch(/Screen-reader reviewNVDA or VoiceOver reading passNot run/)
     expect(text()).toMatch(/machine-validated draft/i)
+  })
+
+  it('shows the report journey before asking the user to create a workspace', async () => {
+    await mount({ reports: [] })
+    expect(text()).toMatch(/1\. Describe/)
+    expect(text()).toMatch(/2\. Evaluate/)
+    expect(text()).toMatch(/3\. Approve/)
+    expect(text()).toMatch(/4\. Publish/)
+    expect(button(/Create Accessibility Conformance Report/)).toBeTruthy()
+  })
+})
+
+describe('report readiness', () => {
+  it('turns real validation, evidence, decision, and approval counts into a guided checklist', async () => {
+    api.getAcrValidation.mockResolvedValue({
+      summary: { may_publish: false, blocking_count: 44, advisory_count: 0 },
+      by_category: {
+        incomplete_metadata: [{ message: 'vendor name is required to publish', blocking: true }],
+      },
+      category_labels: {},
+    })
+    await mount({ gaps: {
+      ...EMPTY_GAPS,
+      counts: { no_evidence: 30, automated_only: 5, stale_only: 2 },
+    } })
+
+    expect(text()).toMatch(/Report readiness/)
+    expect(text()).toMatch(/44 publication blockers remain/)
+    expect(text()).toMatch(/1 required field missing/)
+    expect(text()).toMatch(/37 criteria still need live human evidence/)
+    expect(text()).toMatch(/12 of 55 decided · 3 approved/)
+    expect(text()).toMatch(/Publication stays locked/)
+    expect(text()).not.toMatch(/%/)
+  })
+
+  it('takes the user directly from a readiness item to the work that resolves it', async () => {
+    api.getAcrValidation.mockResolvedValue({
+      summary: { may_publish: false, blocking_count: 1, advisory_count: 0 },
+      by_category: {}, category_labels: {},
+    })
+    await mount({ gaps: {
+      ...EMPTY_GAPS,
+      counts: { no_evidence: 1, automated_only: 0, stale_only: 0 },
+    } })
+    await click(button(/^Review gaps$/))
+    expect(button(/^Evidence gaps$/).getAttribute('aria-current')).toBe('page')
+  })
+
+  it('says ready without publishing automatically when every gate passes', async () => {
+    api.getAcrReport.mockReset().mockResolvedValue({
+      ...REPORT,
+      progress: { total: 55, decided: 55, undecided: 0, approved: 55,
+                  evidence_total: 80, evidence_stale: 0 },
+    })
+    api.getAcrValidation.mockResolvedValue({
+      summary: { may_publish: true, blocking_count: 0, advisory_count: 0 },
+      by_category: {}, category_labels: {},
+    })
+    await mount({ gaps: {
+      ...EMPTY_GAPS,
+      with_human_evidence: 55,
+      counts: { no_evidence: 0, automated_only: 0, stale_only: 0 },
+    } })
+    expect(text()).toMatch(/Ready for authorised publication/)
+    expect(text()).toMatch(/An authorised approver still controls publication/)
+    expect(button(/^Open publication$/)).toBeTruthy()
   })
 })
 
