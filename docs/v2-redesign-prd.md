@@ -72,7 +72,7 @@ work was making it reachable and correct, not building it — see §5.
 
 | # | Requirement | State |
 |---|---|---|
-| 8 | Remediation more intuitive | Collapsing shipped (#154). The rest is undefined — see §7 |
+| 8 | Remediation more intuitive | Collapsing shipped (#154). The live running-stage experience is defined in §7.1; the focused review-queue redesign remains specified separately in `docs/remediate-redesign-spec.md` |
 | 4 / 18c | List of users with access to ACP | **The tab is a mock.** `UserManagement.jsx` renders a hardcoded `SEED_USERS` array and imports nothing from `api.js`; there is no `/users` route on the backend. It looks authoritative and is not, which is worse than absent |
 
 ### 4.3 Already built — the requirement may have been about something narrower
@@ -139,7 +139,116 @@ about the past, and this repo moves faster than the claim does.
 
 ---
 
-## 7. Open questions — blocked on a decision, not on effort
+## 7. Remediation experience
+
+### 7.1 Live running stage
+
+Remediation is the longest-running stage. While it is active, the page must continuously show
+material progress without turning each event or refresh into motion. The operator should be able
+to answer four questions at a glance: **Is the run alive? Where are the documents? How quickly are
+they moving? What needs attention?**
+
+#### Visual hierarchy
+
+The running view is ordered by operational value:
+
+1. Headline and connection freshness.
+2. Reconciled segmented progress and changes since the previous visual update.
+3. Active document pipeline.
+4. Throughput bars and a calibrated ETA range.
+5. Recent activity.
+6. Exceptions and actions.
+
+The following elements make up that view.
+
+1. **Animated document pipeline.** Show document counts across
+   `Waiting → Applying → Verifying → Saving → Delivered`. A document slides/fades only when its
+   state changes; an SSE event or data refresh that leaves it in the same state causes no motion.
+
+2. **Live deltas.** `Completed`, `Fixes applied`, `Verified`, and `Delivered` may show a short-lived
+   positive delta (for example, `36  +3`) with a brief green highlight. Do not celebrate increases
+   in waiting, failure, or retry counts, and do not animate a value whose previous state was
+   unknown as though it increased from zero.
+
+3. **One reconciled segmented progress bar.** Replace a single fill bar with mutually exclusive
+   `Completed | Processing | Waiting | Review | Failed` partitions whose counts reconcile to the
+   run total. Hover and keyboard focus expose the exact count for every segment. Color is never
+   the only distinction: use visible labels and/or patterns as well.
+
+4. **Moving throughput window.** Show documents completed per minute as bars over the most recent
+   five minutes, with new bars entering from the right. Re-bin and redraw on a 10–15 second visual
+   cadence rather than for every SSE event. Pair it with the existing calibrated ETA range.
+
+5. **Concurrent phase activity.** Show `Prepare`, `Applying`, `Verifying`, `Saving`, and
+   `Finalizing` independently. A soft pulse marks a phase with current work; more than one phase
+   may be active because documents move through the pipeline in parallel. A completed phase uses
+   a stable check and an inactive future phase uses a stable outline.
+
+6. **Recently completed ticker.** Put the newest material event at the top, for example a file
+   verified, delivered, or scheduled to retry. New rows slide in; older rows remain readable and
+   age out without fading to low contrast. Relative times update without re-animating the row.
+
+7. **Per-document progress trails.** Expand detailed milestones for at most the three visible
+   active documents: `Opened → fixes applied → Verifying → Saving`. Other documents remain
+   summarized in the stage counts so the page does not grow with the batch.
+
+8. **Queue-flow animation.** A restrained moving dash may show real work flowing through
+   `Queue → Workers → Verification → SharePoint`. Run it only while documents are advancing. Stop
+   it when the run is waiting, disconnected, or stalled; do not animate every React Flow edge.
+
+9. **Rate change.** Beside the current throughput, compare it with the preceding five-minute
+   window (for example, `22.4 documents/min ↑ 18%`). Use a short transition for the arrow and value.
+   Omit the percentage until both windows contain enough completed documents for a meaningful
+   comparison.
+
+10. **Completion milestones.** Use subtle, dismissible notices only at meaningful thresholds:
+    the first corrected copy delivered, a configured document-count milestone, and halfway through
+    the batch. Do not notify for every document, and never let a notice obscure an exception or
+    action.
+
+11. **Explicit connection state.** Text always communicates one of:
+    `Live`, `Reconnecting · last update … ago`, `Updating by polling`, or
+    `Stalled · no material progress for …`. The icon may animate, but is supplementary. Mark the
+    run stalled after 15 minutes without material progress, not merely 15 minutes without an SSE
+    heartbeat.
+
+12. **Optional activity pulse.** A narrow strip may show event density over the last 60 seconds.
+    Label it as activity, not completion, and keep it subordinate to reconciled progress. It can be
+    hidden without losing any operational fact.
+
+#### Motion and accessibility contract
+
+- Animate real state changes only. Refreshes, heartbeat events, and relative-time updates do not
+  replay entrance, delta, or milestone motion.
+- Honor `prefers-reduced-motion`: update content immediately with no sliding, pulsing, moving
+  dashes, or animated value interpolation.
+- Never flash faster than three times per second. Motion does not move keyboard focus, alter
+  reading order, or create routine live-region announcements.
+- When the tab is hidden, continue ingesting and reconciling SSE data but pause visual motion.
+  On return, render the latest state once; do not replay the accumulated transition history.
+- **Pause visual updates** freezes animation and visual transitions only. It does not pause backend
+  work, disconnect SSE, stop polling fallback, or prevent the data model from reaching the latest
+  state. Resuming shows the reconciled current state rather than replaying queued animations.
+- Failure, retry, disconnection, and stall states remain calm and explicit. They never borrow the
+  green increase treatment or celebratory milestone motion.
+
+#### Acceptance criteria
+
+- At every snapshot, the five progress partitions are mutually exclusive and sum to the run total;
+  no document is counted in two partitions or disappears between them.
+- A document transition animates once per durable state change, even if the same event is received
+  more than once or a poll repeats the current state.
+- Throughput bars update no more frequently than once per 10 seconds and retain a five-minute
+  window; insufficient data produces a plain calibrating state rather than a fabricated zero or
+  percentage change.
+- All segment counts, phase states, connection states, ticker entries, and controls are operable and
+  understandable with a keyboard, a screen reader, color removed, and reduced motion enabled.
+- Hidden-tab and paused-visual modes continue to ingest events and converge to the same reconciled
+  state as the normal live view.
+- A connection can be live while material progress is stalled. Heartbeat freshness and progress
+  freshness are measured and communicated separately.
+
+### 7.2 Open questions — blocked on a decision, not on effort
 
 | Question | Why it needs an answer |
 |---|---|
