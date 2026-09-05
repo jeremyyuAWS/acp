@@ -622,7 +622,8 @@ thing the PRD does not mention.
   re-scan says. Media parts are counted from the zip because `Document.inline_shapes` misses
   header, footer and floating images — the consent fixture's only image is in `word/header1.xml`.
 
-- [ ] **P4.10 — Govern and operate assessment-time cloud second opinions.** Draft PR #1283 adds
+- [x] **P4.10 — Govern and operate assessment-time cloud second opinions.** Completed by #1283,
+  #1458 and #1460. #1283 added
   the narrow data path: LOW-confidence findings may be escalated to Hugging Face, and the bounded
   provider/zone/escalated/cost provenance is persisted and shown on the finding. The remaining
   product work is the management layer; it must not be inferred from environment variables or
@@ -642,6 +643,13 @@ thing the PRD does not mention.
   measured versus estimated; regression coverage for off/on, threshold boundary, budget exhaustion,
   provider failure, deduplicated findings, and mid-run disable. This item depends on #1283 landing (or
   an equivalent provenance contract) but does not require retaining provider-generated document text.
+
+  **Closed 2026-09-05:** AI Governance now owns the default-off consent policy, provider/model,
+  eligible criteria, confidence ceiling, per-scan/day request limits and daily estimated-cost
+  ceiling. Each scan stores an immutable policy snapshot; a live disable is an immediate kill
+  switch for new calls. Atomic reservations prevent retries or concurrent workers exceeding a
+  ceiling. Assessment calls feed the existing `ai_calls` ledger and therefore the shipped provider
+  health, latency, failure and measured-spend views. No provider response text is persisted.
 
 ### From the PRD, deliberately not scheduled
 

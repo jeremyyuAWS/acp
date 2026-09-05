@@ -412,6 +412,11 @@ _SCHEMA = [
     # whose temperature/prompt is not yet threaded through (see ai._trace_ai).
     "ALTER TABLE ai_calls ADD COLUMN IF NOT EXISTS temperature REAL",
     "ALTER TABLE ai_calls ADD COLUMN IF NOT EXISTS prompt_version TEXT",
+    """CREATE TABLE IF NOT EXISTS second_opinion_reservations (
+      id TEXT PRIMARY KEY, scan_id TEXT NOT NULL, file TEXT NOT NULL, day TEXT NOT NULL,
+      estimated_cost_usd REAL NOT NULL, created_at TEXT NOT NULL,
+      UNIQUE(scan_id,file)
+    )""",
     # Admin-controlled platform settings (key/value). e.g. ai_enabled='false'
     # forces deterministic-only mode for the whole platform (overrides per-scan ?ai=).
     """CREATE TABLE IF NOT EXISTS app_settings (
@@ -1881,8 +1886,8 @@ class _PgAdapter:
     # escalation. Nothing decides anything from the column; it is evidence for a reviewer.
     # This follows v17's structured-release tables from main; both changes remain additive and
     # safe during a rolling deployment.
-    _SCHEMA_VERSION = 18
-    _SCHEMA_CHECKSUM_AT_VERSION = "be7facc00fb550c158ae0ff8c1870753"
+    _SCHEMA_VERSION = 19
+    _SCHEMA_CHECKSUM_AT_VERSION = "a014bf53187661bc4edf3efced0948d7"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -5836,6 +5841,27 @@ class Store:
                 (uuid.uuid4().hex, now, scan_id, file, surface, provider, model, zone,
                  int(latency_ms), 1 if ok else 0, float(cost_usd), reason,
                  temperature, prompt_version))
+
+    def reserve_second_opinion(self, *, scan_id: str, file: str, policy: dict) -> tuple[bool, str]:
+        """Atomically reserve one call against scan/day request and estimated-cost ceilings."""
+        import uuid
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        day = now.date().isoformat()
+        cost = float(policy["estimated_cost_per_request_usd"])
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO second_opinion_reservations(id,scan_id,file,day,estimated_cost_usd,created_at) "
+                "SELECT %s,%s,%s,%s,%s,%s WHERE "
+                "(SELECT COUNT(*) FROM second_opinion_reservations WHERE scan_id=%s)<%s AND "
+                "(SELECT COUNT(*) FROM second_opinion_reservations WHERE day=%s)<%s AND "
+                "(SELECT COALESCE(SUM(estimated_cost_usd),0) FROM second_opinion_reservations WHERE day=%s)+%s<=%s "
+                "ON CONFLICT(scan_id,file) DO NOTHING",
+                (uuid.uuid4().hex, scan_id, file, day, cost, now.isoformat(), scan_id,
+                 int(policy["max_requests_per_scan"]), day, int(policy["max_requests_per_day"]),
+                 day, cost, float(policy["max_daily_cost_usd"])))
+            inserted = cur.rowcount == 1
+        return (inserted, "reserved" if inserted else "duplicate_or_budget_exhausted")
 
     def list_ai_calls(self, scan_id: str | None = None, limit: int = 500) -> list[dict]:
         """Provenance rows for governance/cost views — newest first, optionally per scan."""

@@ -3309,7 +3309,9 @@ def _escalate_low_confidence_findings(fdict: dict, filepath, *,
         import core as _core
         if not _core.store.get_ai_enabled():
             return
-        from second_opinion_policy import eligible as _second_opinion_eligible
+        from second_opinion_policy import eligible as _second_opinion_eligible, load_policy
+        if not load_policy(_core.store)["enabled"]:  # immediate kill switch for new calls
+            return
         snapshot = _core.store.get_scan_inputs(scan_id) if scan_id else None
         policy = ((snapshot or {}).get("feature_flags") or {}).get("second_opinion_policy")
         # Missing/malformed snapshots fail closed. The general AI switch is not consent for
@@ -3343,6 +3345,11 @@ def _escalate_low_confidence_findings(fdict: dict, filepath, *,
                 low_conf.append(issue)
         if not low_conf:
             return
+        reserved, reserve_reason = _core.store.reserve_second_opinion(
+            scan_id=scan_id, file=file or "", policy=policy)
+        if not reserved:
+            print(f"[hf-escalation] scan={scan_id} file={file} skipped={reserve_reason}", flush=True)
+            return
 
         try:
             raw_bytes = _Path(filepath).read_bytes()
@@ -3359,6 +3366,13 @@ def _escalate_low_confidence_findings(fdict: dict, filepath, *,
             f"Please confirm whether any of these violations are present."
         )
         res = cloud.generate(prompt, img_bytes, timeout=120.0)
+
+        _core.store.record_ai_call(
+            surface="assessment_second_opinion", provider=res.get("provider") or cloud.name,
+            model=res.get("model") or "not_reported", zone=res.get("zone") or "not_reported",
+            latency_ms=int(res.get("latency_ms") or 0), ok=bool(res.get("ok")),
+            scan_id=scan_id, file=file, cost_usd=float(res.get("cost_usd") or 0),
+            reason=res.get("reason"))
 
         provenance = {
             "provider": res.get("provider") or cloud.name,

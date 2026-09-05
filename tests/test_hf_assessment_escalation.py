@@ -18,14 +18,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
-def _make_store(ai_enabled=True, policy=None):
+def _make_store(ai_enabled=True, policy=None, *, live_policy=None, reserve=True, recorded=None):
     policy = policy or {"enabled": True, "criteria": ["1.3.5"],
                         "confidence_threshold": "low"}
     return types.SimpleNamespace(
         get_ai_enabled=lambda: ai_enabled,
+        get_setting=lambda _key, _default="": __import__('json').dumps(live_policy or policy),
         get_scan_inputs=lambda _scan_id: {
             "feature_flags": {"second_opinion_policy": policy}
         },
+        reserve_second_opinion=lambda **_kw: (reserve, "reserved" if reserve else "budget_exhausted"),
+        record_ai_call=lambda **kw: recorded.append(kw) if recorded is not None else None,
     )
 
 
@@ -154,6 +157,7 @@ def test_escalation_skipped_without_immutable_policy_snapshot(env, monkeypatch):
     import providers
     core.store = types.SimpleNamespace(
         get_ai_enabled=lambda: True,
+        get_setting=lambda _key, _default="": "",
         get_scan_inputs=lambda _scan_id: None,
     )
     cloud = _FakeCloud(ok=True)
@@ -179,6 +183,46 @@ def test_policy_criteria_excludes_unapproved_finding(env, monkeypatch):
     ]}
     handlers._escalate_low_confidence_findings(fdict, env, scan_id="s1", file="doc.pdf")
     assert cloud.calls == []
+
+
+def test_mid_run_disable_is_an_immediate_kill_switch(env, monkeypatch):
+    import core
+    import handlers
+    import providers
+    snapshot = {"enabled": True, "criteria": ["1.3.5"], "confidence_threshold": "low"}
+    monkeypatch.setattr(core, "store", _make_store(policy=snapshot, live_policy={
+        **snapshot, "enabled": False,
+    }))
+    cloud = _FakeCloud(ok=True)
+    monkeypatch.setattr(providers, "cloud_vision_provider", lambda: cloud)
+    fdict = {"issues": [{"wcag": "1.3.5 Identify Input Purpose"}]}
+    handlers._escalate_low_confidence_findings(fdict, env, scan_id="s1", file="doc.pdf")
+    assert cloud.calls == []
+
+
+def test_budget_exhaustion_skips_call(env, monkeypatch):
+    import core
+    import handlers
+    import providers
+    monkeypatch.setattr(core, "store", _make_store(reserve=False))
+    cloud = _FakeCloud(ok=True)
+    monkeypatch.setattr(providers, "cloud_vision_provider", lambda: cloud)
+    fdict = {"issues": [{"wcag": "1.3.5 Identify Input Purpose"}]}
+    handlers._escalate_low_confidence_findings(fdict, env, scan_id="s1", file="doc.pdf")
+    assert cloud.calls == []
+
+
+def test_call_is_recorded_for_live_operations(env, monkeypatch):
+    import core
+    import handlers
+    import providers
+    recorded = []
+    monkeypatch.setattr(core, "store", _make_store(recorded=recorded))
+    monkeypatch.setattr(providers, "cloud_vision_provider", lambda: _FakeCloud(ok=True))
+    fdict = {"issues": [{"wcag": "1.3.5 Identify Input Purpose"}]}
+    handlers._escalate_low_confidence_findings(fdict, env, scan_id="s1", file="doc.pdf")
+    assert recorded[0]["surface"] == "assessment_second_opinion"
+    assert recorded[0]["scan_id"] == "s1"
 
 
 def test_escalation_skipped_when_no_low_confidence_finding(env, monkeypatch):

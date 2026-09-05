@@ -1122,7 +1122,9 @@ export const getAiProviders = () => (SIM
   ? sim({ providers: [] })
   : fetch(`${BASE}/ai/providers`, { headers: headers() }).then(j))
 export const getSecondOpinionPolicy = () => (SIM
-  ? sim({ enabled: false, criteria: ['1.3.5'], confidence_threshold: 'low' })
+  ? sim({ enabled: false, criteria: ['1.3.5'], confidence_threshold: 'low',
+      max_requests_per_scan: 25, max_requests_per_day: 250, max_daily_cost_usd: 10,
+      estimated_cost_per_request_usd: 0.01 })
   : fetch(`${BASE}/ai/second-opinion-policy`, { headers: headers() }).then(j))
 export const putSecondOpinionPolicy = (policy) => (SIM
   ? sim({ ...policy, simulated: true })

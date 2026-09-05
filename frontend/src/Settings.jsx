@@ -749,6 +749,10 @@ export function AIProvidersPanel({ onAccess }) {
       enabled: !!policyDraft.enabled,
       criteria: policyDraft.criteria || [],
       confidence_threshold: policyDraft.confidence_threshold || 'low',
+      max_requests_per_scan: Number(policyDraft.max_requests_per_scan),
+      max_requests_per_day: Number(policyDraft.max_requests_per_day),
+      max_daily_cost_usd: Number(policyDraft.max_daily_cost_usd),
+      estimated_cost_per_request_usd: Number(policyDraft.estimated_cost_per_request_usd),
     }
     putSecondOpinionPolicy(next)
       .then((res) => {
@@ -811,7 +815,19 @@ export function AIProvidersPanel({ onAccess }) {
               <option value="high">Low, medium and high</option>
             </select>
           </L>
+          <L label="Maximum requests per scan"><input type="number" min="1" value={policyDraft.max_requests_per_scan}
+            onChange={(e) => setPolicyDraft({ ...policyDraft, max_requests_per_scan: e.target.value })} style={INP} /></L>
+          <L label="Maximum requests per day"><input type="number" min="1" value={policyDraft.max_requests_per_day}
+            onChange={(e) => setPolicyDraft({ ...policyDraft, max_requests_per_day: e.target.value })} style={INP} /></L>
+          <L label="Daily cloud-cost ceiling (USD)"><input type="number" min="0.01" step="0.01" value={policyDraft.max_daily_cost_usd}
+            onChange={(e) => setPolicyDraft({ ...policyDraft, max_daily_cost_usd: e.target.value })} style={INP} /></L>
+          <L label="Estimated cost reserved per request (USD)"><input type="number" min="0.000001" step="0.001" value={policyDraft.estimated_cost_per_request_usd}
+            onChange={(e) => setPolicyDraft({ ...policyDraft, estimated_cost_per_request_usd: e.target.value })} style={INP} /></L>
         </div>
+        <p className="muted" style={{ fontSize: 11 }}>
+          Request limits are enforced atomically. Cost admission uses the labelled estimate above;
+          measured provider cost is recorded after each call and shown in Live Operations.
+        </p>
         {policyDraft.enabled && !purposeEnabled && (
           <p role="alert" style={{ color: 'var(--error-fg-strong)', fontSize: 12 }}>
             Select at least one criterion before enabling this policy.

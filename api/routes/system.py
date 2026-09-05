@@ -1172,6 +1172,10 @@ class SecondOpinionPolicyUpdate(BaseModel):
     enabled: bool
     criteria: list[str]
     confidence_threshold: str = "low"
+    max_requests_per_scan: int = 25
+    max_requests_per_day: int = 250
+    max_daily_cost_usd: float = 10.0
+    estimated_cost_per_request_usd: float = 0.01
 
 
 @router.get("/ai/second-opinion-policy")

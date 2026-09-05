@@ -10,6 +10,10 @@ DEFAULT_POLICY = {
     "enabled": False,
     "criteria": ["1.3.5"],
     "confidence_threshold": "low",
+    "max_requests_per_scan": 25,
+    "max_requests_per_day": 250,
+    "max_daily_cost_usd": 10.0,
+    "estimated_cost_per_request_usd": 0.01,
 }
 
 
@@ -25,12 +29,21 @@ def normalize_policy(value: Any) -> dict:
     threshold = str(value.get("confidence_threshold") or "low").lower()
     if threshold not in CONFIDENCE_ORDER:
         threshold = "low"
-    criteria = sorted({str(item).strip() for item in (value.get("criteria") or [])
+    criteria = sorted({str(item).strip() for item in value.get("criteria", DEFAULT_POLICY["criteria"])
                        if str(item).strip()})
+    def _number(key, cast):
+        try:
+            return cast(value.get(key, DEFAULT_POLICY[key]))
+        except (TypeError, ValueError):
+            return DEFAULT_POLICY[key]
     return {
         "enabled": value.get("enabled") is True,
         "criteria": criteria,
         "confidence_threshold": threshold,
+        "max_requests_per_scan": max(1, min(_number("max_requests_per_scan", int), 10000)),
+        "max_requests_per_day": max(1, min(_number("max_requests_per_day", int), 100000)),
+        "max_daily_cost_usd": max(0.01, min(_number("max_daily_cost_usd", float), 100000)),
+        "estimated_cost_per_request_usd": max(0.000001, min(_number("estimated_cost_per_request_usd", float), 1000)),
     }
 
 

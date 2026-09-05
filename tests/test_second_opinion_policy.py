@@ -25,4 +25,8 @@ def test_policy_normalization_is_bounded_and_deduplicated():
         "enabled": True,
         "criteria": ["1.3.5", "3.1.2"],
         "confidence_threshold": "low",
+        "max_requests_per_scan": 25,
+        "max_requests_per_day": 250,
+        "max_daily_cost_usd": 10.0,
+        "estimated_cost_per_request_usd": 0.01,
     }

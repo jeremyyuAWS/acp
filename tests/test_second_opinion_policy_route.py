@@ -32,8 +32,9 @@ def test_policy_route_round_trips_bounded_state(monkeypatch):
     body = system.SecondOpinionPolicyUpdate(
         enabled=True, criteria=["1.3.5", "1.3.5"], confidence_threshold="medium")
     result = system.put_second_opinion_policy(body, _request())
-    assert result == {"enabled": True, "criteria": ["1.3.5"],
-                      "confidence_threshold": "medium"}
+    assert result["enabled"] is True
+    assert result["criteria"] == ["1.3.5"]
+    assert result["confidence_threshold"] == "medium"
     assert json.loads(store.value) == result
     assert system.get_second_opinion_policy(_request()) == result
     assert "future scans only" in store.audit[0][1]["detail"]
