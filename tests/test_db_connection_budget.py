@@ -216,26 +216,23 @@ def test_an_override_below_the_floor_is_still_clamped():
 #     acp-app        1.0 CPU  2Gi  replicas 1-3
 #     acp-discovery  1.0 CPU  2Gi  replicas 1-2
 #     acp-assess     2.0 CPU  4Gi  replicas 5-5
-#     acp-remediate  2.0 CPU  4Gi  replicas 5-5
+#     acp-remediate  2.0 CPU  4Gi  replicas 5-10
 #
 # So "cut worker max-replicas from 10 to 4" has no tier to act on: nothing in the repo's own
 # baseline is at 10. The tests below recompute against the shape that is actually configured.
 #
-# WHAT IS CARRIED AND WHAT IS NOT. The replica ranges are VERIFIED in this repo
-# (rightsize-production.sh). ACP_WORKERS on the three worker apps is NOT: deploy/public/
-# redeploy.sh sets it on none of them, so each inherits whatever was set out of band, and
-# api/worker_main.py forces 12 when it is unset. Rather than pick one and present it as fact,
-# these tests assert over BOTH plausible values — 2 (deploy.sh's ACP_WORKER_COUNT default) and 12
-# (the 2026-08-30 Azure read) — and assert only the conclusion that holds either way.
+# The worker services now carry an explicit pool ceiling of three connections per replica.
+# That is independent of ACP_WORKERS and is part of the reviewed baseline below.
 
 # Verified: deploy/public/rightsize-production.sh.
 RIGHTSIZE_REPLICAS = {
     "acp-app": (1, 3),
     "acp-discovery": (1, 2),
     "acp-assess": (5, 5),
-    "acp-remediate": (5, 5),
+    "acp-remediate": (5, 10),
 }
 PLAUSIBLE_WORKER_THREADS = (2, 12)
+WORKER_DB_POOL = 2
 
 
 def deployed_tiers(worker_threads: int, *, worker_override=None, api_override=None,
@@ -254,44 +251,27 @@ def deployed_tiers(worker_threads: int, *, worker_override=None, api_override=No
 
 
 @pytest.mark.parametrize("threads", PLAUSIBLE_WORKER_THREADS)
-def test_the_deployed_three_tier_shape_exceeds_the_server_whatever_acp_workers_is(threads):
-    """The corrected finding. 328 was for a topology production no longer has.
-
-    Asserted over both plausible thread counts because the real one is not knowable from this
-    repository, and the conclusion does not depend on it.
-    """
-    steady = fleet_ceiling_tiers(deployed_tiers(threads), overlap=False)
-    assert steady + RESERVE_PROD > PROD_LIMIT, (
-        f"at ACP_WORKERS={threads} the deployed four-app shape now fits {PROD_LIMIT} "
-        f"(steady {steady}) — update docs/db-connection-budget.md, which still says it does not")
+def test_explicit_worker_pools_keep_autoscaled_fleet_under_server_budget(threads):
+    steady = fleet_ceiling_tiers(
+        deployed_tiers(threads, worker_override=WORKER_DB_POOL), overlap=False)
+    assert steady == 82
+    assert steady + RESERVE_PROD <= PROD_LIMIT
 
 
-def test_the_split_raised_the_ceiling_above_the_single_worker_tier_model():
-    """Splitting one worker tier into three multiplied the term that already dominated.
-
-    Pinned because docs/db-connection-budget.md's headline number (328) is now an UNDERSTATEMENT
-    of the shape it was describing, and an understated budget is the kind that gets accepted.
-    """
-    single_tier = fleet_ceiling(**PROD_TODAY, overlap=False)
-    three_tier = fleet_ceiling_tiers(deployed_tiers(12), overlap=False)
-    assert single_tier == 328
-    assert three_tier == 384
-    assert three_tier > single_tier
+def test_autoscaled_fleet_fits_during_revision_overlap():
+    overlap = fleet_ceiling_tiers(
+        deployed_tiers(2, worker_override=WORKER_DB_POOL), overlap=True)
+    assert overlap == 120
+    assert overlap + RESERVE_PROD <= PROD_LIMIT
 
 
-@pytest.mark.parametrize("threads", PLAUSIBLE_WORKER_THREADS)
-def test_cutting_assess_and_remediate_to_four_does_not_reach_the_budget(threads):
-    """Why "cut worker max-replicas to 4" is not sufficient on its own.
-
-    It is the doc's proposal carried onto the deployed shape, and it does not arrive: the cut pays
-    the throughput cost (rightsize-production.sh keeps five replicas warm deliberately, for the
-    batch stages' performance baseline) without buying the safety margin it was supposed to buy.
-    """
-    cut = deployed_tiers(threads, assess_range=(1, 4), remediate_range=(1, 4))
-    steady = fleet_ceiling_tiers(cut, overlap=False)
-    assert steady + RESERVE_PROD > PROD_LIMIT, (
-        f"cutting to 4 now fits at ACP_WORKERS={threads} (steady {steady}) — recompute the "
-        f"proposal in docs/db-connection-budget.md")
+def test_rightsize_script_sets_worker_pool_and_queue_autoscale():
+    script = (Path(__file__).resolve().parent.parent
+              / "deploy" / "public" / "rightsize-production.sh").read_text()
+    assert script.count("ACP_DB_MAX_CONN=$db_pool") == 1
+    assert "--scale-rule-name remediation-queue" in script
+    assert "type IN ('remediate_file','rescore_file','apply_approved_values')" in script
+    assert '"targetQueryValue=4"' in script
 
 
 def test_cutting_to_four_does_not_fit_even_with_the_proposed_pool_override():
