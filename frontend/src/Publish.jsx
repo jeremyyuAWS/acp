@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import ScopeBanner from './ScopeBanner.jsx'
 import { documentSelection, documentScopeSentence } from './remediableScope.js'
-import FileDrawer from './FileDrawer.jsx'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
 import { openReport, publishFile, publishAllFiles, listHitlQueue, getSettings, getSourceStatus, rescoreFile } from './api.js'
 import { releaseDestination, releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
@@ -26,6 +25,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const shownReady = sfP.active ? ready.filter(matchesFilters(sfP, PUB_FACETS, (f) => f.file)) : ready
   const [done, setDone] = useState({})
   const [pubUrls, setPubUrls] = useState({})   // file -> published Drive URL, from POST /publish
+  const [releaseFolder, setReleaseFolder] = useState(null)
+  const [releaseResults, setReleaseResults] = useState({})
+  const [releaseAnnouncement, setReleaseAnnouncement] = useState('')
   const [publishing, setPublishing] = useState(false)
   const [sel, setSel] = useState(null)
   // Why is the publish queue empty? A remediated file only becomes certifiable once its
@@ -97,15 +99,35 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const orgLabel = me?.email
     ? me.email.split('@')[1]?.replace(/\.[^.]+$/, '') || me.name || 'your organisation'
     : me?.name || 'your organisation'
+  const rememberRelease = (res) => {
+    if (res?.release_folder_name) setReleaseFolder({
+      id: res.release_folder_id, name: res.release_folder_name,
+      url: res.release_folder_url, createdAt: run?.started_at || new Date().toISOString(),
+    })
+    const rows = res?.published || []
+    setReleaseResults((old) => ({ ...old,
+      ...Object.fromEntries(rows.map((row) => [row.file, row])),
+    }))
+    const successful = rows.filter((row) => row.status === 'published')
+    if (successful.length) {
+      setDone((old) => ({ ...old,
+        ...Object.fromEntries(successful.map((row) => [row.file, true])),
+      }))
+      setPubUrls((old) => ({ ...old,
+        ...Object.fromEntries(successful.filter((row) => row.published_url)
+          .map((row) => [row.file, row.published_url])),
+      }))
+    }
+    setReleaseAnnouncement(`${successful.length} corrected ${successful.length === 1 ? 'copy' : 'copies'} released${rows.length - successful.length ? `; ${rows.length - successful.length} need attention` : ''}.`)
+    return successful
+  }
   const publish = async (file) => {
     if (done[file]) return
     try {
       const res = await publishFile(run?.id, file)
-      const u = res?.published?.find((x) => x.file === file)?.published_url
-      if (u) setPubUrls((m) => ({ ...m, [file]: u }))
-    } catch { /* best-effort — local state still updates */ }
-    setDone((d) => ({ ...d, [file]: true }))
-    onPublish?.(file)
+      const successful = rememberRelease(res)
+      if (successful.some((row) => row.file === file)) onPublish?.(file)
+    } catch { setReleaseAnnouncement('Release failed. The original file is unchanged; retry when the connection is available.') }
   }
   const publishAll = async () => {
     if (publishing) return
@@ -113,12 +135,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     const pending = ready.filter((f) => !done[f.file]).map((f) => f.file)
     try {
       const res = await publishAllFiles(run?.id, pending)
-      const urls = {}
-      ;(res?.published || []).forEach((x) => { if (x.published_url) urls[x.file] = x.published_url })
-      if (Object.keys(urls).length) setPubUrls((m) => ({ ...m, ...urls }))
+      const successful = rememberRelease(res)
+      successful.forEach((row) => onPublish?.(row.file))
     } catch { /* best-effort */ }
-    setDone(() => Object.fromEntries(ready.map((f) => [f.file, true])))
-    ready.forEach((f) => onPublish?.(f.file))
     setPublishing(false)
   }
   // W5 — set-level certification status (graduation.js). A release can go out CONDITIONALLY while
@@ -135,15 +154,12 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     const targets = setStatus.graduatable
     try {
       const res = await publishAllFiles(run?.id, targets)
-      const urls = {}
-      ;(res?.published || []).forEach((x) => { if (x.published_url) urls[x.file] = x.published_url })
-      if (Object.keys(urls).length) setPubUrls((m) => ({ ...m, ...urls }))
+      const successful = rememberRelease(res)
+      successful.forEach((row) => onPublish?.(row.file))
     } catch { /* best-effort — local state still updates */ }
-    setDone((d) => ({ ...d, ...Object.fromEntries(targets.map((f) => [f, true])) }))
-    targets.forEach((f) => onPublish?.(f))
     setPublishing(false)
   }
-  const publishedCount = Object.keys(done).length + certified.length
+  const publishedCount = Math.min(ready.length, Object.keys(done).length + certified.length)
   const pubStarted = Object.keys(done).length > 0   // zero the outcome cards until the user releases
   const reportDate = new Date(run?.completed_at || Date.now()).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
   // Real publish history: files carry their own published_at once the scan is re-fetched
@@ -160,6 +176,25 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     ? new Date(e.publishedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
     : e.external ? 'via Upload' : 'just now'
   const publishedList = publishedEntries.map((e) => e.file)
+  const sourcePath = (f) => f.source_relative_path || f.parent_folder || f.file
+  const sourceFolder = (f) => {
+    const parts = sourcePath(f).replace(/\\/g, '/').split('/')
+    return parts.length > 1 ? parts.slice(0, -1).join('/') : 'Source root'
+  }
+  const groupedReady = shownReady.reduce((groups, file) => {
+    const folder = sourceFolder(file)
+    return { ...groups, [folder]: [...(groups[folder] || []), file] }
+  }, {})
+  const selectedResult = sel ? releaseResults[sel.file] : null
+  const failedCount = Object.values(releaseResults).filter((row) => row.status === 'failed').length
+  const downloadReleaseManifest = () => {
+    const payload = { release_id: run?.id, release_folder: releaseFolder,
+      original_files_unchanged: true, documents: Object.values(releaseResults) }
+    const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }))
+    const link = document.createElement('a')
+    link.href = url; link.download = `acp-release-${run?.id || 'manifest'}.json`; link.click()
+    URL.revokeObjectURL(url)
+  }
 
   return (
     <>
@@ -196,6 +231,15 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           <span className="muted">Evidence &amp; reports: </span>
           <button className="linklike" onClick={() => run?.id && openReport(run.id)}>⤓ Download scope-limited report (PDF)</button>
         </div>
+        <div aria-label="Release destination" style={{ marginTop: 14, padding: 14,
+          border: '1px solid var(--line)', borderRadius: 10, display: 'grid', gap: 6 }}>
+          <b>{releaseFolder?.name || 'Remediated / timestamp created when release starts'}</b>
+          <span className="muted">{run?.sourceName || run?.source || 'Connected source'} · {releaseFolder?.createdAt ? new Date(releaseFolder.createdAt).toLocaleString() : 'Not created yet'}</span>
+          <span><b>{publishedCount}</b> published · <b>{Math.max(0, ready.length - Object.keys(done).length)}</b> remaining · <b>{failedCount}</b> failed</span>
+          <span>Original files are unchanged.</span>
+          {releaseFolder?.url && <a href={releaseFolder.url} target="_blank" rel="noopener noreferrer" aria-label={`Open release folder ${releaseFolder.name}`}>Open release folder ↗</a>}
+        </div>
+        <div className="sr-only" aria-live="polite">{releaseAnnouncement}</div>
       </section>
 
       {/* W5 — conditional-release → full-certification graduation. Shown only once a release has
@@ -298,9 +342,12 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
             <p className="muted" style={{ marginTop: 10 }}>Nothing verified yet — remediate documents and approve their review items in Remediate first.</p>
           )
         ) : (
-          <div className="publist">
-            {shownReady.length === 0 ? <p className="muted">No files match — <button className="ghost small" onClick={sfP.clear}>clear the filters</button></p> : shownReady.map((f) => (
-              <div className={`pubrow${done[f.file] ? ' pubdone' : ''}`} key={f.file}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', border: '1px solid var(--line)', borderRadius: 10, overflow: 'hidden' }}>
+            <div className="publist" aria-label="Documents grouped by source folder" style={{ borderRight: '1px solid var(--line)', padding: 10 }}>
+            {shownReady.length === 0 ? <p className="muted">No files match — <button className="ghost small" onClick={sfP.clear}>clear the filters</button></p> : Object.entries(groupedReady).map(([folder, folderFiles]) => (
+              <div key={folder}>
+                <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--muted)', padding: '8px 6px 4px' }}>{folder}</div>
+                {folderFiles.map((f) => <div className={`pubrow${done[f.file] ? ' pubdone' : ''}`} key={f.file}>
                 <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName} · {f.department}</span></button>
                 <span className="badge" style={{ background: 'var(--success-bg)', color: 'var(--success-fg)' }}>{f.score} / 100</span>
                 <span className="muted" title="Where this document’s corrected copy will be written" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>→ {releaseDestination({ driveFileId: f.drive_file_id, driveMirrorEnabled, driveMirrorFolder }).label}</span>
@@ -309,12 +356,30 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                 {done[f.file]
                   ? <span className="okline" style={{ fontSize: 13 }}>✓ released · fixed copy in Blob · audit recorded{pubUrls[f.file] && <> · <a href={pubUrls[f.file]} target="_blank" rel="noopener noreferrer">↗ open in Drive</a></>}</span>
                   : <button className="qbtn approve" onClick={() => setConfirm({ kind: 'file', file: f.file })} disabled={readOnly || publishing} title={readOnly ? 'Scan History replay — switch to the latest scan to release' : undefined}>↺ Release</button>}
+              </div>)}
               </div>
             ))}
+            </div>
+            <div aria-label="Selected document release details" style={{ padding: 18 }}>
+              {sel ? <>
+                <h3 style={{ marginTop: 0 }}>{sel.file}</h3>
+                <dl style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '8px 14px', fontSize: 13 }}>
+                  <dt>Release status</dt><dd>{selectedResult?.status || (done[sel.file] ? 'published' : 'ready')}</dd>
+                  <dt>Original path</dt><dd>{selectedResult?.original_relative_path || sourcePath(sel)}</dd>
+                  <dt>Destination path</dt><dd>{selectedResult?.released_relative_path || `Remediated / ${releaseFolder?.name || '<release timestamp>'} / ${sourcePath(sel)}`}</dd>
+                  <dt>Verification</dt><dd>{selectedResult?.verification || 'Pending release'}</dd>
+                </dl>
+                {selectedResult?.status === 'failed' && <div role="alert" style={{ marginTop: 14, color: 'var(--danger-fg)' }}><b>Needs attention:</b> {selectedResult.explanation}</div>}
+                {selectedResult?.published_url && <a href={selectedResult.published_url} target="_blank" rel="noopener noreferrer" aria-label={`Open released document ${sel.file}`}>Open released document ↗</a>}
+                <details style={{ marginTop: 16 }}><summary>Audit history</summary><p className="muted">{selectedResult?.published_at ? `Released ${new Date(selectedResult.published_at).toLocaleString()} · ${selectedResult.created ? 'created' : 'reused'}` : 'No release event yet.'}</p></details>
+              </> : <p className="muted">Select a document to see its original path, destination, verification, and audit history.</p>}
+            </div>
           </div>
         )}
         {publishedList.length > 0 ? (
           <div style={{ marginTop: 14 }}>
+            {Object.keys(done).length === ready.length && ready.length > 0 && <div className="okline" style={{ marginBottom: 10 }}><b>{ready.length} corrected {ready.length === 1 ? 'copy' : 'copies'} released</b>{releaseFolder?.url && <> · <a href={releaseFolder.url} target="_blank" rel="noopener noreferrer">Open release folder ↗</a></>}</div>}
+            <button className="ghost small" onClick={downloadReleaseManifest}>Download release manifest</button>
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 6 }}>📋 Audit trail · {publishedEntries.length} released</div>
             {publishedEntries.slice(0, 8).map((e) => (
               <div key={e.file} style={{ fontSize: 12.5, padding: '5px 0', borderBottom: '1px solid var(--line)' }}>
@@ -327,7 +392,6 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           <p className="muted" style={{ marginTop: 12 }}>{driveMirrorEnabled ? `Releasing writes the fixed copy to the Drive “${driveMirrorFolder}” folder and Azure Blob storage and records each release in the audit trail here.` : 'Releasing writes the fixed copy to Azure Blob storage and records each release in the audit trail here.'}</p>
         )}
       </section>
-      {sel && <FileDrawer file={sel} scanId={run.id} onClose={() => setSel(null)} />}
 
       {/* Confirmation before a release runs. States, in checkable terms, exactly what will happen —
           destination, that the original is untouched, the audit entry, and that this is not a

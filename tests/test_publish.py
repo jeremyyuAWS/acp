@@ -119,3 +119,42 @@ def test_upload_published_stamps_acp_provenance_on_create_and_update():
     publish.upload_published(updated, "fid", "deck.pptx", b"x")
     assert updated.calls[-1][0] == "update"
     assert provenance.is_acp_generated({"properties": updated.props[-1]})
+
+
+def test_normalize_relative_path_preserves_hierarchy_and_normalizes_separators():
+    folders, leaf = publish.normalize_relative_path(
+        r"HR\Policies\Leave Policy.docx", "Leave Policy.docx")
+    assert folders == ["HR", "Policies"]
+    assert leaf == "Leave Policy.docx"
+
+
+def test_normalize_relative_path_rejects_traversal_absolute_and_controls():
+    import pytest
+    for unsafe in ("../secret/report.pdf", "/etc/report.pdf", "C:/tmp/report.pdf",
+                   "HR//report.pdf", "HR/\x00/report.pdf"):
+        with pytest.raises(publish.UnsafeReleasePath):
+            publish.normalize_relative_path(unsafe, "report.pdf")
+
+
+def test_provider_invalid_characters_are_normalized_without_flattening():
+    assert publish.normalize_relative_path("HR:West/Forms?/a.pdf", "a.pdf") == \
+        (["HR_West", "Forms_"], "a.pdf")
+
+
+def test_publication_key_changes_with_content_version_and_source_identity():
+    one = publish.publication_key("release", "source-a", "checksum-1")
+    assert one == publish.publication_key("release", "source-a", "checksum-1")
+    assert one != publish.publication_key("release", "source-a", "checksum-2")
+    assert one != publish.publication_key("release", "source-b", "checksum-1")
+
+
+def test_idempotent_upload_reuses_existing_document_without_overwrite():
+    svc = _FakeSvc(list_result=[{
+        "id": "published-1", "webViewLink": "https://drive/existing"
+    }])
+    result = publish.upload_published(
+        svc, "release-folder", "report.pdf", b"fixed",
+        idempotency_key="stable-key", return_details=True)
+    assert result["id"] == "published-1"
+    assert result["created"] is False
+    assert not any(call[0] in ("create", "update") for call in svc.calls)

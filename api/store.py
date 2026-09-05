@@ -4976,7 +4976,7 @@ class Store:
                 "SELECT fr.file,fr.engine,fr.status,fr.score,fr.compliant,fr.skipped_rules,"
                 "fr.remediated_at,fr.drive_write_url,fr.acp_stamped,fr.published_at,"
                 "fr.size_kb,fr.pages,fr.sheets,fr.drive_file_id,fr.source_modified,"
-                "si.owner,si.parent_folder "
+                "si.owner,si.parent_folder,si.path AS source_relative_path "
                 "FROM file_records fr "
                 "LEFT JOIN scan_inventory si ON si.scan_id=fr.scan_id AND si.file=fr.file "
                 "WHERE fr.scan_id=%s ORDER BY fr.file", (sid,))
@@ -4987,7 +4987,7 @@ class Store:
             # writes real file_records, those win and this fallback goes quiet.
             if not files:
                 self._db.execute(cur,
-                    "SELECT file,doc_class,size_kb,drive_file_id,owner,parent_folder "
+                    "SELECT file,doc_class,size_kb,drive_file_id,owner,parent_folder,path AS source_relative_path "
                     "FROM scan_inventory WHERE scan_id=%s ORDER BY file", (sid,))
                 inv = self._db.fetchall(cur)
                 files = [{"file": r["file"], "engine": r.get("doc_class") or "inventory",
@@ -4996,7 +4996,8 @@ class Store:
                           "acp_stamped": None, "published_at": None, "size_kb": r.get("size_kb"),
                           "pages": None, "sheets": None, "drive_file_id": r.get("drive_file_id"),
                           "source_modified": None, "owner": r.get("owner"),
-                          "parent_folder": r.get("parent_folder")}
+                          "parent_folder": r.get("parent_folder"),
+                          "source_relative_path": r.get("source_relative_path")}
                          for r in inv]
             # Drop ACP's own remediated copies when they shadow the source document they were
             # made from. They are artifacts, not documents in the estate: counting them
@@ -6735,11 +6736,15 @@ class Store:
             return self._db.fetchone(cur) or {}
 
     def get_file_record(self, scan_id: str, file: str) -> dict | None:
-        """Return the full file_records row for one file in a scan."""
+        """Return one file plus its immutable discovery path for release decisions."""
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT file,engine,status,score,compliant,drive_file_id,remediated_at,published_at "
-                "FROM file_records WHERE scan_id=%s AND file=%s",
+                "SELECT f.file,f.engine,f.status,f.score,f.compliant,f.drive_file_id,"
+                "f.remediated_at,f.published_at,f.published_url,f.checksum,"
+                "i.path AS source_relative_path,i.parent_folder "
+                "FROM file_records f LEFT JOIN scan_inventory i "
+                "ON i.scan_id=f.scan_id AND i.file=f.file "
+                "WHERE f.scan_id=%s AND f.file=%s",
                 (scan_id, file))
             return self._db.fetchone(cur)
 

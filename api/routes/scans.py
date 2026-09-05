@@ -2610,34 +2610,83 @@ def clear_scan_tokens(sid: str, request: Request):
 @router.post("/scans/{sid}/publish")
 def publish_files(sid: str, request: Request, body: dict):
     """Publish one or more re-validated files — ADR 0010 archive-copy, NON-destructive.
-    The fixed copy (durable in Blob) is placed in a distinct Drive "Published (Accessible)"
-    folder as the official document-of-record; the original source file is never
-    overwritten. Records published_at + the published Drive URL. Absent Drive token /
-    read-only grant / no Blob copy → record-only publish (Blob stays the durable copy).
+    The fixed copy (durable in Blob) is placed beneath one timestamped ``Remediated``
+    release root using the immutable source hierarchy; the original is never overwritten.
+    Absent provider write support, Blob remains the durable document-of-record.
     Body: {"files": ["fname1", "fname2"]} or {"file": "fname"}."""
-    if core.store.get_scan(sid, owner=_owner(request)) is None:
+    scan = core.store.get_scan(sid, owner=_owner(request))
+    if scan is None:
         raise HTTPException(404, "scan not found")
     files = body.get("files") or ([body["file"]] if body.get("file") else [])
     if not files:
         raise HTTPException(422, "provide 'file' or 'files' in body")
-    # Best-effort Drive service + published folder, resolved once for the batch.
+    # Best-effort Drive service + release folder, resolved once for the batch.
     token = request.headers.get("x-drive-token")
-    owner_email = (core.store.get_scan(sid) or {}).get("run", {}).get("owner_email")
+    owner_email = scan.get("run", {}).get("owner_email")
     import publish as _publish
-    svc = folder_id = None
+    svc = folder_id = release_folder = None
     if token:
         try:
+            from datetime import datetime
             import handlers
             svc = handlers._drive_client(token)
-            folder_id = _publish.ensure_published_folder(svc)
+            started = scan.get("run", {}).get("started_at")
+            released_at = datetime.fromisoformat(started.replace("Z", "+00:00")) if started else None
+            release_folder = _publish.ensure_published_folder(
+                svc, sid, released_at=released_at, return_details=True)
+            folder_id = release_folder["id"]
         except Exception:
-            svc = folder_id = None
+            svc = folder_id = release_folder = None
     results = []
+    folder_cache = {}
     for f in files:
-        url = _publish.archive_copy_publish(svc, folder_id, owner_email, sid, f)
-        ts = core.store.record_publish(sid, f, published_url=url)
-        results.append({"file": f, "published_at": ts, "published_url": url})
-    return {"published": results}
+        record = core.store.get_file_record(sid, f)
+        if not record or not record.get("compliant") or not record.get("remediated_at"):
+            results.append({"file": f, "original_relative_path": None,
+                            "released_relative_path": None, "status": "failed",
+                            "failure_category": "not_approved",
+                            "explanation": "Only approved corrected copies can be released.",
+                            "created": False})
+            continue
+        source_path = record.get("source_relative_path") or record.get("parent_folder") or f
+        try:
+            publication = _publish.archive_copy_publish(
+                svc, folder_id, owner_email, sid, f, relative_path=source_path,
+                source_id=record.get("drive_file_id") or f, folder_cache=folder_cache,
+                return_details=True)
+            # Providers without write support retain Blob as the durable corrected copy.
+            if svc is not None and publication is None:
+                raise IOError("corrected content was unavailable")
+            url = publication.get("url") if publication else record.get("published_url")
+            ts = core.store.record_publish(sid, f, published_url=url)
+            folders, safe_name = _publish.normalize_relative_path(source_path, f)
+            results.append({"file": f, "original_relative_path": source_path,
+                            "released_relative_path": "/".join([*folders, safe_name]),
+                            "status": "published", "published_at": ts,
+                            "published_url": url,
+                            "verification": "checksum verified" if publication else "durable Blob copy",
+                            "released_document_id": publication.get("id") if publication else None,
+                            "created": publication.get("created", False) if publication else False})
+        except _publish.UnsafeReleasePath as exc:
+            results.append({"file": f, "original_relative_path": source_path,
+                            "released_relative_path": None, "status": "failed",
+                            "failure_category": "invalid_source_path",
+                            "explanation": str(exc), "created": False})
+        except Exception:
+            results.append({"file": f, "original_relative_path": source_path,
+                            "released_relative_path": None, "status": "failed",
+                            "failure_category": "provider_write_failed",
+                            "explanation": "The corrected copy could not be verified at the release destination. Retry this document.",
+                            "created": False})
+    published = sum(r["status"] == "published" for r in results)
+    failed = len(results) - published
+    total = len(files)
+    return {"release_id": sid, "release_folder_id": folder_id,
+            "release_folder_name": release_folder.get("name") if release_folder else None,
+            "release_folder_url": release_folder.get("url") if release_folder else None,
+            "documents_total": total, "published_count": published,
+            "failed": failed, "remaining": max(0, total - published - failed),
+            "published": results}
 
 
 @router.get("/scans/{scan_id}/files/{filename:path}/remediated")

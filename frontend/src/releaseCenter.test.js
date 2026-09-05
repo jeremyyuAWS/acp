@@ -61,4 +61,15 @@ describe('Release Center: confirmation before a release', () => {
     const s = pub()
     expect(s).toMatch(/releaseDestination\(\{ driveFileId: f\.drive_file_id, driveMirrorEnabled, driveMirrorFolder \}\)\.label/)
   })
+
+  it('shows one release destination and an accessible two-column document view', () => {
+    const s = pub()
+    expect(s).toMatch(/aria-label="Release destination"/)
+    expect(s).toMatch(/Open release folder/)
+    expect(s).toMatch(/Original files are unchanged/)
+    expect(s).toMatch(/Documents grouped by source folder/)
+    expect(s).toMatch(/Selected document release details/)
+    expect(s).toMatch(/aria-live="polite"/)
+    expect(s).toMatch(/<details[^>]*><summary>Audit history/)
+  })
 })
