@@ -139,8 +139,12 @@ def evidence_problem(evidence: dict | None) -> str:
         return "SharePoint version evidence does not show the replacement is approved/published."
     if kind == ADMIN_MAPPING and not str(e.get("confirmed_by") or "").strip():
         return "Administrator-confirmed mapping does not record who confirmed it."
-    if not str(e.get("replacement_modified") or "").strip():
-        return "Evidence does not record when the replacement was last modified."
+    if _parse_iso(e.get("replacement_modified")) is None:
+        # A PARSEABLE time, not merely a non-empty one. A record whose timestamp is a string
+        # nobody can read cannot show the minimum replacement age has elapsed, and treating it
+        # as present-but-unreadable would push the failure one gate downstream where it reads as
+        # a policy refusal rather than as malformed evidence.
+        return "Evidence does not record a readable time for when the replacement was last modified."
     return ""
 
 
@@ -477,6 +481,10 @@ def decide(candidate: dict, *, policy: dict, evidence: list[dict] | None, now: d
                    f"archival.", keep, rejected)
 
     ages = [replacement_age_days(e, now) for e in keep]
+    # Defence in depth: `evidence_problem` already refuses a record whose replacement time cannot
+    # be parsed, so `keep` should never contain one. Kept because the alternative if it ever does
+    # is `max()` over an empty sequence — a crash mid-run — and because a caller may hand `decide`
+    # evidence it assembled itself rather than through `usable_evidence`.
     if all(age is None for age in ages):
         return out(BLOCKED,
                    "The replacement's last-modified time could not be read, so its minimum age "
