@@ -195,6 +195,54 @@ def email_allowed(email: str) -> bool:
     return any(email.endswith("@" + d.lower()) for d in ALLOWED_DOMAINS)
 
 
+def people_with_access() -> list[dict]:
+    """Everyone the People screen lists, merged from the three places access is actually granted.
+
+    ACCESS AND A `people` ROW ARE NOT THE SAME THING, and that is the whole reason this exists.
+    A person reaches the People screen by any of three routes:
+
+      * a `people` record — added through Settings, carrying a provider and an invite status
+      * the ALLOWLIST alone — seeded from ACP_ALLOWED_EMAILS or added before the people table
+        existed. They can sign in; there is no record describing them. The screen shows them as
+        "Provider not recorded".
+      * being the protected OWNER_EMAIL, who is always present whether stored or not
+
+    Only the first of those puts a row in `store.get_people()`. Anything that asks "does this
+    person exist?" by reading that table alone therefore disagrees with the screen the
+    administrator is looking at — it says no to somebody whose name is on the list, in a row with
+    working controls beside it.
+
+    That is not hypothetical. `assign_person_role` did exactly that and answered
+    `404 person not found` when an administrator used the role dropdown on an allowlist-only
+    person, on the People screen that had just rendered them. The list and the write have to
+    answer from the same set, so they both come here.
+
+    NOT the same question as `email_allowed`, which additionally admits any address under an
+    allowed DOMAIN. Domain-wide users can sign in without appearing here, deliberately: this is
+    the enumerable roster the People screen manages, not the perimeter.
+    """
+    st = get_store()
+    records = {r["email"]: r for r in st.get_people()}
+    admins = set(st.get_admins()) | set(ADMIN_EMAILS)
+    for email in st.get_allowlist():
+        records.setdefault(email, {"email": email, "provider": None, "status": "access_ready",
+                                   "role": "admin" if email in admins else "user"})
+    if OWNER_EMAIL:
+        records[OWNER_EMAIL] = {**records.get(OWNER_EMAIL, {}),
+                                "email": OWNER_EMAIL, "status": "active",
+                                "role": "owner", "protected": True}
+    return sorted(records.values(), key=lambda r: r["email"])
+
+
+def person_with_access(email: str | None) -> dict | None:
+    """One person from `people_with_access`, or None. Lower-cased and stripped, because that is
+    how every caller receives an address off the wire."""
+    target = (email or "").strip().lower()
+    if not target:
+        return None
+    return next((p for p in people_with_access() if p.get("email") == target), None)
+
+
 def is_scope_owner(email: str | None) -> bool:
     """May this identity edit the scan scope? Scope writes go through PUT /settings, which is
     admin-only (_require_admin), so this is the same gate the API enforces — it exists so the SPA can

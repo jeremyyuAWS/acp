@@ -192,17 +192,15 @@ _PEOPLE_PROVIDERS = {"google", "microsoft"}
 
 
 def _people_payload(can_manage: bool = True) -> dict:
+    """The People screen's payload: the roster, plus what the screen needs to render it.
+
+    The merge that builds the roster moved to `core.people_with_access` and is no longer done
+    here. It was done here, and the role-assignment endpoint answered the same question from
+    `store.get_people()` alone — so the screen listed people it then refused to act on. One
+    function now, because two implementations of "who has access" is how they came to differ.
+    """
     import invites
-    records = {r["email"]: r for r in core.store.get_people()}
-    admins = set(core.store.get_admins()) | set(core.ADMIN_EMAILS)
-    for email in core.store.get_allowlist():
-        records.setdefault(email, {"email": email, "provider": None, "status": "access_ready",
-                                   "role": "admin" if email in admins else "user"})
-    if core.OWNER_EMAIL:
-        records[core.OWNER_EMAIL] = {**records.get(core.OWNER_EMAIL, {}),
-                                     "email": core.OWNER_EMAIL, "status": "active",
-                                     "role": "owner", "protected": True}
-    return {"people": sorted(records.values(), key=lambda r: r["email"]),
+    return {"people": core.people_with_access(),
             "invite_enabled": invites.invite_configured(), "domains": core.ALLOWED_DOMAINS,
             "can_manage": can_manage}
 

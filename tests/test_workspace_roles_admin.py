@@ -447,3 +447,125 @@ def test_every_role_change_is_recorded_with_an_actor(env):
                if d["action"].startswith("role.")]
     for action in ("role.created", "role.updated", "role.deleted"):
         assert (action, OWNER) in actions, f"{action} missing from the audit trail"
+
+
+# ── the screen and the write must answer from the same roster ─────────────────
+#
+# REPORTED FROM THE RUNNING PRODUCT: "can't assign roles to user", with `person not found` in red
+# on a People screen that was listing the person at the time. Two functions answered "does this
+# person exist?" from different places — the list merged the `people` table with the ALLOWLIST and
+# the owner, the assignment endpoint read the table alone — so everyone admitted by the allowlist
+# without a stored record (the "Provider not recorded" rows) rendered with a working dropdown and
+# a 404 behind it.
+#
+# The env fixture cannot catch this on its own: it calls upsert_person for every actor, so every
+# test above runs against people who happen to have records. That is the trap — a fixture that
+# only builds the easy case makes the whole file agree with the bug.
+
+ALLOWLISTED = "allowlisted@hosp.org"      # can sign in; no `people` row anywhere
+
+
+@pytest.fixture
+def env_with_allowlisted(env):
+    """`env`, plus a person who reaches the People screen by the allowlist alone."""
+    adm, core, st = env
+    st.set_allowlist([OWNER, MANAGER, REVIEWER, NOBODY, ALLOWLISTED])
+    return adm, core, st
+
+
+def test_the_people_screen_lists_someone_the_people_table_does_not(env_with_allowlisted):
+    """The premise, asserted rather than assumed. If these two ever agree, every test below is
+    testing nothing — it would be exercising a person who has a record either way."""
+    _adm, core, st = env_with_allowlisted
+    import routes.system as system
+    listed = {p["email"] for p in system._people_payload()["people"]}
+    stored = {p["email"] for p in st.get_people()}
+    assert ALLOWLISTED in listed
+    assert ALLOWLISTED not in stored
+
+
+def test_an_allowlisted_person_can_be_given_a_role(env_with_allowlisted):
+    """THE BUG. The dropdown was on screen, the click did nothing but produce `person not found`,
+    and nothing in the message told the administrator that the row was the problem rather than
+    their permissions or the role."""
+    adm, _core, st = env_with_allowlisted
+    adm.assign_person_role(ALLOWLISTED, {"role_id": rbac.REMEDIATION_REVIEWER},
+                           request=_req(OWNER))
+    person = next(p for p in st.get_people() if p["email"] == ALLOWLISTED)
+    assert person[wr.ROLE_FIELD] == rbac.REMEDIATION_REVIEWER
+    assert ("role.assigned", OWNER) in [(d["action"], d["actor"]) for d in st.list_decisions()]
+
+
+def test_every_person_the_screen_lists_can_be_assigned_a_role(env_with_allowlisted):
+    """The general invariant, not the one instance of it. Written over the payload the screen
+    actually renders, so a future third source of access (another table, another seed) is covered
+    the day it is added rather than the day somebody reports it.
+
+    The owner is excluded for a stated reason and not a convenient one: the Owner row is
+    `protected` and renders no dropdown at all, so there is nothing to assign from.
+    """
+    adm, _core, _st = env_with_allowlisted
+    import routes.system as system
+    listed = [p for p in system._people_payload()["people"] if not p.get("protected")]
+    assert len(listed) >= 4, "the roster came out short; this sweep would prove little"
+    for person in listed:
+        adm.assign_person_role(person["email"], {"role_id": rbac.ANALYST}, request=_req(OWNER))
+
+
+def test_a_stranger_is_still_rejected(env_with_allowlisted):
+    """THE CONTROL, and the reason the fix is a shared roster rather than deleting the check.
+    Widening the lookup to `core.email_allowed` would have admitted anyone under an allowed
+    domain — addresses the screen never lists and an administrator never chose."""
+    adm, _core, _st = env_with_allowlisted
+    with pytest.raises(HTTPException) as exc:
+        adm.assign_person_role("stranger@hosp.org", {"role_id": rbac.ANALYST},
+                               request=_req(OWNER))
+    assert exc.value.status_code == 404
+
+
+@pytest.fixture
+def ownerless_allowlisted(ownerless):
+    """The file's existing `ownerless` deployment — no ACP_OWNER_EMAIL, roles seeded under the
+    "default" tenant — with the allowlist-only person added and every roles.manage holder
+    stripped, so the next assignment is the one that decides whether anybody can administer.
+
+    Named apart from `ownerless` rather than redefining it. Shadowing that fixture is not a
+    hypothetical: the first draft of this block did, and it silently retargeted
+    `test_demoting_is_allowed_once_somebody_else_holds_roles_manage` at a different workspace,
+    which then failed for a reason that had nothing to do with what it tests.
+    """
+    adm, core, st = ownerless
+    st.set_allowlist([MANAGER, REVIEWER, NOBODY, ALLOWLISTED])
+    wr.assign_role(st, email=MANAGER, role_id=rbac.VIEWER, actor="test")
+    return adm, core, st
+
+
+def test_promoting_an_allowlisted_person_to_role_manager_is_not_read_as_a_lockout(
+        ownerless_allowlisted):
+    """The same asymmetry in the §14 anti-lockout guard, which is worse than the 404 it sits
+    behind. The guard counts who would still hold roles.manage after the change, reading the
+    `people` table — so a target with no record was never counted as keeping it. Granting
+    roles.manage to an allowlist-only user was therefore refused with "this would leave nobody
+    able to manage roles", by the very act that would have left somebody able to.
+
+    It only bites where no owner is configured, because a configured owner always holds
+    roles.manage. That is exactly the deployment with no other way back in.
+    """
+    adm, _core, st = ownerless_allowlisted
+    adm.assign_person_role(ALLOWLISTED, {"role_id": "role-manager"}, request=_req(MANAGER))
+    person = next(p for p in st.get_people() if p["email"] == ALLOWLISTED)
+    assert person[wr.ROLE_FIELD] == "role-manager"
+
+
+def test_the_lockout_guard_still_refuses_in_this_state(ownerless_allowlisted):
+    """The control, in the same workspace as the test above rather than in a neighbouring one.
+    Without it, "the guard counts the target correctly" and "the guard stopped refusing anything"
+    are the same passing result — and the second is a workspace that can be locked shut.
+
+    Same person, same moment, a role that does NOT carry roles.manage: still 409.
+    """
+    adm, _core, _st = ownerless_allowlisted
+    with pytest.raises(HTTPException) as exc:
+        adm.assign_person_role(ALLOWLISTED, {"role_id": rbac.VIEWER}, request=_req(MANAGER))
+    assert exc.value.status_code == 409
+    assert "nobody able to manage roles" in str(exc.value.detail)
