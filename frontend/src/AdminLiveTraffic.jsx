@@ -622,12 +622,30 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
   return { nodes, edges }
 }
 
+/** Keep the stable service topology and the changing run inventory in separate views. Mixing the
+ * two creates an edge from every source to every run and from every run to a worker, which becomes
+ * unreadable as soon as several scans overlap. The jobs view deliberately has no edges: each card
+ * already names its stage, source, owner, progress and queue position, and remains selectable for
+ * the full live drawer. */
+export function trafficGraphForTab(graph = { nodes: [], edges: [] }, tab = 'infrastructure') {
+  if (tab === 'jobs') {
+    const nodes = graph.nodes.filter((node) => node.type === 'run' && node.data?.run?.status !== 'recent')
+      .map((node, index) => ({ ...node,
+        position: { x: 35 + (index % 3) * 270, y: 55 + Math.floor(index / 3) * 165 } }))
+    return { nodes, edges: [] }
+  }
+  const nodes = graph.nodes.filter((node) => node.type === 'infra')
+  const ids = new Set(nodes.map((node) => node.id))
+  return { nodes, edges: graph.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target)) }
+}
+
 export default function AdminLiveTraffic() {
   const [snapshot, setSnapshot] = useState(null)
   const [selectedKey, setSelectedKey] = useState(null)
   const [connection, setConnection] = useState('connecting')
   const [capacity, setCapacity] = useState(null)
   const [capacityState, setCapacityState] = useState('loading')
+  const [flowTab, setFlowTab] = useState('infrastructure')
   const history = useRef(new Map())
   // Per-node metric samples over the drawer's 15-minute window, and the operational events derived
   // from the differences between consecutive live snapshots. Both are session state: there is no
@@ -675,6 +693,7 @@ export default function AdminLiveTraffic() {
   // is no second keydown listener here to fight it.
 
   const graph = useMemo(() => buildTrafficGraph(snapshot, history.current, capacity, connection), [snapshot, capacity, connection])
+  const visibleGraph = useMemo(() => trafficGraphForTab(graph, flowTab), [graph, flowTab])
 
   // One pass per live snapshot: sample every node for the trend strip, and diff this snapshot
   // against the previous one for the timeline. Both write into refs the same way the sparkline
@@ -754,28 +773,38 @@ export default function AdminLiveTraffic() {
       borderLeft: `4px solid ${PRESSURE.busy.color}`, background: 'var(--page)', fontSize: 12 }}>
       <b>Queue concentration:</b> one user holds {concentration.pct}% of waiting jobs. Tenant-fair scheduling gives other waiting users the next equally prioritized capacity.
     </div>}
-    <div style={{ height: Math.max(540, 495 + Math.ceil((snapshot?.runs?.length || 0) / 3) * 145), maxHeight: 760,
+    <div role="tablist" aria-label="Live Operations flow views" style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
+      {[['infrastructure', 'Infrastructure map'], ['jobs', `Running jobs (${summary.active_runs || 0})`]].map(([id, label]) =>
+        <button key={id} type="button" role="tab" aria-selected={flowTab === id}
+          className={flowTab === id ? '' : 'ghost'}
+          onClick={() => { setFlowTab(id); setSelectedKey(null) }}
+          style={{ padding: '7px 12px', fontSize: 12 }}>{label}</button>)}
+    </div>
+    <div style={{ height: flowTab === 'infrastructure' ? 590
+      : Math.max(360, 100 + Math.ceil(visibleGraph.nodes.length / 3) * 165), maxHeight: 760,
       border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden', background: 'var(--page)' }}>
-      <ReactFlow nodes={graph.nodes} edges={graph.edges} nodeTypes={nodeTypes}
+      <ReactFlow key={flowTab} nodes={visibleGraph.nodes} edges={visibleGraph.edges} nodeTypes={nodeTypes}
         defaultEdgeOptions={EDGE_ROUTING}
         fitView minZoom={0.35} maxZoom={1.5}
         onNodeClick={(_, node) => setSelectedKey(node.id)}
         onNodeDoubleClick={(_, node) => setSelectedKey(node.id)}
         onEdgeClick={(_, edge) => setSelectedKey(edge.data?.detail || edge.target)}>
         <Background gap={18} size={1} /><MiniMap pannable zoomable /><Controls showInteractive={false} />
-        <div aria-label="Map key" style={{ position: 'absolute', zIndex: 3, right: 12, top: 12,
+        {flowTab === 'infrastructure' && <div aria-label="Map key" style={{ position: 'absolute', zIndex: 3, right: 12, top: 12,
           display: 'flex', gap: 12, padding: '6px 9px', border: '1px solid var(--border)',
           borderRadius: 7, background: 'var(--panel)', boxShadow: '0 2px 7px rgba(24,20,28,.07)',
           color: 'var(--muted)', fontSize: 10.5 }}>
           <span><b style={{ color: 'var(--ink)' }}>SERVICE</b> · capacity</span>
-          <span><b style={{ color: 'var(--ink)' }}>ACTIVE JOB</b> · document progress</span>
           <span><b style={{ color: 'var(--ink)' }}>DATA</b> · sources and outputs</span>
-        </div>
-        {!snapshot?.runs?.length && <div className="chip" style={{ position: 'absolute', zIndex: 3, left: 12, bottom: 12 }}>
+        </div>}
+        {flowTab === 'infrastructure' && <div className="chip" style={{ position: 'absolute', zIndex: 3, left: 12, bottom: 12 }}>
           Idle · select any tile to inspect the ready processing path
         </div>}
-        {!!snapshot?.runs?.length && <div className="chip" style={{ position: 'absolute', zIndex: 3, left: 12, bottom: 12 }}>
-          Moving lines carry work in flight · select a line, or either tile it joins, for details
+        {flowTab === 'jobs' && !visibleGraph.nodes.length && <div className="chip" style={{ position: 'absolute', zIndex: 3, left: 12, top: 12 }}>
+          No jobs are running or waiting right now
+        </div>}
+        {flowTab === 'jobs' && !!visibleGraph.nodes.length && <div className="chip" style={{ position: 'absolute', zIndex: 3, left: 12, bottom: 12 }}>
+          Select a job to inspect its live progress, queue, throughput, and events
         </div>}
       </ReactFlow>
     </div>
