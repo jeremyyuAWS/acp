@@ -98,10 +98,15 @@ def test_every_check_passes_on_a_healthy_installation(tmp_path):
 def test_an_autoscaled_tier_inside_its_range_is_not_drift(tmp_path):
     """THE TEST THIS FILE EXISTS FOR.
 
-    The remediate tier is configured 3-10 in the document and running at 7. The obvious check —
-    compare against `replicaCount`, which is the FLOOR (3) — calls that drift. It is not: it is
+    The remediate tier is configured 5-10 in the document and running at 7. The obvious check —
+    compare against `replicaCount`, which is the FLOOR (5) — calls that drift. It is not: it is
     KEDA doing exactly what it was installed to do, and a status command that reports it is red on
     every correctly-working installation.
+
+    The range was 3-10 until 2026-09-05, when the floor was raised to the five replicas production
+    keeps warm. Nothing about this test's point changed — 7 is still strictly inside the range and
+    still above the floor, which is what makes it a real test of the range rule rather than of an
+    exact match.
 
     Read on remediate rather than assess since the owner pinned the assess tier warm at 5-5
     (2026-09-05). A pinned tier is judged by the opposite rule — exact count, any difference is
@@ -127,7 +132,16 @@ def test_an_autoscaled_tier_outside_its_range_is_drift(tmp_path):
     finding = check(report, "replicas.remediate")
     assert finding["status"] == "fail"
     assert "outside" in finding["detail"]
-    assert "3-10" in finding["detail"]
+    # THE RANGE IS READ FROM THE DOCUMENT, not typed here. This assertion was the literal `3-10`
+    # and went red on 2026-09-05 when the remediate floor was raised to 5 — a correct message
+    # failing a stale expectation, which is the least useful kind of red. What the test actually
+    # cares about is that the message NAMES the configured range rather than just complaining, and
+    # that survives the range changing.
+    import yaml
+    doc = yaml.safe_load(
+        (PACKAGING / "examples" / "standard-production.acp-deployment.yaml").read_text())
+    want = doc["workers"]["remediate"]["replicas"]
+    assert f"{want['min']}-{want['max']}" in finding["detail"], finding["detail"]
     assert report["drifted"] is True
 
 

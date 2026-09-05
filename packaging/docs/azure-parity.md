@@ -75,8 +75,15 @@ narrows what a rebuild has to prove for that tier to the replica floor alone.
 #1370 also pinned `ACP_DB_MAX_CONN=2` per replica on all three worker tiers, to keep the fleet
 under Postgres's measured 150-connection ceiling. The baseline records it, because a replica
 ceiling means something different once each replica caps its own pool: `5–10` remediate replicas
-is a 20-connection budget, not an open-ended one. The contract has no vocabulary for a per-replica
-connection pool today, which is a gap in the document rather than a difference in the deployment.
+is a 20-connection budget, not an open-ended one.
+
+**This paragraph used to end "the contract has no vocabulary for a per-replica connection pool
+today", and that stopped being true without the sentence changing.** `tier.connectionPool` was
+added with the Azure adapter, `pool_per_replica` reads it, and `spec.validate` accepts it —
+checked by declaring `connectionPool: 2` on all three worker tiers of this very example, which
+validates OK and takes worst-case demand from **418 to 100**. The gap is no longer in the
+vocabulary; it is that the standard-production example still declines to use it. See the last
+section.
 
 ## Also worth deciding
 
@@ -84,8 +91,8 @@ connection pool today, which is a gap in the document rather than a difference i
 ranges *"mirror the reviewed Azure baseline in `deploy/public/rightsize-production.sh`"*. The CPU
 and memory do mirror it exactly — every tier matches. The replica ranges did not, and only one of
 the differences (the API floor) was acknowledged there. The header now separates the two claims and
-names the three ranges that still differ, so a reader is not told the document mirrors production
-in a respect where it does not. Those three remain undecided: see the generated table below.
+names the exceptions, so a reader is not told the document mirrors production in a respect where it
+does not.
 
 **Today's production fails its own profile's floor.** The standard profile requires two API
 replicas (PRD §8); `acp-app` runs `1–3`. The example raises the floor to 2 and says so, which
@@ -98,6 +105,65 @@ document.
 correct. `acp-worker` is different: `deploy.sh` still creates and updates it while `redeploy.sh`
 calls it *"the retired generic acp-worker"* and deliberately excludes it from the health gate. One
 of those two scripts is wrong about the topology, and it is worth settling which.
+
+## The last three ranges, decided together (2026-09-05)
+
+**Decided by the owner: the contract is authoritative, and production overrides are documented
+rather than silently tolerated.** Three replica ranges had been carried as *unexplained* since the
+baseline was first derived. They are decided here as ONE question, because they are one question:
+every replica ceiling is a term in the fleet's worst-case Postgres demand, and that demand is what
+a server has to be provisioned to survive. Deciding them one at a time is how a capacity budget
+gets spent without anyone noticing.
+
+**Priced first, argued second.** Measured with `acpctl`'s own `connection_budget` against this
+document:
+
+| change | worst-case connections | headroom (700 server, less 15 reserved) |
+|---|---:|---:|
+| the contract as it stood | 418 | 267 |
+| `api.replicas.max` 4 → 3 | 402 | 283 |
+| `discover.replicas.max` 3 → 2 | 400 | 285 |
+| `remediate.replicas.min` 3 → 5 | **418** | **267** |
+
+**The floor is free and the ceilings are cheap.** `connection_budget` sums each tier's demand at
+MAX replicas, because every replica holds its own pool — so raising the remediate FLOOR moves the
+worst case by exactly nothing, and the two ceilings cost 16 and 18 connections against 267 of
+headroom. That is the whole reason these could be settled on their merits: none of them is a
+capacity problem, so none of them had to be traded against another.
+
+**`remediate.replicas.min`: 3 → 5, the contract adopts production.** `rightsize-production.sh`
+names this tier in the same sentence as assess — *"Assessment and Remediation are
+throughput-sensitive batch stages: keep five replicas warm so large runs retain the production
+performance baseline."* The owner already carried that operating model into the contract for
+assess. A contract that accepted the reasoning for one tier and contradicted it for the other was
+not describing a considered position, it was describing two different days. The autoscale block
+stays, unlike assess, because production really does autoscale this tier.
+
+**`api.replicas.max`: stays 4, production is the override.** Production's ceiling of 3 was chosen
+against a floor of 1, and its comment — *"The web tier retains burst headroom"* — is a statement
+about the RANGE rather than the ceiling. The contract corrects that floor to 2 for the profile, so
+holding the ceiling at 3 would quietly halve the burst range production says it wants, from 3x to
+1.5x. 2–4 keeps it at 2x.
+
+**`discover.replicas.max`: stays 3, production is the override.** Production runs 1–2 and records
+no reason for the ceiling; its only comment on this tier is about a scale rule, and that rule is
+itself listed below as unverifiable from this repository. An unexplained 2 is not evidence of a
+considered 2, and the contract does not defer to it.
+
+**What this does NOT claim.** Three real differences remain — the API floor, the API ceiling and
+the discovery ceiling — and every one of them is deliberate. The report's flag was called `parity`
+and computed as "nothing unexplained"; closing these rows would have flipped it True for the first
+time and made the document assert equality it does not have. It is `noUnexplainedDifferences` now,
+beside a `stillDiffers` count, because an acknowledgement records why a difference exists and does
+not remove it.
+
+**The dominant term is not on this list, and is not settled here.** The contract declares
+`maxConnections: 700` and does not pin `connectionPool`; production runs a **150**-connection
+server with `ACP_DB_MAX_CONN=2` on every worker tier (#1370). Measured both ways: the contract's
+own ranges need 418 connections unpinned, and **100** with the pools pinned as production pins
+them — inside a 150-connection server with 35 to spare. So the contract does not need a
+700-connection server; it needs to say that it pins pools. That is a larger decision than these
+three ranges and is left for the owner rather than folded in here.
 
 ## On ADR 0048's Container Apps claims
 
@@ -138,18 +204,19 @@ Parsed from the deployment scripts, not from a live subscription.
 | `api` | 1.0 | 2Gi | 2–4 | yes |
 | `assess` | 2.0 | 4Gi | 5–5 | no |
 | `discover` | 1.0 | 2Gi | 1–3 | yes |
-| `remediate` | 2.0 | 4Gi | 3–10 | yes |
+| `remediate` | 2.0 | 4Gi | 5–10 | yes |
 
 ## Differences
 
-**3 unexplained**, 1 acknowledged.
+**0 unexplained**, 3 acknowledged.
+
+Every difference now carries a recorded decision. Production still differs from the contract in **3** places — that is the point of the acknowledgements, not something they undo. Each row below says which side is authoritative and why.
 
 | Tier | Field | Azure | Contract | | Why |
 |---|---|---|---|---|---|
 | `api` | `replicas.min` | `1` | `2` | acknowledged | The example raises the API floor from 1 to 2 because the standard profile requires two API replicas (PRD S8), and the example's own header says so. Azure runs 1 — so today's production would FAIL its own profile's floor, which is a finding about the deployment rather than about the contract. |
-| `api` | `replicas.max` | `3` | `4` | **unexplained** | — |
-| `discover` | `replicas.max` | `2` | `3` | **unexplained** | — |
-| `remediate` | `replicas.min` | `5` | `3` | **unexplained** | — |
+| `api` | `replicas.max` | `3` | `4` | acknowledged | Production's ceiling of 3 was chosen against a floor of 1 — rightsize-production.sh says 'The web tier retains burst headroom', which is a statement about the RANGE. The contract corrects that floor to 2 for the profile, so holding the ceiling at 3 would silently halve the burst range production says it wants (3x down to 1.5x); 2-4 keeps it at 2x. Priced: the extra replica is 16 Postgres connections against 267 of headroom. The contract stands and Azure's ceiling is the override to correct alongside its floor. |
+| `discover` | `replicas.max` | `2` | `3` | acknowledged | Production runs 1-2 and records no reason for the ceiling — rightsize-production.sh's only comment on this tier ('Discovery can use its existing CPU scale rule') is about the scale rule, and that rule is itself UNVERIFIABLE from this repository. An unexplained 2 is not evidence of a considered 2. Priced: the third replica is 18 Postgres connections against 267 of headroom. The contract stands as the authoritative range; Azure's ceiling is recorded here as a production override, not as the target. |
 
 ## Deployed, and not modelled by the contract
 

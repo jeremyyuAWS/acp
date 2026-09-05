@@ -48,6 +48,23 @@ ACKNOWLEDGED_DIFFERENCES: dict[tuple[str, str], str] = {
         "API replicas (PRD S8), and the example's own header says so. Azure runs 1 — so today's "
         "production would FAIL its own profile's floor, which is a finding about the deployment "
         "rather than about the contract."),
+    # Decided 2026-09-05, together, as one capacity question. The three ranges were left open
+    # because nobody had priced them; the answer is that replica CEILINGS are the only ones that
+    # cost anything (worst-case demand is set by max replicas) and both of these are affordable.
+    ("api", "replicas.max"): (
+        "Production's ceiling of 3 was chosen against a floor of 1 — rightsize-production.sh "
+        "says 'The web tier retains burst headroom', which is a statement about the RANGE. The "
+        "contract corrects that floor to 2 for the profile, so holding the ceiling at 3 would "
+        "silently halve the burst range production says it wants (3x down to 1.5x); 2-4 keeps "
+        "it at 2x. Priced: the extra replica is 16 Postgres connections against 267 of headroom. "
+        "The contract stands and Azure's ceiling is the override to correct alongside its floor."),
+    ("discover", "replicas.max"): (
+        "Production runs 1-2 and records no reason for the ceiling — rightsize-production.sh's "
+        "only comment on this tier ('Discovery can use its existing CPU scale rule') is about "
+        "the scale rule, and that rule is itself UNVERIFIABLE from this repository. An "
+        "unexplained 2 is not evidence of a considered 2. Priced: the third replica is 18 "
+        "Postgres connections against 267 of headroom. The contract stands as the authoritative "
+        "range; Azure's ceiling is recorded here as a production override, not as the target."),
 }
 
 # Configuration this repo cannot see, and why. Named so that a clean report is not read as a
@@ -174,5 +191,17 @@ def compare() -> dict[str, Any]:
         "unverifiable": dict(UNVERIFIABLE),
         "divergences": len(real),
         "acknowledged": len([d for d in differences if d.classification == ACKNOWLEDGED]),
-        "parity": not real,
+        # NOT called `parity`, and the rename is part of the 2026-09-05 decision rather than
+        # tidying. `not real` means "nothing is unexplained" — which was indistinguishable from
+        # "production matches the contract" only while it was False. Closing the last three rows
+        # flips it True for the first time, and under the old name the report would then assert
+        # parity while production still runs a different API floor, a different API ceiling and a
+        # different discovery ceiling, all deliberately. An acknowledgement records WHY a
+        # difference exists; it does not remove it. This module's own docstring calls reporting a
+        # clean comparison as parity "the overstatement this whole exercise is meant to avoid",
+        # so the field says what it measures.
+        "noUnexplainedDifferences": not real,
+        # How many real differences remain, whatever their classification — the number a reader
+        # needs in order not to mistake the flag above for equality.
+        "stillDiffers": len(differences),
     }
