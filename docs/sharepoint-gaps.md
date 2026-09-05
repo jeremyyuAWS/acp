@@ -30,6 +30,13 @@ rules), and `docs/pilot-scope.md`.
   carries a per-site breakdown — libraries, counts, status (`complete` / `partial` / `blocked` /
   `skipped`) and the error — so "no site was silently omitted" is checkable rather than asserted.
   Per-site progress reaches the SSE stream as each site resolves.
+- **Live per-library evidence (2026-09-05)** — the same SSE site rows now identify the library
+  currently being read, whether it is a full walk or delta reconstruction, and each library's own
+  queued/scanning/complete/partial outcome, document count, throttling tally and failure. A site is
+  declared complete only after its returned batches have been classified and counted, rather than
+  when Graph merely finishes returning them. The persisted final scope uses the same shape, so a
+  partial site names the specific library that failed instead of collapsing the evidence into one
+  site-level total.
 - **A refusal that names whose problem it is (2026-09-04)** — a Graph 401/403 used to produce one
   sentence for every case: grant `Sites.Read.All` with tenant admin consent. It is now three
   answers, because they have three different owners. A **401** is the token (expired, wrong
