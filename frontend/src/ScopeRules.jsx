@@ -20,12 +20,12 @@ import {
 // the union. Priority is shown on every row; the override hint says what an override does.
 
 // What the value input means for each selector — labelled so an admin types the right thing.
-const VALUE_LABEL = { folder: 'folder path', owner: 'owner email', department: 'department' }
-const VALUE_PLACEHOLDER = { folder: 'e.g. Finance/', owner: 'e.g. jordan@acme.com', department: 'e.g. Legal' }
-const SELECTOR_LABEL = { folder: 'Folder', owner: 'Owner', department: 'Department' }
+const VALUE_LABEL = { folder: 'folder path', owner: 'owner email', department: 'department', content_type: 'SharePoint Content Type' }
+const VALUE_PLACEHOLDER = { folder: 'e.g. Finance/', owner: 'e.g. jordan@acme.com', department: 'e.g. Legal', content_type: 'e.g. Policy' }
+const SELECTOR_LABEL = { folder: 'Folder', owner: 'Owner', department: 'Department', content_type: 'SharePoint Content Type' }
 
 export default function ScopeRules() {
-  const [selectors, setSelectors] = useState([])       // ['folder','owner','department']
+  const [selectors, setSelectors] = useState([])       // server-owned selector catalog
   const [catalog, setCatalog] = useState([])           // [{code, name, formats:[...]}] — the Core 17
   const [rules, setRules] = useState([])               // existing rules, priority-desc
   const [elig, setElig] = useState(null)               // {discovered, eligible, by_format, rules_applied}
@@ -111,7 +111,7 @@ export default function ScopeRules() {
       <h2 style={{ margin: 0 }}>WCAG scope rules</h2>
       <p className="muted" style={{ margin: '3px 0 14px', fontSize: 13, lineHeight: 1.5 }}>
         Assess different parts of the estate against different WCAG criteria — target files by
-        folder, owner or department and assign a Core-17 subset. A file's checks are the
+        folder, owner, department or SharePoint Content Type and assign a Core-17 subset. A file's checks are the
         <b> union</b> of every matching rule, unless an <b>override</b> replaces that union.
         These decide <i>which checks</i> run where — separate from <b>lifecycle rules</b>
         (tag / archive / deletion review), which live in each source's <b>Rules</b> tab.
