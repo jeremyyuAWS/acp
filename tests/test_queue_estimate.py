@@ -4,6 +4,8 @@ Remediate job, the data source for the queue-status panel on those three tabs.
 What this pins:
   * no live job of the requested kind -> {"available": False}
   * a running job -> "claimed", carrying worker_assigned_at/phase, no wait math
+  * worker_assigned_at reads jobs.claimed_at (immutable), NOT jobs.locked_at (heartbeat) — so a
+    long-running job's "assigned at" does not creep forward every two minutes
   * a queued job whose run_after is still in the future -> "scheduled", carrying the exact time
   * fewer than 3 recent completions of this kind -> "insufficient_history", no earliest/latest
   * enough recent completions -> "estimated", with an earliest/latest range around
@@ -22,6 +24,9 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 
+_UNSET = object()
+
+
 def _iso(dt):
     return dt.isoformat()
 
@@ -35,12 +40,20 @@ def _seed_scan(st, sid, owner="demo"):
 
 
 def _enqueue(st, jtype, sid, *, status="queued", run_after=None, priority=100,
-            locked_at=None, phase=None, updated_at=None):
+            locked_at=None, phase=None, updated_at=None, claimed_at=_UNSET):
+    # A real claim (store.claim_job) writes claimed_at AND locked_at in the same statement, so
+    # seeding only locked_at here would be a state the store never produces. claimed_at therefore
+    # defaults to locked_at; pass it explicitly to model a heartbeat that has moved locked_at on
+    # (which is the whole reason v16 split the two columns).
+    if claimed_at is _UNSET:
+        claimed_at = locked_at
     jid = st.enqueue_job(jtype, {"scan_id": sid}, priority=priority,
                          run_after=run_after or _iso(_now()), scan_id=sid)
     with st._db.cursor() as cur:
-        st._db.execute(cur, "UPDATE jobs SET status=%s, locked_at=%s, phase=%s WHERE id=%s",
-                       (status, locked_at, phase, jid))
+        st._db.execute(cur,
+                       "UPDATE jobs SET status=%s, locked_at=%s, claimed_at=%s, phase=%s "
+                       "WHERE id=%s",
+                       (status, locked_at, claimed_at, phase, jid))
         if updated_at is not None:
             st._db.execute(cur, "UPDATE jobs SET updated_at=%s WHERE id=%s", (updated_at, jid))
     return jid
@@ -70,8 +83,24 @@ def test_running_job_is_claimed_not_estimated(isolated_store):
     assert r["state"] == "claimed"
     assert r["job_type"] == "scan_batch"
     assert r["worker_assigned_at"] == when
+    assert r["worker_heartbeat_at"] == when
     assert r["phase"] == "listing"
     assert "compatible_jobs_ahead" not in r, "a claimed job has no wait to estimate"
+
+
+def test_assigned_at_is_the_claim_not_the_last_heartbeat(isolated_store):
+    """The bug v16 exists to fix: touch_job overwrites locked_at on every heartbeat, so reading
+    worker_assigned_at off it reported "assigned 30s ago" for a job held for an hour — exactly
+    the reading that made a wedged lease invisible in Live Ops."""
+    _seed_scan(isolated_store, "s1")
+    claimed = _iso(_now() - timedelta(minutes=47))
+    beat = _iso(_now() - timedelta(seconds=20))
+    _enqueue(isolated_store, "scan_batch", "s1", status="running",
+             locked_at=beat, claimed_at=claimed, phase="listing")
+
+    r = isolated_store.queue_estimate("s1", "discover")
+    assert r["worker_assigned_at"] == claimed, "assigned-at must not move with the heartbeat"
+    assert r["worker_heartbeat_at"] == beat
 
 
 # ── scheduled (future run_after — retry backoff) ───────────────────────────────

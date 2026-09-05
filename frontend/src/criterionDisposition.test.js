@@ -72,8 +72,16 @@ describe('store.py — criterion_disposition table', () => {
     expect(body).toContain('ORDER BY ts DESC')
   })
 
-  it('schema version bumped to 14', () => {
-    expect(store).toContain('_SCHEMA_VERSION = 15')
+  // Pinned as a FLOOR, not an equality. This assertion has already drifted once — its title
+  // still says 14 while it asserted 15 — because every unrelated migration since has had to come
+  // back and edit this line. An exact pin here tests nothing about criterion_disposition; it
+  // tests that nobody has added a table anywhere else in the file. What this feature actually
+  // needs is that its DDL shipped inside a migrated schema, which the CREATE/index assertions
+  // above cover, plus a version at or past the one it landed in.
+  it('shipped in a migrated schema at or past v15', () => {
+    const m = store.match(/_SCHEMA_VERSION = (\d+)/)
+    expect(m, '_SCHEMA_VERSION not found in api/store.py').toBeTruthy()
+    expect(Number(m[1])).toBeGreaterThanOrEqual(15)
   })
 })
 
