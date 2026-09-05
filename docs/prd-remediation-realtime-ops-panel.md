@@ -446,9 +446,11 @@ missing feature:
 - **`policy_version` and `execution_mode` (§6A)** are carried through as `null`. ACP records no
   version for the remediation lane table and has no per-run execution mode to read, so the panel
   shows nothing for them rather than a version number nothing stamps.
-- **Completion estimates and throughput (§10)** are absent. The existing pickup estimate
-  (`GET /scans/{id}/queue-estimate`) abstains without recent history, and a per-phase, per-lane
-  calibrated range needs evidence that has not been collected. Phase 4.
+- **Completion throughput and ETA (§10)** now come from the server snapshot. Successfully
+  completed document timestamps produce ten 30-second buckets across the latest five minutes;
+  failures, review routes and heartbeats never count as throughput. ETA abstains below five recent
+  completions and otherwise publishes an approximate 95% rate interval rather than a point guess.
+  Per-format and per-lane calibration remains Phase 4 work once production history supports it.
 - **Phase-specific stall thresholds (§18)** collapse to one `STALL_AFTER_S`. Five invented
   thresholds are worse than one honest one until there is per-format evidence to set them from.
 - **`paused` (§7)** is declared in `RUN_STATES` and never derived: ACP has no pause control for a

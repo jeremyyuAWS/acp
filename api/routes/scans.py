@@ -2636,6 +2636,10 @@ def publish_files(sid: str, request: Request, body: dict):
     folder_name = release["folder_name"]
     drive_token = request.headers.get("x-drive-token")
     sp_token = request.headers.get("x-sp-token")
+    # SharePoint Release is worker-backed: make the short-lived delegated credential available
+    # to any remediation replica without ever persisting it in Postgres or a job payload.
+    if source == "sharepoint" and sp_token:
+        core.register_scan_tokens(sid, sp=sp_token)
     drive_svc = None
     if source == "drive" and drive_token:
         try:
@@ -2645,6 +2649,60 @@ def publish_files(sid: str, request: Request, body: dict):
             drive_svc = None
     results = []
     folder_cache = {}
+    # A SharePoint release can contain hundreds of documents. Running that Graph traffic inside
+    # this HTTP request makes the browser/proxy timeout the unit of durability. Queue one stable
+    # job per corrected copy instead; completed documents are reused by the handler and a worker
+    # restart resumes from the durable queue.
+    if source == "sharepoint":
+        if not sp_token:
+            raise HTTPException(403, "SharePoint publishing requires a current write grant.")
+        payloads = []
+        for f in files:
+            record = core.store.get_file_record(sid, f)
+            if not record or not record.get("compliant") or not record.get("remediated_at"):
+                result = {"file": f, "original_relative_path": None,
+                          "released_relative_path": None, "status": "failed",
+                          "failure_category": "not_approved",
+                          "explanation": "Only approved corrected copies can be released.",
+                          "created": False}
+                core.store.record_release_document(release_id, owner, result)
+                results.append(result)
+                continue
+            saved = core.store.get_release_document(release_id, f, owner)
+            if saved and saved.get("status") == "published":
+                results.append({"file": f, "status": "published",
+                                "original_relative_path": saved.get("source_relative_path"),
+                                "released_relative_path": saved.get("destination_relative_path"),
+                                "published_at": saved.get("published_at"),
+                                "published_url": saved.get("released_document_url"),
+                                "verification": saved.get("verification"), "created": False})
+                continue
+            queued = {"file": f,
+                      "source_document_id": record.get("drive_file_id") or f,
+                      "original_relative_path": (record.get("source_relative_path")
+                                                 or record.get("parent_folder") or f),
+                      "released_relative_path": None, "status": "queued", "created": False}
+            core.store.record_release_document(release_id, owner, queued)
+            results.append(queued)
+            payloads.append({"scan_id": sid, "release_id": release_id,
+                             "file": f, "owner": owner})
+        execution = None
+        if payloads:
+            import hashlib, json
+            requested = sorted(p["file"] for p in payloads)
+            fingerprint = hashlib.sha256(json.dumps(requested).encode()).hexdigest()
+            execution = core.store.enqueue_stage_batch(
+                sid, "release", "publish_file", payloads,
+                snapshot_id=release_id, request_fingerprint=fingerprint)
+        status = core.store.release_status(release_id, owner)
+        return {"release_id": release_id, "release_folder_id": None,
+                "release_folder_name": folder_name, "release_folder_url": None,
+                "release_folders": status.get("roots", []),
+                "documents_total": status.get("documents_total", 0),
+                "published_count": status.get("published", 0),
+                "failed": status.get("failed", 0), "remaining": status.get("remaining", 0),
+                "published": results, "queued": len(payloads),
+                "batch_id": execution.get("batch_id") if execution else None}
     for f in files:
         record = core.store.get_file_record(sid, f)
         if not record or not record.get("compliant") or not record.get("remediated_at"):

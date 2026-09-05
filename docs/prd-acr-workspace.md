@@ -234,12 +234,16 @@ product with no live audio. Worse, `acr_plans`' own docstring claimed it did not
 the human evaluation it is; PRD §10 already requires the explanation, and `acr_validation`
 enforces it.
 
-## Explicitly not delivered in Phase 1
+## Deferred out of Phase 1 — and what has since landed
 
-* **The ITI VPAT template and Word export.** Phase 5, gated on a licensing decision. The Phase 1
-  export is a structural preview that states on its face that it is not a VPAT.
+* **The ITI VPAT template and Word export.** Still Phase 5, still gated on a licensing decision.
+  What exists today is a structural preview that states on its face that it is not a VPAT, served
+  as JSON, HTML and a tagged PDF/UA-1 document.
 * **Publication.** Delivered in Phase 4 — see above.
 * **Guided manual test plans.** Delivered in Phase 3 — see above.
+
+The heading used to read "Explicitly not delivered in Phase 1" while two of its three bullets
+said they had been delivered.
 
 ## Non-goals
 
@@ -255,11 +259,33 @@ manual tests, explain contradictions and draft limitation language. AI-generated
 marked as a draft, cite its evidence, never create a test result, never select or approve a final
 status, never publish, and remain editable by a person.
 
-In Phase 1 the only machine-generated judgement is `acr_rules.may_draft`, which is deterministic,
-writes only to `draft_status`, and cannot reach `final_status` — `store.save_acr_draft_status` has
-no code path to that column.
+Through Phase 4 the only machine-generated judgement is still `acr_rules.may_draft`, which is
+deterministic, writes only to `draft_status`, and cannot reach `final_status` —
+`store.save_acr_draft_status` has no code path to that column. Re-checked on 2026-09-05: both
+callers (bulk axe ingestion and single-evidence attach in `routes/acr.py`) go through that one
+function, and both leave the criterion at `needs_review` rather than `decided`, so there is no
+evidence-driven path to a decision at all. Phase 2's axe ingestion writes *evidence*, not
+judgement; a drafted `Supports` is a suggestion awaiting a person.
 
-## Acceptance criteria — Phase 1 status
+## Acceptance criteria — status after Phase 4
+
+Re-checked against the code on 2026-09-05, not carried forward from the previous revision. Three
+rows had gone stale: 11 and 12 still deferred to Phase 4 *after* Phase 4 shipped, and 16 still
+excepted the snapshot and export tests that now exist. A status table is the artifact people read
+*instead of* checking, so where this and the code disagree, the code wins.
+
+Re-run it with `python -m pytest tests/ -k acr`, which sweeps the 18 `test_acr_*.py` files. The
+count is deliberately not written down here: the first draft of this line said 373 and the suite
+answered 381, because the guard file named below had landed in between. A number in a document is
+a claim that decays; the command is one that cannot.
+
+Rows 4, 6–11 and the digest behind 12 were additionally confirmed by mutation on 2026-09-05: the
+rule enforcing each was broken in turn and the whole ACR suite run against it, and every one
+turned the suite red. The same sweep found exactly one guard that no test defended —
+`acr_export_preview._conformance_cell` refusing to print an internal workflow state where a
+conformance level goes (§9, the last layer before a customer reads the document). That gap is now
+closed by `tests/test_acr_export_preview_guard.py`; it is recorded here because a green suite had
+already been read as evidence that the guard worked.
 
 | # | Criterion | Status |
 |---|---|---|
@@ -273,12 +299,12 @@ no code path to that column.
 | 8 | An unresolved failure blocks Supports unless newer evidence resolves it | ✅ |
 | 9 | Stale evidence is visible but cannot satisfy publication | ✅ |
 | 10 | Reports with unevaluated applicable criteria cannot publish | ✅ |
-| 11 | Only an approver can publish | ✅ gate + roles; publish endpoint is Phase 4 |
-| 12 | Publication creates an immutable snapshot | ⬜ Phase 4 (table + edit boundary shipped) |
-| 13 | Exported Word document follows the official VPAT structure | ⬜ Phase 5 |
-| 14 | Generated Word document passes ACP's accessibility checks | ⬜ Phase 5 |
+| 11 | Only an approver can publish | ✅ `POST /acr/{id}/publish`, gated on `acr_authz.may_publish` and never `core.is_admin` |
+| 12 | Publication creates an immutable snapshot | ✅ `acr_snapshot`, digest re-verified on every read |
+| 13 | Exported Word document follows the official VPAT structure | ⬜ Phase 5 — blocked on the licensing decision, not on engineering |
+| 14 | Generated Word document passes ACP's accessibility checks | ⬜ Phase 5 — depends on 13; the gate is settled below |
 | 15 | Report identifies version, methods, tools, environments, reviewers | ✅ required to publish |
-| 16 | Automated tests for authorization, decision rules, freshness, validation, snapshots, export | ✅ except snapshot/export (Phases 4–5) |
+| 16 | Automated tests for authorization, decision rules, freshness, validation, snapshots, export | ✅ all six — 18 `test_acr_*.py` files |
 | 17 | UI has keyboard, focus, screen-reader, reflow and automated accessibility tests | ✅ |
 | 18 | No existing scan, assessment, remediation or reporting workflow regresses | ✅ `test_acr_no_regression.py` |
 

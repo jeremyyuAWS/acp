@@ -5934,6 +5934,31 @@ class Store:
             inserted = cur.rowcount == 1
         return (inserted, "reserved" if inserted else "duplicate_or_budget_exhausted")
 
+    def second_opinion_usage(self, scan_id: str) -> dict:
+        """Measured reservation/call usage for the live assessment transparency card."""
+        from datetime import datetime, timezone
+        day = datetime.now(timezone.utc).date().isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT COUNT(*) AS n, COALESCE(SUM(estimated_cost_usd),0) AS cost "
+                              "FROM second_opinion_reservations WHERE scan_id=%s", (scan_id,))
+            scan = self._db.fetchone(cur) or {}
+            self._db.execute(cur, "SELECT COUNT(*) AS n, COALESCE(SUM(estimated_cost_usd),0) AS cost "
+                              "FROM second_opinion_reservations WHERE day=%s", (day,))
+            daily = self._db.fetchone(cur) or {}
+            self._db.execute(cur, "SELECT COUNT(*) AS calls, COALESCE(SUM(ok),0) AS ok, "
+                              "COALESCE(SUM(cost_usd),0) AS cost FROM ai_calls "
+                              "WHERE scan_id=%s AND surface='assessment_second_opinion'", (scan_id,))
+            calls = self._db.fetchone(cur) or {}
+            self._db.execute(cur, "SELECT reason FROM ai_calls WHERE scan_id=%s AND "
+                              "surface='assessment_second_opinion' AND ok=0 ORDER BY ts DESC LIMIT 1", (scan_id,))
+            failure = self._db.fetchone(cur) or {}
+        return {"scan_reserved": int(scan.get("n") or 0),
+                "daily_reserved": int(daily.get("n") or 0),
+                "daily_estimated_cost_usd": float(daily.get("cost") or 0),
+                "calls": int(calls.get("calls") or 0), "ok": int(calls.get("ok") or 0),
+                "measured_cost_usd": float(calls.get("cost") or 0),
+                "last_failure_reason": failure.get("reason")}
+
     def list_ai_calls(self, scan_id: str | None = None, limit: int = 500) -> list[dict]:
         """Provenance rows for governance/cost views — newest first, optionally per scan."""
         with self._db.cursor() as cur:
@@ -10769,9 +10794,9 @@ class Store:
         "scan_finalize": "discover",
         "scan_assess": "assess", "assess_trace": "assess",
         "remediate_file": "remediate", "rescore_file": "remediate",
-        "apply_approved_values": "remediate",
+        "apply_approved_values": "remediate", "publish_file": "release",
     }
-    _KIND_TYPES = {"discover": (), "assess": (), "remediate": ()}
+    _KIND_TYPES = {"discover": (), "assess": (), "remediate": (), "release": ()}
     for _jt, _k in _JOB_KIND.items():
         _KIND_TYPES[_k] = _KIND_TYPES[_k] + (_jt,)
     del _jt, _k

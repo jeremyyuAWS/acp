@@ -161,14 +161,14 @@ def ensure_sharepoint_release_folder(token: str, drive_id: str | None, release_i
                                      folder_name: str) -> dict:
     """Create a distinct ``Remediated/<timestamp>`` root in one Graph drive/library."""
     import scanner
-    root_id = scanner._sp_folder_id(token, drive_id, RELEASE_ROOT)
+    root_id = _sp_ensure_folder(token, drive_id, None, RELEASE_ROOT)
     base = scanner._sp_base(drive_id)
     children_url = f"{base}/items/{root_id}/children?$select=id,name,folder,webUrl&$top=200"
     collision = _sp_find_child(token, children_url, folder_name, folder_only=True)
     # Graph enforces sibling-name uniqueness. Preserve the clean timestamp normally and add a
     # stable release suffix only when another execution began in the same minute.
     actual_name = folder_name if collision is None else f"{folder_name} · {release_id[:8]}"
-    folder_id = scanner._sp_folder_id(token, drive_id, actual_name, parent_id=root_id)
+    folder_id = _sp_ensure_folder(token, drive_id, root_id, actual_name)
     item = scanner._sp_get(token, f"{base}/items/{folder_id}?$select=id,name,webUrl")
     return {"id": folder_id, "name": item.get("name") or actual_name,
             "url": item.get("webUrl")}
@@ -179,6 +179,33 @@ def _sp_child(token: str, drive_id: str | None, folder_id: str, name: str) -> di
     return _sp_find_child(
         token, f"{scanner._sp_base(drive_id)}/items/{folder_id}/children?"
                "$select=id,name,file,size,webUrl&$top=200", name)
+
+
+def _sp_ensure_folder(token: str, drive_id: str | None, parent_id: str | None,
+                      name: str) -> str:
+    """Find/create one Graph folder, following pagination and converging on a 409 race."""
+    import httpx
+    import scanner
+    base = scanner._sp_base(drive_id)
+    parent = f"{base}/items/{parent_id}" if parent_id else f"{base}/root"
+    children = f"{parent}/children"
+    listing = f"{children}?$select=id,name,folder&$top=200"
+    found = _sp_find_child(token, listing, name, folder_only=True)
+    if found:
+        return found["id"]
+    response = httpx.post(
+        children,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={"name": name, "folder": {}, "@microsoft.graph.conflictBehavior": "fail"},
+        timeout=30, follow_redirects=True)
+    if response.status_code in (401, 403):
+        raise PermissionError("Microsoft Graph refused to create the SharePoint release folder.")
+    if response.status_code == 409:
+        winner = _sp_find_child(token, listing, name, folder_only=True)
+        if winner:
+            return winner["id"]
+    response.raise_for_status()
+    return response.json()["id"]
 
 
 def _sp_content_matches(token: str, drive_id: str | None, item_id: str,
@@ -208,7 +235,7 @@ def archive_copy_publish_sharepoint(token: str, drive_id: str | None, folder_id:
     for segment in folders:
         key = (drive_id or "me", parent, segment.casefold())
         if key not in cache:
-            cache[key] = scanner._sp_folder_id(token, drive_id, segment, parent_id=parent)
+            cache[key] = _sp_ensure_folder(token, drive_id, parent, segment)
         parent = cache[key]
     sha256 = hashlib.sha256(data).hexdigest()
     key = publication_key(release_id, source_id, sha256)

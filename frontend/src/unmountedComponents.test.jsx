@@ -100,6 +100,10 @@ const EXPECTED_UNMOUNTED = [
   // finding-level approval surface, so this second one was unmounted. Kept per the
   // retired-feature policy — restoring it is re-adding the mount, not rewriting the panel.
   'RemediationApprovals',
+  // Retired 2026-09-05: run-level operations already reports the document pipeline. Repeating it
+  // inside every finding displaced the human decision and made Guided Remediation unreadable.
+  // The component remains available for a one-commit restore outside the decision pane.
+  'RemediationDocProgress',
   // Retired 2026-09-04: the two-column Remediation PRD removes the third preview pane. The
   // full-document action remains in the review header; keep this component for easy restoration.
   'RemediationPreview',
