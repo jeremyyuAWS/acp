@@ -27,6 +27,15 @@ describe('Admin live traffic graph', () => {
     expect(graph.nodes.every((node) => node.type === 'infra')).toBe(true)
   })
 
+  it('carries unique replica rows from the measured service into its drawer model', () => {
+    const instances = [{ replica_id: 'assess-r1', process_count: 2 }]
+    const [assess] = workerServiceRows({
+      worker_capacity_by_role: { assess: { healthy_replicas: 1, worker_slots: 4,
+        busy_slots: 3, instances } },
+    })
+    expect(assess.instances).toEqual(instances)
+  })
+
   it('connects each live run to its worker stage within the persistent topology', () => {
     const graph = buildTrafficGraph({ runs: [run] })
     expect(graph.nodes.map((node) => node.id)).toContain('s1:assess')
