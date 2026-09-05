@@ -1572,6 +1572,327 @@ def remediation_snapshot(sid: str, request: Request, response: Response):
     response.headers["Cache-Control"] = "no-store"
     return _remediation_snapshot(sid)
 
+
+# ── Exceptions and scoped recovery (PRD §6E, §11) ─────────────────────────────
+#
+# The panel's exception region is the one place a user ACTS on a run rather than reading it, so
+# every decision it renders is made here and on the server. `remediation_exceptions` is pure and
+# holds the rules; these routes hold the gate (owner, capability, ownership of the run) and the
+# durable side effects. Nothing below trusts a filename the client sent as authorisation for
+# anything: the request names WHICH documents to act on, and the server decides whether each one
+# is eligible — which is what makes "group actions affect only visible/selected eligible items"
+# true even when the client is wrong or hostile.
+
+def _exception_view(sid: str) -> dict:
+    """Grouped exceptions, run controls, and the delivery history behind them — one read.
+
+    Composed from the SAME facts the snapshot is built from, so the exception counts and the
+    counters cannot disagree: `remediation_run.classify_document` decides each document's outcome
+    once, and both the partition and this grouping are derived from that one answer.
+    """
+    import remediation_run
+    import remediation_exceptions as exceptions
+    from datetime import datetime, timezone
+
+    now = datetime.now(timezone.utc)
+    run_facts = core.store.remediation_run_facts(sid)
+    snapshot = remediation_run.build_snapshot(run_facts, now=now)
+    facts = core.store.remediation_exception_facts(sid)
+
+    review_docs = set(run_facts.get("review_documents") or ())
+    corrected = set(run_facts.get("corrected_documents") or ())
+    verified_docs = set(run_facts.get("verified_documents") or ())
+    outcomes = {}
+    for job in run_facts.get("jobs") or ():
+        file = job.get("file")
+        outcomes[file] = remediation_run.classify_document(
+            job, now=now, review_pending=file in review_docs,
+            has_correction=file in corrected, has_verified_fix=file in verified_docs)
+
+    records = exceptions.compose_records(outcomes=outcomes, documents=facts.get("documents"),
+                                         run_id=sid)
+    cancelled = bool(run_facts.get("cancelled") or run_facts.get("cancel_requested"))
+    return {
+        "run_id": sid,
+        "generated_at": now.isoformat(),
+        "revision": snapshot.get("revision"),
+        "state": snapshot.get("state"),
+        "provider": facts.get("provider"),
+        "groups": exceptions.build_exception_groups(records, cancelled=cancelled),
+        "controls": exceptions.run_controls(
+            state=snapshot.get("state"), counters=snapshot.get("documents"),
+            paused=bool(run_facts.get("paused")),
+            cancel_requested=bool(run_facts.get("cancel_requested")),
+            cancelled=bool(run_facts.get("cancelled")),
+            terminal=bool(snapshot.get("terminal"))),
+        "paused_at": facts.get("paused_at"),
+    }, records, facts
+
+
+@router.get("/scans/{sid}/remediation/exceptions")
+def remediation_exceptions_view(sid: str, request: Request, response: Response):
+    """What still needs a decision or a retry on this run, grouped by the response it needs.
+
+    Owner-scoped like every other per-scan read, and for the sharper reason here: the rows carry
+    filenames AND the provider container each corrected copy would be written to. A scan id must
+    not work as a cross-account oracle for either.
+    """
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    response.headers["Cache-Control"] = "no-store"
+    view, _records, _facts = _exception_view(sid)
+    return view
+
+
+async def _requested_files(request: Request) -> list[str] | None:
+    """The `files` list from a request body, or None when the caller sent none.
+
+    None and [] are DIFFERENT and both are honoured as sent. An explicit empty list is "act on
+    nothing", which is what a group action fires with when the user has deselected everything,
+    and turning it into "act on all" would be the worst possible reading of an empty selection.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        swallowed("routes.scans._requested_files: reading the request body failed")
+        return None
+    if not isinstance(body, dict):
+        return None
+    files = body.get("files")
+    if files is None:
+        return None
+    if not isinstance(files, list):
+        raise HTTPException(400, "files must be a list of document names")
+    return [str(f) for f in files]
+
+
+def _selected(records: list[dict], files: list[str] | None) -> list[dict]:
+    """The requested documents, in the run's own order, with unknown names dropped.
+
+    A name the run does not contain is not an error and not an action: it is dropped and reported
+    as such by the caller's count. Raising would let one stale row in a browser fail a group
+    action over eleven good ones.
+    """
+    if files is None:
+        return list(records)
+    wanted = set(files)
+    return [record for record in records if record.get("file") in wanted]
+
+
+@router.post("/scans/{sid}/remediation/exceptions/retry-delivery")
+async def retry_remediation_delivery(sid: str, request: Request):
+    """Re-send already-verified corrected copies to the source provider. Fixes nothing.
+
+    ONE DELIVERY OPERATION PER (run, document, destination, artifact), enforced by the primary key
+    `store.claim_delivery` inserts on. A double-click, a retried request, or two operators pressing
+    the button at the same second all compute the same idempotency key and produce one job; the
+    losers come back as `duplicate` rather than as an error, because from the user's point of view
+    the delivery they asked for IS in progress.
+
+    EVERY DOCUMENT GETS ITS OWN OUTCOME. A group that starts nine, refuses two and fails one is
+    reported as exactly that — see remediation_exceptions.summarize_outcomes, whose `summary` never
+    says the group succeeded unless every member did.
+    """
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    import remediation_exceptions as exceptions
+
+    files = await _requested_files(request)
+    _view, records, facts = _exception_view(sid)
+    owner = _owner(request)
+    cancelled = bool(core.store.remediation_run_facts(sid).get("cancelled"))
+    # Tokens travel with the job exactly as they do for a remediation batch: the worker tier has
+    # no session, and a delivery to a customer's tenant needs the caller's grant, not ACP's.
+    drive_token = request.headers.get("x-drive-token")
+    sp_token = request.headers.get("x-sp-token")
+
+    results = []
+    for record in _selected(records, files):
+        file = record.get("file")
+        decision = exceptions.delivery_retry_decision(
+            record, cancelled=cancelled, in_flight=bool(record.get("delivery_in_flight")))
+        if not decision["eligible"]:
+            results.append({"file": file, "outcome": "refused", "code": decision["code"],
+                            "message": decision["message"]})
+            continue
+        key = decision["idempotency_key"]
+        claim = core.store.claim_delivery(
+            sid, file, idempotency_key=key,
+            destination_provider=decision["destination"]["provider"],
+            destination_key=decision["destination"]["key"],
+            artifact_digest=record.get("artifact_digest"), actor=owner)
+        if not claim["claimed"]:
+            # Already claimed. `delivered` is reported as a duplicate rather than as a fresh
+            # success: this request did not deliver anything, and saying it did would credit it
+            # with somebody else's write.
+            results.append({"file": file, "outcome": "duplicate",
+                            "code": claim["status"], "idempotency_key": key,
+                            "message": exceptions.refusal_message("retry_in_flight")
+                                       if claim["status"] == "in_flight" else None})
+            continue
+        payload = {"scan_id": sid, "file": file, "owner": owner, "actor": owner,
+                   "idempotency_key": key, "artifact_digest": record.get("artifact_digest"),
+                   "destination": decision["destination"],
+                   "provider": decision["destination"]["provider"],
+                   "drive_token": drive_token, "sp_token": sp_token}
+        try:
+            job_id = core.store.enqueue_job("deliver_corrected_copy", payload, scan_id=sid,
+                                            max_attempts=3)
+        except Exception as exc:      # noqa: BLE001 — an unqueued claim would wedge the document
+            core.store.reopen_delivery(key)
+            results.append({"file": file, "outcome": "failed",
+                            "code": "enqueue_failed", "message": str(exc)[:200]})
+            continue
+        _remediation_action_event(sid, "remediate.delivery_retry_requested", file,
+                                  actor=owner, destination=decision["destination"],
+                                  idempotency_key=key, action="retry_delivery",
+                                  outcome="requested")
+        results.append({"file": file, "outcome": "started", "job_id": job_id,
+                        "idempotency_key": key,
+                        "destination": {"provider": decision["destination"]["provider"],
+                                        "label": record.get("destination_label")}})
+    return exceptions.summarize_outcomes(results)
+
+
+@router.post("/scans/{sid}/remediation/exceptions/retry-documents")
+async def retry_remediation_documents(sid: str, request: Request):
+    """Re-run remediation for failed or unverified documents. This DOES re-apply fixes.
+
+    Deliberately a different route, a different verb in the UI, and a different sentence in the
+    group header from the delivery retry beside it. They look similar and are not: this one opens
+    the source document again and can change what the run claims about it, which is why it is
+    offered only for the two groups whose remedy actually is another attempt.
+    """
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    import remediation_exceptions as exceptions
+
+    files = await _requested_files(request)
+    _view, records, _facts = _exception_view(sid)
+    owner = _owner(request)
+    retryable = {"document_failure", "verification_failure"}
+    results = []
+    for record in _selected(records, files):
+        file = record.get("file")
+        classified = exceptions.classify_exception(record)
+        if not classified or classified[0] not in retryable:
+            results.append({"file": file, "outcome": "refused", "code": "not_retryable",
+                            "message": "This document is not a failed or unverified document."})
+            continue
+        payload = core.store.latest_remediation_payload(sid, file)
+        if not payload:
+            results.append({"file": file, "outcome": "refused", "code": "no_prior_attempt",
+                            "message": "ACP has no record of how this document was remediated, "
+                                       "so it cannot repeat the attempt."})
+            continue
+        try:
+            job_id = core.store.enqueue_job("remediate_file", payload, scan_id=sid,
+                                            batch_id=_facts_batch(sid))
+        except Exception as exc:      # noqa: BLE001
+            results.append({"file": file, "outcome": "failed", "code": "enqueue_failed",
+                            "message": str(exc)[:200]})
+            continue
+        core.store.log_decision(owner, "remediate.document_retry_requested", scan_id=sid,
+                                file=file, detail=f"job {job_id}")
+        results.append({"file": file, "outcome": "started", "job_id": job_id})
+    return exceptions.summarize_outcomes(results)
+
+
+def _facts_batch(sid: str) -> str | None:
+    """The batch a retry should join — the one the panel is watching.
+
+    Re-using it rather than minting a new one keeps the retried document inside the partition the
+    counters are scoped to. A retry in its own batch would leave the run showing a failed document
+    forever while a second, invisible batch quietly fixed it (store.remediation_status documents
+    what unscoped counting cost the last time).
+    """
+    try:
+        return core.store.remediation_run_facts(sid).get("batch_id")
+    except Exception:
+        swallowed("routes.scans._facts_batch: reading the run's batch failed", sid)
+        return None
+
+
+def _remediation_action_event(sid: str, kind: str, file: str | None, *, actor: str | None,
+                              action: str, outcome: str, destination: dict | None = None,
+                              idempotency_key: str | None = None,
+                              reason: str | None = None) -> None:
+    """One human action on a run, in the durable log AND in the decision audit.
+
+    BOTH, because they answer different questions. The scan event is the narrative a reconnecting
+    panel replays; the decision row is the audit trail PRD §13 requires — actor, run, document,
+    destination, action, outcome. Neither carries extracted document content: the payload is built
+    by remediation_exceptions.audit_payload, which is a whitelist, and the destination reaches it
+    as container identifiers rather than as a signed URL.
+    """
+    import handlers
+    import remediation_exceptions as exceptions
+    payload = exceptions.audit_payload(
+        actor=actor, run_id=sid, file=file, action=action, outcome=outcome,
+        destination=destination, idempotency_key=idempotency_key, reason=reason)
+    detail = {k: v for k, v in payload.items() if k != "actor"}
+    try:
+        handlers.scan_event(sid, kind, detail=detail)
+    except Exception:
+        swallowed("routes.scans._remediation_action_event: recording the lifecycle event failed", sid)
+    try:
+        core.store.log_decision(actor or "system", kind, scan_id=sid, file=file,
+                                detail=_json.dumps(payload, sort_keys=True)[:400])
+    except Exception:
+        swallowed("routes.scans._remediation_action_event: recording the audit row failed", sid)
+
+
+@router.post("/scans/{sid}/remediation/cancel")
+def cancel_remediation_run(sid: str, request: Request):
+    """Stop this run's outstanding remediation work. Corrected copies already made are kept.
+
+    Distinct from `POST /scans/{sid}/cancel`, which ends the SCAN. This one touches only
+    `remediate_file` jobs, so a cancelled remediation leaves the assessment, its findings and
+    every verified correction exactly where they are — which is what makes it safe to offer beside
+    a live run.
+    """
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    asked = core.store.request_remediation_cancel(sid)
+    _remediation_action_event(sid, "remediate.cancel_requested", None, actor=_owner(request),
+                              action="cancel", outcome="requested",
+                              reason=f"{asked} outstanding")
+    return {"run_id": sid, "cancel_requested": True, "documents_asked_to_stop": asked}
+
+
+@router.post("/scans/{sid}/remediation/pause")
+def pause_remediation_run(sid: str, request: Request):
+    """Hold this run's UNCLAIMED work. Attempts already in flight run to completion.
+
+    The limit is in the response, not only in the documentation: `in_flight` says how many
+    documents this pause does NOT stop, so a caller can state it rather than implying a full stop
+    the backend cannot deliver.
+    """
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    snapshot = _remediation_snapshot(sid)
+    in_flight = int((snapshot.get("documents") or {}).get("processing") or 0)
+    result = core.store.pause_remediation_run(sid, actor=_owner(request))
+    _remediation_action_event(sid, "remediate.paused", None, actor=_owner(request),
+                              action="pause", outcome="paused",
+                              reason=f"{result['held']} held, {in_flight} in flight")
+    return {"run_id": sid, "paused": True, "held": result["held"], "in_flight": in_flight,
+            "paused_at": result["paused_at"]}
+
+
+@router.post("/scans/{sid}/remediation/resume")
+def resume_remediation_run(sid: str, request: Request):
+    """Release the hold and return the deferred documents to the queue."""
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    result = core.store.resume_remediation_run(sid, actor=_owner(request))
+    _remediation_action_event(sid, "remediate.resumed", None, actor=_owner(request),
+                              action="resume", outcome="resumed",
+                              reason=f"{result['released']} released")
+    return {"run_id": sid, "paused": False, "released": result["released"],
+            "resumed_at": result["resumed_at"]}
+
+
 def _resume_plan(sid: str, raw_cursor: str | None) -> tuple[int | None, str | None]:
     """Decide what a reconnecting client gets: (after_seq to replay from, reconcile reason).
 

@@ -170,6 +170,13 @@ def _decode_provenance(raw) -> dict | None:
         return None
     return v if isinstance(v, dict) and v else None
 
+# The `run_after` a paused run's queued jobs are deferred to. A SENTINEL, not "a long time":
+# resume releases exactly the rows carrying this value, so a document genuinely waiting on a
+# backoff retry keeps its own schedule instead of being dragged forward by somebody pressing
+# Resume. Far enough out that no claim can occur while the hold stands, and recognisable on sight
+# in a jobs table — which matters when the question is "why is this queued row not being claimed".
+_PAUSE_RUN_AFTER = "9999-12-31T00:00:00+00:00"
+
 # Schema is identical between SQLite and Postgres (UPSERT syntax is the same).
 _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS scan_runs (
@@ -1405,6 +1412,56 @@ _SCHEMA = [
       PRIMARY KEY (scan_id, file, page)
     )""",
     "CREATE INDEX IF NOT EXISTS idx_scanned_pdf_layouts_scan ON scanned_pdf_layouts(scan_id, file)",
+    # ── Delivery-only retry (PRD "Remediation Real-Time Operations Panel" §11) ────────────────
+    #
+    # ONE ROW PER DELIVERY OPERATION, KEYED BY ITS IDEMPOTENCY KEY. The key is the PRIMARY KEY
+    # rather than a column beside a surrogate id, so "duplicate retry requests produce one
+    # delivery operation" is enforced by the database instead of by whichever request wins a
+    # read-then-write race. remediation_exceptions.delivery_idempotency_key builds it from
+    # (run, document, destination, artifact digest) and contains no clock, so a double-click
+    # computes the same key and the second INSERT is rejected — which is the point.
+    #
+    # `destination_key` records WHERE, by container ids only. No token, no signed URL, no
+    # webUrl-with-credentials: PRD §13 says destinations are recorded "without exposing
+    # credentials or signed URLs", and this is the table that would otherwise be the place they
+    # leaked into.
+    #
+    # `artifact_digest` is the sha256 of the bytes this operation was authorised to send. Stored
+    # rather than recomputed because it is the claim the refusal path checks against: an artifact
+    # that no longer hashes to this is not the artifact anybody approved delivering.
+    """CREATE TABLE IF NOT EXISTS remediation_delivery (
+      idempotency_key TEXT PRIMARY KEY,
+      scan_id TEXT NOT NULL,
+      file TEXT NOT NULL,
+      destination_provider TEXT,
+      destination_key TEXT,
+      artifact_digest TEXT,
+      status TEXT NOT NULL,
+      actor TEXT,
+      requested_at TEXT NOT NULL,
+      completed_at TEXT,
+      delivered_url TEXT,
+      error TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_remediation_delivery_scan "
+    "ON remediation_delivery(scan_id, file)",
+    # A durable hold on one run's unclaimed work. A row exists only while the run is paused
+    # (resume clears `paused_at`), so `paused` is a fact to read rather than a state inferred
+    # from an idle queue — which api/remediation_run.py has refused to do since Phase 1, and
+    # still refuses: the state is derived from THIS row, never from the absence of activity.
+    """CREATE TABLE IF NOT EXISTS remediation_run_hold (
+      scan_id TEXT PRIMARY KEY,
+      paused_at TEXT,
+      paused_by TEXT,
+      resumed_at TEXT,
+      resumed_by TEXT
+    )""",
+    # The corrected artifact's own provenance. Two columns, and both are the difference between
+    # "we have some bytes" and "we have THE bytes the verifier passed": the digest is what a
+    # later delivery-only retry checks the stored object against, and the size is what makes a
+    # zero-byte or truncated store visible without downloading it.
+    "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS corrected_sha256 TEXT",
+    "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS corrected_bytes INT",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -1886,8 +1943,23 @@ class _PgAdapter:
     # escalation. Nothing decides anything from the column; it is evidence for a reviewer.
     # This follows v17's structured-release tables from main; both changes remain additive and
     # safe during a rolling deployment.
-    _SCHEMA_VERSION = 19
-    _SCHEMA_CHECKSUM_AT_VERSION = "a014bf53187661bc4edf3efced0948d7"
+    # v20 adds the delivery-only retry lane (PRD §11): remediation_delivery and its scan index,
+    # remediation_run_hold, and file_records.corrected_sha256 / .corrected_bytes. Additive on the
+    # usual terms, and additive in BEHAVIOUR on every half — which is worth stating per column
+    # rather than as one sentence, because the two tables and the two columns fail differently:
+    #   * remediation_delivery is written only by the retry route and read only by it. A replica
+    #     without this code never touches it, so it keeps remediating and mirroring exactly as it
+    #     does today; it simply offers no delivery-only retry.
+    #   * remediation_run_hold likewise. An older replica does not read the hold, so it would keep
+    #     claiming queued work during a pause — which is why the pause ALSO defers the jobs' own
+    #     run_after rather than relying on this row alone. The row is the durable statement; the
+    #     deferral is what actually holds the queue, and it is a column every replica already
+    #     honours.
+    #   * corrected_sha256 / corrected_bytes are nullable and defaulted NULL. An older replica
+    #     writes neither, and the gate reads a missing digest as "provenance unknown" and REFUSES
+    #     delivery — the safe direction, and the one a re-run clears.
+    _SCHEMA_VERSION = 20
+    _SCHEMA_CHECKSUM_AT_VERSION = "a4337211dd6dc5697358d91d96b3171e"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -6782,6 +6854,13 @@ class Store:
             out["jobs"] = list(jobs.values())
             out["batch_id"] = batch_id
             out["cancel_requested"] = any(j.get("cancel_requested_at") for j in jobs.values())
+            # DERIVED FROM A ROW, NEVER FROM AN IDLE QUEUE. This is the fact that lets
+            # remediation_run.derive_run_state return `paused` at all — see its comment on
+            # RUN_STATES, which has said since Phase 1 that a state nothing can produce must not
+            # be inferred. Something can produce it now, and this is it.
+            self._db.execute(cur,
+                "SELECT paused_at FROM remediation_run_hold WHERE scan_id=%s", (scan_id,))
+            out["paused"] = bool((self._db.fetchone(cur) or {}).get("paused_at"))
             out["cancelled"] = bool(jobs) and all(j.get("status") == "cancelled"
                                                   for j in jobs.values())
             out["latest_progress_at"] = max(
@@ -6846,6 +6925,345 @@ class Store:
         out["assessed_at"] = run.get("assessed_at")
         out["scan_snapshot_id"] = run.get("id") or scan_id
         return out
+
+    # ── exceptions and delivery-only retry (PRD §11) ──────────────────────────────────────────
+
+    def remediation_exception_facts(self, scan_id: str) -> dict:
+        """The rows api/remediation_exceptions.py judges, from one read of the run.
+
+        Facts only, exactly as remediation_run_facts is: no grouping, no eligibility, no labels.
+        The judgement lives in the pure module so every refusal below can be tested against
+        literals rather than against a database.
+
+        THE DESTINATION IS READ FROM THE RUN'S OWN INVENTORY, never from the signed-in account.
+        `scan_inventory.drive_id` is the Graph drive a SharePoint or OneDrive item was listed
+        from; the Drive mirror folder id is the one the SUBMISSION created and stamped into every
+        job payload. Both are durable, both are container identifiers rather than credentials,
+        and neither can be inferred from who happens to be looking at the panel — which is the
+        same rule source_identity follows for PRD §6A, applied to a write instead of a label.
+        """
+        import json as _json
+        out: dict = {"scan_id": scan_id, "run_id": scan_id}
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT id,source FROM scan_runs WHERE id=%s", (scan_id,))
+            run = self._db.fetchone(cur) or {}
+            provider = (run.get("source") or "").strip().lower() or None
+            out["provider"] = provider
+
+            self._db.execute(cur,
+                "SELECT batch_id FROM jobs WHERE scan_id=%s AND type='remediate_file' "
+                "ORDER BY created_at DESC, id DESC LIMIT 1", (scan_id,))
+            batch_id = (self._db.fetchone(cur) or {}).get("batch_id")
+            _scope = " AND batch_id=%s" if batch_id else ""
+            _args = (scan_id, batch_id) if batch_id else (scan_id,)
+            out["batch_id"] = batch_id
+
+            # The Drive mirror folder the SUBMISSION created, off the newest job that carries one.
+            # One id per batch by construction (routes.scans.remediate_scan creates it once and
+            # stamps every payload), so reading any job's copy answers for the batch.
+            self._db.execute(cur,
+                "SELECT payload FROM jobs WHERE scan_id=%s AND type='remediate_file'" + _scope +
+                " ORDER BY created_at DESC, id DESC LIMIT 50", _args)
+            folder_id = None
+            for row in self._db.fetchall(cur):
+                payload = row.get("payload")
+                if isinstance(payload, str):
+                    try:
+                        payload = _json.loads(payload)
+                    except Exception:
+                        payload = {}
+                folder_id = (payload or {}).get("remediated_folder_id")
+                if folder_id:
+                    break
+            out["drive_folder_id"] = folder_id
+            # The container a corrected copy is written into. ONE configured name across
+            # providers (settings.drive_mirror_folder) rather than a literal per provider: the
+            # destination an administrator can point at is the same idea on Drive and on
+            # SharePoint, and two spellings of it is how a run delivers into a folder nobody is
+            # watching.
+            mirror_folder = self.get_drive_mirror_folder()
+
+            self._db.execute(cur,
+                "SELECT file,remediated_at,drive_write_url,corrected_sha256,corrected_bytes "
+                "FROM file_records WHERE scan_id=%s AND remediated_at IS NOT NULL", (scan_id,))
+            corrections = {r["file"]: r for r in self._db.fetchall(cur) if r.get("file")}
+
+            self._db.execute(cur,
+                "SELECT file,drive_id,site_name,library_name,source_modified,path "
+                "FROM scan_inventory WHERE scan_id=%s", (scan_id,))
+            inventory = {r["file"]: r for r in self._db.fetchall(cur) if r.get("file")}
+
+            # Review, split by whether ACP has anything to PROPOSE. A document counts as
+            # authoring-required only when NO pending item on it carries a proposal: with one
+            # proposal available there is a decision a reviewer can make, and filing the document
+            # under "ACP has nothing to offer" would hide that decision behind a longer job.
+            self._db.execute(cur,
+                "SELECT file,proposals FROM hitl_queue WHERE scan_id=%s AND status='pending'",
+                (scan_id,))
+            review: dict[str, dict] = {}
+            for row in self._db.fetchall(cur):
+                file = row.get("file")
+                if not file:
+                    continue
+                entry = review.setdefault(file, {"items": 0, "proposed": 0})
+                entry["items"] += 1
+                if row.get("proposals"):
+                    entry["proposed"] += 1
+
+            self._db.execute(cur,
+                "SELECT file,COUNT(*) AS n FROM applied_fixes WHERE scan_id=%s GROUP BY file",
+                (scan_id,))
+            applied = {r["file"]: int(r.get("n") or 0) for r in self._db.fetchall(cur)
+                       if r.get("file")}
+            self._db.execute(cur,
+                "SELECT file,COUNT(*) AS n FROM remediation_diff WHERE scan_id=%s GROUP BY file",
+                (scan_id,))
+            verified = {r["file"]: int(r.get("n") or 0) for r in self._db.fetchall(cur)
+                        if r.get("file")}
+
+            self._db.execute(cur,
+                "SELECT file,idempotency_key FROM remediation_delivery "
+                "WHERE scan_id=%s AND status='in_flight'", (scan_id,))
+            in_flight = {r["file"] for r in self._db.fetchall(cur) if r.get("file")}
+
+            self._db.execute(cur,
+                "SELECT paused_at,paused_by FROM remediation_run_hold WHERE scan_id=%s",
+                (scan_id,))
+            hold = self._db.fetchone(cur) or {}
+
+        files = sorted(set(corrections) | set(inventory) | set(review)
+                       | set(applied) | set(verified))
+        documents = []
+        for file in files:
+            correction = corrections.get(file) or {}
+            item = inventory.get(file) or {}
+            seen = review.get(file) or {}
+            documents.append({
+                "run_id": scan_id,
+                "file": file,
+                "provider": provider,
+                "artifact_stored_at": correction.get("remediated_at") or None,
+                "artifact_digest": correction.get("corrected_sha256") or None,
+                "artifact_bytes": correction.get("corrected_bytes") or None,
+                "delivered_url": correction.get("drive_write_url") or None,
+                "source_modified": item.get("source_modified") or None,
+                "destination_drive_id": item.get("drive_id") or None,
+                "destination_folder_id": folder_id if provider == "drive" else None,
+                "destination_folder": None if provider == "drive" else mirror_folder,
+                "destination_label": item.get("library_name") or item.get("site_name") or None,
+                "review_items": int(seen.get("items") or 0),
+                "review_pending": bool(seen.get("items")),
+                "review_kind": ("decision" if seen.get("proposed") else "authoring")
+                               if seen.get("items") else None,
+                "fixes_applied": applied.get(file, 0),
+                "fixes_verified": verified.get(file, 0),
+                "delivery_in_flight": file in in_flight,
+            })
+        out["documents"] = documents
+        out["paused"] = bool(hold.get("paused_at"))
+        out["paused_at"] = hold.get("paused_at") or None
+        out["paused_by"] = hold.get("paused_by") or None
+        return out
+
+    def latest_remediation_payload(self, scan_id: str, file: str) -> dict | None:
+        """The newest `remediate_file` payload enqueued for one document, or None.
+
+        A document-level retry re-runs THE SAME WORK, so it re-uses the payload the submission
+        built — source, drive id, mirror folder, cached-bytes checksum — rather than assembling a
+        second one from whatever the retry request happens to know. Two constructions of the same
+        payload is how a retry ends up reading a different source than the attempt it is retrying.
+        """
+        import json as _json
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT payload FROM jobs WHERE scan_id=%s AND type='remediate_file' "
+                "ORDER BY created_at DESC, id DESC LIMIT 200", (scan_id,))
+            for row in self._db.fetchall(cur):
+                payload = row.get("payload")
+                if isinstance(payload, str):
+                    try:
+                        payload = _json.loads(payload)
+                    except Exception:
+                        continue
+                if (payload or {}).get("file") == file:
+                    return dict(payload)
+        return None
+
+    def claim_delivery(self, scan_id: str, file: str, *, idempotency_key: str,
+                       destination_provider: str | None, destination_key: str | None,
+                       artifact_digest: str | None, actor: str | None) -> dict:
+        """Claim ONE delivery operation, or report that it is already claimed.
+
+        Returns `{"claimed": bool, "status": str, "row": dict}`. `claimed` is False when the key
+        already exists — which is the whole mechanism: `idempotency_key` is the table's PRIMARY
+        KEY, so the second INSERT is refused by the database rather than by a read this caller
+        did first and hoped nobody raced. Two identical retry requests therefore produce ONE
+        operation whichever order they arrive in, and the loser is told which.
+
+        A completed key is NOT re-claimable. The artifact digest is part of the key, so a genuine
+        second delivery of a genuinely new corrected copy has a different key and claims cleanly;
+        re-claiming the same one would be re-sending bytes that already arrived.
+        """
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM remediation_delivery WHERE idempotency_key=%s", (idempotency_key,))
+            existing = self._db.fetchone(cur)
+            if existing:
+                return {"claimed": False, "status": existing.get("status") or "unknown",
+                        "row": dict(existing)}
+            try:
+                self._db.execute(cur,
+                    "INSERT INTO remediation_delivery(idempotency_key,scan_id,file,"
+                    "destination_provider,destination_key,artifact_digest,status,actor,"
+                    "requested_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    (idempotency_key, scan_id, file, destination_provider, destination_key,
+                     artifact_digest, "in_flight", actor, now))
+            except Exception:
+                # Lost the insert race. The winner's row is the answer, and returning it is what
+                # makes the duplicate a duplicate rather than an error the caller has to read.
+                self._db.execute(cur,
+                    "SELECT * FROM remediation_delivery WHERE idempotency_key=%s",
+                    (idempotency_key,))
+                row = self._db.fetchone(cur)
+                if row:
+                    return {"claimed": False, "status": row.get("status") or "unknown",
+                            "row": dict(row)}
+                raise
+        return {"claimed": True, "status": "in_flight",
+                "row": {"idempotency_key": idempotency_key, "scan_id": scan_id, "file": file,
+                        "destination_provider": destination_provider,
+                        "destination_key": destination_key, "artifact_digest": artifact_digest,
+                        "status": "in_flight", "actor": actor, "requested_at": now}}
+
+    def finish_delivery(self, idempotency_key: str, *, status: str,
+                        delivered_url: str | None = None, error: str | None = None) -> None:
+        """Close out a claimed delivery. `status` is 'delivered' or 'failed'.
+
+        A failed row is left in place rather than deleted: the key it holds is the record that
+        this exact artifact, to this exact destination, was attempted and did not land. Deleting
+        it would make the next identical request look like a first attempt, which is precisely the
+        history an operator needs when a destination is refusing writes.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE remediation_delivery SET status=%s, completed_at=%s, delivered_url=%s, "
+                "error=%s WHERE idempotency_key=%s",
+                (status, self._now(), delivered_url, (error or None) and str(error)[:500],
+                 idempotency_key))
+
+    def reopen_delivery(self, idempotency_key: str) -> None:
+        """Release a claim that was never dispatched, so the user can try again.
+
+        Called only when enqueueing the delivery job itself failed. Without it a claim taken in
+        the same request that then could not queue the work would wedge the document at
+        `retry_in_flight` forever — a refusal with nothing behind it.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "DELETE FROM remediation_delivery WHERE idempotency_key=%s AND status='in_flight'",
+                (idempotency_key,))
+
+    def list_deliveries(self, scan_id: str, limit: int = 200) -> list[dict]:
+        """This run's delivery operations, newest first. Never raises."""
+        try:
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "SELECT * FROM remediation_delivery WHERE scan_id=%s "
+                    "ORDER BY requested_at DESC LIMIT %s", (scan_id, int(limit)))
+                return [dict(r) for r in self._db.fetchall(cur)]
+        except Exception:
+            return []
+
+    def pause_remediation_run(self, scan_id: str, actor: str | None = None) -> dict:
+        """Hold this run's UNCLAIMED remediation work, and record that it was held.
+
+        TWO WRITES, AND BOTH ARE LOAD-BEARING. The `remediation_run_hold` row is the durable
+        statement a snapshot reads — it is why `paused` can be DERIVED rather than inferred from
+        an idle queue, which api/remediation_run.py has refused to do since Phase 1. The
+        `run_after` deferral is what actually holds the queue, and it is a column every worker
+        already honours, including a replica deployed before this feature existed.
+
+        IT DOES NOT STOP AN ATTEMPT IN FLIGHT, and nothing here pretends otherwise: only rows in
+        'queued' are deferred. `remediation_exceptions.CONTROL_SPECS['pause']['scope']` is the
+        sentence the panel shows for exactly this reason — a pause that silently let three
+        documents keep being rewritten would be a worse lie than no pause at all.
+
+        Returns {"paused_at", "held"} — `held` is how many queued documents were deferred.
+        """
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT scan_id FROM remediation_run_hold WHERE scan_id=%s", (scan_id,))
+            if self._db.fetchone(cur):
+                self._db.execute(cur,
+                    "UPDATE remediation_run_hold SET paused_at=%s, paused_by=%s, resumed_at=NULL,"
+                    " resumed_by=NULL WHERE scan_id=%s", (now, actor, scan_id))
+            else:
+                self._db.execute(cur,
+                    "INSERT INTO remediation_run_hold(scan_id,paused_at,paused_by) "
+                    "VALUES(%s,%s,%s)", (scan_id, now, actor))
+            self._db.execute(cur,
+                "UPDATE jobs SET run_after=%s, updated_at=%s WHERE scan_id=%s "
+                "AND type='remediate_file' AND status='queued'",
+                (_PAUSE_RUN_AFTER, now, scan_id))
+            held = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        return {"paused_at": now, "held": held}
+
+    def resume_remediation_run(self, scan_id: str, actor: str | None = None) -> dict:
+        """Release the hold: clear the durable row and return the deferred jobs to the queue.
+
+        Only jobs deferred BY THE PAUSE are released — the `run_after=_PAUSE_RUN_AFTER` predicate
+        is exact, so a document genuinely waiting on a backoff retry keeps its own schedule
+        instead of being dragged forward by somebody pressing Resume.
+        """
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE remediation_run_hold SET paused_at=NULL, resumed_at=%s, resumed_by=%s "
+                "WHERE scan_id=%s", (now, actor, scan_id))
+            self._db.execute(cur,
+                "UPDATE jobs SET run_after=NULL, updated_at=%s WHERE scan_id=%s "
+                "AND type='remediate_file' AND status='queued' AND run_after=%s",
+                (now, scan_id, _PAUSE_RUN_AFTER))
+            released = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        return {"resumed_at": now, "released": released}
+
+    def remediation_run_paused(self, scan_id: str) -> bool:
+        """Is this run held right now? Never raises — an unreadable hold reads as not paused,
+        which matches what the queue is actually doing when the row cannot be consulted."""
+        try:
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "SELECT paused_at FROM remediation_run_hold WHERE scan_id=%s", (scan_id,))
+                row = self._db.fetchone(cur)
+        except Exception:
+            return False
+        return bool((row or {}).get("paused_at"))
+
+    def request_remediation_cancel(self, scan_id: str) -> int:
+        """Ask this run's outstanding remediation work to stop, and say how many rows were asked.
+
+        Sets `cancel_requested_at` on every queued or running `remediate_file` row, which is the
+        signal worker.check_cancel() already raises on — so an attempt stops at its next
+        checkpoint rather than being killed mid-write. Queued rows are additionally marked
+        'cancelled' so nothing claims them afterwards.
+
+        DOCUMENTS ALREADY CORRECTED KEEP THEIR CORRECTED COPIES. Nothing here touches
+        file_records, remediation_diff or applied_fixes: cancelling a run stops future work, it
+        does not retract work that finished and was verified.
+        """
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE jobs SET cancel_requested_at=COALESCE(cancel_requested_at,%s), "
+                "updated_at=%s WHERE scan_id=%s AND type='remediate_file' "
+                "AND status IN ('queued','running')", (now, now, scan_id))
+            asked = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+            self._db.execute(cur,
+                "UPDATE jobs SET status='cancelled', updated_at=%s WHERE scan_id=%s "
+                "AND type='remediate_file' AND status='queued'", (now, scan_id))
+        return asked
     def get_file_drive_id(self, scan_id: str, file: str) -> str | None:
         with self._db.cursor() as cur:
             self._db.execute(cur,
@@ -7062,25 +7480,56 @@ class Store:
             return self._db.fetchone(cur)
 
     def record_remediation(self, scan_id: str, file: str, drive_write_url: str | None = None,
-                           blob_url: str | None = None) -> str:
+                           blob_url: str | None = None, corrected_sha256: str | None = None,
+                           corrected_bytes: int | None = None) -> str:
+        """Record that a corrected copy exists, and — when the caller can say so — WHICH bytes.
+
+        `corrected_sha256` is the artifact's provenance, and it is the difference between a later
+        delivery-only retry being possible and being refused. Without it the retry gate answers
+        `artifact_provenance_unknown`: ACP holds bytes it cannot prove are the ones the verifier
+        passed, and re-sending those would publish an artifact whose provenance nobody can state.
+        COALESCE, not overwrite, so a record-only update (a delivery that succeeded on retry,
+        say) cannot blank the digest of the artifact it just delivered.
+        """
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
         with self._db.cursor() as cur:
             if blob_url is not None:
                 self._db.execute(cur,
-                    "UPDATE file_records SET remediated_at=%s, drive_write_url=%s, blob_url=%s "
+                    "UPDATE file_records SET remediated_at=%s, drive_write_url=%s, blob_url=%s, "
+                    "corrected_sha256=COALESCE(%s, corrected_sha256), "
+                    "corrected_bytes=COALESCE(%s, corrected_bytes) "
                     "WHERE scan_id=%s AND file=%s",
-                    (now, drive_write_url, blob_url, scan_id, file))
+                    (now, drive_write_url, blob_url, corrected_sha256, corrected_bytes,
+                     scan_id, file))
             else:
                 # Blob not configured (e.g. local dev) — leave blob_url untouched rather
                 # than clobbering a prior value with NULL.
                 self._db.execute(cur,
-                    "UPDATE file_records SET remediated_at=%s, drive_write_url=%s "
+                    "UPDATE file_records SET remediated_at=%s, drive_write_url=%s, "
+                    "corrected_sha256=COALESCE(%s, corrected_sha256), "
+                    "corrected_bytes=COALESCE(%s, corrected_bytes) "
                     "WHERE scan_id=%s AND file=%s",
-                    (now, drive_write_url, scan_id, file))
+                    (now, drive_write_url, corrected_sha256, corrected_bytes, scan_id, file))
             if cur.rowcount > 0:
                 self._bump_scan_revision(cur, scan_id)
         return now
+
+    def record_delivery_url(self, scan_id: str, file: str, drive_write_url: str) -> None:
+        """Record that a corrected copy reached the provider, and NOTHING else.
+
+        The write a delivery-only retry is allowed to make. It sets `drive_write_url` and leaves
+        `remediated_at`, `blob_url` and the artifact's digest exactly as they were — so a
+        successful re-delivery cannot restamp the correction with a later time, and cannot make an
+        artifact look newer than the verification that passed it. record_remediation moves four
+        columns; this moves one, on purpose.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE file_records SET drive_write_url=%s WHERE scan_id=%s AND file=%s",
+                (drive_write_url, scan_id, file))
+            if cur.rowcount > 0:
+                self._bump_scan_revision(cur, scan_id)
 
     def get_remediation_urls(self, scan_id: str, file: str,
                              owner: str | None = None) -> dict | None:
@@ -8869,6 +9318,17 @@ class Store:
         "remediate.accepted", "remediate.fix_applied", "remediate.verified",
         "remediate.verification_failed", "remediate.delivered", "remediate.delivery_failed",
         "remediate.review_requested", "remediate.document_completed",
+        # ── exception actions and run controls (PRD §11, §13) ─────────────────
+        #
+        # Every one of these is a HUMAN ACTION on a run, which is why they are events rather than
+        # a column somewhere: PRD §13 requires cancel, retry, approve, reject and delivery actions
+        # to be audited with actor and timestamp, and this log already carries both in the shape a
+        # resuming client can replay. The outcome of a delivery retry re-uses `remediate.delivered`
+        # / `remediate.delivery_failed` above rather than minting a parallel pair — a corrected copy
+        # reaching the provider is the same fact however the write was triggered, and two spellings
+        # of it is how a delivered document looks undelivered to whichever reader knows only one.
+        "remediate.delivery_retry_requested", "remediate.delivery_retry_refused",
+        "remediate.cancel_requested", "remediate.paused", "remediate.resumed",
     })
 
     _SCAN_EVENT_SEQ_ATTEMPTS = 4

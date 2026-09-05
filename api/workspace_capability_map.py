@@ -147,6 +147,18 @@ _map_many([
     ("POST", "/scans/{sid}/remediate"),
     ("POST", "/scans/{scan_id}/files/{filename:path}/remediate"),
     ("POST", "/scans/{sid}/files/{filename:path}/undo-fix"),
+    # Scoped recovery and run controls. `remediate.run` rather than `remediate.review`, and the
+    # split is deliberate: these ACT on the estate or on the queue (a delivery writes a document
+    # into a customer's library; a cancel stops work), while `remediate.review` decides the
+    # content of a fix. A reviewer who may approve alt text is not thereby permitted to write to
+    # SharePoint — and `release.publish` is not required either, because delivering a corrected
+    # copy to the run's own mirror folder is finishing the remediation the operator started, not
+    # publishing a release.
+    ("POST", "/scans/{sid}/remediation/exceptions/retry-delivery"),
+    ("POST", "/scans/{sid}/remediation/exceptions/retry-documents"),
+    ("POST", "/scans/{sid}/remediation/cancel"),
+    ("POST", "/scans/{sid}/remediation/pause"),
+    ("POST", "/scans/{sid}/remediation/resume"),
 ], {"remediate.run"})
 _map_many([
     ("GET", "/scans/{sid}/remediation-status"),
@@ -155,6 +167,11 @@ _map_many([
     # the same capability. Anything narrower would let the summary be read where the detail it
     # summarises cannot be.
     ("GET", "/scans/{sid}/remediation/snapshot"),
+    # The exception view is the snapshot's detail — the same filenames plus the provider
+    # container each corrected copy would be written to — so it takes the same capability the
+    # snapshot does. Narrower would let the summary be read where the detail it summarises
+    # cannot be; wider would put destination identifiers behind a view-only role's read.
+    ("GET", "/scans/{sid}/remediation/exceptions"),
     ("GET", "/scans/{sid}/remediation-diffs"),
     ("GET", "/scans/{sid}/files/{filename:path}/remediation-diffs"),
     ("GET", "/scans/{sid}/files/{filename:path}/remediation-state"),
