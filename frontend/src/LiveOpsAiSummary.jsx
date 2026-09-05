@@ -1,12 +1,16 @@
 import { useEffect, useState } from 'react'
-import { getAiCosts, getAiProvidersHealth } from './api.js'
+import * as api from './api.js'
 
 export default function LiveOpsAiSummary() {
   const [data, setData] = useState(null)
   const [failed, setFailed] = useState(false)
   useEffect(() => {
     let live = true
-    const refresh = () => Promise.all([getAiCosts(), getAiProvidersHealth(24)])
+    // Namespace access keeps older/inert test and embedded hosts from crashing when they expose
+    // only the Live Ops API subset. Missing telemetry becomes unavailable, never a render error.
+    const refresh = () => Promise.resolve().then(() => Promise.all([
+      api.getAiCosts(), api.getAiProvidersHealth(24),
+    ]))
       .then(([costs, health]) => { if (live) { setData({ costs, health }); setFailed(false) } })
       .catch(() => { if (live) setFailed(true) })
     refresh()
