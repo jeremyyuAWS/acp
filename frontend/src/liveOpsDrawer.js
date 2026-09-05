@@ -894,17 +894,86 @@ export function sourceModel(data = {}, snapshot = {}) {
 
 /** Durable output. Corrected copies and verification counts come from completed remediate/release
  *  work; total output size is Azure's to report and is not in this snapshot. */
+/**
+ * The durable output node's headline counts.
+ *
+ * TWO FIGURES HERE USED TO OVER-CLAIM, and both were real numbers under names that named the
+ * wrong thing — the failure mode this drawer exists to avoid, arriving from the label side rather
+ * than the measurement side.
+ *
+ * `storageFailures` read `summary.queue.failed`, which `Store.queue_composition` defines as
+ * dead-lettered jobs of EVERY type inside the window (deliberate stops excluded). A `scan_file`
+ * job dead-lettering on a malformed document is not a storage failure, and putting it under that
+ * heading on the durable-output node points an operator at the wrong subsystem. The count is kept
+ * — it is useful and true — under the name it actually has. A storage-specific figure is reported
+ * as unavailable, because it is: the classifier that would produce one emits only `rate_limit`,
+ * `auth`, `corrupt` and `transient` (api/worker.py), none of which names storage.
+ *
+ * `awaitingWrite` summed `remediate.running` and `release.running` with `?? 0` on each, so two
+ * unreported stages produced a confident `0` — the zero-for-unknown substitution every other
+ * figure in this file refuses. It now sums only the stages that reported, and is null when
+ * neither did. It is also no longer called a write: a running remediate job is analysing and
+ * rewriting a document, and whether it is blocked on storage is not something the snapshot says.
+ */
 export function outputModel(snapshot = {}) {
   const summary = snapshot?.summary || {}
   const stages = summary.by_stage || {}
   const queue = summary.queue || {}
+  const inFlightParts = [num(stages.remediate?.running), num(stages.release?.running)]
+    .filter((n) => n != null)
   return {
     correctedCopies: num(stages.remediate?.completed),
     verified: num(stages.release?.completed),
-    awaitingWrite: (num(stages.remediate?.running) ?? 0) + (num(stages.release?.running) ?? 0),
-    storageFailures: num(queue.failed),
+    inFlight: inFlightParts.length ? inFlightParts.reduce((a, b) => a + b, 0) : null,
+    inFlightPartial: inFlightParts.length === 1,
+    deadLettered: num(queue.failed),
+    deadLetterWindowMinutes: num(queue.window_s) == null ? null : Math.round(num(queue.window_s) / 60),
     totalSize: null,
-    unavailable: ['Total output size'],
+    storageFailures: null,
+    unavailable: ['Total output size', 'Storage-specific failures'],
+  }
+}
+
+/**
+ * Remediate then Release, as the two stages that actually produce durable output.
+ *
+ * Bounded like every other gauge here: a stage reports `completed` out of `total`, and where the
+ * snapshot publishes no total there is no percentage — not a zero, and not a denominator borrowed
+ * from the completed count.
+ */
+export const OUTPUT_STAGES = [
+  { key: 'remediate', label: 'Corrected copies', verb: 'remediating' },
+  { key: 'release', label: 'Verified and released', verb: 'releasing' },
+]
+
+export function outputPipeline(snapshot = {}) {
+  const stages = snapshot?.summary?.by_stage || {}
+  const rows = OUTPUT_STAGES.map((stage) => {
+    const row = stages[stage.key]
+    if (!row) return { ...stage, present: false }
+    const completed = num(row.completed) ?? 0
+    const total = num(row.total)
+    const running = num(row.running) ?? 0
+    const queued = num(row.queued) ?? 0
+    return {
+      ...stage,
+      present: true,
+      completed,
+      total,
+      running,
+      queued,
+      pct: total ? Math.min(100, Math.round((completed / total) * 100)) : null,
+      active: running > 0 || queued > 0,
+    }
+  })
+  return {
+    rows,
+    present: rows.filter((r) => r.present),
+    // Same honesty rule as the run pipeline: the activity snapshot carries live work plus a recent
+    // tail, so an absent stage may have finished long ago. It is never called "not started".
+    missing: rows.filter((r) => !r.present).map((r) => r.label),
+    missingReason: 'A stage whose last job finished before this snapshot’s recent tail is not '
+      + 'carried in it. Absent means not reported, never “produced nothing”.',
   }
 }
 

@@ -487,8 +487,15 @@ describe('Source and output panels name what they cannot measure', () => {
   })
 
   it('reports output counts it has and refuses a total size Azure did not give', () => {
+    // RE-POINTED, with the reason: `awaitingWrite` and `storageFailures` were renamed because
+    // they named the wrong things. `awaitingWrite` summed two stages with `?? 0` each, so two
+    // unreported stages read as a confident 0, and a running remediate job is not a pending
+    // write. `storageFailures` read queue.failed, which counts dead-lettered jobs of EVERY type.
+    // The counts are unchanged; only the names now match what they measure. See the
+    // "two figures that used to name the wrong thing" block below for the new behaviour.
     expect(outputModel(snapshot)).toMatchObject({
-      correctedCopies: 12, verified: 9, awaitingWrite: 3, storageFailures: 1, totalSize: null,
+      correctedCopies: 12, verified: 9, inFlight: 3, deadLettered: 1, totalSize: null,
+      storageFailures: null,
     })
   })
 
@@ -2092,5 +2099,72 @@ describe('sourceRuns', () => {
 
   it('keeps an unsized run’s total null rather than inventing one', () => {
     expect(sourceRuns('drive', snap, { nowMs: NOW })[0].total).toBeNull()
+  })
+})
+
+import { OUTPUT_STAGES, outputPipeline } from './liveOpsDrawer.js'
+
+describe('outputModel — two figures that used to name the wrong thing', () => {
+  const snap = (over) => ({ summary: { by_stage: {}, queue: {}, ...over } })
+
+  it('reports dead-lettered jobs as what queue_composition counts, not as storage failures', () => {
+    // queue.failed is EVERY job type dead-lettered in the window (deliberate stops excluded), so a
+    // scan_file dying on a malformed document was appearing under "Storage failures" on the
+    // durable-output node and pointing at the wrong subsystem.
+    const m = outputModel(snap({ queue: { failed: 3, window_s: 900 } }))
+    expect(m.deadLettered).toBe(3)
+    expect(m.deadLetterWindowMinutes).toBe(15)
+    // And a storage-specific count is named as unavailable, because ACP cannot produce one.
+    expect(m.storageFailures).toBeNull()
+    expect(m.unavailable).toContain('Storage-specific failures')
+  })
+
+  it('does not turn two unreported stages into a confident zero in flight', () => {
+    expect(outputModel(snap({})).inFlight).toBeNull()
+  })
+
+  it('sums only the stages that reported, and says when that is one of two', () => {
+    const one = outputModel(snap({ by_stage: { remediate: { running: 1 } } }))
+    expect(one.inFlight).toBe(1)
+    expect(one.inFlightPartial).toBe(true)
+
+    const both = outputModel(snap({ by_stage: { remediate: { running: 1 }, release: { running: 2 } } }))
+    expect(both.inFlight).toBe(3)
+    expect(both.inFlightPartial).toBe(false)
+  })
+
+  it('still refuses a total output size', () => {
+    expect(outputModel(snap({})).totalSize).toBeNull()
+    expect(outputModel(snap({})).unavailable).toContain('Total output size')
+  })
+})
+
+describe('outputPipeline', () => {
+  it('reports each output stage with a bounded share of its own documents', () => {
+    const p = outputPipeline({ summary: { by_stage: {
+      remediate: { completed: 12, total: 20, running: 1, queued: 2 },
+      release: { completed: 9, total: 9, running: 0, queued: 0 },
+    } } })
+    expect(p.rows.map((r) => r.key)).toEqual(['remediate', 'release'])
+    expect(p.rows[0]).toMatchObject({ pct: 60, active: true })
+    expect(p.rows[1]).toMatchObject({ pct: 100, active: false })
+  })
+
+  it('gives a stage with no published total no percentage at all', () => {
+    // Not completed/completed — a bar computed against itself sits at 100% forever.
+    const p = outputPipeline({ summary: { by_stage: { remediate: { completed: 12, running: 1 } } } })
+    expect(p.rows[0].pct).toBeNull()
+    expect(p.rows[0].completed).toBe(12)
+  })
+
+  it('calls an absent stage unreported, never “produced nothing”', () => {
+    const p = outputPipeline({ summary: { by_stage: { remediate: { completed: 1, total: 2 } } } })
+    expect(p.missing).toEqual(['Verified and released'])
+    expect(p.missingReason).toMatch(/never “produced nothing”/)
+    expect(p.missingReason).not.toMatch(/not started/i)
+  })
+
+  it('keeps the stages in production order', () => {
+    expect(OUTPUT_STAGES.map((s) => s.key)).toEqual(['remediate', 'release'])
   })
 })

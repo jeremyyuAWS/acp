@@ -442,6 +442,70 @@ describe('Primary visualization per node', () => {
     expect(container.textContent).toContain('Not reported')
   })
 
+  const outputNode = { kind: 'output', label: 'Durable outputs' }
+
+  it('names the dead-letter count for what it counts, not as a storage failure', async () => {
+    const container = await mount({ nodeId: 'infra:output', node: outputNode })
+    expect(container.textContent).toContain('DEAD-LETTERED JOBS')
+    expect(container.textContent).toContain('Every job type, not only output writes')
+    expect(container.textContent).toContain('Deliberate stops excluded')
+    // The old heading claimed a subsystem this number says nothing about.
+    expect(container.textContent).not.toContain('STORAGE FAILURES')
+  })
+
+  it('names a storage-specific count as unavailable, with the reason', async () => {
+    const container = await mount({ nodeId: 'infra:output', node: outputNode })
+    expect(container.textContent).toMatch(/STORAGE-SPECIFIC FAILURES\s*Not reported/)
+    expect(container.textContent).toContain('failure classifier has no storage class')
+  })
+
+  it('reports in-flight work as unavailable when neither stage is in the snapshot', async () => {
+    const summary = { ...snapshot.summary, by_stage: { assess: { running: 2, queued: 10 } } }
+    const container = await mount({ nodeId: 'infra:output', node: outputNode,
+      snapshot: { ...snapshot, summary } })
+    expect(container.textContent).toMatch(/REMEDIATE AND RELEASE IN FLIGHT\s*Not reported/)
+    expect(container.textContent).toContain('Neither stage is reported in this snapshot')
+    // The defect: 0 + 0 read as a confident zero.
+    expect(container.textContent).not.toMatch(/REMEDIATE AND RELEASE IN FLIGHT\s*0/)
+  })
+
+  it('says a partial in-flight count is partial', async () => {
+    const summary = { ...snapshot.summary,
+      by_stage: { remediate: { completed: 12, running: 1 } } }
+    const container = await mount({ nodeId: 'infra:output', node: outputNode,
+      snapshot: { ...snapshot, summary } })
+    expect(container.textContent).toContain('Only one of the two stages is reported')
+  })
+
+  it('draws each output stage bounded against its own published total', async () => {
+    const summary = { ...snapshot.summary, by_stage: {
+      remediate: { completed: 12, total: 20, running: 1, queued: 2 },
+      release: { completed: 9, total: 9, running: 0, queued: 0 },
+    } }
+    const container = await mount({ nodeId: 'infra:output', node: outputNode,
+      snapshot: { ...snapshot, summary } })
+    expect(container.textContent).toContain('OUTPUT STAGES')
+    expect(container.querySelector('[aria-label="Corrected copies: 60% of 20 documents"]')).toBeTruthy()
+    expect(container.querySelector('[aria-label="Verified and released: 100% of 9 documents"]')).toBeTruthy()
+    expect(container.textContent).toContain('1 running, 2 waiting')
+  })
+
+  it('draws no bar for a stage that published no total', async () => {
+    const summary = { ...snapshot.summary, by_stage: { remediate: { completed: 12, running: 1 } } }
+    const container = await mount({ nodeId: 'infra:output', node: outputNode,
+      snapshot: { ...snapshot, summary } })
+    expect(container.textContent).toContain('the completed count is not divided by itself')
+    expect(container.querySelector('[aria-label^="Corrected copies:"]')).toBeFalsy()
+  })
+
+  it('reports an absent output stage as unreported, not as having produced nothing', async () => {
+    const summary = { ...snapshot.summary, by_stage: { remediate: { completed: 12, total: 20 } } }
+    const container = await mount({ nodeId: 'infra:output', node: outputNode,
+      snapshot: { ...snapshot, summary } })
+    expect(container.textContent).toContain('Verified and released: Not reported')
+    expect(container.textContent).toContain('never “produced nothing”')
+  })
+
   it('shows durable output counts and refuses a total size Azure did not report', async () => {
     const container = await mount({ nodeId: 'infra:output', node: { kind: 'output', label: 'Durable outputs' } })
     expect(container.textContent).toContain('CORRECTED COPIES PRODUCED')
