@@ -241,3 +241,68 @@ def test_structural_errors_short_circuit_the_semantic_rules():
     result = findings_for(doc)
     assert not result.ok
     assert {f.rule for f in result.errors} == {"schema"}
+
+
+# ── telemetry: a credential, not a collector ─────────────────────────────────
+#
+# These exist because a bite check did not bite. `_warn_exporter_unimplemented` was added, the
+# examples showed it firing, and unregistering the rule entirely left the whole suite green — so
+# the rule was a claim rather than a check, which is the exact thing this file's docstring is
+# about. The warning cases below are what make it one.
+
+
+def _warnings_for(doc):
+    return {f.rule for f in findings_for(doc).warnings}
+
+
+def test_azure_monitor_requires_the_connection_string_the_application_reads():
+    """api/telemetry.py::configure() returns {"enabled": false, "reason": "not configured"}
+    without APPLICATIONINSIGHTS_CONNECTION_STRING — no SDK, no exporter, no egress. A document
+    declaring telemetry without it is asking for something it will not get."""
+    doc = load_example("standard-production")
+    assert doc["observability"]["exporter"] == "azure-monitor"
+    del doc["secrets"]["refs"]["applicationinsights-connection-string"]
+    assert "secrets.required" in errors_for(doc)
+
+
+def test_the_requirement_is_lifted_when_telemetry_is_off():
+    """THE CONTROL. Without it, "the credential is required" is satisfiable by requiring it
+    always — which would fail every document that has deliberately turned telemetry off."""
+    doc = load_example("standard-production")
+    del doc["secrets"]["refs"]["applicationinsights-connection-string"]
+    doc["observability"]["openTelemetry"] = False
+    assert "secrets.required" not in errors_for(doc)
+
+
+def test_an_exporter_with_no_implementation_warns():
+    doc = load_example("standard-production")
+    doc["observability"]["exporter"] = "cloudwatch"
+    del doc["secrets"]["refs"]["applicationinsights-connection-string"]
+    assert "observability.exporter-unimplemented" in _warnings_for(doc)
+
+
+def test_the_implemented_exporter_does_not_warn():
+    """THE CONTROL for the warning. A rule that fires on everything says nothing."""
+    doc = load_example("standard-production")
+    assert doc["observability"]["exporter"] == "azure-monitor"
+    assert "observability.exporter-unimplemented" not in _warnings_for(doc)
+
+
+def test_telemetry_switched_off_does_not_warn_about_its_exporter():
+    """`exporter` is inert when `openTelemetry` is false, and warning there would train operators
+    to ignore the warning that matters."""
+    doc = load_example("standard-production")
+    doc["observability"]["openTelemetry"] = False
+    doc["observability"]["exporter"] = "cloudwatch"
+    assert "observability.exporter-unimplemented" not in _warnings_for(doc)
+
+
+def test_the_regulated_profiles_local_exporter_is_the_case_that_warns():
+    """THE ONE WORTH NAMING. The schema describes `local` as keeping "collection entirely inside
+    the installation, which is what a regulated profile requires", and the regulated example
+    selects it — with no local collector and no code path that writes to one. The profile's own
+    promise is unmet: not violated by sending data somewhere it should not go, but unfulfilled,
+    because nothing is collected at all."""
+    doc = load_example("regulated")
+    assert doc["observability"]["exporter"] == "local"
+    assert "observability.exporter-unimplemented" in _warnings_for(doc)

@@ -597,13 +597,6 @@ RENDERS_AS = {
 # template, and unlike the data services (which _dataservices.tpl refuses loudly and explains)
 # these fail silently.
 NOT_RENDERED = {
-    "acp-otel-collector": (
-        "The only one with a seam. `_helpers.tpl` DOES read "
-        "`observability.openTelemetry.enabled` and sets OTEL_SDK_DISABLED plus an endpoint — so "
-        "the workloads are instrumented and the collector is expected from outside. That is "
-        "coherent, and it contradicts the inventory, which calls this service `in-cluster`. One "
-        "of the two is wrong; see test_the_otel_endpoint_is_never_actually_set for the sharper "
-        "half of the same seam."),
     "acp-langfuse": (
         "Self-hosted LLM tracing, and the same shape as the OTel collector rather than the same "
         "shape as grafana — which is a distinction the first draft of these tests got wrong. No "
@@ -633,7 +626,6 @@ def app_workloads(manifests):
 # first time an entry moved out: ollama was still being searched for after the chart started
 # rendering it, and the test failed with a message about a map that no longer mentioned it.
 NOT_RENDERED_TOKENS = {
-    "acp-otel-collector": "otel",
     "acp-langfuse": "langfuse",
 }
 
@@ -716,25 +708,28 @@ def test_everything_in_the_not_rendered_map_really_is_absent():
 
 
 @needs_helm
-def test_the_derived_production_document_still_plans_a_service_it_would_not_install():
-    """THE HEADLINE, on the document that describes production rather than on an example — and
-    it is down to one.
+def test_the_derived_production_document_plans_nothing_it_would_not_install():
+    """THE HEADLINE, CLOSED — on the document that describes production rather than on an example.
 
-    azure-current.acp-deployment.yaml declares `ai.ollama.enabled: true` and
-    `observability.grafana: true` because deploy/public/ creates both. `acpctl plan` listed them
-    and `helm install` created neither, so adopting the chart as the Azure rebuild would have
-    silently dropped the local model runtime that ADR 0010's remediation lane depends on, and the
-    dashboards with it. Both now render.
+    It began at three. `azure-current.acp-deployment.yaml` declares `ai.ollama.enabled: true`,
+    `observability.grafana: true` and `openTelemetry: true` because deploy/public/ configures all
+    three; `acpctl plan` listed a model runtime, a dashboard server and an OTLP collector, and
+    `helm install` created none of them. Adopting the chart as the Azure rebuild would have
+    silently dropped the local model runtime ADR 0010's remediation lane depends on.
 
-    WHAT IS LEFT IS NOT THE SAME KIND OF THING, which is why the set shrank rather than emptied.
-    The OTel collector is planned in-cluster for a document whose exporter is `azure-monitor` —
-    telemetry going to a cloud backend, with no collector in any deployment path and none needed.
-    That is the inventory over-claiming rather than the chart lagging, and closing it means
-    deriving `provisioning` from `observability.exporter` (`local` -> in-cluster, a cloud backend
-    -> external), not writing a template.
+    Each closed differently, and the difference is the whole finding of this comparison:
 
-    Named as an exact set so that closing it fails here and the count in packaging/docs/ has to
-    move with it.
+      ollama, grafana   THE CHART was wrong. Both are real workloads that Compose and production
+                        deploy, and it rendered neither. Templates were the fix.
+      otel collector    THE INVENTORY was wrong, and about the mechanism rather than the count.
+                        ACP has no OTLP anywhere: api/telemetry.py configures the Azure Monitor
+                        distribution and needs a connection string, not a collector on 4317. The
+                        fix was to stop planning a workload for a credential — and to require the
+                        credential, which nothing had.
+
+    So "the chart renders less than the plan promises" turned out to be two different faults
+    wearing one number. The empty set is the assertion now; anything appearing in it is a new
+    fault of one of those two kinds.
     """
     from acpctl.spec import load_document
     doc = load_document(PACKAGING / "docs" / "azure-current.acp-deployment.yaml")
@@ -742,7 +737,8 @@ def test_the_derived_production_document_still_plans_a_service_it_would_not_inst
     doc["data"]["postgres"]["backupRetentionDays"] = 35
 
     planned = _in_cluster(doc)
-    assert planned & set(NOT_RENDERED) == {"acp-otel-collector"}, sorted(planned)
+    assert planned, "the derivation planned no in-cluster services at all; this proves nothing"
+    assert planned & set(NOT_RENDERED) == set(), sorted(planned & set(NOT_RENDERED))
 
 
 # ── values knobs the chart declares and no template reads ────────────────────────────────────
@@ -820,41 +816,81 @@ def test_no_other_values_knob_is_silently_ignored():
 
 
 @needs_helm
-def test_the_otel_endpoint_is_never_actually_set():
-    """THE SEAM THAT DOES NOT MEET, pinned because it is a live misconfiguration rather than a gap.
+def test_the_workloads_get_the_telemetry_credential_the_application_reads():
+    """THE SEAM THAT DID NOT MEET, now closed — and it was two seams, not one.
 
-    `acpctl values` emits `observability.openTelemetry.{enabled, exporter}`. `_helpers.tpl` reads
-    `{enabled, endpoint}`. So `exporter: azure-monitor` is rendered and ignored, `endpoint` is
-    never written, and the workloads come up with OTEL_SDK_DISABLED=false and no destination —
-    instrumentation switched on, pointing nowhere.
+    The first was mechanical: `acpctl values` emits
+    `observability.openTelemetry.{enabled, exporter}` and `_helpers.tpl` read `{enabled,
+    endpoint}`, so the endpoint was never written and workloads came up with
+    OTEL_SDK_DISABLED=false and no destination. Instrumentation switched on, pointing nowhere.
 
-    Asserted rather than fixed: what endpoint an `azure-monitor` exporter implies is an adapter
-    decision, and inventing one here would be the guess this programme keeps refusing to make.
+    The second is why fixing the first would have been wrong. OTLP was never the mechanism.
+    `api/telemetry.py` configures the AZURE MONITOR OpenTelemetry distribution and starts nothing
+    without APPLICATIONINSIGHTS_CONNECTION_STRING — `configure()` returns
+    `{"enabled": false, "reason": "not configured"}`, and no SDK, exporter or egress is created.
+    So OTEL_SDK_DISABLED=false described an SDK that was never constructed, and an OTLP endpoint
+    would have pointed at a protocol nothing in this product speaks.
+
+    What closes it is a CREDENTIAL, and the wiring is the secret reference itself: `acp.commonEnv`
+    projects every entry of `secrets.refs` as its own uppercase variable, so declaring
+    `applicationinsights-connection-string` and `acp-telemetry-salt` produces exactly the two
+    names telemetry.py reads, with no special case in any template.
     """
-    from acpctl.spec import load_document
     from acpctl.values import build_values
 
     doc = load_example("standard-production")
     values = build_values(doc)
     otel = values["observability"]["openTelemetry"]
-    assert otel["enabled"] is True and otel.get("exporter")
-    assert "endpoint" not in otel, (
-        "acpctl values now emits an OTel endpoint — the seam has been closed and this test should "
-        "assert the endpoint reaches the workload instead")
+    assert otel["enabled"] is True and otel.get("exporter") == "azure-monitor"
 
-    # ACP's own workloads only. The model runtime is a Deployment too and takes none of
-    # `acp.commonEnv` — it is not instrumented, and reading its container's env here made
-    # this test fail with 'instrumentation is meant to be on here' about a container that
-    # was never meant to have any.
     for manifest in app_workloads(render(doc)):
         if manifest.get("kind") != "Deployment":
             continue
-        env = {e["name"]: e.get("value")
-               for e in manifest["spec"]["template"]["spec"]["containers"][0]["env"]}
-        assert env.get("OTEL_SDK_DISABLED") == "false", "instrumentation is meant to be on here"
-        assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in env, (
-            "an OTLP endpoint now reaches the workload — good, and this test needs rewriting to "
-            "assert it matches the document's exporter")
+        name = manifest["metadata"]["name"]
+        env = {e["name"]: e for e in manifest["spec"]["template"]["spec"]["containers"][0]["env"]}
+
+        ref = env.get("APPLICATIONINSIGHTS_CONNECTION_STRING", {}).get("valueFrom", {})
+        assert ref.get("secretKeyRef", {}).get("key") == "applicationinsights-connection-string", (
+            f"{name} cannot start telemetry: api/telemetry.py reads this variable and nothing "
+            f"else, and it is not projected")
+        assert "value" not in env["APPLICATIONINSIGHTS_CONNECTION_STRING"], (
+            f"{name} carries the connection string as a literal rather than a reference")
+
+        assert env.get("OTEL_SERVICE_NAME", {}).get("value"), (
+            f"{name} would appear in Application Insights unnamed")
+
+        # THE ONES THAT SHOULD BE GONE. Both described a mechanism this product does not use, and
+        # OTEL_SDK_DISABLED was the actively misleading one: it read as "instrumentation is on".
+        for dead in ("OTEL_SDK_DISABLED", "OTEL_EXPORTER_OTLP_ENDPOINT"):
+            assert dead not in env, (
+                f"{name} sets {dead} again — ACP exports through the Azure Monitor distribution, "
+                f"not OTLP, so this describes a pipeline that does not exist")
+
+
+@needs_helm
+def test_no_duplicate_environment_variables_reach_any_container():
+    """A GUARD ON THE SHAPE OF THE FIX, and it caught a real one.
+
+    The first draft set APPLICATIONINSIGHTS_CONNECTION_STRING explicitly in `acp.commonEnv` while
+    the secret-ref loop in the same helper ALSO emitted it — two entries of the same name in one
+    container, which Kubernetes resolves by taking the last and a reader resolves by guessing. The
+    salt was worse: mapped by hand as `telemetry-salt`, it arrived as both ACP_TELEMETRY_SALT and
+    a junk TELEMETRY_SALT that nothing reads.
+
+    Nothing about that fails to render, which is why it is asserted across every container rather
+    than for the two variables that happened to collide.
+    """
+    for name in RENDERABLE:
+        for manifest in render(load_example(name)):
+            if manifest.get("kind") not in ("Deployment", "StatefulSet", "Job", "CronJob"):
+                continue
+            spec = manifest["spec"].get("template", manifest["spec"])["spec"]
+            for container in spec.get("containers", []) + spec.get("initContainers", []):
+                names = [e["name"] for e in container.get("env") or []]
+                dupes = sorted({n for n in names if names.count(n) > 1})
+                assert not dupes, (
+                    f"{name}/{manifest['metadata']['name']}/{container['name']} sets {dupes} "
+                    f"more than once")
 
 
 def _grafana(manifests):
