@@ -309,6 +309,19 @@ def _dimension_value(series) -> str | None:
 _STATUS_CLASSES = ("2xx", "3xx", "4xx", "5xx")
 
 
+def _metric_timespan(now: datetime) -> str:
+    """Azure-safe UTC interval for the rolling metric window.
+
+    `azure-mgmt-monitor` forwards a literal ``+`` in an ISO offset through a query-string path
+    that Azure decodes as a space. Production then receives ``...13:24:59 00:00`` and rejects the
+    entire metric request as an invalid interval. UTC's ``Z`` spelling is equivalent ISO 8601 and
+    contains no query-string metacharacter, so it survives that transport unchanged.
+    """
+    end = now.astimezone(timezone.utc)
+    start = end - timedelta(minutes=_AZ_METRIC_WINDOW_MIN)
+    return f"{start.strftime('%Y-%m-%dT%H:%M:%S.%fZ')}/{end.strftime('%Y-%m-%dT%H:%M:%S.%fZ')}"
+
+
 def _status_split(app_id: str, now: datetime) -> dict:
     """Requests per response class over the metric window, or {} when Azure does not answer.
 
@@ -316,8 +329,7 @@ def _status_split(app_id: str, now: datetime) -> dict:
     5xx and an app whose metrics have not arrived must not render alike, which is the same rule
     every other metric here follows.
     """
-    timespan = (f"{(now - timedelta(minutes=_AZ_METRIC_WINDOW_MIN)).isoformat()}"
-                f"/{now.isoformat()}")
+    timespan = _metric_timespan(now)
     try:
         answer = _monitor_client().metrics.list(
             app_id, metricnames="Requests", aggregation="Total", timespan=timespan,
@@ -355,8 +367,7 @@ def _gather_metrics(app_id: str, now: datetime) -> tuple[dict, str | None]:
     values, never absent and never zero. The distinction the UI needs is between "nothing is
     happening" and "nobody measured", and dropping the key would erase it.
     """
-    timespan = (f"{(now - timedelta(minutes=_AZ_METRIC_WINDOW_MIN)).isoformat()}"
-                f"/{now.isoformat()}")
+    timespan = _metric_timespan(now)
     out = {key: {"label": label, "unit": unit, "aggregation": agg, "azure_metric": rest,
                  "available": False, "latest": None, "average": None, "series": []}
            for rest, key, agg, unit, _scale, label in _AZ_METRICS}
