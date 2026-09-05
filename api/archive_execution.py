@@ -106,10 +106,21 @@ def evaluate(store, owner: str, scan_id: str, *, policy: dict | None = None,
         decision = af.decide(candidate, policy=normalized, evidence=evidence, now=stamp,
                              executed=existing, day_used=day_used, run_used=run_used)
         if decision["state"] == af.ELIGIBLE_AUTO:
-            # Counted against the per-run ceiling at DECISION time so the surface an operator
-            # reads shows the same eligible set the run will attempt. Counting only at execution
-            # would show 40 eligible and move 25, which reads as 15 silent failures.
+            # Counted against BOTH ceilings at DECISION time.
+            #
+            # Against the per-run ceiling so the surface an operator reads shows the same eligible
+            # set the run will attempt — counting only at execution would show 40 eligible and
+            # move 25, which reads as 15 silent failures.
+            #
+            # And against the DAY's ceiling, which is the one that would otherwise be breached.
+            # `day_used` is read once before this loop; without incrementing it here, a tenant
+            # 99 moves into a 100-a-day ceiling would see all 25 remaining candidates decided
+            # against the same stale 99 and then move all 25 — exceeding the daily limit by 24
+            # while every individual decision looked correct. The ceiling is the one control a
+            # customer sets to bound the blast radius of a misconfiguration, so it has to hold
+            # within a run and not only between them.
             run_used += 1
+            day_used += 1
         items.append({
             "file": row.get("file"), "path": row.get("path"),
             "source": row.get("source"), "source_connection": candidate["source_connection"],

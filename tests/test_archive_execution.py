@@ -395,6 +395,24 @@ def test_no_connection_for_a_source_is_a_truthful_blocked_row_not_a_crash(seeded
     assert "No connection is available" in report["executions"][0]["detail"]
 
 
+def test_the_daily_ceiling_holds_WITHIN_a_run_not_only_between_them(isolated_store):
+    """The ceiling bounds the blast radius of a misconfiguration, so a single run must not blow it.
+
+    `day_used` is read once, before the evaluation loop. Decide each candidate against that same
+    stale number and a tenant one move short of its ceiling approves its whole remaining queue —
+    every individual decision correct, the limit breached by the size of the queue.
+    """
+    store = isolated_store
+    _seed(store, extra_pairs=3)                      # four eligible pairs in one scan
+    store.set_archive_policy(OWNER, _policy(max_actions_per_day=2, max_actions_per_run=25),
+                             actor=OWNER)
+    report = archive_execution.evaluate(store, OWNER, "s1", now=NOW)
+    assert report["counts"]["eligible"] == 2
+    blocked = [i for i in report["items"] if i["state"] == af.BLOCKED]
+    assert len(blocked) == 2
+    assert all("Today has reached" in i["reason"] for i in blocked)
+
+
 def test_the_daily_ceiling_counts_moves_that_happened_not_rows_that_were_claimed(seeded):
     graph = FakeGraph()
     _run(seeded, graph)
