@@ -98,6 +98,16 @@ class JobCancelledError(Exception):
     worker catches this, skips retry logic, and marks the job status='cancelled'."""
 
 
+class JobDrainingError(JobCancelledError):
+    """Raised at a safe handler checkpoint when this worker is shutting down.
+
+    It subclasses JobCancelledError so every existing scan boundary that deliberately lets
+    cancellation escape also lets a deployment handoff escape.  The worker catches this more
+    specific signal first and returns the still-valid job to the durable queue; it must never
+    turn a deployment into a user cancellation.
+    """
+
+
 # The worker installs a callable here before running a handler, and the handler reads it
 # (indirectly, via check_cancel()) without needing a reference to the worker.
 #
@@ -274,6 +284,7 @@ class JobWorker:
         self.worker_id = worker_id or f"worker-{uuid.uuid4().hex[:8]}"
         self.poll_interval = poll_interval
         self._running = False
+        self._draining = threading.Event()
         self.active_job_id = None
         self.unhealthy = False
         # Optional (job_id: str, patch: dict) -> None hook, called after a transient failure
@@ -373,6 +384,8 @@ class JobWorker:
         def _do_cancel_check():
             if self.store.is_job_cancelled(job["id"]):
                 raise JobCancelledError(f"job {job['id']} was cancelled")
+            if self._draining.is_set():
+                raise JobDrainingError(f"worker deployment handoff for job {job['id']}")
         _cancel_token = _cancel_cv.set(_do_cancel_check)
         try:
             # The job's identity travels with the work. Handlers fan out across threads — and
@@ -391,6 +404,27 @@ class JobWorker:
             else:
                 self.store.complete_job(job["id"], **_claim)
                 _emit_persisted("job.complete")
+        except JobDrainingError:
+            outcome = self.store.requeue_job_for_deployment(job["id"], **_claim)
+            _emit_persisted("job.deployment_requeue", outcome=outcome)
+            if outcome == "queued":
+                try:
+                    fresh = self.store.get_job(job["id"])
+                    if fresh and fresh.get("scan_id"):
+                        self.store.append_scan_event(
+                            fresh["scan_id"], "scan.interrupted", phase="deployment_requeue",
+                            job_id=job["id"], worker_id=self.worker_id,
+                            attempt=job.get("attempts"),
+                            detail={"reason": "planned deployment handoff",
+                                    "job_type": job.get("type")})
+                    if self.on_retry:
+                        self.on_retry(job["id"], {
+                            "phase": "deployment_requeue",
+                            "attempt": max(0, int(job.get("attempts") or 0) - 1),
+                            "max_attempts": job.get("max_attempts"),
+                        })
+                except Exception:
+                    swallowed("worker.run_once: announcing deployment handoff failed")
         except JobCancelledError:
             self.store.mark_job_cancelled(job["id"], **_claim)
             _emit_persisted("job.cancelled", when="during_handler")
@@ -497,3 +531,7 @@ class JobWorker:
 
     def stop(self) -> None:
         self._running = False
+        # A handler observes this only where it already declares a safe cancellation
+        # checkpoint. Work without a checkpoint keeps the existing bounded-drain + lease-reclaim
+        # fallback rather than being interrupted in the middle of a write.
+        self._draining.set()

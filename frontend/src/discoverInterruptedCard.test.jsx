@@ -86,6 +86,17 @@ describe('when the server did not supply an attempt number', () => {
   })
 })
 
+describe('a planned deployment handoff', () => {
+  it('names the service update and does not report a crash or failed attempt', async () => {
+    const c = await mount({
+      progress: { phase: 'deployment_requeue', attempt: 0, max_attempts: 5 }, busy: true })
+    expect(c.querySelector('[aria-label="Discovery deployment handoff"]')).toBeTruthy()
+    expect(c.textContent).toMatch(/Service updated; resuming safely/)
+    expect(c.textContent).toMatch(/without consuming a retry/)
+    expect(c.textContent).not.toMatch(/stopped without reporting|attempt failed/i)
+  })
+})
+
 describe('the states either side of it', () => {
   it('leaves the retrying card alone', async () => {
     // The control. A handler that raised is a different fact and keeps its own wording, its own

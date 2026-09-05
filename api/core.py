@@ -1998,7 +1998,8 @@ def _job_is_stale(state: dict) -> bool:
     died before its first heartbeat) counts as stale, not exempt — that is precisely the case the
     live incident above was.
 
-    phase=='retrying' and phase=='reclaimed' are exempt for the same reason 'done' is: both are
+    phase=='retrying', phase=='reclaimed', and phase=='deployment_requeue' are exempt for the
+    same reason 'done' is: all are
     legitimate WAITING states,
     not a stalled one. No worker holds this job while it sits out its backoff — heartbeats
     stop by design — and rate-limit backoff alone can run up to 600s, well past the normal 90s
@@ -2006,7 +2007,8 @@ def _job_is_stale(state: dict) -> bool:
     (see worker.py's on_retry call) only ever writes this phase when the job is genuinely
     'queued' for another attempt, and the next real attempt overwrites it with a live phase
     within seconds of being claimed."""
-    if state.get("done") or state.get("phase") in ("retrying", "reclaimed"):
+    if state.get("done") or state.get("phase") in (
+            "retrying", "reclaimed", "deployment_requeue"):
         return False
     ts = state.get("updated_at")
     if not ts:
