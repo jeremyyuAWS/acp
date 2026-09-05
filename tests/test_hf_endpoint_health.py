@@ -180,9 +180,10 @@ def test_health_stats_p95_with_enough_data(isolated_store):
         {"provider": "huggingface", "latency_ms": ms, "ok": True} for ms in latencies
     ])
     stats = isolated_store.ai_provider_health_stats("huggingface", window_hours=24)
-    # 95th percentile of 20 sorted values is index 19 (min(int(20*0.95), 19) = min(19,19))
-    # latencies sorted = [100, 200, ..., 2000]; index 19 = 2000
-    assert stats["p95_latency_ms"] == 2000
+    # Nearest-rank convention: idx = min(ceil(N*0.95), N) - 1
+    # N=20: idx = min(ceil(19.0), 20) - 1 = min(19, 20) - 1 = 18
+    # sorted latencies[18] = 1900 (not 2000, the maximum)
+    assert stats["p95_latency_ms"] == 1900
     assert stats["avg_latency_ms"] > 0
 
 
@@ -199,13 +200,29 @@ def test_health_stats_last_call_ts_populated(isolated_store):
 
 
 def test_health_stats_window_excludes_old_calls(isolated_store):
-    """Calls outside the window are not counted."""
-    # Use store's record_ai_call directly — it always uses now(), so we can only test
-    # that a fresh call IS included and the count matches expectations.
+    """Calls outside the window are not counted — proved by inserting one stale row."""
+    import uuid
+
+    # Fresh call — must be counted
     _insert_calls(isolated_store, [{"provider": "huggingface", "latency_ms": 300, "ok": True}])
-    # window_hours=0 not valid (ge=1), but we can verify the 1-hour window includes our fresh call
+
+    # Stale call 48 h ago — inserted directly so we can set an explicit ts
+    old_ts = (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "INSERT INTO ai_calls(id,ts,scan_id,file,surface,provider,model,zone,"
+            "latency_ms,ok,cost_usd,reason,temperature,prompt_version) "
+            "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (uuid.uuid4().hex, old_ts, None, None, "alt_text", "huggingface", "test-model",
+             "cloud", 200, 1, 0.0, None, None, None))
+
+    # 1-hour window: only the fresh call
     stats = isolated_store.ai_provider_health_stats("huggingface", window_hours=1)
     assert stats["calls"] == 1
+
+    # 72-hour window: both calls
+    stats = isolated_store.ai_provider_health_stats("huggingface", window_hours=72)
+    assert stats["calls"] == 2
 
 
 def test_health_stats_provider_field_in_response(isolated_store):
@@ -262,3 +279,24 @@ def test_health_route_accepts_all_cloud_providers(isolated_store, monkeypatch):
     for name in providers.CLOUD_PROVIDERS:
         resp = client.get(f"/ai/providers/{name}/health")
         assert resp.status_code == 200, f"{name} should be accepted by the health route"
+
+
+def test_health_route_requires_admin(isolated_store, monkeypatch):
+    """When OWNER_EMAIL is set, a non-admin caller receives 403."""
+    import core
+    monkeypatch.setattr(core, "store", isolated_store)
+    monkeypatch.setattr(core, "OWNER_EMAIL", "admin@example.com")
+    monkeypatch.setattr(core, "is_admin", lambda email: email == "admin@example.com")
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import routes.system as sys_routes
+
+    app = FastAPI()
+    app.include_router(sys_routes.router)
+    # No _require_admin bypass — the real guard runs
+    client = TestClient(app, raise_server_exceptions=False)
+
+    # Request carries no user email → not an admin → 403
+    resp = client.get("/ai/providers/huggingface/health")
+    assert resp.status_code == 403
