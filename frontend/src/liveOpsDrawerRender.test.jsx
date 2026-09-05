@@ -1131,3 +1131,88 @@ describe('The seven-section drawer', () => {
     expect(order.indexOf('Live events')).toBeLessThan(order.indexOf('Alerts and platform health'))
   })
 })
+
+describe('Capacity cost panel', () => {
+  const workerNode = { kind: 'worker', label: 'Assess workers', service }
+  const six = (c) => c.querySelector('[aria-label="6. Configuration and limits"]')
+  const costFor = (over = {}) => ({ ...capacity, cost: {
+    apps: [], basis: 'Estimated from configured capacity', rate_configured: false, currency: null,
+    rate_note: 'No rate is configured, so capacity is shown as resource-hours rather than money. '
+      + 'Set ACP_COST_VCPU_HOUR and ACP_COST_GIB_HOUR to your own rates.',
+    total_vcpu_hours: 6, total_gib_hours: 12, total_floor_vcpu_hours: 2,
+    estimated_hourly: null, estimated_daily: null,
+    actuals: { available: false, reason: 'Cost Management is not configured for this deployment.',
+      billing_note: 'Azure Cost Management refreshes roughly every four hours. Actuals are never live.',
+      month_to_date: null, forecast: null, budget_percent: null, last_updated: null },
+    not_instrumented: [{ item: 'AI cost per assessment or remediation',
+      reason: 'Model spend is not metered per job in ACP.' }], ...over } })
+
+  it('shows resource-hours, not a currency figure, when no rate is configured', async () => {
+    // ACP knows exactly how much capacity is provisioned and cannot know what it costs. A made-up
+    // price in dollars would be the most confidently wrong number on the screen.
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode, capacity: costFor() })
+    const text = six(container).textContent
+    expect(text).toContain('6 vCPU-h/h')
+    expect(text).toContain('12 GiB-h/h')
+    expect(text).toMatch(/ACP_COST_VCPU_HOUR/)
+    // The MONEY TILE itself must be absent, not merely empty. Asserting only that no currency
+    // string appears passed even with the tile forced visible, because an unpriced figure renders
+    // as "Not reported" — a tile headed "ESTIMATED PER DAY · Not reported" still implies ACP
+    // tried to price it and failed, when in fact it was never asked to.
+    expect(text).not.toContain('ESTIMATED PER DAY')
+    expect(text).not.toMatch(/\$\d|USD \d/)
+  })
+
+  it('never calls any of it live, and says actual spend is not reported', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode, capacity: costFor() })
+    const text = six(container).textContent
+    expect(text).toContain('Estimated from configured capacity')
+    expect(text.toLowerCase()).not.toContain('live cost')
+    expect(text).toMatch(/Actual spend:.*Not reported/)
+    expect(text).toMatch(/every four hours/)
+  })
+
+  it('shows money only once the operator has supplied a rate', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode,
+      capacity: costFor({ rate_configured: true, currency: 'USD', estimated_hourly: 0.288,
+        estimated_daily: 6.912, rate_note: null }) })
+    const text = six(container).textContent
+    expect(text).toContain('USD 6.91')
+    expect(text).toMatch(/At your configured rate/)
+  })
+
+  it('names the always-on floor as paid for whether or not work arrives', async () => {
+    // The one cost figure derivable with no billing access at all, and the one an operator can
+    // act on tonight.
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode, capacity: costFor() })
+    const text = six(container).textContent
+    expect(text).toContain('ALWAYS-ON FLOOR')
+    expect(text).toMatch(/whether or not work arrives/)
+  })
+
+  it('carries the estimate provenance, never the Azure Monitor one', async () => {
+    // The measured panels above say "Azure Monitor". This one is derived and must not borrow
+    // that label — the distinction is the whole point of the provenance line.
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode, capacity: costFor() })
+    const text = six(container).textContent
+    expect(text).toMatch(/Estimated from configured capacity/)
+    // And specifically NOT the measured label. Matching only the line above passed even when the
+    // provenance was switched to Azure Monitor, because `basis` says the same words higher up —
+    // so this pins the provenance line by what it must never say.
+    expect(text).not.toMatch(/Azure Monitor/)
+    expect(text).not.toMatch(/\d+[smh] ago/)
+  })
+
+  it('names ACP-side spend nobody meters rather than omitting it', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode, capacity: costFor() })
+    expect(six(container).textContent).toMatch(/AI cost per assessment/)
+  })
+
+  it('appears on every node, because capacity cost is the deployment’s not one node’s', async () => {
+    for (const node of [workerNode, { kind: 'queue', label: 'Shared queue' },
+      { kind: 'run', label: 'Run s1', run: snapshot.runs[0] }]) {
+      const container = await mount({ nodeId: 'x', node, capacity: costFor() })
+      expect(six(container).textContent, node.kind).toContain('Capacity cost')
+    }
+  })
+})

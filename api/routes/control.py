@@ -508,6 +508,9 @@ def get_capacity():
     if not _AZ_CONFIGURED:
         unconfigured = _empty_capacity(False)
         unconfigured["service_health"] = _empty_service_health()
+        # Carried even here: the named gaps (no rate configured, no Cost Management) are gaps on
+        # a deployment with no Azure too, and the rate note is how an operator learns the knob.
+        unconfigured["cost"] = _cost_block({})
         return unconfigured
     # Every configured worker app, keyed by name. The top-level fields stay the FIRST app's, so
     # every existing caller of this endpoint is unaffected; `apps` is what lets each worker
@@ -526,6 +529,9 @@ def get_capacity():
     # Azure incident is not a fault in any one worker service, and nesting it under one would read
     # as though it were. One call for the whole response, not one per app.
     result["service_health"] = _service_health(datetime.now(timezone.utc))
+    # Subscription-wide too, and derived rather than measured: see the Tier 6 section. Computed
+    # from the blocks already read, so it costs no extra Azure call.
+    result["cost"] = _cost_block(blocks)
     return result
 
 
@@ -991,6 +997,191 @@ def _impacted_services(raw) -> list:
                  if isinstance(r, dict)]
         out.append({"service": name, "regions": [n for n in names if n]})
     return out
+
+
+# ── Tier 6: cost and capacity ───────────────────────────────────────────────────────────────────
+#
+# THE RULE THIS SECTION IS BUILT AROUND, and it is the owner's, not an inference: Azure billing
+# data is NOT real-time. Cost Management refreshes roughly every four hours and Microsoft advises
+# against querying it more than daily. So nothing here is ever labelled "live cost". A figure is
+# either "estimated from configured capacity" — derived, never measured — or "billing data, last
+# updated <t>". Those are different claims and they never share a label.
+#
+# NO PRICE IS HARDCODED, and this is the deliberate part. Container Apps rates vary by region, by
+# plan and over time; a rate baked into this file would be wrong somewhere on the day it was
+# written and wrong everywhere within a year, while still rendering as a confident currency
+# figure. So the QUANTITIES are computed exactly — vCPU-hours and GiB-hours follow from the
+# configured replica count and per-replica resources with nothing invented — and money appears
+# only when an operator supplies their own rate through the environment. Without one, the panel
+# shows the resource quantities and says a rate is needed, which is a useful answer; a made-up
+# currency figure is not.
+#
+# WHAT NEEDS COST MANAGEMENT AND IS NOT ATTEMPTED: month-to-date actuals, forecast, and budget
+# consumption. Those are measurements of real spend and cannot be derived from capacity at all.
+# They are named as unavailable, with the four-hour refresh caveat attached, so that when access
+# does exist nobody expects the number to be current.
+_COST_VCPU_HOUR_ENV = "ACP_COST_VCPU_HOUR"
+_COST_GIB_HOUR_ENV = "ACP_COST_GIB_HOUR"
+_COST_CURRENCY_ENV = "ACP_COST_CURRENCY"
+
+# Microsoft's published guidance, carried in the payload so the UI cannot forget it.
+_BILLING_REFRESH_NOTE = ("Azure Cost Management refreshes roughly every four hours, and Microsoft "
+                         "advises against querying it more than daily. Actuals are never live.")
+
+
+def _cost_rates() -> dict:
+    """The operator's own rates, or None for each. Never a default: a default price is a wrong
+    price rendered with the same confidence as a right one."""
+    def _rate(name):
+        raw = os.environ.get(name)
+        if raw is None or not str(raw).strip():
+            return None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        # A negative or zero rate is a misconfiguration, not a free deployment.
+        return value if value > 0 else None
+
+    return {
+        "vcpu_hour": _rate(_COST_VCPU_HOUR_ENV),
+        "gib_hour": _rate(_COST_GIB_HOUR_ENV),
+        "currency": (os.environ.get(_COST_CURRENCY_ENV) or "").strip() or None,
+    }
+
+
+def _memory_gib(value) -> float | None:
+    """Container Apps reports memory as a string like "2Gi" or "512Mi". Parsed rather than
+    assumed: reading "512Mi" as 512 would overstate a replica's memory by a thousand times, and
+    the resulting cost estimate would be confidently absurd."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        for suffix, factor in (("Gi", 1.0), ("Mi", 1 / 1024), ("G", 1.0), ("M", 1 / 1024)):
+            if text.endswith(suffix):
+                return float(text[: -len(suffix)]) * factor
+        return float(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _cost_for_app(block: dict) -> dict:
+    """One app's capacity expressed as resource-hours, and as money only if a rate exists.
+
+    EVERY QUANTITY HERE IS DERIVED FROM CONFIGURATION, not measured. `current_replicas` is what
+    Azure reports running now, so the "running" figures follow the real replica count; the "floor"
+    figures follow `min_replicas`, which is what the deployment pays for even when nothing is
+    happening. The gap between them is the idle capacity question, and it is the one cost figure
+    an operator can act on without any billing access at all.
+    """
+    rates = _cost_rates()
+    cpu = _num_or_none(block.get("cpu_cores_per_replica"))
+    gib = _memory_gib(block.get("memory_per_replica"))
+    running = _num_or_none(block.get("current_replicas"))
+    floor = _num_or_none(block.get("min_replicas"))
+    ceiling = _num_or_none(block.get("max_replicas"))
+
+    def _hours(replicas):
+        if replicas is None:
+            return {"vcpu_hours": None, "gib_hours": None}
+        return {"vcpu_hours": None if cpu is None else round(replicas * cpu, 4),
+                "gib_hours": None if gib is None else round(replicas * gib, 4)}
+
+    def _money(hours):
+        """Only with a rate for BOTH halves. A vCPU-only figure labelled as an hourly cost would
+        silently omit memory, which is a large share of a Container Apps bill."""
+        if rates["vcpu_hour"] is None or rates["gib_hour"] is None:
+            return None
+        if hours["vcpu_hours"] is None or hours["gib_hours"] is None:
+            return None
+        return round(hours["vcpu_hours"] * rates["vcpu_hour"]
+                     + hours["gib_hours"] * rates["gib_hour"], 4)
+
+    now_hours, floor_hours, ceiling_hours = _hours(running), _hours(floor), _hours(ceiling)
+    hourly, floor_cost = _money(now_hours), _money(floor_hours)
+    return {
+        "app": block.get("worker_app_name"),
+        "cpu_cores_per_replica": cpu,
+        "memory_gib_per_replica": gib,
+        "replicas_running": running,
+        "replicas_floor": floor,
+        "replicas_ceiling": ceiling,
+        "running": now_hours,
+        "floor": floor_hours,
+        "ceiling": ceiling_hours,
+        # Money, only with the operator's own rates. None is the honest answer otherwise.
+        "estimated_hourly": hourly,
+        "estimated_daily": None if hourly is None else round(hourly * 24, 4),
+        "estimated_floor_hourly": floor_cost,
+        # What is being paid for while nothing is happening. Derivable with no billing access.
+        "idle_vcpu_hours": None if (floor_hours["vcpu_hours"] is None) else floor_hours["vcpu_hours"],
+        "currency": rates["currency"],
+        "rate_configured": rates["vcpu_hour"] is not None and rates["gib_hour"] is not None,
+    }
+
+
+def _num_or_none(value):
+    try:
+        return None if value is None else float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _cost_block(blocks: dict) -> dict:
+    """The whole subscription's estimate, per app and totalled, plus the actuals it cannot supply.
+
+    `basis` and `billing_note` travel in the payload rather than living in the UI, so the caveat
+    cannot be dropped by a frontend change and the label cannot drift from what it describes.
+    """
+    rates = _cost_rates()
+    apps = [_cost_for_app(block) for block in (blocks or {}).values()]
+
+    def _total(field, sub=None):
+        values = [(a[field][sub] if sub else a[field]) for a in apps]
+        present = [v for v in values if v is not None]
+        # A total over a partial set would understate the bill while looking complete. All or
+        # nothing, and the caller can see which apps are missing.
+        return round(sum(present), 4) if present and len(present) == len(values) else None
+
+    return {
+        "apps": apps,
+        "basis": "Estimated from configured capacity",
+        "rate_configured": rates["vcpu_hour"] is not None and rates["gib_hour"] is not None,
+        "rate_source": "environment" if (rates["vcpu_hour"] is not None) else None,
+        "currency": rates["currency"],
+        "rate_note": (None if (rates["vcpu_hour"] is not None and rates["gib_hour"] is not None)
+                      else f"No rate is configured, so capacity is shown as resource-hours rather "
+                           f"than money. Set {_COST_VCPU_HOUR_ENV} and {_COST_GIB_HOUR_ENV} (and "
+                           f"optionally {_COST_CURRENCY_ENV}) to your own Container Apps rates — "
+                           f"none is assumed, because a rate baked in here would be wrong for "
+                           f"some region on the day it was written."),
+        "total_vcpu_hours": _total("running", "vcpu_hours"),
+        "total_gib_hours": _total("running", "gib_hours"),
+        "total_floor_vcpu_hours": _total("floor", "vcpu_hours"),
+        "estimated_hourly": _total("estimated_hourly"),
+        "estimated_daily": _total("estimated_daily"),
+        # NOT DERIVABLE. Real spend is a measurement, and capacity cannot stand in for it.
+        "actuals": {
+            "available": False,
+            "reason": "Month-to-date spend, forecast and budget consumption come from Azure Cost "
+                      "Management, which is not configured for this deployment.",
+            "billing_note": _BILLING_REFRESH_NOTE,
+            "month_to_date": None, "forecast": None, "budget_percent": None,
+            "last_updated": None,
+        },
+        # ACP-side spend nobody instruments yet. Named so it is a known gap, not an oversight.
+        "not_instrumented": [
+            {"item": "AI cost per assessment or remediation",
+             "reason": "Model spend is not metered per job in ACP, so a per-document AI figure "
+                       "would be a guess divided by a count."},
+            {"item": "Storage and network contribution",
+             "reason": "Blob and egress charges are billed per subscription, not per worker app, "
+                       "and are not attributable to a service from capacity alone."},
+        ],
+    }
 
 
 # ── Tier 4: deployment transparency ─────────────────────────────────────────────────────────────
