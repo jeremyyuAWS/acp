@@ -1175,3 +1175,116 @@ describe('incidentRegions', () => {
     expect(incidentRegions({ services: 'not a list' })).toEqual([])
   })
 })
+
+/* ─────────────────────── Deployment transparency (Tier 4) ─────────────────────── */
+
+import { deploymentModel, revisionComparisonModel } from './liveOpsDrawer.js'
+
+const gaps = [
+  { step: 'Build started', reason: 'Runs in the CI workflow, not in Azure.' },
+  { step: 'Image published', reason: 'Happens in the container registry.' },
+  { step: 'Smoke test passed', reason: 'Runs in the CI workflow after the rollout.' },
+]
+const deployBlock = (over = {}) => ({ deployments: {
+  queried: true, events: [], window_hours: 24, not_reported: gaps,
+  system_logs: { available: false, reason: 'Needs a Log Analytics workspace; lags ~three minutes.' },
+  unavailable_reason: null, ...over } })
+
+describe('deploymentModel', () => {
+  it('carries the steps Azure cannot see even when the timeline is empty', () => {
+    // A timeline that silently begins at "revision created" claims the deployment began there.
+    const m = deploymentModel(deployBlock())
+    expect(m.notReported.map(g => g.step)).toEqual(
+      ['Build started', 'Image published', 'Smoke test passed'])
+    expect(m.notReported.every(g => g.reason)).toBe(true)
+  })
+
+  it('keeps the system-log gap and its reason', () => {
+    const m = deploymentModel(deployBlock())
+    expect(m.systemLogs.available).toBe(false)
+    expect(m.systemLogs.reason).toMatch(/Log Analytics/)
+  })
+
+  it('marks a timeline partial when the activity log failed but revisions did not', () => {
+    // Revision milestones come from a call that already succeeded. Presenting the remainder as a
+    // whole timeline would hide that Azure's own operations are missing from it.
+    const m = deploymentModel(deployBlock({ queried: false, unavailable_reason: 'error',
+      events: [{ at: '2026-09-05T09:00:00Z', kind: 'revision', label: 'Revision v2 created',
+        status: 'Provisioned', failed: false, detail: null }] }))
+    expect(m.available).toBe(true)
+    expect(m.partial).toBe(true)
+    expect(m.reason).toMatch(/activity-log query failed/)
+  })
+
+  it('is not partial when the query succeeded', () => {
+    expect(deploymentModel(deployBlock({ events: [{ at: 'x', kind: 'revision', failed: false }] })).partial)
+      .toBe(false)
+  })
+
+  it('counts failed rows so a bad deploy is not just another line', () => {
+    const m = deploymentModel(deployBlock({ events: [
+      { at: 'c', kind: 'operation', label: 'Container app updated', failed: true },
+      { at: 'b', kind: 'revision', label: 'Revision v2 created', failed: true },
+      { at: 'a', kind: 'operation', label: 'Container app updated', failed: false }] }))
+    expect(m.failedCount).toBe(2)
+  })
+
+  it('says nothing happened only when it actually asked', () => {
+    expect(deploymentModel(deployBlock()).reason).toMatch(/No deployment activity/)
+    expect(deploymentModel(deployBlock({ queried: false, unavailable_reason: 'permission' })).reason)
+      .toMatch(/Monitoring Reader/)
+  })
+
+  it('is unavailable with no block at all', () => {
+    expect(deploymentModel(null).available).toBe(false)
+    expect(deploymentModel({}).available).toBe(false)
+  })
+})
+
+describe('revisionComparisonModel', () => {
+  const revision = (name, over = {}) => ({ name, image: 'acr.io/acp:v1', cpu: 1.0, memory: '2Gi',
+    provisioning_state: 'Provisioned', replicas: 2, created_at: '2026-09-05T09:00:00Z', ...over })
+  const notCompared = [
+    { field: 'error_rate', label: 'Error rate', reason: 'Collected per container app, not per revision.' },
+    { field: 'cpu_used', label: 'CPU actually used', reason: 'Per app, not per revision.' },
+  ]
+  const cmp = (over = {}) => ({ revision_comparison: {
+    current: revision('v2', { image: 'acr.io/acp:v2' }), previous: revision('v1'),
+    changes: [{ field: 'image', label: 'Image', from: 'acr.io/acp:v1', to: 'acr.io/acp:v2' }],
+    rollback: { name: 'v1', image: 'acr.io/acp:v1' }, rollback_reason: null,
+    not_compared: notCompared, ...over } })
+
+  it('always carries what it did not compare, and why', () => {
+    // Not a footnote: it is the reason the rest of the panel can be trusted.
+    const m = revisionComparisonModel(cmp())
+    expect(m.notCompared.map(r => r.field)).toEqual(['error_rate', 'cpu_used'])
+    expect(m.notCompared.every(r => /per revision/i.test(r.reason))).toBe(true)
+  })
+
+  it('reports an image change from and to', () => {
+    const m = revisionComparisonModel(cmp())
+    expect(m.changes[0]).toMatchObject({ from: 'acr.io/acp:v1', to: 'acr.io/acp:v2' })
+    expect(m.reason).toBeNull()
+  })
+
+  it('says the revisions match rather than showing an empty change list', () => {
+    expect(revisionComparisonModel(cmp({ changes: [] })).reason).toMatch(/unchanged/)
+  })
+
+  it('says there is nothing to compare when there is only one revision', () => {
+    const m = revisionComparisonModel(cmp({ previous: null, changes: [] }))
+    expect(m.reason).toMatch(/nothing to compare/)
+  })
+
+  it('passes the rollback reason through when there is no target', () => {
+    const m = revisionComparisonModel(cmp({ rollback: null,
+      rollback_reason: 'No earlier revision is still provisioned.' }))
+    expect(m.rollback).toBeNull()
+    expect(m.rollbackReason).toMatch(/still provisioned/)
+  })
+
+  it('is unavailable when no active revision was read', () => {
+    expect(revisionComparisonModel({ revision_comparison: { current: null } }).available).toBe(false)
+    expect(revisionComparisonModel(null).available).toBe(false)
+  })
+})

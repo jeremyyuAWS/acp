@@ -432,8 +432,37 @@ def _empty_capacity(configured: bool, app_name: str | None = None) -> dict:
         # The health transitions Azure reported for THIS app. Not a current status — see the
         # platform-health section. Present unqueried in every shape, same reason as `alerts`.
         "resource_health": _empty_resource_health(),
+        # The deployment timeline, and the steps of a deployment Azure cannot see. Present in
+        # every shape so the NAMED gaps (build, image publish, smoke test, system logs) are
+        # readable even on a deployment with no Azure at all — they are gaps there too.
+        "deployments": _empty_deployments(),
+        "revision_comparison": None,
     }
 
+
+def _revision_template(rev) -> dict:
+    """`image`, `cpu` and `memory` for one revision, from its own template.
+
+    ALLOCATION, NOT USE. This is what the revision asks Azure for, which is the only per-revision
+    resource figure that exists — Azure Monitor collects CpuPercentage and the rest per CONTAINER
+    APP, with no revision attribution this code has verified. A "CPU went up 12% in this revision"
+    figure would therefore be app-wide data wearing a revision's name.
+
+    `env` is deliberately not read. A container's environment carries connection strings, keys and
+    tokens, and this response reaches a screen any signed-in workspace user can open.
+    """
+    out = {"image": None, "cpu": None, "memory": None}
+    template = _rev_field(rev, "template")
+    containers = getattr(template, "containers", None) or []
+    if not containers:
+        return out
+    first = containers[0]
+    out["image"] = getattr(first, "image", None)
+    resources = getattr(first, "resources", None)
+    if resources is not None:
+        out["cpu"] = getattr(resources, "cpu", None)
+        out["memory"] = getattr(resources, "memory", None)
+    return out
 
 def _rev_field(rev, name, default=None):
     """The published azure-mgmt-appcontainers docs describe Revision's fields (active, replicas,
@@ -643,6 +672,14 @@ def _capacity_for_app(app_name: str) -> dict:
                 "replicas": _rev_field(rev, "replicas"),
                 "traffic_percent": _rev_field(rev, "traffic_weight"),
                 "created_at": _iso(created) if created is not None else None,
+                # When this revision last SERVED — the honest end of a drained revision's life,
+                # and the only timestamp Azure gives for it. Absent on one that never took traffic.
+                "last_active_at": _iso(_rev_field(rev, "last_active_time")),
+                # The image, and the CPU/memory this revision ASKS FOR. Allocation, not use: the
+                # per-revision figure Azure will actually answer for. `env` is deliberately not
+                # read — a container's environment carries connection strings and keys, and this
+                # lands on a screen any signed-in workspace user can open.
+                **_revision_template(rev),
                 # Elapsed since the revision was created. NOT a provisioning duration: Azure
                 # reports when a revision was created and what state it is in now, but never when
                 # it BECAME ready, so "how long did provisioning take" is not answerable from this
@@ -693,6 +730,11 @@ def _capacity_for_app(app_name: str) -> dict:
     # `app.id` is what scopes it, so it needs the container-app lookup above to have succeeded.
     result["alerts"] = _alerts_for_app(getattr(app, "id", None))
     result["resource_health"] = _resource_health(getattr(app, "id", None), now)
+    # Last, and after the revisions block above has run: the timeline merges Azure's own
+    # operations with the revision milestones already read, so a failed activity-log call still
+    # leaves a partial timeline rather than none.
+    result["deployments"] = _deployments_for_app(getattr(app, "id", None), result["revisions"], now)
+    result["revision_comparison"] = _revision_comparison(result["revisions"])
 
     return result
 
@@ -949,6 +991,215 @@ def _impacted_services(raw) -> list:
                  if isinstance(r, dict)]
         out.append({"service": name, "regions": [n for n in names if n]})
     return out
+
+
+# ── Tier 4: deployment transparency ─────────────────────────────────────────────────────────────
+#
+# WHAT THIS CAN AND CANNOT SEE, stated up front because the gaps are the honest part.
+#
+# Azure knows what it did to the platform: a revision was created at T, it took traffic, an old
+# one drained, a write operation succeeded or failed. That is a real deployment timeline and it is
+# what this section builds, from the Administrative activity log plus the revisions themselves.
+#
+# Azure does NOT know about the half of a deployment that happens before it:
+#
+#   · build started        · image published to the registry        · smoke test passed
+#
+# Those live in the CI workflow and the container registry. They are NAMED as not reported rather
+# than omitted, because a timeline that silently begins at "revision created" reads as though the
+# deployment began there — and the most common real failure (a build that never produced an image)
+# would show up as no timeline at all, which is indistinguishable from no deployment.
+#
+# THE SYSTEM LOG FEED IS NOT HERE EITHER. Image-pull errors, failed volume mounts and container
+# crash output live in Log Analytics (ContainerAppSystemLogs_CL), which needs a workspace, its own
+# RBAC and carries roughly a three-minute ingestion delay. No workspace is configured, so the gap
+# is reported as a gap.
+_DEPLOY_WINDOW_HOURS = 24
+
+# Activity-log operations worth a timeline row, mapped to what actually happened. Anything else
+# under Administrative (a tag write, a diagnostic-setting change) is noise on a deployment
+# timeline and is dropped rather than rendered as a deploy.
+_DEPLOY_OPERATIONS = {
+    "microsoft.app/containerapps/write": "Container app updated",
+    "microsoft.app/containerapps/revisions/activate/action": "Revision activated",
+    "microsoft.app/containerapps/revisions/deactivate/action": "Revision deactivated",
+    "microsoft.app/containerapps/revisions/restart/action": "Revision restarted",
+    "microsoft.app/containerapps/delete": "Container app deleted",
+}
+
+# The steps a Container Apps deployment has that Azure cannot report, and where each one lives.
+# Carried in the payload rather than written into the UI so the reason travels with the gap.
+_DEPLOY_STEPS_NOT_REPORTED = (
+    {"step": "Build started",
+     "reason": "Runs in the CI workflow, not in Azure. Container Apps sees a deployment only once "
+               "an image already exists."},
+    {"step": "Image published",
+     "reason": "Happens in the container registry. The revision below names the image it runs, "
+               "which is the same fact at the other end."},
+    {"step": "Smoke test passed",
+     "reason": "Runs in the CI workflow after the rollout. Azure reports whether the revision "
+               "provisioned, never whether it works."},
+)
+
+
+def _empty_deployments() -> dict:
+    return {"queried": False, "events": [], "window_hours": _DEPLOY_WINDOW_HOURS,
+            "not_reported": list(_DEPLOY_STEPS_NOT_REPORTED),
+            "system_logs": {"available": False,
+                            "reason": "Container Apps system logs (image-pull failures, volume "
+                                      "mounts, crash output) need a Log Analytics workspace, which "
+                                      "is not configured. Log Analytics also lags by about three "
+                                      "minutes, so it would be labelled as delayed, not live."},
+            "unavailable_reason": None}
+
+
+def _deploy_events_from_activity(client, app_id: str, now: datetime) -> list:
+    """Deployment operations Azure recorded against this app in the window.
+
+    THE CALLER IS DELIBERATELY NOT INCLUDED. An activity-log `caller` is a person's UPN or a
+    service principal id, and this response reaches a screen any signed-in workspace user can
+    open. "What happened and when" is the operational question; "who did it" is an audit question
+    with a different audience, and the activity log itself is where that belongs.
+    """
+    rows = []
+    for event in _activity_log(client, _health_filter(now, category="Administrative",
+                                                      resource_id=app_id), limit=60):
+        operation = (_localized(getattr(event, "operation_name", None)) or "").lower()
+        label = _DEPLOY_OPERATIONS.get(operation)
+        if not label:
+            continue
+        status = _localized(getattr(event, "status", None))
+        rows.append({
+            "at": _iso(getattr(event, "event_timestamp", None)),
+            "kind": "operation",
+            "label": label,
+            # Started / Accepted / Succeeded / Failed. A FAILED write is the row that matters most
+            # on this timeline and is never filtered out.
+            "status": status,
+            "failed": (status or "").strip().lower() in ("failed", "failure"),
+            "detail": _strip_html(_localized(getattr(event, "description", None))),
+        })
+    return rows
+
+
+def _deploy_events_from_revisions(revisions: list) -> list:
+    """Revision milestones, from the revisions already read for this app.
+
+    Two timestamps per revision and no more, because those are the two Azure actually records.
+    WHEN A REVISION BECAME READY IS NOT ONE OF THEM — Azure reports that a revision was created
+    and what state it is in now, never when it finished provisioning. So "first replica ready" is
+    absent from this timeline rather than approximated from created_time, which would report a
+    slow rollout as an instant one.
+    """
+    rows = []
+    for rev in revisions or []:
+        name = rev.get("name")
+        if rev.get("created_at"):
+            rows.append({
+                "at": rev["created_at"], "kind": "revision", "label": f"Revision {name} created",
+                "status": rev.get("provisioning_state"),
+                "failed": (rev.get("provisioning_state") or "").lower() == "failed",
+                # The platform's own error string is where a failed rollout actually surfaces.
+                "detail": rev.get("provisioning_error") or rev.get("image"),
+            })
+        # Only for a revision that is no longer active: on the live one this is "a moment ago" and
+        # would sit on the timeline restating the present.
+        if rev.get("last_active_at") and not rev.get("active"):
+            rows.append({
+                "at": rev["last_active_at"], "kind": "revision",
+                "label": f"Revision {name} last served traffic",
+                "status": None, "failed": False, "detail": None,
+            })
+    return rows
+
+
+def _deployments_for_app(app_id: str, revisions: list, now: datetime) -> dict:
+    """The deployment timeline: Azure's own operations merged with revision milestones.
+
+    Merged and sorted newest-first so one list answers "what changed here recently", rather than
+    making a reader interleave two. Revision milestones survive an activity-log failure, because
+    they come from a call that already succeeded — a partial timeline that says so beats none.
+    """
+    block = _empty_deployments()
+    block["events"] = _deploy_events_from_revisions(revisions)
+    if not app_id:
+        # Revision milestones still stand: they came from the revisions list, not from this call.
+        block["events"].sort(key=lambda r: r["at"] or "", reverse=True)
+        return block
+    try:
+        client = _monitor_client()
+        block["events"].extend(_deploy_events_from_activity(client, app_id, now))
+        block["queried"] = True
+    except Exception as e:  # noqa: BLE001 — the revision milestones above are still returned
+        status = getattr(e, "status_code", None)
+        block["unavailable_reason"] = "permission" if status in (401, 403) else "error"
+        swallowed("routes.control._deployments_for_app: reading Administrative activity events "
+                  "failed")
+    block["events"].sort(key=lambda r: r["at"] or "", reverse=True)
+    return block
+
+
+def _revision_comparison(revisions: list) -> dict:
+    """Current versus the one before it, and whether a rollback target exists.
+
+    WHAT IS COMPARED IS WHAT AZURE ATTRIBUTES PER REVISION: the image, the CPU and memory the
+    revision ASKS FOR, its replica count, its traffic share and its health.
+
+    WHAT IS NOT, and this is the point. Error rate, latency and actual CPU or memory USE are
+    collected by Azure Monitor per CONTAINER APP. This code does not attempt to split them by
+    revision, and the reason is not that the split is hard: a dimension filter that Azure ignored
+    rather than rejected would return app-wide data wearing one revision's name — a regression
+    attributed to a deploy that did not cause it, which is worse than no comparison. So those are
+    named as not compared, with the reason, and the metrics panel above keeps showing them for
+    the app as a whole, which is what they actually describe.
+    """
+    rows = [r for r in (revisions or []) if r.get("name")]
+    current = next((r for r in rows if r.get("active")), None)
+    # Newest first among the rest. `created_at` is an ISO string, so a lexical sort is a
+    # chronological one — and a revision with no timestamp sorts last rather than first.
+    others = sorted([r for r in rows if r is not current],
+                    key=lambda r: r.get("created_at") or "", reverse=True)
+    previous = others[0] if others else None
+
+    changes = []
+    if current and previous:
+        for field, label in (("image", "Image"), ("cpu", "CPU requested"),
+                             ("memory", "Memory requested")):
+            before, after = previous.get(field), current.get(field)
+            if before != after:
+                changes.append({"field": field, "label": label,
+                                "from": before, "to": after})
+
+    # A rollback target is a revision that still EXISTS and provisioned successfully. A Failed one
+    # is not a way back, and saying it is would send an operator to a revision that never ran.
+    rollback = None
+    for candidate in others:
+        if (candidate.get("provisioning_state") or "").lower() == "provisioned":
+            rollback = {"name": candidate["name"], "image": candidate.get("image"),
+                        "created_at": candidate.get("created_at"),
+                        "replicas": candidate.get("replicas")}
+            break
+
+    return {
+        "current": current, "previous": previous, "changes": changes,
+        "rollback": rollback,
+        "rollback_reason": None if rollback else (
+            "No earlier revision is still provisioned, so there is nothing to roll back to from "
+            "the platform's side." if rows else
+            "No revisions were read for this app."),
+        "not_compared": [
+            {"field": "error_rate", "label": "Error rate",
+             "reason": "Azure Monitor collects requests per container app, not per revision."},
+            {"field": "latency", "label": "Response time",
+             "reason": "Collected per container app. A per-revision figure would be app-wide "
+                       "data under one revision's name."},
+            {"field": "cpu_used", "label": "CPU actually used",
+             "reason": "Per app, not per revision. The CPU compared above is what the revision "
+                       "requests, not what it consumes."},
+            {"field": "memory_used", "label": "Memory actually used",
+             "reason": "Per app, not per revision, for the same reason."},
+        ],
+    }
 
 
 # ── Tier 5: active alerts ───────────────────────────────────────────────────────────────────────

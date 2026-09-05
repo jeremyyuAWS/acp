@@ -1515,3 +1515,74 @@ export function incidentRegions(incident = {}) {
   const services = Array.isArray(incident.services) ? incident.services : []
   return [...new Set(services.flatMap(s => (Array.isArray(s?.regions) ? s.regions : [])))]
 }
+
+/* ─────────────────────── Deployment transparency (Tier 4) ─────────────────────── */
+
+/** Timeline row kinds. `operation` is something Azure did; `revision` is a milestone in a
+ *  revision's own life. Different shapes so the two read apart at a glance without colour. */
+export const DEPLOY_ICONS = { operation: '⇅', revision: '⬆', failed: '■' }
+
+/**
+ * The deployment timeline, plus — and this is the half that matters — the steps of a deployment
+ * Azure cannot report.
+ *
+ * A timeline that silently begins at "revision created" claims the deployment began there. The
+ * build, the image publish and the smoke test happen in CI and the registry, so they are carried
+ * as named gaps with the reason attached, and the panel shows them rather than starting midway
+ * through the story.
+ */
+export function deploymentModel(capacity = null) {
+  const block = capacity?.deployments || null
+  if (!block) {
+    return { available: false, events: [], notReported: [], systemLogs: null,
+      reason: 'This deployment does not report deployment activity.', windowHours: null,
+      failedCount: 0 }
+  }
+  const events = Array.isArray(block.events) ? block.events : []
+  return {
+    // `queried` is about the activity log only. Revision milestones come from a call that already
+    // succeeded, so a timeline can carry rows even when that query failed — and the panel says so
+    // rather than presenting a partial timeline as a whole one.
+    available: block.queried === true || events.length > 0,
+    partial: block.queried !== true && events.length > 0,
+    events,
+    failedCount: events.filter(e => e.failed).length,
+    notReported: Array.isArray(block.not_reported) ? block.not_reported : [],
+    systemLogs: block.system_logs || null,
+    windowHours: num(block.window_hours),
+    reason: block.unavailable_reason === 'permission'
+      ? 'Azure refused the activity-log query — the identity is missing the Monitoring Reader role.'
+      : block.unavailable_reason === 'error'
+        ? 'The activity-log query failed, so Azure’s own deployment operations are missing below.'
+        : events.length ? null
+          : `No deployment activity in the last ${num(block.window_hours) ?? 24} hours.`,
+  }
+}
+
+/**
+ * Current revision against the one before it.
+ *
+ * `notCompared` is not a footnote — it is the reason the panel can be trusted. Error rate,
+ * latency and actual CPU/memory use are collected per container app, so a per-revision figure
+ * would be app-wide data wearing one revision's name.
+ */
+export function revisionComparisonModel(capacity = null) {
+  const block = capacity?.revision_comparison || null
+  if (!block || !block.current) {
+    return { available: false, changes: [], notCompared: [], rollback: null,
+      reason: 'No active revision was read for this service.' }
+  }
+  return {
+    available: true,
+    current: block.current,
+    previous: block.previous || null,
+    changes: Array.isArray(block.changes) ? block.changes : [],
+    notCompared: Array.isArray(block.not_compared) ? block.not_compared : [],
+    rollback: block.rollback || null,
+    rollbackReason: block.rollback_reason || null,
+    reason: !block.previous
+      ? 'This is the only revision read for this service, so there is nothing to compare it to.'
+      : (block.changes || []).length ? null
+        : 'The image and the requested CPU and memory are unchanged from the previous revision.',
+  }
+}
