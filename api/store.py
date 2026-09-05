@@ -10426,8 +10426,8 @@ class Store:
                 "sr.owner_email,sr.source,sr.files,sr.files_done,sr.live_checkpoint "
                 "FROM jobs j JOIN scan_runs sr ON sr.id=j.scan_id "
                 "WHERE j.scan_id IN (SELECT DISTINCT scan_id FROM jobs "
-                "WHERE status IN ('queued','running')) OR "
-                "(j.status IN ('done','dead') AND j.updated_at>=%s) "
+                "WHERE status IN ('queued','running') OR "
+                "(status IN ('done','dead') AND updated_at>=%s)) "
                 "ORDER BY j.updated_at DESC LIMIT %s", (recent_cutoff, 5000))
             rows = self._db.fetchall(cur)
 
@@ -10506,7 +10506,8 @@ class Store:
                 item["updated_at"] = row.get("updated_at")
         result = [grouped[key] for key in active | recent]
         for item in result:
-            item["status"] = "active" if (item["queued"] or item["running"]) else "recent"
+            item["status"] = ("active" if (item["queued"] or item["running"]) else
+                              "failed" if item["failed"] else "recent")
         # The Remediation screen has a durable lifecycle stream. Carry a bounded, sanitized
         # projection into Live Operations too, so arriving after a fix or reconnecting does not
         # erase the activity timeline. The helper removes filenames and free text before these

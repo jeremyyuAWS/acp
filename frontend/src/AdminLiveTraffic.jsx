@@ -270,30 +270,49 @@ export function tileStyle(kind, color) {
 
 function RunNode({ data }) {
   const cfg = STAGE[data.run.stage] || { label: data.run.stage, color: '#6B7280' }
+  const accent = data.workflowColor || cfg.color
   const pct = data.run.total ? Math.round((data.run.completed / data.run.total) * 100) : 0
+  const statusLabel = data.run.status === 'recent' ? 'Complete'
+    : data.run.status === 'failed' ? 'Failed' : `${pct}%`
   return <div title="Select for live run details; double-click to open charts"
     style={{ width: 225, padding: 12,
-      ...tileStyle('run', cfg.color),
+      ...tileStyle('run', accent),
       border: `2px solid ${cfg.color}`,
-      borderLeft: `5px solid ${cfg.color}`,
-      boxShadow: `0 4px 12px color-mix(in srgb, ${cfg.color} 18%, transparent)` }}>
+      borderLeft: `5px solid ${accent}`,
+      boxShadow: `0 4px 12px color-mix(in srgb, ${accent} 18%, transparent)` }}>
     <Handle type="target" position={Position.Left} />
     <div style={{ color: cfg.color, fontSize: 9.5, fontWeight: 800, letterSpacing: '.09em',
       marginBottom: 4 }}>{TILE_KINDS.job.label}</div>
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-      <b>{cfg.label}</b><span style={{ color: cfg.color, fontWeight: 700 }}>{data.run.status === 'recent' ? 'Complete' : `${pct}%`}</span>
+      <b>{cfg.label}</b><span style={{ color: data.run.status === 'failed' ? 'var(--error-fg)' : cfg.color,
+        fontWeight: 700 }}>{statusLabel}</span>
     </div>
     <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{data.run.owner}</div>
     <div style={{ height: 5, background: 'var(--border)', borderRadius: 4, margin: '9px 0 7px' }}>
       <div style={{ width: `${pct}%`, height: '100%', background: cfg.color, borderRadius: 4 }} />
     </div>
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'end' }}>
-      <span style={{ fontSize: 12 }}>{data.run.status === 'recent' ? `Finished ${age(data.run.updated_at)} ago` : `${data.run.completed}/${data.run.total} · ${data.run.running} active`}</span>
+      <span style={{ fontSize: 12 }}>{data.run.status === 'recent' ? `Finished ${age(data.run.updated_at)} ago`
+        : data.run.status === 'failed' ? `${data.run.failed || 0} failed · updated ${age(data.run.updated_at)} ago`
+          : `${data.run.completed}/${data.run.total} · ${data.run.running} active`}</span>
       <MiniTrend values={data.history} color={cfg.color} />
     </div>
     {!!data.run.queued && <div style={{ fontSize: 11, marginTop: 5, color: 'var(--muted)' }}>
       {data.run.queued} waiting{data.run.queue_position ? ` · queue position ${data.run.queue_position}` : ''}
     </div>}
+    <Handle type="source" position={Position.Right} />
+  </div>
+}
+
+function WorkflowNode({ data }) {
+  return <div style={{ width: 225, minHeight: 112, padding: 12, borderRadius: 9,
+    border: `2px solid ${data.color}`, borderLeft: `7px solid ${data.color}`,
+    background: 'var(--panel)', boxShadow: '0 2px 8px rgba(24,20,28,.07)' }}>
+    <div style={{ color: data.color, fontSize: 9.5, fontWeight: 800, letterSpacing: '.09em' }}>WORKFLOW</div>
+    <b style={{ display: 'block', marginTop: 4, overflowWrap: 'anywhere' }}>{data.owner}</b>
+    <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>{data.source}</div>
+    <div style={{ fontSize: 11, marginTop: 9, fontWeight: 700 }}>{data.status}</div>
+    <div className="muted" style={{ fontSize: 10, marginTop: 3 }}>{data.workflowId}</div>
     <Handle type="source" position={Position.Right} />
   </div>
 }
@@ -392,7 +411,15 @@ function InfraNode({ data }) {
   </div>
 }
 
-const nodeTypes = { run: RunNode, infra: InfraNode }
+const nodeTypes = { run: RunNode, infra: InfraNode, workflow: WorkflowNode }
+
+const WORKFLOW_COLORS = ['#246B79', '#7B4D91', '#A65A2E', '#356B3F', '#9A3F62', '#5269A8']
+
+export function workflowColor(workflowId = '') {
+  let hash = 0
+  for (const char of String(workflowId)) hash = ((hash * 31) + char.charCodeAt(0)) >>> 0
+  return WORKFLOW_COLORS[hash % WORKFLOW_COLORS.length]
+}
 
 // React Flow's `animated` flag renders a moving dashed stroke. At the fitView zoom those dashes
 // repeatedly land between device pixels, which makes an otherwise healthy path look fuzzy. Keep
@@ -678,12 +705,51 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
  * unreadable as soon as several scans overlap. The jobs view deliberately has no edges: each card
  * already names its stage, source, owner, progress and queue position, and remains selectable for
  * the full live drawer. */
-export function trafficGraphForTab(graph = { nodes: [], edges: [] }, tab = 'infrastructure') {
+export function trafficGraphForTab(graph = { nodes: [], edges: [] }, tab = 'infrastructure', filter = null) {
   if (tab === 'jobs') {
-    const nodes = graph.nodes.filter((node) => node.type === 'run' && node.data?.run?.status !== 'recent')
-      .map((node, index) => ({ ...node,
-        position: { x: 35 + (index % 3) * 270, y: 55 + Math.floor(index / 3) * 165 } }))
-    return { nodes, edges: [] }
+    const allRuns = graph.nodes.filter((node) => node.type === 'run')
+    const matchingIds = new Set(allRuns.filter((node) =>
+      (!filter?.stage || node.data?.run?.stage === filter.stage)
+      && (!filter?.source || node.data?.run?.source === filter.source))
+      .map((node) => node.data?.run?.scan_id))
+    const runs = filter ? allRuns.filter((node) => matchingIds.has(node.data?.run?.scan_id)) : allRuns
+    const byWorkflow = new Map()
+    for (const node of runs) {
+      const id = node.data?.run?.scan_id
+      if (!byWorkflow.has(id)) byWorkflow.set(id, [])
+      byWorkflow.get(id).push(node)
+    }
+    const ordered = [...byWorkflow.entries()].sort(([, a], [, b]) => {
+      const aActive = a.some((node) => node.data.run.status !== 'recent')
+      const bActive = b.some((node) => node.data.run.status !== 'recent')
+      if (aActive !== bActive) return aActive ? -1 : 1
+      return String(b[0]?.data.run.updated_at || '').localeCompare(String(a[0]?.data.run.updated_at || ''))
+    })
+    const nodes = []
+    const edges = []
+    const stageX = { discover: 310, assess: 580, remediate: 850, release: 1120 }
+    ordered.forEach(([workflowId, workflowRuns], lane) => {
+      const y = 45 + lane * 185
+      const color = workflowColor(workflowId)
+      const first = workflowRuns[0]?.data.run || {}
+      const active = workflowRuns.filter((node) => node.data.run.status === 'active')
+      const failed = workflowRuns.some((node) => node.data.run.status === 'failed')
+      nodes.push({ id: `workflow:${workflowId}`, type: 'workflow', position: { x: 25, y },
+        ariaLabel: `Workflow ${workflowId}, ${first.owner || 'owner not reported'}, ${active.length ? 'active' : 'recently completed'}.`,
+        data: { workflowId, owner: first.owner || 'Owner not reported', source: first.source || 'Source not reported',
+          status: active.length ? `${active.at(-1).data.run.stage} in progress`
+            : failed ? 'Needs attention' : 'Recently completed', color } })
+      const stages = workflowRuns.sort((a, b) => (stageX[a.data.run.stage] || 1390) - (stageX[b.data.run.stage] || 1390))
+      stages.forEach((node, index) => {
+        nodes.push({ ...node, position: { x: stageX[node.data.run.stage] || 1390, y },
+          data: { ...node.data, workflowColor: color } })
+        const prior = index ? stages[index - 1].id : `workflow:${workflowId}`
+        const live = Number(node.data.run.running || 0) > 0 || Number(node.data.run.queued || 0) > 0
+        edges.push(flowEdge({ id: `workflow-edge:${prior}:${node.id}`, source: prior, target: node.id,
+          color, active: live, detail: node.id }))
+      })
+    })
+    return { nodes, edges }
   }
   const nodes = graph.nodes.filter((node) => node.type === 'infra')
   const ids = new Set(nodes.map((node) => node.id))
@@ -697,6 +763,7 @@ export default function AdminLiveTraffic() {
   const [capacity, setCapacity] = useState(null)
   const [capacityState, setCapacityState] = useState('loading')
   const [flowTab, setFlowTab] = useState('infrastructure')
+  const [flowFilter, setFlowFilter] = useState(null)
   const history = useRef(new Map())
   // Per-node metric samples over the drawer's 15-minute window, and the operational events derived
   // from the differences between consecutive live snapshots. Both are session state: there is no
@@ -744,7 +811,8 @@ export default function AdminLiveTraffic() {
   // is no second keydown listener here to fight it.
 
   const graph = useMemo(() => buildTrafficGraph(snapshot, history.current, capacity, connection), [snapshot, capacity, connection])
-  const visibleGraph = useMemo(() => trafficGraphForTab(graph, flowTab), [graph, flowTab])
+  const visibleGraph = useMemo(() => trafficGraphForTab(graph, flowTab, flowFilter),
+    [graph, flowTab, flowFilter])
 
   // One pass per live snapshot: sample every node for the trend strip, and diff this snapshot
   // against the previous one for the timeline. Both write into refs the same way the sparkline
@@ -827,21 +895,33 @@ export default function AdminLiveTraffic() {
       <b>Queue concentration:</b> one user holds {concentration.pct}% of waiting jobs. Tenant-fair scheduling gives other waiting users the next equally prioritized capacity.
     </div>}
     <div role="tablist" aria-label="Live Operations flow views" style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-      {[['infrastructure', 'Infrastructure map'], ['jobs', `Running jobs (${summary.active_runs || 0})`]].map(([id, label]) =>
+      {[['infrastructure', 'Infrastructure map'], ['jobs', `Running jobs (${summary.active_workflows ?? summary.active_runs ?? 0})`]].map(([id, label]) =>
         <button key={id} type="button" role="tab" aria-selected={flowTab === id}
           className={flowTab === id ? '' : 'ghost'}
-          onClick={() => { setFlowTab(id); setSelectedKey(null) }}
+          onClick={() => { setFlowTab(id); setFlowFilter(null); setSelectedKey(null) }}
           style={{ padding: '7px 12px', fontSize: 12 }}>{label}</button>)}
     </div>
+    {flowTab === 'jobs' && flowFilter && <div role="status" className="chip" style={{ marginBottom: 8 }}>
+      Showing workflows for {flowFilter.stage ? `${STAGE[flowFilter.stage]?.label || flowFilter.stage} activity` : flowFilter.source}
+      <button type="button" className="ghost" onClick={() => setFlowFilter(null)} style={{ marginLeft: 8 }}>Clear filter</button>
+    </div>}
     <div style={{ height: flowTab === 'infrastructure' ? 590
-      : Math.max(360, 100 + Math.ceil(visibleGraph.nodes.length / 3) * 165), maxHeight: 760,
+      : Math.max(360, 100 + visibleGraph.nodes.filter((node) => node.type === 'workflow').length * 185), maxHeight: 760,
       border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden', background: 'var(--page)' }}>
       <ReactFlow key={flowTab} nodes={visibleGraph.nodes} edges={visibleGraph.edges} nodeTypes={nodeTypes}
         defaultEdgeOptions={EDGE_ROUTING}
         fitView minZoom={0.35} maxZoom={1.5}
         onNodeClick={(_, node) => setSelectedKey(node.id)}
         onNodeDoubleClick={(_, node) => setSelectedKey(node.id)}
-        onEdgeClick={(_, edge) => setSelectedKey(edge.data?.detail || edge.target)}>
+        onEdgeClick={(_, edge) => {
+          if (flowTab === 'infrastructure' && edge.data?.active) {
+            const detail = String(edge.data?.detail || '')
+            setFlowFilter(detail.startsWith('stage:') ? { stage: detail.slice(6) }
+              : detail.startsWith('source:') ? { source: detail.slice(7) } : null)
+            setFlowTab('jobs')
+            setSelectedKey(null)
+          } else setSelectedKey(edge.data?.detail || edge.target)
+        }}>
         <Background gap={18} size={1} /><MiniMap pannable zoomable /><Controls showInteractive={false} />
         {flowTab === 'infrastructure' && <div aria-label="Map key" style={{ position: 'absolute', zIndex: 3, right: 12, top: 12,
           display: 'flex', gap: 12, padding: '6px 9px', border: '1px solid var(--border)',
@@ -854,10 +934,10 @@ export default function AdminLiveTraffic() {
           Idle · select any tile to inspect the ready processing path
         </div>}
         {flowTab === 'jobs' && !visibleGraph.nodes.length && <div className="chip" style={{ position: 'absolute', zIndex: 3, left: 12, top: 12 }}>
-          No jobs are running or waiting right now
+          No active or recently completed workflows match this view
         </div>}
         {flowTab === 'jobs' && !!visibleGraph.nodes.length && <div className="chip" style={{ position: 'absolute', zIndex: 3, left: 12, bottom: 12 }}>
-          Select a job to inspect its live progress, queue, throughput, and events
+          Select a stage to inspect progress; connected cards belong to one workflow
         </div>}
       </ReactFlow>
     </div>

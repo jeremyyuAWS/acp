@@ -169,6 +169,7 @@ def test_recent_failed_stage_is_visible_to_the_workflow_contract(isolated_store)
                             attempt=claimed["attempts"], force_dead=True)
     run = isolated_store.admin_live_activity()[0]
     assert run["failed"] == 1
+    assert run["status"] == "failed"
     workflow = system._workflow_rows([run])[0]
     assert workflow["status"] == "failed"
     assert workflow["stages"][0]["failed"] == 1
