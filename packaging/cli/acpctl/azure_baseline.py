@@ -192,6 +192,20 @@ def parse_deploy(text: str | None = None) -> dict[str, AzureApp]:
     return apps
 
 
+# `secretref:database-url` — how a container app names a secret from its own store. The names are
+# what the deployment actually keeps a credential FOR, which is a different and more useful set
+# than the names the contract requires: production reaches Blob Storage through a managed identity
+# and so has no storage secret at all, and that absence is only visible if the present ones are
+# read rather than assumed.
+_SECRETREF = re.compile(r"secretref:(?P<name>[a-z0-9][a-z0-9-]*)")
+
+
+def secret_names(text: str | None = None) -> set[str]:
+    """Every secret the create script wires into a container app, by name."""
+    body = DEPLOY_SH.read_text(encoding="utf-8") if text is None else text
+    return {m["name"] for m in _SECRETREF.finditer(body)}
+
+
 def baseline() -> dict[str, AzureApp]:
     """One record per app: sizing from the reviewed baseline, posture from the create script."""
     apps = parse_rightsize()
