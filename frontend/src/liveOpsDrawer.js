@@ -1303,3 +1303,105 @@ export function trendMarkers(log = [], { start, end } = {}) {
     .map((event) => ({ ...event, t: new Date(event.at).getTime() }))
     .filter((event) => Number.isFinite(event.t) && (start == null || event.t >= start) && (end == null || event.t <= end))
 }
+
+/* ─────────────────────── Active alerts (Tier 5) ─────────────────────── */
+
+/** Azure severity is 0-4 and 0 is the WORST. The backend already sends the word alongside the
+ *  number; this is the fallback for a severity it did not label, and the tone each maps to. */
+export const ALERT_SEVERITY_TONE = {
+  0: 'bad', 1: 'bad', 2: 'warn', 3: 'info', 4: 'info',
+}
+
+/** The five states this UI distinguishes, and what each is allowed to claim.
+ *
+ *  `unmonitored` is the one that matters and the one a conventional alerts panel does not have.
+ *  An empty firing list renders as "all clear" everywhere else; here it renders as all clear ONLY
+ *  when something is actually watching. Zero rules is a finding — a green tick over a service no
+ *  alert covers answers "is this healthy?" with evidence that does not exist. */
+export const ALERT_STATES = {
+  firing: { icon: '■', text: 'Firing', tone: 'bad' },
+  clear: { icon: '●', text: 'No alerts firing', tone: 'ok' },
+  unmonitored: { icon: '◇', text: 'Not monitored', tone: 'warn' },
+  unknown: { icon: '◔', text: 'Alert state unknown', tone: 'warn' },
+  unavailable: { icon: '—', text: NOT_REPORTED, tone: 'idle' },
+}
+
+/**
+ * What the alerts panel should say about one service.
+ *
+ * Four inputs, four different answers, and the whole point is that they do not collapse:
+ *
+ *   · the block is absent, or the query failed   → unavailable. Nobody asked, or Azure refused.
+ *   · queried, zero rules                        → UNMONITORED. Nothing is watching this service.
+ *   · queried, rules exist, none fired           → clear. This is the only honest "all good".
+ *   · queried, rules exist, some fired           → firing, worst first.
+ *
+ * A rule whose status could not be read is counted separately rather than folded into either
+ * side: "three rules, one unreadable" is a different situation from "three rules, all quiet",
+ * and the difference is exactly the alert that might be firing unseen.
+ */
+export function alertsModel(capacity = null) {
+  const block = capacity?.alerts || null
+  if (!block || block.queried !== true) {
+    return {
+      state: 'unavailable',
+      ...ALERT_STATES.unavailable,
+      reason: block?.unavailable_reason === 'permission'
+        ? 'Azure refused the alert-rules query — the identity is missing the Monitoring Reader role.'
+        : block?.unavailable_reason === 'error'
+          ? 'The alert-rules query failed, so whether anything is firing is not known.'
+          : 'This deployment does not report alert rules.',
+      rulesTotal: null, rulesEnabled: null, firing: [], rules: [], unknownCount: 0,
+    }
+  }
+  const rules = Array.isArray(block.rules) ? block.rules : []
+  const firing = Array.isArray(block.firing) ? block.firing : []
+  const rulesTotal = num(block.rules_total) ?? rules.length
+  const rulesEnabled = num(block.rules_enabled)
+  const unknownCount = rules.filter(r => r?.state === 'unknown' && r?.enabled !== false).length
+
+  let state = 'clear'
+  if (firing.length) state = 'firing'
+  else if (!rulesTotal) state = 'unmonitored'
+  else if (unknownCount === rulesTotal) state = 'unknown'
+
+  return {
+    state,
+    ...ALERT_STATES[state],
+    // The sentence under the chip. Every branch says what IS known, never implies more.
+    reason: state === 'unmonitored'
+      ? 'No alert rules watch this service, so nothing here is being checked. An empty list is '
+        + 'not the same as a healthy one.'
+      : state === 'unknown'
+        ? `Azure did not report a state for ${unknownCount === 1 ? 'the rule' : 'any of the '
+          + `${unknownCount} rules`} watching this service.`
+        : state === 'firing'
+          ? `${firing.length} of ${rulesTotal} ${rulesTotal === 1 ? 'rule' : 'rules'} firing.`
+          : `${rulesTotal} ${rulesTotal === 1 ? 'rule' : 'rules'} watching, none firing.`
+            + (unknownCount ? ` ${unknownCount} could not be read.` : ''),
+    rulesTotal,
+    rulesEnabled,
+    firing,
+    rules,
+    unknownCount,
+  }
+}
+
+/** Tone for one rule row: a firing rule takes its severity's tone, anything unreadable is a
+ *  warning rather than a pass, and a disabled rule is idle because it is not evaluating. */
+export function alertRuleTone(rule = {}) {
+  if (rule.enabled === false) return 'idle'
+  if (rule.state === 'fired') return ALERT_SEVERITY_TONE[rule.severity] ?? 'bad'
+  if (rule.state === 'resolved') return 'ok'
+  return 'warn'
+}
+
+/** The label for one rule's state — never a bare "resolved" for something nobody could read. */
+export function alertRuleState(rule = {}) {
+  if (rule.enabled === false) return 'Disabled'
+  if (rule.state === 'fired') return 'Firing'
+  if (rule.state === 'resolved') return 'Clear'
+  if (!rule.state || rule.state === 'unknown') return 'Not reported'
+  // A state Azure added that this UI does not know: shown as itself rather than guessed at.
+  return String(rule.state).replace(/^./, c => c.toUpperCase())
+}

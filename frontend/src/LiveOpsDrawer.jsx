@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { prefersReducedMotion, useDialog } from './a11y.js'
 import {
-  EVENT_FILTERS, EVENT_ICONS, NOT_REPORTED, TONE, arcPath, capacityMatchesService, chartModel,
+  EVENT_FILTERS, EVENT_ICONS, NOT_REPORTED, TONE, alertRuleState, alertRuleTone, alertsModel,
+  arcPath, capacityMatchesService, chartModel,
   capacityForService, componentState, defaultMetricFor, eventClock, eventsForNode, filterEvents,
   formatDuration,
   REPLICA_STATES, gaugeModel, metricGroups, nodeTypeLabel, outputModel, provenance, queueModel,
@@ -244,6 +245,60 @@ function Tracing({ tracing }) {
       Correlates by {tracing.correlate.join(', ')}
     </div>}
     {tracing.note && <p className="muted" style={{ fontSize: 11, margin: '6px 0 0' }}>{tracing.note}</p>}
+  </section>
+}
+
+/**
+ * Active alerts — section 5.
+ *
+ * The panel is built around one distinction that a conventional alerts widget does not make. An
+ * empty firing list renders as a green tick everywhere; here it does so ONLY when rules exist to
+ * fire. Zero rules is reported as "Not monitored", in the warning tone, because a green tick over
+ * a service no alert covers answers the operator's actual question — is this component healthy? —
+ * with evidence that does not exist.
+ *
+ * A query that failed is a third state again, and says whether the cause is a missing Monitoring
+ * Reader grant, which is the version an operator can act on.
+ *
+ * WCAG 1.4.1: every state carries its own glyph and its own words; the tone is never the only
+ * thing separating firing from clear from unmonitored.
+ */
+function ActiveAlerts({ alerts, measuredAt, nowMs }) {
+  return <section aria-label="Active alerts" style={{ ...PANEL, padding: 14 }}>
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <b>Alerts</b>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12,
+        fontWeight: 700, color: TONE[alerts.tone] || 'var(--muted)' }}>
+        <span aria-hidden="true">{alerts.icon}</span>{alerts.text}
+      </span>
+      {alerts.rulesEnabled != null && alerts.rulesTotal ? <span className="muted" style={{ fontSize: 11 }}>
+        {alerts.rulesEnabled} of {alerts.rulesTotal} enabled
+      </span> : null}
+    </div>
+    <p className="muted" style={{ fontSize: 11, margin: '6px 0 0' }}>{alerts.reason}</p>
+    {!!alerts.rules.length && <ul style={{ listStyle: 'none', margin: '10px 0 0', padding: 0,
+      display: 'grid', gap: 6 }}>
+      {alerts.rules.map((rule) => <li key={rule.name}
+        style={{ display: 'grid', gap: 2, borderTop: '1px solid var(--line,#eee)', paddingTop: 6 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, fontWeight: 700 }}>{rule.name}</span>
+          <span style={{ fontSize: 11, fontWeight: 700, color: TONE[alertRuleTone(rule)] || 'var(--muted)' }}>
+            {alertRuleState(rule)}
+          </span>
+          {rule.severity_label && <span className="muted" style={{ fontSize: 11 }}>
+            {rule.severity_label}
+          </span>}
+        </div>
+        {rule.condition && <span className="muted" style={{ fontSize: 11 }}>{rule.condition}</span>}
+        {rule.state === 'fired' && rule.since && <span className="muted" style={{ fontSize: 11 }}>
+          Firing since {eventClock(rule.since)}
+        </span>}
+      </li>)}
+    </ul>}
+    {/* No `at` when the query did not answer: an age beside "Not reported" would date a
+        measurement that was never taken. */}
+    <Source kind={alerts.state === 'unavailable' ? 'unavailable' : 'azure'}
+      at={alerts.state === 'unavailable' ? null : measuredAt} nowMs={nowMs} />
   </section>
 }
 
@@ -880,6 +935,8 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
       <TrendStrip groups={groups} metricKey={metricKey} onMetric={setMetricKey} chart={chart}
         markers={markers} paused={paused} source={picked.source} measuredAt={picked.measuredAt}
         nowMs={nowMs} />
+      {node?.kind === 'worker' && <ActiveAlerts alerts={alertsModel(serviceCapacity)}
+        measuredAt={serviceCapacity?.measured_at} nowMs={nowMs} />}
       <Tracing tracing={tracingModel(snapshot)} />
       <EventTimeline events={nodeEvents} filter={filter} onFilter={setFilter} paused={paused}
         onPause={() => setFrozen((held) => (held ? null : { samples, events }))}

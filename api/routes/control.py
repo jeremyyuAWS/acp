@@ -424,6 +424,11 @@ def _empty_capacity(configured: bool, app_name: str | None = None) -> dict:
         # reason as `metrics`: a caller should never have to test for the key before the values.
         "replicas": [], "revisions": [], "replica_lifecycle": None, "scale": None,
         "status_classes": {},
+        # Alert rules watching this app and which are firing. Present (unqueried) in every
+        # shape so a caller never tests for the key — and so "we did not ask" is
+        # distinguishable from "we asked and nothing is firing", which an absent key is not.
+        "alerts": {"queried": False, "rules_total": None, "rules_enabled": None,
+                   "firing": [], "rules": [], "unavailable_reason": None},
     }
 
 
@@ -674,6 +679,11 @@ def _capacity_for_app(app_name: str) -> dict:
         # above is still returned rather than lost.
         swallowed("routes.control.get_capacity: reading a replica's capacity fields failed")
 
+    # Alert rules watching this app, and which are firing. Last, and in its own block, because a
+    # missing Alerts read must not cost the capacity figures that already came back — and because
+    # `app.id` is what scopes it, so it needs the container-app lookup above to have succeeded.
+    result["alerts"] = _alerts_for_app(getattr(app, "id", None))
+
     return result
 
 
@@ -707,6 +717,151 @@ def _scrub_metadata(metadata) -> dict:
             return {}
     return {k: v for k, v in metadata.items()
             if not any(marker in str(k).lower() for marker in _SECRETISH)}
+
+
+# ── Tier 5: active alerts ───────────────────────────────────────────────────────────────────────
+#
+# Azure severity is an integer 0-4 and reads backwards to most people: 0 is the WORST. Rendered as
+# a bare number next to a rule name it is routinely misread as a priority where higher means more
+# urgent, so it never leaves this module without its word.
+_ALERT_SEVERITY = {0: "Critical", 1: "Error", 2: "Warning", 3: "Informational", 4: "Verbose"}
+
+# Azure reports a metric alert's current state as one of these strings. Anything else — including
+# a state Azure adds later — is carried through as-is rather than being coerced into "resolved",
+# because the safe direction to be wrong in is "I don't know", never "it's fine".
+_ALERT_FIRING = "fired"
+_ALERT_RESOLVED = "resolved"
+
+
+def _alert_rules(client, app_id: str) -> list:
+    """Metric alert rules in the resource group whose scopes include this container app.
+
+    Scoped by resource id rather than by name: a rule can be written against the subscription or
+    the resource group and still cover this app, and a rule named after this app can be scoped
+    somewhere else entirely. The id is the only thing that says what a rule actually watches.
+    """
+    wanted = (app_id or "").lower()
+    rules = []
+    for rule in client.metric_alerts.list_by_resource_group(_AZ_RG):
+        scopes = [str(s).lower() for s in (getattr(rule, "scopes", None) or [])]
+        if wanted and wanted in scopes:
+            rules.append(rule)
+    return rules
+
+
+def _alert_state(client, rule_name: str) -> tuple[str | None, str | None]:
+    """(state, since) for one rule — "fired", "resolved", whatever else Azure says, or None.
+
+    None means the status call did not answer, which is NOT the same as resolved and must not be
+    rendered as one; the caller keeps it as "unknown".
+    """
+    try:
+        collection = client.metric_alerts_status.list(_AZ_RG, rule_name)
+    except Exception:  # noqa: BLE001 — one rule's status failing must not hide the other rules
+        swallowed(f"routes.control._alert_state: reading the status of metric alert "
+                  f"{rule_name!r} failed")
+        return None, None
+    rows = getattr(collection, "value", None) or []
+    # A rule split by dimensions has one status row per dimension combination. FIRING WINS: if any
+    # one combination is fired the rule is firing, because a rule that is fired for a single worker
+    # app and resolved for four others is a live incident, and taking the first row (or the last)
+    # would report it as whichever happened to be ordered first.
+    state, since = None, None
+    for row in rows:
+        props = getattr(row, "properties", None)
+        row_state = getattr(props, "status", None) if props is not None else None
+        row_at = _iso(getattr(props, "timestamp", None)) if props is not None else None
+        if row_state is None:
+            continue
+        if str(row_state).strip().lower() == _ALERT_FIRING:
+            return str(row_state).strip().lower(), row_at
+        if state is None:
+            state, since = str(row_state).strip().lower(), row_at
+    return state, since
+
+
+def _alert_condition(rule) -> str | None:
+    """A one-line reading of what the rule thresholds on, or None when the criteria shape is one
+    this does not recognise. Never invented: an unrecognised criteria block yields None and the
+    UI says the condition is not reported rather than describing a threshold nobody can confirm."""
+    criteria = getattr(rule, "criteria", None)
+    all_of = getattr(criteria, "all_of", None) or []
+    parts = []
+    for c in all_of:
+        metric = getattr(c, "metric_name", None)
+        op = getattr(c, "operator", None)
+        threshold = getattr(c, "threshold", None)
+        agg = getattr(c, "time_aggregation", None)
+        if metric is None or threshold is None:
+            continue
+        lead = f"{agg} {metric}" if agg else str(metric)
+        parts.append(f"{lead} {op or '?'} {threshold}")
+    return " and ".join(parts) or None
+
+
+def _alerts_for_app(app_id: str) -> dict:
+    """Which alert rules watch this app, and which of them are firing right now.
+
+    THE DISTINCTION THIS BLOCK EXISTS TO PRESERVE: an empty firing list means "nothing is firing"
+    only when something is actually watching. With no rules configured — which is this deployment's
+    state today — an empty list means "nobody is watching", and the two must never render alike.
+    A green panel over an unmonitored service is worse than no panel, because it answers the
+    question the operator actually asked ("is this healthy?") with evidence that does not exist.
+    So `rules_total` is reported beside `firing`, and 0 is a finding rather than a pass.
+
+    Every field degrades to None rather than to a number nobody measured, matching the rest of
+    this module.
+    """
+    block = {
+        "queried": False,
+        "rules_total": None,
+        "rules_enabled": None,
+        "firing": [],
+        "rules": [],
+        "unavailable_reason": None,
+    }
+    if not app_id:
+        return block
+    try:
+        client = _monitor_client()
+        rules = _alert_rules(client, app_id)
+    except Exception as e:  # noqa: BLE001 — the alerts panel degrades; the rest of capacity stands
+        status = getattr(e, "status_code", None)
+        block["unavailable_reason"] = "permission" if status in (401, 403) else "error"
+        swallowed("routes.control._alerts_for_app: listing metric alert rules failed")
+        return block
+
+    block["queried"] = True
+    block["rules_total"] = len(rules)
+    block["rules_enabled"] = sum(1 for r in rules if getattr(r, "enabled", None) is not False)
+    for rule in rules:
+        name = getattr(rule, "name", None)
+        enabled = getattr(rule, "enabled", None)
+        severity = getattr(rule, "severity", None)
+        # A DISABLED rule is not asked for its status. Azure keeps returning the last status a
+        # disabled rule had, so a rule switched off while fired would keep reporting "fired"
+        # forever — an alert nobody can clear, on a condition nobody is evaluating.
+        state, since = (_alert_state(client, name) if (name and enabled is not False) else (None, None))
+        row = {
+            "name": name,
+            "description": getattr(rule, "description", None) or None,
+            "severity": severity,
+            "severity_label": _ALERT_SEVERITY.get(severity),
+            "enabled": enabled,
+            "state": state or "unknown",
+            "since": since,
+            "condition": _alert_condition(rule),
+            "window": str(getattr(rule, "window_size", None) or "") or None,
+            "frequency": str(getattr(rule, "evaluation_frequency", None) or "") or None,
+        }
+        block["rules"].append(row)
+        if row["state"] == _ALERT_FIRING:
+            block["firing"].append(row)
+    # Worst first: severity 0 is Critical, so a plain ascending sort puts the thing to look at
+    # first. A rule with no severity sorts last rather than as 0, which would promote an unknown
+    # to the top of the list.
+    block["firing"].sort(key=lambda r: (r["severity"] is None, r["severity"]))
+    return block
 
 
 def _scale_block(app) -> dict | None:

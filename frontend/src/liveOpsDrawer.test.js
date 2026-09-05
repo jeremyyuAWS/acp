@@ -937,3 +937,118 @@ describe('Tracing tells you whether a drill-down exists', () => {
     expect(tracingModel({}).note).toMatch(/does not report whether tracing is configured/)
   })
 })
+
+/* ─────────────────────── Active alerts (Tier 5) ─────────────────────── */
+
+import { alertsModel, alertRuleTone, alertRuleState, ALERT_STATES } from './liveOpsDrawer.js'
+
+const rule = (over = {}) => ({
+  name: 'cpu-high', severity: 2, severity_label: 'Warning', enabled: true,
+  state: 'resolved', since: null, condition: 'Average CpuPercentage GreaterThan 85',
+  description: null, window: 'PT5M', frequency: 'PT1M', ...over,
+})
+
+describe('alertsModel', () => {
+  it('separates "nobody is watching" from "nothing is firing"', () => {
+    // The single reason this model exists. Both have an empty firing list; a conventional alerts
+    // panel renders both as a green tick, and one of them is a service no alert covers.
+    const unmonitored = alertsModel({ alerts: { queried: true, rules_total: 0, rules_enabled: 0, firing: [], rules: [] } })
+    const clear = alertsModel({ alerts: { queried: true, rules_total: 1, rules_enabled: 1, firing: [], rules: [rule()] } })
+
+    expect(unmonitored.firing).toEqual(clear.firing)
+    expect(unmonitored.state).toBe('unmonitored')
+    expect(clear.state).toBe('clear')
+    expect(unmonitored.tone).not.toBe('ok')
+    expect(clear.tone).toBe('ok')
+  })
+
+  it('never claims all-clear when the query itself failed', () => {
+    for (const reason of ['permission', 'error']) {
+      const m = alertsModel({ alerts: { queried: false, rules_total: null, firing: [], rules: [], unavailable_reason: reason } })
+      expect(m.state).toBe('unavailable')
+      expect(m.tone).not.toBe('ok')
+      expect(m.text).toBe('Not reported')
+    }
+  })
+
+  it('names the permission case, because it is the one an operator can fix', () => {
+    const m = alertsModel({ alerts: { queried: false, firing: [], rules: [], unavailable_reason: 'permission' } })
+    expect(m.reason).toMatch(/Monitoring Reader/)
+  })
+
+  it('is unavailable, not clear, when there is no alerts block at all', () => {
+    expect(alertsModel(null).state).toBe('unavailable')
+    expect(alertsModel({}).state).toBe('unavailable')
+    expect(alertsModel({ alerts: {} }).state).toBe('unavailable')
+  })
+
+  it('reports firing with a count against the rules that exist', () => {
+    const fired = rule({ state: 'fired', severity: 0, severity_label: 'Critical' })
+    const m = alertsModel({ alerts: { queried: true, rules_total: 3, rules_enabled: 3, firing: [fired], rules: [fired, rule(), rule()] } })
+    expect(m.state).toBe('firing')
+    expect(m.tone).toBe('bad')
+    expect(m.reason).toBe('1 of 3 rules firing.')
+  })
+
+  it('counts rules whose state could not be read, rather than folding them into "quiet"', () => {
+    // "three rules, one unreadable" is a different situation from "three rules, all quiet", and
+    // the difference is exactly the alert that might be firing unseen.
+    const m = alertsModel({ alerts: { queried: true, rules_total: 3, rules_enabled: 3, firing: [],
+      rules: [rule(), rule(), rule({ state: 'unknown' })] } })
+    expect(m.unknownCount).toBe(1)
+    expect(m.reason).toMatch(/1 could not be read/)
+  })
+
+  it('goes to unknown, not clear, when no rule reported a state at all', () => {
+    const m = alertsModel({ alerts: { queried: true, rules_total: 2, rules_enabled: 2, firing: [],
+      rules: [rule({ state: 'unknown' }), rule({ state: 'unknown' })] } })
+    expect(m.state).toBe('unknown')
+    expect(m.tone).not.toBe('ok')
+  })
+
+  it('does not count a disabled rule as unreadable — it is not evaluating', () => {
+    const m = alertsModel({ alerts: { queried: true, rules_total: 2, rules_enabled: 1, firing: [],
+      rules: [rule(), rule({ enabled: false, state: 'unknown' })] } })
+    expect(m.unknownCount).toBe(0)
+    expect(m.state).toBe('clear')
+  })
+
+  it('uses singular wording for one rule', () => {
+    const m = alertsModel({ alerts: { queried: true, rules_total: 1, rules_enabled: 1, firing: [], rules: [rule()] } })
+    expect(m.reason).toBe('1 rule watching, none firing.')
+  })
+
+  it('every state carries a non-colour indicator', () => {
+    // WCAG 1.4.1: the icon and the word both have to distinguish these, not the tone alone.
+    const icons = Object.values(ALERT_STATES).map(s => s.icon)
+    const texts = Object.values(ALERT_STATES).map(s => s.text)
+    expect(new Set(icons).size).toBe(icons.length)
+    expect(new Set(texts).size).toBe(texts.length)
+  })
+})
+
+describe('alertRuleTone / alertRuleState', () => {
+  it('a rule nobody could read is a warning, never a pass', () => {
+    expect(alertRuleTone(rule({ state: 'unknown' }))).toBe('warn')
+    expect(alertRuleState(rule({ state: 'unknown' }))).toBe('Not reported')
+  })
+
+  it('a disabled rule is idle and says so, rather than reading as clear', () => {
+    expect(alertRuleTone(rule({ enabled: false, state: 'fired' }))).toBe('idle')
+    expect(alertRuleState(rule({ enabled: false, state: 'fired' }))).toBe('Disabled')
+  })
+
+  it('a firing rule takes its severity tone, and severity 0 is the worst', () => {
+    expect(alertRuleTone(rule({ state: 'fired', severity: 0 }))).toBe('bad')
+    expect(alertRuleTone(rule({ state: 'fired', severity: 3 }))).toBe('info')
+  })
+
+  it('a firing rule with an unlabelled severity is still treated as bad, not as info', () => {
+    expect(alertRuleTone(rule({ state: 'fired', severity: null }))).toBe('bad')
+  })
+
+  it('shows a state Azure invented later as itself rather than guessing', () => {
+    expect(alertRuleState(rule({ state: 'suppressed' }))).toBe('Suppressed')
+    expect(alertRuleTone(rule({ state: 'suppressed' }))).toBe('warn')
+  })
+})
