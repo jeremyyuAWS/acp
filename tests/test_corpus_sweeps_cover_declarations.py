@@ -58,6 +58,10 @@ PROVEN_ELSEWHERE = {
     ("xlsx", "2.4.2"): "DECLARED_ENGINE — proven by the .NET analyser in "
                        "test_the_engine_confirms_the_declared_pairs, skipped on a bare checkout",
     ("xlsx", "3.1.1"): "DECLARED_ENGINE — same .NET-gated sweep",
+    ("xlsx", "1.3.1"): "DECLARED_ENGINE — .NET TableHeaderRule, structural half in "
+                       "test_the_table_fixtures_carry_or_withhold_what_the_rule_reads",
+    ("xlsx", "1.3.2"): "DECLARED_ENGINE — .NET HiddenContentRule, structural half in "
+                       "test_the_hidden_row_fixtures_carry_or_withhold_what_the_rule_reads",
     ("pptx", "2.4.2"): "DECLARED_ENGINE — proven by the .NET analyser in "
                        "test_the_engine_confirms_the_declared_pairs, skipped on a bare checkout. "
                        "The structural half (does the fixture still carry or withhold what "
