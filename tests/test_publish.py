@@ -192,11 +192,31 @@ def test_sharepoint_child_lookup_follows_nextlink_before_deciding_name_is_free(m
     ]
 
 
+def test_sharepoint_folder_reuse_follows_every_page_and_does_not_create(monkeypatch):
+    import httpx
+    import scanner
+    pages = {
+        "https://graph/items/parent/children?$select=id,name,folder&$top=200": {
+            "value": [{"id": str(i), "name": f"folder-{i}", "folder": {}} for i in range(200)],
+            "@odata.nextLink": "https://graph/folders-page-2",
+        },
+        "https://graph/folders-page-2": {
+            "value": [{"id": "winner", "name": "Policies", "folder": {}}]
+        },
+    }
+    monkeypatch.setattr(scanner, "_sp_base", lambda drive: "https://graph")
+    monkeypatch.setattr(scanner, "_sp_get", lambda token, url: pages[url])
+    monkeypatch.setattr(httpx, "post",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not create")))
+
+    assert publish._sp_ensure_folder("token", "drive", "parent", "Policies") == "winner"
+
+
 def test_sharepoint_release_root_collision_on_later_page_gets_stable_suffix(monkeypatch):
     import scanner
     folder_calls = []
-    monkeypatch.setattr(scanner, "_sp_folder_id",
-                        lambda token, drive, name, parent_id="":
+    monkeypatch.setattr(publish, "_sp_ensure_folder",
+                        lambda token, drive, parent_id, name:
                         folder_calls.append((name, parent_id)) or
                         ("root" if not parent_id else "release-folder"))
     monkeypatch.setattr(scanner, "_sp_base", lambda drive: "https://graph")
@@ -232,7 +252,7 @@ def test_sharepoint_publish_reuses_identical_copy_without_writing(monkeypatch):
     monkeypatch.setattr(publish, "_sp_content_matches",
                         lambda token, drive, item, expected: expected == digest)
     import scanner
-    monkeypatch.setattr(scanner, "_sp_folder_id", lambda *a, **k: "unused")
+    monkeypatch.setattr(publish, "_sp_ensure_folder", lambda *a, **k: "unused")
     monkeypatch.setattr(scanner, "_sp_write",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not write")))
 
@@ -256,8 +276,8 @@ def test_sharepoint_publish_preserves_hierarchy_and_never_overwrites_collision(m
                         lambda token, drive, item, expected: item == "uploaded")
     import scanner
     folders = []
-    monkeypatch.setattr(scanner, "_sp_folder_id",
-                        lambda token, drive, name, parent_id=None:
+    monkeypatch.setattr(publish, "_sp_ensure_folder",
+                        lambda token, drive, parent_id, name:
                         folders.append((parent_id, name)) or f"folder-{name}")
     monkeypatch.setattr(scanner, "_sp_base", lambda drive: "https://graph/drive")
     writes = []

@@ -270,7 +270,7 @@ def test_rightsize_script_sets_worker_pool_and_queue_autoscale():
               / "deploy" / "public" / "rightsize-production.sh").read_text()
     assert script.count("ACP_DB_MAX_CONN=$db_pool") == 1
     assert "--scale-rule-name remediation-queue" in script
-    assert "type IN ('remediate_file','rescore_file','apply_approved_values')" in script
+    assert "type IN ('remediate_file','rescore_file','apply_approved_values','publish_file')" in script
     assert '"targetQueryValue=4"' in script
 
 
