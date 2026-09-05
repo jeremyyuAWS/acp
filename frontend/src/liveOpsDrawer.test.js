@@ -8,8 +8,8 @@ import {
   CAPACITY_RULES, NOT_REPORTED, TREND_WINDOW_MS, appendSample, arcPath, capacityMatchesService,
   chartModel, componentState, defaultMetricFor, deriveEvents, etaSeconds, eventClock,
   eventsForNode, filterEvents, formatDuration, gaugeModel, mergeEvents, metricsForKind,
-  PROVENANCE, capacityForService, metricGroups, niceCeiling, num, outputModel, provenance,
-  queueModel, rateSeries,
+  PROVENANCE, capacityForService, fairnessModel, metricGroups, niceCeiling, num, outputModel,
+  provenance, queueModel, rateSeries,
   replicaLifecycle, reported, revisionLabel, runModel, sampleForNode, saturationModel, scaleEvents,
   scaleExplanation, secondsSince, seriesForMetric, sourceModel, tenantConcentration, throughputModel,
   trendMarkers, updatedAgo, workerJobHealth,
@@ -799,5 +799,48 @@ describe('Throughput, and how it compares with five minutes ago', () => {
     expect(sample.findings).toBe(null)
     expect(sample.documents).toBe(40)
     expect(sample.fixes).toBe(5)
+  })
+})
+
+
+describe('Queue health beyond the oldest job', () => {
+  const summary = (over = {}) => ({ queued: 10, running: 2, queue: {
+    running: 2, waiting: 8, retrying: 0, failed: 0, arrived: 30, completed: 45, window_s: 900,
+    oldest_queued_at: iso(-1000), median_queued_at: iso(-500), p95_queued_at: iso(-950),
+    wait_sampled: 10, fairness: { tenants: 3, counts: [8, 5, 2], top_share_pct: 53 }, ...over } })
+
+  it('reports the median and the tail, not just the worst job', () => {
+    const model = queueModel(summary(), { nowMs: NOW })
+    expect(model.oldestWaitS).toBe(1000)
+    expect(model.medianWaitS).toBe(500)
+    expect(model.p95WaitS).toBe(950)
+    expect(model.waitSampled).toBe(10)
+  })
+
+  it('leaves a percentile unreported when nothing was sampled', () => {
+    const model = queueModel(summary({ median_queued_at: null, p95_queued_at: null, wait_sampled: 0 }),
+      { nowMs: NOW })
+    expect(model.medianWaitS).toBe(null)
+    expect(model.p95WaitS).toBe(null)
+  })
+
+  it('models the spread as shares, and never as a list of customers', () => {
+    const fairness = fairnessModel({ tenants: 3, counts: [8, 5, 2], top_share_pct: 53 })
+    expect(fairness.available).toBe(true)
+    expect(fairness.shares).toEqual([53.3, 33.3, 13.3])
+    expect(fairness.concentrated).toBe(false)
+    expect(JSON.stringify(fairness)).not.toMatch(/@/)
+  })
+
+  it('flags a concentrated queue on the same threshold the map banner uses', () => {
+    expect(fairnessModel({ tenants: 2, counts: [9, 1], top_share_pct: 90 }).concentrated).toBe(true)
+    // One tenant holding all of a queue only it is using is not a fairness problem.
+    expect(fairnessModel({ tenants: 1, counts: [12], top_share_pct: 100 }).concentrated).toBe(false)
+    expect(fairnessModel({ tenants: 1, counts: [12], top_share_pct: 100 }).topSharePct).toBe(100)
+  })
+
+  it('is unavailable rather than empty when the backend reports no fairness block', () => {
+    expect(fairnessModel(undefined)).toMatchObject({ available: false, counts: [], concentrated: false })
+    expect(fairnessModel({ tenants: 0, counts: [], top_share_pct: null }).available).toBe(false)
   })
 })

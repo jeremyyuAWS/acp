@@ -88,6 +88,61 @@ def test_rates_count_only_the_window_they_report(isolated_store):
                        "oldest_queued_at": outside["oldest_queued_at"]}
 
 
+def test_the_percentiles_describe_the_queue_not_one_straggler(isolated_store):
+    """The oldest wait is one job's; it says nothing about whether the queue is broadly slow or
+    holding a single laggard. The median and the 95th say which."""
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+    isolated_store.save_scan(_scan())
+    for _ in range(10):
+        isolated_store.enqueue_job("scan_file", {"file": "q.docx"}, scan_id="scan-queue-1")
+    # Age them 100, 200, ..., 1000 seconds so each rank is identifiable.
+    rows = isolated_store.list_jobs(status="queued", limit=20)
+    now = _dt.now(_tz.utc)
+    for index, job in enumerate(rows):
+        with isolated_store._db.cursor() as cur:
+            isolated_store._db.execute(cur, "UPDATE jobs SET created_at=%s WHERE id=%s",
+                                       ((now - _td(seconds=(index + 1) * 100)).isoformat(), job["id"]))
+
+    composition = isolated_store.queue_composition()
+    assert composition["wait_sampled"] == 10
+    wait = lambda iso: (now - _dt.fromisoformat(iso)).total_seconds()
+    # Rank 0 in created_at ASC is the OLDEST, so the longest wait has the smallest index. The 95th
+    # percentile of WAIT is the 5% oldest, not the 95% mark — which would report the newest arrival.
+    assert round(wait(composition["oldest_queued_at"])) == 1000
+    assert round(wait(composition["p95_queued_at"])) == 1000     # floor(0.05 * 10) = rank 0
+    assert round(wait(composition["median_queued_at"])) == 500   # rank 5 of 10
+
+
+def test_a_percentile_of_nothing_is_absent_rather_than_zero(isolated_store):
+    isolated_store.save_scan(_scan())
+    composition = isolated_store.queue_composition()
+    assert composition["wait_sampled"] == 0
+    assert composition["median_queued_at"] is None
+    assert composition["p95_queued_at"] is None
+
+
+def test_fairness_reports_the_spread_without_naming_the_tenants(isolated_store):
+    """The counts alone answer "is one customer holding the queue", which is what tenant-fair
+    scheduling is judged on. Adding the identities would put a list of customer addresses on a
+    screen any signed-in workspace user can open, to answer a question that does not need them."""
+    isolated_store.save_scan(_scan("scan-a", "big@example.org"))
+    isolated_store.save_scan(_scan("scan-b", "small@example.org"))
+    for _ in range(8):
+        isolated_store.enqueue_job("scan_file", {"file": "a.docx"}, scan_id="scan-a")
+    for _ in range(2):
+        isolated_store.enqueue_job("scan_file", {"file": "b.docx"}, scan_id="scan-b")
+
+    fairness = isolated_store.queue_composition()["fairness"]
+    assert fairness == {"tenants": 2, "counts": [8, 2], "top_share_pct": 80}
+    assert "example.org" not in str(fairness)
+
+
+def test_fairness_has_no_top_share_when_nothing_waits(isolated_store):
+    isolated_store.save_scan(_scan())
+    assert isolated_store.queue_composition()["fairness"] == {
+        "tenants": 0, "counts": [], "top_share_pct": None}
+
+
 def test_oldest_wait_is_an_instant_not_a_counter(isolated_store):
     """The activity stream emits only when its payload changes. An elapsed-seconds field would
     change on every two-second build, turning one waiting job into a frame every two seconds."""
@@ -96,7 +151,14 @@ def test_oldest_wait_is_an_instant_not_a_counter(isolated_store):
     composition = isolated_store.queue_composition()
     assert composition["oldest_queued_at"]
     assert "oldest_queued_wait_s" not in composition
+    # The load-bearing assertion: two builds a moment apart are IDENTICAL. An elapsed-seconds field
+    # anywhere in this block would differ between them and make every snapshot look new, which is
+    # what would turn one waiting job into an SSE frame every two seconds forever.
+    import time as _t
+    _t.sleep(1.1)
     assert isolated_store.queue_composition() == composition
+    # And no field is even named as elapsed, so the next reader does not add one back.
+    assert [k for k in composition if k.endswith("_wait_s") or k.endswith("_age_s")] == []
 
 
 def test_a_job_in_retry_backoff_is_not_evidence_of_a_stalled_queue(isolated_store):

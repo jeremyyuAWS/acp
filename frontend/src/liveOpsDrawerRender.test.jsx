@@ -52,7 +52,9 @@ const snapshot = {
       remediate: { completed: 12, running: 1 }, release: { completed: 9, running: 0 } },
     worker_roles: { assess: { alive: true, pool_size: 3, age_s: 4, version: 'v25' } },
     queue: { running: 2, waiting: 8, retrying: 2, failed: 1, arrived: 30, completed: 45,
-      window_s: 900, oldest_queued_at: iso(-200) },
+      window_s: 900, oldest_queued_at: iso(-200), median_queued_at: iso(-90),
+      p95_queued_at: iso(-185), wait_sampled: 10,
+      fairness: { tenants: 3, counts: [8, 5, 2], top_share_pct: 53 } },
   },
 }
 
@@ -156,6 +158,23 @@ describe('Primary visualization per node', () => {
     expect(container.textContent).toContain('3/min')            // completions
     expect(container.textContent).toContain('USERS WAITING')
     expect(container.textContent).toContain('Tenant concentration')
+  })
+
+  it('shows the median and the tail alongside the worst job', async () => {
+    const container = await mount({ nodeId: 'infra:queue', node: { kind: 'queue', label: 'Shared queue' } })
+    expect(container.textContent).toContain('MEDIAN WAIT')
+    expect(container.textContent).toContain('1m 30s')
+    expect(container.textContent).toContain('95TH PERCENTILE WAIT')
+    expect(container.textContent).toContain('Across 10 claimable jobs')
+  })
+
+  it('draws the tenant split as a shape and never names a customer', async () => {
+    const container = await mount({ nodeId: 'infra:queue', node: { kind: 'queue', label: 'Shared queue' } })
+    expect(container.textContent).toContain('Fairness')
+    expect(container.textContent).toContain('3 tenants waiting')
+    expect(container.textContent).toContain('tenants are counted, never named')
+    expect(container.querySelector('[aria-label^="Waiting work split across 3 tenants"]')).toBeTruthy()
+    expect(container.textContent).not.toMatch(/@example/)
   })
 
   it('draws run progress radially, with an estimate only when the samples support one', async () => {

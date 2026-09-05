@@ -458,6 +458,12 @@ function QueueBar({ queue, concentration, generatedAt, nowMs }) {
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 8, marginTop: 11 }}>
       <Tile label="OLDEST WAIT" value={queue.oldestWaitS == null ? NOT_REPORTED : formatDuration(queue.oldestWaitS)}
         source={queue.oldestWaitS == null ? 'unavailable' : 'live'} at={generatedAt} nowMs={nowMs} />
+      <Tile label="MEDIAN WAIT" value={queue.medianWaitS == null ? NOT_REPORTED : formatDuration(queue.medianWaitS)}
+        detail={queue.waitSampled ? `Across ${queue.waitSampled} claimable jobs` : undefined}
+        source={queue.medianWaitS == null ? 'unavailable' : 'live'} at={generatedAt} nowMs={nowMs} />
+      <Tile label="95TH PERCENTILE WAIT" value={queue.p95WaitS == null ? NOT_REPORTED : formatDuration(queue.p95WaitS)}
+        detail={queue.p95WaitS == null ? undefined : 'The tail, not the typical job'}
+        source={queue.p95WaitS == null ? 'unavailable' : 'live'} at={generatedAt} nowMs={nowMs} />
       <Tile label="ARRIVAL RATE" value={queue.arrivalPerMin == null ? NOT_REPORTED : `${queue.arrivalPerMin}/min`}
         detail={queue.arrivalPerMin == null ? undefined : `Over the last ${Math.round(queue.windowMinutes)} min`}
         source={queue.arrivalPerMin == null ? 'unavailable' : 'live'} at={generatedAt} nowMs={nowMs} />
@@ -468,6 +474,26 @@ function QueueBar({ queue, concentration, generatedAt, nowMs }) {
         detail={queue.schedulingPolicy ? queue.schedulingPolicy.replaceAll('_', ' ') : undefined}
         source={queue.waitingUsers == null ? 'unavailable' : 'live'} at={generatedAt} nowMs={nowMs} />
     </div>
+    {queue.fairness?.available && <div style={{ marginTop: 11 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+        <b style={{ fontSize: 12 }}>Fairness</b>
+        <span className="muted" style={{ fontSize: 11 }}>
+          {queue.fairness.tenants} tenant{queue.fairness.tenants === 1 ? '' : 's'} waiting
+        </span>
+      </div>
+      <div role="img" aria-label={`Waiting work split across ${queue.fairness.tenants} tenants: `
+        + queue.fairness.shares.map((share) => `${share}%`).join(', ')}
+        style={{ display: 'flex', height: 12, borderRadius: 4, overflow: 'hidden', marginTop: 6,
+          border: '1px solid var(--line)', gap: 1 }}>
+        {queue.fairness.shares.map((share, index) => <div key={index} title={`${share}%`}
+          style={{ width: `${share}%`, background: index === 0 && queue.fairness.concentrated
+            ? TONE.warn : 'var(--plum)', opacity: 1 - Math.min(0.6, index * 0.12) }} />)}
+      </div>
+      <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+        Largest share {queue.fairness.topSharePct == null ? NOT_REPORTED : `${queue.fairness.topSharePct}%`}
+        {' · '}tenants are counted, never named
+      </div>
+    </div>}
     {concentration.concentrated && <p role="status" style={{ margin: '10px 0 0', padding: '9px 11px', fontSize: 12,
       borderLeft: `4px solid ${TONE.warn}`, background: 'var(--warn-bg)', color: 'var(--ink)' }}>
       <b>▲ Tenant concentration:</b> one user holds {concentration.pct}% of the {concentration.total} waiting

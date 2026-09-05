@@ -629,8 +629,44 @@ export function queueModel(summary = {}, { nowMs = Date.now() } = {}) {
     // Elapsed from the instant the backend reports, not from a server-side seconds counter — a
     // counter would change on every two-second snapshot and defeat the stream's emit-on-change rule.
     oldestWaitS: secondsSince(queue.oldest_queued_at, nowMs),
+    // The oldest wait is one job's. The median says whether the queue is broadly slow; the 95th
+    // says whether a tail is being left behind. All three are derived from instants the backend
+    // returns, for the same reason: an elapsed counter would change on every snapshot.
+    medianWaitS: secondsSince(queue.median_queued_at, nowMs),
+    p95WaitS: secondsSince(queue.p95_queued_at, nowMs),
+    waitSampled: num(queue.wait_sampled),
+    fairness: fairnessModel(queue.fairness),
     waitingUsers: num(summary.waiting_users),
     schedulingPolicy: summary.scheduling_policy || null,
+  }
+}
+
+/**
+ * How the waiting work is spread across tenants — as a shape, never as a list of customers.
+ *
+ * The backend returns counts without identities on purpose: "is one customer holding the queue" is
+ * what tenant-fair scheduling is judged on, and the identities are not needed to answer it. So
+ * this models an even spread against a concentrated one and stops there.
+ *
+ * `even` is not a boolean dressed up as a measurement — a single tenant IS the whole queue and
+ * that is not unfairness, so one tenant reports concentrated: false with the share still shown.
+ */
+export function fairnessModel(fairness) {
+  const counts = Array.isArray(fairness?.counts) ? fairness.counts.map(num).filter((n) => n != null) : []
+  const tenants = num(fairness?.tenants)
+  const share = num(fairness?.top_share_pct)
+  if (!counts.length || tenants == null) {
+    return { available: false, tenants, topSharePct: share, counts: [], concentrated: false }
+  }
+  const total = counts.reduce((sum, count) => sum + count, 0)
+  return {
+    available: true, tenants, counts, total,
+    topSharePct: share,
+    // The same threshold the map's concentration banner uses, and the same exemption: one tenant
+    // holding 100% of a queue only it is using is not a fairness problem.
+    concentrated: tenants > 1 && share != null && share >= 70,
+    // A share of the bar each tenant holds, largest first, for a distribution the eye can read.
+    shares: counts.map((count) => (total ? Math.round((count / total) * 1000) / 10 : 0)),
   }
 }
 

@@ -9584,13 +9584,61 @@ class Store:
                 "SELECT created_at FROM jobs WHERE status='queued' AND run_after<=%s "
                 "ORDER BY created_at ASC LIMIT 1", (now,))
             oldest = (self._db.fetchone(cur) or {}).get("created_at")
-        # The oldest wait is returned as the INSTANT, not as elapsed seconds. The activity SSE
+        # ── Wait percentiles ────────────────────────────────────────────────────────────────
+        # The oldest wait is one job's; it says nothing about whether the queue is broadly slow or
+        # holding one straggler. The median and the 95th say which.
+        #
+        # Computed by OFFSET rather than by pulling every queued row: a deep queue is thousands of
+        # rows and this runs on the live map's read path. Two extra single-row selects cost the
+        # same whether ten jobs are waiting or ten thousand, and neither SQLite nor Postgres shares
+        # a percentile function this code could use portably.
+        #
+        # Ordered by created_at ASC, so the OLDEST job is rank 0 and the longest wait is the
+        # smallest index. The 95th percentile of WAIT is therefore the 5% oldest — index
+        # floor(0.05 * n) — not the 95% mark, which would report the newest arrival instead.
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE status='queued' AND run_after<=%s", (now,))
+            eligible = int((self._db.fetchone(cur) or {}).get("n") or 0)
+
+            def _at_rank(rank: int):
+                if eligible <= 0:
+                    return None
+                self._db.execute(cur,
+                    "SELECT created_at FROM jobs WHERE status='queued' AND run_after<=%s "
+                    "ORDER BY created_at ASC LIMIT 1 OFFSET %s",
+                    (now, max(0, min(rank, eligible - 1))))
+                return (self._db.fetchone(cur) or {}).get("created_at")
+
+            median_at = _at_rank(eligible // 2)
+            p95_at = _at_rank(int(eligible * 0.05))
+
+        # ── Fairness ────────────────────────────────────────────────────────────────────────
+        # How the waiting work is spread across tenants, WITHOUT naming them. The counts alone
+        # answer "is one customer holding the queue", which is what tenant-fair scheduling is
+        # judged on; adding the identities would put a list of customer addresses on a screen any
+        # signed-in workspace user can open, to answer a question that does not need them.
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs j JOIN scan_runs sr ON sr.id=j.scan_id "
+                "WHERE j.status='queued' GROUP BY sr.owner_email ORDER BY n DESC", ())
+            per_tenant = [int(r["n"] or 0) for r in self._db.fetchall(cur)]
+        total_waiting = sum(per_tenant)
+
+        # Every instant here is returned as an INSTANT, not as elapsed seconds. The activity SSE
         # stream emits only when its payload changes (routes/system.py), and a seconds counter
         # changes on every two-second build — which would turn a queue with one waiting job into a
-        # frame every two seconds forever. The reader computes the elapsed time from this.
+        # frame every two seconds forever. The reader computes the elapsed time from these.
         return {"running": running, "waiting": waiting, "retrying": retrying, "failed": failed,
                 "arrived": arrived, "completed": completed, "window_s": int(max(0, window_s)),
-                "oldest_queued_at": oldest}
+                "oldest_queued_at": oldest,
+                "median_queued_at": median_at, "p95_queued_at": p95_at,
+                "wait_sampled": eligible,
+                "fairness": {
+                    "tenants": len(per_tenant),
+                    "counts": per_tenant[:10],
+                    "top_share_pct": round((per_tenant[0] / total_waiting) * 100) if total_waiting else None,
+                }}
 
     def list_jobs(self, status: str | None = None, limit: int = 200, owner: str | None = None) -> list[dict]:
         clauses, params = [], []
