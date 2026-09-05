@@ -35,6 +35,7 @@ import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
 import { deriveRemediateProcessingState } from './remediateProcessingState.js'
 import { groupFixesByRule, summarizeImpact, totalFixes, scOf } from './fixSummary.js'
 import { remediationWork, batchScope } from './remediationWork.js'
+import { remediationResume } from './resumeInFlight.js'
 import { firstProposed, firstBefore, firstThumb, firstKind, firstRationale, firstSource, pageOf,
          appliedFixAlt } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
@@ -524,6 +525,26 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     let saved = null
     try { saved = JSON.parse(sessionStorage.getItem(REMKEY(runId)) || 'null') } catch { /* ignore */ }
     if (saved?.total) { setRemBusy(true); setRemProg({ total: saved.total, done: 0, latest: null, failed: 0, history: [] }); startLiveUpdates(saved.total) }
+    // NO LOCAL MEMORY IS NOT NO RUN. Sign out wipes every `acp-` key and reloads (App.jsx), so a
+    // batch still running server-side comes back to a browser that has never heard of it — and
+    // before this, to no card at all. Ask the server instead of assuming: it is the same snapshot
+    // the live view already consumes, and it knows the batch and its size.
+    if (!saved?.total) {
+      let cancelled = false
+      getRemediationStatus(runId).then((s) => {
+        if (cancelled) return
+        const resume = remediationResume(s)
+        if (!resume) return
+        // Re-seed the denominator so a later remount in this tab costs nothing, exactly as
+        // starting a run does.
+        try { sessionStorage.setItem(REMKEY(runId), JSON.stringify({ total: resume.total })) } catch { /* ignore */ }
+        setRemBusy(true)
+        setRemProg({ ...resume, activity: null, history: [] })
+        startLiveUpdates(resume.total)
+      }).catch(() => { /* no reconnect available — the card stays idle, as before */ })
+      return () => { cancelled = true }
+    }
+    return undefined
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId])
   // SIM: rebuild queue when triage changes (real mode: queue is DB-driven, unaffected by triage).

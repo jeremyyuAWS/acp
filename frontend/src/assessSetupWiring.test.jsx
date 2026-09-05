@@ -34,6 +34,11 @@ vi.mock('./api.js', () => ({
   getWorkerReplicas: vi.fn(() => Promise.resolve({ configured: false })),
   setWorkerReplicas: vi.fn(() => Promise.resolve({ configured: false })),
   getQueueEstimate: vi.fn(() => Promise.resolve({ available: false })),
+  // AssessRunner asks /scans/{sid}/live on mount to rejoin a run this browser has no memory of
+  // (see resumeInFlight.js — sign out wipes the sessionStorage the old resume depended on).
+  // `available: false` is the endpoint's own degrade shape for an unknown scan, so these tests
+  // keep exercising the idle screen they are about.
+  getScanLive: vi.fn(() => Promise.resolve({ available: false })),
 }))
 
 const { default: AssessRunner } = await import('./AssessRunner.jsx')
