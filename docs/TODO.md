@@ -14,24 +14,27 @@ new split is meant to prevent:
 Items are struck through when the code says they shipped, with the evidence
 named — not when someone remembers closing them.
 
-Current coverage (87 WCAG 2.1/2.2 success criteria) — **authored, and NOT
-re-verified in this pass.** These counts are derived from
-`frontend/src/wcagCatalog.js`, which is not present in this checkout, so they
-carry the same staleness risk the rest of this header just shed. Treat them as
-2026-07-09 figures until someone re-counts against the catalog. The generated
-block further down is the part that is guaranteed current.
+Current coverage (87 WCAG 2.1/2.2 success criteria) — **now generated**, in the
+coverage-status block below. It used to be a hand-maintained table here, carrying
+36 / 45 / 6 and this instruction: *"treat them as 2026-07-09 figures until someone
+re-counts against the catalog"*, because `frontend/src/wcagCatalog.js` was not in
+the checkout when the paragraph was written.
 
-| Bucket | Count | Meaning |
-|---|---|---|
-| Shipped (demo) | 36 | Real automated validator, verified backing |
-| MDK HITL | 45 | Human-judgment criteria (captions, timing, error text, media, gesture alternatives) — routed to the HITL queue |
-| Partner baseline | 6 | Covered by the .NET partner engine (`spike/dotnet/AcpScan.Cli`) |
-| ~~Roadmap~~ | 0 | **CLOSED (`75fc6b8`)** — the 5 pure-media AAA "MDK net-new" SCs (1.2.6/1.2.7/1.2.8/1.2.9/1.4.7) were already `Human / AT` + Tier 3, so they already rendered HUMAN-tier per file; reclassified `net-new → MDK HITL`. Zero roadmap. |
+The catalog arrived on 2026-08-28 (`f7475813`, #907) and nobody re-counted. The
+real split is **37 / 44 / 6** — one criterion had moved from HITL to shipped and
+the table could not say so. That is precisely the failure this header describes
+two paragraphs up, recurring in the half the generator had not reached, so the
+counts moved into it rather than being corrected in place.
 
-Every one of the 87 SCs now has a closed disposition: Auto-detected (36),
-HITL (45), or Partner (6). **No Required (A/AA) gap** — every Required
-criterion is auto-detected or HITL-routed matching the checklist's own
-"Human / AT" designation.
+The roadmap bucket stays closed and stays authored, because it is a decision
+rather than a count: the 5 pure-media AAA "MDK net-new" SCs
+(1.2.6/1.2.7/1.2.8/1.2.9/1.4.7) were already `Human / AT` + Tier 3 and rendered
+HUMAN-tier per file, so `75fc6b8` reclassified them `net-new → MDK HITL`. Zero
+roadmap.
+
+Every one of the 87 SCs has a closed disposition. **No Required (A/AA) gap** —
+every Required criterion is auto-detected or HITL-routed matching the checklist's
+own "Human / AT" designation.
 
 **The 4 Required format gaps (1.4.1, 1.3.5, 2.5.3, 4.1.2)** were this file's
 headline open item for months, described as "auto-detected for HTML but
@@ -56,6 +59,14 @@ Regenerate with `python scripts/gen_todo_status.py`; CI fails if this block is s
 **Conformance target: AA.** Criteria above the target are not assessed at all (`store.in_target`). Selectable targets are A, AA, so the 7 AAA criteria are never assessed: `1.4.6`, `1.4.8`, `1.4.9`, `2.4.10`, `2.4.9`, `3.1.4`, `3.1.5`.
 
 This is a behaviour change, not bookkeeping: several detectors compute the AA and AAA thresholds in one pass, so AAA findings were previously scored against AA-target files.
+
+**Criterion disposition — 87 success criteria**, counted from `frontend/src/wcagCatalog.js` (its `source:` field). Every criterion has a closed disposition; the buckets are the catalog's own.
+
+| Bucket | Count | Meaning |
+|---|---:|---|
+| Shipped (demo) | 37 | Real automated validator, verified backing |
+| MDK HITL | 44 | Human-judgment criteria — routed to the HITL queue |
+| Partner baseline | 6 | Covered by the .NET partner engine (`spike/dotnet/AcpScan.Cli`) |
 
 **Capability registry — 34 (criterion, format) pair(s) migrated.** Coverage is declared beside the detector; only `full` may certify a pass.
 
@@ -136,9 +147,17 @@ zero backend validator at all) are both fixed and committed (`92189ce`,
 
 ## P1 — Tier 2 format-coverage gaps (scoped out of the last pass, real work)
 
-Three of four shipped (`22a7202`, `a916068`, `5ec86b6`); one is genuinely
-blocked, not just deferred. Each landed with real fixtures verified before
-implementing — no guessed detection logic.
+**All four shipped** (`22a7202`, `a916068`, `5ec86b6`, and the pptx audio entry
+below). Each landed with real fixtures verified before implementing — no guessed
+detection logic.
+
+This paragraph said "three of four shipped; one is genuinely blocked, not just
+deferred" while all four items below were already struck through. Item 2 records
+its own resolution — the `<p:timing>` blocker was answered structurally rather
+than by obtaining the fixture it was waiting on — so the summary outlived the
+blocker it described. A header that reports open work where there is none is the
+kind of claim that ends an investigation, which is why it is worth correcting
+rather than leaving as harmless pessimism.
 
 1. ~~**PDF outline-tree analog for 2.4.1 (Bypass Blocks)**~~ — SHIPPED
    (`22a7202`). `pdf_bypass_blocks_check()` in `office_structure.py`, via

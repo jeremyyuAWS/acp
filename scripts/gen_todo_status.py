@@ -25,6 +25,7 @@ whose facts are 387 commits old is worse than one with no facts, because it read
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -40,6 +41,38 @@ FORMATS = ("html", "docx", "xlsx", "pptx", "pdf")
 # HTML but UNCHECKED for PDF/Office. Kept here so the doc's own open question gets answered with
 # current data every run, instead of by a sentence nobody re-checked.
 HEADLINE_GAPS = ("1.4.1", "1.3.5", "2.5.3", "4.1.2")
+
+# The disposition table TODO.md carried by hand. It is a fact about a file, so it belongs here.
+#
+# WHY IT MOVED. The authored version said 36 shipped / 45 HITL / 6 partner and told the reader to
+# "treat them as 2026-07-09 figures until someone re-counts against the catalog", because
+# `frontend/src/wcagCatalog.js` was not in the checkout when that paragraph was written. The
+# catalog arrived on 2026-08-28 (#907) and nothing re-counted: the real split is 37 / 44 / 6.
+# One criterion had moved from HITL to shipped and the doc could not say so — which is the exact
+# failure this script's own docstring describes, recurring in the half it had not reached.
+CATALOG = ROOT / "frontend" / "src" / "wcagCatalog.js"
+
+# What each `source:` value means, in the doc's own words. Ordered by size so the table reads the
+# way the old one did.
+CATALOG_BUCKETS = {
+    "Shipped (demo)": "Real automated validator, verified backing",
+    "MDK HITL": "Human-judgment criteria — routed to the HITL queue",
+    "Partner baseline": "Covered by the .NET partner engine (`spike/dotnet/AcpScan.Cli`)",
+}
+
+
+def catalog_counts() -> dict[str, int]:
+    """{source: count} over the criteria in wcagCatalog.js.
+
+    A REGEX RATHER THAN A JS PARSER, and the risk that carries is a pattern that silently matches
+    nothing — which would render every bucket as zero and read as "no coverage at all". The
+    caller checks the total against the catalog's own count of `sc:` keys for exactly that reason.
+    """
+    import collections
+    import re
+    text = CATALOG.read_text(encoding="utf-8")
+    rows = re.findall(r'\{sc:"[\d.]+".*?source:"([^"]+)"', text)
+    return dict(collections.Counter(rows))
 
 
 def _load():
@@ -122,6 +155,30 @@ def build(store, registry) -> str:
     add("")
     add("This is a behaviour change, not bookkeeping: several detectors compute the AA and AAA "
         "thresholds in one pass, so AAA findings were previously scored against AA-target files.")
+    add("")
+
+    # ── the disposition of all 87 criteria ────────────────────────────────────────────
+    counts = catalog_counts()
+    declared = len(re.findall(r'\{sc:"[\d.]+"', CATALOG.read_text(encoding="utf-8")))
+    total = sum(counts.values())
+    if total != declared:
+        raise SystemExit(
+            f"gen_todo_status: the catalog parse found {total} sources for {declared} criteria in "
+            f"{CATALOG.relative_to(ROOT)} — the regex has drifted from the file's shape, and "
+            f"emitting the counts anyway would understate coverage")
+
+    add(f"**Criterion disposition — {declared} success criteria**, counted from "
+        f"`frontend/src/wcagCatalog.js` (its `source:` field). Every criterion has a closed "
+        f"disposition; the buckets are the catalog's own.")
+    add("")
+    add("| Bucket | Count | Meaning |")
+    add("|---|---:|---|")
+    for bucket, meaning in CATALOG_BUCKETS.items():
+        add(f"| {bucket} | {counts.get(bucket, 0)} | {meaning} |")
+    unknown = sorted(set(counts) - set(CATALOG_BUCKETS))
+    for bucket in unknown:
+        add(f"| {bucket} | {counts[bucket]} | **not described here — a new bucket appeared in "
+            f"the catalog** |")
     add("")
 
     # ── capability registry ───────────────────────────────────────────────────────────
