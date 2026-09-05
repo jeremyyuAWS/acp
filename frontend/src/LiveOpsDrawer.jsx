@@ -5,6 +5,7 @@ import {
   PROVISIONING_STAGES, factGroups, provisioningTimeline, queueDrain, queueRoleLoad, streamState,
   runCoverage, runFlow, runStagePipeline, runTiming, runTrouble,
   sourceCoverage, sourceFailures, sourceRuns, sourceVolume,
+  outputPipeline,
   DEPLOY_ICONS, configurationModel, costModel, costText, deploymentModel, incidentRegions,
   isAzureBacked,
   notAzureBackedReason, resourceHealthModel, serviceHealthModel,
@@ -1404,7 +1405,51 @@ function SourceHealth({ model, state, nowMs, failures, coverage, volume, runs })
   </section>
 }
 
-function OutputSummary({ model }) {
+/**
+ * Remediate then Release, as the two stages that actually produce durable output.
+ *
+ * Bars are bounded and only drawn where the snapshot published a total: a stage with a completed
+ * count and no denominator gets the count and no percentage, rather than a bar computed against
+ * itself and permanently at 100%.
+ */
+function OutputPipeline({ pipeline }) {
+  return <div style={{ marginTop: 12 }}>
+    <span style={LABEL}>OUTPUT STAGES</span>
+    <ul style={{ listStyle: 'none', margin: '6px 0 0', padding: 0, display: 'grid', gap: 10 }}>
+      {pipeline.present.map((row) => <li key={row.key}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 12 }}>
+          <span style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
+            {/* Shape, not colour: working, or done for now. */}
+            <span aria-hidden="true" style={{ color: row.active ? TONE.info : TONE.ok }}>
+              {row.active ? '◐' : '●'}
+            </span>
+            <b>{row.label}</b>
+          </span>
+          <span>
+            {row.completed}{row.total == null ? '' : ` of ${row.total}`}
+            {row.active ? ` · ${row.running} running, ${row.queued} waiting` : ''}
+          </span>
+        </div>
+        {row.pct == null
+          ? <p className="muted" style={{ fontSize: 11, margin: '3px 0 0' }}>
+              This stage has not published a document total, so its share of the estate is
+              {' '}{NOT_REPORTED} — the completed count is not divided by itself to make one.
+            </p>
+          : <><div role="img" aria-label={`${row.label}: ${row.pct}% of ${row.total} documents`}
+              style={{ height: 8, borderRadius: 4, background: 'var(--bg)',
+                border: '1px solid var(--line)', overflow: 'hidden', marginTop: 5 }}>
+              <div style={{ width: `${row.pct}%`, height: '100%', background: TONE.ok }} />
+            </div>
+            <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{row.pct}% of this stage’s documents</div></>}
+      </li>)}
+    </ul>
+    {!!pipeline.missing.length && <p className="muted" style={{ fontSize: 11, margin: '8px 0 0' }}>
+      {pipeline.missing.join(', ')}: {NOT_REPORTED}. {pipeline.missingReason}
+    </p>}
+  </div>
+}
+
+function OutputSummary({ model, pipeline, nowMs }) {
   return <section aria-label="Durable output" style={{ ...PANEL, padding: 14 }}>
     <b>Durable output</b>
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 8, marginTop: 10 }}>
@@ -1412,12 +1457,30 @@ function OutputSummary({ model }) {
         detail="Completed remediation work in view" />
       <Tile label="RESULTS VERIFIED" value={model.verified == null ? NOT_REPORTED : model.verified}
         detail="Completed release work in view" />
-      <Tile label="WRITES AWAITING COMPLETION" value={model.awaitingWrite} />
-      <Tile label="STORAGE FAILURES" value={model.storageFailures == null ? NOT_REPORTED : model.storageFailures}
-        detail={model.storageFailures == null ? undefined : 'Dead-lettered jobs in the reporting window'} />
+      {/* Null when NEITHER stage reported, rather than 0 + 0. And named for what it counts —
+          jobs in flight — not for a write the snapshot never mentions. */}
+      <Tile label="REMEDIATE AND RELEASE IN FLIGHT"
+        source={model.inFlight == null ? 'unavailable' : 'live'} nowMs={nowMs}
+        value={model.inFlight == null ? NOT_REPORTED : model.inFlight}
+        detail={model.inFlight == null
+          ? 'Neither stage is reported in this snapshot'
+          : model.inFlightPartial
+            ? 'Only one of the two stages is reported, so this is a partial count'
+            : 'Running remediate and release jobs'} />
+      {/* WAS "STORAGE FAILURES", which this number is not: queue_composition counts dead-lettered
+          jobs of every type in the window, deliberate stops excluded. */}
+      <Tile label="DEAD-LETTERED JOBS" source={model.deadLettered == null ? 'unavailable' : 'live'}
+        nowMs={nowMs}
+        value={model.deadLettered == null ? NOT_REPORTED : model.deadLettered}
+        detail={model.deadLettered == null ? undefined
+          : `Every job type, not only output writes${model.deadLetterWindowMinutes == null ? ''
+            : `, in the last ${model.deadLetterWindowMinutes} min`}. Deliberate stops excluded.`} />
+      <Tile label="STORAGE-SPECIFIC FAILURES" value={NOT_REPORTED} source="unavailable"
+        detail="ACP's failure classifier has no storage class — it emits rate limit, auth, corrupt or transient" />
       <Tile label="TOTAL OUTPUT SIZE" value={NOT_REPORTED} source="unavailable"
         detail="Azure does not report this to the activity snapshot" />
     </div>
+    <OutputPipeline pipeline={pipeline} />
     <p className="muted" style={{ fontSize: 11, margin: '9px 0 0' }}>
       Original source documents are never modified; corrected copies and their evidence are written alongside.
     </p>
@@ -1683,7 +1746,8 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
       volume={sourceVolume(node.source, snapshot)}
       runs={sourceRuns(node.source, snapshot, { nowMs })} />
   } else if (node?.kind === 'output') {
-    primary = <OutputSummary model={outputModel(snapshot)} />
+    primary = <OutputSummary model={outputModel(snapshot)} nowMs={nowMs}
+      pipeline={outputPipeline(snapshot)} />
   } else {
     primary = <IntakeSummary snapshot={snapshot} state={state} />
   }
