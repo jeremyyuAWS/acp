@@ -4,6 +4,7 @@ import {
   EVENT_FILTERS, EVENT_ICONS, NOT_REPORTED, TONE, alertRuleState, alertRuleTone, alertsModel,
   PROVISIONING_STAGES, factGroups, provisioningTimeline, queueDrain, queueRoleLoad, streamState,
   runCoverage, runFlow, runStagePipeline, runTiming, runTrouble,
+  sourceCoverage, sourceFailures, sourceRuns, sourceVolume,
   DEPLOY_ICONS, configurationModel, costModel, costText, deploymentModel, incidentRegions,
   isAzureBacked,
   notAzureBackedReason, resourceHealthModel, serviceHealthModel,
@@ -1279,7 +1280,103 @@ function RunRadial({ model, run, accent, pipeline, flow, timing, trouble, covera
   </section>
 }
 
-function SourceHealth({ model, state, nowMs }) {
+/**
+ * Classified failures on the runs reading from this connector.
+ *
+ * The caption is the point. `classify_job_error` matches phrases against an exception's text, so
+ * it knows WHAT KIND of failure happened and never WHO caused it — a rate limit on an assess job
+ * is more likely the AI provider than SharePoint. Labelling this "connector health" would be a
+ * claim the data cannot support, so it names the classes, names the stages they happened in, and
+ * says outright that attribution is unavailable.
+ */
+function SourceFailures({ failures }) {
+  if (!failures.total) {
+    return <p className="muted" style={{ fontSize: 12, margin: '10px 0 0' }}>
+      No classified failure has been recorded on this connector’s live or recent runs.
+    </p>
+  }
+  return <div style={{ marginTop: 12 }}>
+    <span style={LABEL}>CLASSIFIED FAILURES</span>
+    <ul style={{ listStyle: 'none', margin: '6px 0 0', padding: 0, display: 'grid', gap: 6, fontSize: 12 }}>
+      {failures.classes.map((row) => <li key={row.kind}
+        style={{ display: 'flex', gap: 7, alignItems: 'baseline', flexWrap: 'wrap' }}>
+        <span aria-hidden="true" style={{ color: TONE.warn }}>▲</span>
+        <b>{row.label}</b>
+        <span className="muted" style={{ flex: 1 }}>
+          {row.stages.length ? `while ${row.stages.join(', ')}` : 'stage not reported'}
+          {row.maxAttempts == null ? '' : ` · up to ${row.maxAttempts} attempt${row.maxAttempts === 1 ? '' : 's'}`}
+        </span>
+        <b>{row.runs} run{row.runs === 1 ? '' : 's'}</b>
+      </li>)}
+    </ul>
+    <p className="muted" style={{ fontSize: 11, margin: '7px 0 0' }}>{failures.attributionNote}</p>
+  </div>
+}
+
+/** Site coverage summed across this connector's runs. Absent for connectors that checkpoint no
+ *  sites — a Drive connector has none, and "0 of 0" would be a fact about this panel. */
+function SourceCoverage({ coverage }) {
+  if (!coverage.available) return null
+  return <div style={{ marginTop: 12 }}>
+    <span style={LABEL}>SITE COVERAGE</span>
+    <div role="img" aria-label={`${coverage.done} of ${coverage.total} sites read across ${coverage.runs} runs`}
+      style={{ height: 8, borderRadius: 4, background: 'var(--bg)', border: '1px solid var(--line)',
+        overflow: 'hidden', marginTop: 5 }}>
+      <div style={{ width: `${coverage.pct ?? 0}%`, height: '100%', background: TONE.ok }} />
+    </div>
+    <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+      {coverage.done} of {coverage.total} sites read across {coverage.runs} run
+      {coverage.runs === 1 ? '' : 's'}
+      {coverage.libraries == null ? '' : ` · ${coverage.libraries} libraries`}
+    </div>
+    {coverage.unread > 0 && <p style={{ fontSize: 11, margin: '4px 0 0', color: TONE.warn }}>
+      <span aria-hidden="true">▲ </span>
+      {coverage.unread} site{coverage.unread === 1 ? '' : 's'} not read (blocked or skipped).
+      The exception report says which.
+    </p>}
+  </div>
+}
+
+/** Every run on this connector, worst first. The source node showed counts only; which run is
+ *  failing, and at what stage, is the question a connector panel is opened to answer. */
+function SourceRunList({ rows }) {
+  if (!rows.length) {
+    return <p className="muted" style={{ fontSize: 12, margin: '10px 0 0' }}>
+      No live or recent run is reading from this connector.
+    </p>
+  }
+  return <div style={{ marginTop: 12 }}>
+    <span style={LABEL} id="source-run-list">RUNS ON THIS CONNECTOR</span>
+    {/* Labelled so the list is addressable: the stage names are capitalised by CSS only, so
+        `textContent` (and a screen reader) sees the raw lowercase stage. */}
+    <ul aria-labelledby="source-run-list"
+      style={{ listStyle: 'none', margin: '6px 0 0', padding: 0, display: 'grid', gap: 7, fontSize: 12 }}>
+      {rows.map((row) => <li key={`${row.scanId}:${row.stage}`}
+        style={{ display: 'flex', gap: 7, alignItems: 'baseline', flexWrap: 'wrap' }}>
+        {/* Shape, not colour: failing, running, finished. */}
+        <span aria-hidden="true" style={{ color: row.failing ? TONE.warn : row.status === 'recent' ? TONE.ok : TONE.info }}>
+          {row.failing ? '▲' : row.status === 'recent' ? '●' : '◐'}
+        </span>
+        <b style={{ textTransform: 'capitalize' }}>{row.stage || 'Unknown stage'}</b>
+        <span className="muted" style={{ flex: 1, overflowWrap: 'anywhere' }}>
+          {row.completed}{row.total == null ? '' : ` of ${row.total}`} documents
+          {row.running || row.queued ? ` · ${row.running} running, ${row.queued} waiting` : ''}
+          {row.errorLabel ? ` · ${row.errorLabel}` : ''}
+        </span>
+        <span className="muted">
+          {row.updatedAgoS == null ? NOT_REPORTED : `${formatDuration(row.updatedAgoS)} ago`}
+        </span>
+      </li>)}
+    </ul>
+    {/* The scan id is deliberately not shown: this screen spans tenants, and the run list is
+        about connector behaviour, not about whose scan it is. */}
+    <p className="muted" style={{ fontSize: 11, margin: '7px 0 0' }}>
+      Runs are identified by stage only — this view spans tenants and never names a scan or its owner.
+    </p>
+  </div>
+}
+
+function SourceHealth({ model, state, nowMs, failures, coverage, volume, runs }) {
   return <section aria-label="Source connector health" style={{ ...PANEL, padding: 14 }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
       <b>Connection health</b><StateChip state={state} />
@@ -1288,10 +1385,22 @@ function SourceHealth({ model, state, nowMs }) {
       <Tile label="ACTIVE RUNS" value={model.activeRuns} detail={`${model.recentRuns} finished in the last 15 min`} />
       <Tile label="LATEST SUCCESSFUL READ"
         value={model.latestRead ? `${formatDuration(Math.max(0, Math.round((nowMs - new Date(model.latestRead).getTime()) / 1000)))} ago` : NOT_REPORTED} />
+      {/* Documents, which the snapshot DOES publish per run — the panel previously reported only
+          how many runs there were, not how much work they represent. */}
+      <Tile label="DOCUMENTS" source="live" nowMs={nowMs}
+        value={volume.total == null ? `${volume.completed}` : `${volume.completed} of ${volume.total}`}
+        detail={volume.total == null
+          ? 'No run on this connector has published a document count yet'
+          : volume.unsized
+            ? `${volume.unsized} run${volume.unsized === 1 ? '' : 's'} has not published a size, and is not in the total`
+            : `${volume.pct}% complete across ${volume.runs} run${volume.runs === 1 ? '' : 's'}`} />
       {model.unavailable.map((label) => <Tile key={label} label={label.toUpperCase()} value={NOT_REPORTED}
         detail="The connector layer does not publish this to the activity snapshot"
         source="unavailable" />)}
     </div>
+    <SourceFailures failures={failures} />
+    <SourceCoverage coverage={coverage} />
+    <SourceRunList rows={runs} />
   </section>
 }
 
@@ -1568,7 +1677,11 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
       <RequestHealth health={requestHealth(capacity, { windowMinutes: capacity?.metrics_window_minutes || 15 })}
         measuredAt={capacity?.measured_at} nowMs={nowMs} /></>
   } else if (node?.kind === 'source') {
-    primary = <SourceHealth model={sourceModel(node, snapshot)} state={state} nowMs={nowMs} />
+    primary = <SourceHealth model={sourceModel(node, snapshot)} state={state} nowMs={nowMs}
+      failures={sourceFailures(node.source, snapshot)}
+      coverage={sourceCoverage(node.source, snapshot)}
+      volume={sourceVolume(node.source, snapshot)}
+      runs={sourceRuns(node.source, snapshot, { nowMs })} />
   } else if (node?.kind === 'output') {
     primary = <OutputSummary model={outputModel(snapshot)} />
   } else {

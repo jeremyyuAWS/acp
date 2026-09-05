@@ -461,7 +461,30 @@ export function scaleEvents(capacity = null) {
 /** The closed vocabulary the backend classifies failures into, in the words an operator uses.
  *  Free-text error messages are deliberately NOT carried across tenants — a message can name
  *  another customer's document, a vocabulary term cannot. */
+/**
+ * Labels for `jobs.error_class`, covering BOTH vocabularies — and they are two, which is the
+ * thing to know before reading a label off this map.
+ *
+ * WHAT IS ACTUALLY WRITTEN TODAY is the first group: `classify_job_error` (api/worker.py) returns
+ * exactly `rate_limit`, `auth`, `corrupt` or `transient`, and `fail_job` persists whatever it is
+ * handed without validating it. Every failure on this screen carries one of those four.
+ *
+ * THE SECOND GROUP is `Store.ERROR_CLASS_VOCABULARY`, whose own comment says it is "used by a
+ * later PR's classification logic". Nothing writes those terms yet. They are kept here so the day
+ * something does, the labels are already in place.
+ *
+ * This map used to carry ONLY the second group — so it covered eighteen classes that are never
+ * produced and none of the four that are, and every failure rendered its raw token (`transient`)
+ * where a label was intended. Verified by running it against the four, not by reading the file.
+ */
 export const ERROR_CLASS_LABELS = {
+  // Produced today by api/worker.py's classifier.
+  rate_limit: 'Rate limited', auth: 'Authentication failed', corrupt: 'Malformed document',
+  // "everything else" in the classifier's own words — not a diagnosis, and labelled so it does
+  // not read as one.
+  transient: 'Transient — unclassified',
+
+  // Declared in Store.ERROR_CLASS_VOCABULARY; no writer yet.
   capacity: 'Capacity', worker_startup: 'Worker startup', worker_crash: 'Worker crash',
   lease_expired: 'Lease expired', source_authentication: 'Source authentication',
   source_authorization: 'Source authorization', source_rate_limit: 'Source rate limit',
@@ -470,6 +493,9 @@ export const ERROR_CLASS_LABELS = {
   invalid_document: 'Invalid document', unsupported_document: 'Unsupported document',
   timeout: 'Timeout', cancelled: 'Cancelled', unknown: 'Unclassified',
 }
+
+/** The four the worker actually emits, so a panel can say which vocabulary it is looking at. */
+export const PRODUCED_ERROR_CLASSES = ['rate_limit', 'auth', 'corrupt', 'transient']
 
 /**
  * What each of this service's runs is doing right now — the file, the criterion, how long a
@@ -2200,4 +2226,112 @@ export function runCoverage(run = {}) {
       ? `${unread} site${unread === 1 ? '' : 's'} not read (blocked or skipped). The exception report says which.`
       : null,
   }
+}
+
+/* ─────────────────────── Sources and connections ─────────────────────── */
+
+/**
+ * Classified failures on the runs reading from one source.
+ *
+ * WHY THIS IS NOT "CONNECTOR HEALTH", and the line matters. `classify_job_error` matches phrases
+ * against an exception's text ("429", "rate limit", "401", "token expired"), so it says WHAT KIND
+ * of failure occurred and never WHO caused it. A `rate_limit` on an assess job is far more likely
+ * the AI provider than SharePoint; an `auth` on a discover job almost certainly IS the connector.
+ * Nothing in the data distinguishes them, so this panel reports the classes seen on this source's
+ * runs and says plainly that attribution is not available — rather than captioning it "the
+ * connector is throttling", which is the reading it would otherwise invite.
+ *
+ * A stage is carried, because it is the one clue there is: a failure on `discover` happened while
+ * listing the source, which is as close to connector attribution as this data gets.
+ */
+export function sourceFailures(source, snapshot = {}) {
+  const runs = (snapshot?.runs || []).filter((run) => run.source === source && run.last_error_class)
+  const byClass = new Map()
+  for (const run of runs) {
+    const kind = run.last_error_class
+    const row = byClass.get(kind) || {
+      kind, label: ERROR_CLASS_LABELS[kind] || kind, runs: 0, stages: new Set(), maxAttempts: null,
+    }
+    row.runs += 1
+    if (run.stage) row.stages.add(run.stage)
+    const attempts = num(run.max_attempts_seen)
+    if (attempts != null && (row.maxAttempts == null || attempts > row.maxAttempts)) {
+      row.maxAttempts = attempts
+    }
+    byClass.set(kind, row)
+  }
+  const classes = [...byClass.values()]
+    .map((row) => ({ ...row, stages: [...row.stages].sort() }))
+    .sort((a, b) => b.runs - a.runs || a.kind.localeCompare(b.kind))
+  return {
+    classes,
+    total: classes.reduce((sum, row) => sum + row.runs, 0),
+    // Said once, under the list.
+    attributionNote: 'The classifier reads the failure text, not its origin — a rate limit here '
+      + 'may be the AI provider rather than this connector. The stage is the only attribution '
+      + 'available: a failure while discovering happened reading this source.',
+  }
+}
+
+/** Site coverage summed across every run reading from this source. Runs with no site data
+ *  contribute nothing rather than zeros, so a Drive run cannot dilute a SharePoint total. */
+export function sourceCoverage(source, snapshot = {}) {
+  const runs = (snapshot?.runs || []).filter((run) => run.source === source
+    && num(run.sites_total) != null)
+  if (!runs.length) return { available: false, runs: 0 }
+  const sum = (field) => runs.reduce((total, run) => total + (num(run[field]) ?? 0), 0)
+  const total = sum('sites_total')
+  const done = sum('sites_done')
+  return {
+    available: true,
+    runs: runs.length,
+    total,
+    done,
+    unread: sum('sites_unread'),
+    libraries: sum('libraries_total') || null,
+    pct: total ? Math.min(100, Math.round((done / total) * 100)) : null,
+  }
+}
+
+/** Documents this source has produced work for, across its live and recent runs. Totals only
+ *  what each run actually reported: a run with no `total` contributes its completed count and
+ *  is counted as unsized, rather than being given a denominator it never published. */
+export function sourceVolume(source, snapshot = {}) {
+  const runs = (snapshot?.runs || []).filter((run) => run.source === source)
+  let completed = 0
+  let total = 0
+  let unsized = 0
+  for (const run of runs) {
+    completed += num(run.completed) ?? 0
+    const runTotal = num(run.total)
+    if (runTotal == null) unsized += 1
+    else total += runTotal
+  }
+  return {
+    runs: runs.length, completed, unsized,
+    total: runs.length && unsized === runs.length ? null : total,
+    pct: total ? Math.min(100, Math.round((completed / total) * 100)) : null,
+  }
+}
+
+/** One row per run currently reading from this source, worst first: failing, then busiest. */
+export function sourceRuns(source, snapshot = {}, { nowMs = Date.now() } = {}) {
+  return (snapshot?.runs || [])
+    .filter((run) => run.source === source)
+    .map((run) => ({
+      scanId: run.scan_id,
+      stage: run.stage || null,
+      status: run.status === 'recent' ? 'recent' : 'active',
+      completed: num(run.completed) ?? 0,
+      total: num(run.total),
+      running: num(run.running) ?? 0,
+      queued: num(run.queued) ?? 0,
+      failing: !!run.last_error_class,
+      errorLabel: run.last_error_class
+        ? (ERROR_CLASS_LABELS[run.last_error_class] || run.last_error_class) : null,
+      updatedAgoS: secondsSince(run.updated_at, nowMs),
+    }))
+    .sort((a, b) => (b.failing - a.failing)
+      || ((b.running + b.queued) - (a.running + a.queued))
+      || String(a.scanId).localeCompare(String(b.scanId)))
 }
