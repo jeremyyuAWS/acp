@@ -5,7 +5,8 @@ import { getAdminActivity, getWorkerCapacity, openAdminActivityStream } from './
 import { ensureResizeObserver } from './resizeObserverFallback.js'
 import LiveOpsDrawer from './LiveOpsDrawer.jsx'
 import LiveOpsCostSummary from './LiveOpsCostSummary.jsx'
-import { appendSample, deriveEvents, formatDuration, mergeEvents, sampleForNode, secondsSince } from './liveOpsDrawer.js'
+import { appendSample, deriveEvents, formatDuration, mergeEvents, queueCapacityGauge,
+  sampleForNode, secondsSince } from './liveOpsDrawer.js'
 
 ensureResizeObserver(typeof window === 'undefined' ? globalThis : window)
 
@@ -298,9 +299,10 @@ function NodeGauge({ fraction, label, color, over = false, tone }) {
  * What each tile's bar measures, or null when nothing on that tile is a ratio.
  *
  * Only two node kinds have an honest denominator: a worker service (busy slots against its own
- * slot count) and the shared queue (waiting work against the tier's total slots, which is what
- * "can the queue be picked up now" means). A source connector and the output store have no
- * capacity to be a fraction of, so they get no bar rather than an invented one.
+ * slot count) and the shared queue (waiting work against the slots of the ROLE that can claim it
+ * — not the fleet's total, which counts slots no such job is eligible for). A source connector
+ * and the output store have no capacity to be a fraction of, so they get no bar rather than an
+ * invented one.
  */
 export function nodeGauge(data = {}, summary = {}) {
   if (data.kind === 'worker') {
@@ -317,16 +319,10 @@ export function nodeGauge(data = {}, summary = {}) {
     }
   }
   if (data.kind === 'queue') {
-    const queued = Number(summary.queued || 0)
-    const slots = Number(summary.worker_slots || 0)
-    if (!slots) return { fraction: null, label: `${queued} waiting · worker slots not reported`, over: false }
-    const over = queued > slots
-    return {
-      fraction: Math.min(1, queued / slots),
-      over,
-      label: over ? `${queued} waiting, more than the ${slots} slots that could pick them up`
-        : `${queued} waiting against ${slots} worker slots`,
-    }
+    // PER-ROLE, not the fleet total. A job is claimed only by workers for its own stage, so the
+    // question "can this be picked up now" is answered by that stage's slots — see
+    // queueCapacityGauge for the production reading that made this wrong answer visible.
+    return queueCapacityGauge(summary)
   }
   if (data.kind === 'run') {
     const run = data.run || {}

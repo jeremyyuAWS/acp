@@ -1479,3 +1479,123 @@ describe('idleShare', () => {
     expect(idleShare({ running: { vcpu_hours: 0 }, floor: { vcpu_hours: 2 } })).toBeNull()
   })
 })
+
+/* ─────────────────────── Queue capacity, per role ─────────────────────── */
+
+import { queueRoleLoad, queueCapacityGauge } from './liveOpsDrawer.js'
+
+// The production reading from 2026-09-05: 132 remediate jobs waiting, Remediate holding 2 slots,
+// Discover and Assess idle with 5 slots between them that no remediate job is eligible for.
+const PRODUCTION = {
+  queued: 132,
+  worker_slots: 7,
+  by_stage: { remediate: { queued: 132, running: 10 }, discover: { queued: 0 }, assess: { queued: 0 } },
+  worker_roles: {
+    discover: { alive: true, pool_size: 3 },
+    assess: { alive: true, pool_size: 2 },
+    remediate: { alive: true, pool_size: 2 },
+  },
+}
+
+describe('queueCapacityGauge', () => {
+  it('counts only the slots that can actually claim the waiting work', () => {
+    // The bug: "132 waiting, more than the 7 slots that could pick them up". Five of those seven
+    // belong to Discover and Assess and are not eligible for a single remediate job.
+    const g = queueCapacityGauge(PRODUCTION)
+    expect(g.label).not.toContain('7')
+    expect(g.label).toContain('remediate')
+    expect(g.label).toContain('132 for 2 slots')
+    expect(g.over).toBe(true)
+  })
+
+  it('names the role, because the action is "scale remediate" not "the fleet is busy"', () => {
+    expect(queueCapacityGauge(PRODUCTION).label).toMatch(/remediate has 132/)
+  })
+
+  it('measures the bar against the blocked role, not the fleet', () => {
+    // 132/7 and 132/2 both clamp to 1 here, so prove it through a case where they differ.
+    const g = queueCapacityGauge({
+      queued: 4, worker_slots: 7,
+      by_stage: { remediate: { queued: 4 } },
+      worker_roles: { discover: { alive: true, pool_size: 3 }, assess: { alive: true, pool_size: 2 },
+        remediate: { alive: true, pool_size: 8 } },
+    })
+    expect(g.fraction).toBeCloseTo(4 / 8)   // the role's own slots, not 4/7
+    expect(g.over).toBe(false)
+  })
+
+  it('does not count a dead role’s last-known pool as capacity', () => {
+    // A role that stopped heartbeating has unknown capacity, not its final reading.
+    const g = queueCapacityGauge({
+      queued: 10, worker_slots: 5,
+      by_stage: { remediate: { queued: 10 } },
+      worker_roles: { remediate: { alive: false, pool_size: 4 } },
+    })
+    expect(g.label).toMatch(/not reporting slots/)
+    expect(g.fraction).toBeNull()
+  })
+
+  it('says nothing is waiting rather than dividing by a role', () => {
+    expect(queueCapacityGauge({ queued: 0, by_stage: {}, worker_roles: {} }).label)
+      .toBe('Nothing waiting')
+  })
+
+  it('says so when waiting work belongs to no stage at all', () => {
+    // Rather than spreading it across the fleet and implying anyone can take it.
+    const g = queueCapacityGauge({ queued: 9, worker_slots: 7, by_stage: {}, worker_roles: {} })
+    expect(g.label).toMatch(/not attributed to a stage/)
+    expect(g.fraction).toBeNull()
+  })
+
+  it('uses the singular for a one-slot role', () => {
+    expect(queueCapacityGauge({
+      queued: 3, by_stage: { assess: { queued: 3 } },
+      worker_roles: { assess: { alive: true, pool_size: 1 } },
+    }).label).toMatch(/for 1 slot$/)
+  })
+})
+
+describe('queueRoleLoad', () => {
+  it('attributes waiting work to the stage that owns it', () => {
+    const load = queueRoleLoad(PRODUCTION)
+    expect(load.rows).toHaveLength(1)          // only remediate has anything waiting
+    expect(load.rows[0]).toMatchObject({ stage: 'remediate', queued: 132, slots: 2, over: true })
+    expect(load.blocked.map(r => r.stage)).toEqual(['remediate'])
+  })
+
+  it('reports waiting work no stage claimed rather than hiding it', () => {
+    // The per-role numbers stay true even when the stage list does not cover the total.
+    const load = queueRoleLoad({ queued: 20, by_stage: { assess: { queued: 12 } },
+      worker_roles: { assess: { alive: true, pool_size: 2 } } })
+    expect(load.unattributed).toBe(8)
+    expect(load.rows[0].queued).toBe(12)
+  })
+
+  it('never reports negative unattributed work', () => {
+    const load = queueRoleLoad({ queued: 5, by_stage: { assess: { queued: 12 } }, worker_roles: {} })
+    expect(load.unattributed).toBe(0)
+  })
+
+  it('puts a role that is over its slots ahead of one that merely has more waiting', () => {
+    const load = queueRoleLoad({
+      queued: 60,
+      by_stage: { assess: { queued: 50 }, remediate: { queued: 10 } },
+      worker_roles: { assess: { alive: true, pool_size: 80 }, remediate: { alive: true, pool_size: 2 } },
+    })
+    expect(load.rows[0].stage).toBe('remediate')   // 10 > 2 blocks; 50 < 80 does not
+  })
+
+  it('ranks a measured problem above an unmeasured one', () => {
+    const load = queueRoleLoad({
+      queued: 20,
+      by_stage: { assess: { queued: 5 }, discover: { queued: 15 } },
+      worker_roles: { assess: { alive: true, pool_size: 1 } },   // discover: no heartbeat
+    })
+    expect(load.rows[0].stage).toBe('assess')
+    expect(load.unknownRoles.map(r => r.stage)).toEqual(['discover'])
+  })
+
+  it('ignores stages with nothing waiting', () => {
+    expect(queueRoleLoad(PRODUCTION).rows.map(r => r.stage)).toEqual(['remediate'])
+  })
+})

@@ -1765,3 +1765,87 @@ export function idleShare(app = {}) {
   if (running == null || floor == null || running <= 0) return null
   return Math.round(Math.min(1, floor / running) * 100)
 }
+
+/* ─────────────────────── Queue capacity, per role ─────────────────────── */
+
+/**
+ * Which role's slots can actually pick up the work that is waiting.
+ *
+ * THE BUG THIS REPLACES, seen in production 2026-09-05: the queue tile read "132 waiting, more
+ * than the 7 slots that could pick them up". Those 7 were every worker slot in the fleet
+ * (3 discover + 2 assess + 2 remediate) — but a job is claimed only by workers for ITS stage, so
+ * the 132 waiting remediate jobs could be picked up by 2 slots, not 7. Discover and Assess sat
+ * idle with 5 free slots that were never eligible for any of it.
+ *
+ * That is the wrong answer to the question the tile is asked. It understates how blocked the
+ * queue is, and it points an operator at the fleet when one service is the constraint — which is
+ * the difference between "we are at capacity" and "scale remediate".
+ *
+ * `by_stage[*].queued` and `summary.queued` are both summed from the same `runs` list server-side,
+ * so per-stage attribution is exact rather than approximate. A stage whose role reports no
+ * heartbeat has UNKNOWN slots, not zero: "nobody is watching this role" and "this role has no
+ * capacity" are different, and only one of them means the work cannot move.
+ */
+export function queueRoleLoad(summary = {}) {
+  const byStage = summary?.by_stage || {}
+  const roles = summary?.worker_roles || {}
+  const rows = []
+  for (const [stage, row] of Object.entries(byStage)) {
+    const queued = num(row?.queued) ?? 0
+    if (!queued) continue
+    const role = roles[stage]
+    // Only a LIVE role's pool counts. A dead role's last-known pool_size is not capacity.
+    const slots = role && role.alive ? num(role.pool_size) : null
+    rows.push({ stage, queued, slots, over: slots != null && queued > slots, unknown: slots == null })
+  }
+  // Worst first: a role over its slots leads, then by how much work is stuck behind how little
+  // capacity. A role whose slots are unknown sorts after the ones that are known to be over,
+  // because a measured problem outranks an unmeasured one.
+  rows.sort((a, b) => (b.over - a.over) || (b.unknown - a.unknown) || (b.queued - a.queued))
+  const totalQueued = num(summary?.queued) ?? rows.reduce((sum, r) => sum + r.queued, 0)
+  const attributed = rows.reduce((sum, r) => sum + r.queued, 0)
+  return {
+    rows,
+    totalQueued,
+    // Waiting work no stage claimed. Reported rather than folded into a role's number, so the
+    // per-role figures stay true even when the stage list does not cover everything.
+    unattributed: Math.max(0, totalQueued - attributed),
+    blocked: rows.filter(r => r.over),
+    unknownRoles: rows.filter(r => r.unknown),
+  }
+}
+
+/** The queue tile's bar and label, from per-role capacity rather than the fleet total. */
+export function queueCapacityGauge(summary = {}) {
+  const load = queueRoleLoad(summary)
+  const { totalQueued } = load
+  if (!totalQueued) {
+    return { fraction: 0, over: false, label: 'Nothing waiting' }
+  }
+  const worst = load.rows[0]
+  if (!worst) {
+    // Work is waiting but no stage owns it — say that, rather than dividing it by the fleet.
+    return { fraction: null, over: false,
+      label: `${totalQueued} waiting · not attributed to a stage` }
+  }
+  if (worst.unknown) {
+    return { fraction: null, over: false,
+      label: `${totalQueued} waiting · ${worst.stage} has ${worst.queued} and is not reporting slots` }
+  }
+  if (worst.over) {
+    return {
+      fraction: Math.min(1, worst.queued / Math.max(1, worst.slots)),
+      over: true,
+      // Names the ROLE and its own slots. "scale remediate" is the action; "the fleet is busy"
+      // is not.
+      label: `${totalQueued} waiting · ${worst.stage} has ${worst.queued} for ${worst.slots} `
+        + `${worst.slots === 1 ? 'slot' : 'slots'}`,
+    }
+  }
+  return {
+    fraction: Math.min(1, worst.queued / Math.max(1, worst.slots)),
+    over: false,
+    label: `${totalQueued} waiting · ${worst.stage} has ${worst.queued} for ${worst.slots} `
+      + `${worst.slots === 1 ? 'slot' : 'slots'}`,
+  }
+}
