@@ -22,6 +22,16 @@ const render = (snapshot, throughput, onStop) =>
   renderToStaticMarkup(createElement(AssessRunProgress, { snapshot, throughput, onStop }))
 
 describe('the assessment running screen focuses on the document in flight', () => {
+  it('keeps the SharePoint boundary visible while documents are assessed', () => {
+    const html = render({ ...SNAP, source: 'sharepoint', scope: { kind: 'sharepoint', sites: [
+      { id: 's1', name: 'Clinical', status: 'complete', libraries: [{ id: 'l1', name: 'Documents' }] },
+    ] } })
+    expect(html).toContain('Content source')
+    expect(html).toContain('SharePoint')
+    expect(html).toContain('Clinical')
+    expect(html).toContain('1 document library')
+  })
+
   it('renders nothing until the live snapshot is available', () => {
     expect(render(null)).toBe('')
     expect(render({ available: false })).toBe('')
@@ -44,6 +54,14 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).toContain('12 documents/min')
     expect(html).toContain('about 1 min 50s left')
     expect(html).toMatch(/Results appear when the run finishes/)
+  })
+
+  it('labels dedicated worker heartbeat capacity as per-replica, never unavailable or aggregate', () => {
+    const split = { ...SNAP, queue: { ...SNAP.queue,
+      workers: { busy: 1, max: 2, idle: 1, capacity_scope: 'per_replica' } } }
+    const html = render(split)
+    expect(html).toContain('Assessment service online · 2 slots per replica')
+    expect(html).not.toContain('Worker status unavailable')
   })
 
   it('groups current processing and throughput in a collapsible section that starts expanded', () => {

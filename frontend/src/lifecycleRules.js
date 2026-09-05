@@ -126,6 +126,24 @@ export const CONDITIONS = [
     lead: 'owned by ',
   },
   {
+    key: 'ownerInRoster',
+    label: 'Owner is in departed-employee roster',
+    field: 'owner',
+    op: 'in',
+    kind: 'list',
+    placeholder: 'Paste one email or account name per line',
+    lead: 'owned by someone in ',
+  },
+  {
+    key: 'ownerNotInRoster',
+    label: 'Owner is not in current-staff roster',
+    field: 'owner',
+    op: 'not_in',
+    kind: 'list',
+    placeholder: 'Paste one email or account name per line',
+    lead: 'whose owner is outside ',
+  },
+  {
     key: 'source',
     label: 'Source',
     field: 'source',
@@ -186,6 +204,8 @@ function clauseFor(cond) {
   const raw = cond.value
   if (tpl) {
     const value = tpl.kind === 'date' ? formatRuleDate(raw)
+      : tpl.kind === 'list'
+        ? `${Array.isArray(raw) ? raw.length : 0}-person roster`
       : tpl.unit ? `${raw} ${tpl.unit}`
       : String(raw ?? '')
     return { lead: tpl.lead, value, positional: !!tpl.positional }
@@ -223,7 +243,9 @@ export function matchToDraftValues(match) {
   parseMatch(match).forEach((cond) => {
     if (!cond || !cond.field || !cond.op) return
     const tpl = BY_FIELD_OP.get(`${cond.field}:${cond.op}`)
-    if (tpl) values[tpl.key] = String(cond.value ?? '')
+    if (tpl) values[tpl.key] = tpl.kind === 'list'
+      ? (Array.isArray(cond.value) ? cond.value.join('\n') : '')
+      : String(cond.value ?? '')
   })
   return values
 }
@@ -294,6 +316,17 @@ export function draftToMatch(draft) {
   return CONDITIONS.flatMap((c) => {
     const raw = values[c.key]
     if (raw === '' || raw == null) return []
+    if (c.kind === 'list') {
+      const seen = new Set()
+      const value = String(raw).split(/[\n,;]+/).map((v) => v.trim()).filter(Boolean)
+        .filter((v) => {
+          const key = v.toLocaleLowerCase()
+          if (seen.has(key)) return false
+          seen.add(key)
+          return true
+        })
+      return value.length ? [{ field: c.field, op: c.op, value }] : []
+    }
     return [{ field: c.field, op: c.op, value: c.kind === 'number' ? Number(raw) : String(raw) }]
   })
 }

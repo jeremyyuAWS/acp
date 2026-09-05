@@ -44,6 +44,26 @@ async function signInAsAdmin(page) {
   await expect(page.locator('[role="tablist"]')).toBeVisible({ timeout: 15_000 })
 }
 
+/** Open the account menu and click Settings.
+ *
+ * The compact header consolidated identity, build details, settings, account switching and sign
+ * out into one avatar menu, so the ⚙ opener is no longer a top-level header button: it lives
+ * inside a <details> that is closed until someone opens it. getByRole().click() waits for
+ * visibility, so the three tests below timed out on an opener that was present in the DOM and
+ * not yet revealed.
+ *
+ * The extra step is the real interaction now, and it stays keyboard-reachable because <summary>
+ * is natively focusable and toggles on Enter/Space — which is the property that makes moving
+ * these controls into a disclosure acceptable at all. The assertions themselves are unchanged:
+ * they are about the settings PANEL's accessibility, not about where its opener sits.
+ */
+async function openSettings(page) {
+  await page.locator('details.account-menu > summary').click()
+  await page.getByRole('button', { name: /Platform settings/i }).click()
+  await page.waitForFunction(
+    () => !!document.querySelector('[role="dialog"],.setpanel,.setoverlay'), { timeout: 8_000 })
+}
+
 /** Click a tab by its display-text pattern. */
 const clickTab = (page, re) =>
   page.locator('[role="tab"]', { hasText: re }).click()
@@ -320,8 +340,7 @@ test.describe('Settings panel (modal)', () => {
     // Must sign in as the admin persona — the compliance persona does not have `settings` in
     // its allow list, so the ⚙ cog button is not rendered for them.
     await signInAsAdmin(page)
-    await page.getByRole('button', { name: /Platform settings/i }).click()
-    await page.waitForFunction(() => !!document.querySelector('[role="dialog"],.setpanel,.setoverlay'), { timeout: 8_000 })
+    await openSettings(page)
   })
 
   test('no WCAG 2.1 A/AA violations in settings panel', async ({ page }) => {
@@ -396,9 +415,7 @@ test.describe('Dialog focus management', () => {
     await page.goto('/')
     await page.getByRole('button', { name: /Platform Admin|Sam Devlin/i }).click()
     await expect(page.locator('[role="tablist"]')).toBeVisible({ timeout: 15_000 })
-    const opener = page.getByRole('button', { name: /Platform settings/i })
-    await opener.click()
-    await page.waitForFunction(() => !!document.querySelector('[role="dialog"],.setpanel,.setoverlay'), { timeout: 8_000 })
+    await openSettings(page)
     // After opening, focus should be inside the settings panel, not on the opener
     const activeIsInsidePanel = await page.evaluate(() => {
       const active = document.activeElement

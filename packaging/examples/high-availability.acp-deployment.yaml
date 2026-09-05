@@ -1,0 +1,85 @@
+# High Availability (PRD S8) — multi-zone, HA data services, at least two replicas per critical
+# tier. PRD S22: HA is not claimed without failure testing; this document declares the topology,
+# packaging/tests/contract is where the claim gets tested.
+apiVersion: packaging.acp.mova.io/v1alpha1
+kind: ACPDeployment
+metadata:
+  name: acp-ha
+  environment: production
+  region: us-east-1
+runtime:
+  version: "2026.9"
+  profile: high-availability
+  platform: aws
+  publicUrl: "https://acp.example.com"
+  imageRegistry: "123456789012.dkr.ecr.us-east-1.amazonaws.com/acp"
+api:
+  replicas: { min: 3, max: 12 }
+  resources: { preset: standard }
+  autoscale:
+    signals: [concurrent-requests, cpu]
+workers:
+  discover:
+    replicas: { min: 2, max: 6 }
+    resources: { preset: standard }
+    autoscale:
+      signals: [queue-depth, oldest-job-age]
+  assess:
+    replicas: { min: 4, max: 20 }
+    resources: { preset: large }
+    autoscale:
+      signals: [queue-depth, oldest-job-age]
+  remediate:
+    replicas: { min: 4, max: 20 }
+    resources: { preset: large }
+    autoscale:
+      signals: [queue-depth, oldest-job-age]
+data:
+  postgres:
+    mode: managed
+    backupRetentionDays: 35
+    highAvailability: true
+    storage: 2Ti
+    maxConnections: 2000
+  redis:
+    mode: managed
+    highAvailability: true
+  objectStorage:
+    mode: managed
+    encryption: customer-managed
+    retentionDays: 2555
+ai:
+  mode: local-only
+  ollama:
+    enabled: true
+    modelVolume: 500Gi
+    gpu: true
+observability:
+  openTelemetry: true
+  exporter: cloudwatch
+  grafana: true
+  langfuse:
+    mode: self-hosted
+network:
+  privateWorkers: true
+  publicIngress: true
+  allowedEgress:
+    - googleapis.com
+    - graph.microsoft.com
+secrets:
+  provider: aws-secrets-manager
+  refs:
+    database-url: { name: acp/prod, key: database-url }
+    redis-url: { name: acp/prod, key: redis-url }
+    object-storage: { name: acp/prod, key: object-storage }
+    langfuse-secret-key: { name: acp/prod, key: langfuse-secret-key }
+    google-oauth-client-secret: { name: acp/prod, key: google-oauth-client-secret }
+    microsoft-oauth-client-secret: { name: acp/prod, key: microsoft-oauth-client-secret }
+sources:
+  - google-drive
+  - sharepoint
+  - local-upload
+capacity:
+  maxSourceFileSizeMb: 250
+  concurrentFilesPerWorker: 6
+  expectedDocumentsPerDay: 250000

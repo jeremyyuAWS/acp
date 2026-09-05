@@ -30,7 +30,9 @@ const read = (f) => readFileSync(join(HERE, f), 'utf8')
 const BACKEND_FIELDS = new Set(['department', 'business_criticality', 'regulatory_tags', 'triage_score',
   'source', 'owner', 'age_days', 'path', 'parent_folder', 'modified_age_days', 'modified_at', 'created_at',
   'doc_class', 'size_kb'])
-const BACKEND_OPS = new Set(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'prefix', 'before', 'after'])
+// `in` / `not_in` are set membership for pasted identity rosters.
+const BACKEND_OPS = new Set(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'prefix', 'before',
+  'after', 'in', 'not_in'])
 
 const draft = (over = {}) => ({ ...emptyDraft(), ...over, values: { ...emptyDraft().values, ...(over.values || {}) } })
 
@@ -177,6 +179,23 @@ describe('draft → the payload the backend validates', () => {
     expect(typeof m[1].value).toBe('number')
   })
 
+  it('turns a pasted departed-employee roster into one case-insensitive set condition', () => {
+    const m = draftToMatch(draft({ values: {
+      ownerInRoster: 'Jane@company.com\n bob@company.com; jane@COMPANY.com,alice@company.com ',
+    } }))
+    expect(m).toEqual([{ field: 'owner', op: 'in', value: [
+      'Jane@company.com', 'bob@company.com', 'alice@company.com',
+    ] }])
+    expect(ruleSentenceText(m, 'archive'))
+      .toBe('Files owned by someone in 3-person roster will be tagged for archive review.')
+  })
+
+  it('builds the safe current-staff complement without treating a blank roster as a rule', () => {
+    expect(draftToMatch(draft({ values: { ownerNotInRoster: 'a@company.com\nb@company.com' } })))
+      .toEqual([{ field: 'owner', op: 'not_in', value: ['a@company.com', 'b@company.com'] }])
+    expect(draftToMatch(draft({ values: { ownerNotInRoster: '\n , ; ' } }))).toEqual([])
+  })
+
   it('refuses a rule with no conditions — it would match every file in scope', () => {
     expect(draftProblem(draft({ name: 'Everything' })))
       .toBe('Add at least one condition — a rule with none would match every file in scope.')
@@ -231,6 +250,15 @@ describe('matchToDraftValues — the inverse of draftToMatch, for editing a save
   it('parses the stored JSON-string form, the shape the column actually holds', () => {
     const values = matchToDraftValues(JSON.stringify([{ field: 'parent_folder', op: 'prefix', value: 'HR/' }]))
     expect(values.folder).toBe('HR/')
+  })
+
+  it('round-trips roster arrays into editable one-identity-per-line text', () => {
+    const values = matchToDraftValues([
+      { field: 'owner', op: 'in', value: ['a@company.com', 'b@company.com'] },
+      { field: 'owner', op: 'not_in', value: ['c@company.com'] },
+    ])
+    expect(values.ownerInRoster).toBe('a@company.com\nb@company.com')
+    expect(values.ownerNotInRoster).toBe('c@company.com')
   })
 
   it('drops a condition the builder cannot create rather than crashing on it', () => {

@@ -89,11 +89,24 @@ def bootstrap(request: Request):
             revision = head["revision"]
         overview = core.store.get_overview_snapshot(scan_id, owner)
 
+    # Workspace access rides the SAME request the SPA already makes rather than being fetched
+    # separately from GET /me/access. This endpoint exists because the first screen used to cost
+    # several round trips; adding one back for the thing that decides which tabs to RENDER would
+    # be the worst possible place to spend it — the navigation cannot draw until it arrives, so a
+    # second call would show every tab and then remove some, which reads as a glitch and briefly
+    # advertises surfaces the user may not have. The endpoint stays for slice 3's admin UI and for
+    # re-reading after a role change; both compute from the same function, so they cannot drift.
+    import routes.system as _system
+    import workspace_roles as _wr
+    access = _wr.access_for_email(core.store, owner, owner_email=core.OWNER_EMAIL,
+                                  is_suspended=_system._is_suspended)
+
     return {
         "me": {
             "email": owner,
             "is_scope_owner": core.is_scope_owner(owner),
             "is_admin": core.is_admin(owner),
+            "access": access,
         },
         "scan_id": scan_id,
         "scan_status": scan_status,

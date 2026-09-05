@@ -1,0 +1,566 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://packaging.acp.mova.io/v1alpha1/acp-deployment.schema.json",
+  "title": "ACPDeployment",
+  "description": "The versioned deployment contract for ACP. One document describes an installation on any supported platform; the platform adapters consume it, the application never reads it. Structural validation lives here; cross-field rules that a JSON Schema cannot express (profile floors, preset validity, ephemeral-storage sizing, managed/embedded downgrades) are enforced by acpctl validate and are listed in docs/adr/0048.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "metadata",
+    "runtime",
+    "api",
+    "workers",
+    "data",
+    "ai",
+    "observability",
+    "network",
+    "secrets"
+  ],
+  "properties": {
+    "apiVersion": {
+      "description": "Contract version. Only v1alpha1 exists; a breaking change gets a new version, never a redefined field.",
+      "const": "packaging.acp.mova.io/v1alpha1"
+    },
+    "kind": {
+      "const": "ACPDeployment"
+    },
+    "metadata": {
+      "$ref": "#/$defs/metadata"
+    },
+    "runtime": {
+      "$ref": "#/$defs/runtime"
+    },
+    "api": {
+      "$ref": "#/$defs/tier"
+    },
+    "workers": {
+      "$ref": "#/$defs/workers"
+    },
+    "data": {
+      "$ref": "#/$defs/data"
+    },
+    "ai": {
+      "$ref": "#/$defs/ai"
+    },
+    "observability": {
+      "$ref": "#/$defs/observability"
+    },
+    "network": {
+      "$ref": "#/$defs/network"
+    },
+    "secrets": {
+      "$ref": "#/$defs/secrets"
+    },
+    "sources": {
+      "description": "Document sources this installation is expected to reach. Drives the egress allowlist check and the preflight external-data-path report (PRD S13).",
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "google-drive",
+          "sharepoint",
+          "smb",
+          "local-upload"
+        ]
+      }
+    },
+    "capacity": {
+      "$ref": "#/$defs/capacity"
+    }
+  },
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "environment"
+      ],
+      "properties": {
+        "name": {
+          "description": "Installation name. Lowercase DNS label so it can be used verbatim as a Kubernetes release name, an ACA app prefix and a Compose project name.",
+          "type": "string",
+          "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "environment": {
+          "enum": [
+            "development",
+            "staging",
+            "production"
+          ]
+        },
+        "region": {
+          "description": "Provider region or, on-prem, the data-residency boundary this installation must not leave. Free text: the adapters validate it against the provider, this contract only records it.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "profile",
+        "platform"
+      ],
+      "properties": {
+        "version": {
+          "description": "ACP release, CalVer YYYY.M or YYYY.M.PATCH. Every image in the release carries this version; acpctl rejects a spec that mixes versions.",
+          "type": "string",
+          "pattern": "^[0-9]{4}\\.(0|[1-9][0-9]?)(\\.[0-9]+)?$"
+        },
+        "profile": {
+          "enum": [
+            "evaluation",
+            "standard",
+            "regulated",
+            "high-availability"
+          ]
+        },
+        "platform": {
+          "enum": [
+            "azure",
+            "aws",
+            "gcp",
+            "kubernetes",
+            "onprem",
+            "compose"
+          ]
+        },
+        "publicUrl": {
+          "description": "The URL users reach. Required unless network.publicIngress is false.",
+          "type": "string",
+          "pattern": "^https://[^\\s]+$"
+        },
+        "imageRegistry": {
+          "description": "Registry the release images are pulled from. Digests, not tags, are what the plan resolves; this only says where.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "preset"
+      ],
+      "properties": {
+        "preset": {
+          "description": "Validated size. cpu/memory/ephemeralStorage are derived from it and may be stated for readability, but must agree with the preset row (PRD S11).",
+          "enum": [
+            "small",
+            "standard",
+            "large",
+            "x-large"
+          ]
+        },
+        "cpu": {
+          "type": "string",
+          "pattern": "^[0-9]+(\\.[0-9]+)?$"
+        },
+        "memory": {
+          "type": "string",
+          "pattern": "^[0-9]+(Gi|Mi)$"
+        },
+        "ephemeralStorage": {
+          "type": "string",
+          "pattern": "^[0-9]+(Gi|Mi)$"
+        }
+      }
+    },
+    "replicas": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "min",
+        "max"
+      ],
+      "properties": {
+        "min": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "max": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      }
+    },
+    "tier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "replicas",
+        "resources"
+      ],
+      "properties": {
+        "replicas": {
+          "$ref": "#/$defs/replicas"
+        },
+        "resources": {
+          "$ref": "#/$defs/resources"
+        },
+        "autoscale": {
+          "$ref": "#/$defs/autoscale"
+        },
+        "connectionPool": {
+          "description": "ACP_DB_MAX_CONN: this tier's per-replica Postgres pool size, overriding the derived ACP_WORKERS + headroom formula. api/store.py's db_max_conn() returns max(2, this) and ignores the formula entirely when it is set, so declaring it here is the only way a document can describe a fleet that is safe BECAUSE its pools are capped. Production pins 2 on every worker tier (deploy/public/rightsize-production.sh, PR #1370); without this key the same fleet computes 384 worst-case connections against a 150-connection server and reads as unsafe.",
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 1000
+        }
+      }
+    },
+    "autoscale": {
+      "description": "Autoscaling signal. PRD S11: queue depth and oldest-job age are the preferred signals; cpu is permitted only alongside one of them, never alone.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "signals"
+      ],
+      "properties": {
+        "signals": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "queue-depth",
+              "oldest-job-age",
+              "cpu",
+              "concurrent-requests"
+            ]
+          }
+        },
+        "queueDepthTarget": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "oldestJobAgeSeconds": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 86400
+        }
+      }
+    },
+    "workers": {
+      "description": "The three worker tiers. Names match ACP_WORKER_ROLE values and the production container apps acp-discovery / acp-assess / acp-remediate.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "discover",
+        "assess",
+        "remediate"
+      ],
+      "properties": {
+        "discover": {
+          "$ref": "#/$defs/tier"
+        },
+        "assess": {
+          "$ref": "#/$defs/tier"
+        },
+        "remediate": {
+          "$ref": "#/$defs/tier"
+        }
+      }
+    },
+    "data": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "postgres",
+        "redis",
+        "objectStorage"
+      ],
+      "properties": {
+        "postgres": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "$ref": "#/$defs/serviceMode"
+            },
+            "backupRetentionDays": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 3650
+            },
+            "highAvailability": {
+              "type": "boolean"
+            },
+            "storage": {
+              "type": "string",
+              "pattern": "^[0-9]+(Gi|Ti)$"
+            },
+            "maxConnections": {
+              "description": "The Postgres server's max_connections. The plan checks the fleet's worst-case connection demand against it: api/store.py sizes each replica's pool at ACP_WORKERS + _API_HEADROOM_CONN, so demand scales with max replicas, not with average load. 150 is the value confirmed live on the current production server.",
+              "type": "integer",
+              "minimum": 10,
+              "maximum": 10000
+            }
+          }
+        },
+        "redis": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "$ref": "#/$defs/serviceMode"
+            },
+            "highAvailability": {
+              "type": "boolean"
+            }
+          }
+        },
+        "objectStorage": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "$ref": "#/$defs/serviceMode"
+            },
+            "encryption": {
+              "enum": [
+                "provider-managed",
+                "customer-managed"
+              ]
+            },
+            "retentionDays": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3650
+            }
+          }
+        }
+      }
+    },
+    "serviceMode": {
+      "description": "managed = a provider service; self-hosted = the customer runs it as a first-class HA-capable service; embedded = a container inside this installation, single node, evaluation only.",
+      "enum": [
+        "managed",
+        "self-hosted",
+        "embedded"
+      ]
+    },
+    "ai": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "mode": {
+          "description": "local-only forbids every external AI egress. External providers are never the default (PRD S13).",
+          "enum": [
+            "local-only",
+            "hybrid",
+            "external"
+          ]
+        },
+        "ollama": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "modelVolume": {
+              "type": "string",
+              "pattern": "^[0-9]+(Gi|Ti)$"
+            },
+            "gpu": {
+              "type": "boolean"
+            }
+          }
+        },
+        "externalProviders": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "openTelemetry"
+      ],
+      "properties": {
+        "openTelemetry": {
+          "type": "boolean"
+        },
+        "exporter": {
+          "description": "Where OTel data goes. 'local' keeps collection entirely inside the installation, which is what a regulated profile requires.",
+          "enum": [
+            "local",
+            "azure-monitor",
+            "cloudwatch",
+            "google-cloud-monitoring"
+          ]
+        },
+        "grafana": {
+          "type": "boolean"
+        },
+        "langfuse": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "enum": [
+                "self-hosted",
+                "cloud",
+                "disabled"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "privateWorkers",
+        "publicIngress"
+      ],
+      "properties": {
+        "privateWorkers": {
+          "description": "Workers have no ingress at all. PRD S13 requires this everywhere; the contract makes it explicit so a spec that turns it off has to say so.",
+          "type": "boolean"
+        },
+        "publicIngress": {
+          "type": "boolean"
+        },
+        "privateDataServices": {
+          "description": "The managed data services are reached over a private endpoint and refuse public network access. PRD S21 phase 3's private-network option, declared once rather than per service because an installation that reaches Postgres privately and Blob Storage over the internet has the posture of the weaker one. Absent means public endpoints, which is what today's Azure runs.",
+          "type": "boolean"
+        },
+        "privateControlPlane": {
+          "description": "The Kubernetes API server has no public endpoint. Separate from privateDataServices because they fail differently: a public API server is an administrative exposure, a public data endpoint is a data one, and a regulated installation is usually required to close both.",
+          "type": "boolean"
+        },
+        "allowedEgress": {
+          "description": "Hostnames this installation is permitted to reach. Empty means deny-all egress, which is a valid regulated posture and is checked against sources and ai.mode.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9.*-]+$"
+          }
+        }
+      }
+    },
+    "secrets": {
+      "description": "Secret REFERENCES only. A literal value anywhere under this key is a validation error, not a warning.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "refs"
+      ],
+      "properties": {
+        "provider": {
+          "enum": [
+            "azure-key-vault",
+            "aws-secrets-manager",
+            "gcp-secret-manager",
+            "kubernetes",
+            "external-secrets",
+            "env-file"
+          ]
+        },
+        "refs": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/secretRef"
+          }
+        },
+        "workloadIdentity": {
+          "description": "Required references satisfied by the platform's workload identity instead of by a stored secret — AKS/EKS/GKE workload identity, or an Azure Container Apps managed identity. Naming one here is a stronger posture than declaring a reference, not a weaker one: there is no credential to rotate, leak or mount. Today's Azure production reaches Blob Storage exactly this way (deploy/public/deploy.sh grants the worker's managed identity Storage Blob Data Contributor and stores no storage secret at all), and without this key the contract would require an operator to invent a credential the deployment does not need.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "secretRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "key"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253
+        },
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253
+        }
+      }
+    },
+    "capacity": {
+      "description": "Inputs to the temporary-storage floor (PRD S12). Omitted means the defaults in acpctl.presets are used and the plan says so.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxSourceFileSizeMb": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20480
+        },
+        "concurrentFilesPerWorker": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        },
+        "expectedDocumentsPerDay": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000000
+        }
+      }
+    }
+  }
+}

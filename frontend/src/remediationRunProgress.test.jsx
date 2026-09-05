@@ -4,6 +4,19 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import RemediationRunProgress from './RemediationRunProgress.jsx'
 
 describe('RemediationRunProgress', () => {
+  it('keeps the SharePoint boundary visible while fixes run', () => {
+    const html = renderToStaticMarkup(
+      <RemediationRunProgress source="sharepoint"
+        scope={{ kind: 'sharepoint', sites: [
+          { id: 's1', name: 'Clinical', status: 'complete', libraries: [{ id: 'l1', name: 'Documents' }] },
+        ] }} progress={{ total: 2, done: 1 }} />,
+    )
+    expect(html).toContain('Content source')
+    expect(html).toContain('SharePoint')
+    expect(html).toContain('Clinical')
+    expect(html).toContain('1 document library')
+  })
+
   it('shows live automated-remediation progress from the SSE snapshot', () => {
     const html = renderToStaticMarkup(
       <RemediationRunProgress
@@ -45,7 +58,7 @@ describe('RemediationRunProgress', () => {
     expect(html).toContain('slides.pptx · applying eligible WCAG fixes')
     expect(html).toContain('Processing now')
     expect(html).toContain('13 documents remaining')
-    expect(html).toContain('Fix throughput')
+    expect(html).toContain('Remediation throughput')
     expect(html).toContain('1 document could not be remediated')
     expect(html).toContain('live')
     expect(html).toContain('aria-live="polite"')

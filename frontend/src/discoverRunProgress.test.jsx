@@ -62,6 +62,19 @@ describe('DiscoverRunProgress renders nothing until a scan is live', () => {
 })
 
 describe('the discovery step checklist', () => {
+  it('keeps the SharePoint boundary visible on the live card', () => {
+    const html = renderToStaticMarkup(createElement(DiscoverRunProgress, {
+      progress: PROG, busy: true, source: 'sharepoint',
+      scope: { kind: 'sharepoint', sites: [
+        { id: 's1', name: 'Clinical', status: 'complete', libraries: [{ id: 'l1', name: 'Documents' }] },
+      ] },
+    }))
+    expect(html).toContain('Content source')
+    expect(html).toContain('SharePoint')
+    expect(html).toContain('Clinical')
+    expect(html).toContain('1 document library')
+  })
+
   it('shows Discovering documents heading', () => {
     const html = render(PROG, true)
     expect(html).toContain('Discovering documents')
@@ -799,6 +812,16 @@ describe('stopped card (§9): scan ended before completion', () => {
     expect(html).toContain('Discovery complete')
     expect(html).toContain('Continue to Assessment')
     expect(html).not.toContain('Discovery stopped')
+  })
+
+  it('does not offer to rerun Assessment for an already-assessed snapshot', () => {
+    const prog = { phase: 'done', files_found: 100 }
+    const html = renderToStaticMarkup(createElement(DiscoverRunProgress, {
+      progress: prog, busy: false, onContinue: () => {}, assessmentComplete: true,
+    }))
+    expect(html).toContain('Assessment complete')
+    expect(html).toContain('disabled=""')
+    expect(html).not.toContain('Continue to Assessment')
   })
 })
 

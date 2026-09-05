@@ -36,7 +36,7 @@ const CATALOG = [
   { code: '1.4.3', name: 'Contrast (Minimum)', formats: ['docx', 'pdf', 'pptx'] },
   { code: '2.4.6', name: 'Headings and Labels', formats: ['docx'] },
 ]
-const SELECTORS = ['folder', 'owner', 'department']
+const SELECTORS = ['folder', 'owner', 'department', 'content_type']
 
 const settle = async () => { await act(async () => { await new Promise((r) => setTimeout(r, 0)) }) }
 const click = async (el) => { await act(async () => { el.click() }) }
@@ -114,6 +114,8 @@ describe('the create form posts the right body', () => {
     expect(field(c, 'folder path'), 'default is the folder-path label').toBeTruthy()
     await set(field(c, 'Selector'), 'department')
     expect(field(c, 'department'), 'switches to the department label').toBeTruthy()
+    await set(field(c, 'Selector'), 'content_type')
+    expect(field(c, 'SharePoint Content Type'), 'switches to the SharePoint Content Type label').toBeTruthy()
   })
 })
 

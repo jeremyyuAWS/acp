@@ -12,7 +12,7 @@ import { armNotifyOnComplete, notifyScanComplete, notifyScanFailed, notification
 import { refreshDriveToken } from './driveAuth.js'
 import { refreshSPToken } from './spAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, getMe, getCapability, listScans, getScan, NOT_MODIFIED, getActiveScan, getWorkspaceBootstrap, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, SCAN_UNAVAILABLE, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
+import { getSources, getRubric, getConfig, getMe, getMyAccess, getCapability, listScans, getScan, NOT_MODIFIED, getActiveScan, getWorkspaceBootstrap, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, SCAN_UNAVAILABLE, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
 import { beginOrResumeIntent, completeIntent, abandonIntent, outcomeIsUncertain } from './submitIntent'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
@@ -68,6 +68,8 @@ import { useScanRefetch } from './scanRefetch.js'
 import ConfirmDialog from './ConfirmDialog.jsx'
 import { AdminInsights } from './AdminInsights.jsx'
 import AcrWorkspace from './AcrWorkspace.jsx'
+import AccessRestricted from './AccessRestricted.jsx'
+import { visibleTabs, isVisible, canOperate, firstPermittedTab } from './access.js'
 import { handleWorkflowTabKeyDown } from './workflowTabs.js'
 
 // Self-scan overlay: on in dev, or on the deployed demo via ?a11y
@@ -90,6 +92,11 @@ const TABS = [
   // tabs assess the documents ACP processes, this one assesses ACP.
   ['acr',           'Conformance',   'ACR / VPAT',          0],
 ]
+
+// TEMPORARY PRODUCT POLICY (2026-09-04): every signed-in user can navigate the complete
+// workspace. API authorization remains authoritative for privileged mutations; in particular,
+// making these views discoverable must not turn a read-only user into a platform administrator.
+const ALL_TAB_KEYS = TABS.map(([key]) => key)
 
 function timeAgo(iso) {
   if (!iso) return null
@@ -322,6 +329,49 @@ export default function App() {
   // fault that does not exist.
   const [stopped, setStopped] = useState(null)
   const [view, setView] = useState('overview')
+  // Whether the user has CHOSEN the tab they are on. 'overview' is the app's own default, so a
+  // role that hides it must move them rather than showing an Access restricted screen for a place
+  // they never asked to be — see AccessRestricted.jsx for why an explicit navigation gets the
+  // screen instead of a silent bounce. A ref, not state: nothing renders from it, and making it
+  // state would re-render the whole workspace on the first tab click.
+  const viewWasChosen = useRef(false)
+  const goToView = (next) => { viewWasChosen.current = true; setView(next) }
+  // The server's answer to "which tabs may this user see, and what may they do inside them".
+  // `null` until bootstrap answers, and null means NOT TOLD — everything renders. The refusal
+  // that matters is the server's; see the header of access.js for why this direction is right
+  // here and the opposite direction is right there.
+  const [access, setAccess] = useState(null)
+
+  // PRD §10 — the app's own default view is 'overview'. A role that hides it must move the user
+  // on rather than greeting them with Access restricted for a tab they never chose. Only the
+  // default: once they have picked a tab, an inaccessible one gets the screen, which explains
+  // itself instead of silently bouncing them somewhere they did not ask to go.
+  useEffect(() => {
+    if (!access?.enforced || viewWasChosen.current) return
+    if (isVisible(access, view)) return
+    const target = firstPermittedTab(access, TABS)
+    if (target && target !== view) setView(target)
+  }, [access, view])
+
+  // PRD §9 — a role changed by an administrator must reach an open session without a sign-out.
+  // On focus rather than on a timer: the moment somebody comes back to the tab is when they are
+  // about to act on it, and a poll would spend the shared API budget on sessions nobody is
+  // looking at. A failed refresh leaves the previous answer in place (getMyAccess resolves null
+  // on error, and null would mean "not told" — so it is only applied when it is real), because a
+  // network blip is not a permission decision.
+  useEffect(() => {
+    if (!access) return
+    const refresh = () => {
+      if (document.visibilityState === 'hidden') return
+      getMyAccess().then((next) => { if (next) setAccess(next) }).catch(() => {})
+    }
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [access])
   // A pending "open this source's history" redirect from Discover's completion card (the "See
   // what's changed since your last scan of this source" link) to Integrations' SourceDrawer —
   // the raw scan-source string (run.source), not a source object; Integrations does its own
@@ -471,6 +521,20 @@ export default function App() {
   // a queued scan that is cancelled simply stops existing, and absence is what it looked like all
   // along.
   const scanCancelledRef = useRef(false)
+  // Set once, on unmount, and read by the job poll loop below.
+  //
+  // WHY THIS IS NEEDED AND WHAT IT IS NOT. `_pollScanJobPolling` is a `do…while (!job.done)` over
+  // `getJob` with a 350ms sleep and NO other stop condition — not even scanCancelledRef, which
+  // only the queued-scan loop consults. So an App that unmounts while a job is still running kept
+  // issuing a request every 350ms until that job finished on the server, for a component that no
+  // longer exists.
+  //
+  // This is about the REQUESTS, not about setState. React 18 removed the "state update on an
+  // unmounted component" warning because such an update is a documented no-op; guarding the
+  // setters would buy nothing. The network traffic and the timer are the real cost, and they are
+  // what this stops.
+  const unmountedRef = useRef(false)
+  useEffect(() => () => { unmountedRef.current = true }, [])
   // Live job state pushed by the Discover SSE stream (openDiscoverStream), read by the queued-
   // scan poll loop instead of it separately fetching getJob() every tick — a ref, not state,
   // because it updates far more often (~every backend seq bump) than the loop itself renders
@@ -647,6 +711,11 @@ export default function App() {
         // carries the pick, the scan-picker list, the active-job summary, and (Phase 1a) the
         // picked scan's cached Overview snapshot, in place of listScans + getActiveScan.
         setScanList(b.scans || [])
+        // Workspace access (PRD §13) rides this same request rather than a second one, so the
+        // navigation can draw with the right tabs on its FIRST render. Fetched separately it
+        // would render every tab and then remove some — a visible flicker that also briefly
+        // advertises surfaces the user may not have.
+        setAccess(b.me?.access || null)
         setOverviewPreview(b.overview || null)
         hadPreviewForPerf = !!b.overview
         const scanId = b.scan_id || null
@@ -712,6 +781,15 @@ export default function App() {
   // for a REAL backend scan the files arrive without it, so compute it here — otherwise
   // `remediable` is empty and server-side remediation finds nothing to do.
   const allFiles = useMemo(() => annotate(scan?.files ?? [], ontology).map((f) => (f.rec ? f : { ...f, rec: recommendFor(f) })), [scan, ontology])
+  // Run health, derived ONCE and read by both places that report it: the exception chip in the
+  // header actions, and the "✓ Verified" affordance in the context bar below it. They are two ends
+  // of one ordering (worker error > unreadable > healthy), so deriving them separately is how the
+  // header came to show "3 unreadable" and "✓ Verified" side by side.
+  // Off `scan?.run`, not the `run` const — that one is bound much further down, and reading it
+  // here is a temporal-dead-zone crash rather than a stale value. Same object either way.
+  const unreadableFiles = useMemo(
+    () => allFiles.filter((f) => f.status === 'error').length, [allFiles])
+  const workerError = scan?.run?.status === 'failed'
 
   // The file-type filter applies to EVERY tab, not just Discover.
   //
@@ -821,7 +899,8 @@ export default function App() {
     setAssessPhase('idle'); setJustAssessed(null)
     setOntology(loadPublished())
     setSettingsOpen(false); setView((p.allow || ['overview'])[0])
-    setMe({ email: p.email, name: p.name, role: p.role, scope: p.scope?.label, allow: p.allow || [] })
+    setMe({ email: p.email, name: p.name, role: p.role, scope: p.scope?.label,
+      allow: [...new Set([...(p.allow || []), ...ALL_TAB_KEYS])] })
     // Scope editing is owner-only (PUT /settings = _require_admin). GET /me returns the
     // authoritative per-user `is_scope_owner` post-auth (the sign-in payload doesn't carry it,
     // and /config is fetched pre-auth so its copy is null). A non-owner → read-only scope in the
@@ -992,8 +1071,16 @@ export default function App() {
   // regression, not a review step. FolderPicker's `layout="inline"` is already what the wizard's
   // own step 1 embeds for "Specific folders" (see FolderPicker.jsx's own header), so the fix is
   // routing straight there instead of opening a second, separate instance of the same picker.
-  const requestScan = (source, folder = null, { folderFirst = false, allFolders = false } = {}) =>
-    setPendingScan({ source, folder, folderFirst, allFolders })
+  // `folders` is the multi-root form, carried through the review modal to the run. It exists for
+  // the SharePoint site picker: several sites travel as roots (scanner._sp_locations splits bare
+  // site ids out of the same `folders` list it reads folder pairs from), and the wizard has no
+  // surface that could hold them — its folder tree browses ONE drive, so a multi-site selection
+  // would have been silently dropped at the review step and the scan would have run against the
+  // whole of OneDrive instead. Dropping a boundary is the one failure this whole path is careful
+  // about, so the selection is carried rather than re-asked.
+  const requestScan = (source, folder = null,
+                       { folderFirst = false, allFolders = false, folders = null } = {}) =>
+    setPendingScan({ source, folder, folderFirst, allFolders, folders })
 
   // The DEFAULT (session-scoped, non-durable) scan path has no scan_runs row until AFTER its
   // crawl finishes — _scan_discover creates it partway through its own function body, well past
@@ -1014,9 +1101,13 @@ export default function App() {
     let job
     do {
       job = await getJob(job_id)
+      // Checked straight after the await, before the sleep: an unmounted App must not schedule
+      // another tick, and must not spend a further getScan below either.
+      if (unmountedRef.current) return null
       setProgress(job)
       if (!job.done) await new Promise((r) => setTimeout(r, 350))
-    } while (!job.done)
+    } while (!job.done && !unmountedRef.current)
+    if (unmountedRef.current) return null
     if (job.error) throw new Error(job.error)
     return getScan(job.scan_id)
   }
@@ -1039,6 +1130,9 @@ export default function App() {
             }
             stream = getJob.openStream(job_id, {
               onMessage: (job) => {
+                // Same rule as the polling fallback: once the App is gone, close the stream
+                // rather than holding a server-side generator open for nobody.
+                if (unmountedRef.current) { settled = true; stream?.close(); resolve(null); return }
                 lastJob = job
                 setProgress(job)
                 if (job.done) finish(job)
@@ -1054,6 +1148,11 @@ export default function App() {
           })
         : _pollScanJobPolling(job_id)
     return run.finally(() => {
+      // ONLY when the job actually reached a terminal state. Abandoning the poll because the App
+      // unmounted is not the same as the job finishing: these two keys are what a fresh load
+      // reconnects THROUGH, so clearing them on unmount would mean a reload during a running job
+      // silently forgot it — defeating the reconnect this function exists to serve.
+      if (unmountedRef.current) return
       sessionStorage.removeItem(ACTIVE_JOB_KEY)
       sessionStorage.removeItem(ACTIVE_JOB_AT_KEY)
     })
@@ -1529,28 +1628,18 @@ export default function App() {
       <a className="skiplink" href="#main-content">Skip to main content</a>
       <header>
         <div className="brand"><Logo /><h1 className="sub">Accessibility Platform</h1>
-          {/* The version's DATE is Pacific (deploy.sh BUILD_TZ); fmtStamp renders the build
-              instant in the viewer's zone. Tag it so the two never read as contradictory. */}
-          <span className="muted" title={`Version dated in Pacific time · built ${fmtStamp(__BUILD_TIME__)} (your local time)`}
-                style={{ fontSize: 11, marginLeft: 10, fontFamily: 'ui-monospace, monospace', whiteSpace: 'nowrap' }}>
-            {void tick}v{platformVersion || __BUILD_VERSION__} PT · updated {timeAgo(__BUILD_TIME__)}
-          </span>
         </div>
-        <div className="userbox">
-          {me.role && <span className="chip" title={me.scope}>{me.role}</span>}
-          {rubric && me.allow?.includes('settings') && <span className="chip">{rubric.target} · rubric {rubric.hash.slice(0, 8)}</span>}
+        <div className="header-actions">
           {/* Process-health chip — visible only once a discovery run has completed. Shows
-              the highest-severity signal for the run: worker failure > unreadable files > healthy.
+              exceptions only: worker failure > unreadable files. Healthy is the quiet default.
               Uses allFiles (not files) so the type-filter never hides error-status rows from
               the count, and the indicator describes the full run rather than the current view. */}
           {run?.completed_at && (() => {
-            const unreadable = allFiles.filter(f => f.status === 'error').length
-            const workerError = run?.status === 'failed'
+            const unreadable = unreadableFiles
+            if (!workerError && unreadable === 0) return null
             const [chipColor, chipBg, chipLabel, chipTip] = workerError
               ? ['#7A271A', '#FEF3F2', 'Worker error', 'Assessment stopped due to a processing failure. Some files were not scored.']
-              : unreadable > 0
-              ? ['#6B3A00', '#FFF7E6', `${unreadable} unreadable`, `${unreadable} file${unreadable !== 1 ? 's' : ''} could not be opened and were skipped.`]
-              : ['#074D31', '#ECFDF3', 'Healthy', 'All files were processed successfully.']
+              : ['#6B3A00', '#FFF7E6', `${unreadable} unreadable`, `${unreadable} file${unreadable !== 1 ? 's' : ''} could not be opened and were skipped.`]
             return (
               <span title={chipTip} style={{
                 fontSize: 11, fontWeight: 700, letterSpacing: '0.04em',
@@ -1563,33 +1652,43 @@ export default function App() {
               </span>
             )
           })()}
-          {/* Global mode (applies across scanning, explanations, and remediation). The
-              scan-only options (Deep scan, Queued) live on the Sources tab where you scan. */}
-          <PrivateAiBadge aiEnabled={aiEnabled} />
           <HitlBell />
-          <button
-            className={`wcag-toggle${wcagMode ? ' wcag-toggle--on' : ''}`}
-            onClick={() => setWcagMode(v => !v)}
-            title={wcagMode
-              ? 'High-contrast colours are on across every tab. Click to restore ACP’s standard colour palette.'
-              : 'Standard colours are on. Click to use ACP’s high-contrast colour palette across every tab.'}
-            aria-label={wcagMode
-              ? 'Use standard colour palette across every tab'
-              : 'Use high-contrast colour palette across every tab'}
-            aria-pressed={wcagMode}>
-            {wcagMode ? '◉ Contrast' : '◎ Contrast'}
-          </button>
-          <button
-            className={`ai-toggle${aiEnabled ? ' ai-toggle--on' : ''}`}
-            onClick={() => setAiEnabled(v => !v)}
-            title={aiEnabled
-              ? 'AI is on across the whole platform — it helps explain findings and draft fixes. Click to turn AI off (rules-only mode; AI-dependent fixes route to human review).'
-              : 'AI is off — everything runs on the deterministic rules engine only. Click to turn AI back on.'}
-            aria-pressed={aiEnabled}>
-            {aiEnabled ? '✦ AI on' : '◻ AI off'}
-          </button>
-          <span className="user">{me.email}</span>
-          {me.allow?.includes('settings') && <button className="cogbtn" aria-label="Platform settings" title="Platform settings" onClick={() => setSettingsOpen(true)}>⚙</button>}
+          <details className="header-menu accessibility-menu">
+            <summary aria-label="Accessibility and AI preferences">
+              <span aria-hidden="true">◉</span> Accessibility
+            </summary>
+            <div className="header-menu-panel" role="group" aria-label="Accessibility and AI preferences">
+              <div className="header-menu-heading">Display and assistance</div>
+              <button className={`menu-setting${wcagMode ? ' menu-setting--on' : ''}`}
+                onClick={() => setWcagMode(v => !v)} aria-pressed={wcagMode}>
+                <span><b>High-contrast palette</b><small>Apply accessible colours across every tab</small></span>
+                <span aria-hidden="true">{wcagMode ? 'On' : 'Off'}</span>
+              </button>
+              <button className={`menu-setting${aiEnabled ? ' menu-setting--on' : ''}`}
+                onClick={() => setAiEnabled(v => !v)} aria-pressed={aiEnabled}>
+                <span><b>AI assistance</b><small>{aiEnabled ? 'Explanations and drafting enabled' : 'Deterministic rules only'}</small></span>
+                <span aria-hidden="true">{aiEnabled ? 'On' : 'Off'}</span>
+              </button>
+              <PrivateAiBadge aiEnabled={aiEnabled} />
+            </div>
+          </details>
+          <details className="header-menu account-menu">
+            <summary aria-label={`Account menu for ${me.email}`}>
+              <span className="account-avatar" aria-hidden="true">{(me.name || me.email || '?').split(/\s|@/).filter(Boolean).slice(0, 2).map(s => s[0]).join('').toUpperCase()}</span>
+              <span className="account-chevron" aria-hidden="true">⌄</span>
+            </summary>
+            <div className="header-menu-panel account-panel">
+              <div className="account-identity">
+                <b>{me.name || me.email}</b>
+                <span>{me.email}</span>
+              </div>
+              {me.role && <div className="account-meta"><span>Role</span><b>{me.role}</b></div>}
+              {rubric && <div className="account-meta"><span>Rubric</span><b>{rubric.target} · {rubric.hash.slice(0, 8)}</b></div>}
+              <div className="account-meta"><span>Build</span><b title={`Built ${fmtStamp(__BUILD_TIME__)} (your local time)`}>
+                {void tick}v{platformVersion || __BUILD_VERSION__} PT · {timeAgo(__BUILD_TIME__)}
+              </b></div>
+              <div className="menu-separator" />
+              {me.allow?.includes('settings') && <button className="menu-action" aria-label="Platform settings" onClick={() => setSettingsOpen(true)}>⚙ <span>Settings</span></button>}
           {/* SWITCH ACCOUNT — a full teardown, then the sign-in screen, which now asks Google
               and Microsoft for an account chooser rather than reusing the browser's single
               signed-in session.
@@ -1601,7 +1700,7 @@ export default function App() {
               account while reading another's Drive, with the scans owned by the first — the
               wrong half of a switch, and invisible. So this does the same complete teardown as
               sign out and differs only in saying what it is for. */}
-          <button className="ghost small" title="Sign out and choose a different Google or Microsoft account"
+              <button className="menu-action" title="Sign out and choose a different Google or Microsoft account"
                   onClick={async () => {
             // Best-effort: clear the running scan's backend token store so the worker
             // doesn't keep credentials that are about to become invalid.
@@ -1610,8 +1709,8 @@ export default function App() {
             clearActivityStorage()
             try { sessionStorage.clear() } catch { /* ignore */ }
             window.location.reload()
-          }}>switch account</button>
-          <button className="ghost small" onClick={async () => {
+              }}>⇄ <span className="menu-action-label">switch account</span></button>
+              <button className="menu-action menu-action--danger" onClick={async () => {
             // Best-effort: clear the running scan's backend token store so the worker
             // doesn't keep credentials that are about to become invalid.
             try { const a = await getActiveScan(); if (a?.id) await clearScanTokens(a.id) } catch { /* ignore */ }
@@ -1621,7 +1720,9 @@ export default function App() {
             // on this browser — no scan, decisions, assess phase, or files survive.
             try { sessionStorage.clear() } catch { /* ignore */ }
             window.location.reload()
-          }}>sign out</button>
+              }}>↪ <span className="menu-action-label">sign out</span></button>
+            </div>
+          </details>
         </div>
       </header>
       {backendDown && (() => {
@@ -1696,11 +1797,35 @@ export default function App() {
           </button>
         </div>
       )}
-      {me.scope && <div className="scopebar"><i className="scopedot" />access scope · <b>{me.scope}</b></div>}
+      <div className="header-context" aria-label="Current workspace context">
+        {me.scope && <span><i className="scopedot" /><b>{me.scope}</b></span>}
+        {rubric && <span><b>{rubric.target}</b></span>}
+        {allFiles.length > 0 && <span><b>{allFiles.length.toLocaleString()}</b> documents</span>}
+        {/* ✓ Verified is the healthy state, which this header now reports by SILENCE in the chip
+            row above — so it has to mean the same thing the chip's absence means, or the header
+            contradicts itself. Gated on `run.status !== 'failed'` alone it did not: a run with
+            unreadable files showed the amber "N unreadable" chip AND "✓ Verified" at the same
+            time, one saying documents were skipped and the other that everything checked out.
+            The chip was always a single highest-severity signal (worker error > unreadable >
+            healthy); moving the healthy end of it down here has to preserve that ordering. */}
+        {run?.completed_at && !workerError && unreadableFiles === 0 && (
+          <span className="context-verified">✓ Verified</span>
+        )}
+      </div>
 
       <nav aria-label="Compliance workflow">
         <div className="tabs" role="tablist" aria-label="Compliance workflow">
-          {TABS.filter(([k]) => !me.allow || me.allow.includes(k)).map(([k, label, rg, step]) => {
+          {/* ONE MECHANISM, NOT TWO. #1287 opened every tab to every signed-in user by deleting
+              the legacy `me.allow` persona filter from this line; the owner's 2026-09-04 decision
+              replaces that blanket opening with a REASON — every signed-in user holds the default
+              Platform User role, which grants every current tab (api/workspace_rbac.py).
+
+              So the filter stays gone and this reads only the server's answer. The difference is
+              that the openness is now something a role says and an administrator can narrow,
+              rather than a property of the navigation nobody can change; and it is enforced
+              server-side, which a tab filter never was. With RBAC off, `access` is null and
+              everything renders — the same as today. */}
+          {visibleTabs(access, TABS).map(([k, label, rg, step]) => {
             const stageDone = {
               // A scan record existing is not the same as discovery having FINISHED — `run` is
               // truthy the instant a scan starts (even mid-listing, `status='running'`), so `!!run`
@@ -1737,7 +1862,7 @@ export default function App() {
                       title={locked ? 'A scan or assessment is running — this step opens when it finishes' : rg}
                       className={`tab${view === k ? ' on' : ''}${done ? ' done' : ''}${step ? ' stepTab' : ''}${locked ? ' locked' : ''}`}
                       onKeyDown={handleWorkflowTabKeyDown}
-                      onClick={() => setView(k)}>
+                      onClick={() => goToView(k)}>
                 {step > 0 && <span className="stepnum" aria-hidden="true">{done ? '✓' : step}</span>}
                 <span className="tablbl">{done && <span className="vh">completed: </span>}{label}</span>
                 <span className="rg">{rg}</span>
@@ -1970,6 +2095,15 @@ export default function App() {
       <main id="main-content" tabIndex={-1}>
       <div id="workflow-panel" role="tabpanel" aria-labelledby={`workflow-tab-${view}`}>
       <ErrorBoundary key={view}>
+      {/* PRD §10 — a tab the role does not include renders an explanation instead of its body.
+          Wrapping the whole panel rather than gating each `view === 'x'` branch is deliberate:
+          a per-branch check is one edit away from being forgotten on the next tab somebody adds,
+          and the branch that gets forgotten renders its real contents. This is presentation, not
+          protection — every route behind these tabs enforces its own capability server-side. */}
+      {!isVisible(access, view) ? (
+        <AccessRestricted access={access} tabKey={view} tabs={TABS} onGo={goToView}
+                          label={(TABS.find(([k]) => k === view) || [])[1]} />
+      ) : (<>
         {/* onScan/busy/tokens are threaded so Overview can offer the scan-scope editor after a
             scan exists. Before one, `placeholder` (EmptyState → ScanSetup) is the whole screen;
             without these the editor would still be reachable exactly once per workspace. */}
@@ -2004,7 +2138,7 @@ export default function App() {
              a single ad-hoc file without wiring a whole source. */
           onStop={() => stopScan(liveScanId)} me={me}
           onViewMonitor={() => { setMonitorFocusScanId(liveScanId || run?.id); setView('monitor') }}
-          onViewLiveOps={me?.allow?.includes('liveops') ? () => { setView('liveops'); window.scrollTo({ top: 0, behavior: 'smooth' }) } : undefined}
+          onViewLiveOps={() => { setView('liveops'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
           onOpenSource={(sourceKey) => { setPendingSourceOpen(sourceKey); setView('integrations'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />}
 
         {view === 'assess' && (run ? (
@@ -2145,13 +2279,13 @@ export default function App() {
             gate: assessGate when a scan exists but hasn't been assessed yet. */}
         {view === 'graph' && (run ? (assessed ? <Suspense fallback={<Loading />}><KnowledgeGraph files={files} scanId={run.id} /></Suspense> : assessGate) : placeholder)}
 
-        {/* Admin-only analytics — backend gate (_require_admin) mirrors the allow check */}
-        {view === 'analytics' && me.allow?.includes('analytics') && <AdminInsights me={me} />}
+        {/* Visible to every signed-in user under the temporary open-tab policy. The analytics
+            API remains the authority for the underlying estate-wide data. */}
+        {view === 'analytics' && <AdminInsights me={me} />}
 
-        {/* Admin-only live Azure traffic — its API and SSE endpoints independently enforce the
-            same admin boundary. Kept separate from historical Scan Analytics so operations are
-            visible in one click and do not start streaming until this tab is opened. */}
-        {view === 'liveops' && me.allow?.includes('liveops') &&
+        {/* Live Azure traffic is read-only and payload-sanitized. Its API and SSE endpoints still
+            require an authenticated user, and the stream starts only when this tab is opened. */}
+        {view === 'liveops' &&
           <Suspense fallback={<Loading />}><AdminLiveTraffic /></Suspense>}
 
         {/* ACP's own Accessibility Conformance Report (ADR 0047). No `run` gate: it is not about a
@@ -2167,9 +2301,14 @@ export default function App() {
           const label = { discover: '1 · Discover — classify the estate', assess: '2 · Assess — score vs WCAG',
                           remediate: '3 · Remediate — fix the issues', publish: '4 · Publish — certify what passes',
                           monitor: '5 · Monitor — keep it compliant' }
+          // PRD §10 — "Workflow calls to action must respect destination access." A hidden
+          // destination is skipped entirely rather than offered and refused on arrival, so
+          // "Continue to Remediate" cannot appear for someone who has no Remediate.
           let nxt = null
           for (let j = flow.indexOf(view) + 1; j < flow.length; j++) {
-            if (!me.allow || me.allow.includes(flow[j])) { nxt = flow[j]; break }
+            if ((!me.allow || me.allow.includes(flow[j])) && isVisible(access, flow[j])) {
+              nxt = flow[j]; break
+            }
           }
           // Same "is this tab's task done" signal the tab stepper uses — the CTA can't
           // advance until the current tab's own work is actually finished.
@@ -2185,12 +2324,18 @@ export default function App() {
               <span className="muted" style={{ fontSize: 13 }}>
                 {taskDone ? 'Done here? Continue →' : 'Finish this step to continue →'}
               </span>
+              {/* §10 again: "If a destination is view-only, wording changes from Start to View."
+                  The label promising work the user cannot do there is worse than no label — the
+                  button works, and it was wrong about what it does. */}
               <button disabled={!taskDone}
                       title={taskDone ? undefined : "Complete this tab's task before moving on"}
-                      onClick={() => { setView(nxt); window.scrollTo({ top: 0, behavior: 'smooth' }) }}>{label[nxt]} →</button>
+                      onClick={() => { goToView(nxt); window.scrollTo({ top: 0, behavior: 'smooth' }) }}>
+                {canOperate(access, nxt) ? label[nxt] : `View ${label[nxt].split(' — ')[0]}`} →
+              </button>
             </div>
           ) : null
         })()}
+      </>)}
       </ErrorBoundary>
       </div>
       </main>
@@ -2220,11 +2365,24 @@ export default function App() {
             .reduce((a, s) => a + (s.files || 0), 0)}
           hasDrive={hasDriveToken} hasSP={hasSPToken} canEditScope={scopeOwner !== false}
           scans={scanList}
-          onConfirm={(runScope) => { const { source, folder } = pendingScan; setPendingScan(null); doScan(source, folder, runScope) }}
+          onConfirm={(runScope) => {
+            const { source, folder, folders: preset } = pendingScan
+            setPendingScan(null)
+            // The wizard's own answer WINS when it has one: an operator who went on to pick
+            // specific folders gave a tighter boundary than the sites they started from, and
+            // overriding it with the preset would scan more than they asked for. `folders: []`
+            // is the wizard's "entire connected source" and is not an answer about sites, so the
+            // preset stands there — that is the ordinary multi-site path.
+            const chose = Array.isArray(runScope?.folders) && runScope.folders.length > 0
+            const rs = (preset && preset.length && !chose)
+              ? { ...(runScope || {}), folders: preset }
+              : runScope
+            doScan(source, folder, rs)
+          }}
           onCancel={() => setPendingScan(null)} />
       )}
       <ConfirmDialog />
-      {view !== 'liveops' && me?.allow?.includes('liveops') && <Suspense fallback={null}>
+      {view !== 'liveops' && <Suspense fallback={null}>
         <LiveOperationsNotifier onOpen={() => { setView('liveops'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
       </Suspense>}
       <VersionToast currentVersion={platformVersion} />

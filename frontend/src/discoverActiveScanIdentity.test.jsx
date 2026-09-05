@@ -101,6 +101,24 @@ describe('scan B submitted while scan A results are displayed', () => {
     const ids = getSourceStatus.mock.calls.map((c) => c[0])
     expect(ids.every((id) => id === DISPLAYED)).toBe(true)
   })
+
+  it('does not paint scan B live state over a historical completed scan A', async () => {
+    const c = await render({
+      scanId: DISPLAYED,
+      activeScanId: ACTIVE,
+      scanList: [{ id: ACTIVE }, { id: DISPLAYED }],
+      run: { id: DISPLAYED, source: 'sharepoint', status: 'discovered',
+        discovered_at: '2026-09-04T20:00:00Z' },
+      scope: { kind: 'site', inventory: { discovered: 235 }, sites: [] },
+      progress: { phase: 'listing', elapsed: 6949, files_found: 6201,
+        active_folders: ['OneDrive/root'], source: 'drive' },
+    })
+
+    expect(c.textContent).not.toMatch(/Discovering documents/i)
+    expect(c.textContent).not.toMatch(/6,201 found so far/i)
+    expect(c.textContent).not.toMatch(/OneDrive\/root/i)
+    expect(c.textContent).toMatch(/235/)
+  })
 })
 
 

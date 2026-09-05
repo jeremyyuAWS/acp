@@ -224,11 +224,54 @@ class OllamaVisionProvider:
 # 'environment_managed' when a ref is set (the enterprise "this is your key in your vault" answer).
 
 def _resolve_key(cfg: dict) -> str | None:
-    """The actual API key for a provider, read from the ops-provisioned environment secret named by
-    `key_secret_ref`. Internal — only an adapter calls this, never a route or the UI. Returns None
-    when unconfigured or the secret isn't present (→ provider stays inert, routes to local + human)."""
+    """The actual API key for a provider, read from the secret named by `key_secret_ref`.
+
+    Two kinds of name, one field (api/secret_store.py):
+      * an environment variable — the original, ops-provisioned design; unchanged;
+      * `keyvault:<name>` — a secret this product wrote to the deployment's Key Vault, resolved
+        through a short-lived cache so the AI request path does not make a vault round-trip per
+        call.
+
+    Internal — only an adapter calls this, never a route or the UI. Returns None when unconfigured
+    or the secret isn't present (→ provider stays inert, routes to local + human)."""
     ref = (cfg or {}).get("key_secret_ref")
-    return os.environ.get(ref) if ref else None
+    if not ref:
+        return None
+    import secret_store                    # noqa: PLC0415 - avoids an import cycle at module load
+    if secret_store.is_vault_ref(ref):
+        return secret_store.read_ref(ref)
+    return os.environ.get(ref)
+
+
+def credential_source_for(ref: str | None) -> str:
+    """Who owns the secret behind a reference — for an admin reading the Settings page, and never
+    a statement about its value."""
+    if not ref:
+        return "not_configured"
+    import secret_store                    # noqa: PLC0415
+    return "key_vault" if secret_store.is_vault_ref(ref) else "environment_managed"
+
+
+def credential_for(provider: str) -> tuple[str | None, str]:
+    """A provider's API key and the NAME it was read from — the supported way for code outside
+    this module to reach an ops-provisioned credential.
+
+    Returns `(key_or_None, source)` where source is the secret's reference name, or
+    `"not_configured"` when the Settings page has no `key_secret_ref` for this provider, or
+    `"secret_absent:<REF>"` when it names one that is not present in this environment. The
+    SOURCE is always safe to print; the key never is.
+
+    Exists because the evals kit (evals/candidates.py) needs the same credential the product
+    uses, and the alternative was a second place to configure a key — one that fails silently
+    when an ops team provisions it under a name of their own choosing, which is exactly what
+    `key_secret_ref` exists to allow. Callers must not log or persist the first element.
+    """
+    cfg = _config_for(provider)
+    ref = (cfg.get("key_secret_ref") or "").strip()
+    if not ref:
+        return None, "not_configured"
+    val = _resolve_key(cfg)
+    return (val, ref) if val else (None, f"secret_absent:{ref}")
 
 
 def provider_view(cfg: dict) -> dict:
@@ -243,8 +286,11 @@ def provider_view(cfg: dict) -> dict:
         "deployment": cfg.get("deployment") or "",
         "model": cfg.get("model") or "",
         "key_secret_ref": ref,                       # the NAME only, never the value
-        "key_present": bool(os.environ.get(ref)) if ref else False,
-        "credential_source": "environment_managed" if ref else "not_configured",
+        # Resolved through _resolve_key rather than os.environ directly, so a vault-backed
+        # credential reports "present" on the page that an admin uses to check exactly that.
+        # Before this, a key written to the vault read as absent and the provider looked broken.
+        "key_present": bool(_resolve_key(cfg or {})) if ref else False,
+        "credential_source": credential_source_for(ref),
         "zone": zone_for_url(cfg.get("endpoint") or "") if cfg.get("endpoint") else "cloud",
         "updated_at": cfg.get("updated_at"),
         "updated_by": cfg.get("updated_by"),
@@ -445,6 +491,157 @@ class OpenAIVisionProvider:
                        latency_ms=int((time.monotonic() - t0) * 1000), ok=True, cost_usd=cost,
                        prompt_tokens=usage.get("prompt_tokens"),
                        completion_tokens=usage.get("completion_tokens"))
+
+
+class GeminiVisionProvider:
+    """Google Gemini vision via Gemini's OpenAI-compatible chat-completions endpoint.
+
+    Gemini exposes the same request/response shape as OpenAI's `/v1/chat/completions`, so this
+    class is structurally identical to OpenAIVisionProvider — the difference is the default
+    endpoint and the provider name used in metrics. `zone='cloud'` because
+    generativelanguage.googleapis.com is a public Google service (ADR 0016). The key rides only
+    in the Authorization header; no secret is stored, logged, or returned.
+    """
+
+    def __init__(self, api_key: str, *, model: str, endpoint: str | None = None):
+        self.endpoint = (endpoint or "https://generativelanguage.googleapis.com/v1beta/openai").rstrip("/")
+        self._key = api_key
+        self.model = model
+        self.name = "gemini"
+        self.zone = zone_for_url(self.endpoint)
+
+    def generate(self, prompt: str, image_bytes: bytes, *, model: str | None = None,
+                 timeout: float = 120.0) -> dict:
+        import base64
+        mdl = model or self.model
+        t0 = time.monotonic()
+        url = f"{self.endpoint}/chat/completions"
+
+        def _fail(reason: str) -> dict:
+            return _result(text=None, model=mdl, provider=self.name, zone=self.zone,
+                           latency_ms=int((time.monotonic() - t0) * 1000), ok=False, reason=reason)
+
+        try:
+            import httpx
+            b64 = base64.b64encode(image_bytes).decode("ascii")
+            body = {
+                "model": mdl,
+                "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                ]}],
+                "max_tokens": 128, "temperature": 0.2,
+            }
+            r = httpx.post(url, json=body, headers={"Authorization": f"Bearer {self._key}"},
+                           timeout=timeout)
+            r.raise_for_status()
+            data = r.json() or {}
+            choice = (data.get("choices") or [{}])[0]
+            text = ((choice.get("message") or {}).get("content", "") or "").strip()
+        except Exception as e:
+            reason, detail = _classify(e)
+            _log_failure(self.name, mdl, url, detail)
+            return _fail(reason)
+        if not text:
+            _log_failure(self.name, mdl, url,
+                         "model returned empty — HTTP 200 with empty content "
+                         f"(finish_reason={choice.get('finish_reason')!r}, "
+                         f"usage={data.get('usage') or {}}).")
+            return _fail(REASON_EMPTY)
+        usage = data.get("usage") or {}
+        price = _price_for(mdl)
+        cost = 0.0
+        if price:
+            cost = round(usage.get("prompt_tokens", 0) / 1e6 * price[0]
+                         + usage.get("completion_tokens", 0) / 1e6 * price[1], 6)
+        return _result(text=text, model=mdl, provider=self.name, zone=self.zone,
+                       latency_ms=int((time.monotonic() - t0) * 1000), ok=True, cost_usd=cost,
+                       prompt_tokens=usage.get("prompt_tokens"),
+                       completion_tokens=usage.get("completion_tokens"))
+
+
+class BedrockVisionProvider:
+    """AWS Bedrock vision via the Bedrock Runtime invoke_model API with SigV4 signing (boto3).
+
+    Targets Claude models on Bedrock (payload: Anthropic Messages format, bedrock-2023-05-31
+    version). `zone='cloud'` — Bedrock is AWS infrastructure, bytes leave the network (ADR 0016).
+    The AWS secret access key rides only through boto3's SigV4 layer (never stored/logged/returned);
+    `aws_access_key_id` is an identifier, not the secret. `key_secret_ref` resolves the secret key.
+    Never raises → ok=False on failure.
+    """
+
+    def __init__(self, aws_access_key_id: str, aws_secret_access_key: str, *,
+                 region: str, model: str):
+        self._key_id = aws_access_key_id
+        self._secret = aws_secret_access_key
+        self.region = region
+        self.model = model
+        self.name = "bedrock"
+        self.zone = "cloud"   # Bedrock is always a public AWS endpoint
+
+    def generate(self, prompt: str, image_bytes: bytes, *, model: str | None = None,
+                 timeout: float = 120.0) -> dict:
+        import base64, json
+        mdl = model or self.model
+        t0 = time.monotonic()
+        url = f"https://bedrock-runtime.{self.region}.amazonaws.com/model/{mdl}/invoke"
+
+        def _fail(reason: str) -> dict:
+            return _result(text=None, model=mdl, provider=self.name, zone=self.zone,
+                           latency_ms=int((time.monotonic() - t0) * 1000), ok=False, reason=reason)
+
+        try:
+            import boto3, botocore.exceptions
+            client = boto3.client(
+                "bedrock-runtime",
+                region_name=self.region,
+                aws_access_key_id=self._key_id,
+                aws_secret_access_key=self._secret,
+            )
+            b64 = base64.b64encode(image_bytes).decode("ascii")
+            body = {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 128,
+                "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image", "source": {
+                        "type": "base64", "media_type": "image/png", "data": b64,
+                    }},
+                ]}],
+            }
+            resp = client.invoke_model(
+                modelId=mdl,
+                body=json.dumps(body),
+                contentType="application/json",
+                accept="application/json",
+            )
+            data = json.loads(resp["body"].read()) or {}
+            content = data.get("content") or []
+            text = ""
+            for block in content:
+                if block.get("type") == "text":
+                    text = (block.get("text") or "").strip()
+                    break
+        except Exception as e:
+            reason, detail = _classify(e)
+            _log_failure(self.name, mdl, url, detail)
+            return _fail(reason)
+        if not text:
+            _log_failure(self.name, mdl, url,
+                         "model returned empty — invoke_model 200 with no text block "
+                         f"(stop_reason={data.get('stop_reason')!r}, "
+                         f"usage={data.get('usage') or {}}).")
+            return _fail(REASON_EMPTY)
+        usage = data.get("usage") or {}
+        price = _price_for(mdl)
+        cost = 0.0
+        if price:
+            cost = round(usage.get("input_tokens", 0) / 1e6 * price[0]
+                         + usage.get("output_tokens", 0) / 1e6 * price[1], 6)
+        return _result(text=text, model=mdl, provider=self.name, zone=self.zone,
+                       latency_ms=int((time.monotonic() - t0) * 1000), ok=True, cost_usd=cost,
+                       prompt_tokens=usage.get("input_tokens"),
+                       completion_tokens=usage.get("output_tokens"))
 
 
 class AnthropicVisionProvider:
@@ -695,6 +892,8 @@ _REQUIRED_FIELDS = {
     "azure_openai": ("endpoint", "deployment"),
     "openai": ("model",),
     "anthropic": ("model",),
+    "gemini": ("model",),
+    "bedrock": ("model", "region", "aws_access_key_id"),
     "huggingface": ("endpoint", "model"),
 }
 
@@ -852,6 +1051,16 @@ def _adapter_for(provider: str, cfg: dict) -> VisionProvider | None:
         if not (key and cfg.get("model")):
             return None
         return AnthropicVisionProvider(key, model=cfg.get("model"), endpoint=cfg.get("endpoint"))
+    if provider == "gemini":
+        if not (key and cfg.get("model")):
+            return None
+        return GeminiVisionProvider(key, model=cfg.get("model"), endpoint=cfg.get("endpoint"))
+    if provider == "bedrock":
+        region = cfg.get("region")
+        key_id = cfg.get("aws_access_key_id")
+        if not (key and region and key_id and cfg.get("model")):
+            return None
+        return BedrockVisionProvider(key_id, key, region=region, model=cfg.get("model"))
     if provider == "huggingface":
         endpoint = cfg.get("endpoint")
         if not (key and endpoint and cfg.get("model")):

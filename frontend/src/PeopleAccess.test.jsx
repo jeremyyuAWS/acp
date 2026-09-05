@@ -13,7 +13,16 @@ const getPeople = vi.fn(() => Promise.resolve({
 const addPerson = vi.fn((person) => Promise.resolve({ person: { ...person, status: 'access_ready' } }))
 const updatePerson = vi.fn((email, patch) => Promise.resolve({ person: { email, provider: 'microsoft', role: 'user', ...patch } }))
 const removePerson = vi.fn(() => Promise.resolve({ people: [] }))
-vi.mock('./api.js', () => ({ getPeople, addPerson, updatePerson, removePerson }))
+// The workspace-role calls PeopleAccess makes for its role column (PRD §9). This mock is not
+// partial, so an omitted export is `undefined` at the call site and the component throws from
+// inside an effect — which reads as four unrelated assertion failures rather than as a missing
+// mock. `getWorkspaceRoles` resolving to no roles is also the state these tests want: they are
+// about onboarding, and the role column correctly does not render when there is nothing to pick.
+const getWorkspaceRoles = vi.fn(async () => ({ roles: [], enforced: false }))
+const assignWorkspaceRole = vi.fn(async () => ({}))
+const roleImpact = vi.fn(async () => ({ gains: [], loses: [] }))
+vi.mock('./api.js', () => ({ getPeople, addPerson, updatePerson, removePerson,
+                             getWorkspaceRoles, assignWorkspaceRole, roleImpact }))
 
 const PeopleAccess = (await import('./PeopleAccess.jsx')).default
 afterEach(() => { unmountAll(); vi.clearAllMocks() })

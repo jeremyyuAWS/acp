@@ -93,6 +93,8 @@ export function auditEvent(e) {
     title: e.title || '',
     detail: e.detail || '',
     ruleId: e.rule_id || e.ruleId || null,
+    correlationId: e.correlation_id || e.correlationId || null,
+    runId: e.run_id || e.runId || null,
     changed: CHANGED.has(kind),
     by: named ? actor : (model || AGENT[kind] || 'ACP'),
     // An `ai` row's model comes off the persisted title, so naming it is recorded, not derived.

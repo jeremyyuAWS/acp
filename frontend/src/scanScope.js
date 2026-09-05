@@ -25,6 +25,44 @@
 
 const plural = (n) => (n === 1 ? 'document' : 'documents')
 
+// The SharePoint sites a scan covered, newest shape first.
+//
+// `scope.sites` is `[{id, name}, …]` and is written whenever any site was chosen — including a
+// one-site run, so a reader can ask one question instead of branching on how many there were.
+// `scope.site`/`site_name` remain the singular spelling and are all that exists on every scan
+// recorded before multi-site: read them as a list of one rather than treating a historical run
+// as boundary-less, which would render its count with no boundary at all — the defect at the top
+// of this file.
+export function scopeSites(scope) {
+  if (!scope) return []
+  if (Array.isArray(scope.sites) && scope.sites.length) {
+    return scope.sites.filter(Boolean).map((s) => ({
+      id: s.id, name: s.name || null, status: s.status || null,
+      listed: Number.isFinite(s.listed) ? s.listed : null,
+    }))
+  }
+  return scope.site ? [{ id: scope.site, name: scope.site_name || null,
+                         status: null, listed: null }] : []
+}
+
+// SELECTED is not COVERED, and the difference is the whole point of recording a status per site.
+// A site the token could not read, or that the cap or the file budget never reached, is still on
+// the scope — that is what makes "no site was silently omitted" checkable — but naming it in the
+// boundary would claim its documents were counted. So the label reads the covered set and the
+// sentence reports the rest.
+//
+// A row with NO status is a scan recorded before per-site statuses existed, or the singular
+// `site` read as a list of one. Those were all covered, by construction: the run had one site
+// and it completed or the scan failed outright.
+const UNREAD = new Set(['blocked', 'skipped'])
+export const scopeSitesCovered = (scope) => scopeSites(scope).filter((s) => !UNREAD.has(s.status))
+export const scopeSitesUnread = (scope) => scopeSites(scope).filter((s) => UNREAD.has(s.status))
+
+// Names for a phrase, in the reader's terms: “Finance”, “HR” — falling back to the count when
+// Graph would not hand over a display name (a token can read a site's drives while the tenant
+// refuses the site metadata read; see scanner._sp_site_name).
+const siteNames = (scope) => scopeSitesCovered(scope).map((s) => s.name).filter(Boolean)
+
 // Does this scan admit to a boundary narrower than "your whole estate"? Drives the callout —
 // the case a reader needs told, rather than merely available.
 export function isNarrowScope(scope) {
@@ -50,7 +88,11 @@ export function isNarrowScope(scope) {
   // the 2026-07-30 defect at the top of this file, with the source swapped again. A new
   // narrowing mode gets to re-introduce it for free unless it says so here.
   if (Array.isArray(scope.folders) && scope.folders.length > 0) return true
-  return (scope.kind === 'folder' || !!scope.site || !!scope.truncated
+  // `scopeSites(...).length`, not `scope.site`: a MULTI-site run has no singular `site`, so
+  // keying off that field alone made a three-site scan — a narrower boundary than one site is
+  // wide — render with no ⚠ and no boundary, exactly as a whole-tenant scan would. Thirty sites
+  // out of a tenant's four hundred is still not "your estate".
+  return (scope.kind === 'folder' || scopeSites(scope).length > 0 || !!scope.truncated
           || (Number(scope.skipped_out_of_scope) || 0) > 0)
 }
 
@@ -88,14 +130,42 @@ export function scopeLabel(scope) {
         // boundary the scan did not have.
         const picked = (scope.folders || []).map((f) => f && f.name).filter(Boolean)
         if (picked.length) {
-          const where = scope.site_name ? ` on “${scope.site_name}”` : ' in OneDrive'
+          // " in OneDrive" only when there really is no site. A multi-site run has no singular
+          // `site_name`, so keying off that field alone put "in OneDrive" on folders that live in
+          // a SharePoint library — naming the wrong source, which is the failure the branch below
+          // was written to stop.
+          const on = scopeSites(scope)
+          const where = scope.site_name ? ` on “${scope.site_name}”`
+            : on.length === 1 && on[0].name ? ` on “${on[0].name}”`
+            : on.length ? ` on ${on.length} SharePoint sites`
+            : ' in OneDrive'
           return `in ${picked.map((n) => `“${n}”`).join(', ')}${where}`
         }
       }
-      if (!scope.site) return 'across your OneDrive'
-      return scope.site_name
-        ? `in the SharePoint site “${scope.site_name}”`
-        : 'in one SharePoint site'
+      {
+        // Sites NAME THEMSELVES rather than collapsing to "across 3 SharePoint sites", for the
+        // same reason chosen Drive folders do above: the reader's question is WHICH parts of the
+        // estate this covers, and a bare count answers "how many boundaries" instead.
+        const selected = scopeSites(scope)
+        if (!selected.length) return 'across your OneDrive'
+        const sites = scopeSitesCovered(scope)
+        // Every selected site unreadable. "In 0 sites" is the honest phrase and the one a reader
+        // can act on; naming the sites that were asked for would claim documents were counted in
+        // them, which is the direction that overstates coverage.
+        if (!sites.length) return `in 0 of ${selected.length} selected SharePoint sites`
+        const named = siteNames(scope)
+        if (sites.length === 1) {
+          return named[0] ? `in the SharePoint site “${named[0]}”` : 'in one SharePoint site'
+        }
+        // A partly-named set says how many it could not name rather than listing a shorter set
+        // as though it were the whole boundary.
+        if (named.length === sites.length) {
+          return `in the SharePoint sites ${named.map((n) => `“${n}”`).join(', ')}`
+        }
+        return named.length
+          ? `in ${sites.length} SharePoint sites, including ${named.map((n) => `“${n}”`).join(', ')}`
+          : `in ${sites.length} SharePoint sites`
+      }
     case 'local':
       return 'in the local corpus'
     default:
@@ -123,13 +193,31 @@ export function scopeSentence(scope, count) {
       scope.folders_walked > 1 ? `; this folder and its ${scope.folders_walked - 1} subfolder${scope.folders_walked === 2 ? '' : 's'} were` : ''
     }.`
   }
-  if (scope.kind === 'sharepoint' && scope.site) {
+  if (scope.kind === 'sharepoint' && scopeSites(scope).length) {
     // The folder clause's counterpart, and unconditional for the same reason: the reader's
-    // question is "is this my estate?", and one site is not, at any size. Said as "other sites"
-    // rather than "your whole SharePoint" because there is no scan that covers every site —
-    // _sp_list takes one site or OneDrive — so promising a wider one would be a lie about a
-    // button that does not exist.
+    // question is "is this my estate?", and a chosen set of sites is not, at any size or count.
+    // Said as "other sites" rather than "your whole SharePoint" because there is still no scan
+    // that covers every site — the selection is capped (ACP_SP_MAX_SITES) — so promising a wider
+    // one would be a lie about a button that does not exist.
     s += ' Documents on other SharePoint sites, and in your OneDrive, were not scanned.'
+  }
+  if (scope.kind === 'sharepoint') {
+    // WHY the listing is a floor, which `truncated` alone does not say. The distinction the
+    // operator acts on: this is not a file cap they can wait out, it is sites that were never
+    // read — because the token could not, or because the site cap or the file budget stopped
+    // short — and the fix is a permission, a higher limit, or a second scan.
+    //
+    // Falls back to `sites_omitted` for a scan recorded before per-site statuses existed, where
+    // the count is all there is.
+    const unread = scopeSitesUnread(scope)
+    const n = unread.length || Number(scope.sites_omitted) || 0
+    if (n > 0) {
+      const named = unread.map((x) => x.name).filter(Boolean)
+      s += ` ${n} further site${n === 1 ? '' : 's'} you selected ${
+        n === 1 ? 'was' : 'were'} not read${
+        named.length === n ? ` (${named.map((x) => `“${x}”`).join(', ')})` : ''
+      }, so this is a floor rather than the whole selection.`
+    }
   }
   // An exclusion makes the scan cover LESS than its included paths imply. Two runs of the same
   // folder, one with an Archive carve-out, otherwise render identical boundaries and different
@@ -182,8 +270,19 @@ export function scopeChip(scope) {
   // Before `truncated`, because a site scan that also hit its cap is still most usefully
   // identified by WHICH site — the folder branch above takes the same precedence for the same
   // reason, and `truncated` still reaches the sentence and the ⚠ either way.
-  if (scope.kind === 'sharepoint' && scope.site) {
-    return { text: scope.site_name ? `🏢 ${scope.site_name}` : '🏢 one site', narrow: true }
+  {
+    const selected = scopeSites(scope)
+    if (scope.kind === 'sharepoint' && selected.length) {
+      const covered = scopeSitesCovered(scope)
+      // "2 of 3 sites" in a list row, because the scan-history table is exactly where a partial
+      // estate scan gets compared against a complete one and read as a shrinking estate.
+      if (selected.length > 1) {
+        return { text: covered.length === selected.length
+          ? `🏢 ${selected.length} sites`
+          : `🏢 ${covered.length} of ${selected.length} sites`, narrow: true }
+      }
+      return { text: selected[0].name ? `🏢 ${selected[0].name}` : '🏢 one site', narrow: true }
+    }
   }
   if (scope.truncated) return { text: 'partial listing', narrow: true }
   if (scope.kind === 'drive') return { text: 'whole Drive', narrow: false }

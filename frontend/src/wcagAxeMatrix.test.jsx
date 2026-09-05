@@ -63,6 +63,17 @@ vi.mock('./api.js', () => ({
   addPerson:          vi.fn(() => Promise.resolve({})),
   updatePerson:       vi.fn(() => Promise.resolve({})),
   removePerson:       vi.fn(() => Promise.resolve({ people: [] })),
+  // Workspace roles (PRD §13). PeopleAccess reads these to offer the role column; this mock is
+  // NOT partial, so an export it omits is `undefined` at the call site and the component throws
+  // — which surfaced here as two failing axe assertions rather than as a missing-mock error,
+  // because the crash happens inside an effect.
+  getWorkspaceRoles:  vi.fn(() => Promise.resolve({ roles: [], enforced: false })),
+  getRoleCapabilities: vi.fn(() => Promise.resolve({ tabs: [], levels: [], grants: [], mine: [] })),
+  assignWorkspaceRole: vi.fn(() => Promise.resolve({})),
+  roleImpact:         vi.fn(() => Promise.resolve({ gains: [], loses: [] })),
+  createWorkspaceRole: vi.fn(() => Promise.resolve({})),
+  updateWorkspaceRole: vi.fn(() => Promise.resolve({})),
+  deleteWorkspaceRole: vi.fn(() => Promise.resolve({})),
   getAiCosts:         vi.fn(() => Promise.resolve([])),
   getAiProviders:     vi.fn(() => Promise.resolve([])),
   putAiProvider:      vi.fn(() => Promise.resolve({})),

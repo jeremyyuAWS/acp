@@ -72,11 +72,9 @@ body {
   color: var(--ink);
 }
 .app { max-width: 1320px; margin: 0 auto; padding: 28px 32px 64px; }
-.scopebar { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); margin: 8px 0 -4px; }
-.scopebar b { color: var(--ink); font-weight: 500; }
 .scopedot { width: 7px; height: 7px; border-radius: 50%; background: #639922; display: inline-block; }
 
-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 38px; }
 .brand { display: flex; align-items: center; gap: 12px; }
 .logoimg { height: 28px; width: auto; display: block; }
 .logoimg.big { height: 48px; margin: 0 auto; }
@@ -199,8 +197,14 @@ td { padding: 10px 0; border-top: 1px solid var(--line); }
 .scorecell { display: inline-flex; align-items: center; gap: 8px; }
 .scorecell > span:first-child { min-width: 22px; }
 
-.tabs { display: flex; gap: 6px; margin: 22px 0 4px; }
-.tab { background: #fff; color: var(--muted); border: 1px solid var(--line); border-radius: 9px; padding: 7px 14px; font-size: 14px; }
+.tabs { display: flex; gap: 6px; margin: 22px 0 4px; padding: 2px 2px 8px;
+  max-width: 100%; overflow-x: auto; overflow-y: hidden; overscroll-behavior-inline: contain;
+  scrollbar-width: thin; scrollbar-color: var(--plum) var(--line); scroll-snap-type: inline proximity;
+  -webkit-overflow-scrolling: touch; }
+.tabs::-webkit-scrollbar { height: 7px; }
+.tabs::-webkit-scrollbar-track { background: var(--line); border-radius: 999px; }
+.tabs::-webkit-scrollbar-thumb { background: var(--plum); border-radius: 999px; }
+.tab { flex: 0 0 auto; scroll-snap-align: start; background: #fff; color: var(--muted); border: 1px solid var(--line); border-radius: 9px; padding: 7px 14px; font-size: 14px; }
 .tab.on { background: var(--plum); color: #fff; border-color: var(--plum); }
 .tab.locked, .tab:disabled { opacity: 0.45; cursor: not-allowed; }
 
@@ -250,7 +254,50 @@ td { padding: 10px 0; border-top: 1px solid var(--line); }
 .pscope { font-size: 12px; }
 .psso { font-size: 12px; flex: 0 0 auto; }
 
-.userbox { display: flex; align-items: center; gap: 10px; }
+.header-actions { display: flex; align-items: center; gap: 8px; }
+.header-context { display: flex; align-items: center; gap: 0; min-height: 30px; margin: 8px 0 -10px;
+  color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow-x: auto; scrollbar-width: thin; }
+.header-context > span { display: inline-flex; align-items: center; gap: 6px; }
+.header-context > span + span::before { content: ''; width: 1px; height: 14px; margin: 0 12px; background: var(--line); }
+.header-context b { color: var(--ink); font-weight: 600; }
+.header-context .context-verified { color: #287A3C; font-weight: 650; }
+.header-menu { position: relative; }
+.header-menu > summary { list-style: none; display: inline-flex; align-items: center; gap: 7px; min-height: 32px;
+  padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--ink);
+  font-size: 12.5px; font-weight: 600; cursor: pointer; user-select: none; }
+.header-menu > summary::-webkit-details-marker { display: none; }
+.header-menu > summary:hover { background: var(--bg); }
+.header-menu[open] > summary { border-color: var(--plum); box-shadow: 0 0 0 1px var(--plum); }
+.header-menu-panel { position: absolute; z-index: 90; top: calc(100% + 7px); right: 0; width: 290px;
+  padding: 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--card);
+  box-shadow: 0 14px 36px rgba(49, 31, 47, .16); }
+.header-menu-heading { padding: 7px 8px 9px; color: var(--muted); font-size: 11px; font-weight: 700;
+  letter-spacing: .05em; text-transform: uppercase; }
+.menu-setting { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding: 10px; border: 0; border-radius: 8px; background: transparent; color: var(--ink); text-align: left; }
+.menu-setting:hover { background: var(--bg); opacity: 1; }
+.menu-setting > span:first-child { display: flex; flex-direction: column; gap: 2px; }
+.menu-setting b { font-size: 13px; }
+.menu-setting small { color: var(--muted); font-size: 11.5px; font-weight: 400; }
+.menu-setting > span:last-child { min-width: 34px; color: var(--muted); font-size: 11px; font-weight: 700; text-align: right; }
+.menu-setting--on > span:last-child { color: #287A3C; }
+.account-menu > summary { padding: 2px 7px 2px 3px; border: 0; background: transparent; }
+.account-avatar { width: 29px; height: 29px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; background: var(--plum); color: #fff; font-size: 11px; font-weight: 750; letter-spacing: .02em; }
+.account-chevron { color: var(--muted); font-size: 13px; }
+.account-panel { width: 300px; }
+.account-identity { display: flex; flex-direction: column; gap: 3px; padding: 9px 10px 12px; }
+.account-identity b { font-size: 14px; }
+.account-identity span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.account-meta { display: grid; grid-template-columns: 62px 1fr; gap: 8px; padding: 5px 10px; font-size: 11.5px; }
+.account-meta span { color: var(--muted); }
+.account-meta b { font-weight: 600; overflow-wrap: anywhere; }
+.menu-separator { height: 1px; margin: 8px 0; background: var(--line); }
+.menu-action { width: 100%; display: flex; align-items: center; gap: 9px; padding: 9px 10px; border: 0;
+  border-radius: 8px; background: transparent; color: var(--ink); text-align: left; font-size: 13px; }
+.menu-action:hover { background: var(--bg); opacity: 1; }
+.menu-action-label::first-letter { text-transform: uppercase; }
+.menu-action--danger { color: #8A2D25; }
 .user { font-size: 13px; color: var(--ink); }
 button.small { padding: 6px 12px; font-size: 13px; }
 .runinfo { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 5px 16px; background: var(--surface-1, #f7f6f3); border-bottom: 0.5px solid var(--line); font-size: 12px; }
@@ -1031,6 +1078,48 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .schednext { font-size: 12px; color: var(--ink); font-weight: 600; white-space: nowrap; }
 
 /* --- self-remediation (Remediate) --- */
+.remediation-comparison { margin-top: 18px; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.remediation-comparison > div { display: grid; grid-template-columns: minmax(90px, 22%) 1fr; gap: 14px; padding: 12px 14px; align-items: start; }
+.remediation-comparison > div + div { border-top: 1px solid var(--line); background: var(--surface-2, #f6f5f8); }
+.remediation-comparison b { font-size: 12px; }
+.remediation-comparison span { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13.5px; line-height: 1.5; }
+.remediation-change { padding: 0 2px; border-radius: 3px; color: inherit; background: #fff0b8; box-shadow: inset 0 -1px #b7791f; }
+.remediation-match-preview { margin: 8px 0 4px; padding-left: 20px; }
+.remediation-match-preview li { margin: 5px 0; }
+.remediation-match-preview b, .remediation-match-preview span { display: block; overflow-wrap: anywhere; }
+.remediation-match-preview span { color: var(--muted); margin-top: 1px; }
+.remediation-details-list { margin: 10px 0 0; }
+.remediation-details-list > div { display: grid; grid-template-columns: minmax(150px, 32%) 1fr; gap: 14px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.remediation-details-list dt { font-size: 12px; font-weight: 600; }
+.remediation-details-list dd { margin: 0; min-width: 0; overflow-wrap: anywhere; font-size: 12.5px; }
+.remediation-detail-actions { position: sticky; bottom: 0; z-index: 2; box-shadow: 0 -5px 14px rgba(31, 43, 58, .07); }
+.remediation-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+.remediation-filters select { min-width: 112px; max-width: 100%; padding: 4px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); font-size: 11.5px; }
+.remediation-shortcuts { margin-left: auto; font-size: 11.5px; }
+.remediation-shortcuts summary { cursor: pointer; font-weight: 600; }
+.remediation-shortcuts span { display: block; max-width: 300px; padding-top: 5px; color: var(--muted); line-height: 1.45; }
+.remediation-saved { margin-bottom: 8px; padding: 9px 12px; border: 1px solid #b9d6aa; border-radius: 8px; background: #edf7e8; color: #244d1d; font-size: 13px; animation: remediation-saved-in .18s ease-out; }
+.remediation-review-header { position: sticky; top: -18px; z-index: 3; margin: -18px -22px 0; padding: 18px 22px 10px; background: var(--bg, #fff); border-bottom: 1px solid transparent; }
+.remediation-copy-value { display: block; margin-top: 7px; font-size: 11.5px; }
+.documentaudit-loading { min-height: 72px; display: grid; place-items: center; color: var(--muted); font-size: 13px; }
+.remediation-complete { padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+.remediation-complete h3 { margin: 0 0 6px; }
+.remediation-complete-counts { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 12px 0; font-size: 13px; }
+.remediation-release-blocked { margin: 12px 0 0; }
+.audit-copy-correlation { display: block; margin-top: 4px; font-size: 11.5px; }
+@keyframes remediation-saved-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+@media (max-width: 520px) {
+  .remediation-comparison > div, .remediation-details-list > div { grid-template-columns: 1fr; gap: 4px; }
+  .remediation-detail-content { padding: 16px !important; }
+  .remediation-detail-actions > div { padding-left: 16px !important; padding-right: 16px !important; }
+}
+@media (prefers-reduced-motion: reduce) { .remediation-saved { animation: none; } }
+@media (forced-colors: active) {
+  .remediation-change, .remediation-saved, .remediation-complete { border: 1px solid CanvasText; background: Canvas; color: CanvasText; }
+  .remediation-change { text-decoration: underline; }
+  .rinbox-row[aria-current="true"] { outline: 2px solid Highlight; outline-offset: -2px; }
+}
+
 .qbtn.self { background: #fff; color: #185FA5; border-color: var(--line); }
 .qbtn.rescan { background: #185FA5; color: #fff; border-color: #185FA5; }
 .qbtn.rescan:disabled { opacity: 0.6; cursor: default; }
@@ -1127,8 +1216,10 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 }
 @media (max-width: 640px) {
   .app { padding: 14px 12px 48px; }
-  .userbox { flex-wrap: wrap; gap: 6px; row-gap: 4px; }
-  .userbox .user { font-size: 12px; }
+  .accessibility-menu > summary { width: 34px; padding: 0; justify-content: center; font-size: 0; }
+  .accessibility-menu > summary span { font-size: 13px; }
+  .header-menu-panel { position: fixed; top: 62px; left: 12px; right: 12px; width: auto; }
+  .header-context { margin-top: 6px; }
   .estatebar { flex-direction: column; align-items: flex-start; }
   .estatebar > button { align-self: stretch; }
   .planhead { flex-direction: column; }
@@ -1194,6 +1285,19 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 /* Rule-breakdown bars: pass bar #5FA83C = 2.78:1 (FAIL 1.4.11); skip bar #C7CCD6 = 1.53:1 (FAIL) */
 [data-wcag="on"] .rb-pass { background: #3D7527; } /* 5.27:1 on --bg */
 [data-wcag="on"] .rb-skip { background: #6B7280; } /* 4.58:1 on --bg */
+/* Icon buttons: color:#b7afbd (currentColor → SVG fill) = 2.13:1 on white (FAIL 1.4.11 ≥3:1).
+   In WCAG mode --muted is already tightened to #4d4551 (9.19:1); reference it directly. */
+[data-wcag="on"] .insighteye,
+[data-wcag="on"] .terminfo { color: var(--muted); }
+/* Upload step done-badge: white on #639922 = 3.44:1 — 11px text needs 4.5:1 (FAIL 1.4.3).
+   Darken to --success-fg-strong (#2F5310); white on #2F5310 = 8.4:1. */
+[data-wcag="on"] .upstep.done .upnum { background: var(--success-fg-strong); }
+/* Assess pipeline: active step indicator #4B861F on #F2F8EA = 4.10:1 (FAIL 1.4.3, need 4.5:1) */
+[data-wcag="on"] .assesslist li.active .alstate { color: var(--success-fg-strong); } /* #2F5310 on #F2F8EA = 8.2:1 */
+/* Coverage segment bars: review bar #e0900a on white = 2.57:1 (FAIL 1.4.11, need ≥3:1) */
+[data-wcag="on"] .seg-review { background: #8A5A00; } /* 5.93:1 on white */
+/* Verify-track progress bar: #BF8C00 on #faf8fb = 2.85:1 (FAIL 1.4.11); darken to match amber fix pattern */
+[data-wcag="on"] .verify-track > i { background: #7A5000; } /* 6.68:1 on --bg */
 .setoverlay { position: fixed; inset: 0; background: rgba(40, 30, 48, 0.38); backdrop-filter: blur(2px); z-index: 80; display: flex; align-items: flex-start; justify-content: center; padding: 36px 20px; overflow-y: auto; }
 .setpanel { background: var(--bg); border-radius: 16px; width: min(1360px, 97vw); box-shadow: 0 24px 64px rgba(30, 22, 34, 0.4); overflow: hidden; }
 .sethead { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 22px; background: var(--card); border-bottom: 1px solid var(--line); font-size: 15px; position: sticky; top: 0; }
@@ -2737,3 +2841,69 @@ html[data-wcag="on"] .wcag-toggle--on {
 .rem-worker-line{display:flex;gap:16px;flex-wrap:wrap;border-top:1px solid var(--line);padding-top:10px;margin-top:12px;font-size:12.5px;color:var(--muted)}
 @media(max-width:800px){.rem-live-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(prefers-reduced-motion:reduce){.rem-live-delta{animation:none}}
+
+/* Access restricted (PRD §10) — the panel a user sees in place of a tab their role does not
+   include. Deliberately plain: it is an explanation, not an error, and styling it as a failure
+   would tell people something has gone wrong when nothing has. */
+.access-restricted { display: block; max-width: 560px; margin: 32px auto; padding: 24px;
+  border: 1px solid var(--line); border-radius: 10px; text-align: center; }
+.access-restricted-hd { margin: 0 0 8px; font-size: 17px; }
+.access-restricted-why { margin: 0 0 16px; font-size: 13.5px; line-height: 1.5;
+  color: var(--fg, #1c1620); }
+.access-restricted-none { margin: 0; font-size: 12.5px; line-height: 1.5; }
+
+/* Roles administration (PRD §8). */
+.roles-not-enforced { margin-top: 14px; padding: 12px; border: 1px solid #E5C875;
+  border-radius: 9px; background: #FFF8E7; font-size: 13px; line-height: 1.5; }
+.roles-table { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.roles-row { display: grid; grid-template-columns: minmax(220px, 2fr) 90px 150px minmax(210px, 1fr);
+  gap: 12px; align-items: center; padding: 13px 14px; }
+.roles-chip { display: inline-block; margin-left: 7px; padding: 1px 6px; border-radius: 4px;
+  background: #ECE7EC; color: var(--plum); font-size: 10.5px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .03em; }
+.roles-drawer-scrim { position: fixed; inset: 0; z-index: 1000; background: rgba(24,18,25,.42);
+  display: flex; justify-content: flex-end; }
+/* A right-side drawer, per the PRD's own sketch — it keeps the role list visible behind it, so an
+   administrator comparing two roles does not lose their place. */
+.roles-drawer { width: min(560px, 100%); height: 100%; overflow-y: auto; padding: 24px;
+  background: var(--surface); box-shadow: -14px 0 44px rgba(0,0,0,.22); }
+.roles-field { display: grid; gap: 6px; margin-top: 14px; font-size: 13px; font-weight: 700; }
+.roles-field input { padding: 8px; font: inherit; font-size: 13px; font-weight: 400;
+  border: 1px solid var(--line); border-radius: 6px; }
+.roles-fieldset { border: 1px solid var(--line); border-radius: 9px; padding: 12px 14px;
+  margin: 20px 0 0; }
+.roles-fieldset legend { font-size: 12px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .04em; padding: 0 6px; }
+.roles-grid { width: 100%; border-collapse: collapse; font-size: 13px; }
+.roles-grid th[scope="col"] { font-size: 11.5px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .03em; padding: 4px 6px; text-align: center; }
+.roles-grid th[scope="row"] { text-align: left; font-weight: 400; padding: 5px 6px; }
+.roles-grid td { text-align: center; padding: 5px 6px; }
+.roles-grant { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; }
+.roles-warn { margin: 10px 0 0; padding: 9px 11px; border-radius: 7px; background: #FFF8E7;
+  border: 1px solid #E5C875; font-size: 12px; line-height: 1.5; }
+.people-role-cell { display: grid; gap: 4px; }
+.people-role-impact { font-size: 11.5px; line-height: 1.45; }
+
+/* Live Operations drawer — the "this is live" indicator. A slow opacity pulse on a dot that is
+   already legible without it: the connection state is also spelled out in text beside it, so the
+   animation carries no information of its own (WCAG 1.4.1). The global prefers-reduced-motion rule
+   at the top of this file neutralizes it, and LiveOpsDrawer additionally drops the class entirely
+   under reduced motion rather than relying on a 0.001ms duration. */
+@keyframes liveops-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+.liveops-pulse { animation: liveops-pulse 1.8s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .liveops-pulse { animation: none; opacity: 1; } }
+
+/* Live Operations map — the moving lines.
+   ReactFlow animates an active edge by marching its dash pattern (`.react-flow__edge.animated`).
+   The global prefers-reduced-motion rule near the top of this file only shortens animations to
+   0.001ms, which on an INFINITE animation is not calm — it is the same motion at an unbounded
+   frame rate. Stop it outright instead. Nothing is lost by doing so: an active line is also
+   drawn thicker and fully opaque (see flowEdge in AdminLiveTraffic.jsx), so "carrying work" is
+   legible without motion, in a screenshot, and to anyone who cannot perceive the dashes. */
+@media (prefers-reduced-motion: reduce) {
+  .react-flow__edge.animated path.react-flow__edge-path { animation: none !important; }
+}
+/* The stroke is 1.4-2.4px; ReactFlow's own interaction layer widens the hit area, and this makes
+   the pointer say so before the click. */
+.react-flow__edge.animated { cursor: pointer; }

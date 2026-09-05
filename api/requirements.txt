@@ -25,6 +25,13 @@ python-multipart==0.0.32
 # --- Google Drive source (keyless ADC) ---
 google-api-python-client==2.197.0
 google-auth==2.55.0
+# PINNED, and the pin is load-bearing. google-api-core 2.36.0 is the FIRST release to make
+# `opentelemetry-api>=1.44.0` a hard, non-extra dependency, and the Azure Monitor distro below
+# pins `opentelemetry-sdk~=1.43.0` — so 2.36.0 and Application Insights cannot both be satisfied.
+# 2.34.0 requires no opentelemetry-api at all, which removes the conflict rather than papering
+# over it. google-api-python-client 2.197.0 accepts >=1.31.5,<3.0.0, so this is well inside its
+# range. Revisit when the distro moves to opentelemetry 1.44+; then this pin can be dropped.
+google-api-core==2.34.0
 googleapis-common-protos==1.75.0
 
 # --- Azure Blob remediated-output store (ADR 0010) — managed-identity auth, no key ---
@@ -39,6 +46,16 @@ azure-mgmt-appcontainers==5.0.0
 # other packages — azure-mgmt-monitor's MonitorManagementClient.metrics.list() predates that
 # churn and is the stabler surface to build on.
 azure-mgmt-monitor==7.0.0
+# azure-monitor-query IS used, for LOGS only — and that is not a contradiction of the note above.
+# The churn described there removed MetricsQueryClient in 2.0.0; LogsQueryClient is the half of
+# that package the split left alone, and it is the only way to read a Log Analytics workspace.
+# Metrics still come from azure-mgmt-monitor, which is the stabler surface for them.
+#
+# OPT-IN AT RUNTIME: routes/control.py imports this lazily and only when
+# LOG_ANALYTICS_WORKSPACE_ID is set, so an install with no workspace configured never touches it.
+# Verified to resolve against this file's existing pins with nothing new pulled in beyond
+# azure-core, isodate and typing-extensions, all already present.
+azure-monitor-query==2.0.0
 
 # --- PDF analyser engine ---
 pikepdf==10.8.0
@@ -64,9 +81,27 @@ segno>=1.6  # pure-Python QR code generation (R15 verify-this-report)
 # --- observability (per-rule Langfuse spans; no-ops when env vars absent) ---
 langfuse>=2.0,<3.0
 
-# --- AI compliance-digest narrative + per-finding explanations: 100% local via the
-#     Ollama backend (OLLAMA_BASE_URL / OLLAMA_MODEL), with a deterministic-prose
-#     fallback. No commercial-LLM SDK or key — Anthropic/OpenAI are not used at all. ---
-
-# --- tests ---
-pytest==9.1.0
+# --- Application Insights (distributed traces) — api/telemetry.py ---
+# The Azure Monitor OpenTelemetry DISTRO rather than the raw exporter: it brings the SDK, resource
+# detection and the FastAPI/httpx/psycopg auto-instrumentation as one pinned set, which is the
+# difference between "traces exist" and "traces join across API → queue → worker → storage".
+#
+# Installed but INERT without APPLICATIONINSIGHTS_CONNECTION_STRING: telemetry.configure() does not
+# import it, let alone start an exporter, until one is set. Declared here so that turning tracing
+# on in production is an env-var change rather than a rebuild, and so CI exercises the import path.
+#
+# Its `opentelemetry-sdk~=1.43.0` pin is why google-api-core is held at 2.34.0 above. The two
+# constraints are a pair; changing either without the other reintroduces the conflict.
+azure-monitor-opentelemetry==1.8.9
+# The SDK, named explicitly even though the distro above already brings it. api/telemetry.py
+# imports `opentelemetry.sdk.trace.SpanProcessor` directly — the scrubber IS a SpanProcessor — so
+# this is a first-party dependency of ours, not a transitive one, and a package our own code
+# imports has to be declared. Leaving it implicit also made three tests skip silently in CI
+# (tests/test_undeclared_importorskip.py caught that): the ones that exercise the scrubber against
+# a real provider, which are the only place the "nothing that names a document leaves" rule is
+# tested end to end rather than against dictionaries.
+#
+# 1.43.0 is what azure-monitor-opentelemetry 1.8.9's own `~=1.43.0` already resolves to, so this
+# pin constrains nothing new today; it exists so a distro bump that moves the SDK fails here,
+# where the google-api-core note above explains why that matters, rather than silently.
+opentelemetry-sdk==1.43.0

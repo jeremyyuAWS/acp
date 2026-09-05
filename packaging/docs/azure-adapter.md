@@ -1,0 +1,146 @@
+# Who makes the document true?
+
+`azure-parity.md` wrote down what production runs. `azure-rebuild.md` derived a document that
+describes it. Neither answers the question those two make unavoidable: **nothing in this
+repository creates the Postgres server, the storage account, or the identity grants those
+documents describe.**
+
+That is not an oversight anybody made — `deploy/public/deploy.sh` says it outright, twice. The
+Blob account, the container, the app's identity and its role grant are *"one-time infra setup (not
+this script's job)"*. What makes it worth a document is the second half of the same comment, which
+says how the omission surfaces: *"else remediation blob writes 403 from the worker tier."* After
+deploy. Under load. On the tier with no ingress to check it from.
+
+Everything below the markers is generated from the deployment documents. Everything above is
+authored, because what an unowned requirement means is a judgement.
+
+## The declaration that had no consequence
+
+Slice 2 added `secrets.workloadIdentity` so a document could say what production actually does:
+reach Blob Storage through a managed identity, holding no credential. That was the right key and
+it shipped **inert**. A document could declare it, validate cleanly, render values, template the
+chart, and deploy onto a cluster where the identity did not exist.
+
+Making it true on AKS takes three resources, not one boolean:
+
+1. a user-assigned managed identity — one per reference, because a single identity holding every
+   grant makes each workload as privileged as the most privileged one;
+2. a federated credential binding it to one `(issuer, namespace, service account)` triple;
+3. a role assignment on the target resource — for Blob, the `Storage Blob Data Contributor` that
+   `deploy.sh` already names.
+
+Miss any one and the workload starts cleanly, passes every readiness probe, and returns 403 the
+first time it writes. The chart cannot catch it, `acpctl doctor` cannot catch it, and the
+declaration reads as configured on every screen that shows it. The requirements tables below
+decompose each declared identity into all three, which is the only form in which the omission is
+visible before it is a 403.
+
+## The connection ceiling changes direction
+
+The contract has an operator **type** a `maxConnections` and checks the fleet against it. That
+catches a server too small and cannot tell an adapter what to build.
+
+Here the demand is the input: this fleet needs N connections at maximum replicas, so provision a
+server that provides at least N — plus the fifteen a Postgres server spends on itself. That
+reserve is stated rather than folded into the demand because the two answer different questions:
+demand is what the application will take, the reserve is what was never available to it. A ceiling
+that clears the first and not the second passes `data.connection-budget` today, and the first
+connection a real server refuses is usually the `psql` session opened to investigate why
+connections are being refused. `acpctl validate` now warns in exactly that band.
+
+The same change fixed a message that had gone stale under slice 2's feet. The budget error used to
+say *"each replica's pool is ACP_WORKERS + 16"* and send the operator to lower `ACP_WORKERS` — a
+lever with no effect on a document that pins `connectionPool`, which is now every document
+describing production. It names the pinned tiers, and the direction to move them.
+
+## Backup retention has an owner now
+
+`azure-rebuild.md` left `backupRetentionDays` unstated and failed validation for it, because
+`deploy/public/` does not provision the Postgres server and no artifact in this repository owned
+the number. It is an adapter requirement, and where a document states none the requirement is
+rendered **UNDECIDED** rather than defaulted — an adapter that provisions a server without setting
+retention has left the decision to Azure, which is a decision nobody made.
+
+Retention is also where this document is careful about what it has achieved. A retention period is
+a number the contract can carry; whether a restore has ever been *performed* is not, and PRD §16
+wants both. An adapter that satisfies every row below has provisioned 35-day backups and has not
+demonstrated a recovery.
+
+## What this deliberately is not
+
+**It emits no Terraform or Bicep.** There is no `terraform`, `az` or `bicep` in the environment
+this was written in, so generated infrastructure code could not have been validated — and
+unvalidated IaC that looks runnable is worse than a requirements list that admits it is one. This
+is the specification an adapter author implements against.
+
+**It invents no vendor limits.** Azure's `max_connections` is a function of the server's SKU. That
+table is not reproduced here from memory; the requirement states the number to satisfy and marks
+the SKU choice `vendor`, so a reader can tell what was derived from what was looked up.
+
+<!-- BEGIN GENERATED: azure-adapter -->
+
+
+_Generated by `scripts/gen_azure_adapter.py` from the deployment documents in `packaging/`. Do not edit by hand._
+
+## Requirements per document
+
+Only documents that declare `platform: azure` — the adapter is Azure's, and AWS/GCP are phase 4.
+
+### `azure-current (derived from production)`
+
+Profile `standard`, postgres `managed`, 14 requirements.
+
+| Resource | Setting | Required | From | Why |
+|---|---|---|---|---|
+| `postgres` | `provisioning` | Azure Database for PostgreSQL Flexible Server | document | data.postgres.mode is managed |
+| `postgres` | `max_connections` | >= 97 | derived | the fleet's worst case at maximum replicas is 82 (acpctl.inventory.connection_budget, which mirrors api/store.py's db_max_conn per replica), plus 15 the server keeps for itself |
+| `postgres` | `sku` | one whose max_connections reaches the value above | vendor | Azure derives max_connections from the server's vCPU/memory tier, and this repository cannot check that table offline — so the requirement is stated as the number to satisfy rather than as a SKU name that would read as verified |
+| `postgres` | `backup.retentionDays` | UNDECIDED | document | the document states none. THIS IS THE GAP slice 2 could not close: deploy/public/ does not provision the server, so no artifact in this repository owned retention and the derived document had to leave it blank. The adapter owns it now, and an adapter that provisions a server without setting it has left the decision to Azure's default |
+| `redis` | `provisioning` | Azure Managed Redis | document | data.redis.mode is managed |
+| `blob` | `provisioning` | Storage account + container | document | data.objectStorage.mode is managed |
+| `cluster` | `oidcIssuer` | enabled | derived | secrets.workloadIdentity is non-empty; federated credentials are issued against the cluster's OIDC issuer URL and cannot exist without it |
+| `cluster` | `workloadIdentity` | enabled | derived | the addon that projects the identity token into the pod. Without it the SDK falls back to whatever else it can find — often the node's identity, which usually has MORE access than intended and so fails silently in the permissive direction |
+| `identity:object-storage` | `userAssignedIdentity` | one per reference | document | secrets.workloadIdentity names object-storage. One identity per reference rather than one shared: a single identity holding every grant makes each workload as privileged as the most privileged one |
+| `identity:object-storage` | `federatedCredential` | subject = system:serviceaccount:<namespace>:<the chart's service account> | derived | the credential binds the identity to one service account in one namespace; a wrong subject is not an error at deploy time, it is a 403 at first use |
+| `identity:object-storage` | `roleAssignment` | Storage Blob Data Contributor on the storage account | derived | deploy/public/deploy.sh already names this grant for the ACA deployment and calls it "one-time infra setup (not this script's job)" — which is precisely why nothing owned it |
+| `network` | `privateEndpoints` | none | document | network.privateDataServices is not set, so the managed services keep public endpoints — which is what today's Azure runs, stated rather than left to be assumed either way |
+| `network` | `ingress` | public endpoint for https://acp.example.com | document | network.publicIngress with runtime.publicUrl |
+| `network` | `workerIngress` | none | document | network.privateWorkers (PRD S13). The chart renders no Service for the worker tiers, so this needs nothing from the adapter — recorded because a requirement satisfied by the application layer is easy to re-satisfy expensively in the infrastructure one |
+
+**1 UNDECIDED** — a setting the adapter must choose and this document does not state.
+
+### `standard-production`
+
+Profile `standard`, postgres `managed`, 12 requirements.
+
+| Resource | Setting | Required | From | Why |
+|---|---|---|---|---|
+| `postgres` | `provisioning` | Azure Database for PostgreSQL Flexible Server | document | data.postgres.mode is managed |
+| `postgres` | `max_connections` | >= 433 | derived | the fleet's worst case at maximum replicas is 418 (acpctl.inventory.connection_budget, which mirrors api/store.py's db_max_conn per replica), plus 15 the server keeps for itself |
+| `postgres` | `sku` | one whose max_connections reaches the value above | vendor | Azure derives max_connections from the server's vCPU/memory tier, and this repository cannot check that table offline — so the requirement is stated as the number to satisfy rather than as a SKU name that would read as verified |
+| `postgres` | `backup.retentionDays` | 35 | document | data.postgres.backupRetentionDays |
+| `postgres` | `storage` | 256Gi | document | data.postgres.storage |
+| `redis` | `provisioning` | Azure Managed Redis | document | data.redis.mode is managed |
+| `blob` | `provisioning` | Storage account + container | document | data.objectStorage.mode is managed |
+| `blob` | `lifecycle.retentionDays` | 365 | document | data.objectStorage.retentionDays |
+| `network` | `privateEndpoints` | none | document | network.privateDataServices is not set, so the managed services keep public endpoints — which is what today's Azure runs, stated rather than left to be assumed either way |
+| `network` | `ingress` | public endpoint for https://acp.example.org | document | network.publicIngress with runtime.publicUrl |
+| `network` | `workerIngress` | none | document | network.privateWorkers (PRD S13). The chart renders no Service for the worker tiers, so this needs nothing from the adapter — recorded because a requirement satisfied by the application layer is easy to re-satisfy expensively in the infrastructure one |
+| `network` | `egress` | ['googleapis.com', 'graph.microsoft.com'] | document | network.allowedEgress. Deny-all is a valid regulated posture and the contract already checks it against `sources` and `ai.mode` |
+
+## Requirements this repository cannot verify
+
+Marked `vendor` above: they rest on an Azure fact that cannot be checked from here offline, so the requirement states the condition to satisfy rather than a value that would read as confirmed.
+
+- **`postgres.sku`** — Azure derives max_connections from the server's vCPU/memory tier, and this repository cannot check that table offline — so the requirement is stated as the number to satisfy rather than as a SKU name that would read as verified
+
+## Not expressed by the contract at all
+
+Settings the adapter must decide that no deployment document carries. Named because an adapter author reading only the tables above would otherwise conclude the list is complete.
+
+- **VNet address space** — Private endpoints and a private control plane need a network the contract has no vocabulary for. Deliberately so: an address plan belongs to the customer's estate, not to an application's deployment document.
+- **backup destination and restore drill** — Retention is a number the contract can carry; whether a restore has ever been PERFORMED is not, and PRD S16 wants both. An adapter that provisions 35-day backups has satisfied this list and not the requirement.
+- **compute SKU / tier** — The contract sizes WORKLOADS by preset and says nothing about the node pool or database tier that has to fit them. An adapter must map the fleet's total requests to a node SKU and the connection ceiling to a Postgres tier — and the second is a vendor lookup: Azure's max_connections is a function of the server's SKU, and that table is not reproduced here from memory.
+- **region** — `metadata.region` is optional and free text; the contract records a residency boundary and does not choose a datacentre.
+
+<!-- END GENERATED: azure-adapter -->

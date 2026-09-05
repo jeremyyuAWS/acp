@@ -1,0 +1,167 @@
+{{/*
+Two autoscalers, because the two tiers scale on different evidence.
+
+The API scales on REQUEST LOAD, which the HorizontalPodAutoscaler can see natively. Workers scale
+on QUEUE DEPTH and the age of the oldest job, which it cannot: a worker chewing through a large
+PDF is at 100% CPU whether the queue holds one job or four hundred, so a CPU-driven HPA on the
+worker tier scales up when documents are hard and not when they are numerous — exactly backwards
+from what a backlog needs.
+
+That is why `acpctl values` emits `scaler: hpa` for the API and `scaler: keda` for workers rather
+than one autoscaling block: they are different mechanisms answering different questions, and
+collapsing them would silently give the worker tier the wrong one.
+
+KEDA IS A CLUSTER PREREQUISITE, NOT A DEPENDENCY OF THIS CHART. A ScaledObject rendered into a
+cluster with no KEDA is an object nothing reconciles — the workers sit at their floor replica
+count and the backlog grows with nothing reporting why. `acpctl doctor` checks for KEDA before
+an install and reports its absence as a blocker; the NOTES say so too, for the operator who
+installs without running it.
+*/}}
+{{- if .Values.api.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "acp.fullname" . }}-api
+  labels:
+    {{- include "acp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "acp.fullname" . }}-api
+  minReplicas: {{ .Values.api.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.api.autoscaling.maxReplicas }}
+  metrics:
+    {{- if has "cpu" .Values.api.autoscaling.triggers }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    {{- end }}
+    {{- if has "concurrent-requests" .Values.api.autoscaling.triggers }}
+    {{- /*
+      A custom metric, so it needs a metrics adapter that publishes it. Named here rather than
+      quietly dropped: an HPA referencing a metric nothing publishes reports
+      `FailedGetPodsMetric` and does not scale, which is a condition an operator can find — a
+      silently omitted trigger is not.
+    */}}
+    - type: Pods
+      pods:
+        metric:
+          name: acp_concurrent_requests
+        target:
+          type: AverageValue
+          averageValue: "40"
+    {{- end }}
+  behavior:
+    scaleDown:
+      {{- /*
+        Five minutes of stability before scaling the API down. Request load is spiky and a tier
+        that follows every dip sheds capacity into the next peak; the cost of a spare replica is
+        far below the cost of a cold start under load.
+      */}}
+      stabilizationWindowSeconds: 300
+    scaleUp:
+      stabilizationWindowSeconds: 30
+{{- end }}
+
+{{- range $role, $cfg := .Values.workers }}
+{{- if and $cfg.autoscaling.enabled (eq ($cfg.autoscaling.scaler | default "keda") "keda") }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "acp.fullname" $ }}-worker-{{ $role }}
+  labels:
+    {{- include "acp.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: worker
+    acp.mova.io/worker-role: {{ $role | quote }}
+spec:
+  scaleTargetRef:
+    name: {{ include "acp.fullname" $ }}-worker-{{ $role }}
+  minReplicaCount: {{ $cfg.autoscaling.minReplicas }}
+  maxReplicaCount: {{ $cfg.autoscaling.maxReplicas }}
+  {{- /*
+    Long cooldown for the same reason as the worker's grace period: scaling in a tier that holds
+    partially-processed documents costs re-work, so it waits until the backlog is genuinely gone
+    rather than following a momentary dip.
+  */}}
+  cooldownPeriod: 300
+  pollingInterval: 15
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleDown:
+          stabilizationWindowSeconds: 300
+  triggers:
+    {{- if has "queue-depth" $cfg.autoscaling.triggers }}
+    - type: postgresql
+      metadata:
+        {{- /*
+          The queue is a Postgres table (api/store.py's `jobs`), not a broker — so the trigger is
+          a query, and it counts only the job types THIS role claims. A depth trigger counting
+          every queued job would scale all three worker tiers on one tier's backlog.
+
+          FILTERED ON `type`, NOT ON A `role` COLUMN — there isn't one. The first draft of this
+          template invented `WHERE role = '<role>'` from the shape of the values file, which is
+          a Postgres error at scaler time: KEDA logs it and scales nothing, so the tier sits at
+          its floor while the queue grows and the only symptom is autoscaling that never
+          happens. The list comes from `acpctl values`, which takes it from
+          inventory.LANE_JOB_TYPES, which a test pins against api/core.py's own lane tuples.
+        */}}
+        query: >-
+          SELECT count(*) FROM jobs WHERE status = 'queued' AND type IN (
+          {{- range $i, $t := $cfg.autoscaling.queueJobTypes }}{{ if $i }}, {{ end }}'{{ $t }}'{{ end -}}
+          )
+        targetQueryValue: {{ $cfg.autoscaling.queueDepthTarget | default 10 | quote }}
+      authenticationRef:
+        name: {{ include "acp.fullname" $ }}-queue-auth
+    {{- end }}
+    {{- if has "oldest-job-age" $cfg.autoscaling.triggers }}
+    - type: postgresql
+      metadata:
+        {{- /*
+          Depth alone is not enough. A queue holding three jobs for forty minutes is a worse
+          state than one holding thirty for ten seconds, and only the age trigger sees it —
+          which is the difference between a backlog that drains and one that has stalled.
+        */}}
+        query: >-
+          SELECT COALESCE(EXTRACT(EPOCH FROM (now() - MIN(created_at::timestamptz))), 0)::int
+          FROM jobs WHERE status = 'queued' AND type IN (
+          {{- range $i, $t := $cfg.autoscaling.queueJobTypes }}{{ if $i }}, {{ end }}'{{ $t }}'{{ end -}}
+          )
+        targetQueryValue: {{ $cfg.autoscaling.oldestJobAgeSeconds | default 300 | quote }}
+      authenticationRef:
+        name: {{ include "acp.fullname" $ }}-queue-auth
+    {{- end }}
+{{- end }}
+{{- end }}
+
+{{- /*
+  KEDA reads the queue with the same credential the application uses, resolved from the same
+  Secret. A second credential for the scaler would be a second thing to rotate and a second way
+  for the scaler to be reading a different database than the workers.
+*/}}
+{{- $needsQueueAuth := false }}
+{{- range $role, $cfg := .Values.workers }}
+{{- if and $cfg.autoscaling.enabled (eq ($cfg.autoscaling.scaler | default "keda") "keda") }}
+{{- $needsQueueAuth = true }}
+{{- end }}
+{{- end }}
+{{- if $needsQueueAuth }}
+---
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ include "acp.fullname" . }}-queue-auth
+  labels:
+    {{- include "acp.labels" . | nindent 4 }}
+spec:
+  secretTargetRef:
+    - parameter: connection
+      name: {{ include "acp.secretName" . }}
+      key: database-url
+{{- end }}

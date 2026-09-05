@@ -1,0 +1,156 @@
+# Defaults for the ACP application chart.
+#
+# THESE ARE NOT A DEPLOYMENT. Every real install renders its values from an acp-deployment
+# document (`acpctl values <doc> > values.yaml`), because that document is the reviewed record of
+# what was installed and this file is not. What lives here is the shape — every key the templates
+# read, with a default that is either safe or absent — so that `helm template` on the bare chart
+# produces something legible and `helm lint` has a complete schema to check.
+#
+# Where a default would be a GUESS about somebody's infrastructure, there is no default: the
+# template fails the render and says which key is missing. A chart that invents a database
+# hostname installs an application that cannot start, and reports success doing it.
+
+acpDeployment:
+  name: acp
+  environment: development
+  profile: standard
+  platform: kubernetes
+  adapter: ""
+  supportStatus: planned
+
+image:
+  registry: ""
+  repository: acp
+  # Worker and API share one image; they differ by command and by ACP_WORKER_ROLE.
+  workerRepository: acp-worker
+  tag: ""
+  # Digests, when `acpctl install` has resolved them. A digest wins over the tag, because a tag
+  # is a moving reference and an install that cannot say exactly what it ran is not auditable.
+  digests: {}
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+api:
+  replicaCount: 1
+  autoscaling:
+    enabled: false
+    minReplicas: 1
+    maxReplicas: 1
+    scaler: hpa
+    triggers: []
+  resources: {}
+  env: {}
+  port: 8077
+  service:
+    type: ClusterIP
+    port: 80
+
+# One entry per worker role. The keys are the role names the application understands
+# (ACP_WORKER_ROLE), and adding a key here adds a Deployment — there is no per-role template.
+workers: {}
+
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  tls: false
+  tlsSecretName: ""
+  annotations: {}
+
+networkPolicy:
+  enabled: false
+  defaultDeny: false
+  workerIngress: true
+  allowedEgress: []
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+# Data services. `enabled: true` means IN-CLUSTER, which this chart does not provision — see
+# Chart.yaml. `external: true` means the adapter supplies the endpoint, which is the supported
+# path, and the connection details arrive through `secrets.refs`.
+postgresql:
+  mode: managed
+  enabled: false
+  external: true
+  chart: null
+redis:
+  mode: managed
+  enabled: false
+  external: true
+  chart: null
+objectStorage:
+  mode: managed
+  enabled: false
+  external: true
+  chart: null
+
+secrets:
+  provider: kubernetes
+  # When the platform's secret backend is not Kubernetes itself, the External Secrets Operator
+  # syncs the references into one Secret and the workloads mount that. The workloads cannot tell
+  # the difference, which is the point.
+  externalSecrets:
+    enabled: false
+    backend: ""
+    secretStoreRef: ""
+    refreshInterval: 1h
+  # Name of an existing Secret to consume instead of the one this chart wires up. For the case
+  # where a cluster's secrets are managed by something this chart has never heard of.
+  existingSecret: ""
+  refs: {}
+
+ai:
+  mode: local-only
+  ollama:
+    enabled: false
+    gpu: false
+    modelVolumeSize: 100Gi
+  externalProviders: []
+
+observability:
+  openTelemetry:
+    enabled: false
+    exporter: ""
+    endpoint: ""
+  grafana:
+    enabled: false
+  langfuse:
+    mode: disabled
+
+# Schema migrations run as a hook BEFORE the new code is admitted, with backoffLimit 0 — a failed
+# migration must stop the release rather than retry against a database it has already half
+# changed. See ADR 0045 for why every migration is additive and why there is no down-migration.
+migrations:
+  enabled: true
+  hook: "pre-install,pre-upgrade"
+  backoffLimit: 0
+
+# Preflight runs AFTER, and reports. It is deliberately not a gate: a post-install check that
+# fails the release would roll back a deployment whose application is already serving.
+preflight:
+  enabled: true
+  hook: "post-install,post-upgrade"
+  backoffLimit: 0
+
+nameOverride: ""
+fullnameOverride: ""
+podAnnotations: {}
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  fsGroup: 10001
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop: ["ALL"]
+nodeSelector: {}
+tolerations: []
+affinity: {}

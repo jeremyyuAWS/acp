@@ -1,0 +1,98 @@
+# Standard Production (PRD S8) — split tiers, managed data services, independent worker scaling.
+#
+# The sizes mirror the reviewed Azure baseline in deploy/public/rightsize-production.sh exactly
+# (acp-app small; acp-discovery small; acp-assess and acp-remediate standard). The REPLICA RANGES
+# mirror it only where a decision has been taken to make them: the assess tier is pinned warm at
+# 5-5 as production runs it, and the API floor is raised to the two replicas the profile requires.
+# Three ranges still differ from production and no decision has been recorded for them
+# (api.replicas.max, discover.replicas.max, remediate.replicas.min) — packaging/docs/azure-parity.md
+# lists each one, and this header does not claim otherwise.
+apiVersion: packaging.acp.mova.io/v1alpha1
+kind: ACPDeployment
+metadata:
+  name: acp-production
+  environment: production
+  region: eastus2
+runtime:
+  version: "2026.9"
+  profile: standard
+  platform: azure
+  publicUrl: "https://acp.example.org"
+  imageRegistry: "mdkaccessibilityacr.azurecr.io"
+api:
+  replicas: { min: 2, max: 4 }
+  resources: { preset: small, cpu: "1", memory: 2Gi }
+  autoscale:
+    signals: [concurrent-requests, cpu]
+workers:
+  discover:
+    replicas: { min: 1, max: 3 }
+    resources: { preset: small }
+    autoscale:
+      signals: [queue-depth, oldest-job-age]
+      queueDepthTarget: 20
+      oldestJobAgeSeconds: 300
+  # PINNED WARM, DELIBERATELY NOT AUTOSCALED. rightsize-production.sh keeps five assess replicas
+  # warm because assessment is a throughput-sensitive batch stage, and that is the operating model
+  # the owner chose to carry into the contract rather than replace (packaging/docs/azure-parity.md).
+  # min == max AND no `autoscale` block, which are two halves of one statement: a scale rule on a
+  # tier that cannot move is a declaration with no consequence, and values.py reads the block's
+  # ABSENCE to render a fixed replicaCount and no ScaledObject. Adding one back here is a
+  # performance change, not a packaging detail.
+  assess:
+    replicas: { min: 5, max: 5 }
+    resources: { preset: standard }
+  remediate:
+    replicas: { min: 3, max: 10 }
+    resources: { preset: standard }
+    autoscale:
+      signals: [queue-depth, oldest-job-age]
+      queueDepthTarget: 10
+      oldestJobAgeSeconds: 180
+data:
+  postgres:
+    mode: managed
+    backupRetentionDays: 35
+    storage: 256Gi
+    maxConnections: 700
+  redis:
+    mode: managed
+  objectStorage:
+    mode: managed
+    encryption: provider-managed
+    retentionDays: 365
+ai:
+  mode: local-only
+  ollama:
+    enabled: true
+    modelVolume: 200Gi
+    gpu: true
+observability:
+  openTelemetry: true
+  exporter: azure-monitor
+  grafana: true
+  langfuse:
+    mode: self-hosted
+network:
+  privateWorkers: true
+  publicIngress: true
+  allowedEgress:
+    - googleapis.com
+    - graph.microsoft.com
+secrets:
+  provider: azure-key-vault
+  refs:
+    database-url: { name: acp-kv, key: database-url }
+    redis-url: { name: acp-kv, key: redis-url }
+    object-storage: { name: acp-kv, key: blob-account }
+    langfuse-secret-key: { name: acp-kv, key: langfuse-secret-key }
+    google-oauth-client-secret: { name: acp-kv, key: google-oauth-client-secret }
+    microsoft-oauth-client-secret: { name: acp-kv, key: microsoft-oauth-client-secret }
+sources:
+  - google-drive
+  - sharepoint
+  - local-upload
+capacity:
+  maxSourceFileSizeMb: 100
+  concurrentFilesPerWorker: 4
+  expectedDocumentsPerDay: 20000

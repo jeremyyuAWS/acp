@@ -141,7 +141,8 @@ def assess_eligibility_scoped(request: Request, codes: str | None = Query(None))
     `codes` — optional comma-separated SC list; default = Core 17. This is the
     `default_codes` a file keeps when NO scope rule matches it. For each file in the latest
     discovery's per-file inventory we resolve its effective code-set from the enabled scope
-    rules (folder / owner / department), then count it eligible when its format has an
+    rules (folder / owner / department / SharePoint Content Type), then count it eligible when
+    its format has an
     assessment lane for at least one code in that RESOLVED set.
 
     Returns `{discovered, eligible, by_format, rules_applied}`. Zeros (never a 500) when no
@@ -173,6 +174,7 @@ def assess_eligibility_scoped(request: Request, codes: str | None = Query(None))
             "path": row.get("path"),
             "parent_folder": row.get("parent_folder"),
             "owner": row.get("owner"),
+            "content_type": row.get("content_type"),
         }
         resolved = scope_resolver.resolve(file, rules, default_codes)
         # Which enabled rules actually reach a file — reported as rules_applied.

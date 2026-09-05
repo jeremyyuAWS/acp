@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { normalizeLive } from './liveAssessment.js'
 import LiveThroughput from './LiveThroughput.jsx'
+import SourceVisibility from './SourceVisibility.jsx'
 
 // The Assess RUNNING screen (approved board assess-03). It replaces the mid-run KPI scoreboard
 // (LiveAssessment.jsx, kept but no longer mounted here) with a single per-DOCUMENT focus card.
@@ -54,6 +55,9 @@ function fmtElapsedSecs(s) {
 function workerDetail(queue) {
   const workers = queue?.workers
   if (!workers || workers.max == null) return 'Worker status unavailable for this run'
+  if (workers.capacityScope === 'per_replica') {
+    return `Assessment service online · ${workers.max.toLocaleString()} slots per replica`
+  }
   const active = workers.busy || 0
   const standingBy = workers.idle == null ? Math.max(0, workers.max - active) : workers.idle
   return `${active.toLocaleString()} active · ${standingBy.toLocaleString()} standing by · ${workers.max.toLocaleString()} total`
@@ -205,6 +209,7 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
              style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div className="assess-run-card" style={{ border: '1px solid var(--line,#e4e8ec)', borderRadius: 12,
                                                 padding: '14px 16px', background: 'var(--panel,#fff)' }}>
+        <SourceVisibility source={m.source} scope={m.scope} />
         {isPreparing ? (
           <PrepChecklist m={m} total={total} completed={completed}
                          processing={processing} elapsed={elapsed} />

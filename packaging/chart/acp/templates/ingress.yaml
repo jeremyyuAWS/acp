@@ -1,0 +1,41 @@
+{{- if .Values.ingress.enabled }}
+{{- if not .Values.ingress.host }}
+{{- fail "ingress.enabled is true but ingress.host is empty — set runtime.publicUrl in the deployment document. An Ingress with no host matches every request reaching the controller, which on a shared cluster means ACP answers for somebody else's domain." }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "acp.fullname" . }}
+  labels:
+    {{- include "acp.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  {{- /*
+    The second place the platform shows through: certificate issuer, load-balancer class, WAF.
+    Annotations rather than a per-cloud template, so the Ingress OBJECT is the same everywhere
+    and only its annotations differ — which is what makes "one application package" checkable.
+  */}}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- if .Values.ingress.tls }}
+  tls:
+    - hosts:
+        - {{ .Values.ingress.host | quote }}
+      secretName: {{ .Values.ingress.tlsSecretName | default (printf "%s-tls" (include "acp.fullname" .)) }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "acp.fullname" . }}-api
+                port:
+                  number: {{ .Values.api.service.port }}
+{{- end }}

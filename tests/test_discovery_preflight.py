@@ -112,6 +112,59 @@ def test_sharepoint_readiness_blocked_when_root_unreachable(monkeypatch):
     assert r["ready"] is False
 
 
+def test_sharepoint_readiness_checks_a_bare_root_as_a_SITE(monkeypatch):
+    """A bare root is a site id, and every multi-site scan preflights exactly this shape.
+
+    Before this it fell through to the ITEM path, which resolves a missing drive to the signed-in
+    user's OneDrive and then asks it for an item whose id is a site: Graph 404s, and a perfectly
+    readable site is reported unreachable by a check that looked in somebody's OneDrive for it.
+    The scan would then have been blocked by its own preflight.
+    """
+    import scanner
+    from routes.sharepoint import describe_sharepoint_readiness
+    monkeypatch.setattr(scanner, "_sp_drives",
+                        lambda token, site: [{"id": "d1", "name": "Documents"}])
+    monkeypatch.setattr(scanner, "_sp_site_name", lambda token, site: "Policies")
+    monkeypatch.setattr(scanner, "_sp_default_drive",
+                        lambda token, site=None: pytest.fail("a site id was looked up as an item"))
+    r = describe_sharepoint_readiness(_FakeRequest({"x-sp-token": "tok"}), ["contoso,g1,g2"])
+    assert r["ready"] is True
+    assert r["roots"][0] == {"id": "contoso,g1,g2", "kind": "site", "exists": True,
+                             "name": "Policies", "libraries": 1}
+
+
+def test_sharepoint_readiness_checks_every_site_in_a_multi_site_selection(monkeypatch):
+    """One unreachable site among several is not "ready" — a run that silently skips it reports
+    a smaller estate as the answer, which is the defect multi-site exists to fix."""
+    import scanner
+    from routes.sharepoint import describe_sharepoint_readiness
+    monkeypatch.setattr(scanner, "_sp_site_name", lambda token, site: site)
+
+    def drives(token, site):
+        if site == "S2":
+            raise PermissionError("Sites.Read.All not granted — needs admin consent")
+        return [{"id": "d1", "name": "Documents"}]
+
+    monkeypatch.setattr(scanner, "_sp_drives", drives)
+    r = describe_sharepoint_readiness(_FakeRequest({"x-sp-token": "tok"}), ["S1", "S2", "S3"])
+    assert r["ready"] is False
+    assert [x["exists"] for x in r["roots"]] == [True, False, True]
+    assert "admin consent" in r["roots"][1]["error"]
+    assert "1 of 3" in r["reason"]
+
+
+def test_a_site_with_no_libraries_is_not_ready(monkeypatch):
+    """It scans to zero. Reporting it ready hands the operator an empty run and no way to tell
+    the site from the product — the same call SitePicker makes before the scan starts."""
+    import scanner
+    from routes.sharepoint import describe_sharepoint_readiness
+    monkeypatch.setattr(scanner, "_sp_drives", lambda token, site: [])
+    monkeypatch.setattr(scanner, "_sp_site_name", lambda token, site: "Empty Team")
+    r = describe_sharepoint_readiness(_FakeRequest({"x-sp-token": "tok"}), ["contoso,g1,g2"])
+    assert r["ready"] is False
+    assert "no document libraries" in r["roots"][0]["error"]
+
+
 def test_sharepoint_readiness_splits_drive_and_item_ids_correctly(monkeypatch):
     """A Graph item id is unique only within its drive — the pair must be split apart before
     being handed to _sp_item_exists, the same way sp_folders splits `parent` (found live bug

@@ -14,6 +14,7 @@ from fastapi.responses import RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 import core
+import scanner
 from scanner import run_scan
 from report import build_report
 from report_tagged import build_tagged_report
@@ -105,6 +106,31 @@ def _supersede_replaced_run(prior: dict | None, new_scan_id: str, owner: str) ->
                        new_scan_id, prior["id"], exc)
 
 
+def sharepoint_site_overflow(folder: str | None, folders: list[str] | None) -> str | None:
+    """The message to refuse a SharePoint request with when it names more sites than one scan
+    may span, or None when it is within the cap.
+
+    REFUSED AT THE EDGE rather than silently trimmed. scanner._sp_list caps the walk too, and
+    that cap stays — a job queued before this check existed still has to be bounded somewhere —
+    but a cap that only truncates hands the operator a floor and an explanation after the fact,
+    while refusing here gives them the choice before the scan spends an hour against a customer's
+    tenant. Both read the same number from the same helper, so raising ACP_SP_MAX_SITES moves
+    them together and they cannot drift.
+
+    A site is a root with no "/" (scanner._sp_locations makes the same split); "root" is Drive's
+    no-narrowing sentinel and is not a site. Counted as a SET, because selecting one site twice
+    is one site — the listing collapses the duplicate, so refusing it here would reject a request
+    the scanner would have handled correctly.
+    """
+    roots = [f for f in (list(folders) if folders else ([folder] if folder else []))
+             if f and f != "root" and "/" not in f]
+    n, cap = len(set(roots)), scanner._sp_max_sites()
+    if n <= cap:
+        return None
+    return (f"{n} SharePoint sites selected; one scan covers at most {cap}. Run them as "
+            f"separate scans, or raise ACP_SP_MAX_SITES on the deployment.")
+
+
 @router.post("/scans")
 def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive|sharepoint)$"),
                sync: bool = False, folder: str | None = Query(None),
@@ -140,6 +166,10 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
         raise HTTPException(401, "sign in with Google to scan your Drive")
     if source == "sharepoint" and not sp_token:
         raise HTTPException(401, "sign in with Microsoft to scan OneDrive")
+    if source == "sharepoint":
+        over = sharepoint_site_overflow(folder, folders)
+        if over:
+            raise HTTPException(400, over)
     # Admin deterministic-only mode is a HARD override: if AI is disabled platform-wide,
     # no scan runs AI regardless of the per-scan ?ai= request.
     effective_ai = ai and core.store.get_ai_enabled()
@@ -480,10 +510,14 @@ async def remediate_scan(sid: str, request: Request):
     res = core.store.get_scan(sid, owner=_owner(request))
     if res is None:
         raise HTTPException(404, "scan not found")
-    token = request.headers.get("x-drive-token")
     source = (res.get("run") or {}).get("source") or "drive"
     owner = _owner(request)
-    core.register_scan_tokens(sid, drive=token)  # in-memory only
+    # A Drive token belongs to a Drive job and to nothing else. A SharePoint (or local) scan
+    # reads the source bytes Assess cached, so it neither registers nor carries one — and the
+    # worker's source dispatch (handlers._remediation_source_bytes) never asks for one either.
+    token = request.headers.get("x-drive-token") if source == "drive" else None
+    if source == "drive":
+        core.register_scan_tokens(sid, drive=token)  # in-memory only
 
     # Parse optional scope list from request body.
     scope_set = None
@@ -504,7 +538,27 @@ async def remediate_scan(sid: str, request: Request):
             remediated_folder_id = handlers.ensure_remediated_folder(handlers._drive_client(token))
         except Exception:
             remediated_folder_id = None   # jobs fall back to find-or-create
-    enqueued = []
+    # One id per SUBMISSION, so live progress can be scoped to the batch a user is watching
+    # rather than to everything this scan has ever queued. Re-submitting the same scan (the
+    # honest response to a failed run) used to make its dead jobs accumulate against one total:
+    # two 147-document batches reported "294 failed" out of 147, and the UI subtracted its way
+    # to -147 remediated. See store.remediation_status.
+    # THE KEY THE CACHE WAS WRITTEN UNDER. ADR 0020 keys a cached original by its content
+    # checksum whenever the listing carried one — {owner}/{checksum} — and only falls back to
+    # {owner}/{scan_id}/{filename} when it did not. SharePoint listings have carried
+    # quickXorHash since #963, so a SharePoint scan's bytes are under the checksum key.
+    #
+    # This used to read `f.get("checksum")` off get_scan's file rows, which is ALWAYS None:
+    # that SELECT has no checksum column, and file_records.checksum is NULL anyway because the
+    # scan report's file rows carry none for save_scan to write. So every job looked under a key
+    # nothing had written, missed, and fell through to the Drive downloader. scan_inventory is
+    # where the value actually lives — one query for the batch, not one per document.
+    try:
+        checksums = core.store.get_source_checksums(sid)
+    except Exception:
+        swallowed("routes.scans.remediate_scan: reading the scan's source checksums failed", sid)
+        checksums = {}
+    payloads = []
     for f in res["files"]:
         # Honour the triage scope: skip files the user marked N/A or deferred.
         if scope_set is not None and f["file"] not in scope_set:
@@ -529,14 +583,42 @@ async def remediate_scan(sid: str, request: Request):
         # are valid remediation inputs and produce the primary Blob artifact.
         if source == "drive" and not drive_file_id:
             continue
-        jid = core.store.enqueue_job(
-            "remediate_file",
+        payloads.append(
             {"scan_id": sid, "file": f["file"], "drive_file_id": drive_file_id,
              "remediated_folder_id": remediated_folder_id, "drive_token": token,
-             "source": source, "owner": owner, "checksum": f.get("checksum")},
-            scan_id=sid)
-        enqueued.append(jid)
-    return {"scan_id": sid, "enqueued": len(enqueued), "job_ids": enqueued,
+             "source": source, "owner": owner,
+             "checksum": checksums.get(f["file"]) or f.get("checksum")})
+    snapshot_id = core.store.stage_snapshot_id(sid)
+    # Fingerprint the EFFECTIVE file set, not raw request spelling: adding a nonexistent name or
+    # reordering the same names is still the same work and must reuse the same execution.
+    request_fingerprint = _json.dumps(
+        {"files": sorted(p["file"] for p in payloads)}, sort_keys=True)
+    execution = core.store.enqueue_stage_batch(
+        sid, "remediate", "remediate_file", payloads, snapshot_id=snapshot_id,
+        request_fingerprint=request_fingerprint)
+    # AFTER the jobs exist, never before: the run is "accepted" precisely when durable work has
+    # been enqueued for it, and an acceptance event that led the enqueue would let the panel show
+    # a run that nothing will ever claim. Emitted once per batch — the run-level transition PRD §7
+    # calls Accepted.
+    #
+    # NOT on a reused execution. enqueue_stage_batch is idempotent on the request fingerprint, so
+    # re-submitting the same file set returns the EXISTING batch rather than making one. That is
+    # the same run, already accepted; announcing it again would put a second acceptance in the
+    # log for work that was never re-enqueued, and a client replaying the log would see one run
+    # start twice.
+    if execution["job_ids"] and not execution.get("reused"):
+        import handlers
+        handlers.scan_event(sid, "remediate.accepted", job_id=execution["job_ids"][0],
+                            detail={"documents": len(execution["job_ids"]),
+                                    "batch_id": execution["batch_id"]})
+    return {"scan_id": sid, "enqueued": len(execution["job_ids"]),
+            "job_ids": execution["job_ids"], "batch_id": execution["batch_id"],
+            "snapshot_id": snapshot_id, "reused": execution["reused"],
+            # How many DEAD documents this call revived. `enqueued` counts the execution's
+            # documents either way, so on its own it cannot tell a retry that queued work from one
+            # that matched an existing execution and queued none — which is exactly the question
+            # an operator re-submitting after a failure is asking.
+            "requeued": execution.get("requeued", 0),
             "workers": core.WORKERS, "worker_tier_alive": core.store.worker_tier_alive()}
 
 
@@ -1146,17 +1228,32 @@ def assess(sid: str, request: Request, level: str = Query("AA"),
             _live = _active_scope(core.store)
             if _live:
                 core.store.merge_scan_scope(sid, {"scan_scope": _scope_as_json(_live)})
-        jid = core.store.enqueue_job(
-            "scan_assess",
-            {"scan_id": sid, "user": _owner(request),
-             "include_lifecycle_flagged": include_lifecycle_flagged}, scan_id=sid)
+        snapshot_id = core.store.stage_snapshot_id(sid)
+        request_fingerprint = _json.dumps(
+            {"level": level, "include_lifecycle_flagged": include_lifecycle_flagged},
+            sort_keys=True)
+        execution = core.store.enqueue_stage_batch(
+            sid, "assess", "scan_assess",
+            [{"scan_id": sid, "user": _owner(request),
+              "include_lifecycle_flagged": include_lifecycle_flagged}],
+            snapshot_id=snapshot_id, request_fingerprint=request_fingerprint)
+        jid = execution["job_ids"][0]
         return {"scan_id": sid, "level": level, "job_id": jid, "workers": core.WORKERS,
                 "worker_tier_alive": core.store.worker_tier_alive(),
-                "phase": "assessing", "deferred": True}
+                "phase": "assessing", "deferred": True,
+                "snapshot_id": snapshot_id, "reused": execution["reused"]}
     # Immediate model — the results views gate on assessed_at; stamp it + build the assess trace.
     core.store.mark_assessed(sid, _dt.datetime.now(_dt.timezone.utc).isoformat())
-    jid = core.store.enqueue_job("assess_trace", {"scan_id": sid, "level": level}, scan_id=sid)
-    return {"scan_id": sid, "level": level, "job_id": jid, "workers": core.WORKERS}
+    snapshot_id = core.store.stage_snapshot_id(sid)
+    request_fingerprint = _json.dumps(
+        {"level": level, "include_lifecycle_flagged": include_lifecycle_flagged},
+        sort_keys=True)
+    execution = core.store.enqueue_stage_batch(
+        sid, "assess", "assess_trace", [{"scan_id": sid, "level": level}],
+        snapshot_id=snapshot_id, request_fingerprint=request_fingerprint)
+    return {"scan_id": sid, "level": level, "job_id": execution["job_ids"][0],
+            "workers": core.WORKERS, "snapshot_id": snapshot_id,
+            "reused": execution["reused"]}
 
 
 @router.get("/scans/{sid}/trace/session/data")
@@ -1440,6 +1537,37 @@ def remediation_status(sid: str, request: Request, response: Response):
     return out
 
 
+def _remediation_snapshot(sid: str) -> dict:
+    """The revisioned run snapshot for one scan — facts from the store, judgement from the pure
+    module. One function so the poll route and the SSE stream cannot disagree about either.
+
+    `policy_version` and `execution_mode` are absent, not blank: ACP records no version for the
+    remediation lane table and has no per-run execution mode to read. build_snapshot carries them
+    through as None, and the panel renders nothing for a fact it has not been told — the same rule
+    RemediationRunHeader already applies to its counts.
+    """
+    import remediation_run
+    facts = core.store.remediation_run_facts(sid)
+    return remediation_run.build_snapshot(facts)
+
+
+@router.get("/scans/{sid}/remediation/snapshot")
+def remediation_snapshot(sid: str, request: Request, response: Response):
+    """One reconciled, revisioned account of this remediation run (PRD §8).
+
+    Owner-scoped for the same reason `remediation-status` is: filenames and SharePoint site paths
+    are in here, and a scan id must not work as a cross-account oracle.
+
+    This does NOT replace `remediation-status`, which still feeds the shipped progress bar. It
+    answers the different question that endpoint never could — what state is this run in, and do
+    its numbers reconcile — and it answers it on the server, because every attempt to assemble it
+    in the browser produced a screen whose parts contradicted each other.
+    """
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    response.headers["Cache-Control"] = "no-store"
+    return _remediation_snapshot(sid)
+
 @router.get("/scans/{sid}/remediation/stream")
 async def stream_remediation_status(sid: str, request: Request):
     """Push the owner-scoped remediation status whenever it changes.
@@ -1467,7 +1595,24 @@ async def stream_remediation_status(sid: str, request: Request):
             out["activity"] = activity.current(sid)
             out["workers"] = {"active": int(out.get("running") or 0),
                               "capacity": int(getattr(core, "WORKERS", 0) or 0)}
-            sig = _json.dumps(out, sort_keys=True, default=str)
+            # The reconciled run snapshot rides the SAME frame as the legacy counts, so a client
+            # can never render a state from one instant against counters from another. A stream
+            # failure here must not take the stream down with it: the legacy payload is what the
+            # shipped progress bar consumes, and it is still correct without this.
+            try:
+                out["snapshot"] = await asyncio.to_thread(_remediation_snapshot, sid)
+            except Exception:
+                swallowed("routes.scans.stream_remediation_status: building the run snapshot failed", sid)
+                out.pop("snapshot", None)
+            # generated_at moves every tick by construction, so comparing it would push a frame
+            # per interval and defeat the change detection this loop exists for. The snapshot's
+            # `revision` is the field that actually advances on a durable change — that is what
+            # it is for — so the signature is taken over everything except the generation time.
+            _sig_src = dict(out)
+            if isinstance(_sig_src.get("snapshot"), dict):
+                _sig_src["snapshot"] = {k: v for k, v in _sig_src["snapshot"].items()
+                                        if k != "generated_at"}
+            sig = _json.dumps(_sig_src, sort_keys=True, default=str)
             if sig != last:
                 last = sig
                 idle = 0
@@ -1489,6 +1634,53 @@ async def stream_remediation_status(sid: str, request: Request):
     })
 
 
+def _sp_freshness(run: dict, request: Request):
+    """What has changed in this scan's SharePoint libraries since it listed them.
+
+    Returns `(changed_by_key, removed_keys, error)`, or `(None, set(), None)` when this is not a
+    SharePoint scan that can be asked — no recorded cursors (a scan from before this shipped, or
+    one whose shape the delta query cannot serve), or no Microsoft token on the request. None is
+    "cannot answer", and the caller renders those files `untracked`, which is the honest state
+    and never a false `unchanged`.
+
+    ONE GRAPH CALL PER LIBRARY. That is the whole design: Drive answers this per file, which on a
+    thousands-of-documents estate is thousands of calls to render one screen, and is why
+    SharePoint has never had a freshness answer at all rather than a slow one.
+
+    The cursor is replayed and NOT saved. Advancing it here would move the scan's recorded
+    position every time somebody opened the screen, so the second viewing would report "nothing
+    changed" no matter what had — a read that quietly destroys the thing it reads.
+    """
+    if (run.get("source") != "sharepoint"):
+        return None, set(), None
+    scope = run.get("scope")
+    if isinstance(scope, str):
+        try:
+            scope = _json.loads(scope)
+        except Exception:  # noqa: BLE001
+            scope = {}
+    cursors = (scope or {}).get("sp_cursors") if isinstance(scope, dict) else None
+    if not cursors:
+        return None, set(), None
+    token = request.headers.get("x-sp-token")
+    if not token:
+        return None, set(), None
+    from scanner import sp_delta_since
+    changed: dict = {}
+    removed: set = set()
+    for raw_drive, link in cursors.items():
+        drive_id = raw_drive or None          # "" is the OneDrive/no-drive key (see handlers)
+        try:
+            items, gone, _ = sp_delta_since(token, drive_id, link)
+        except Exception as e:  # noqa: BLE001 — one library's failure is not the screen's
+            return None, set(), f"could not read changes for library {raw_drive or 'OneDrive'}: {e}"
+        removed |= set(gone)
+        for it in items:
+            if it.get("id"):
+                changed[(drive_id, it["id"])] = it.get("lastModifiedDateTime")
+    return changed, removed, None
+
+
 @router.get("/scans/{sid}/source-status")
 def source_status(sid: str, request: Request):
     """Has each file's SOURCE changed since ACP scanned it, and — PRD Phase 3 — where does ACP's
@@ -1508,17 +1700,39 @@ def source_status(sid: str, request: Request):
     if scan is None:
         raise HTTPException(404, "scan not found")
     files = scan.get("files") or []
-    run_status = (scan.get("run") or {}).get("status")
-    source_is_drive = (scan.get("run") or {}).get("source") == "drive"
+    run = scan.get("run") or {}
+    run_status = run.get("status")
+    source_is_drive = run.get("source") == "drive"
+    # SHAREPOINT ANSWERS THIS A DIFFERENT WAY, and the difference is the whole reason it can
+    # answer at all. Drive's answer is one metadata read per FILE; on a 30-site estate that is
+    # thousands of Graph calls to render one screen. SharePoint has a delta cursor, so the same
+    # question costs one call per LIBRARY — replayed from the position the scan itself recorded
+    # (handlers._sp_scan_cursors), which is what makes it "changed since THIS scan" rather than
+    # "changed since the last sync", a different question with an indistinguishable answer.
+    sp_changed, sp_removed, sp_error = _sp_freshness(run, request)
+    source_tracked = source_is_drive or sp_changed is not None
     trackable = source_is_drive and any(f.get("source_modified") and f.get("drive_file_id") for f in files)
     svc = core.drive_service(request) if trackable else None   # 401 in GIS mode without X-Drive-Token
     from googleapiclient.errors import HttpError
     rows = []
     for f in files:
         baseline, drive_id = f.get("source_modified"), f.get("drive_file_id")
-        if not source_is_drive or not drive_id or not baseline:
+        if sp_changed is not None and drive_id and baseline:
+            # A file the delta mentions changed; one it does not, did not. `current` is the
+            # item's own new timestamp so the SAME comparison Drive uses produces the state —
+            # a second classification path would be a second thing to keep true.
+            key = (f.get("drive_id"), drive_id)
+            if key in sp_removed:
+                row = _ss.classify_sync_state(f, None, source_is_drive=False,
+                                              source_tracked=True, fetch_error="deleted",
+                                              run_status=run_status)
+            else:
+                row = _ss.classify_sync_state(f, sp_changed.get(key, baseline),
+                                              source_is_drive=False, source_tracked=True,
+                                              run_status=run_status)
+        elif not source_is_drive or not drive_id or not baseline:
             row = _ss.classify_sync_state(f, None, source_is_drive=source_is_drive,
-                                          run_status=run_status)
+                                          source_tracked=source_tracked, run_status=run_status)
         else:
             current, err = None, None
             try:
@@ -1533,6 +1747,17 @@ def source_status(sid: str, request: Request):
                                           fetch_error=err, run_status=run_status)
         rows.append({"file": f["file"], "drive_file_id": drive_id, **row})
     count = lambda st: sum(1 for r in rows if r["state"] == st)
+    if sp_error:
+        # Named, not swallowed. Every SharePoint file reads `untracked` when the delta replay
+        # fails, and an operator seeing a wall of "untracked" deserves to know it is a Graph
+        # problem this endpoint hit rather than a scan that recorded nothing.
+        return {"scan_id": sid, "sharepoint_freshness_error": sp_error,
+                "stale_count": count("stale"), "untracked_count": count("untracked"),
+                "unavailable_count": count("unavailable"), "importing_count": count("importing"),
+                "import_failed_count": count("import_failed"),
+                "publish_pending_count": count("publish_pending"),
+                "conflict_count": count("conflict"), "acp_newer_count": count("acp_newer"),
+                "files": rows}
     return {"scan_id": sid, "stale_count": count("stale"), "untracked_count": count("untracked"),
             "unavailable_count": count("unavailable"), "importing_count": count("importing"),
             "import_failed_count": count("import_failed"),
@@ -1645,6 +1870,107 @@ def lifecycle_file_detail(sid: str, document_id: str, request: Request):
             "data_version": core.store.lifecycle_data_version(sid)}
 
 
+def _sp_export_cells(raw) -> dict:
+    """The three export cells that come out of the `sp_metadata` JSON rather than a column.
+
+    `managed_columns` flattens the tenant's own columns to "Name=Value; Name=Value" — a sheet
+    cell an information architect can read, rather than JSON they have to parse to check one
+    value. `sp_availability` names only the fields that are NOT present, because listing thirty
+    "present" states per row would bury the two that matter under noise; a field absent from this
+    cell was read and had a value. `sp_unread_reason` carries the explanations.
+
+    Never raises: this blob is written by a scan and read by an export, and a malformed one from
+    a partially-rolled-forward replica must cost that row its metadata cells, not the whole
+    auditor's export.
+    """
+    if not raw:
+        return {}
+    try:
+        blob = _json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:  # noqa: BLE001
+        return {}
+    if not isinstance(blob, dict):
+        return {}
+    managed = blob.get("managed_columns") or {}
+    availability = blob.get("availability") or {}
+    reasons = blob.get("reasons") or {}
+    return {
+        "managed_columns": "; ".join(f"{k}={v}" for k, v in managed.items()) or None,
+        "sp_availability": "; ".join(f"{k}={v}" for k, v in availability.items()
+                                     if v and v != "present") or None,
+        "sp_unread_reason": "; ".join(f"{k}: {v}" for k, v in reasons.items()) or None,
+        # SMART ARCHIVAL, and the two cells travel together on purpose. A sheet showing
+        # "collaborators: 1" without saying how it was counted invites the reader to treat an
+        # authorship FLOOR (creator + last editor, all a listing page can name) as a total. The
+        # basis is what makes the number safe to act on — see sp_metadata.collaborator_count.
+        "collaborator_count": (blob.get("collaborators") or {}).get("count"),
+        "collaborator_basis": (blob.get("collaborators") or {}).get("basis"),
+        # Access is not use. An empty cell here is "not measured", never "idle" — the counts are
+        # absent from the blob entirely unless the analytics read actually happened, and
+        # `sp_availability` carries the state for a reader who needs to be sure.
+        "recent_actor_count": (blob.get("activity") or {}).get("actors"),
+        "recent_action_count": (blob.get("activity") or {}).get("actions"),
+    }
+
+
+@router.get("/scans/{sid}/exceptions.csv")
+def scan_exceptions_csv(sid: str, request: Request):
+    """Everything this scan could NOT read, as CSV — the exportable exception report.
+
+    An estate report says what was found. This says what was missed, which is the half an auditor
+    and an IT admin actually act on: a site whose consent lapsed, a library that throttled out, a
+    selection the site cap refused. Those facts have been on the scan's scope since Phase 1 and
+    have only ever been visible inside the app, one run at a time; a customer chasing thirty
+    consents needs a list they can send to somebody.
+
+    EMPTY IS A REAL ANSWER AND IS RETURNED AS ONE — a header row and no data. A report that 404s
+    when nothing failed is indistinguishable from a report that could not be produced, and the
+    difference is exactly what the reader is asking about.
+
+    Rows are per SITE and per LIBRARY, because those fail independently: a site can be readable
+    while one of its libraries throttles out, and merging them would hide the working nine tenths
+    of a site behind its broken tenth.
+    """
+    import csv
+    import io
+    if core.store.get_scan_head(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    scan = core.store.get_scan(sid, owner=_owner(request)) or {}
+    scope = (scan.get("run") or {}).get("scope")
+    if isinstance(scope, str):
+        try:
+            scope = _json.loads(scope)
+        except Exception:  # noqa: BLE001
+            scope = {}
+    scope = scope if isinstance(scope, dict) else {}
+
+    cols = ["level", "site_id", "site_name", "library_id", "library_name", "status",
+            "documents_listed", "reason"]
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(cols)
+    for site in (scope.get("sites") or []):
+        if not isinstance(site, dict):
+            continue
+        # A site that completed is not an exception, however little it held: an empty library is
+        # an answer about the tenant, and listing it here would bury the sites that actually
+        # failed under the ones that are simply small.
+        if site.get("status") in ("blocked", "skipped", "partial"):
+            w.writerow(["site", site.get("id") or "", site.get("name") or "", "", "",
+                        site.get("status") or "", site.get("listed") if site.get("listed")
+                        is not None else "", site.get("error") or ""])
+        for lib in (site.get("libraries") or []):
+            if not isinstance(lib, dict) or not lib.get("full_reason"):
+                continue
+            # A library walked in full is not itself an exception — but the REASON it had to be
+            # is the operational fact: an expired cursor, a forced reconciliation, a first sync.
+            w.writerow(["library", site.get("id") or "", site.get("name") or "",
+                        lib.get("id") or "", lib.get("name") or "", lib.get("mode") or "",
+                        "", lib.get("full_reason")])
+    return Response(buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="exceptions-{sid}.csv"'})
+
+
 @router.get("/scans/{sid}/inventory.csv")
 def scan_inventory_csv(sid: str, request: Request):
     """The whole per-file estate inventory as CSV (owner-scoped) — every discovered file, source
@@ -1660,10 +1986,26 @@ def scan_inventory_csv(sid: str, request: Request):
     # THAT a file was tagged (lifecycle_status) but not WHICH rule tagged it, WHY, or whether a
     # human overrode the recommendation (lifecycle rules #8). Added alongside lifecycle_status,
     # not in place of it.
+    # SharePoint-native columns (Phase 2) sit beside the lifecycle ones because they are what an
+    # auditor checks a lifecycle decision AGAINST: "archived under the Superseded content type"
+    # is checkable from this sheet, "archived because a rule said so" is not.
+    #
+    # `sp_availability` is the column that makes the rest readable. Every other SharePoint cell
+    # can be empty for two opposite reasons — the tenant sets nothing, or ACP was refused — and
+    # an export that cannot tell them apart invites the wrong conclusion in the more damaging
+    # direction: an estate whose sensitivity labels nobody ever requested reads as an estate with
+    # no sensitivity labels. This column carries the per-field state, and `sp_unread_reason` the
+    # explanation where there is one.
     cols = ["file", "owner", "size_kb", "mime", "format", "status", "doc_class",
             "lifecycle_status", "lifecycle_rule_id", "lifecycle_reason",
             "policy_version", "evaluation_result", "evidence_json",
             "lifecycle_override_reason", "lifecycle_overridden_by", "lifecycle_overridden_at",
+            "site_name", "library_name", "content_type", "retention_label",
+            "sensitivity_label", "sharing_scope", "item_kind", "checked_out_by",
+            "sp_version", "modified_by", "managed_columns",
+            "collaborator_count", "collaborator_basis",
+            "recent_actor_count", "recent_action_count",
+            "sp_availability", "sp_unread_reason",
             "path", "parent_folder", "created_at", "source_modified",
             "discovered_at", "drive_file_id"]
     buf = io.StringIO()
@@ -1683,6 +2025,7 @@ def scan_inventory_csv(sid: str, request: Request):
             e["policy_version"] = winning.get("policy_version")
             e["evaluation_result"] = winning.get("result")
             e["evidence_json"] = _json.dumps(winning.get("evidence") or {}, separators=(",", ":"))
+        e.update(_sp_export_cells(r.get("sp_metadata")))
         w.writerow([e.get(c, "") if e.get(c) is not None else "" for c in cols])
     return Response(buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": f'attachment; filename="inventory-{sid}.csv"'})
@@ -2446,6 +2789,122 @@ def get_file_geometry(scan_id: str, filename: str, request: Request,
 
     import geometry as _geom
     return {"bbox": _geom.shape_bbox(data, ext, locator)}
+
+
+@router.get("/scans/{scan_id}/files/{filename:path}/source_link")
+def get_file_source_link(scan_id: str, filename: str, request: Request,
+                         page: int = Query(1, ge=1)):
+    """Deep-link URL back to the source document, scoped to the given slide/page.
+
+    Owner-scoped and non-blocking: returns 200 with `{url: null}` when a link cannot be
+    constructed (local upload, missing token, Graph error) so the card degrades gracefully.
+
+    Drive: constructs the link from the stored `drive_file_id` — no API call.
+    SharePoint: calls Graph `GET /drives/{drive_id}/items/{drive_file_id}?$select=webUrl`
+      with the caller-supplied `x-sp-token`; appends `?web=1&slide={page}` for .pptx.
+      Returns `{url: null}` when no token is supplied or when the Graph call fails.
+    Local / unknown: returns `{url: null}`.
+
+    Honesty (ADR 0016): a real stored id or a live Graph response, or nothing."""
+    import os as _os
+
+    owner = _owner(request)
+    row = core.store.get_source_link_data(scan_id, filename, owner=owner)
+    if row is None:
+        raise HTTPException(404, "scan not found")
+
+    source = (row.get("source") or "").lower()
+    drive_file_id = row.get("drive_file_id") or ""
+
+    if source == "drive" and drive_file_id:
+        return {"url": f"https://drive.google.com/file/d/{drive_file_id}/view",
+                "label": "Open in Drive"}
+
+    if source == "sharepoint" and drive_file_id:
+        token = request.headers.get("x-sp-token")
+        if not token:
+            return {"url": None}
+        drive_id = row.get("drive_id") or ""
+        try:
+            import scanner as _scanner
+            graph_url = (f"{_scanner.GRAPH}/drives/{drive_id}/items/{drive_file_id}"
+                         if drive_id else
+                         f"{_scanner.GRAPH}/me/drive/items/{drive_file_id}")
+            item = _scanner._sp_get(token, graph_url + "?$select=webUrl")
+            web_url = item.get("webUrl", "")
+            if not web_url:
+                return {"url": None}
+            ext = _os.path.splitext(filename)[1].lower()
+            if ext == ".pptx":
+                web_url = f"{web_url}?web=1&slide={page}"
+            return {"url": web_url, "label": "Open in SharePoint"}
+        except Exception:
+            return {"url": None}
+
+    return {"url": None}
+
+
+_DISPOSITION_KINDS = frozenset({"attested", "out_of_scope"})
+
+
+@router.post("/scans/{scan_id}/files/{filename:path}/dispose")
+async def dispose_criterion(scan_id: str, filename: str, request: Request):
+    """W4 — record a human disposition for one criterion in a file.
+
+    Body: {"sc": "<criterion-id>", "kind": "attested"|"out_of_scope", "reason": "<text>"}
+
+    Append-only: correcting a wrong disposition means calling again with the updated kind/reason —
+    the most-recent row wins in /dispositions. Guarded to the dispositionable outcome types
+    (UNCHECKED, GAP, AT) on the frontend; the backend trusts the kind value and validates only that
+    it is a recognised kind and that reason is non-empty."""
+    owner = _owner(request)
+    if core.store.get_scan(scan_id, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(422, "JSON body required")
+    sc = (body.get("sc") or "").strip()
+    kind = (body.get("kind") or "").strip()
+    reason = (body.get("reason") or "").strip()
+    if not sc:
+        raise HTTPException(422, "sc is required")
+    if kind not in _DISPOSITION_KINDS:
+        raise HTTPException(422, f"kind must be one of {sorted(_DISPOSITION_KINDS)}")
+    if not reason:
+        raise HTTPException(422, "reason is required")
+    row = core.store.record_criterion_disposition(
+        scan_id, filename, sc, kind, reason, actor=owner, owner=owner)
+    core.store.log_decision(owner, "criterion.disposed", scan_id=scan_id,
+                            file=filename, rule_id=sc, detail=f"{kind}: {reason}")
+    return row
+
+
+@router.get("/scans/{scan_id}/files/{filename:path}/dispositions")
+def list_file_dispositions(scan_id: str, filename: str, request: Request):
+    """W4 — all recorded criterion dispositions for one file, most-recent-first.
+
+    The caller takes the first row per sc as the effective disposition. Returns an empty list
+    when the scan is found but no dispositions have been recorded for this file."""
+    owner = _owner(request)
+    if core.store.get_scan(scan_id, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    return core.store.list_criterion_dispositions(scan_id, filename, owner=owner)
+
+
+@router.get("/scans/{scan_id}/files/{filename:path}/scanned-layout")
+def get_scanned_pdf_layout(scan_id: str, filename: str, request: Request):
+    """ADR 0027 Tier A — vision layout model for a scanned/untagged PDF.
+
+    Returns per-page descriptions extracted during scanning when ACP_SCANNED_PDF_TIER_A is on
+    and the file was detected as scanned. ``detected`` is True only when at least one page was
+    assessed. Returns ``{"detected": false, "pages": []}`` for all other cases (structured files,
+    flag off, scan not found)."""
+    owner = _owner(request)
+    if core.store.get_scan(scan_id, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    rows = core.store.get_scanned_pdf_layouts(scan_id, filename)
+    return {"detected": bool(rows), "pages": rows}
 
 
 @router.get("/scans/{scan_id}/files/{filename:path}/heading-outline")

@@ -69,7 +69,9 @@ describe('source — DiscoverCompleteSummary shows after discovery, not assessme
     // so the card must render even without the timestamp.
     expect(discover).toMatch(/run\?\.status\s*===\s*['"]discovered['"]/)
     // The estatebar fallback hides under the same condition so the two panels don't both show.
-    const estatebarGate = discover.match(/busy\s*\|\|\s*!\(run\?\.discovered_at[^)]+\)/)
+    // displayBusy is the active job only when it belongs to the displayed scan. A raw global
+    // `busy` here painted a newer job over a completed Scan History selection.
+    const estatebarGate = discover.match(/displayBusy\s*\|\|\s*!\(run\?\.discovered_at[^)]+\)/)
     expect(estatebarGate).not.toBeNull()
   })
 })

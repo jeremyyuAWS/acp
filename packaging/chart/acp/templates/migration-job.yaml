@@ -1,0 +1,73 @@
+{{- if .Values.migrations.enabled }}
+{{/*
+Schema migration, as a pre-install/pre-upgrade hook.
+
+WHY BEFORE THE NEW CODE, AND WHY backoffLimit 0.
+
+ADR 0045 establishes that every ACP migration is ADDITIVE (expand/contract, contract deferred to
+a later release once no old-code replica remains). That property is what makes running the
+migration first safe: the old code keeps working against the new schema, so there is a window in
+which both versions coexist and neither is broken. It is also why there is no down-migration to
+run on rollback — rolling the DEPLOYMENT back is safe precisely because the schema did not move
+backwards.
+
+`backoffLimit: 0` because a retry is the wrong response to a failed migration. Helm's hook
+failure stops the release, which leaves the previous version serving against a schema that is
+either unchanged or additively ahead — both fine. A retry, by contrast, re-runs DDL against a
+database the first attempt may have half-changed, and does it while an operator is not watching.
+
+hook-delete-policy keeps the Job on failure: `before-hook-creation` clears the previous one when
+the next release starts, and `hook-succeeded` removes it when it worked. What is deliberately NOT
+here is `hook-failed` — the failed Job and its logs are the only record of what went wrong, and
+deleting them is deleting the evidence at the exact moment somebody needs it.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "acp.fullname" . }}-migrate
+  labels:
+    {{- include "acp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrations
+  annotations:
+    "helm.sh/hook": {{ .Values.migrations.hook | quote }}
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrations.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "acp.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: migrations
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "acp.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "acp.image" (dict "root" $ "component" "api") | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          {{- /*
+            Runs the application's own schema application path, not a separate migration tool.
+            One writer of the schema means the boot-time verification in api/store.py and this
+            Job cannot disagree about what "current" is — and ADR 0045's version marker is what
+            makes a second run a no-op rather than a replay of 139 DDL statements.
+          */}}
+          command: ["python", "-c", "import store; store.Store(); print('schema current')"]
+          env:
+            {{- include "acp.commonEnv" . | nindent 12 }}
+          resources:
+            requests:
+              cpu: "250m"
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+{{- end }}

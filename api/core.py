@@ -195,6 +195,54 @@ def email_allowed(email: str) -> bool:
     return any(email.endswith("@" + d.lower()) for d in ALLOWED_DOMAINS)
 
 
+def people_with_access() -> list[dict]:
+    """Everyone the People screen lists, merged from the three places access is actually granted.
+
+    ACCESS AND A `people` ROW ARE NOT THE SAME THING, and that is the whole reason this exists.
+    A person reaches the People screen by any of three routes:
+
+      * a `people` record — added through Settings, carrying a provider and an invite status
+      * the ALLOWLIST alone — seeded from ACP_ALLOWED_EMAILS or added before the people table
+        existed. They can sign in; there is no record describing them. The screen shows them as
+        "Provider not recorded".
+      * being the protected OWNER_EMAIL, who is always present whether stored or not
+
+    Only the first of those puts a row in `store.get_people()`. Anything that asks "does this
+    person exist?" by reading that table alone therefore disagrees with the screen the
+    administrator is looking at — it says no to somebody whose name is on the list, in a row with
+    working controls beside it.
+
+    That is not hypothetical. `assign_person_role` did exactly that and answered
+    `404 person not found` when an administrator used the role dropdown on an allowlist-only
+    person, on the People screen that had just rendered them. The list and the write have to
+    answer from the same set, so they both come here.
+
+    NOT the same question as `email_allowed`, which additionally admits any address under an
+    allowed DOMAIN. Domain-wide users can sign in without appearing here, deliberately: this is
+    the enumerable roster the People screen manages, not the perimeter.
+    """
+    st = get_store()
+    records = {r["email"]: r for r in st.get_people()}
+    admins = set(st.get_admins()) | set(ADMIN_EMAILS)
+    for email in st.get_allowlist():
+        records.setdefault(email, {"email": email, "provider": None, "status": "access_ready",
+                                   "role": "admin" if email in admins else "user"})
+    if OWNER_EMAIL:
+        records[OWNER_EMAIL] = {**records.get(OWNER_EMAIL, {}),
+                                "email": OWNER_EMAIL, "status": "active",
+                                "role": "owner", "protected": True}
+    return sorted(records.values(), key=lambda r: r["email"])
+
+
+def person_with_access(email: str | None) -> dict | None:
+    """One person from `people_with_access`, or None. Lower-cased and stripped, because that is
+    how every caller receives an address off the wire."""
+    target = (email or "").strip().lower()
+    if not target:
+        return None
+    return next((p for p in people_with_access() if p.get("email") == target), None)
+
+
 def is_scope_owner(email: str | None) -> bool:
     """May this identity edit the scan scope? Scope writes go through PUT /settings, which is
     admin-only (_require_admin), so this is the same gate the API enforces — it exists so the SPA can
@@ -498,6 +546,31 @@ def _matches_a_protected_route(path: str) -> bool:
     return False
 
 
+def match_registered_route(path: str, method: str):
+    """The registered APIRoute this request will actually dispatch to, or None.
+
+    Sibling of _matches_a_protected_route above, and separate from it because the two want
+    different answers. That one asks "is this a real API path at all", so a method mismatch still
+    counts. This one is used to look a route up in the capability map (PRD §11), where the METHOD
+    is half the key — GET /admin/roles and DELETE /admin/roles/{id} are different permissions —
+    so only a FULL match will do. A PARTIAL match (right path, wrong verb) resolves to no route
+    here, which is correct: FastAPI will answer 405, and there is no capability to check on a
+    request that reaches no endpoint.
+
+    Returns the route object rather than its path so callers get the PATTERN (`/scans/{sid}`),
+    not the concrete path (`/scans/abc123`) — the map is keyed on patterns, and keying it on
+    concrete paths would mean a table with one row per scan.
+    """
+    from starlette.routing import Match
+    scope = {"type": "http", "path": path, "method": (method or "GET").upper(),
+             "path_params": {}}
+    for route in _protected_routes():
+        match, _ = route.matches(scope)
+        if match == Match.FULL:
+            return route
+    return None
+
+
 def is_public(path: str) -> bool:
     if path in ALWAYS_PUBLIC:
         return True
@@ -663,6 +736,51 @@ def _drive_delta_check(cursor_key: str, owner: str | None,
         return None
 
 
+def _whole_drive_prior_inventory_for_account(
+        owner: str | None, account_id: str | None) -> tuple[str, list[dict]] | None:
+    """Return the newest trustworthy whole-Drive inventory for this Google account.
+
+    A Drive delta describes changes to the account-wide corpus.  It can therefore only be
+    applied to an account-wide baseline.  In particular, the newest completed Drive scan may
+    be a folder run; using that inventory as the baseline manufactures a tiny result and then
+    labels it ``kind=drive``.  Production did exactly that on 2026-09-03 (986-file whole Drive,
+    then a 37-file folder run, then a "whole Drive" reconstruction containing 37 files).
+
+    A Discovery-only run is deliberately not used for delta reconstruction yet: the existing
+    inventory reader is tied to ``completed_at``.  Falling back to a fresh listing is slower but
+    safe; pretending an older completed folder inventory belongs to that newer run is not.
+    """
+    if not owner:
+        return None
+    store = get_store()
+    try:
+        candidates = [r for r in store.list_finished_scans(owner)
+                      if r.get("source") == "drive"]
+    except AttributeError:
+        # Compatibility for small store doubles and older deployments during a rolling update.
+        # Production Store implements list_finished_scans; the conservative path there is the
+        # scope-aware loop below.
+        prior = store.latest_scan_inventory_items(owner, "drive")
+        if prior is None or any(r.get("drive_account_id") != account_id for r in prior):
+            return None
+        return "legacy-unknown-scope", prior
+
+    if not candidates:
+        return None
+    # Load-bearing: inspect the NEWEST finished Drive boundary; never skip past a newer folder
+    # run and silently pair an old whole-Drive scope with some other inventory.
+    run = candidates[0]
+    scope = run.get("scope") if isinstance(run.get("scope"), dict) else {}
+    enumeration = scope.get("enumeration") or {}
+    if (scope.get("kind") != "drive" or not run.get("completed_at")
+            or not enumeration.get("complete") or scope.get("truncated")):
+        return None
+    prior = store.latest_scan_inventory_items(owner, "drive")
+    if prior is None or any(r.get("drive_account_id") != account_id for r in prior):
+        return None
+    return run["id"], prior
+
+
 def _drive_prior_inventory_for_account(owner: str | None, account_id: str | None) -> list[dict] | None:
     """The most recent completed Drive scan's inventory, but ONLY if it was actually run as
     THIS Google account. store.latest_scan_inventory_items has no account-scoped query of its
@@ -683,12 +801,8 @@ def _drive_prior_inventory_for_account(owner: str | None, account_id: str | None
     that still participates in the comparison rather than skipping it: None only matches other
     Nones, so an unverifiable CURRENT identity checked against a KNOWN prior one is correctly
     treated as a mismatch, never a silent pass."""
-    prior = get_store().latest_scan_inventory_items(owner, "drive")
-    if prior is None:
-        return None
-    if any(r.get("drive_account_id") != account_id for r in prior):
-        return None
-    return prior
+    match = _whole_drive_prior_inventory_for_account(owner, account_id)
+    return match[1] if match else None
 
 
 def _drive_sync_plan(owner: str | None) -> tuple[bool, dict | None]:
@@ -912,6 +1026,134 @@ def _sp_interactive_cursor_key(owner: str | None, drive_id: str | None) -> str:
     return f"sharepoint:{json.dumps([owner, drive_id])}"
 
 
+def sp_reconcile_days() -> int:
+    """How old a stored delta cursor may get before its library is walked in FULL again.
+
+    A CORRECTNESS control, not a performance knob, and the reason it exists is specific: Graph's
+    delta feed reports changes to the driveItem, and a managed-column edit that does not touch
+    the driveItem may never appear in it. A library synced incrementally forever would carry a
+    stale retention label or records category indefinitely, with nothing anywhere saying so —
+    the failure mode is silent and it grows.
+
+    Seven days by default: a week of drift is a week of a rule keying on a column that has since
+    changed, which is recoverable; a quarter of it is not. 0 disables the forced reconciliation
+    for an operator who has measured their tenant and accepts the risk knowingly.
+    """
+    try:
+        n = int(os.environ.get("ACP_SP_RECONCILE_DAYS", "7") or 7)
+    except ValueError:
+        return 7
+    return max(0, n)
+
+
+def _sp_cursor_is_stale(cursor: dict | None) -> str | None:
+    """The reason this cursor's library is due a full reconciliation, or None to sync it.
+
+    A cursor with no readable `updated_at` is treated as DUE, not as fresh: an unparseable
+    timestamp is a fact we do not have, and defaulting the unknown to "recently synced" is how a
+    library would quietly never be reconciled again.
+    """
+    days = sp_reconcile_days()
+    if not days:
+        return None
+    if not cursor:
+        return None                       # no cursor at all is a seed, handled by the caller
+    from source_staleness import parse_rfc3339
+    when = parse_rfc3339(cursor.get("updated_at"))
+    if when is None:
+        return "the stored cursor has no readable timestamp, so its age cannot be trusted"
+    import datetime as _dt
+    age = (_dt.datetime.now(_dt.timezone.utc) - when).days
+    if age >= days:
+        return (f"the delta cursor is {age} days old (ACP_SP_RECONCILE_DAYS={days}) — a full "
+                f"re-list catches column edits Graph's delta feed does not report")
+    return None
+
+
+def sp_multi_sync_plan(owner: str, token: str, drive_ids: list[str | None]) -> dict:
+    """PRD Phase 3 at ESTATE SCALE: one plan covering several document libraries at once.
+
+    `_interactive_sp_sync_plan` answers for exactly one drive, because Graph's delta query is
+    scoped to one drive and has no folder filter. A 30-site estate is 30-plus drives, and the
+    question "can this scan skip walking?" stops having a single answer: one library's cursor is
+    fresh, another's expired last week, a third has never been synced, a fourth is due its
+    periodic reconciliation. Collapsing that to one yes/no means either walking everything
+    because one library needs it, or reconstructing everything and quietly serving a stale
+    estate for the one that did not.
+
+    So the answer is PER LIBRARY::
+
+        {"delta":  {drive_id: {"prior_files", "changed", "removed_ids"}},
+         "full":   {drive_id: "why this one has to be walked"},
+         "carried": int}     # documents carried forward without re-reading
+
+    A drive in `full` is walked exactly as it always was. A drive in `delta` is reconstructed.
+    One expired cursor degrades ONE library, and the estate is still mostly free.
+
+    UNCERTAINTY ALWAYS RESOLVES TO A FULL WALK of the library in question — never to a skip and
+    never to a reconstruction this function cannot vouch for. That is _sp_delta_check's own
+    contract (None means "fall back"), applied per drive instead of per scan.
+    """
+    plan: dict = {"delta": {}, "full": {}, "carried": 0}
+    if not drive_ids:
+        return plan
+    priors = _sp_prior_inventory_by_drive(owner, drive_ids)
+    for drive_id in drive_ids:
+        key = _sp_interactive_cursor_key(owner, drive_id)
+        stale = _sp_cursor_is_stale(get_store().get_sync_cursor(key))
+        if stale:
+            # Advance the cursor anyway, so the NEXT scan can go incremental again from a fresh
+            # baseline. Skipping that would make a reconciled library reconcile forever.
+            _sp_delta_check(key, owner, token, drive_id)
+            plan["full"][drive_id] = stale
+            continue
+        result = _sp_delta_check(key, owner, token, drive_id)
+        if result is None:
+            plan["full"][drive_id] = ("no usable delta cursor for this library yet (first sync, "
+                                      "an expired link, or the change-check failed) — walking it "
+                                      "in full and seeding one for next time")
+            continue
+        prior = priors.get(drive_id)
+        if prior is None:
+            plan["full"][drive_id] = ("no prior scan of this library to reconstruct from — "
+                                      "walking it in full to establish a baseline")
+            continue
+        changed, removed_ids = result
+        from scanner import _sp_file_from_inventory_row
+        plan["delta"][drive_id] = {
+            "prior_files": [_sp_file_from_inventory_row(r) for r in prior],
+            "changed": changed, "removed_ids": removed_ids}
+        plan["carried"] += max(0, len(prior) - len(changed))
+    return plan
+
+
+def _sp_prior_inventory_by_drive(owner: str | None,
+                                 drive_ids: list[str | None]) -> dict[str | None, list[dict]]:
+    """The most recent completed SharePoint scan's inventory, PARTITIONED by drive.
+
+    _sp_prior_inventory_for_drive answers the single-drive question by rejecting the whole
+    baseline if ANY row belongs to a different drive — correct when a scan covers one library,
+    and exactly wrong once a scan covers thirty: every row would "belong to a different drive"
+    from the perspective of twenty-nine of them, and no library would ever have a baseline.
+
+    Partitioning instead gives each library its own, and a library with no rows in the prior scan
+    simply has none — that library is walked, the others are not. A drive whose partition is
+    empty is absent from the result rather than present-and-empty, because those mean different
+    things to the caller: absent is "no baseline, walk it", and this function never returns the
+    other one for a drive the prior scan genuinely did not cover.
+    """
+    prior = get_store().latest_scan_inventory_items(owner, "sharepoint")
+    if prior is None:
+        return {}
+    wanted = set(drive_ids)
+    out: dict[str | None, list[dict]] = {}
+    for row in prior:
+        d = row.get("drive_id")
+        if d in wanted:
+            out.setdefault(d, []).append(row)
+    return out
+
+
 def _interactive_sp_sync_plan(owner: str, token: str, drive_id: str | None) -> dict | None:
     """PRD Phase 3, interactive SharePoint scans: the same delta reconstruction _sp_sync_plan
     gives the scheduled sweep, but for a user-initiated whole-library (or whole OneDrive,
@@ -1132,6 +1374,30 @@ ASSESS_LANE_JOB_TYPES = (
 REMEDIATE_LANE_JOB_TYPES = ("remediate_file", "rescore_file", "apply_approved_values")
 
 
+def _replica_id() -> str:
+    """This replica's identity, for a globally unique worker id.
+
+    Read through joblog rather than re-reading the environment, so log attribution and job
+    attribution cannot drift. Falls back to a random suffix only when the platform supplies
+    nothing: "unknown:w0" from every replica would recreate the collision this exists to remove.
+    """
+    try:
+        import joblog  # noqa: PLC0415
+        replica = (joblog.REPLICA or "").strip()
+    except Exception:  # noqa: BLE001 — identity must never take the worker pool down
+        replica = ""
+    if replica and replica != "unknown":
+        return replica
+    global _REPLICA_FALLBACK
+    if _REPLICA_FALLBACK is None:
+        import uuid  # noqa: PLC0415
+        _REPLICA_FALLBACK = f"unknown-{uuid.uuid4().hex[:8]}"
+    return _REPLICA_FALLBACK
+
+
+_REPLICA_FALLBACK = None
+
+
 def _worker_job_types(index, pool_size):
     """Route dedicated services before falling back to the mixed pool reservation."""
     from worker import HANDLERS
@@ -1161,7 +1427,15 @@ def _spawn_worker() -> None:
     # poll/SSE stream without worker.py importing core (it is deliberately infra-only — see its
     # own docstring). See _job_is_stale's phase=='retrying' exemption below for why this signal
     # can outlive the normal 90s staleness window (backoff can run up to 600s).
-    w = JobWorker(get_store(), worker_id=f"w{_worker_seq}", on_retry=update_job)
+    # GLOBALLY UNIQUE, not "w0". The id was a per-PROCESS sequence, so every replica minted the
+    # same handful of names — production ran ten Assess replicas and `locked_by` held only `w0`
+    # and `w1`. Counting distinct values therefore counted workers per replica, never replicas,
+    # and a diagnosis built on it (2026-09-05, a suspected stuck queue) could not have been right
+    # whatever the data said. Prefixing the replica makes the id identify one worker in the fleet.
+    #
+    # joblog.REPLICA is the same resolution used for log attribution — the Container Apps replica
+    # name, else HOSTNAME, else "unknown" — so the two agree rather than inventing a second answer.
+    w = JobWorker(get_store(), worker_id=f"{_replica_id()}:w{_worker_seq}", on_retry=update_job)
     w.job_types = _worker_job_types(len(_worker_handles), WORKERS)
     t = threading.Thread(target=w.run_forever, daemon=True, name=f"jobworker-{_worker_seq}")
     _worker_seq += 1
@@ -1206,6 +1480,9 @@ def stop_workers() -> None:
             w.stop()
         except Exception:
             swallowed("core.stop_workers: stopping a worker failed")
+    # Production sets this to 540s alongside a 600s Container Apps termination grace period
+    # (deploy/public/redeploy.sh). Keep the short local/default window so an unstamped developer
+    # worker or test cannot hang shutdown for nine minutes.
     deadline = _t.monotonic() + float(os.environ.get("ACP_SHUTDOWN_DRAIN_SECONDS", "20"))
     for _w, t in _worker_handles:
         remaining = deadline - _t.monotonic()

@@ -32,9 +32,19 @@ class _Resp:
 
 
 def _pages_by_url(pages: dict[str, dict], calls: list | None = None):
+    """A Graph stand-in that answers the mapped URLs and REFUSES the rest with a 400.
+
+    400 rather than a raised KeyError, because that is what Graph actually does with a `$select`
+    or `$expand` it does not accept — and the difference is now behaviour-visible: `_sp_get`
+    retries transport exceptions (a connection reset is transient) and does NOT retry a 400 (a
+    refused ask will be refused again). A stub that raised would make every tier fallback in this
+    file pay four retries to learn something Graph says immediately.
+    """
     def fake_get(url, **kw):
         if calls is not None:
             calls.append(url)
+        if url not in pages:
+            return _Resp(400, {"error": {"message": "unsupported query"}})
         return _Resp(200, pages[url])
     return fake_get
 
@@ -50,6 +60,17 @@ def _item(iid, name, mime=PPTX):
 
 
 SEED_URL = f"{scanner.GRAPH}/drives/drv-1/root/delta?$select={scanner._SP_ITEM_SELECT}"
+#: The same request with the listItem expansion — what a seed asks for FIRST (Phase 3), so a
+#: changed file keeps its content type and managed columns instead of being replaced by a raw
+#: item stripped of them. A tenant that refuses it falls back to SEED_URL.
+SEED_URL_EXPANDED = SEED_URL + scanner._SP_LIST_EXPAND
+
+
+def _graph_keys(item: dict) -> dict:
+    """The item minus ACP's own `_acp_`-prefixed stamps. `sp_delta_since` returns RAW Graph
+    resources — that contract is unchanged — and separately records what it knows about how the
+    item was read, on keys a reader can tell apart at a glance."""
+    return {k: v for k, v in item.items() if not k.startswith("_acp_")}
 
 
 # ── single page ────────────────────────────────────────────────────────────────────────────
@@ -58,9 +79,23 @@ def test_a_single_page_of_changed_items_is_raw(monkeypatch):
     resp = {"value": [_item("I1", "deck.pptx")], "@odata.deltaLink": "https://delta/2"}
     _inject_httpx(monkeypatch, _pages_by_url({"https://delta/1": resp}))
     items, removed, new_link = scanner.sp_delta_since("tok", "drv-1", "https://delta/1")
-    assert items == [_item("I1", "deck.pptx")]
+    assert [_graph_keys(i) for i in items] == [_item("I1", "deck.pptx")]
     assert removed == set()
     assert new_link == "https://delta/2"
+
+
+def test_a_changed_item_records_HOW_its_metadata_was_read(monkeypatch):
+    """Phase 3. A changed file is replaced WHOLLY by its fresh raw item (apply_sp_delta), so
+    whatever the delta feed did not carry is gone from that file for this scan. Recording which
+    containers were read is what keeps that honest: a retention label the delta feed never
+    carries must report as NOT READ, not as a tenant that stopped applying one.
+    """
+    resp = {"value": [_item("I1", "deck.pptx")], "@odata.deltaLink": "https://delta/2"}
+    _inject_httpx(monkeypatch, _pages_by_url({"https://delta/1": resp}))
+    [item], _, _ = scanner.sp_delta_since("tok", "drv-1", "https://delta/1")
+    assert "delta feed does not carry the wider driveItem $select" in item["_acp_rich_error"]
+    meta = scanner._sp_item_metadata(item, site_id="S", site_name="S", library_name="L")
+    assert meta["fields"]["retention_label"]["state"] == "unavailable"
 
 
 def test_no_changes_returns_an_empty_list_and_the_new_link(monkeypatch):
@@ -75,8 +110,38 @@ def test_a_seed_call_uses_the_configured_drive_root(monkeypatch):
     calls: list = []
     _inject_httpx(monkeypatch, _pages_by_url({SEED_URL: resp}, calls))
     items, removed, new_link = scanner.sp_delta_since("tok", "drv-1", None)
-    assert calls == [SEED_URL]
+    # The EXPANDED request first, then the plain one when this stub refuses it — the same tier
+    # ladder the walk uses, and the same promise: what a refusal costs is metadata, never the
+    # delta itself.
+    assert calls == [SEED_URL_EXPANDED, SEED_URL]
     assert new_link == "https://delta/seeded"
+
+
+def test_a_seed_call_asks_for_the_expansion_and_keeps_it_when_the_tenant_allows(monkeypatch):
+    """The point of asking. A tenant that answers the expansion hands back the content type and
+    managed columns of every changed file, at no extra round trip — the whole reason the delta
+    feed is worth expanding rather than re-reading each changed item afterwards."""
+    resp = {"value": [dict(_item("I1", "deck.pptx"),
+                           listItem={"contentType": {"name": "Policy"},
+                                     "fields": {"Records Category": "Active"}})],
+            "@odata.deltaLink": "https://delta/seeded"}
+    calls: list = []
+    _inject_httpx(monkeypatch, _pages_by_url({SEED_URL_EXPANDED: resp}, calls))
+    [item], _, _ = scanner.sp_delta_since("tok", "drv-1", None)
+    assert calls == [SEED_URL_EXPANDED], "fell back when the tenant had answered"
+    meta = scanner._sp_item_metadata(item, site_id="S", site_name="S", library_name="L")
+    assert meta["fields"]["content_type"]["value"] == "Policy"
+    assert meta["fields"]["managed_columns"]["value"] == {"Records Category": "Active"}
+
+
+def test_a_persisted_delta_link_is_passed_through_untouched(monkeypatch):
+    """Graph requires it. A deltaLink already carries its own query, and appending an $expand to
+    it is how a perfectly good cursor becomes a 400 on the next sync."""
+    calls: list = []
+    _inject_httpx(monkeypatch, _pages_by_url(
+        {"https://delta/1": {"value": [], "@odata.deltaLink": "https://delta/2"}}, calls))
+    scanner.sp_delta_since("tok", "drv-1", "https://delta/1")
+    assert calls == ["https://delta/1"]
 
 
 # ── deleted / folder / OS metadata filtering ──────────────────────────────────────────────────

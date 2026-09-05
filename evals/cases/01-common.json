@@ -1,0 +1,3740 @@
+[
+  {
+    "case_id": "rem-c00",
+    "suite": "detection",
+    "environment": {
+      "format": "docx",
+      "filename": "docx-sample-00.docx",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "1.1.1 inline image, 880x380, no alt text; OCR reads '2026 Open Enrollment Notice \u2014 enrollment runs March 1 to March 31'",
+        "defect": true,
+        "criterion": "1.1.1"
+      },
+      {
+        "id": "noise-scan-00",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      },
+      {
+        "id": "noise-meta-01",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.1.1",
+      "component": "drawing.inline",
+      "root_cause": "image_without_alt_text",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 8.0,
+    "allowed_actions": [
+      "propose_value",
+      "request_approval",
+      "apply_approved",
+      "escalate"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_approved",
+        "target": "image.alt",
+        "example_value": "2026 Open Enrollment Notice: enrollment runs March 1 to March 31",
+        "value_matches": [
+          "enrollment"
+        ],
+        "value_forbidden": [
+          "image",
+          "picture",
+          "photo of"
+        ],
+        "value_max_words": 30
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.1.1"
+      },
+      {
+        "check": "approval_recorded",
+        "field": "image.alt"
+      },
+      {
+        "check": "field_matches",
+        "field": "image.alt",
+        "pattern": "enrollment"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.1.1": "open"
+      },
+      "scope": [
+        "image.alt"
+      ],
+      "derived": {}
+    },
+    "notes": "assisted lane: a prefilled value a reviewer approves before it is written"
+  },
+  {
+    "case_id": "rem-c01",
+    "suite": "diagnosis",
+    "environment": {
+      "format": "html",
+      "filename": "html-sample-01.html",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "1.3.1 a 4x6 data table declares no header row",
+        "defect": true,
+        "criterion": "1.3.1"
+      },
+      {
+        "id": "noise-meta-10",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      },
+      {
+        "id": "noise-lint-11",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.3.1",
+      "component": "body.table",
+      "root_cause": "table_without_header_row",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 4.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "table.headerRow",
+        "example_value": true
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.3.1"
+      },
+      {
+        "check": "field_equals",
+        "field": "table.headerRow",
+        "value": true
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.3.1": "open"
+      },
+      "scope": [
+        "table.headerRow"
+      ],
+      "derived": {}
+    },
+    "notes": "auto lane: html 1.3.1 is deterministic in REMEDIATION"
+  },
+  {
+    "case_id": "rem-c02",
+    "suite": "planning",
+    "environment": {
+      "format": "pdf",
+      "filename": "pdf-sample-02.pdf",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "1.1.1 inline image, 880x380, no alt text; OCR reads '2026 Open Enrollment Notice \u2014 enrollment runs March 1 to March 31'",
+        "defect": true,
+        "criterion": "1.1.1"
+      },
+      {
+        "id": "noise-lint-20",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      },
+      {
+        "id": "noise-size-21",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.1.1",
+      "component": "drawing.inline",
+      "root_cause": "image_without_alt_text",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 8.0,
+    "allowed_actions": [
+      "propose_value",
+      "request_approval",
+      "apply_approved",
+      "escalate"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_approved",
+        "target": "image.alt",
+        "example_value": "2026 Open Enrollment Notice: enrollment runs March 1 to March 31",
+        "value_matches": [
+          "enrollment"
+        ],
+        "value_forbidden": [
+          "image",
+          "picture",
+          "photo of"
+        ],
+        "value_max_words": 30
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.1.1"
+      },
+      {
+        "check": "approval_recorded",
+        "field": "image.alt"
+      },
+      {
+        "check": "field_matches",
+        "field": "image.alt",
+        "pattern": "enrollment"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.1.1": "open"
+      },
+      "scope": [
+        "image.alt"
+      ],
+      "derived": {}
+    },
+    "notes": "assisted lane: a prefilled value a reviewer approves before it is written"
+  },
+  {
+    "case_id": "rem-c03",
+    "suite": "execution",
+    "environment": {
+      "format": "pptx",
+      "filename": "pptx-sample-03.pptx",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "1.1.1 inline image, 880x380, no alt text; OCR reads '2026 Open Enrollment Notice \u2014 enrollment runs March 1 to March 31'",
+        "defect": true,
+        "criterion": "1.1.1"
+      },
+      {
+        "id": "noise-size-30",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      },
+      {
+        "id": "noise-scan-31",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.1.1",
+      "component": "drawing.inline",
+      "root_cause": "image_without_alt_text",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 8.0,
+    "allowed_actions": [
+      "propose_value",
+      "request_approval",
+      "apply_approved",
+      "escalate"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_approved",
+        "target": "image.alt",
+        "example_value": "2026 Open Enrollment Notice: enrollment runs March 1 to March 31",
+        "value_matches": [
+          "enrollment"
+        ],
+        "value_forbidden": [
+          "image",
+          "picture",
+          "photo of"
+        ],
+        "value_max_words": 30
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.1.1"
+      },
+      {
+        "check": "approval_recorded",
+        "field": "image.alt"
+      },
+      {
+        "check": "field_matches",
+        "field": "image.alt",
+        "pattern": "enrollment"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.1.1": "open"
+      },
+      "scope": [
+        "image.alt"
+      ],
+      "derived": {}
+    },
+    "notes": "assisted lane: a prefilled value a reviewer approves before it is written"
+  },
+  {
+    "case_id": "rem-c04",
+    "suite": "operational",
+    "environment": {
+      "format": "xlsx",
+      "filename": "xlsx-sample-04.xlsx",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "1.1.1 inline image, 880x380, no alt text; OCR reads '2026 Open Enrollment Notice \u2014 enrollment runs March 1 to March 31'",
+        "defect": true,
+        "criterion": "1.1.1"
+      },
+      {
+        "id": "noise-scan-40",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      },
+      {
+        "id": "noise-meta-41",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.1.1",
+      "component": "drawing.inline",
+      "root_cause": "image_without_alt_text",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 8.0,
+    "allowed_actions": [
+      "propose_value",
+      "request_approval",
+      "apply_approved",
+      "escalate"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_approved",
+        "target": "image.alt",
+        "example_value": "2026 Open Enrollment Notice: enrollment runs March 1 to March 31",
+        "value_matches": [
+          "enrollment"
+        ],
+        "value_forbidden": [
+          "image",
+          "picture",
+          "photo of"
+        ],
+        "value_max_words": 30
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.1.1"
+      },
+      {
+        "check": "approval_recorded",
+        "field": "image.alt"
+      },
+      {
+        "check": "field_matches",
+        "field": "image.alt",
+        "pattern": "enrollment"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.1.1": "open"
+      },
+      "scope": [
+        "image.alt"
+      ],
+      "derived": {}
+    },
+    "notes": "assisted lane: a prefilled value a reviewer approves before it is written"
+  },
+  {
+    "case_id": "rem-c05",
+    "suite": "detection",
+    "environment": {
+      "format": "docx",
+      "filename": "docx-sample-05.docx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "1.3.1 a 4x6 data table declares no header row",
+        "defect": true,
+        "criterion": "1.3.1"
+      },
+      {
+        "id": "noise-meta-50",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      },
+      {
+        "id": "noise-lint-51",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.3.1",
+      "component": "body.table",
+      "root_cause": "table_without_header_row",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 4.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "table.headerRow",
+        "example_value": true
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.3.1"
+      },
+      {
+        "check": "field_equals",
+        "field": "table.headerRow",
+        "value": true
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.3.1": "open"
+      },
+      "scope": [
+        "table.headerRow"
+      ],
+      "derived": {}
+    },
+    "notes": "auto lane: docx 1.3.1 is deterministic in REMEDIATION"
+  },
+  {
+    "case_id": "rem-c06",
+    "suite": "diagnosis",
+    "environment": {
+      "format": "html",
+      "filename": "html-sample-06.html",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "1.3.3 instruction relies on shape and position alone: 'click the round green button on the right to continue'",
+        "defect": true,
+        "criterion": "1.3.3"
+      },
+      {
+        "id": "noise-lint-60",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      },
+      {
+        "id": "noise-size-61",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.3.3",
+      "component": "body.paragraph",
+      "root_cause": "sensory_only_instruction",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 5.0,
+    "allowed_actions": [
+      "propose_value",
+      "request_approval",
+      "apply_approved",
+      "escalate"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_approved",
+        "target": "paragraph.text",
+        "example_value": "Select Continue to proceed",
+        "value_matches": [
+          "continue"
+        ],
+        "value_forbidden": [
+          "on the right",
+          "round green"
+        ],
+        "value_max_words": 20
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.3.3"
+      },
+      {
+        "check": "approval_recorded",
+        "field": "paragraph.text"
+      },
+      {
+        "check": "field_matches",
+        "field": "paragraph.text",
+        "pattern": "continue"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.3.3": "open"
+      },
+      "scope": [
+        "paragraph.text"
+      ],
+      "derived": {}
+    },
+    "notes": "assisted lane: a prefilled value a reviewer approves before it is written"
+  },
+  {
+    "case_id": "rem-c07",
+    "suite": "planning",
+    "environment": {
+      "format": "pdf",
+      "filename": "pdf-sample-07.pdf",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "1.4.3 body run #767676 on #FFFFFF measures 4.54:1 against a 4.5:1 requirement on 11pt text; the adjacent caption measures 3.1:1",
+        "defect": true,
+        "criterion": "1.4.3"
+      },
+      {
+        "id": "noise-size-70",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      },
+      {
+        "id": "noise-scan-71",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.4.3",
+      "component": "run.color",
+      "root_cause": "insufficient_text_contrast",
+      "severity": "AA"
+    },
+    "risk_tier": "low",
+    "human_minutes": 6.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "run.color",
+        "example_value": "#595959"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.4.3"
+      },
+      {
+        "check": "field_equals",
+        "field": "run.color",
+        "value": "#595959"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.4.3": "open"
+      },
+      "scope": [
+        "run.color"
+      ],
+      "derived": {
+        "color": "#595959"
+      }
+    },
+    "notes": "auto lane: pdf 1.4.3 is deterministic in REMEDIATION"
+  },
+  {
+    "case_id": "rem-c08",
+    "suite": "execution",
+    "environment": {
+      "format": "pptx",
+      "filename": "pptx-sample-08.pptx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "1.3.1 a 4x6 data table declares no header row",
+        "defect": true,
+        "criterion": "1.3.1"
+      },
+      {
+        "id": "noise-scan-80",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      },
+      {
+        "id": "noise-meta-81",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.3.1",
+      "component": "body.table",
+      "root_cause": "table_without_header_row",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 4.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "table.headerRow",
+        "example_value": true
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.3.1"
+      },
+      {
+        "check": "field_equals",
+        "field": "table.headerRow",
+        "value": true
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.3.1": "open"
+      },
+      "scope": [
+        "table.headerRow"
+      ],
+      "derived": {}
+    },
+    "notes": "auto lane: pptx 1.3.1 is deterministic in REMEDIATION"
+  },
+  {
+    "case_id": "rem-c09",
+    "suite": "operational",
+    "environment": {
+      "format": "xlsx",
+      "filename": "xlsx-sample-09.xlsx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "1.3.1 a 4x6 data table declares no header row",
+        "defect": true,
+        "criterion": "1.3.1"
+      },
+      {
+        "id": "noise-meta-90",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      },
+      {
+        "id": "noise-lint-91",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.3.1",
+      "component": "body.table",
+      "root_cause": "table_without_header_row",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 4.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "table.headerRow",
+        "example_value": true
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.3.1"
+      },
+      {
+        "check": "field_equals",
+        "field": "table.headerRow",
+        "value": true
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.3.1": "open"
+      },
+      "scope": [
+        "table.headerRow"
+      ],
+      "derived": {}
+    },
+    "notes": "auto lane: xlsx 1.3.1 is deterministic in REMEDIATION"
+  },
+  {
+    "case_id": "rem-c10",
+    "suite": "detection",
+    "environment": {
+      "format": "docx",
+      "filename": "docx-sample-10.docx",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "1.3.2 a floating text box carries the deadline sentence and is read last",
+        "defect": true,
+        "criterion": "1.3.2"
+      },
+      {
+        "id": "noise-lint-100",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      },
+      {
+        "id": "noise-size-101",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.3.2",
+      "component": "body.textbox",
+      "root_cause": "floating_text_out_of_reading_order",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 7.0,
+    "allowed_actions": [
+      "propose_value",
+      "request_approval",
+      "apply_approved",
+      "escalate"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_approved",
+        "target": "textbox.anchor",
+        "example_value": "place inline after paragraph 3",
+        "value_matches": [
+          "after"
+        ],
+        "value_forbidden": [
+          "delete"
+        ],
+        "value_max_words": 12
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.3.2"
+      },
+      {
+        "check": "approval_recorded",
+        "field": "textbox.anchor"
+      },
+      {
+        "check": "field_matches",
+        "field": "textbox.anchor",
+        "pattern": "after"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.3.2": "open"
+      },
+      "scope": [
+        "textbox.anchor"
+      ],
+      "derived": {}
+    },
+    "notes": "assisted lane: a prefilled value a reviewer approves before it is written"
+  },
+  {
+    "case_id": "rem-c11",
+    "suite": "diagnosis",
+    "environment": {
+      "format": "html",
+      "filename": "html-sample-11.html",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "1.4.3 body run #767676 on #FFFFFF measures 4.54:1 against a 4.5:1 requirement on 11pt text; the adjacent caption measures 3.1:1",
+        "defect": true,
+        "criterion": "1.4.3"
+      },
+      {
+        "id": "noise-size-110",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      },
+      {
+        "id": "noise-scan-111",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.4.3",
+      "component": "run.color",
+      "root_cause": "insufficient_text_contrast",
+      "severity": "AA"
+    },
+    "risk_tier": "low",
+    "human_minutes": 6.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "run.color",
+        "example_value": "#595959"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.4.3"
+      },
+      {
+        "check": "field_equals",
+        "field": "run.color",
+        "value": "#595959"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.4.3": "open"
+      },
+      "scope": [
+        "run.color"
+      ],
+      "derived": {
+        "color": "#595959"
+      }
+    },
+    "notes": "auto lane: html 1.4.3 is deterministic in REMEDIATION"
+  },
+  {
+    "case_id": "rem-c12",
+    "suite": "planning",
+    "environment": {
+      "format": "pdf",
+      "filename": "pdf-sample-12.pdf",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "2.4.2 document has no title set in core properties",
+        "defect": true,
+        "criterion": "2.4.2"
+      },
+      {
+        "id": "noise-scan-120",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      },
+      {
+        "id": "noise-meta-121",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "2.4.2",
+      "component": "docProps/core.xml",
+      "root_cause": "missing_document_title",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 2.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "doc.title",
+        "example_value": "2026 Open Enrollment Notice"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "2.4.2"
+      },
+      {
+        "check": "field_equals",
+        "field": "doc.title",
+        "value": "2026 Open Enrollment Notice"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "2.4.2": "open"
+      },
+      "scope": [
+        "doc.title"
+      ],
+      "derived": {
+        "title": "2026 Open Enrollment Notice"
+      }
+    },
+    "notes": "auto lane: pdf 2.4.2 is deterministic in REMEDIATION"
+  },
+  {
+    "case_id": "rem-c13",
+    "suite": "execution",
+    "environment": {
+      "format": "pptx",
+      "filename": "pptx-sample-13.pptx",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "1.3.3 instruction relies on shape and position alone: 'click the round green button on the right to continue'",
+        "defect": true,
+        "criterion": "1.3.3"
+      },
+      {
+        "id": "noise-meta-130",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      },
+      {
+        "id": "noise-lint-131",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.3.3",
+      "component": "body.paragraph",
+      "root_cause": "sensory_only_instruction",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 5.0,
+    "allowed_actions": [
+      "propose_value",
+      "request_approval",
+      "apply_approved",
+      "escalate"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_approved",
+        "target": "paragraph.text",
+        "example_value": "Select Continue to proceed",
+        "value_matches": [
+          "continue"
+        ],
+        "value_forbidden": [
+          "on the right",
+          "round green"
+        ],
+        "value_max_words": 20
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.3.3"
+      },
+      {
+        "check": "approval_recorded",
+        "field": "paragraph.text"
+      },
+      {
+        "check": "field_matches",
+        "field": "paragraph.text",
+        "pattern": "continue"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.3.3": "open"
+      },
+      "scope": [
+        "paragraph.text"
+      ],
+      "derived": {}
+    },
+    "notes": "assisted lane: a prefilled value a reviewer approves before it is written"
+  },
+  {
+    "case_id": "rem-c14",
+    "suite": "operational",
+    "environment": {
+      "format": "xlsx",
+      "filename": "xlsx-sample-14.xlsx",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "1.3.3 instruction relies on shape and position alone: 'click the round green button on the right to continue'",
+        "defect": true,
+        "criterion": "1.3.3"
+      },
+      {
+        "id": "noise-lint-140",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      },
+      {
+        "id": "noise-size-141",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.3.3",
+      "component": "body.paragraph",
+      "root_cause": "sensory_only_instruction",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 5.0,
+    "allowed_actions": [
+      "propose_value",
+      "request_approval",
+      "apply_approved",
+      "escalate"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_approved",
+        "target": "paragraph.text",
+        "example_value": "Select Continue to proceed",
+        "value_matches": [
+          "continue"
+        ],
+        "value_forbidden": [
+          "on the right",
+          "round green"
+        ],
+        "value_max_words": 20
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.3.3"
+      },
+      {
+        "check": "approval_recorded",
+        "field": "paragraph.text"
+      },
+      {
+        "check": "field_matches",
+        "field": "paragraph.text",
+        "pattern": "continue"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.3.3": "open"
+      },
+      "scope": [
+        "paragraph.text"
+      ],
+      "derived": {}
+    },
+    "notes": "assisted lane: a prefilled value a reviewer approves before it is written"
+  },
+  {
+    "case_id": "rem-c15",
+    "suite": "detection",
+    "environment": {
+      "format": "docx",
+      "filename": "docx-sample-15.docx",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "1.3.3 instruction relies on shape and position alone: 'click the round green button on the right to continue'",
+        "defect": true,
+        "criterion": "1.3.3"
+      },
+      {
+        "id": "noise-size-150",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      },
+      {
+        "id": "noise-scan-151",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.3.3",
+      "component": "body.paragraph",
+      "root_cause": "sensory_only_instruction",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 5.0,
+    "allowed_actions": [
+      "propose_value",
+      "request_approval",
+      "apply_approved",
+      "escalate"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_approved",
+        "target": "paragraph.text",
+        "example_value": "Select Continue to proceed",
+        "value_matches": [
+          "continue"
+        ],
+        "value_forbidden": [
+          "on the right",
+          "round green"
+        ],
+        "value_max_words": 20
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.3.3"
+      },
+      {
+        "check": "approval_recorded",
+        "field": "paragraph.text"
+      },
+      {
+        "check": "field_matches",
+        "field": "paragraph.text",
+        "pattern": "continue"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.3.3": "open"
+      },
+      "scope": [
+        "paragraph.text"
+      ],
+      "derived": {}
+    },
+    "notes": "assisted lane: a prefilled value a reviewer approves before it is written"
+  },
+  {
+    "case_id": "rem-c16",
+    "suite": "diagnosis",
+    "environment": {
+      "format": "html",
+      "filename": "html-sample-16.html",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "2.4.2 document has no title set in core properties",
+        "defect": true,
+        "criterion": "2.4.2"
+      },
+      {
+        "id": "noise-scan-160",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      },
+      {
+        "id": "noise-meta-161",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "2.4.2",
+      "component": "docProps/core.xml",
+      "root_cause": "missing_document_title",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 2.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "doc.title",
+        "example_value": "2026 Open Enrollment Notice"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "2.4.2"
+      },
+      {
+        "check": "field_equals",
+        "field": "doc.title",
+        "value": "2026 Open Enrollment Notice"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "2.4.2": "open"
+      },
+      "scope": [
+        "doc.title"
+      ],
+      "derived": {
+        "title": "2026 Open Enrollment Notice"
+      }
+    },
+    "notes": "auto lane: html 2.4.2 is deterministic in REMEDIATION"
+  },
+  {
+    "case_id": "rem-c17",
+    "suite": "planning",
+    "environment": {
+      "format": "pdf",
+      "filename": "pdf-sample-17.pdf",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "3.1.1 no default language declared for the document",
+        "defect": true,
+        "criterion": "3.1.1"
+      },
+      {
+        "id": "noise-meta-170",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      },
+      {
+        "id": "noise-lint-171",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "3.1.1",
+      "component": "docProps/core.xml",
+      "root_cause": "missing_document_language",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 2.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "doc.lang",
+        "example_value": "en-US"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "3.1.1"
+      },
+      {
+        "check": "field_equals",
+        "field": "doc.lang",
+        "value": "en-US"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "3.1.1": "open"
+      },
+      "scope": [
+        "doc.lang"
+      ],
+      "derived": {
+        "lang": "en-US"
+      }
+    },
+    "notes": "auto lane: pdf 3.1.1 is deterministic in REMEDIATION"
+  },
+  {
+    "case_id": "rem-c18",
+    "suite": "execution",
+    "environment": {
+      "format": "pptx",
+      "filename": "pptx-sample-18.pptx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "1.4.3 body run #767676 on #FFFFFF measures 4.54:1 against a 4.5:1 requirement on 11pt text; the adjacent caption measures 3.1:1",
+        "defect": true,
+        "criterion": "1.4.3"
+      },
+      {
+        "id": "noise-lint-180",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      },
+      {
+        "id": "noise-size-181",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.4.3",
+      "component": "run.color",
+      "root_cause": "insufficient_text_contrast",
+      "severity": "AA"
+    },
+    "risk_tier": "low",
+    "human_minutes": 6.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "run.color",
+        "example_value": "#595959"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.4.3"
+      },
+      {
+        "check": "field_equals",
+        "field": "run.color",
+        "value": "#595959"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.4.3": "open"
+      },
+      "scope": [
+        "run.color"
+      ],
+      "derived": {
+        "color": "#595959"
+      }
+    },
+    "notes": "auto lane: pptx 1.4.3 is deterministic in REMEDIATION"
+  },
+  {
+    "case_id": "rem-c19",
+    "suite": "operational",
+    "environment": {
+      "format": "xlsx",
+      "filename": "xlsx-sample-19.xlsx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "1.4.3 body run #767676 on #FFFFFF measures 4.54:1 against a 4.5:1 requirement on 11pt text; the adjacent caption measures 3.1:1",
+        "defect": true,
+        "criterion": "1.4.3"
+      },
+      {
+        "id": "noise-size-190",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      },
+      {
+        "id": "noise-scan-191",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.4.3",
+      "component": "run.color",
+      "root_cause": "insufficient_text_contrast",
+      "severity": "AA"
+    },
+    "risk_tier": "low",
+    "human_minutes": 6.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "run.color",
+        "example_value": "#595959"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.4.3"
+      },
+      {
+        "check": "field_equals",
+        "field": "run.color",
+        "value": "#595959"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.4.3": "open"
+      },
+      "scope": [
+        "run.color"
+      ],
+      "derived": {
+        "color": "#595959"
+      }
+    },
+    "notes": "auto lane: xlsx 1.4.3 is deterministic in REMEDIATION"
+  },
+  {
+    "case_id": "rem-c20",
+    "suite": "detection",
+    "environment": {
+      "format": "docx",
+      "filename": "docx-sample-20.docx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "1.4.3 body run #767676 on #FFFFFF measures 4.54:1 against a 4.5:1 requirement on 11pt text; the adjacent caption measures 3.1:1",
+        "defect": true,
+        "criterion": "1.4.3"
+      },
+      {
+        "id": "noise-scan-200",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      },
+      {
+        "id": "noise-meta-201",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.4.3",
+      "component": "run.color",
+      "root_cause": "insufficient_text_contrast",
+      "severity": "AA"
+    },
+    "risk_tier": "low",
+    "human_minutes": 6.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "run.color",
+        "example_value": "#595959"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.4.3"
+      },
+      {
+        "check": "field_equals",
+        "field": "run.color",
+        "value": "#595959"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.4.3": "open"
+      },
+      "scope": [
+        "run.color"
+      ],
+      "derived": {
+        "color": "#595959"
+      }
+    },
+    "notes": "auto lane: docx 1.4.3 is deterministic in REMEDIATION"
+  },
+  {
+    "case_id": "rem-c21",
+    "suite": "diagnosis",
+    "environment": {
+      "format": "html",
+      "filename": "html-sample-21.html",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "2.4.4 link text is 'click here'; the sentence reads 'For the full accessibility policy, click here.'",
+        "defect": true,
+        "criterion": "2.4.4"
+      },
+      {
+        "id": "noise-meta-210",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      },
+      {
+        "id": "noise-lint-211",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "2.4.4",
+      "component": "body.hyperlink",
+      "root_cause": "non_descriptive_link_text",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 4.0,
+    "allowed_actions": [
+      "propose_value",
+      "request_approval",
+      "apply_approved",
+      "escalate"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_approved",
+        "target": "link.text",
+        "example_value": "Read the full accessibility policy",
+        "value_matches": [
+          "accessibility policy"
+        ],
+        "value_forbidden": [
+          "click here",
+          "here",
+          "read more"
+        ],
+        "value_max_words": 12
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "2.4.4"
+      },
+      {
+        "check": "approval_recorded",
+        "field": "link.text"
+      },
+      {
+        "check": "field_matches",
+        "field": "link.text",
+        "pattern": "accessibility policy"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "2.4.4": "open"
+      },
+      "scope": [
+        "link.text"
+      ],
+      "derived": {}
+    },
+    "notes": "assisted lane: a prefilled value a reviewer approves before it is written"
+  },
+  {
+    "case_id": "rem-c22",
+    "suite": "planning",
+    "environment": {
+      "format": "pdf",
+      "filename": "pdf-sample-22.pdf",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "4.1.2 content control has no Title (w:alias); adjacent text reads 'Date of birth'",
+        "defect": true,
+        "criterion": "4.1.2"
+      },
+      {
+        "id": "noise-lint-220",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      },
+      {
+        "id": "noise-size-221",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "4.1.2",
+      "component": "form.control",
+      "root_cause": "control_without_accessible_name",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 3.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "field.name",
+        "example_value": "Date of birth"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "4.1.2"
+      },
+      {
+        "check": "field_equals",
+        "field": "field.name",
+        "value": "Date of birth"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "4.1.2": "open"
+      },
+      "scope": [
+        "field.name"
+      ],
+      "derived": {
+        "adjacent_label": "Date of birth"
+      }
+    },
+    "notes": "auto lane: pdf 4.1.2 is deterministic in REMEDIATION"
+  },
+  {
+    "case_id": "rem-c23",
+    "suite": "execution",
+    "environment": {
+      "format": "pptx",
+      "filename": "pptx-sample-23.pptx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "2.4.2 document has no title set in core properties",
+        "defect": true,
+        "criterion": "2.4.2"
+      },
+      {
+        "id": "noise-size-230",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      },
+      {
+        "id": "noise-scan-231",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "2.4.2",
+      "component": "docProps/core.xml",
+      "root_cause": "missing_document_title",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 2.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "doc.title",
+        "example_value": "2026 Open Enrollment Notice"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "2.4.2"
+      },
+      {
+        "check": "field_equals",
+        "field": "doc.title",
+        "value": "2026 Open Enrollment Notice"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "2.4.2": "open"
+      },
+      "scope": [
+        "doc.title"
+      ],
+      "derived": {
+        "title": "2026 Open Enrollment Notice"
+      }
+    },
+    "notes": "auto lane: pptx 2.4.2 is deterministic in REMEDIATION"
+  },
+  {
+    "case_id": "rem-c24",
+    "suite": "operational",
+    "environment": {
+      "format": "xlsx",
+      "filename": "xlsx-sample-24.xlsx",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "1.4.5 image is 92% text by area; OCR reads 'Benefits at a glance \u2014 medical, dental, vision'",
+        "defect": true,
+        "criterion": "1.4.5"
+      },
+      {
+        "id": "noise-scan-240",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      },
+      {
+        "id": "noise-meta-241",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.4.5",
+      "component": "drawing.inline",
+      "root_cause": "image_of_text",
+      "severity": "AA"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 9.0,
+    "allowed_actions": [
+      "propose_value",
+      "request_approval",
+      "apply_approved",
+      "escalate"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_approved",
+        "target": "image.textEquivalent",
+        "example_value": "Benefits at a glance: medical, dental, vision",
+        "value_matches": [
+          "medical"
+        ],
+        "value_forbidden": [
+          "image of"
+        ],
+        "value_max_words": 30
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.4.5"
+      },
+      {
+        "check": "approval_recorded",
+        "field": "image.textEquivalent"
+      },
+      {
+        "check": "field_matches",
+        "field": "image.textEquivalent",
+        "pattern": "medical"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.4.5": "open"
+      },
+      "scope": [
+        "image.textEquivalent"
+      ],
+      "derived": {}
+    },
+    "notes": "assisted lane: a prefilled value a reviewer approves before it is written"
+  },
+  {
+    "case_id": "rem-c25",
+    "suite": "detection",
+    "environment": {
+      "format": "docx",
+      "filename": "docx-sample-25.docx",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "1.4.5 image is 92% text by area; OCR reads 'Benefits at a glance \u2014 medical, dental, vision'",
+        "defect": true,
+        "criterion": "1.4.5"
+      },
+      {
+        "id": "noise-meta-250",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      },
+      {
+        "id": "noise-lint-251",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.4.5",
+      "component": "drawing.inline",
+      "root_cause": "image_of_text",
+      "severity": "AA"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 9.0,
+    "allowed_actions": [
+      "propose_value",
+      "request_approval",
+      "apply_approved",
+      "escalate"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_approved",
+        "target": "image.textEquivalent",
+        "example_value": "Benefits at a glance: medical, dental, vision",
+        "value_matches": [
+          "medical"
+        ],
+        "value_forbidden": [
+          "image of"
+        ],
+        "value_max_words": 30
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.4.5"
+      },
+      {
+        "check": "approval_recorded",
+        "field": "image.textEquivalent"
+      },
+      {
+        "check": "field_matches",
+        "field": "image.textEquivalent",
+        "pattern": "medical"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.4.5": "open"
+      },
+      "scope": [
+        "image.textEquivalent"
+      ],
+      "derived": {}
+    },
+    "notes": "assisted lane: a prefilled value a reviewer approves before it is written"
+  },
+  {
+    "case_id": "rem-c26",
+    "suite": "diagnosis",
+    "environment": {
+      "format": "html",
+      "filename": "html-sample-26.html",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "2.4.6 outline jumps H1 -> H3 with no H2",
+        "defect": true,
+        "criterion": "2.4.6"
+      },
+      {
+        "id": "noise-lint-260",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      },
+      {
+        "id": "noise-size-261",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "2.4.6",
+      "component": "body.heading",
+      "root_cause": "heading_level_skipped",
+      "severity": "AA"
+    },
+    "risk_tier": "low",
+    "human_minutes": 3.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "heading.level",
+        "example_value": 2
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "2.4.6"
+      },
+      {
+        "check": "field_equals",
+        "field": "heading.level",
+        "value": 2
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "2.4.6": "open"
+      },
+      "scope": [
+        "heading.level"
+      ],
+      "derived": {}
+    },
+    "notes": "auto lane: html 2.4.6 is deterministic in REMEDIATION"
+  },
+  {
+    "case_id": "rem-c27",
+    "suite": "planning",
+    "environment": {
+      "format": "pptx",
+      "filename": "pptx-sample-27.pptx",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "2.4.4 link text is 'click here'; the sentence reads 'For the full accessibility policy, click here.'",
+        "defect": true,
+        "criterion": "2.4.4"
+      },
+      {
+        "id": "noise-size-270",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      },
+      {
+        "id": "noise-scan-271",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "2.4.4",
+      "component": "body.hyperlink",
+      "root_cause": "non_descriptive_link_text",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 4.0,
+    "allowed_actions": [
+      "propose_value",
+      "request_approval",
+      "apply_approved",
+      "escalate"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_approved",
+        "target": "link.text",
+        "example_value": "Read the full accessibility policy",
+        "value_matches": [
+          "accessibility policy"
+        ],
+        "value_forbidden": [
+          "click here",
+          "here",
+          "read more"
+        ],
+        "value_max_words": 12
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "2.4.4"
+      },
+      {
+        "check": "approval_recorded",
+        "field": "link.text"
+      },
+      {
+        "check": "field_matches",
+        "field": "link.text",
+        "pattern": "accessibility policy"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "2.4.4": "open"
+      },
+      "scope": [
+        "link.text"
+      ],
+      "derived": {}
+    },
+    "notes": "assisted lane: a prefilled value a reviewer approves before it is written"
+  },
+  {
+    "case_id": "rem-c28",
+    "suite": "execution",
+    "environment": {
+      "format": "xlsx",
+      "filename": "xlsx-sample-28.xlsx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "2.4.2 document has no title set in core properties",
+        "defect": true,
+        "criterion": "2.4.2"
+      },
+      {
+        "id": "noise-scan-280",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      },
+      {
+        "id": "noise-meta-281",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "2.4.2",
+      "component": "docProps/core.xml",
+      "root_cause": "missing_document_title",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 2.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "doc.title",
+        "example_value": "2026 Open Enrollment Notice"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "2.4.2"
+      },
+      {
+        "check": "field_equals",
+        "field": "doc.title",
+        "value": "2026 Open Enrollment Notice"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "2.4.2": "open"
+      },
+      "scope": [
+        "doc.title"
+      ],
+      "derived": {
+        "title": "2026 Open Enrollment Notice"
+      }
+    },
+    "notes": "auto lane: xlsx 2.4.2 is deterministic in REMEDIATION"
+  },
+  {
+    "case_id": "rem-c29",
+    "suite": "operational",
+    "environment": {
+      "format": "docx",
+      "filename": "docx-sample-29.docx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "2.4.2 document has no title set in core properties",
+        "defect": true,
+        "criterion": "2.4.2"
+      },
+      {
+        "id": "noise-meta-290",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      },
+      {
+        "id": "noise-lint-291",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "2.4.2",
+      "component": "docProps/core.xml",
+      "root_cause": "missing_document_title",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 2.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "doc.title",
+        "example_value": "2026 Open Enrollment Notice"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "2.4.2"
+      },
+      {
+        "check": "field_equals",
+        "field": "doc.title",
+        "value": "2026 Open Enrollment Notice"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "2.4.2": "open"
+      },
+      "scope": [
+        "doc.title"
+      ],
+      "derived": {
+        "title": "2026 Open Enrollment Notice"
+      }
+    },
+    "notes": "auto lane: docx 2.4.2 is deterministic in REMEDIATION"
+  },
+  {
+    "case_id": "rem-c30",
+    "suite": "detection",
+    "environment": {
+      "format": "html",
+      "filename": "html-sample-30.html",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "3.1.1 no default language declared for the document",
+        "defect": true,
+        "criterion": "3.1.1"
+      },
+      {
+        "id": "noise-lint-300",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      },
+      {
+        "id": "noise-size-301",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "3.1.1",
+      "component": "docProps/core.xml",
+      "root_cause": "missing_document_language",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 2.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "doc.lang",
+        "example_value": "en-US"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "3.1.1"
+      },
+      {
+        "check": "field_equals",
+        "field": "doc.lang",
+        "value": "en-US"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "3.1.1": "open"
+      },
+      "scope": [
+        "doc.lang"
+      ],
+      "derived": {
+        "lang": "en-US"
+      }
+    },
+    "notes": "auto lane: html 3.1.1 is deterministic in REMEDIATION"
+  },
+  {
+    "case_id": "rem-c31",
+    "suite": "diagnosis",
+    "environment": {
+      "format": "pptx",
+      "filename": "pptx-sample-31.pptx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "3.1.1 no default language declared for the document",
+        "defect": true,
+        "criterion": "3.1.1"
+      },
+      {
+        "id": "noise-size-310",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      },
+      {
+        "id": "noise-scan-311",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "3.1.1",
+      "component": "docProps/core.xml",
+      "root_cause": "missing_document_language",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 2.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "doc.lang",
+        "example_value": "en-US"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "3.1.1"
+      },
+      {
+        "check": "field_equals",
+        "field": "doc.lang",
+        "value": "en-US"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "3.1.1": "open"
+      },
+      "scope": [
+        "doc.lang"
+      ],
+      "derived": {
+        "lang": "en-US"
+      }
+    },
+    "notes": "auto lane: pptx 3.1.1 is deterministic in REMEDIATION"
+  },
+  {
+    "case_id": "rem-c32",
+    "suite": "planning",
+    "environment": {
+      "format": "xlsx",
+      "filename": "xlsx-sample-32.xlsx",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "2.4.4 link text is 'click here'; the sentence reads 'For the full accessibility policy, click here.'",
+        "defect": true,
+        "criterion": "2.4.4"
+      },
+      {
+        "id": "noise-scan-320",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      },
+      {
+        "id": "noise-meta-321",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "2.4.4",
+      "component": "body.hyperlink",
+      "root_cause": "non_descriptive_link_text",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 4.0,
+    "allowed_actions": [
+      "propose_value",
+      "request_approval",
+      "apply_approved",
+      "escalate"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_approved",
+        "target": "link.text",
+        "example_value": "Read the full accessibility policy",
+        "value_matches": [
+          "accessibility policy"
+        ],
+        "value_forbidden": [
+          "click here",
+          "here",
+          "read more"
+        ],
+        "value_max_words": 12
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "2.4.4"
+      },
+      {
+        "check": "approval_recorded",
+        "field": "link.text"
+      },
+      {
+        "check": "field_matches",
+        "field": "link.text",
+        "pattern": "accessibility policy"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "2.4.4": "open"
+      },
+      "scope": [
+        "link.text"
+      ],
+      "derived": {}
+    },
+    "notes": "assisted lane: a prefilled value a reviewer approves before it is written"
+  },
+  {
+    "case_id": "rem-c33",
+    "suite": "execution",
+    "environment": {
+      "format": "docx",
+      "filename": "docx-sample-33.docx",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "2.4.4 link text is 'click here'; the sentence reads 'For the full accessibility policy, click here.'",
+        "defect": true,
+        "criterion": "2.4.4"
+      },
+      {
+        "id": "noise-meta-330",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      },
+      {
+        "id": "noise-lint-331",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "2.4.4",
+      "component": "body.hyperlink",
+      "root_cause": "non_descriptive_link_text",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 4.0,
+    "allowed_actions": [
+      "propose_value",
+      "request_approval",
+      "apply_approved",
+      "escalate"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_approved",
+        "target": "link.text",
+        "example_value": "Read the full accessibility policy",
+        "value_matches": [
+          "accessibility policy"
+        ],
+        "value_forbidden": [
+          "click here",
+          "here",
+          "read more"
+        ],
+        "value_max_words": 12
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "2.4.4"
+      },
+      {
+        "check": "approval_recorded",
+        "field": "link.text"
+      },
+      {
+        "check": "field_matches",
+        "field": "link.text",
+        "pattern": "accessibility policy"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "2.4.4": "open"
+      },
+      "scope": [
+        "link.text"
+      ],
+      "derived": {}
+    },
+    "notes": "assisted lane: a prefilled value a reviewer approves before it is written"
+  },
+  {
+    "case_id": "rem-c34",
+    "suite": "operational",
+    "environment": {
+      "format": "html",
+      "filename": "html-sample-34.html",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "3.1.2 an unmarked French passage: 'Veuillez consulter la politique d'accessibilite.'",
+        "defect": true,
+        "criterion": "3.1.2"
+      },
+      {
+        "id": "noise-lint-340",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      },
+      {
+        "id": "noise-size-341",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "3.1.2",
+      "component": "run.lang",
+      "root_cause": "unmarked_language_of_parts",
+      "severity": "AA"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 3.0,
+    "allowed_actions": [
+      "propose_value",
+      "request_approval",
+      "apply_approved",
+      "escalate"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_approved",
+        "target": "run.lang",
+        "example_value": "fr-FR",
+        "value_matches": [
+          "fr"
+        ],
+        "value_forbidden": [
+          "en"
+        ],
+        "value_max_words": 3
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "3.1.2"
+      },
+      {
+        "check": "approval_recorded",
+        "field": "run.lang"
+      },
+      {
+        "check": "field_matches",
+        "field": "run.lang",
+        "pattern": "fr"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "3.1.2": "open"
+      },
+      "scope": [
+        "run.lang"
+      ],
+      "derived": {}
+    },
+    "notes": "assisted lane: a prefilled value a reviewer approves before it is written"
+  },
+  {
+    "case_id": "rem-c35",
+    "suite": "detection",
+    "environment": {
+      "format": "pptx",
+      "filename": "pptx-sample-35.pptx",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "3.1.2 an unmarked French passage: 'Veuillez consulter la politique d'accessibilite.'",
+        "defect": true,
+        "criterion": "3.1.2"
+      },
+      {
+        "id": "noise-size-350",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      },
+      {
+        "id": "noise-scan-351",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "3.1.2",
+      "component": "run.lang",
+      "root_cause": "unmarked_language_of_parts",
+      "severity": "AA"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 3.0,
+    "allowed_actions": [
+      "propose_value",
+      "request_approval",
+      "apply_approved",
+      "escalate"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_approved",
+        "target": "run.lang",
+        "example_value": "fr-FR",
+        "value_matches": [
+          "fr"
+        ],
+        "value_forbidden": [
+          "en"
+        ],
+        "value_max_words": 3
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "3.1.2"
+      },
+      {
+        "check": "approval_recorded",
+        "field": "run.lang"
+      },
+      {
+        "check": "field_matches",
+        "field": "run.lang",
+        "pattern": "fr"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "3.1.2": "open"
+      },
+      "scope": [
+        "run.lang"
+      ],
+      "derived": {}
+    },
+    "notes": "assisted lane: a prefilled value a reviewer approves before it is written"
+  },
+  {
+    "case_id": "rem-c36",
+    "suite": "diagnosis",
+    "environment": {
+      "format": "xlsx",
+      "filename": "xlsx-sample-36.xlsx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "3.1.1 no default language declared for the document",
+        "defect": true,
+        "criterion": "3.1.1"
+      },
+      {
+        "id": "noise-scan-360",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      },
+      {
+        "id": "noise-meta-361",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "3.1.1",
+      "component": "docProps/core.xml",
+      "root_cause": "missing_document_language",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 2.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "doc.lang",
+        "example_value": "en-US"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "3.1.1"
+      },
+      {
+        "check": "field_equals",
+        "field": "doc.lang",
+        "value": "en-US"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "3.1.1": "open"
+      },
+      "scope": [
+        "doc.lang"
+      ],
+      "derived": {
+        "lang": "en-US"
+      }
+    },
+    "notes": "auto lane: xlsx 3.1.1 is deterministic in REMEDIATION"
+  },
+  {
+    "case_id": "rem-c37",
+    "suite": "planning",
+    "environment": {
+      "format": "docx",
+      "filename": "docx-sample-37.docx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "2.4.6 outline jumps H1 -> H3 with no H2",
+        "defect": true,
+        "criterion": "2.4.6"
+      },
+      {
+        "id": "noise-meta-370",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      },
+      {
+        "id": "noise-lint-371",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "2.4.6",
+      "component": "body.heading",
+      "root_cause": "heading_level_skipped",
+      "severity": "AA"
+    },
+    "risk_tier": "low",
+    "human_minutes": 3.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "heading.level",
+        "example_value": 2
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "2.4.6"
+      },
+      {
+        "check": "field_equals",
+        "field": "heading.level",
+        "value": 2
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "2.4.6": "open"
+      },
+      "scope": [
+        "heading.level"
+      ],
+      "derived": {}
+    },
+    "notes": "auto lane: docx 2.4.6 is deterministic in REMEDIATION"
+  },
+  {
+    "case_id": "rem-c38",
+    "suite": "execution",
+    "environment": {
+      "format": "html",
+      "filename": "html-sample-38.html",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "3.3.2 text input with no label; visible text beside it reads 'Date of birth'",
+        "defect": true,
+        "criterion": "3.3.2"
+      },
+      {
+        "id": "noise-lint-380",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      },
+      {
+        "id": "noise-size-381",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "3.3.2",
+      "component": "form.field",
+      "root_cause": "unlabelled_form_field",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 3.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "field.label",
+        "example_value": "Date of birth"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "3.3.2"
+      },
+      {
+        "check": "field_equals",
+        "field": "field.label",
+        "value": "Date of birth"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "3.3.2": "open"
+      },
+      "scope": [
+        "field.label"
+      ],
+      "derived": {
+        "adjacent_label": "Date of birth"
+      }
+    },
+    "notes": "auto lane: html 3.3.2 is deterministic in REMEDIATION"
+  },
+  {
+    "case_id": "rem-c39",
+    "suite": "operational",
+    "environment": {
+      "format": "docx",
+      "filename": "docx-sample-39.docx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "3.1.1 no default language declared for the document",
+        "defect": true,
+        "criterion": "3.1.1"
+      },
+      {
+        "id": "noise-size-390",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      },
+      {
+        "id": "noise-scan-391",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "3.1.1",
+      "component": "docProps/core.xml",
+      "root_cause": "missing_document_language",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 2.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "doc.lang",
+        "example_value": "en-US"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "3.1.1"
+      },
+      {
+        "check": "field_equals",
+        "field": "doc.lang",
+        "value": "en-US"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "3.1.1": "open"
+      },
+      "scope": [
+        "doc.lang"
+      ],
+      "derived": {
+        "lang": "en-US"
+      }
+    },
+    "notes": "auto lane: docx 3.1.1 is deterministic in REMEDIATION"
+  }
+]

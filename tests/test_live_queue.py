@@ -90,3 +90,34 @@ def test_for_scan_degrades_safely_when_activity_store_is_unavailable():
     s = lq.for_scan(_Store(), "scan1", now=NOW)
     assert s["total"] == 12 and s["done"] == 5
     assert s["in_flight"] == 0 and s["queued"] == 7     # activity unavailable → 0 in flight, rest queued
+
+
+def test_split_api_uses_live_assess_role_capacity_without_claiming_an_aggregate(monkeypatch):
+    """ACP_WORKERS=0 on the API must not hide the dedicated Assess service's heartbeat."""
+    class _Store:
+        def get_scan(self, sid):
+            return {"files": 235, "files_done": 54, "phase": "assessing"}
+
+        def worker_roles_status(self):
+            return {"assess": {"alive": True, "pool_size": 2}}
+
+    import core
+    monkeypatch.setattr(core, "WORKERS", 0)
+    monkeypatch.setattr(lq, "_activity", None, raising=False)
+    snapshot = lq.for_scan(_Store(), "scan1", now=NOW)
+    assert snapshot["workers"] == {
+        "busy": 0, "max": 2, "idle": 2, "capacity_scope": "per_replica",
+    }
+
+
+def test_stale_assess_heartbeat_is_not_presented_as_current_capacity(monkeypatch):
+    class _Store:
+        def get_scan(self, sid):
+            return {"files": 10, "files_done": 2}
+
+        def worker_roles_status(self):
+            return {"assess": {"alive": False, "pool_size": 2}}
+
+    import core
+    monkeypatch.setattr(core, "WORKERS", 0)
+    assert lq.for_scan(_Store(), "scan1", now=NOW)["workers"] == {"busy": 0}

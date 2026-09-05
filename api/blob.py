@@ -25,7 +25,40 @@ _RENDER_CONTAINER = os.environ.get("ACP_BLOB_RENDER_CONTAINER", "thumbnails")
 _ENABLED = bool(_ACCOUNT)
 _LOG = logging.getLogger(__name__)
 
+# TRANSPORT BUDGET, STATED RATHER THAN INHERITED. A blob read sits on the remediation worker's
+# hot path — `handlers._remediation_source_bytes` reads the cached original for every local and
+# SharePoint document — and the remediate tier runs two slots, so a request that sits there
+# occupies half the tier while it waits.
+#
+# The SDK is not timeout-free: measured on azure-storage-blob 12.24.0, its base client applies
+# CONNECTION_TIMEOUT=20 / READ_TIMEOUT=60 and an ExponentialRetry with total_retries=3,
+# initial_backoff=15, increment_base=3. So one stalled read is bounded at roughly four 60s
+# attempts plus ~84s of backoff — about five to six minutes — PER chunk request, since readall()
+# streams. Bounded, but far longer than anything on this path should take, and invisible: the
+# caller's try/except sees a slow success, not a problem.
+#
+# These make the budget explicit and tighter, and env-tunable so an operator can widen it for a
+# slow link without a deploy. Deliberately NOT lowering retry_total from the SDK default: the
+# remediated-copy upload is the must-succeed write of ADR 0010 and goes through the same client.
+_CONNECT_TIMEOUT_S = int(os.environ.get("ACP_BLOB_CONNECT_TIMEOUT_S", "10") or 10)
+_READ_TIMEOUT_S = int(os.environ.get("ACP_BLOB_READ_TIMEOUT_S", "30") or 30)
+_RETRY_TOTAL = int(os.environ.get("ACP_BLOB_RETRY_TOTAL", "3") or 3)
+
 _client = None
+
+
+def _timeouts() -> dict:
+    """Per-operation transport timeouts.
+
+    Passed at the CALL SITE as well as on the client because the client is a process-global
+    cached on first use: whichever code path built it decided the budget for every later caller.
+    azure-core's transport pops `connection_timeout`/`read_timeout` from per-request kwargs
+    (RequestsTransport.send) ahead of the client's connection_config, and the storage
+    StorageStreamDownloader stores the kwargs it was given and replays them on every chunk
+    request — so passing them to download_blob() covers the whole streamed read, not just the
+    first call. Both verified against the installed 12.24.0, not assumed.
+    """
+    return {"connection_timeout": _CONNECT_TIMEOUT_S, "read_timeout": _READ_TIMEOUT_S}
 
 
 def enabled() -> bool:
@@ -41,7 +74,8 @@ def _service_client():
         from azure.storage.blob import BlobServiceClient
         _client = BlobServiceClient(
             account_url=f"https://{_ACCOUNT}.blob.core.windows.net",
-            credential=DefaultAzureCredential())
+            credential=DefaultAzureCredential(),
+            retry_total=_RETRY_TOTAL, **_timeouts())
     return _client
 
 
@@ -201,7 +235,10 @@ def download_source(owner: str | None, scan_id: str, filename: str,
     key = _source_key(owner, scan_id, filename, checksum)
     blob = svc.get_blob_client(container=_SOURCES_CONTAINER, blob=key)
     try:
-        return blob.download_blob().readall()
+        # Bounded (see _timeouts): a read that stalls must give the worker slot back rather than
+        # hold it for minutes. Returning None on the timeout is the existing contract — the caller
+        # (scanner.read_cached_source) treats any failure as a cache miss.
+        return blob.download_blob(**_timeouts()).readall()
     except Exception:
         return None
 

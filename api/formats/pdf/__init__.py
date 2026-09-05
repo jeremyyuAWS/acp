@@ -155,12 +155,13 @@ register(
 )
 
 # ── 2.5.3 Label in Name ───────────────────────────────────────────────────────────────
-# PARTIAL (not FULL): push buttons are the only AcroForm field type that carries both its
-# visible text label (/MK /CA caption) and its accessible name (/TU, or /T as fallback) in the
-# same field object. For every other field type (text, checkbox, radio) the visible label is a
-# separate text object drawn on the page and not programmatically linked to the field — so a
-# comparison requires rendering and is outside scope. HIGH confidence within the push-button
-# subset: the caption-in-name check is a direct string comparison, not an estimate.
+# PARTIAL (not FULL): two checks at different confidence levels.
+# HIGH — push buttons: /MK /CA caption must appear in the accessible name (/TU or /T);
+#   a direct string comparison, fully deterministic.
+# MEDIUM — text, checkbox, radio, choice, signature fields: the visible label is separate
+#   page text not linked to the field object, so a direct comparison requires rendering.
+#   Instead, the accessible name is flagged when it looks like a developer identifier
+#   (snake_case / camelCase) — such names can never match what a speech-input user says.
 register(
     rule="2.5.3",
     fmt="pdf",
@@ -168,8 +169,8 @@ register(
     requires={Capability.FORMS},
     coverage=Coverage.PARTIAL,
     confidence=Confidence.HIGH,
-    reason=("push buttons are checked for WCAG 2.5.3: the visible caption (/MK /CA) must appear "
-            "inside the accessible name (/TU, or /T when /TU is absent); other field types "
-            "(text, checkbox, radio) display their labels as separate text objects not linked to "
-            "the field object and cannot be compared without rendering"),
+    reason=("push buttons: /MK /CA caption must appear in /TU or /T (deterministic); "
+            "text, checkbox, radio, choice, signature fields: accessible name is flagged "
+            "when it looks like a developer identifier (snake_case/camelCase) — those names "
+            "will never match what a speech-input user says (heuristic, MODERATE severity)"),
 )

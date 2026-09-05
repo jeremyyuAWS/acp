@@ -7,6 +7,7 @@ import { CAPABILITY_FALLBACK, fmtOf, isAuto } from './capability.js'
 import { assessLine } from './phaseNarration.js'
 import { coreStats } from './coreStats.js'
 import { activeAssessmentFiles } from './assessLiveJobs.js'
+import { assessResume } from './resumeInFlight.js'
 // Separate line on purpose: coreStats.test.js pins the exact `import { coreStats } from
 // './coreStats.js'` line as its no-drift guard, and widening the braces would have meant
 // loosening someone else's assertion to accommodate this change.
@@ -155,6 +156,9 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   // rather than a silent one. Unchecking sends the authorized include-flagged override to the run.
   const [ignoreLifecycle, setIgnoreLifecycle] = useState(true)
   const assessRef = useRef(null)                  // latest `assess`, for the optional external start
+  // One server reconnect attempt per run id: the effect below re-runs as `docs` fills in, and a
+  // reconnect is a decision about the run, not about how many documents have arrived yet.
+  const serverResumeRef = useRef(null)
   const [phase, setPhase] = useState(saved?.phase || 'idle') // idle | running | done
   const [progress, setProgress] = useState(0)
   const [currentFile, setCurrentFile] = useState(null)
@@ -535,7 +539,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   // point, or finish if the expected duration already passed while away.
   useEffect(() => {
     if (saved?.phase === 'running') {
-      if (saved.deferred) { pollDeferred(saved.startedAt || Date.now(), saved.jobId); return }
+      if (saved.deferred) { pollDeferred(saved.startedAt || Date.now(), saved.jobId); return undefined }
       if (saved.startedAt) {
         if (Date.now() - saved.startedAt >= DURATION) {
           setProgress(docs.length); setResult(saved.result); setPhase('done')
@@ -544,9 +548,29 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
           runTicker(saved.startedAt, saved.level, saved.result)
         }
       }
+      return undefined
     }
+    // NO SAVED PASS IS NOT NO RUN. Sign out wipes every `acp-` key and hard-reloads (App.jsx),
+    // so an assessment still running server-side returns to a browser with no memory of it — and
+    // before this, to an idle screen while workers were mid-estate. /scans/{sid}/live is the same
+    // authoritative snapshot the running screen already reconnects against; ask it once, and
+    // rejoin the deferred poll if the run is genuinely still active. Only when there is no local
+    // state to prefer, so this can never fight the resume above.
+    if (!runId || phase !== 'idle' || serverResumeRef.current === runId) return undefined
+    serverResumeRef.current = runId
+    let cancelled = false
+    getScanLive(runId).then((snap) => {
+      if (cancelled) return
+      const resume = assessResume(snap)
+      if (!resume) return
+      const startedAt = Date.now()
+      setPhase('running'); setLiveTotal(resume.total); setProgress(resume.done)
+      save({ phase: 'running', deferred: true, startedAt, level })
+      pollDeferred(startedAt, null)
+    }).catch(() => { /* no reconnect available — the screen stays idle, as before */ })
+    return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [docs.length])
+  }, [docs.length, runId])
 
   // How many criteria the in-flight file is actually being weighed against. This is the SAME
   // list the result tile and the "By WCAG criterion" table reconcile to — the agreed scope

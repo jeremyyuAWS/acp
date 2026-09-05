@@ -40,6 +40,12 @@ const KIND_LABEL = {
 }
 
 function Row({ r }) {
+  const [copied, setCopied] = useState(false)
+  const copyCorrelation = async () => {
+    if (!r.correlationId || !navigator.clipboard?.writeText) return
+    await navigator.clipboard.writeText(r.correlationId)
+    setCopied(true)
+  }
   return (
     <li className="audit-row" data-kind={r.kind} data-changed={r.changed ? '1' : '0'}
         style={{ display: 'grid', gridTemplateColumns: 'minmax(140px, auto) 1fr',
@@ -71,6 +77,12 @@ function Row({ r }) {
                 read from what kind of event it is</span>
             : <span className="audit-recorded"> — recorded in the log</span>}
         </div>
+        {r.correlationId && (
+          <button type="button" className="linklike audit-copy-correlation" onClick={copyCorrelation}
+                  aria-label={`Copy correlation ID ${r.correlationId}`}>
+            {copied ? 'Copied correlation ID' : 'Copy correlation ID'}
+          </button>
+        )}
       </div>
     </li>
   )
@@ -102,24 +114,42 @@ export default function DocumentAudit({ scanId, file, changesOnly = false }) {
   if (!scanId || !file) return null
 
   const rows = auditTrail(events)
-  // Before the fetch answers, render nothing. A trail is a claim about everything that happened, and
-  // an empty one before the request returns is the strongest wrong claim this component could make.
+  // Before the fetch answers, state that it is loading. This avoids presenting a false empty trail
+  // while giving slow connections an honest, screen-reader-visible progress state.
   if (!rows) {
     return err
-      ? <section className="panel documentaudit" role="region" aria-label="Audit trail">
-          <div style={kicker}>Audit trail</div>
-          <p style={{ ...muted, marginTop: 6 }}>The trail for this document could not be loaded: {err}.</p>
-        </section>
-      : null
+      ? <details className="panel documentaudit" aria-label="Audit trail" style={{ marginBottom: 14 }}>
+          <summary style={{ cursor: 'pointer', padding: 14, fontWeight: 700 }}>Audit trail · unavailable</summary>
+          <div style={{ padding: '0 14px 14px' }}>
+            <p style={{ ...muted, margin: 0 }}>The trail for this document could not be loaded: {err}.</p>
+          </div>
+        </details>
+      : <div className="panel documentaudit documentaudit-loading" role="status" aria-live="polite">Loading audit trail…</div>
   }
 
   const s = auditSummary(rows)
   const shown = onlyChanges ? rows.filter((r) => r.changed) : rows
+  const exportAudit = () => {
+    const blob = new Blob([JSON.stringify({ scanId, file, exportedAt: new Date().toISOString(), events: rows }, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${String(file).replace(/[^a-z0-9._-]+/gi, '-')}-audit.json`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
 
   return (
-    <section className="panel documentaudit" role="region" aria-label="Audit trail"
-             style={{ marginBottom: 14 }}>
-      <div style={kicker}>Audit trail</div>
+    <details className="panel documentaudit" aria-label="Audit trail" style={{ marginBottom: 14 }}>
+      <summary style={{ cursor: 'pointer', padding: 14, display: 'flex', gap: 10,
+        alignItems: 'baseline', justifyContent: 'space-between', listStylePosition: 'inside' }}>
+        <span><b>Audit trail</b> <span className="muted" style={{ fontSize: 12 }}>· {file}</span></span>
+        <span className="muted" style={{ fontSize: 12, whiteSpace: 'nowrap' }}>
+          {s.events} {s.events === 1 ? 'event' : 'events'} · {s.changes} {s.changes === 1 ? 'change' : 'changes'}
+        </span>
+      </summary>
+      <div className="documentaudit-body" style={{ padding: '0 14px 14px', borderTop: '1px solid var(--line)' }}>
+      <div style={{ ...kicker, marginTop: 12 }}>Recorded history</div>
       <h2 style={{ margin: '4px 0 0', fontSize: 18, wordBreak: 'break-word' }}>{file}</h2>
 
       {rows.length === 0 ? (
@@ -148,6 +178,9 @@ export default function DocumentAudit({ scanId, file, changesOnly = false }) {
             <input type="checkbox" checked={onlyChanges} onChange={(e) => setOnlyChanges(e.target.checked)} />
             Changes only
           </label>
+          <button type="button" className="ghost small audit-export" onClick={exportAudit} style={{ marginLeft: 10 }}>
+            Export audit record
+          </button>
 
           {shown.length === 0 ? (
             <p className="audit-nochanges" style={{ ...muted, marginTop: 8 }}>
@@ -161,6 +194,7 @@ export default function DocumentAudit({ scanId, file, changesOnly = false }) {
           )}
         </>
       )}
-    </section>
+      </div>
+    </details>
   )
 }

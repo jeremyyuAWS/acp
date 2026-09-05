@@ -121,6 +121,9 @@ def describe_sharepoint_readiness(request: Request, roots: list[str] | None) -> 
     folder size. `roots` are `<driveId>/<itemId>` pairs — the same form /sharepoint/folders hands
     out and start_scan's `folders` param expects — split the same way sp_folders splits `parent`.
     An empty/None roots means the signed-in user's whole OneDrive, checked via its default drive.
+
+    A root with NO "/" is a SITE id, and is checked as one (its libraries listed) rather than as
+    an item — see the branch below for what the item path did with a site id before this.
     """
     token = request.headers.get("x-sp-token")
     if not token:
@@ -129,10 +132,44 @@ def describe_sharepoint_readiness(request: Request, roots: list[str] | None) -> 
     checked = roots or [None]
     root_results = []
     for r in checked:
+        if r and "/" not in r:
+            # A BARE root is a SITE id, not an item id — the same split scanner._sp_locations
+            # makes, and the reason this branch exists at all. Without it the id fell through to
+            # the item path below, which resolves a missing drive to the signed-in user's
+            # OneDrive and then asks it for an item whose id is a site: Graph answers 404, and a
+            # perfectly readable site was reported "unreachable" by a check that had looked in
+            # somebody's OneDrive for it. Every multi-site scan starts with roots of exactly this
+            # shape, so the wrong answer would have been the ordinary case.
+            #
+            # Readiness for a site is "can this token list its libraries" — one Graph call, the
+            # same bounded cost as an item lookup, and the same call the scan itself makes first.
+            try:
+                libs = scanner._sp_drives(token, r)
+            except PermissionError as e:
+                # WHOSE PROBLEM, alongside the message. The message is already the diagnosis
+                # (scanner._sp_get calls sp_readiness); `owner` is the same verdict in a form the
+                # preflight UI can group by, so an operator selecting thirty sites sees "two need
+                # the site owner, one needs your admin" rather than thirty sentences to read.
+                import sp_readiness
+                root_results.append({"id": r, "kind": "site", "exists": False, "error": str(e),
+                                     "owner": sp_readiness.diagnose_refusal(
+                                         403, token=token, on_site=True)["owner"]})
+                continue
+            except Exception as e:  # noqa: BLE001 — a transport failure is not a missing site
+                root_results.append({"id": r, "kind": "site", "exists": False,
+                                     "error": f"Microsoft Graph error: {e}"})
+                continue
+            # A site with NO visible library scans to zero. Reporting it ready would hand the
+            # operator an empty run and no way to tell the site from the product — the same
+            # judgement SitePicker makes when it says so before the scan starts.
+            root_results.append({"id": r, "kind": "site", "exists": bool(libs),
+                                 "name": scanner._sp_site_name(token, r),
+                                 "libraries": len(libs),
+                                 **({} if libs else
+                                    {"error": "no document libraries visible on this site"})})
+            continue
         if r:
-            drive_id, _, item_id = r.partition("/") if "/" in r else ("", "", r)
-            if not drive_id:
-                drive_id = scanner._sp_default_drive(token) or ""
+            drive_id, _, item_id = r.partition("/")
         else:
             drive_id, item_id = scanner._sp_default_drive(token) or "", "root"
         if not drive_id:
@@ -144,6 +181,103 @@ def describe_sharepoint_readiness(request: Request, roots: list[str] | None) -> 
     bad = [r for r in root_results if not r.get("exists")]
     return {"ready": not bad, "credential_valid": True, "roots": root_results,
            "reason": None if not bad else f"{len(bad)} of {len(checked)} selected folder(s) unreachable"}
+
+
+@router.get("/sharepoint/readiness")
+def sharepoint_readiness(request: Request, site: str = "", probe: bool = True):
+    """TENANT ONBOARDING: what this tenant will and will not answer, before a scan is committed.
+
+    The two questions a first run against a customer tenant fails on, asked up front instead of
+    discovered at the end:
+
+    1. **Which permissions does this sign-in actually carry?** Read from the token's own claims
+       (sp_readiness.token_scopes) — no Graph call, and the difference between "the grant is
+       missing" and "the grant is there and this account is not a member of that site" is the
+       difference between a task for the tenant admin and a task for the site owner. Before this,
+       every refusal was reported as the former.
+    2. **Which SharePoint-native metadata will arrive?** The walk asks for the wide `$select` and
+       the `listItem` expansion and silently falls back when a tenant refuses them, so a refused
+       tenant produces a complete estate with every content type unread — and says so only per
+       document, only after the scan. Three bounded requests settle it in advance.
+
+    `site` names a site to probe; omitted, the signed-in user's own OneDrive is used. `probe=false`
+    reports the token facts alone and issues NO Graph call, which is what a caller wants when the
+    question is "am I signed in with the right scopes" rather than "will this tenant answer".
+
+    DELIBERATELY NOT A GATE. Nothing here refuses a scan: a tenant that answers only tier 2 can
+    still be scanned, and should be — it produces a real estate with less metadata. This endpoint
+    exists so that outcome is a decision somebody made rather than one they discover afterwards.
+    """
+    import sp_readiness
+    token = _token(request)
+    granted, why_not = sp_readiness.token_scopes(token)
+    report: dict = {
+        "scopes": sorted(granted) if granted else None,
+        "scopes_unreadable": why_not,
+        "has_sites_scope": sp_readiness._has(granted, sp_readiness.SITES_SCOPE)
+                           if granted else None,
+        "site": site or None,
+        "libraries": None,
+        "metadata": None,
+        "problems": [],
+    }
+    # A token with no Sites.Read.All is not an error and is not refused here — a OneDrive-only
+    # deployment is a legitimate configuration. It is reported, because the operator selecting a
+    # SITE with this token is about to get a 403 and this is where that becomes predictable.
+    if granted is not None and not report["has_sites_scope"]:
+        report["problems"].append({
+            "owner": sp_readiness.TENANT_ADMIN,
+            "missing_scope": sp_readiness.SITES_SCOPE,
+            "message": (f"This sign-in does not carry {sp_readiness.SITES_SCOPE}, so SharePoint "
+                        f"SITES will be refused; the signed-in user's own OneDrive still works. "
+                        f"A tenant admin grants it on the Azure app registration."),
+        })
+    if not probe:
+        return report
+
+    drive_id = None
+    if site:
+        try:
+            libs = scanner._sp_drives(token, site)
+        except PermissionError as e:
+            # The diagnosis _sp_get already made, carried through rather than re-derived: one
+            # place decides whose problem a refusal is, and a second opinion here could disagree
+            # with the message the scan itself will print.
+            report["problems"].append({"owner": sp_readiness.UNKNOWN_OWNER, "message": str(e)})
+            return report
+        except Exception as e:  # noqa: BLE001 — a transport failure is not a permissions verdict
+            report["problems"].append({"owner": sp_readiness.UNKNOWN_OWNER,
+                                       "message": f"Microsoft Graph error: {e}"})
+            return report
+        report["libraries"] = [{"id": d["id"], "name": d.get("name")} for d in libs]
+        if not libs:
+            report["problems"].append({
+                "owner": sp_readiness.SITE_OWNER,
+                "message": "No document libraries are visible on this site, so a scan of it "
+                           "would return nothing.",
+            })
+            return report
+        drive_id = libs[0]["id"]
+
+    try:
+        report["metadata"] = sp_readiness.probe_metadata_tiers(token, drive_id)
+    except PermissionError as e:
+        report["problems"].append({"owner": sp_readiness.UNKNOWN_OWNER, "message": str(e)})
+        return report
+    except Exception as e:  # noqa: BLE001
+        report["problems"].append({"owner": sp_readiness.UNKNOWN_OWNER,
+                                   "message": f"Microsoft Graph error: {e}"})
+        return report
+    if (report["metadata"] or {}).get("refused"):
+        report["problems"].append({
+            "owner": sp_readiness.TENANT_ADMIN,
+            "message": (f"This tenant refuses part of what the walk asks for, so a scan will "
+                        f"record {report['metadata']['reads']}. Fields it cannot read are "
+                        f"reported as 'unavailable' per document rather than as 'not "
+                        f"configured' — they are not missing from the tenant, they were not "
+                        f"handed over."),
+        })
+    return report
 
 
 @router.post("/sharepoint/upload")
@@ -207,6 +341,27 @@ async def sharepoint_upload(request: Request):
     content_type = upload_file.content_type or "application/octet-stream"
 
     if item_id:
+        # PRECONDITIONS BEFORE THE ARCHIVE, which is the whole point of where this sits. The
+        # archive is a copy taken immediately before the overwrite; a replace that was never
+        # going to succeed still leaves a dated copy behind, in the folder a customer would go to
+        # if they ever needed to roll a remediation back. And a declared record is not a failed
+        # write at all — it is a governance decision ACP must not make on the tenant's behalf.
+        #
+        # One Graph call per write-back, read LIVE rather than from the scan's inventory: a file
+        # checked out since the scan is exactly the case this catches, and a write-back is
+        # per-file and approval-gated, so the call is proportionate here where the same call in a
+        # 30-site listing is an outage (tests/test_sp_scale.py).
+        import sp_writeback
+        state = sp_writeback.read_state(token, drive_id or None, item_id)
+        if not state["ok"]:
+            raise HTTPException(status_code=409, detail={
+                "error": "write-back refused by SharePoint preconditions",
+                "blockers": state["blockers"],
+                "notes": state["notes"],
+                # Named so the caller can say "nothing was touched" with the same confidence the
+                # archive path's own failure message does.
+                "archived": False, "replaced": False,
+            })
         try:
             # Archive, THEN write. Ordered, and not wrapped in its own try: an archive failure
             # must propagate as a refusal to write, never be logged past.
@@ -224,7 +379,13 @@ async def sharepoint_upload(request: Request):
         if scan_id and filename:
             core.store.record_remediation(scan_id, filename, drive_write_url=web_url)
         return {"ok": True, "url": web_url, "replaced": True,
-                "archivedTo": scanner.SP_ARCHIVE_FOLDER, "driveId": drive_id}
+                "archivedTo": scanner.SP_ARCHIVE_FOLDER, "driveId": drive_id,
+                # Whether the preconditions were actually READ, not just whether they passed. A
+                # tenant that refuses the listItem expansion gets a write that proceeded without
+                # the check, and a response that says "clear" there would be claiming a check
+                # nobody ran — the distinction the availability contract exists for.
+                "preconditionsChecked": state["checked"],
+                **({"preconditionNotes": state["notes"]} if state["notes"] else {})}
 
     folder = core.store.get_drive_mirror_folder()
     try:
