@@ -98,6 +98,18 @@ def test_groups_the_call_by_aggregation_rather_than_one_call_per_metric(control,
     assert sum(len(call["names"]) for call in calls) == len(control._AZ_METRICS)
 
 
+def test_metric_timespan_uses_query_safe_utc_z_not_a_plus_offset(control, monkeypatch):
+    """A literal '+' in the SDK query is decoded to a space by Azure and rejects every metric.
+    The equivalent UTC-Z interval survives the request path unchanged."""
+    monitor, calls = _monitor({})
+    monkeypatch.setattr(control, "_monitor_client", lambda: monitor)
+    control._gather_metrics("/subs/x/app", NOW)
+    assert calls
+    assert all(call["timespan"].endswith("Z") for call in calls)
+    assert all("+" not in call["timespan"] and " " not in call["timespan"] for call in calls)
+    assert calls[0]["timespan"] == "2026-09-04T14:15:00.000000Z/2026-09-04T14:30:00.000000Z"
+
+
 def test_returns_the_per_minute_series_not_just_one_average(control, monkeypatch):
     """The old call collapsed five minutes to a single number and threw the shape away. The strip
     plots fifteen real minutes of Azure's own history, which is more than this browser saw."""
