@@ -3,6 +3,7 @@ import { prefersReducedMotion, useDialog } from './a11y.js'
 import {
   EVENT_FILTERS, EVENT_ICONS, NOT_REPORTED, TONE, alertRuleState, alertRuleTone, alertsModel,
   PROVISIONING_STAGES, factGroups, provisioningTimeline, queueDrain, queueRoleLoad, streamState,
+  runCoverage, runFlow, runStagePipeline, runTiming, runTrouble,
   DEPLOY_ICONS, configurationModel, costModel, costText, deploymentModel, incidentRegions,
   isAzureBacked,
   notAzureBackedReason, resourceHealthModel, serviceHealthModel,
@@ -49,12 +50,12 @@ function Source({ kind, at, nowMs, detail }) {
   </div>
 }
 
-function Tile({ label, value, detail, source, at, nowMs }) {
+function Tile({ label, value, detail, source, sourceDetail, at, nowMs }) {
   return <div style={PANEL}>
     <span style={LABEL}>{label}</span>
     <Value>{value}</Value>
     {detail && <div className="muted" style={{ fontSize: 11, marginTop: 3, overflowWrap: 'anywhere' }}>{detail}</div>}
-    {source && <Source kind={source} at={at} nowMs={nowMs} />}
+    {source && <Source kind={source} at={at} nowMs={nowMs} detail={sourceDetail} />}
   </div>
 }
 
@@ -1091,7 +1092,136 @@ function QueueRoleCapacity({ load }) {
   </section>
 }
 
-function RunRadial({ model, run, accent }) {
+/**
+ * The pipeline this scan is walking, and where it has got to.
+ *
+ * A run node is one (scan, stage) pair, so an Assess drawer knows nothing about the Discover that
+ * fed it — and "has discovery finished?" is the first question asked of a stalled assess. A stage
+ * the snapshot does not carry says exactly that: see runStagePipeline for why it must not read as
+ * "not started".
+ */
+function RunPipeline({ pipeline }) {
+  return <div style={{ marginTop: 12 }}>
+    <span style={LABEL}>PIPELINE</span>
+    <ol style={{ listStyle: 'none', display: 'flex', flexWrap: 'wrap', gap: 6, margin: '6px 0 0', padding: 0 }}>
+      {pipeline.stages.map((stage, i) => <li key={stage.key}
+        style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11,
+          fontWeight: stage.state === 'active' ? 700 : 400,
+          color: stage.present ? 'var(--ink)' : 'var(--muted)' }}>
+          {/* Shape carries the state, not colour (1.4.1): done, working, unreported. */}
+          <span aria-hidden="true">
+            {stage.state === 'complete' ? '●' : stage.state === 'active' ? '◐' : '○'}
+          </span>
+          {stage.label}
+          {stage.present && <span className="muted">
+            ({stage.completed}{stage.total == null ? '' : `/${stage.total}`})
+          </span>}
+        </span>
+        {i < pipeline.stages.length - 1 && <span aria-hidden="true" className="muted">→</span>}
+      </li>)}
+    </ol>
+    {!!pipeline.missing.length && <p className="muted" style={{ fontSize: 11, margin: '6px 0 0' }}>
+      {pipeline.missing.join(', ')}: {NOT_REPORTED}. {pipeline.missingReason}
+    </p>}
+  </div>
+}
+
+/** The four document states as one bar, sharing the queue bar's shape and vocabulary. */
+function RunFlow({ flow }) {
+  return <div style={{ marginTop: 12 }}>
+    <span style={LABEL}>DOCUMENTS</span>
+    <div role="img" aria-label={flow.segments.map((s) => `${s.count} ${s.label.toLowerCase()}`).join(', ')
+      || 'No documents counted for this run'}
+      style={{ display: 'flex', height: 18, borderRadius: 6, overflow: 'hidden', marginTop: 5,
+        border: '1px solid var(--line)', background: 'var(--bg)' }}>
+      {flow.total > 0 && flow.segments.map((segment) => <div key={segment.key}
+        title={`${segment.label}: ${segment.count}`}
+        style={{ width: `${(segment.count / flow.total) * 100}%`, background: TONE[segment.tone],
+          display: 'grid', placeItems: 'center', color: '#fff', fontSize: 10, fontWeight: 700 }}>
+        {(segment.count / flow.total) > 0.14 ? segment.count : ''}
+      </div>)}
+    </div>
+    <ul style={{ listStyle: 'none', margin: '7px 0 0', padding: 0, display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(120px,1fr))', gap: 5, fontSize: 12 }}>
+      {flow.rows.map((row) => <li key={row.key} style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
+        <span aria-hidden="true" style={{ color: TONE[row.tone] }}>■</span>
+        <span style={{ flex: 1 }}>{row.label}</span>
+        <b>{row.count == null ? NOT_REPORTED : row.count}</b>
+      </li>)}
+    </ul>
+    {flow.partial && <p className="muted" style={{ fontSize: 11, margin: '6px 0 0' }}>
+      A count marked “{NOT_REPORTED}” is not published per run by the activity snapshot, and is
+      left out of the total rather than counted as zero.
+    </p>}
+  </div>
+}
+
+/**
+ * Three durations that are routinely confused for each other, kept apart on purpose.
+ *
+ * Run age, time the current worker has held THIS job, and time since that worker last checked in.
+ * The middle one is `claimed_at` (schema v16) and does not move; reading it off the heartbeat, as
+ * this drawer once did, made a job wedged for an hour read as forty seconds old.
+ */
+function RunTiming({ timing, nowMs }) {
+  return <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))',
+    gap: 8, marginTop: 11 }}>
+    <Tile label="RUN ELAPSED" source="live" nowMs={nowMs}
+      value={timing.elapsedS == null ? NOT_REPORTED : formatDuration(timing.elapsedS)}
+      detail="Since the run’s first job was created" />
+    <Tile label="ON THIS JOB" source={timing.currentJobS == null ? 'unavailable' : 'live'} nowMs={nowMs}
+      value={timing.currentJobS == null ? NOT_REPORTED : formatDuration(timing.currentJobS)}
+      detail={timing.currentJobUnknown
+        ? 'Claimed before the claim time was recorded. Not inferred from the heartbeat.'
+        : timing.currentJobS == null ? 'Nothing is being processed' : 'From the claim, which does not move'} />
+    <Tile label="LAST HEARTBEAT" source={timing.heartbeatAgeS == null ? 'unavailable' : 'live'} nowMs={nowMs}
+      value={timing.heartbeatAgeS == null ? NOT_REPORTED : `${formatDuration(timing.heartbeatAgeS)} ago`}
+      detail={timing.heartbeatAgeS == null ? undefined : 'Lease freshness, not run duration'} />
+  </div>
+}
+
+/**
+ * A classified failure and the retries behind it.
+ *
+ * `last_error_class` is a term from a CLOSED vocabulary, which is what makes it safe on a screen
+ * that spans tenants: a free-text error can carry another customer's filename, a vocabulary term
+ * cannot. Nothing here shows the error text, and nothing here shows a document.
+ */
+function RunTrouble({ trouble }) {
+  if (!trouble.kind && !trouble.retrying) return null
+  return <p role="status" style={{ margin: '10px 0 0', padding: '9px 11px', fontSize: 12,
+    borderLeft: `4px solid ${TONE.warn}`, background: 'var(--warn-bg)', color: 'var(--ink)' }}>
+    <span aria-hidden="true">▲ </span>
+    {trouble.label && <b>{trouble.label}</b>}
+    {trouble.label && trouble.attempts != null ? ' · ' : ''}
+    {trouble.attempts != null && `${trouble.attempts} attempt${trouble.attempts === 1 ? '' : 's'}`}
+    {trouble.note && <span className="muted" style={{ display: 'block', marginTop: 3 }}>{trouble.note}</span>}
+  </p>
+}
+
+/** SharePoint site coverage. Absent entirely for Drive and OneDrive runs — the backend sends no
+ *  site data for those, and "0 of 0 sites" would be a fact about this panel, not the estate. */
+function RunCoverage({ coverage }) {
+  if (!coverage.available) return null
+  return <div style={{ marginTop: 12 }}>
+    <span style={LABEL}>SITE COVERAGE</span>
+    <div role="img" aria-label={`${coverage.done} of ${coverage.total} sites read`}
+      style={{ height: 8, borderRadius: 4, background: 'var(--bg)', border: '1px solid var(--line)',
+        overflow: 'hidden', marginTop: 5 }}>
+      <div style={{ width: `${coverage.pct ?? 0}%`, height: '100%', background: TONE.ok }} />
+    </div>
+    <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+      {coverage.done} of {coverage.total} sites read
+      {coverage.libraries == null ? '' : ` · ${coverage.libraries} libraries`}
+    </div>
+    {coverage.unreadNote && <p style={{ fontSize: 11, margin: '4px 0 0', color: TONE.warn }}>
+      <span aria-hidden="true">▲ </span>{coverage.unreadNote}
+    </p>}
+  </div>
+}
+
+function RunRadial({ model, run, accent, pipeline, flow, timing, trouble, coverage, nowMs }) {
   const radius = 46
   const circumference = 2 * Math.PI * radius
   const dash = model.total ? circumference * model.fraction : 0
@@ -1119,7 +1249,8 @@ function RunRadial({ model, run, accent }) {
           detail={run.queue_position ? `Queue position ${run.queue_position}` : undefined} />
         <Tile label="FAILED" value={model.failed == null ? NOT_REPORTED : model.failed}
           detail={model.failed == null ? 'Per-run failures are not published by the activity snapshot' : undefined} />
-        <Tile label="ESTIMATED REMAINING"
+        <Tile label="ESTIMATED REMAINING" source={model.eta == null ? 'unavailable' : 'projection'}
+          nowMs={nowMs}
           value={model.eta == null ? 'Not enough evidence' : formatDuration(model.eta)}
           detail={model.eta == null ? 'Needs 30s of samples with completions' : 'From this run’s own completion rate'} />
         <Tile label="OLDEST WAIT" value={model.oldestWaitS == null ? NOT_REPORTED : formatDuration(model.oldestWaitS)} />
@@ -1131,6 +1262,20 @@ function RunRadial({ model, run, accent }) {
       {model.ruleId && <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>WCAG criterion {model.ruleId}</div>}
       {model.jobType && <div className="muted" style={{ fontSize: 12 }}>{model.jobType}</div>}
     </div>}
+    <RunFlow flow={flow} />
+    <RunTiming timing={timing} nowMs={nowMs} />
+    {/* The lease check the stuck-queue investigation had no way to make: a worker holding a job
+        and no longer beating is the shape reclaim_stuck_jobs cannot reach, and it renders
+        identically to healthy work unless it is called out. */}
+    {timing.leaseStale && <p role="status" style={{ margin: '10px 0 0', padding: '9px 11px', fontSize: 12,
+      borderLeft: `4px solid ${TONE.bad}`, background: 'var(--error-bg, var(--warn-bg))', color: 'var(--ink)' }}>
+      <span aria-hidden="true">■ </span>
+      <b>Worker has stopped checking in.</b> The last heartbeat was {formatDuration(timing.heartbeatAgeS)} ago,
+      past {formatDuration(timing.staleThresholdS)}. The job is still claimed, so nothing else can pick it up.
+    </p>}
+    <RunTrouble trouble={trouble} />
+    <RunPipeline pipeline={pipeline} />
+    <RunCoverage coverage={coverage} />
   </section>
 }
 
@@ -1410,8 +1555,13 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
       <QueueRoleCapacity load={queueRoleLoad(snapshot?.summary)} />
       <Throughput samples={shown.samples} nowMs={nowMs} /></>
   } else if (node?.kind === 'run') {
-    primary = <RunRadial run={node.run || {}} accent={accent}
-      model={runModel(node.run, shown.samples, { nowMs })} />
+    primary = <RunRadial run={node.run || {}} accent={accent} nowMs={nowMs}
+      model={runModel(node.run, shown.samples, { nowMs })}
+      flow={runFlow(node.run || {})}
+      timing={runTiming(node.run || {}, { nowMs })}
+      trouble={runTrouble(node.run || {})}
+      coverage={runCoverage(node.run || {})}
+      pipeline={runStagePipeline(node.run?.scan_id, snapshot)} />
   } else if (node?.kind === 'intake') {
     primary = <><IntakeSummary snapshot={snapshot} state={state} />
       <Throughput samples={shown.samples} nowMs={nowMs} />

@@ -52,6 +52,11 @@ export const PROVENANCE = {
   session: { label: 'Observed in this session', detail: 'sampled from the live stream' },
   logs: { label: 'Log Analytics', detail: 'delayed' },
   estimate: { label: 'Estimated from configured capacity', detail: 'derived, not measured' },
+  // A DIFFERENT basis from `estimate`, and the difference is the point: that one projects
+  // from what the deployment is configured for, this one from completions actually observed
+  // in this session. Both are estimates and both must say so; a reader deciding whether to
+  // trust a finishing time needs to know which of the two it came from.
+  projection: { label: 'Estimated', detail: 'projected from completions observed in this session' },
   billing: { label: 'Cost Management', detail: 'billing data, not live' },
   unavailable: { label: 'Not reported', detail: 'no measurement available' },
 }
@@ -2051,4 +2056,148 @@ export function factGroups(facts = []) {
   return FACT_GROUPS
     .map((group) => ({ ...group, facts: buckets.get(group.key) }))
     .filter((group) => group.facts.length > 0)
+}
+
+/* ─────────────────────── Running jobs: pipeline, flow, timing, trouble ─────────────────────── */
+
+/** The pipeline a document walks, in order. `release` is included because the store classifies
+ *  publish jobs into it, even though the topology map draws only the first three. */
+export const RUN_STAGES = [
+  { key: 'discover', label: 'Discover' },
+  { key: 'assess', label: 'Assess' },
+  { key: 'remediate', label: 'Remediate' },
+  { key: 'release', label: 'Release' },
+]
+
+/**
+ * Where this scan is in the pipeline, from the OTHER stage rows the snapshot carries for it.
+ *
+ * A run node is one (scan, stage) pair, so the drawer for an Assess run knows nothing about the
+ * Discover that fed it — yet "has discovery finished?" is the first question an operator asks of a
+ * stalled assess.
+ *
+ * THE HONESTY PROBLEM, and why `missing` is not called "not started". `admin_live_activity` returns
+ * live work plus stages whose last job finished inside a recent tail. A stage that completed before
+ * that tail is simply ABSENT — indistinguishable, from here, from one that never ran. Rendering
+ * absence as "Not started" would tell an operator that discovery has not happened on a scan whose
+ * discovery finished an hour ago, which is worse than saying nothing. So a missing stage is
+ * reported as not carried by this snapshot, and the reason travels with it.
+ */
+export function runStagePipeline(scanId, snapshot = {}) {
+  const rows = (snapshot?.runs || []).filter((run) => run.scan_id === scanId)
+  const byStage = new Map(rows.map((run) => [run.stage, run]))
+  const stages = RUN_STAGES.map((stage) => {
+    const row = byStage.get(stage.key)
+    if (!row) return { ...stage, present: false, state: 'unknown', label: stage.label }
+    const completed = num(row.completed) ?? 0
+    const total = num(row.total)
+    return {
+      ...stage,
+      present: true,
+      state: row.status === 'recent' ? 'complete' : 'active',
+      completed,
+      total,
+      running: num(row.running) ?? 0,
+      queued: num(row.queued) ?? 0,
+      pct: total ? Math.min(100, Math.round((completed / total) * 100)) : null,
+    }
+  })
+  return {
+    stages,
+    present: stages.filter((s) => s.present),
+    missing: stages.filter((s) => !s.present).map((s) => s.label),
+    // Said once, under the row, rather than repeated per stage.
+    missingReason: 'A stage that finished before this snapshot’s recent tail is not carried in it. '
+      + 'Absent here means not reported, never “did not run”.',
+  }
+}
+
+/** The four document states as one bounded bar. Shares the queue bar's shape deliberately: the
+ *  same four words mean the same four things on both, and a reader should not have to relearn. */
+export function runFlow(run = {}) {
+  const rows = [
+    { key: 'completed', label: 'Completed', tone: 'ok', count: num(run.completed) ?? 0 },
+    { key: 'running', label: 'Processing', tone: 'info', count: num(run.running) ?? 0 },
+    { key: 'queued', label: 'Waiting', tone: 'warn', count: num(run.queued) ?? 0 },
+    // NOT defaulted to zero. The activity snapshot does not publish a per-run failure count, and
+    // "0 failed" is a much stronger claim than "not counted".
+    { key: 'failed', label: 'Failed', tone: 'bad', count: num(run.failed) },
+  ]
+  const counted = rows.filter((row) => row.count != null)
+  const total = counted.reduce((sum, row) => sum + row.count, 0)
+  return {
+    rows,
+    total,
+    segments: counted.filter((row) => row.count > 0),
+    partial: rows.some((row) => row.count == null),
+  }
+}
+
+/**
+ * How long, measured three different ways, none of them interchangeable.
+ *
+ * `elapsedS` is the run's age; `currentJobS` is how long a worker has held THIS job, from the
+ * immutable `claimed_at` the schema gained in v16; `heartbeatAgeS` is how long since that worker
+ * last checked in. The middle one used to be read off `locked_at` and reset every two minutes,
+ * which is exactly how a job wedged for an hour looked forty seconds old.
+ *
+ * `leaseStale` compares the heartbeat against the worker's own interval rather than a number
+ * invented here: a beat older than several intervals means the holder has stopped reporting, which
+ * is the shape of a wedged handler that reclaim cannot reach.
+ */
+export const HEARTBEAT_INTERVAL_S = 120
+export const STALE_BEATS = 3
+
+export function runTiming(run = {}, { nowMs = Date.now() } = {}) {
+  const heartbeatAgeS = secondsSince(run.current_job_heartbeat_at, nowMs)
+  return {
+    elapsedS: secondsSince(run.started_at, nowMs),
+    updatedAgoS: secondsSince(run.updated_at, nowMs),
+    currentJobS: secondsSince(run.current_job_started_at, nowMs),
+    // Null when the row predates v16 — reported as unknown, never backfilled from the heartbeat.
+    currentJobUnknown: !!run.current_file && !run.current_job_started_at,
+    heartbeatAgeS,
+    leaseStale: heartbeatAgeS != null && heartbeatAgeS > HEARTBEAT_INTERVAL_S * STALE_BEATS,
+    staleThresholdS: HEARTBEAT_INTERVAL_S * STALE_BEATS,
+  }
+}
+
+/**
+ * Retry pressure and the classified reason.
+ *
+ * `last_error_class` comes from a CLOSED vocabulary, which is why it can be shown on a screen that
+ * spans tenants — a free-text error can carry another customer's filename, a vocabulary term
+ * cannot. `attempts` is the highest seen across the stage's jobs, so 1 is not a problem and 4 is.
+ */
+export function runTrouble(run = {}) {
+  const attempts = num(run.max_attempts_seen)
+  const kind = run.last_error_class || null
+  return {
+    attempts,
+    retrying: (attempts ?? 0) > 1,
+    kind,
+    label: kind ? (ERROR_CLASS_LABELS[kind] || kind) : null,
+    // A classified failure with no retry left is a different situation from one being retried.
+    note: kind && (attempts ?? 0) > 1
+      ? 'Retried after a classified failure. The class is a vocabulary term, never the error text.'
+      : kind ? 'A classified failure was recorded for this stage.' : null,
+  }
+}
+
+/** SharePoint site coverage, when the run checkpointed any. Absent for Drive and OneDrive runs by
+ *  design — the backend returns an empty dict rather than zeros, so there is nothing to render. */
+export function runCoverage(run = {}) {
+  const total = num(run.sites_total)
+  if (total == null) return { available: false }
+  const done = num(run.sites_done) ?? 0
+  const unread = num(run.sites_unread) ?? 0
+  return {
+    available: true, total, done, unread,
+    libraries: num(run.libraries_total),
+    pct: total ? Math.min(100, Math.round((done / total) * 100)) : null,
+    // Blocked and skipped are counted together upstream; say so rather than implying a reason.
+    unreadNote: unread
+      ? `${unread} site${unread === 1 ? '' : 's'} not read (blocked or skipped). The exception report says which.`
+      : null,
+  }
 }
