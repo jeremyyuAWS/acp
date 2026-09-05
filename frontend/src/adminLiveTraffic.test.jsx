@@ -419,10 +419,27 @@ describe('The map tiles carry a live gauge', () => {
     expect(gauge.label).not.toContain('%')
   })
 
-  it('measures the queue against the slots that could pick it up', () => {
-    expect(nodeGauge({ kind: 'queue' }, { queued: 3, worker_slots: 6 }))
-      .toEqual({ fraction: 0.5, over: false, label: '3 waiting against 6 worker slots' })
-    expect(nodeGauge({ kind: 'queue' }, { queued: 184, worker_slots: 7 }).over).toBe(true)
+  it('measures the queue against the slots of the ROLE that could pick it up', () => {
+    // This test kept its subject and changed its expectation, deliberately. It used to assert
+    // `worker_slots` — the FLEET total — which was the bug: seen in production 2026-09-05, the
+    // tile read "132 waiting, more than the 7 slots that could pick them up" when five of those
+    // seven belonged to Discover and Assess and no remediate job was eligible for any of them.
+    // A job is claimed only by workers for its own stage, so the denominator is that stage's.
+    expect(nodeGauge({ kind: 'queue' }, {
+      queued: 3, worker_slots: 60,
+      by_stage: { assess: { queued: 3 } },
+      worker_roles: { assess: { alive: true, pool_size: 6 } },
+    })).toMatchObject({ fraction: 0.5, over: false })
+
+    const blocked = nodeGauge({ kind: 'queue' }, {
+      queued: 184, worker_slots: 7,
+      by_stage: { remediate: { queued: 184 } },
+      worker_roles: { remediate: { alive: true, pool_size: 2 },
+        assess: { alive: true, pool_size: 5 } },
+    })
+    expect(blocked.over).toBe(true)
+    expect(blocked.label).toContain('remediate')
+    expect(blocked.label).not.toContain('7')
   })
 
   it('draws no bar at all when there is no denominator to be a share of', () => {
@@ -441,14 +458,20 @@ describe('The map tiles carry a live gauge', () => {
       worker_roles: { assess: { alive: true, pool_size: 2, age_s: 1 } } } })
     expect(graph.nodes.find((n) => n.id === 'stage:assess').data.gauge)
       .toMatchObject({ fraction: 0.5, label: '1 of 2 slots busy (50%)' })
+    // The queue's waiting work now has to be attributed to a stage to be measured at all —
+    // `queued: 5` with no stage owning it is work nobody is eligible for, and the tile says so
+    // instead of dividing it by the fleet.
     expect(graph.nodes.find((n) => n.id === 'infra:queue').data.gauge)
-      .toMatchObject({ fraction: 0.5, label: '5 waiting against 10 worker slots' })
+      .toMatchObject({ fraction: null, label: '5 waiting · not attributed to a stage' })
     // The next snapshot rebuilds the graph, so the bar is as live as the tile it sits on.
     const busier = buildTrafficGraph({ runs: [], summary: { queued: 9, worker_slots: 10,
-      by_stage: { assess: { running: 2 } },
+      by_stage: { assess: { running: 2, queued: 9 } },
       worker_roles: { assess: { alive: true, pool_size: 2, age_s: 1 } } } })
     expect(busier.nodes.find((n) => n.id === 'stage:assess').data.gauge.fraction).toBe(1)
-    expect(busier.nodes.find((n) => n.id === 'infra:queue').data.gauge.fraction).toBe(0.9)
+    // 9 waiting against assess's OWN 2 slots is over capacity — where the fleet's 10 would have
+    // rendered it as a comfortable 0.9.
+    expect(busier.nodes.find((n) => n.id === 'infra:queue').data.gauge)
+      .toMatchObject({ fraction: 1, over: true })
   })
 
   it('does not put a second progress bar on a run tile that already has one', () => {
