@@ -99,12 +99,18 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const orgLabel = me?.email
     ? me.email.split('@')[1]?.replace(/\.[^.]+$/, '') || me.name || 'your organisation'
     : me?.name || 'your organisation'
-  const rememberRelease = (res) => {
+  const rememberRelease = (res, expectedFiles = []) => {
     if (res?.release_folder_name) setReleaseFolder({
       id: res.release_folder_id, name: res.release_folder_name,
       url: res.release_folder_url, createdAt: run?.started_at || new Date().toISOString(),
     })
-    const rows = res?.published || []
+    const reported = res?.published || []
+    // Pre-structured-release servers returned no per-document status. Preserve the existing
+    // callback contract for that response shape during rolling deploys; a new response always
+    // carries release_id, so an explicit empty/failed result is never promoted to success.
+    const rows = reported.length || res?.release_id
+      ? reported
+      : expectedFiles.map((file) => ({ file, status: 'published', created: false }))
     setReleaseResults((old) => ({ ...old,
       ...Object.fromEntries(rows.map((row) => [row.file, row])),
     }))
@@ -125,7 +131,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     if (done[file]) return
     try {
       const res = await publishFile(run?.id, file)
-      const successful = rememberRelease(res)
+      const successful = rememberRelease(res, [file])
       if (successful.some((row) => row.file === file)) onPublish?.(file)
     } catch { setReleaseAnnouncement('Release failed. The original file is unchanged; retry when the connection is available.') }
   }
@@ -135,7 +141,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     const pending = ready.filter((f) => !done[f.file]).map((f) => f.file)
     try {
       const res = await publishAllFiles(run?.id, pending)
-      const successful = rememberRelease(res)
+      const successful = rememberRelease(res, pending)
       successful.forEach((row) => onPublish?.(row.file))
     } catch { /* best-effort */ }
     setPublishing(false)
@@ -154,7 +160,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     const targets = setStatus.graduatable
     try {
       const res = await publishAllFiles(run?.id, targets)
-      const successful = rememberRelease(res)
+      const successful = rememberRelease(res, targets)
       successful.forEach((row) => onPublish?.(row.file))
     } catch { /* best-effort — local state still updates */ }
     setPublishing(false)
