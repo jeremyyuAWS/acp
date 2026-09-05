@@ -241,15 +241,30 @@ def test_the_known_divergences_are_exactly_these(report):
     than being absorbed into a growing number nobody reads.
 
     Resolving one is meant to fail this test. That is the point: the fix and the record of it move
-    together, the same way CLAUDE.md's unmounted-component list works.
+    together, the same way CLAUDE.md's unmounted-component list works — and on 2026-09-05 the last
+    three were resolved at once, so the set is now empty. An EMPTY expectation still has teeth:
+    anything newly unexplained, from either side, fails here.
     """
     from acpctl.azure_parity import DIVERGENCE
     found = {(d.tier, d.field) for d in report["differences"] if d.classification == DIVERGENCE}
-    assert found == {
+    assert found == set(), sorted(found)
+
+
+def test_three_real_differences_remain_and_every_one_is_explained(report):
+    """THE OTHER HALF, and without it the test above is satisfiable by a comparison that found
+    nothing at all — the vacuous-pass shape this file already guards against elsewhere.
+
+    Zero UNEXPLAINED is not zero differences. Production still runs a different API floor, a
+    different API ceiling and a different discovery ceiling, all deliberately.
+    """
+    from acpctl.azure_parity import ACKNOWLEDGED
+    assert report["stillDiffers"] == 3
+    assert all(d.classification == ACKNOWLEDGED for d in report["differences"])
+    assert {(d.tier, d.field) for d in report["differences"]} == {
+        ("api", "replicas.min"),
         ("api", "replicas.max"),
         ("discover", "replicas.max"),
-        ("remediate", "replicas.min"),
-    }, sorted(found)
+    }
 
 
 def test_an_acknowledged_difference_must_still_be_a_real_difference():
@@ -275,9 +290,20 @@ def test_every_acknowledgement_carries_a_reason():
         assert len(reason) > 40, f"{key} is acknowledged without saying why"
 
 
-def test_the_report_does_not_claim_parity_while_divergences_exist(report):
-    assert report["parity"] is False
-    assert report["divergences"] == 3
+def test_the_flag_says_what_it_measures_rather_than_claiming_parity(report):
+    """THE RENAME IS THE TEST. The field was `parity`, computed as `not real` — "nothing is
+    unexplained". That was indistinguishable from "production matches the contract" only while it
+    was False, and closing the last three rows flips it True for the first time. Under the old
+    name this report would now assert parity while three deliberate differences stand.
+
+    `noUnexplainedDifferences` says the narrow thing it measures; `stillDiffers` carries the number
+    that stops it being misread. The module's own docstring calls the overstatement out by name.
+    """
+    assert "parity" not in report, (
+        "the flag is back under a name that claims more than it measures")
+    assert report["noUnexplainedDifferences"] is True
+    assert report["divergences"] == 0
+    assert report["stillDiffers"] == 3
 
 
 # ── what the repository can and cannot confirm ────────────────────────────────
@@ -379,3 +405,91 @@ def test_the_check_fails_when_the_document_is_stale():
     proc = subprocess.run([sys.executable, str(generator), "--check"],
                           capture_output=True, text=True, cwd=str(ROOT), timeout=120)
     assert proc.returncode == 0, "the document was not restored"
+
+
+# ── the 2026-09-05 capacity decision, priced ──────────────────────────────────
+#
+# The three ranges were decided together because they are one question: a replica CEILING is a
+# term in the fleet's worst-case Postgres demand. These tests hold the arithmetic the decision was
+# made on, because a decision justified by numbers is only reviewable while the numbers are still
+# true — and every one of them is a number the acknowledgement text states out loud.
+
+def _example_doc():
+    import yaml
+    from acpctl.azure_parity import EXAMPLE
+    return yaml.safe_load(EXAMPLE.read_text())
+
+
+def _budget(doc):
+    from acpctl.inventory import connection_budget
+    return connection_budget(doc)["worstCaseConnections"]
+
+
+def test_the_remediate_floor_matches_the_five_production_keeps_warm():
+    """`rightsize-production.sh` names remediate in the SAME SENTENCE as assess — "keep five
+    replicas warm so large runs retain the production performance baseline" — and the owner had
+    already accepted that reasoning for assess. The contract said 3, which was not a considered
+    disagreement, it was the half of the sentence nobody had applied yet."""
+    doc = _example_doc()
+    assert doc["workers"]["remediate"]["replicas"]["min"] == 5
+
+
+def test_remediate_still_autoscales_unlike_assess():
+    """THE CONTROL, and the reason the two tiers are not treated identically. Assess is pinned
+    min == max WITH NO autoscale block, because production does not scale it. Production DOES
+    scale remediate — `apply_remediation_autoscale` attaches a queue-depth rule — so copying the
+    assess shape here would have replaced a real autoscaler with a fixed pool, which is the exact
+    mistake the assess decision existed to avoid, in the other direction."""
+    doc = _example_doc()
+    remediate = doc["workers"]["remediate"]
+    assert remediate["autoscale"]["signals"], "remediate must keep its scale rule"
+    assert remediate["replicas"]["max"] == 10
+    assert "autoscale" not in doc["workers"]["assess"], "assess must stay unscaled"
+
+
+def test_raising_the_remediate_floor_costs_no_connections():
+    """WHY THIS ONE COULD BE DECIDED ON ITS MERITS. `connection_budget` sums each tier's demand at
+    MAX replicas — every replica holds its own pool — so a FLOOR does not appear in the worst case
+    at all. If this ever stops being true the acknowledgement's "costs nothing" claim is wrong and
+    the decision deserves re-taking."""
+    import copy
+    doc = _example_doc()
+    at_five = _budget(doc)
+    lowered = copy.deepcopy(doc)
+    lowered["workers"]["remediate"]["replicas"]["min"] = 3
+    assert _budget(lowered) == at_five == 418
+
+
+def test_the_two_ceilings_cost_exactly_what_the_acknowledgements_say():
+    """16 and 18 connections. Both numbers are quoted in ACKNOWLEDGED_DIFFERENCES, so a reader is
+    told the price; this keeps the quote honest as the presets or thread model change."""
+    import copy
+    doc = _example_doc()
+    base = _budget(doc)
+
+    api = copy.deepcopy(doc)
+    api["api"]["replicas"]["max"] = 3
+    assert base - _budget(api) == 16
+
+    disc = copy.deepcopy(doc)
+    disc["workers"]["discover"]["replicas"]["max"] = 2
+    assert base - _budget(disc) == 18
+
+
+def test_the_contract_can_express_the_pooling_that_makes_production_fit():
+    """THE STALE CLAIM THIS REPLACES. azure-parity.md said "the contract has no vocabulary for a
+    per-replica connection pool today"; `tier.connectionPool` had since been added and the
+    sentence never changed. Declaring it on this very example validates, and takes worst-case
+    demand from 418 to 100 — inside production's real 150-connection server.
+
+    Asserted rather than described, because "the document cannot say X" is precisely the kind of
+    claim that ends an investigation, and this one had already outlived its truth once."""
+    import copy
+    from acpctl.spec import validate
+    doc = _example_doc()
+    pinned = copy.deepcopy(doc)
+    for tier in ("discover", "assess", "remediate"):
+        pinned["workers"][tier]["connectionPool"] = 2
+    assert validate(pinned).ok, validate(pinned).errors
+    assert _budget(pinned) == 100
+    assert _budget(doc) == 418

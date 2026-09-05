@@ -125,7 +125,7 @@ Platform `azure` · release `2026.9` · VALID
 | `acp-web-api` | service | in-cluster | public | 2–4 | 1/2Gi | — | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `applicationinsights-connection-string`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
 | `acp-discovery` | service | in-cluster | none | 1–3 | 1/2Gi | discovery | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `applicationinsights-connection-string`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
 | `acp-assess` | service | in-cluster | none | 5–5 | 2/4Gi | assess | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `applicationinsights-connection-string`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
-| `acp-remediate` | service | in-cluster | none | 3–10 | 2/4Gi | remediate | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `applicationinsights-connection-string`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
+| `acp-remediate` | service | in-cluster | none | 5–10 | 2/4Gi | remediate | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `applicationinsights-connection-string`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
 | `acp-ollama-gateway` | service | in-cluster | internal | 1–1 | 4/8Gi | — | — |
 | `acp-grafana` | service | in-cluster | internal | — | — | — | — |
 | `acp-langfuse` | service | in-cluster | internal | — | — | — | `langfuse-secret-key` |

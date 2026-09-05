@@ -87,6 +87,16 @@ def build() -> str:
         lines.append(f"**{report['divergences']} unexplained**, "
                      f"{report['acknowledged']} acknowledged.")
         lines.append("")
+        # SAID IN WORDS, because the counts alone invite the wrong reading once the unexplained
+        # count reaches zero. "0 unexplained" is not "production matches the contract" — an
+        # acknowledgement says why a difference is there, not that it went away.
+        if not report["divergences"]:
+            lines.append(
+                f"Every difference now carries a recorded decision. Production still differs "
+                f"from the contract in **{report['stillDiffers']}** places — that is the point "
+                f"of the acknowledgements, not something they undo. Each row below says which "
+                f"side is authoritative and why.")
+            lines.append("")
         lines.append("| Tier | Field | Azure | Contract | | Why |")
         lines.append("|---|---|---|---|---|---|")
         for d in report["differences"]:
