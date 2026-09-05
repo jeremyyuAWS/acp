@@ -72,7 +72,7 @@ work was making it reachable and correct, not building it — see §5.
 
 | # | Requirement | State |
 |---|---|---|
-| 8 | Remediation more intuitive | Collapsing shipped (#154). The live running-stage experience is defined in §7.1; the focused review-queue redesign remains specified separately in `docs/remediate-redesign-spec.md` |
+| 8 | Remediation more intuitive | Collapsing shipped (#154). The running-stage summary is in §7.1; the authoritative operational contract is `docs/prd-remediation-realtime-ops-panel.md`, and the focused review queue remains in `docs/remediate-redesign-spec.md` |
 | 4 / 18c | List of users with access to ACP | **The tab is a mock.** `UserManagement.jsx` renders a hardcoded `SEED_USERS` array and imports nothing from `api.js`; there is no `/users` route on the backend. It looks authoritative and is not, which is worse than absent |
 
 ### 4.3 Already built — the requirement may have been about something narrower

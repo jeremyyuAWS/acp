@@ -1,8 +1,8 @@
-# PRD — Remediation Real-Time Operations Panel
+# PRD — Remediation Real-Time Operations Panel v2
 
 **Product:** ACP
 **Scope:** Remediate workspace, live job status, verification, review handoff, and corrected-copy delivery
-**Status:** Proposed
+**Status:** Proposed · **Priority:** High · **Dependency:** build on PR #1413 after it merges
 **Owner outcome:** Make every remediation run understandable and trustworthy while it is happening, without requiring users to interpret queues, workers, or contradictory counters.
 
 ## 1. Problem
@@ -606,3 +606,301 @@ Two documents describing one feature is how a spec stops being one, and the near
 no signal that the other exists, and an edit to either leaves the pair disagreeing silently. Its
 §21 API contract and §22 component plan are deliberately NOT adopted verbatim — see §21's "On
 naming" for why the shipped names stand.
+
+---
+
+## 28. Version 2 decision — one live narrative
+
+Version 2 evolves the existing `RemediationOpsPanel`; it does not add another card. Once the
+authoritative panel reaches parity, `RemediationRunProgress` is intentionally unmounted. Keep the
+older component and its tests in the repository under the retired-feature policy so restoration is
+one commit and the unmounted state is explicit in a test.
+
+This amendment is deliberately additive. Sections 1–27 define the truth model, product decisions,
+implementation seams and rollout controls. Sections 28 onward specify the next presentation and
+contract increment against the repository as it exists after the SharePoint-parity, durable-event,
+resumable-stream and active-attempt work.
+
+Within ten seconds, the card must answer:
+
+1. Is remediation progressing?
+2. Which immutable source snapshot is being remediated?
+3. How many documents are waiting, processing, completed or blocked?
+4. What are the workers doing now, in parallel?
+5. Are fixes being independently verified?
+6. Are corrected copies reaching their intended destination?
+7. Has material progress stopped, or is the service waiting for capacity?
+8. What changed since the user last viewed the run?
+9. Does the user need to act?
+10. Can the user safely leave the tab?
+
+## 29. Version 2 layout
+
+### Desktop
+
+```text
+┌────────────────────────────────────────────────────────────────────────────┐
+│ REMEDIATION IN PROGRESS                         ● Live · updated 2s ago    │
+│ SharePoint › UTSW › Policies › Clinical Docs                              │
+│ Snapshot locked at 5:13 PM · Batch rem-7f24                View Live Ops → │
+├────────────────────────────────────────────────────────────────────────────┤
+│ 36 / 100 documents complete                         Estimated 1–2 min      │
+│ [ Completed ][ Processing ][ Waiting ][ Review ][ Failed ]                 │
+│ 36 complete   10 processing   49 waiting   3 review   2 failed            │
+├────────────────────────────────┬───────────────────────────────────────────┤
+│ PROCESSING NOW                 │ RUN HEALTH                                │
+│ ● Patient Guide.docx           │ Throughput       22.4 documents/min      │
+│   Applying heading structure   │ Queue age        18 seconds               │
+│   In flight 12s · progress 1s  │ Active capacity  10 compatible slots      │
+│ ● Intake Form.pdf              │ Retries          2 scheduled              │
+│   Re-checking WCAG 1.3.1       │ Delivery         34 of 36 to SharePoint  │
+│ ● Benefits.xlsx · attempt 2    │ Integrity        Reconciled               │
+│   Graph throttle · retry 14s   │                                           │
+│              Show 7 more →     │                                           │
+├────────────────────────────────┴───────────────────────────────────────────┤
+│ PHASES                                                                     │
+│ ✓ Prepared 100  ● Applying 10  ● Re-checking 6  ● Saving 3  ○ Finalizing │
+├────────────────────────────────────────────────────────────────────────────┤
+│ LIVE ACTIVITY                                                Pause motion  │
+│ 17:32:08  ✓ Patient Guide.docx — 4 fixes verified                         │
+│ 17:32:06  ↑ Intake Form.pdf — corrected copy saved to SharePoint          │
+│ 17:32:03  ↻ Benefits.xlsx — Graph throttled; retry scheduled              │
+│ 17:31:58  ! Handbook.docx — manual review requested                       │
+│                                                    View full audit trail → │
+├────────────────────────────────────────────────────────────────────────────┤
+│ NEEDS ATTENTION                                                            │
+│ 3 review requests · 2 failed documents · 2 delivery retries               │
+│ [Review decisions] [Inspect failures] [Retry delivery]                    │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+The order is fixed: headline and connection freshness; reconciled progress and deltas; active
+documents; throughput and ETA; live activity; then exceptions and actions. Ordinary users should
+not need Monitor to determine whether their run is progressing.
+
+### Narrow screens
+
+Keep identity, connection state, numeric progress and ETA visible. Render the six document
+outcomes as a vertical list, show two active attempts, and collapse `Phases`, `Live activity`,
+`Delivery`, and `Needs attention` behind native disclosures. Filenames wrap rather than overflow.
+Preserve the user's disclosure state through live updates.
+
+## 30. Locked source and coverage
+
+The card identifies the immutable workflow snapshot, not merely the connected provider.
+
+For one SharePoint location:
+
+```text
+SharePoint › {site name} › {library name} › {optional folder}
+Snapshot locked {timestamp}
+{N} documents inherited from completed Assessment
+```
+
+For multiple locations:
+
+```text
+SharePoint · 3 sites · 8 libraries
+Snapshot locked {timestamp}
+View source coverage →
+```
+
+The disclosure reuses the locked Discover coverage projection: site and library names, full or
+incremental mode, listed/changed/removed counts, and complete, partial, blocked or skipped status.
+It must not issue a new Microsoft Graph inventory request merely to populate Remediate.
+
+If the live source has changed, say **Source changed since snapshot** without silently changing
+scope. Never imply that documents added after the lock are in the remediation batch. Partial or
+skipped discovery coverage remains visible wherever the batch denominator is presented.
+
+## 31. Reconciled progress and active attempts
+
+The denominator is the latest immutable remediation batch:
+
+```text
+completed + processing + waiting + review + failed + skipped = total_documents
+```
+
+Do not mix historical batches, prior attempts, scan-wide jobs, findings with documents, fixes with
+corrected copies, or stored copies with provider-delivered copies. Unknown values render as `—`,
+never `0`.
+
+Initially show at most three active attempts with **Show N more**. Each row includes the authorized
+display filename, structured phase, attempt number when greater than one, time since claim, time
+since material progress, retry time and reason, and verification or delivery state. Criterion
+counts are allowed; document contents are not.
+
+The backend distinguishes:
+
+```text
+last_worker_signal_at
+last_material_progress_at
+phase_started_at
+```
+
+A worker signal proves liveness, not progress. The card may therefore say that the stream and
+worker are live while the document or run is stalled.
+
+## 32. Durable activity and reconciliation
+
+The SSE hook retains a bounded client-side projection of the lifecycle events it already receives;
+events are no longer used only to advance the resume cursor.
+
+| Event | User-facing text |
+|---|---|
+| `remediate.accepted` | Remediation accepted for 100 documents |
+| `remediate.fix_applied` | 4 approved fixes applied to Patient Guide.docx |
+| `remediate.verified` | 4 fixes independently verified |
+| `remediate.verification_failed` | 1 fix did not pass re-scan |
+| `remediate.delivered` | Corrected copy saved to SharePoint |
+| `remediate.delivery_failed` | Corrected copy retained in ACP; SharePoint delivery failed |
+| `remediate.review_requested` | Manual review requested for WCAG 1.1.1 |
+| `remediate.document_completed` | Document remediation finished |
+
+Show newest first, at most ten visible events, and link to the complete audit trail. Deduplicate by
+durable sequence ID, retain the visible history through reconnect, and never expose extracted
+content, prompts, tokens or model responses. Routine activity is not announced to screen readers;
+announce only phase changes, failure, completion and newly required action.
+
+The transport and reconciliation hook owns initial snapshot loading, authenticated SSE, cursor
+persistence, replay, bounded activity, polling fallback and freshness. Presentational components
+do not open streams or derive terminal state.
+
+- Apply only a snapshot revision newer than the current one.
+- Ignore an event at or behind the applied durable cursor.
+- On an invalid cursor, retention gap or reconciliation-required frame, fetch and apply a fresh
+  snapshot before rendering subsequent lifecycle events.
+- A reconnect preserves counters, expanded state, scroll position and activity history.
+- The stream closes on `snapshot.terminal`, not `in_flight === 0`; `completing`,
+  `needs_attention`, delivery and reconciliation states continue updating.
+- On stream loss, retain the last confirmed snapshot and show its age. Polling fallback says
+  **Updating by polling**.
+
+Continue using the existing durable `scan_events` sequence. Do not add a second remediation event
+table.
+
+## 33. Throughput, delivery and exceptions
+
+Throughput is a server-observed run measurement, not browser arithmetic. The snapshot adds only
+fields not already available:
+
+```json
+{
+  "throughput": {
+    "documents_per_minute": 22.4,
+    "window_seconds": 300,
+    "sample_documents": 31,
+    "trend": "stable"
+  },
+  "estimate": {
+    "available": true,
+    "lower_seconds": 52,
+    "upper_seconds": 88,
+    "confidence": "medium",
+    "basis_documents": 31
+  }
+}
+```
+
+Do not estimate until five comparable documents complete. Show a range, never a resetting
+countdown. Account for format, phase, retry schedule, compatible capacity, provider throttling and
+delivery latency. If evidence is insufficient, show **Estimating after the first results**.
+
+Correction generation, safe ACP storage and provider delivery are separate outcomes. Display
+stored, delivered, pending, failed, retry count, next retry and destination. A delivery failure
+states that the corrected copy is safe in ACP and the original is unchanged. Delivery-only retry
+must not reapply or reverify a correction unless the stored artifact is stale.
+
+Replace a flat failure total with actionable groups:
+
+- Manual decisions, grouped by criterion and document count.
+- Verification failures, with a link to inspect re-scan evidence.
+- Provider delivery failures, with a scoped retry action.
+- Terminal document failures.
+
+Classifications distinguish authentication, authorization, throttling, source unavailable,
+invalid or unsupported document, verification failure, storage failure, provider delivery failure,
+worker loss, lease expiry, exhausted retry, and required manual decision.
+
+The ordinary card may show compatible capacity, active count, queue depth, oldest queue age, worker
+availability, capacity shortage and provider throttling. Raw replicas, Azure resource IDs,
+hostnames, credentials, exception stacks and fabricated utilization remain in Monitor.
+
+## 34. Motion contract
+
+Motion communicates durable change and never substitutes for status text.
+
+- Animate a document only when its durable stage changes. A refresh or repeated event does not
+  replay motion.
+- Positive deltas may briefly highlight increases in completed, applied, verified or delivered
+  counts. Never celebrate waiting, failure or retry increases, and never animate an unknown value
+  from zero.
+- Progress is one reconciled, segmented partition. Labels and/or patterns supplement color;
+  hover and keyboard focus reveal exact counts.
+- Throughput bars use a five-minute window and update on a 10–15 second visual cadence rather than
+  every SSE event.
+- Multiple phases may pulse softly while work is active. Queue-flow dashes move only while
+  documents advance and stop while waiting, disconnected or stalled.
+- Newly visible activity enters at the top. Older rows age out without fading below readable
+  contrast, and relative-time refreshes do not replay entrance motion.
+- Show detailed progress trails for at most the three visible active documents.
+- Milestone notices are subtle and dismissible and appear only for meaningful thresholds, never
+  for every document.
+- Connection text always says `Live`, `Reconnecting · last update … ago`,
+  `Updating by polling`, or `Stalled · no material progress for …`; animation is supplementary.
+- Respect `prefers-reduced-motion`; never flash faster than three times per second; never move
+  focus, reading order or scroll position because data arrived.
+- When the tab is hidden, continue ingesting SSE but pause visual motion. On return, render the
+  latest reconciled state once without replaying accumulated transitions.
+- **Pause motion** freezes animation, not backend work, event ingestion or reconciliation.
+
+## 35. Version 2 delivery and acceptance
+
+### Phase A — use what already exists
+
+- Merge and build on PR #1413.
+- Render the existing bounded `active_attempts` list and lifecycle events.
+- Show `retry_at`, integrity state and locked source identity.
+- Preserve the cursor and visible history through reconnect.
+- Stop mounting `RemediationRunProgress` after parity; add an explicit orphan assertion.
+
+### Phase B — SharePoint parity
+
+- Add locked site/library coverage and full/incremental provenance to the snapshot.
+- Show delivery destination and delivery-only retry state.
+- Categorize SharePoint throttling and permission failures.
+- Issue no new Graph inventory request for display.
+
+### Phase C — progress quality
+
+- Separate worker signal from material progress.
+- Add structured phase keys and timestamps.
+- Add server-observed throughput and evidence-based ETA ranges.
+- Continue streaming through completion and delivery reconciliation.
+
+### Phase D — actionable exceptions
+
+- Group review, verification, terminal and delivery exceptions.
+- Add scoped retry actions and audit-evidence links.
+- Prove that delivery-only retry cannot reapply a successful fix.
+
+Version 2 is accepted when:
+
+1. One card authoritatively describes the latest remediation batch and its six outcomes reconcile.
+2. A SharePoint run shows its locked site/library scope and never says OneDrive.
+3. Existing durable lifecycle events appear in the activity feed and survive reconnect without
+   duplication.
+4. Reconciliation occurs before later events render after invalid resume state.
+5. Multiple active attempts are represented as parallel work.
+6. Worker signal and material progress use different timestamps.
+7. **Live** clears within one heartbeat window after stream loss and polling is explicitly labelled.
+8. The stream remains active while delivery or reconciliation is incomplete.
+9. Stored corrected copies remain distinct from provider-delivered copies.
+10. Verification failure cannot increment delivery, and delivery-only retry cannot reapply or
+    reverify an unchanged artifact.
+11. Unknown capacity and telemetry render as unavailable, never zero.
+12. Navigation, refresh, sign-out and sign-in do not imply that backend work stopped.
+13. Routine counters and feed rows do not overwhelm screen-reader users.
+14. The legacy progress card remains in the tree but is intentionally unmounted after parity.
+15. P95 durable-event-to-visible latency is at most two seconds, at least 99.9% of terminal runs
+    reconcile, and source-label mismatches and negative/over-total progress values remain zero.
