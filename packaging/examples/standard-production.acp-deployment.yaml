@@ -1,8 +1,12 @@
 # Standard Production (PRD S8) — split tiers, managed data services, independent worker scaling.
 #
-# The replica ranges and sizes mirror the reviewed Azure baseline in
-# deploy/public/rightsize-production.sh (acp-app small; acp-discovery small; acp-assess and
-# acp-remediate standard), with the API floor raised to the two replicas the profile requires.
+# The sizes mirror the reviewed Azure baseline in deploy/public/rightsize-production.sh exactly
+# (acp-app small; acp-discovery small; acp-assess and acp-remediate standard). The REPLICA RANGES
+# mirror it only where a decision has been taken to make them: the assess tier is pinned warm at
+# 5-5 as production runs it, and the API floor is raised to the two replicas the profile requires.
+# Three ranges still differ from production and no decision has been recorded for them
+# (api.replicas.max, discover.replicas.max, remediate.replicas.min) — packaging/docs/azure-parity.md
+# lists each one, and this header does not claim otherwise.
 apiVersion: packaging.acp.mova.io/v1alpha1
 kind: ACPDeployment
 metadata:
@@ -28,13 +32,16 @@ workers:
       signals: [queue-depth, oldest-job-age]
       queueDepthTarget: 20
       oldestJobAgeSeconds: 300
+  # PINNED WARM, DELIBERATELY NOT AUTOSCALED. rightsize-production.sh keeps five assess replicas
+  # warm because assessment is a throughput-sensitive batch stage, and that is the operating model
+  # the owner chose to carry into the contract rather than replace (packaging/docs/azure-parity.md).
+  # min == max AND no `autoscale` block, which are two halves of one statement: a scale rule on a
+  # tier that cannot move is a declaration with no consequence, and values.py reads the block's
+  # ABSENCE to render a fixed replicaCount and no ScaledObject. Adding one back here is a
+  # performance change, not a packaging detail.
   assess:
-    replicas: { min: 3, max: 10 }
+    replicas: { min: 5, max: 5 }
     resources: { preset: standard }
-    autoscale:
-      signals: [queue-depth, oldest-job-age]
-      queueDepthTarget: 10
-      oldestJobAgeSeconds: 180
   remediate:
     replicas: { min: 3, max: 10 }
     resources: { preset: standard }

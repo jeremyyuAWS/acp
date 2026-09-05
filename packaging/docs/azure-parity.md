@@ -10,29 +10,43 @@ regenerates or `scripts/gen_azure_parity.py --check` fails. Everything above the
 authored, because what to *do* about a difference is a decision and a generator should not pretend
 to make one.
 
-## The finding that matters
+## The finding that mattered, and the decision taken
+
+**Decided 2026-09-05 by the owner: bring the contract to production.** The standard-production
+example now describes the assess tier the way production runs it — `replicas: {min: 5, max: 5}`
+and **no `autoscale` block** — so the chart reproduces today's behaviour instead of replacing it.
+Autoscaling that tier stays available as a later, measured change; it is not a side effect of a
+packaging project.
+
+The finding it settles, kept because the reasoning is what makes the decision reviewable:
 
 **Production does not autoscale the assess tier at all.** It is pinned at five replicas —
 `min == max` — and `rightsize-production.sh` says why: *"Assessment and Remediation are
 throughput-sensitive batch stages: keep five replicas warm so large runs retain the production
 performance baseline."* That is a deliberate operating model, chosen against measured behaviour.
+The contract's example described that tier as autoscaling **3–10** on queue depth, and the Helm
+chart renders a KEDA `ScaledObject` to make it happen — so adopting the chart as it stood would
+not have been a like-for-like rebuild: it would have **replaced a warm pool with an autoscaler**,
+on a stage whose latency somebody deliberately traded capacity for. That is what "parity" means as
+the PRD uses the word. The other direction may well be better; it is a performance change wearing
+a migration's clothes, and it should be measured before it is made.
 
-The contract's standard-production example describes that tier as autoscaling **3–10** on queue
-depth, and the Helm chart renders a KEDA `ScaledObject` to make it happen. So adopting the chart
-on Azure as it stands would not be a like-for-like rebuild: it would **replace a warm pool with an
-autoscaler**, on a stage whose latency somebody deliberately traded capacity for.
+**What the decision changed, beyond the three rows it closed.** The assess tier's replica ceiling
+was the largest single term in the fleet's connection demand. Pinning it takes the worst case from
+**518 to 418** connections, and the Azure adapter's Postgres requirement from `max_connections >=
+533` to `>= 433` — so a decision about latency also moved the number a server has to be
+provisioned to reach. That is the seam working: it is stated once, in the document, and every
+generated artefact below follows.
 
-That is a decision, and it is the first one phase 3 needs:
-
-- **Bring the contract to production** — record the pinned-warm model in the document (`replicas:
-  {min: 5, max: 5}`, no `autoscale` block) so the chart reproduces today's behaviour exactly, and
-  treat autoscaling as a later, measured change.
-- **Bring production to the contract** — accept that a cold start on the assess tier costs
-  latency, and let queue-depth scaling manage it.
-
-The first is what "parity" means as the PRD uses the word. The second may well be better, but it
-is a performance change wearing a migration's clothes, and it should be measured before it is
-made rather than arriving as a side effect of a packaging project.
+**Two halves of one statement, and either alone is wrong.** `min == max` without removing the
+block would leave a scale rule attached to a tier that cannot move — a declaration with no
+consequence, which reads as configured on every screen that renders it. Removing the block without
+pinning would leave the ceiling describing capacity nothing will ever reach. `values.py` reads the
+block's ABSENCE (`autoscaling.enabled = bool(tier.get("autoscale"))`) to render a fixed
+`replicaCount` and no `ScaledObject`, so the two fields have to agree for the chart to be right.
+`test_azure_parity.py::test_the_assess_tier_stays_pinned_warm` fails if either half is undone,
+because the way this decision would be lost is not an argument — it is somebody restoring a
+plausible-looking autoscale block and nothing going red.
 
 ### This finding was about two tiers a day ago
 
@@ -66,10 +80,12 @@ connection pool today, which is a gap in the document rather than a difference i
 
 ## Also worth deciding
 
-**The example's header is half true.** It says its ranges *"mirror the reviewed Azure baseline in
-`deploy/public/rightsize-production.sh`"*. The CPU and memory do mirror it exactly — every tier
-matches. The replica ranges do not, and only one of the differences (the API floor) is
-acknowledged in that header. The generated table below lists the rest.
+**The example's header used to be half true, and now names its own exceptions.** It claimed its
+ranges *"mirror the reviewed Azure baseline in `deploy/public/rightsize-production.sh`"*. The CPU
+and memory do mirror it exactly — every tier matches. The replica ranges did not, and only one of
+the differences (the API floor) was acknowledged there. The header now separates the two claims and
+names the three ranges that still differ, so a reader is not told the document mirrors production
+in a respect where it does not. Those three remain undecided: see the generated table below.
 
 **Today's production fails its own profile's floor.** The standard profile requires two API
 replicas (PRD §8); `acp-app` runs `1–3`. The example raises the floor to 2 and says so, which
@@ -120,21 +136,18 @@ Parsed from the deployment scripts, not from a live subscription.
 | Tier | CPU | Memory | Replicas | Autoscaled |
 |---|---:|---:|---|---|
 | `api` | 1.0 | 2Gi | 2–4 | yes |
-| `assess` | 2.0 | 4Gi | 3–10 | yes |
+| `assess` | 2.0 | 4Gi | 5–5 | no |
 | `discover` | 1.0 | 2Gi | 1–3 | yes |
 | `remediate` | 2.0 | 4Gi | 3–10 | yes |
 
 ## Differences
 
-**6 unexplained**, 1 acknowledged.
+**3 unexplained**, 1 acknowledged.
 
 | Tier | Field | Azure | Contract | | Why |
 |---|---|---|---|---|---|
 | `api` | `replicas.min` | `1` | `2` | acknowledged | The example raises the API floor from 1 to 2 because the standard profile requires two API replicas (PRD S8), and the example's own header says so. Azure runs 1 — so today's production would FAIL its own profile's floor, which is a finding about the deployment rather than about the contract. |
 | `api` | `replicas.max` | `3` | `4` | **unexplained** | — |
-| `assess` | `replicas.min` | `5` | `3` | **unexplained** | — |
-| `assess` | `replicas.max` | `5` | `10` | **unexplained** | — |
-| `assess` | `autoscaled` | `False` | `True` | **unexplained** | — |
 | `discover` | `replicas.max` | `2` | `3` | **unexplained** | — |
 | `remediate` | `replicas.min` | `5` | `3` | **unexplained** | — |
 

@@ -116,7 +116,7 @@ Profile `standard`, postgres `managed`, 12 requirements.
 | Resource | Setting | Required | From | Why |
 |---|---|---|---|---|
 | `postgres` | `provisioning` | Azure Database for PostgreSQL Flexible Server | document | data.postgres.mode is managed |
-| `postgres` | `max_connections` | >= 533 | derived | the fleet's worst case at maximum replicas is 518 (acpctl.inventory.connection_budget, which mirrors api/store.py's db_max_conn per replica), plus 15 the server keeps for itself |
+| `postgres` | `max_connections` | >= 433 | derived | the fleet's worst case at maximum replicas is 418 (acpctl.inventory.connection_budget, which mirrors api/store.py's db_max_conn per replica), plus 15 the server keeps for itself |
 | `postgres` | `sku` | one whose max_connections reaches the value above | vendor | Azure derives max_connections from the server's vCPU/memory tier, and this repository cannot check that table offline — so the requirement is stated as the number to satisfy rather than as a SKU name that would read as verified |
 | `postgres` | `backup.retentionDays` | 35 | document | data.postgres.backupRetentionDays |
 | `postgres` | `storage` | 256Gi | document | data.postgres.storage |

@@ -56,8 +56,19 @@ def test_the_derivation_covers_every_tier_the_contract_requires(document):
 
 
 def test_the_document_records_todays_replica_ranges_not_the_examples(document):
-    """The point of deriving rather than adapting the example. If these ever equal the
-    standard-production example's ranges, the derivation has stopped reading the scripts."""
+    """The point of deriving rather than adapting the example.
+
+    THE ORIGINAL WORDING NO LONGER HOLDS FOR ONE OF THESE THREE, and rewriting it is the honest
+    move rather than leaving a rationale that has quietly become false. It said: if these ever
+    equal the standard-production example's ranges, the derivation has stopped reading the
+    scripts. On 2026-09-05 the owner pinned the example's assess tier to 5-5 to match production
+    (packaging/docs/azure-parity.md), so assess NOW equals the example and that is correct — the
+    example moved to production, not the derivation to the example.
+
+    Discover (1-2 against the example's 1-3) and remediate (5-10 against 3-10) still differ, so
+    the guard keeps its discriminating power: a derivation that started copying the example would
+    still be caught by those two. Assess is now a fixed expectation like any other.
+    """
     assert document["workers"]["assess"]["replicas"] == {"min": 5, "max": 5}
     assert document["workers"]["remediate"]["replicas"] == {"min": 5, "max": 10}
     assert document["workers"]["discover"]["replicas"] == {"min": 1, "max": 2}
@@ -65,7 +76,10 @@ def test_the_document_records_todays_replica_ranges_not_the_examples(document):
 
 def test_a_pinned_tier_gets_no_autoscale_block(document):
     """Assess is pinned 5-5. Recording an autoscale block for it would misdescribe the warm pool
-    the operator deliberately chose — the finding azure-parity.md puts to the owner."""
+    the operator deliberately chose — the finding azure-parity.md put to the owner, and which the
+    owner settled on 2026-09-05 by pinning the contract's example to match. The derived document
+    said this before the decision and says it after; that it needed no change is the evidence that
+    it was describing production rather than arguing for a position."""
     assert "autoscale" not in document["workers"]["assess"]
     assert document["workers"]["remediate"]["autoscale"] == {"signals": ["queue-depth"]}
 

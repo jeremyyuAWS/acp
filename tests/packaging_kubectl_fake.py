@@ -45,9 +45,13 @@ HEALTHY = {
     "deny": {},
     # ── what `acpctl status` reads: a running installation ────────────────────
     #
-    # Shaped to match the standard-production example: an api tier autoscaled 2-4 and three
-    # worker tiers autoscaled by KEDA. `replicas: null` means the Deployment has NO spec.replicas,
-    # which is what the chart renders for an autoscaled tier — the distinction status depends on.
+    # Shaped to match the standard-production example: an api tier autoscaled 2-4, two worker
+    # tiers autoscaled by KEDA, and ASSESS PINNED WARM at 5 (the owner's 2026-09-05 parity
+    # decision — packaging/docs/azure-parity.md). `replicas: null` means the Deployment has NO
+    # spec.replicas, which is what the chart renders for an autoscaled tier; a NUMBER means the
+    # chart pinned it. That distinction is the whole of what status judges replica drift on, so
+    # the healthy fixture has to carry one of each — a fixture where every tier autoscales cannot
+    # tell a correct fixed-tier check from one that never runs.
     "release": "2026.9",
     "profile": "standard",
     "platform": "azure",
@@ -56,14 +60,16 @@ HEALTHY = {
         {"name": "acp-worker-discover", "component": "worker", "role": "discovery",
          "replicas": None, "ready": 1},
         {"name": "acp-worker-assess", "component": "worker", "role": "assess",
-         "replicas": None, "ready": 7},
+         "replicas": 5, "ready": 5},
         {"name": "acp-worker-remediate", "component": "worker", "role": "remediate",
          "replicas": None, "ready": 3},
     ],
     # Each entry: {name, phase, containers: [{ready, restarts, waiting_reason, message}]}
     "pods": [],
     "jobs": [],
-    "scaled_objects": ["acp-worker-discover", "acp-worker-assess", "acp-worker-remediate"],
+    # No ScaledObject for assess: it is pinned, and status reports a scaler on a tier the
+    # document does not autoscale as its own kind of drift.
+    "scaled_objects": ["acp-worker-discover", "acp-worker-remediate"],
 }
 
 
