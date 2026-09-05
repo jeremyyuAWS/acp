@@ -326,6 +326,23 @@ describe('counters flash their increase like Discovery does', () => {
 })
 
 describe('the v2 live operations hierarchy', () => {
+  it('adds focusable segment details, retry timing, activity density, and documents in their phases', () => {
+    const snapshot = { ...SNAP, retry_at: '2026-09-05T12:00:14Z', active_attempts: [
+      { file: 'Patient Guide.docx', phase: 're-verifying the corrected copy', elapsed_s: 8, attempt: 2,
+        trail: [{ label: '4 fixes applied' }] },
+    ] }
+    const html = render({ snapshot, connected: true, receivedAt: Date.now(), events: [
+      { key: '17', tone: 'success', occurredAt: '2026-09-05T11:59:58Z', line: 'Verified Patient Guide.docx' },
+    ] })
+    expect(html).toContain('data-detail="Completed: 4"')
+    expect(html).toContain('tabindex="0"')
+    expect(html).toContain('Temporary issue')
+    expect(html).toContain('Last 60 seconds')
+    expect(html).toContain('remops-pipeline-moving')
+    expect(html).toContain('Patient Guide.docx')
+    expect(html).toContain('4 fixes applied')
+  })
+
   it('renders reconciled progress before pipeline, active work, throughput, activity, and exceptions', () => {
     const html = render({ snapshot: { ...SNAP, active_attempts: [
       { file: 'guide.docx', phase: 're-verifying', elapsed_s: 8, attempt: 1 },
