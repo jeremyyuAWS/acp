@@ -138,6 +138,18 @@ class Service:
         return out
 
 
+# Connections a Postgres server spends on itself, and therefore cannot lend the fleet: the
+# superuser reservation, a migration job, an operator's psql session during an incident. Small and
+# deliberately so — the fleet's demand is already a worst case, so this is not a second safety
+# factor, it is the part of `max_connections` that was never available.
+#
+# It is stated here rather than folded into the demand because the two answer different questions:
+# demand is what the application will take, this is what the server keeps. A ceiling that clears
+# the first and not the second passes `data.connection-budget` and still refuses the operator's
+# session during the incident they opened it to investigate.
+SERVER_RESERVED_CONNECTIONS = 15
+
+
 def worker_threads(preset: str) -> int:
     return int(float(presets.PRESETS[preset]["cpu"]) * WORKER_THREADS_PER_CPU)
 

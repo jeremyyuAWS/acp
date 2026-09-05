@@ -183,6 +183,55 @@ def cmd_values(args) -> int:
     return 0
 
 
+def cmd_adapter(args) -> int:
+    """What the infrastructure adapter must provision for this document to be true.
+
+    VALIDATES FIRST, LIKE `values` AND `inventory`, AND FOR A SHARPER REASON. The requirements are
+    derived from the document's numbers — the Postgres ceiling comes from the fleet's connection
+    demand, the identity grants from `secrets.workloadIdentity` — so an invalid document produces
+    a requirements list that is confidently wrong about what to build. That is worse than a
+    refusal: infrastructure gets created from it.
+    """
+    from .adapter_azure import report as azure_report
+
+    document, result = _load_and_validate(args.spec)
+    if not result.ok:
+        _print_findings("Errors", result.errors, sys.stderr)
+        print(f"\nrefusing to derive adapter requirements: {args.spec} is invalid", file=sys.stderr)
+        return 1
+
+    platform = document["runtime"]["platform"]
+    if platform != "azure":
+        print(f"acpctl adapter: only the azure adapter exists (PRD S21 phase 3); this document "
+              f"declares platform '{platform}', and AWS/GCP are phase 4", file=sys.stderr)
+        return 2
+
+    rep = azure_report(document)
+    if args.json:
+        print(json.dumps({
+            "requirements": [
+                {"resource": r.resource, "setting": r.setting, "value": r.value,
+                 "because": r.because, "source": r.source}
+                for r in rep.requirements],
+            "unowned": rep.unowned,
+        }, indent=2))
+        return 0
+
+    print(f"Azure adapter requirements for {document['metadata']['name']} "
+          f"({len(rep.requirements)}):\n")
+    for requirement in rep.requirements:
+        print(f"  {requirement.render()}")
+    if rep.undecided:
+        print(f"\n  UNDECIDED ({len(rep.undecided)}): a setting the adapter must choose and the "
+              f"document does not state.")
+    if rep.unverifiable:
+        print(f"  VENDOR ({len(rep.unverifiable)}): rests on an Azure fact this repository "
+              f"cannot check offline.")
+    print(f"\n  Not expressed by the contract at all ({len(rep.unowned)}): "
+          f"{', '.join(sorted(rep.unowned))}")
+    return 0
+
+
 def cmd_doctor(args) -> int:
     """Can this cluster run what the document describes?
 
@@ -348,6 +397,14 @@ def build_parser() -> argparse.ArgumentParser:
         "values", help="render Helm values for the shared ACP release (writes nothing)")
     p.add_argument("spec")
     p.set_defaults(func=cmd_values)
+
+    p = sub.add_parser(
+        "adapter",
+        help="what the cloud adapter must provision for this document (derives only, creates "
+             "nothing)")
+    p.add_argument("spec")
+    p.add_argument("--json", action="store_true", help="machine-readable output")
+    p.set_defaults(func=cmd_adapter)
 
     p = sub.add_parser(
         "doctor", help="check a live cluster can run this document (reads only, changes nothing)")
