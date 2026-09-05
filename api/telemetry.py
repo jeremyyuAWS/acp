@@ -33,6 +33,8 @@ import hmac
 import os
 import threading
 
+from swallowed import swallowed
+
 _CONNECTION_ENV = "APPLICATIONINSIGHTS_CONNECTION_STRING"
 _SALT_ENV = "ACP_TELEMETRY_SALT"
 _SAMPLING_ENV = "APPLICATIONINSIGHTS_SAMPLING_RATIO"
@@ -206,7 +208,7 @@ def _shutdown_provider() -> None:
         if callable(shutdown):
             shutdown()
     except Exception:  # noqa: BLE001
-        pass
+        swallowed("telemetry._shutdown_provider: stopping the Azure Monitor exporter failed")
 
 
 def _install_scrubber() -> bool:
@@ -228,7 +230,13 @@ def _install_scrubber() -> bool:
                 for key, value in cleaned.items():
                     span.set_attribute(key, value)
             except Exception:  # noqa: BLE001 — a scrub failure must not drop the span silently
-                pass
+                # `scrub` is total by construction (tests/test_telemetry.py pins that), so
+                # reaching here means an attribute shape nobody anticipated got past it — and
+                # the span goes to the exporter with its ORIGINAL attributes, which is exactly
+                # the case where an unscrubbed filename ships. It cannot be undone from here
+                # (set_attribute cannot remove one), so it must at least be findable.
+                swallowed("telemetry._Scrubber.on_start: scrubbing span attributes failed; "
+                          "the span was exported unscrubbed")
 
         def on_end(self, span):  # noqa: D102
             return None

@@ -335,7 +335,7 @@ def _start_job_workers():
             print(f"[telemetry] Application Insights on · sampling {_state['sampling_ratio']} "
                   f"· correlation {_state['correlation']}", flush=True)
     except Exception:  # noqa: BLE001 — never take startup down for telemetry.
-        pass
+        swallowed("app.startup: configuring Application Insights tracing failed")
     core.reload_scheduler()
     core.start_scheduler()
     n = core.start_workers()

@@ -313,3 +313,48 @@ def test_a_live_span_loses_the_filename_and_the_query():
         cleaned = telemetry.scrub(dict(span.attributes))
     assert cleaned == {"acp.scan_id": "scan-1", "http.url": "https://graph.microsoft.com/items"}
     assert "Board Pack" not in str(cleaned)
+
+
+def test_a_scrub_failure_is_reported_rather_than_shipped_in_silence(monkeypatch):
+    """The one handler in this file whose silence has a security cost.
+
+    `scrub` is total (see above), so the only way to reach its handler is an attribute shape
+    nobody anticipated. When that happens the span still goes to the exporter carrying its
+    ORIGINAL attributes — a filename among them — and `set_attribute` cannot take one back off.
+    The failure is therefore invisible in the trace itself: the span looks normal and simply
+    was not cleaned. `swallowed` is the only thing that says so.
+    """
+    pytest.importorskip("opentelemetry.sdk.trace",
+                        reason="azure-monitor-opentelemetry pulls the SDK; pinned in api/requirements.txt")
+    import logging
+
+    import opentelemetry.trace as ot
+    from opentelemetry.sdk.trace import TracerProvider
+    import swallowed as _swallowed
+
+    provider = TracerProvider()
+    monkeypatch.setattr(ot, "get_tracer_provider", lambda: provider)
+    assert telemetry._install_scrubber() is True
+
+    def _explode(_attributes):
+        raise RuntimeError("an attribute shape nobody anticipated")
+
+    monkeypatch.setattr(telemetry, "scrub", _explode)
+    _swallowed.reset()
+
+    records = []
+    handler = logging.Handler()
+    handler.emit = records.append
+    _swallowed.logger.addHandler(handler)
+    try:
+        with provider.get_tracer("test").start_as_current_span("probe") as span:
+            span.set_attribute("acp.current_file", "Q3 Board Pack.docx")
+    finally:
+        _swallowed.logger.removeHandler(handler)
+        _swallowed.reset()
+
+    assert records, "a scrub failure produced no report at all — the unscrubbed span is untraceable"
+    assert any("_Scrubber.on_start" in r.getMessage() for r in records)
+    # And it names the consequence, not just the site: whoever reads this line needs to know the
+    # span went out uncleaned rather than being dropped.
+    assert any("unscrubbed" in r.getMessage() for r in records)
