@@ -137,13 +137,14 @@ def test_scopes_are_read_from_the_app_not_restated(pf):
     pf.check_sharepoint()
     d = detail(pf, "delegated scopes")
     src = (ROOT / "frontend" / "src" / "sharepointScopes.js").read_text()
-    for scope in ("User.Read", "Files.Read.All", "Sites.Read.All"):
+    for scope in ("User.Read", "Files.ReadWrite.All", "Sites.ReadWrite.All"):
         assert scope in d and scope in src
 
 
-def test_the_read_only_posture_is_asserted_not_assumed(pf):
+def test_the_non_destructive_release_posture_is_asserted_not_assumed(pf):
     pf.check_sharepoint()
-    assert state(pf, "read-only posture") == pf.PASS
+    assert state(pf, "release write posture") == pf.PASS
+    assert "source replacement disabled" in detail(pf, "release write posture")
 
 
 def test_delegated_token_acquisition_is_reported_as_unverifiable(pf):
