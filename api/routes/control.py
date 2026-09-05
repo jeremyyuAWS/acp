@@ -429,6 +429,9 @@ def _empty_capacity(configured: bool, app_name: str | None = None) -> dict:
         # distinguishable from "we asked and nothing is firing", which an absent key is not.
         "alerts": {"queried": False, "rules_total": None, "rules_enabled": None,
                    "firing": [], "rules": [], "unavailable_reason": None},
+        # The health transitions Azure reported for THIS app. Not a current status — see the
+        # platform-health section. Present unqueried in every shape, same reason as `alerts`.
+        "resource_health": _empty_resource_health(),
     }
 
 
@@ -474,7 +477,9 @@ def get_capacity():
     the first real deployment as this endpoint's actual proof.
     """
     if not _AZ_CONFIGURED:
-        return _empty_capacity(False)
+        unconfigured = _empty_capacity(False)
+        unconfigured["service_health"] = _empty_service_health()
+        return unconfigured
     # Every configured worker app, keyed by name. The top-level fields stay the FIRST app's, so
     # every existing caller of this endpoint is unaffected; `apps` is what lets each worker
     # service in Live Operations show its own figures instead of suppressing them.
@@ -488,6 +493,10 @@ def get_capacity():
     if blocks:
         result["apps"] = blocks
         result["worker_app_names"] = apps
+    # Subscription-scoped, so it lives at the TOP LEVEL and never inside an app block: a regional
+    # Azure incident is not a fault in any one worker service, and nesting it under one would read
+    # as though it were. One call for the whole response, not one per app.
+    result["service_health"] = _service_health(datetime.now(timezone.utc))
     return result
 
 
@@ -683,6 +692,7 @@ def _capacity_for_app(app_name: str) -> dict:
     # missing Alerts read must not cost the capacity figures that already came back — and because
     # `app.id` is what scopes it, so it needs the container-app lookup above to have succeeded.
     result["alerts"] = _alerts_for_app(getattr(app, "id", None))
+    result["resource_health"] = _resource_health(getattr(app, "id", None), now)
 
     return result
 
@@ -717,6 +727,228 @@ def _scrub_metadata(metadata) -> dict:
             return {}
     return {k: v for k, v in metadata.items()
             if not any(marker in str(k).lower() for marker in _SECRETISH)}
+
+
+# ── Tier 5: platform health ─────────────────────────────────────────────────────────────────────
+#
+# TWO DIFFERENT QUESTIONS, FROM ONE API, AND THEY MUST NOT BE MERGED.
+#
+#   · RESOURCE HEALTH is about THIS container app: has Azure reported it unavailable or degraded?
+#   · SERVICE HEALTH is about AZURE: is there an incident in the region or a planned maintenance
+#     window that would affect everything in the subscription?
+#
+# The first is per-app and the second is subscription-wide, so attributing a regional Azure
+# incident to one worker service would read as that service being at fault. They are separate
+# blocks for that reason.
+#
+# WHAT THE ACTIVITY LOG CAN AND CANNOT ANSWER — the constraint that shapes this whole section.
+# `activity_logs.list` returns health TRANSITION EVENTS, not a current status. Azure's current
+# resource health lives at Microsoft.ResourceHealth/availabilityStatuses/current, a different
+# provider needing a package this repo does not install. So nothing here may say "this app is
+# Available". It says "the last health transition Azure reported was Available, N hours ago",
+# which is a weaker claim and the only one the data supports: an app that went unavailable ninety
+# seconds ago has not had its event ingested yet, and reading the older event as a current status
+# would show a broken service as healthy at exactly the moment that matters most.
+_HEALTH_WINDOW_HOURS = 24
+
+# Azure's documented resource health statuses, and how each should read. "Unknown" is Azure saying
+# it cannot tell — kept as its own state rather than folded into either healthy or unhealthy.
+_HEALTH_STATES = {
+    "available": "ok", "unavailable": "bad", "degraded": "warn", "unknown": "warn",
+}
+
+# Service Health events come in kinds with very different urgency. An "Incident" is happening now;
+# "Maintenance" is scheduled; "Informational" and "Security" are advisories.
+_SERVICE_EVENT_KINDS = ("Incident", "Maintenance", "Informational", "Security", "ActionRequired")
+
+_TAG_RE = None
+_SPACE_BEFORE_PUNCT = None
+
+
+def _strip_html(text) -> str | None:
+    """Microsoft writes Service Health `communication` as HTML, and it reaches a page any
+    signed-in workspace user can open.
+
+    Tags are removed rather than escaped-and-rendered because this is operational prose, not
+    layout worth preserving, and because handing markup from an external system to a renderer is
+    the kind of decision that is only safe until somebody swaps the renderer. Entities are decoded
+    after stripping so `&amp;` reads as `&` rather than as itself.
+    """
+    if not text:
+        return None
+    global _TAG_RE, _SPACE_BEFORE_PUNCT
+    import re as _re  # noqa: PLC0415
+    if _TAG_RE is None:
+        _TAG_RE = _re.compile(r"<[^>]*>")
+        # A tag becomes a SPACE, not nothing, or `<div>a</div><div>b</div>` reads as "ab". The
+        # cost is a space before the punctuation that followed an inline tag — "investigating ." —
+        # so it is taken back out afterwards rather than paid on screen.
+        _SPACE_BEFORE_PUNCT = _re.compile(r"\s+([,.;:!?%)\]])")
+    import html as _html  # noqa: PLC0415
+    cleaned = _html.unescape(_TAG_RE.sub(" ", str(text)))
+    cleaned = _SPACE_BEFORE_PUNCT.sub(r"\1", " ".join(cleaned.split()))
+    return cleaned.strip() or None
+
+
+def _localized(value) -> str | None:
+    """An activity-log `category`/`operation_name`/`status` is a LocalizableString with `.value`
+    and `.localized_value`; `level` is a plain string. Read whichever this is."""
+    if value is None:
+        return None
+    inner = getattr(value, "value", None)
+    return str(inner) if inner is not None else (str(value) or None)
+
+
+def _activity_log(client, filter_str: str, limit: int = 50) -> list:
+    """Activity-log events matching a filter, newest first, capped.
+
+    Capped because `list` is a paged iterator over a subscription-wide log and a busy subscription
+    would otherwise walk thousands of rows on a read path the live map polls.
+    """
+    rows = []
+    for event in client.activity_logs.list(filter=filter_str):
+        rows.append(event)
+        if len(rows) >= limit:
+            break
+    rows.sort(key=lambda e: getattr(e, "event_timestamp", None) or datetime.min.replace(
+        tzinfo=timezone.utc), reverse=True)
+    return rows
+
+
+def _health_filter(now: datetime, *, category: str, resource_id: str | None = None) -> str:
+    """The OData filter activity_logs.list requires. `eventTimestamp` bounds are mandatory — the
+    API rejects a filter without them — and a resource id narrows a subscription-wide log to one
+    app."""
+    start = (now - timedelta(hours=_HEALTH_WINDOW_HOURS)).isoformat()
+    parts = [f"eventTimestamp ge '{start}'", f"eventTimestamp le '{now.isoformat()}'",
+             f"category eq '{category}'"]
+    if resource_id:
+        parts.append(f"resourceId eq '{resource_id}'")
+    return " and ".join(parts)
+
+
+def _empty_resource_health() -> dict:
+    return {"queried": False, "status": None, "tone": None, "previous": None, "cause": None,
+            "reported_at": None, "summary": None, "transitions": [],
+            "window_hours": _HEALTH_WINDOW_HOURS, "unavailable_reason": None}
+
+
+def _resource_health(app_id: str, now: datetime) -> dict:
+    """The health transitions Azure reported for THIS app in the last 24 hours.
+
+    `status` is the status of the MOST RECENT transition and is named `reported_at` alongside, not
+    "now": see the section docstring. A resource with no transitions in the window is the normal,
+    healthy case and is reported as exactly that — no events — rather than as Available, because
+    this API cannot distinguish "nothing went wrong" from "nothing was ingested".
+    """
+    block = _empty_resource_health()
+    if not app_id:
+        return block
+    try:
+        client = _monitor_client()
+        events = _activity_log(client, _health_filter(now, category="ResourceHealth",
+                                                      resource_id=app_id))
+    except Exception as e:  # noqa: BLE001 — the health panel degrades; capacity figures stand
+        status = getattr(e, "status_code", None)
+        block["unavailable_reason"] = "permission" if status in (401, 403) else "error"
+        swallowed("routes.control._resource_health: reading ResourceHealth activity events failed")
+        return block
+
+    block["queried"] = True
+    for event in events:
+        props = getattr(event, "properties", None) or {}
+        current = (props.get("currentHealthStatus") or "").strip() or None
+        block["transitions"].append({
+            "at": _iso(getattr(event, "event_timestamp", None)),
+            "status": current,
+            "previous": (props.get("previousHealthStatus") or "").strip() or None,
+            # PlatformInitiated vs UserInitiated is the difference between "Azure did this to you"
+            # and "a deploy did this" — the two call for opposite responses.
+            "cause": (props.get("cause") or "").strip() or None,
+            "summary": _strip_html(props.get("title") or props.get("summary")),
+        })
+    if block["transitions"]:
+        latest = block["transitions"][0]
+        block["status"] = latest["status"]
+        block["tone"] = _HEALTH_STATES.get((latest["status"] or "").lower())
+        block["previous"] = latest["previous"]
+        block["cause"] = latest["cause"]
+        block["reported_at"] = latest["at"]
+        block["summary"] = latest["summary"]
+    return block
+
+
+def _empty_service_health() -> dict:
+    return {"queried": False, "active": [], "window_hours": _HEALTH_WINDOW_HOURS,
+            "unavailable_reason": None}
+
+
+def _service_health(now: datetime) -> dict:
+    """Azure's own incidents and planned maintenance affecting this SUBSCRIPTION.
+
+    Subscription-scoped on purpose and kept out of the per-app blocks: a regional Azure incident
+    is not a fault in any one worker service, and showing it inside a service's panel would read
+    as though it were.
+    """
+    block = _empty_service_health()
+    try:
+        client = _monitor_client()
+        events = _activity_log(client, _health_filter(now, category="ServiceHealth"), limit=25)
+    except Exception as e:  # noqa: BLE001
+        status = getattr(e, "status_code", None)
+        block["unavailable_reason"] = "permission" if status in (401, 403) else "error"
+        swallowed("routes.control._service_health: reading ServiceHealth activity events failed")
+        return block
+
+    block["queried"] = True
+    seen = set()
+    for event in events:
+        props = getattr(event, "properties", None) or {}
+        tracking = (props.get("trackingId") or "").strip() or None
+        # One incident emits an event per stage (Active, Updated, Resolved). Keyed by trackingId
+        # so a single incident is one row at its LATEST stage, not three rows implying three
+        # incidents — and because the events are already newest-first, the first one wins.
+        if tracking and tracking in seen:
+            continue
+        if tracking:
+            seen.add(tracking)
+        stage = (props.get("stage") or "").strip() or None
+        block["active"].append({
+            "tracking_id": tracking,
+            "kind": (props.get("incidentType") or "").strip() or None,
+            "stage": stage,
+            # Resolved incidents are KEPT rather than filtered out. An incident that resolved
+            # twenty minutes ago is the explanation for the restarts still on the timeline, and
+            # dropping it leaves an operator hunting for a cause that has already been published.
+            "resolved": (stage or "").lower() in ("resolved", "complete", "completed"),
+            "title": _strip_html(props.get("title")),
+            "summary": _strip_html(props.get("communication")),
+            "at": _iso(getattr(event, "event_timestamp", None)),
+            "services": _impacted_services(props.get("impactedServices")),
+        })
+    return block
+
+
+def _impacted_services(raw) -> list:
+    """`impactedServices` is a JSON STRING inside a string-valued property map. Parsed here so the
+    UI never has to, and degrading to [] rather than raising when Azure changes the encoding."""
+    if not raw:
+        return []
+    try:
+        import json as _json  # noqa: PLC0415
+        parsed = _json.loads(raw) if isinstance(raw, str) else raw
+    except (ValueError, TypeError):
+        return []
+    out = []
+    for entry in (parsed if isinstance(parsed, list) else []):
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("ServiceName") or entry.get("serviceName")
+        regions = entry.get("ImpactedRegions") or entry.get("impactedRegions") or []
+        names = [r.get("RegionName") or r.get("regionName") for r in regions
+                 if isinstance(r, dict)]
+        out.append({"service": name, "regions": [n for n in names if n]})
+    return out
 
 
 # ── Tier 5: active alerts ───────────────────────────────────────────────────────────────────────

@@ -1405,3 +1405,113 @@ export function alertRuleState(rule = {}) {
   // A state Azure added that this UI does not know: shown as itself rather than guessed at.
   return String(rule.state).replace(/^./, c => c.toUpperCase())
 }
+
+/* ─────────────────────── Platform health (Tier 5) ─────────────────────── */
+
+/** Azure's documented resource-health statuses. `unknown` is Azure saying it cannot tell, and is
+ *  its own state: mapping it to healthy claims health nobody measured, and mapping it to broken
+ *  pages someone for an absence of information. */
+export const HEALTH_STATES = {
+  available: { icon: '●', text: 'Available', tone: 'ok' },
+  degraded: { icon: '▲', text: 'Degraded', tone: 'warn' },
+  unavailable: { icon: '■', text: 'Unavailable', tone: 'bad' },
+  unknown: { icon: '◔', text: 'Azure could not tell', tone: 'warn' },
+  quiet: { icon: '◇', text: 'No health events', tone: 'idle' },
+  unavailable_reading: { icon: '—', text: NOT_REPORTED, tone: 'idle' },
+}
+
+/**
+ * What the resource-health panel may claim.
+ *
+ * The activity log reports health TRANSITIONS, not a current status, so every branch here is
+ * phrased as a past reading with a time attached. The one that matters:
+ *
+ *   no transitions in the window → `quiet`, NOT `available`.
+ *
+ * A quiet 24 hours is the normal healthy case AND exactly what an outage looks like ninety
+ * seconds in, before Azure has ingested the event. Rendering the second as the first shows a
+ * broken service as healthy at the moment that matters most, so the panel says what it actually
+ * knows — nothing was reported — and lets the live metrics beside it carry the "right now".
+ */
+export function resourceHealthModel(capacity = null) {
+  const block = capacity?.resource_health || null
+  if (!block || block.queried !== true) {
+    return {
+      state: 'unavailable_reading',
+      ...HEALTH_STATES.unavailable_reading,
+      reason: block?.unavailable_reason === 'permission'
+        ? 'Azure refused the health query — the identity is missing the Monitoring Reader role.'
+        : block?.unavailable_reason === 'error'
+          ? 'The health query failed, so Azure’s view of this service is not known.'
+          : 'This deployment does not report Azure resource health.',
+      reportedAt: null, cause: null, previous: null, transitions: [], windowHours: null,
+    }
+  }
+  const windowHours = num(block.window_hours)
+  const status = (block.status || '').toLowerCase()
+  const state = block.transitions?.length ? (HEALTH_STATES[status] ? status : 'unknown') : 'quiet'
+  return {
+    state,
+    ...HEALTH_STATES[state],
+    // Never "is": always "was reported". The panel cannot say what is true now.
+    reason: state === 'quiet'
+      ? `Azure reported no health change for this service in the last ${windowHours ?? 24} hours. `
+        + 'That is the healthy case — and also what an outage looks like before Azure has '
+        + 'ingested it, so read the live metrics above for right now.'
+      : `Last reported by Azure${block.cause === 'PlatformInitiated' ? ', platform-initiated'
+        : block.cause === 'UserInitiated' ? ', caused by a change we made' : ''}.`
+        + (block.previous ? ` Changed from ${block.previous}.` : ''),
+    reportedAt: block.reported_at || null,
+    cause: block.cause || null,
+    previous: block.previous || null,
+    summary: block.summary || null,
+    transitions: Array.isArray(block.transitions) ? block.transitions : [],
+    windowHours,
+  }
+}
+
+/**
+ * Azure's own incidents, subscription-wide.
+ *
+ * Read from the top level of the capacity payload, never from an app block: a regional incident
+ * is not a fault in any one worker service. Resolved incidents are kept and marked, because one
+ * that cleared twenty minutes ago is the explanation for restarts still on the timeline.
+ */
+export function serviceHealthModel(capacity = null) {
+  const block = capacity?.service_health || null
+  if (!block || block.queried !== true) {
+    return {
+      available: false,
+      // A query that was ATTEMPTED and failed is a real, actionable gap and must be shown. A
+      // deployment with no Azure at all is not — a permanent "Not reported" panel on every
+      // drawer would be noise, and the drawer says elsewhere that Azure is not configured.
+      // `unavailable_reason` is set only when a call was actually made, so it is the line.
+      failed: Boolean(block?.unavailable_reason),
+      reason: block?.unavailable_reason === 'permission'
+        ? 'Azure refused the service-health query — the identity is missing the Monitoring Reader role.'
+        : block?.unavailable_reason === 'error'
+          ? 'The service-health query failed, so Azure incidents are not known.'
+          : 'This deployment does not report Azure service health.',
+      active: [], resolved: [], windowHours: null,
+    }
+  }
+  const rows = Array.isArray(block.active) ? block.active : []
+  return {
+    available: true,
+    failed: false,
+    reason: rows.length
+      ? null
+      : `No Azure incidents affecting this subscription in the last ${num(block.window_hours) ?? 24} hours.`,
+    active: rows.filter(r => !r.resolved),
+    resolved: rows.filter(r => r.resolved),
+    windowHours: num(block.window_hours),
+  }
+}
+
+/** One incident's regions, flattened for display. Empty when Azure named none — never guessed at
+ *  from the subscription's own region, which would attribute an incident to a place it may not
+ *  have touched. */
+export function incidentRegions(incident = {}) {
+  const services = Array.isArray(incident.services) ? incident.services : []
+  return [...new Set(services.flatMap(s => (Array.isArray(s?.regions) ? s.regions : [])))]
+}

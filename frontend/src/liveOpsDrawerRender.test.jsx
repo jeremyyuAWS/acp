@@ -813,3 +813,115 @@ describe('Active alerts panel', () => {
     }
   })
 })
+
+describe('Azure health panels', () => {
+  const workerNode = { kind: 'worker', label: 'Assess workers', service }
+  const rhPanel = (c) => c.querySelector('[aria-label="Azure resource health"]')
+  const shPanel = (c) => c.querySelector('[aria-label="Azure platform incidents"]')
+  const withRh = (resource_health) => ({ ...capacity, resource_health })
+  const withSh = (service_health) => ({ ...capacity, service_health })
+
+  it('shows a quiet window as "No health events" and points at the live metrics', async () => {
+    // The claim the activity log cannot support is "Available". A quiet window is the healthy
+    // case and also what an outage looks like before Azure ingests it.
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode,
+      capacity: withRh({ queried: true, status: null, transitions: [], window_hours: 24 }) })
+    const text = rhPanel(container).textContent
+    expect(text).toContain('No health events')
+    expect(text).toMatch(/live metrics/)
+    expect(text).not.toContain('Available')
+  })
+
+  it('dates a reported transition instead of presenting it as now', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode,
+      capacity: withRh({ queried: true, status: 'Degraded', previous: 'Available',
+        cause: 'PlatformInitiated', reported_at: iso(-3600), window_hours: 24,
+        transitions: [{ at: iso(-3600), status: 'Degraded', previous: 'Available',
+          cause: 'PlatformInitiated', summary: null }] }) })
+    const text = rhPanel(container).textContent
+    expect(text).toContain('Degraded')
+    expect(text).toMatch(/Last reported/)
+    expect(text).toMatch(/last reported health transition/)
+    expect(text).toMatch(/platform-initiated/)
+  })
+
+  it('claims no health at all when the query failed', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode,
+      capacity: withRh({ queried: false, transitions: [], unavailable_reason: 'permission' }) })
+    const text = rhPanel(container).textContent
+    expect(text).toContain('Not reported')
+    expect(text).toMatch(/Monitoring Reader/)
+    expect(text).not.toMatch(/\d+s ago|\d+m ago/)
+  })
+
+  it('shows an Azure incident on every node, not just on a worker', async () => {
+    // Subscription-wide. A regional incident is context for the whole map; scoping it to one
+    // service would read as that service being at fault.
+    const sh = { queried: true, window_hours: 24, active: [{ tracking_id: 'ABC-123',
+      kind: 'Incident', stage: 'Active', resolved: false, title: 'Networking degradation',
+      summary: 'We are investigating.', at: iso(-600),
+      services: [{ service: 'Container Apps', regions: ['East US'] }] }] }
+    for (const node of [workerNode, { kind: 'queue', label: 'Shared queue' }]) {
+      const container = await mount({ nodeId: 'x', node, capacity: withSh(sh) })
+      const text = shPanel(container).textContent
+      expect(text).toContain('Networking degradation')
+      expect(text).toContain('East US')
+      expect(text).toContain('ABC-123')
+      expect(text).toContain('1 active incident')
+    }
+  })
+
+  it('keeps a resolved incident visible and marked as resolved', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode,
+      capacity: withSh({ queried: true, window_hours: 24, active: [{ tracking_id: 'X',
+        kind: 'Incident', stage: 'Resolved', resolved: true, title: 'Storage latency',
+        summary: null, at: iso(-1200), services: [] }] }) })
+    const text = shPanel(container).textContent
+    expect(text).toContain('Storage latency')
+    expect(text).toContain('Resolved')
+    expect(text).not.toContain('active incident')
+  })
+
+  it('says no incidents only when it actually asked', async () => {
+    const asked = await mount({ nodeId: 'stage:assess', node: workerNode,
+      capacity: withSh({ queried: true, window_hours: 24, active: [] }) })
+    expect(shPanel(asked).textContent).toMatch(/No Azure incidents/)
+
+    const failed = await mount({ nodeId: 'stage:assess', node: workerNode,
+      capacity: withSh({ queried: false, active: [], unavailable_reason: 'error' }) })
+    expect(shPanel(failed).textContent).not.toMatch(/No Azure incidents/)
+  })
+
+  it('is absent entirely when Azure is not configured, but present when a query failed', async () => {
+    // The two are different: an attempted query that failed is an actionable gap and has to be
+    // visible; a deployment with no Azure at all would otherwise carry a permanent "Not reported"
+    // panel on every drawer, which is noise. `unavailable_reason` is set only when a call was made.
+    const notConfigured = await mount({ nodeId: 'stage:assess', node: workerNode,
+      capacity: { ...capacity, service_health: { queried: false, active: [] } } })
+    expect(shPanel(notConfigured)).toBeNull()
+
+    const queryFailed = await mount({ nodeId: 'stage:assess', node: workerNode,
+      capacity: withSh({ queried: false, active: [], unavailable_reason: 'error' }) })
+    expect(shPanel(queryFailed)).not.toBeNull()
+  })
+
+  it('renders Microsoft prose as text, never as markup', async () => {
+    // The backend strips tags; this asserts the drawer does not reintroduce them by rendering
+    // whatever arrives as HTML. The two halves of that control have to hold together.
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode,
+      capacity: withSh({ queried: true, window_hours: 24, active: [{ tracking_id: 'X',
+        kind: 'Incident', stage: 'Active', resolved: false,
+        title: '<img src=x onerror=alert(1)>Outage', summary: '<b>bold</b>', at: iso(-60),
+        services: [] }] }) })
+    // Scoped to the incident LIST, not the panel: the panel's own heading is a <b> of ours.
+    const list = shPanel(container).querySelector('ul')
+    expect(list.querySelector('img')).toBeNull()
+    expect(list.querySelector('b')).toBeNull()
+    expect(list.textContent).toContain('<img src=x onerror=alert(1)>Outage')
+  })
+
+  it('does not show the resource-health panel for a node with no container app', async () => {
+    const container = await mount({ nodeId: 'x', node: { kind: 'queue', label: 'Shared queue' } })
+    expect(rhPanel(container)).toBeNull()
+  })
+})
