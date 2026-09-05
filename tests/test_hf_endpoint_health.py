@@ -300,3 +300,90 @@ def test_health_route_requires_admin(isolated_store, monkeypatch):
     # Request carries no user email → not an admin → 403
     resp = client.get("/ai/providers/huggingface/health")
     assert resp.status_code == 403
+
+
+# ── 4. GET /ai/providers/health — batch endpoint ──────────────────────────────────────────────
+
+def _make_admin_app(store, monkeypatch):
+    """App with _require_admin bypassed (same pattern as _make_app above)."""
+    import core
+    import routes.system as sys_routes
+    monkeypatch.setattr(core, "store", store)
+    monkeypatch.setattr(core, "OWNER_EMAIL", "")
+    monkeypatch.setattr(sys_routes, "_require_admin", lambda _req: None)
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    app.include_router(sys_routes.router)
+    return TestClient(app)
+
+
+def test_health_all_route_returns_all_providers(isolated_store, monkeypatch):
+    """Batch endpoint returns a key for every CLOUD_PROVIDERS entry."""
+    client = _make_admin_app(isolated_store, monkeypatch)
+    resp = client.get("/ai/providers/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "providers" in body
+    assert "window_hours" in body
+    for p in providers.CLOUD_PROVIDERS:
+        assert p in body["providers"], f"provider {p!r} missing from batch response"
+
+
+def test_health_all_route_window_hours_param(isolated_store, monkeypatch):
+    """window_hours query param is reflected in the response."""
+    client = _make_admin_app(isolated_store, monkeypatch)
+    resp = client.get("/ai/providers/health?window_hours=48")
+    assert resp.status_code == 200
+    assert resp.json()["window_hours"] == 48
+
+
+def test_health_all_route_requires_admin(isolated_store, monkeypatch):
+    """Batch endpoint returns 403 when OWNER_EMAIL is set and caller is not admin."""
+    import core
+    monkeypatch.setattr(core, "store", isolated_store)
+    monkeypatch.setattr(core, "OWNER_EMAIL", "admin@example.com")
+    monkeypatch.setattr(core, "is_admin", lambda email: email == "admin@example.com")
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    import routes.system as sys_routes
+
+    app = FastAPI()
+    app.include_router(sys_routes.router)
+    client = TestClient(app, raise_server_exceptions=False)
+
+    resp = client.get("/ai/providers/health")
+    assert resp.status_code == 403
+
+
+def test_health_all_route_not_captured_by_provider_param(isolated_store, monkeypatch):
+    """The literal path /ai/providers/health must NOT be routed to the per-provider handler."""
+    import core
+    import routes.system as sys_routes
+    monkeypatch.setattr(core, "store", isolated_store)
+    monkeypatch.setattr(core, "OWNER_EMAIL", "")
+    monkeypatch.setattr(sys_routes, "_require_admin", lambda _req: None)
+
+    captured = []
+    original = sys_routes.get_ai_provider_health
+
+    def spy(provider, *args, **kwargs):
+        captured.append(provider)
+        return original(provider, *args, **kwargs)
+
+    monkeypatch.setattr(sys_routes, "get_ai_provider_health", spy)
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    app.include_router(sys_routes.router)
+    client = TestClient(app)
+
+    resp = client.get("/ai/providers/health")
+    assert resp.status_code == 200, "batch route should respond 200"
+    # The per-provider handler must NOT have been called with "health" as the provider name
+    assert "health" not in captured, (
+        "FastAPI routed /ai/providers/health to the per-provider handler — "
+        "the batch route must be registered first"
+    )

@@ -1732,6 +1732,27 @@ def test_ai_provider(body: AIProviderTest, request: Request):
     return result
 
 
+@router.get("/ai/providers/health")
+def get_all_ai_provider_health(request: Request,
+                               window_hours: int = Query(24, ge=1, le=168)):
+    """Admin: health snapshot for ALL cloud vision providers in one call.
+
+    Returns the same fields as the per-provider endpoint, keyed by provider name.
+    This is the route the Live Operations panel uses to avoid N round-trips.
+    Must be registered BEFORE the /{provider}/health route so FastAPI resolves
+    the literal path 'health' here rather than treating it as a provider name.
+    """
+    _require_admin(request)
+    import providers as _providers
+    return {
+        "window_hours": window_hours,
+        "providers": {
+            p: core.store.ai_provider_health_stats(p, window_hours=window_hours)
+            for p in _providers.CLOUD_PROVIDERS
+        },
+    }
+
+
 @router.get("/ai/providers/{provider}/health")
 def get_ai_provider_health(provider: str, request: Request,
                            window_hours: int = Query(24, ge=1, le=168)):
