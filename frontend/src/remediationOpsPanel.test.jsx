@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { createElement } from 'react'
+import { act, createElement } from 'react'
+import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -375,5 +376,53 @@ describe('the v2 live operations hierarchy', () => {
       const cell = html.slice(html.indexOf('>', open) + 1, html.indexOf('</dd>', open))
       expect(cell).not.toContain('livecounter')
     }
+  })
+
+  it('keeps the essentials visible and collapses secondary detail on narrow screens', () => {
+    const attempts = Array.from({ length: 4 }, (_, index) => ({
+      file: `long-document-name-${index}.docx`, phase: 'applying', attempt: 1, elapsed_s: 10,
+    }))
+    const html = render({ snapshot: { ...SNAP, active_attempts: attempts }, connected: true,
+      receivedAt: Date.now(), compactLayout: true })
+    expect(html).toContain('4 of 10 documents complete')
+    expect(html).toContain('Throughput')
+    for (const title of ['Phases', 'Fix and delivery totals', 'Live activity', 'Needs attention']) {
+      expect(html).toContain(`<summary>${title}</summary>`)
+    }
+    expect(html).not.toContain('<details class="remops-disclosure remops-disclosure-compact" open="">')
+    const work = html.slice(html.indexOf('In flight now'), html.indexOf('</ul>', html.indexOf('In flight now')))
+    expect(work).toContain('long-document-name-0.docx')
+    expect(work).toContain('long-document-name-1.docx')
+    expect(work).not.toContain('long-document-name-2.docx')
+    expect(html).toContain('and 2 more documents in flight')
+  })
+
+  it('keeps compact disclosure choices through live snapshot updates', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const props = { connected: true, receivedAt: Date.now(), compactLayout: true }
+    await act(async () => { root.render(createElement(RemediationOpsPanel, { ...props, snapshot: SNAP })) })
+    const phases = [...host.querySelectorAll('details')]
+      .find((details) => details.querySelector('summary')?.textContent === 'Phases')
+    expect(phases.open).toBe(false)
+    await act(async () => {
+      phases.open = true
+      phases.dispatchEvent(new Event('toggle'))
+    })
+    await act(async () => { root.render(createElement(RemediationOpsPanel, {
+      ...props, snapshot: { ...SNAP, revision: SNAP.revision + 1,
+        documents: { ...SNAP.documents, completed: 5, waiting: 2 } },
+    })) })
+    expect(phases.open).toBe(true)
+    await act(async () => { root.unmount() })
+    host.remove()
+  })
+
+  it('leaves every disclosure open on wider layouts and wraps compact filenames', () => {
+    const html = render({ snapshot: SNAP, connected: true, receivedAt: Date.now(), compactLayout: false })
+    expect(html.match(/<details class="remops-disclosure" open="">/g)).toHaveLength(4)
+    const css = readFileSync(join(here, 'remediation-live-detail.css'), 'utf8')
+    expect(css).toContain('.remops-work .fname{overflow-wrap:anywhere;word-break:break-word}')
   })
 })
