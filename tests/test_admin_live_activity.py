@@ -142,7 +142,7 @@ def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(mo
     assert snapshot["summary"] == {
         "active_runs": 1, "recent_runs": 1, "active_users": 2, "waiting_users": 2,
         "queued": 10, "running": 4, "completed_jobs": 12,
-        "worker_slots": 7, "available_slots": 3, "utilization_pct": 57,
+        "worker_slots": 7, "available_slots": 3, "utilization_pct": None,
         "pressure": "busy", "worker_tier_alive": True,
         "scheduling_policy": "tenant_fair_least_loaded",
         "worker_roles": {
@@ -151,6 +151,7 @@ def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(mo
             "remediate": {"alive": True, "pool_size": 2, "age_s": 3, "version": "v10"},
             "processing": {"alive": False, "pool_size": 4, "age_s": 999, "version": "v9"},
         },
+        "worker_capacity_by_role": {},
         "by_stage": {
             # `findings` is None, not 0: this stub reports no findings count, and "no findings yet"
             # is a different fact from "findings were not counted for this stage".
@@ -169,8 +170,53 @@ def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(mo
         # table instead would render as "no workers running".
         "worker_instance_attribution": {
             "available": False,
-            "reason": "ACP does not record which replica ran a job. The worker_instances "
-                      "registry exists but has no writer yet, so job activity is attributed "
-                      "to a service, not to one of its replicas.",
+            "reason": "Per-replica capacity is not yet reporting. Jobs in flight are available, but slot utilization cannot be calculated honestly.",
         },
     }
+
+
+def test_instance_capacity_uses_busy_slots_not_running_rows(monkeypatch):
+    class ActivityStore:
+        def worker_tier_status(self): return {"alive": True, "pool_size": 2}
+        def worker_roles_status(self): return {"assess": {"alive": True, "pool_size": 2}}
+        def job_stats(self, owner=None): return {"done": 0}
+        def admin_live_activity(self):
+            return [{"stage": "assess", "status": "active", "running": 40, "queued": 0,
+                     "completed": 0, "total": 40}]
+        def list_worker_instances(self):
+            now = system.datetime.now(system.timezone.utc).isoformat()
+            return [{"worker_id": f"assess:r{i}:p{i}", "replica_id": f"r{i}",
+                     "last_heartbeat_at": now, "state": "busy", "concurrency_limit": 2,
+                     "active_job_count": 2, "revision_name": "v1"} for i in range(10)]
+
+    monkeypatch.setattr(system.core, "store", ActivityStore())
+    summary = system._admin_activity_snapshot()["summary"]
+    assess = summary["worker_capacity_by_role"]["assess"]
+    assert assess["healthy_replicas"] == 10
+    assert assess["worker_slots"] == 20
+    assert assess["busy_slots"] == 20
+    assert assess["jobs_in_flight"] == 40
+    assert assess["unattributed_running"] == 20
+    assert assess["utilization_pct"] == 100
+    assert summary["utilization_pct"] == 100
+
+
+def test_stale_instances_remain_visible_but_add_no_capacity(monkeypatch):
+    class ActivityStore:
+        def worker_tier_status(self): return {"alive": False, "pool_size": None}
+        def worker_roles_status(self): return {}
+        def job_stats(self, owner=None): return {"done": 0}
+        def admin_live_activity(self): return []
+        def list_worker_instances(self):
+            return [{"worker_id": "assess:old:p1", "replica_id": "old", "state": "busy",
+                     "last_heartbeat_at": "2020-01-01T00:00:00+00:00",
+                     "concurrency_limit": 50, "active_job_count": 50}]
+
+    monkeypatch.setattr(system.core, "store", ActivityStore())
+    assess = system._admin_activity_snapshot()["summary"]["worker_capacity_by_role"]["assess"]
+    assert assess["stale_replicas"] == 1
+    assert assess["healthy_replicas"] == 0
+    assert assess["worker_slots"] == 0
+    assert assess["busy_slots"] == 0
+    assert assess["status"] == "stale"
+    assert assess["instances"][0]["fresh"] is False

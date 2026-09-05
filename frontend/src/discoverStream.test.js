@@ -13,16 +13,20 @@ const { parseSSEFrames, openDiscoverStream, setGoogleToken } = await import('./a
 
 afterEach(() => { vi.unstubAllGlobals() })
 
+// `id: null` on every frame since ADR 0051: the parser now reads SSE's `id:` line, which is the
+// remediation stream's resume cursor. Discover emits no ids, so its frames carry null — asserted
+// explicitly rather than omitted, because "this frame has no id" and "this parser forgot to look
+// for one" must not render as the same object shape.
 describe('parseSSEFrames — pure parsing', () => {
   it('parses a single complete frame', () => {
     const { frames, rest } = parseSSEFrames('data: {"phase":"listing"}\n\n')
-    expect(frames).toEqual([{ event: 'message', data: '{"phase":"listing"}' }])
+    expect(frames).toEqual([{ event: 'message', data: '{"phase":"listing"}', id: null }])
     expect(rest).toBe('')
   })
 
   it('recognises an event: line', () => {
     const { frames } = parseSSEFrames('event: done\ndata: {"done": true}\n\n')
-    expect(frames).toEqual([{ event: 'done', data: '{"done": true}' }])
+    expect(frames).toEqual([{ event: 'done', data: '{"done": true}', id: null }])
   })
 
   it('parses multiple frames in one buffer', () => {
@@ -42,7 +46,7 @@ describe('parseSSEFrames — pure parsing', () => {
     const first = parseSSEFrames('data: {"a":2')
     expect(first.frames).toEqual([])
     const second = parseSSEFrames(first.rest + '}\n\n')
-    expect(second.frames).toEqual([{ event: 'message', data: '{"a":2}' }])
+    expect(second.frames).toEqual([{ event: 'message', data: '{"a":2}', id: null }])
   })
 
   it('ignores a frame with no data: line at all', () => {

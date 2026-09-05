@@ -60,15 +60,28 @@ export function queueConcentration(runs = []) {
 
 export function workerServiceRows(summary = {}) {
   const roles = summary.worker_roles || {}
+  const capacity = summary.worker_capacity_by_role || {}
   const load = summary.by_stage || {}
-  return ['discovery', 'assess', 'remediate'].filter((role) => roles[role]).map((role) => {
-    const heartbeat = roles[role]
+  return ['discovery', 'assess', 'remediate'].filter((role) => roles[role] || capacity[role]).map((role) => {
+    const heartbeat = roles[role] || {}
+    const measured = capacity[role]
     const stage = role === 'discovery' ? 'discover' : role
-    const active = Number(load[stage]?.running || 0)
-    const slots = Number(heartbeat.pool_size || 0)
+    const active = measured ? Number(measured.busy_slots || 0) : Number(load[stage]?.running || 0)
+    const slots = measured ? Number(measured.worker_slots || 0) : Number(heartbeat.pool_size || 0)
     return {
       role, stage, active, slots, available: Math.max(0, slots - active),
-      alive: Boolean(heartbeat.alive), age_s: heartbeat.age_s, version: heartbeat.version,
+      alive: measured ? Number(measured.healthy_replicas || 0) > 0 : Boolean(heartbeat.alive),
+      age_s: heartbeat.age_s, version: heartbeat.version,
+      status: measured?.status,
+      ...(measured ? {
+        jobs_in_flight: measured.jobs_in_flight,
+        healthy_replicas: measured.healthy_replicas,
+        stale_replicas: measured.stale_replicas,
+        unattributed_running: measured.unattributed_running,
+        utilization_pct: measured.utilization_pct,
+        capacity_source: measured.capacity_source,
+        measured_at: measured.measured_at,
+      } : {}),
     }
   })
 }
@@ -426,8 +439,14 @@ export function infrastructureDetail(data, snapshot = {}, capacity = null) {
     return {
       title: `${data.label} infrastructure`, subtitle: 'Live worker capacity and Azure configuration', color: data.color,
       facts: [
-        ['Service health', service.alive ? 'Online' : 'Offline'],
-        ['Worker slots', `${service.active || 0} active · ${service.available || 0} available of ${service.slots || 0}`],
+        ['Service health', service.status || (service.alive ? 'Online' : 'Offline')],
+        ['Worker slots', `${service.active || 0} busy · ${service.available || 0} available of ${service.slots || 0}`],
+        ['Healthy replicas', service.healthy_replicas ?? 'Not reported'],
+        ['Stale replicas', service.stale_replicas ?? 'Not reported'],
+        ['Jobs recorded in flight', service.jobs_in_flight ?? 'Not reported'],
+        ['Unattributed running', service.unattributed_running ?? 'Not reported'],
+        ['Capacity source', service.capacity_source || 'Not reported'],
+        ['Capacity measured', service.measured_at || 'Not reported'],
         ['Replica size', reportedWorkerSize(capacity)],
         // Adjacent to the size deliberately: the figure above is ONE container app's, drawn on
         // every stage node, so the row that says whose it is has to sit next to it rather than
@@ -563,11 +582,17 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
     // which is how this was first written and what the announcement test caught.
     nodes.push({ id: `stage:${stage}`, type: 'infra',
       position: { x: 720, y: WORKER_LANE_TOP + index * WORKER_LANE_GAP },
-      ariaLabel: `${STAGE[stage].label} workers, ${service.alive ? 'online' : 'standby'}, `
-        + `${service.active} active of ${service.slots} slots. Select for details.`,
+      ariaLabel: `${STAGE[stage].label} workers, ${service.status || (service.alive ? 'online' : 'standby')}, `
+        + `${service.active} busy of ${service.slots} slots. `
+        + `${service.healthy_replicas != null ? `${service.healthy_replicas} healthy replicas. ` : ''}`
+        + `${service.jobs_in_flight != null ? `${service.jobs_in_flight} jobs recorded in flight. ` : ''}`
+        + 'Select for details.',
       data: { kind: 'worker',
-      label: `${STAGE[stage].label} workers`, status: service.alive ? 'online' : 'standby',
-      detail: `${service.active} active · ${service.available} available of ${service.slots}`,
+      label: `${STAGE[stage].label} workers`, status: service.status || (service.alive ? 'online' : 'standby'),
+      detail: `${service.active} / ${service.slots} slots busy`
+        + `${service.healthy_replicas != null ? ` · ${service.healthy_replicas} healthy replicas` : ''}`
+        + `${service.jobs_in_flight != null ? ` · ${service.jobs_in_flight} jobs recorded in flight` : ''}`
+        + `${service.unattributed_running ? ` · ${service.unattributed_running} running job records are not attributed to live worker slots` : ''}`,
       // Named rather than "Tier:", which claimed a coverage one container app does not have.
       // The app name is what makes a figure repeated on all three stage nodes readable: it says
       // whose size this is, so a stage it does not describe is visibly not describing itself.
