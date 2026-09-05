@@ -46,6 +46,16 @@ azure-mgmt-appcontainers==5.0.0
 # other packages — azure-mgmt-monitor's MonitorManagementClient.metrics.list() predates that
 # churn and is the stabler surface to build on.
 azure-mgmt-monitor==7.0.0
+# azure-monitor-query IS used, for LOGS only — and that is not a contradiction of the note above.
+# The churn described there removed MetricsQueryClient in 2.0.0; LogsQueryClient is the half of
+# that package the split left alone, and it is the only way to read a Log Analytics workspace.
+# Metrics still come from azure-mgmt-monitor, which is the stabler surface for them.
+#
+# OPT-IN AT RUNTIME: routes/control.py imports this lazily and only when
+# LOG_ANALYTICS_WORKSPACE_ID is set, so an install with no workspace configured never touches it.
+# Verified to resolve against this file's existing pins with nothing new pulled in beyond
+# azure-core, isodate and typing-extensions, all already present.
+azure-monitor-query==2.0.0
 
 # --- PDF analyser engine ---
 pikepdf==10.8.0
