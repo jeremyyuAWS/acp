@@ -473,6 +473,43 @@ describe('Replica lifecycle', () => {
   })
 })
 
+describe('Request health panel', () => {
+  const ingress = { ...capacity, metrics_window_minutes: 15,
+    metrics: { ...capacity.metrics,
+      requests: azureMetric('Requests', 'Requests', 40, [[-60, 150], [0, 150]]),
+      response_ms: azureMetric('Average response time', 'ResponseTime', 42, [[0, 42]]),
+      retries: azureMetric('Request retries', 'ResiliencyRequestRetries', 3, [[0, 3]]),
+      connect_timeouts: azureMetric('Connection timeouts', 'ResiliencyConnectTimeouts', null, [], false) },
+    status_classes: { '2xx': 280, '4xx': 18, '5xx': 2 } }
+
+  it('shows the ingress counters Azure does report', async () => {
+    const container = await mount({ nodeId: 'infra:intake', capacity: ingress,
+      node: { kind: 'intake', label: 'ACP intake' } })
+    expect(container.textContent).toContain('Request health')
+    expect(container.textContent).toContain('REQUEST RATE')
+    expect(container.textContent).toContain('20/min')
+    expect(container.textContent).toContain('CONNECTION TIMEOUTS')
+  })
+
+  it('never shows an average under a percentile label', async () => {
+    const container = await mount({ nodeId: 'infra:intake', capacity: ingress,
+      node: { kind: 'intake', label: 'ACP intake' } })
+    expect(container.textContent).toContain('AVERAGE RESPONSE TIME')
+    expect(container.textContent).toContain('An average, not a percentile')
+    expect(container.textContent).toContain('not shown rather than approximated from the mean')
+    // The caption names P50/P95/P99 as the thing that is missing, so their presence in the text is
+    // correct. What must not appear is a percentile with a VALUE beside it.
+    expect(container.textContent).toMatch(/P50, P95 and P99 need request-level telemetry/)
+    expect(container.textContent).not.toMatch(/P(50|95|99)\s*[:·]?\s*\d/)
+  })
+
+  it('says an app with no ingress has none rather than showing zeroes', async () => {
+    const container = await mount({ nodeId: 'infra:intake', capacity: { configured: true, metrics: {} },
+      node: { kind: 'intake', label: 'ACP intake' } })
+    expect(container.textContent).toContain('claim from a queue rather than serving requests')
+  })
+})
+
 describe('Throughput panel', () => {
   const counters = [
     { at: iso(-600), documents: 70, fixes: 4, findings: 10 },

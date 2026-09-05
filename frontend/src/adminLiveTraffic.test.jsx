@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { azureBytes, azureLatest, buildTrafficGraph, capacityValue, flowEdge, infrastructureDetail, nodeGauge, queueConcentration, sizeScopeNote, trafficEdgeStyle, trendToggleLabel, workerServiceRows } from './AdminLiveTraffic.jsx'
+import { TILE_KINDS, azureBytes, azureLatest, buildTrafficGraph, capacityValue, flowEdge, infrastructureDetail, nodeGauge, queueConcentration, sizeScopeNote, tileKind, tileStyle, trafficEdgeStyle, trendToggleLabel, workerServiceRows } from './AdminLiveTraffic.jsx'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(join(here, 'AdminLiveTraffic.jsx'), 'utf8')
@@ -35,10 +35,16 @@ describe('Admin live traffic graph', () => {
   })
 
   it('visually and verbally separates active jobs from worker services', () => {
-    expect(source).toContain('>ACTIVE JOB</div>')
-    expect(source).toContain(">SERVICE</div>")
-    expect(source).toContain('color-mix(in srgb, ${cfg.color} 8%, var(--panel))')
-    expect(source).toContain('borderRadius: 6')
+    // Same subject as when this landed; asserted through tileStyle rather than through the literal
+    // strings it used to inline, so the separation can be strengthened without the test reading as
+    // a regression. The fill went from 8% to 16% with a left accent bar, because at 8% a job tile
+    // and a service tile still read as the same white card on a real screen.
+    expect(TILE_KINDS.job.label).toBe('ACTIVE JOB')
+    expect(TILE_KINDS.service.label).toBe('SERVICE')
+    expect(tileStyle('run', '#4C78C2').background).toMatch(/^color-mix\(in srgb, #4C78C2 \d+%/)
+    expect(tileStyle('worker', '#4C78C2').background).toBe('var(--panel)')
+    expect(TILE_KINDS.job.radius).toBe(6)
+    expect(TILE_KINDS.service.radius).toBeGreaterThan(TILE_KINDS.job.radius)
     expect(source).toContain('SERVICE</b> · capacity')
     expect(source).toContain('ACTIVE JOB</b> · document progress')
     expect(source).toContain('DATA</b> · sources and outputs')
@@ -449,5 +455,39 @@ describe('The map tiles carry a live gauge', () => {
     const graph = buildTrafficGraph({ runs: [{ scan_id: 's1', stage: 'assess', source: 'drive',
       owner: 'a@example.org', completed: 5, total: 20, running: 1, queued: 2 }] })
     expect(graph.nodes.find((n) => n.id === 's1:assess').data.gauge).toBeUndefined()
+  })
+})
+
+
+describe('A scan job and a durable service do not look alike', () => {
+  it('fills a job with its stage colour and leaves a service flat', () => {
+    // The two were nearly identical white cards, which is what made "51 active" on a job tile
+    // beside "2 slots" on a service tile read as one contradiction rather than two measurements.
+    const job = tileStyle('run', '#4C78C2')
+    const service = tileStyle('worker', '#4C78C2')
+    expect(job.background).toBe('color-mix(in srgb, #4C78C2 16%, var(--panel))')
+    expect(service.background).toBe('var(--panel)')
+    expect(job.borderLeft).toBe('5px solid #4C78C2')
+    expect(service.borderLeft).toBeUndefined()
+  })
+
+  it('groups the map into the three kinds a reader actually distinguishes', () => {
+    // Sources and outputs are where documents come from and go to — neither transient work nor
+    // the services that process it — so they are their own kind.
+    expect(tileKind('run')).toBe('job')
+    expect(['worker', 'queue', 'intake'].map(tileKind)).toEqual(['service', 'service', 'service'])
+    expect(['source', 'output'].map(tileKind)).toEqual(['data', 'data'])
+    expect(tileKind('something-new')).toBe('service')
+  })
+
+  it('never leaves colour as the only cue', () => {
+    // WCAG 1.4.1. The fill makes the grouping visible at a glance; the typed label is what says
+    // which is which, and the map key spells all three out.
+    expect(Object.values(TILE_KINDS).map((spec) => spec.label))
+      .toEqual(['ACTIVE JOB', 'SERVICE', 'DATA'])
+    expect(tileStyle('run', '#000').label).toBe('ACTIVE JOB')
+    expect(tileStyle('source', '#000').label).toBe('DATA')
+    expect(source).toContain('{tileStyle(data.kind, color).label}')
+    expect(source).toContain('<b style={{ color: \'var(--ink)\' }}>DATA</b>')
   })
 })

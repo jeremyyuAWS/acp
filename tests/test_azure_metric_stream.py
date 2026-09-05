@@ -348,3 +348,70 @@ def test_an_azure_read_that_fails_does_not_interrupt_the_activity_stream(monkeyp
     frames = _run(system_module, _StreamRequest(3), 4)
     assert [event for event, _ in frames].count("azure") == 0
     assert [event for event, _ in frames].count("activity") >= 2
+
+
+# ── Requests by response class ──────────────────────────────────────────────────────────────
+
+def _split_series(label, totals, style="mgmt"):
+    """A dimension-split time series in either of the two shapes the Azure packages document."""
+    data = [SimpleNamespace(total=value, time_stamp=NOW.replace(minute=20 + i).isoformat())
+            for i, value in enumerate(totals)]
+    if style == "mgmt":
+        return SimpleNamespace(data=data, metadatavalues=[
+            SimpleNamespace(name=SimpleNamespace(value="statuscodecategory"), value=label)])
+    return SimpleNamespace(data=data, metadata_values={"statuscodecategory": label})
+
+
+def _split_client(series_list, capture=None):
+    def _list(app_id, metricnames=None, aggregation=None, timespan=None, interval=None, filter=None):
+        if capture is not None:
+            capture.append({"names": metricnames, "aggregation": aggregation, "filter": filter})
+        return SimpleNamespace(value=[SimpleNamespace(
+            name=SimpleNamespace(value="Requests"), timeseries=series_list)])
+    return SimpleNamespace(metrics=SimpleNamespace(list=_list))
+
+
+def test_requests_are_split_by_response_class_with_one_filtered_call(control, monkeypatch):
+    """statusCodeCategory is a DIMENSION on Requests, not three separate metrics, so this is one
+    call with a filter rather than three more names in _AZ_METRICS."""
+    calls = []
+    monkeypatch.setattr(control, "_monitor_client", lambda: _split_client([
+        _split_series("2xx", [10, 12]), _split_series("5xx", [1, 0])], calls))
+    split = control._status_split("/subs/x/app", NOW)
+    assert split == {"2xx": 22.0, "5xx": 1.0}
+    assert len(calls) == 1
+    assert calls[0]["filter"] == "statusCodeCategory eq '*'"
+    assert calls[0]["names"] == "Requests"
+
+
+def test_the_dimension_is_read_from_either_documented_shape(control, monkeypatch):
+    """azure-mgmt-monitor documents `metadatavalues` as a list of MetadataValue; the newer
+    azure-monitor-query documents `metadata_values` as a dict. Trying both avoids a shape mismatch
+    becoming a silently unsplit metric."""
+    monkeypatch.setattr(control, "_monitor_client",
+                        lambda: _split_client([_split_series("4xx", [3], style="query")]))
+    assert control._status_split("/subs/x/app", NOW) == {"4xx": 3.0}
+
+
+def test_a_response_class_azure_did_not_report_is_absent_not_zero(control, monkeypatch):
+    """An app serving no 5xx and an app whose metrics have not arrived must not render alike."""
+    monkeypatch.setattr(control, "_monitor_client",
+                        lambda: _split_client([_split_series("2xx", [10])]))
+    split = control._status_split("/subs/x/app", NOW)
+    assert "5xx" not in split and "4xx" not in split
+    # A series with no data points at all contributes nothing rather than a zero.
+    monkeypatch.setattr(control, "_monitor_client",
+                        lambda: _split_client([_split_series("2xx", [None, None])]))
+    assert control._status_split("/subs/x/app", NOW) == {}
+
+
+def test_an_unrecognised_dimension_value_is_ignored(control, monkeypatch):
+    monkeypatch.setattr(control, "_monitor_client",
+                        lambda: _split_client([_split_series("teapot", [7])]))
+    assert control._status_split("/subs/x/app", NOW) == {}
+
+
+def test_a_failed_split_leaves_the_unsplit_request_total_intact(control, monkeypatch):
+    monkeypatch.setattr(control, "_monitor_client", lambda: SimpleNamespace(
+        metrics=SimpleNamespace(list=lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("no dims")))))
+    assert control._status_split("/subs/x/app", NOW) == {}

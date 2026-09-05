@@ -239,6 +239,59 @@ export function capacityForService(capacity, service = {}) {
   return capacityMatchesService(capacity, service) ? capacity : null
 }
 
+/* ─────────────────────── Request health ─────────────────────── */
+
+/**
+ * How the ingress surface is behaving: request rate, response time, the response-class split, and
+ * the resiliency counters Azure exposes.
+ *
+ * ONE THING IS DELIBERATELY NOT HERE. The request said P50/P95/P99 latency, and Azure Monitor's
+ * `ResponseTime` is an AVERAGE — there is no percentile in the Container Apps metric set. An
+ * average presented under a percentile's label is the most quietly wrong thing this panel could
+ * do, because the two differ most exactly when latency matters: a p99 blowout barely moves a mean.
+ * So the average is labelled an average, and the percentiles are named as needing Application
+ * Insights, which is where request-level telemetry with real percentiles would come from.
+ */
+export const LATENCY_PERCENTILES_NOTE =
+  'Azure Monitor reports an average response time for Container Apps, not percentiles. P50, P95 '
+  + 'and P99 need request-level telemetry (Application Insights) and are not shown rather than '
+  + 'approximated from the mean.'
+
+export function requestHealth(capacity = null, { windowMinutes = 15 } = {}) {
+  const metric = (key) => {
+    const found = capacity?.metrics?.[key]
+    return found?.available && found.latest != null ? { latest: num(found.latest), total: num(found.average) } : null
+  }
+  const requests = capacity?.metrics?.requests
+  const totalRequests = requests?.available
+    ? (requests.series || []).reduce((sum, point) => sum + (num(point.value) || 0), 0)
+    : null
+  const classes = capacity?.status_classes && typeof capacity.status_classes === 'object'
+    ? capacity.status_classes : {}
+  const classified = Object.values(classes).reduce((sum, value) => sum + (num(value) || 0), 0)
+  return {
+    requestsPerMin: totalRequests == null || !windowMinutes ? null
+      : Math.round((totalRequests / windowMinutes) * 10) / 10,
+    averageResponseMs: metric('response_ms')?.latest ?? null,
+    // Present with its own key so the UI cannot render it as a percentile by accident.
+    percentilesAvailable: false,
+    percentilesNote: LATENCY_PERCENTILES_NOTE,
+    classes: ['2xx', '3xx', '4xx', '5xx'].map((name) => ({
+      name,
+      count: num(classes[name]),
+      // A share only where the class was reported; a class Azure did not answer for has no share,
+      // rather than a 0% that reads as "none of these happened".
+      sharePct: classes[name] != null && classified
+        ? Math.round((num(classes[name]) / classified) * 1000) / 10 : null,
+    })),
+    classified: classified || null,
+    retries: metric('retries')?.latest ?? null,
+    connectTimeouts: metric('connect_timeouts')?.latest ?? null,
+    ejectedHosts: metric('ejected_hosts')?.latest ?? null,
+    windowMinutes,
+  }
+}
+
 /* ─────────────────────── Throughput ─────────────────────── */
 
 export const THROUGHPUT_SERIES = [

@@ -186,17 +186,62 @@ function AzureCapacity({ capacity, state }) {
   </section>
 }
 
+/**
+ * TWO KINDS OF TILE, TOLD APART WITHOUT READING THEM.
+ *
+ * The map mixes things that persist with things that pass through, and they were rendered nearly
+ * alike: a white card with a coloured border. That is what made "51 active" on a job tile beside
+ * "2 slots" on a service tile read as one contradiction rather than two different measurements.
+ *
+ * A SCAN JOB is transient — one user's run, here for minutes. It is filled with its stage's colour
+ * so it reads as a thing moving through the system, and carries a left accent bar.
+ *
+ * A DURABLE SERVICE is permanent infrastructure. It is backfilled with the flat surface tone, so a
+ * row of services reads as the fixed pipeline the jobs travel along.
+ *
+ * Colour is never the only cue (WCAG 1.4.1): every tile also carries a typed label — ACTIVE JOB,
+ * SERVICE, or DATA — and the map key spells the three out. The fill makes the grouping visible at
+ * a glance; the label is what actually says which is which.
+ */
+export const TILE_KINDS = {
+  job: { label: 'ACTIVE JOB', tint: 16, accent: 5, radius: 6 },
+  service: { label: 'SERVICE', tint: 0, accent: 0, radius: 10 },
+  data: { label: 'DATA', tint: 0, accent: 0, radius: 10 },
+}
+
+/** Which of the three a node is. Sources and outputs are where documents come from and go to —
+ *  neither a job nor a service — so they are their own kind rather than being lumped in with the
+ *  worker services they sit between. */
+export function tileKind(kind) {
+  if (kind === 'run') return 'job'
+  if (kind === 'source' || kind === 'output') return 'data'
+  return 'service'
+}
+
+export function tileStyle(kind, color) {
+  const spec = TILE_KINDS[tileKind(kind)] || TILE_KINDS.service
+  return {
+    background: spec.tint
+      ? `color-mix(in srgb, ${color} ${spec.tint}%, var(--panel))`
+      : 'var(--panel)',
+    borderLeft: spec.accent ? `${spec.accent}px solid ${color}` : undefined,
+    borderRadius: spec.radius,
+    label: spec.label,
+  }
+}
+
 function RunNode({ data }) {
   const cfg = STAGE[data.run.stage] || { label: data.run.stage, color: '#6B7280' }
   const pct = data.run.total ? Math.round((data.run.completed / data.run.total) * 100) : 0
   return <div title="Select for live run details; double-click to open charts"
     style={{ width: 225, padding: 12,
-      background: `color-mix(in srgb, ${cfg.color} 8%, var(--panel))`,
-      border: `2px solid ${cfg.color}`, borderRadius: 6,
+      ...tileStyle('run', cfg.color),
+      border: `2px solid ${cfg.color}`,
+      borderLeft: `5px solid ${cfg.color}`,
       boxShadow: `0 4px 12px color-mix(in srgb, ${cfg.color} 18%, transparent)` }}>
     <Handle type="target" position={Position.Left} />
     <div style={{ color: cfg.color, fontSize: 9.5, fontWeight: 800, letterSpacing: '.09em',
-      marginBottom: 4 }}>ACTIVE JOB</div>
+      marginBottom: 4 }}>{TILE_KINDS.job.label}</div>
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
       <b>{cfg.label}</b><span style={{ color: cfg.color, fontWeight: 700 }}>{data.run.status === 'recent' ? 'Complete' : `${pct}%`}</span>
     </div>
@@ -288,14 +333,15 @@ export function nodeGauge(data = {}, summary = {}) {
 function InfraNode({ data }) {
   const color = data.color || '#51606D'
   return <div title="Select for infrastructure details; double-click for telemetry"
-    style={{ width: data.wide ? 205 : 175, minHeight: 68, padding: 11, background: 'var(--panel)',
-      border: `2px solid ${color}`, borderRadius: 10, boxShadow: '0 2px 8px rgba(24,20,28,.08)' }}>
+    style={{ width: data.wide ? 205 : 175, minHeight: 68, padding: 11,
+      ...tileStyle(data.kind, color),
+      border: `2px solid ${color}`, boxShadow: '0 2px 8px rgba(24,20,28,.08)' }}>
     {data.inputPorts?.length
       ? data.inputPorts.map(({ id, top }) => <Handle key={id} id={id} type="target"
           position={Position.Left} style={{ top }} />)
       : data.hasInput !== false && <Handle type="target" position={Position.Left} />}
-    {data.kind === 'worker' && <div style={{ color, fontSize: 9.5, fontWeight: 800,
-      letterSpacing: '.09em', marginBottom: 4 }}>SERVICE</div>}
+    <div style={{ color, fontSize: 9.5, fontWeight: 800, letterSpacing: '.09em',
+      marginBottom: 4 }}>{tileStyle(data.kind, color).label}</div>
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 7, alignItems: 'start' }}>
       <b style={{ overflowWrap: 'anywhere' }}>{data.label}</b>
       <span style={{ color, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap' }}>{data.status}</span>

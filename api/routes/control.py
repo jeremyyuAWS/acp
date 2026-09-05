@@ -281,6 +281,69 @@ def _metric_points(metric, agg: str, scale: float) -> list[dict]:
     return points
 
 
+def _dimension_value(series) -> str | None:
+    """The dimension a split time series belongs to, e.g. "2xx" for a Requests series filtered by
+    statusCodeCategory.
+
+    Dual-path for the same reason `_rev_field` is: the two Azure monitor packages disagree about
+    this attribute. `azure-mgmt-monitor` (what this module uses) documents `metadatavalues` as a
+    list of MetadataValue with `.name.value` and `.value`, while the newer `azure-monitor-query`
+    documents `metadata_values` as a plain dict. Trying both costs nothing and avoids a shape
+    mismatch becoming a silently unsplit metric.
+    """
+    values = getattr(series, "metadatavalues", None)
+    if values:
+        for item in values:
+            value = getattr(item, "value", None)
+            if value:
+                return str(value)
+    mapping = getattr(series, "metadata_values", None)
+    if isinstance(mapping, dict) and mapping:
+        return str(next(iter(mapping.values())))
+    return None
+
+
+# Requests split by response class. Azure exposes `statusCodeCategory` as a DIMENSION on the
+# Requests metric rather than as separate metrics, so this is one extra call with a filter rather
+# than three more names in _AZ_METRICS.
+_STATUS_CLASSES = ("2xx", "3xx", "4xx", "5xx")
+
+
+def _status_split(app_id: str, now: datetime) -> dict:
+    """Requests per response class over the metric window, or {} when Azure does not answer.
+
+    A class Azure does not report is ABSENT from the result rather than zero — an app serving no
+    5xx and an app whose metrics have not arrived must not render alike, which is the same rule
+    every other metric here follows.
+    """
+    timespan = (f"{(now - timedelta(minutes=_AZ_METRIC_WINDOW_MIN)).isoformat()}"
+                f"/{now.isoformat()}")
+    try:
+        answer = _monitor_client().metrics.list(
+            app_id, metricnames="Requests", aggregation="Total", timespan=timespan,
+            interval=_AZ_METRIC_INTERVAL, filter="statusCodeCategory eq '*'")
+    except Exception:  # noqa: BLE001 — the unsplit Requests total is still reported by _gather_metrics.
+        swallowed("routes.control._status_split: splitting Requests by status class failed")
+        return {}
+    out: dict = {}
+    for metric in (getattr(answer, "value", None) or []):
+        for series in (getattr(metric, "timeseries", None) or []):
+            label = (_dimension_value(series) or "").lower()
+            if label not in _STATUS_CLASSES:
+                continue
+            total = 0.0
+            seen = False
+            for dp in (getattr(series, "data", None) or []):
+                value = getattr(dp, "total", None)
+                if value is None:
+                    continue
+                total += float(value)
+                seen = True
+            if seen:
+                out[label] = round(total, 2)
+    return out
+
+
 def _gather_metrics(app_id: str, now: datetime) -> tuple[dict, str | None]:
     """Every metric in _AZ_METRICS, with its per-minute series, or ({}, reason) on failure.
 
@@ -360,6 +423,7 @@ def _empty_capacity(configured: bool, app_name: str | None = None) -> dict:
         # Per-replica and per-revision lifecycle. Empty here rather than absent, for the same
         # reason as `metrics`: a caller should never have to test for the key before the values.
         "replicas": [], "revisions": [], "replica_lifecycle": None, "scale": None,
+        "status_classes": {},
     }
 
 
@@ -514,6 +578,9 @@ def _capacity_for_app(app_name: str) -> dict:
         # over the metric window — so every existing caller is unaffected. What changed is that
         # the window is now REPORTED (metrics_window_minutes) instead of living only in this file
         # while the panel next to the figure said "last 5 min" from a hardcoded string.
+        # Requests by response class — a dimension on the Requests metric, so one extra filtered
+        # call rather than three more metric names. Absent when Azure does not answer.
+        result["status_classes"] = _status_split(app.id, now)
         result["cpu_percent"] = metrics["cpu_percent"]["average"]
         result["memory_percent"] = metrics["memory_percent"]["average"]
         result["metrics_available"] = result["cpu_percent"] is not None or result["memory_percent"] is not None

@@ -10,7 +10,8 @@ import {
   eventsForNode, filterEvents, formatDuration, gaugeModel, mergeEvents, metricsForKind,
   PROVENANCE, capacityForService, fairnessModel, metricGroups, niceCeiling, num, outputModel,
   provenance, queueModel, rateSeries,
-  replicaLifecycle, reported, revisionLabel, runModel, sampleForNode, saturationModel, scaleEvents,
+  LATENCY_PERCENTILES_NOTE, replicaLifecycle, reported, requestHealth, revisionLabel, runModel,
+  sampleForNode, saturationModel, scaleEvents,
   scaleExplanation, secondsSince, seriesForMetric, sourceModel, tenantConcentration, throughputModel,
   trendMarkers, updatedAgo, workerJobHealth,
 } from './liveOpsDrawer.js'
@@ -842,5 +843,67 @@ describe('Queue health beyond the oldest job', () => {
   it('is unavailable rather than empty when the backend reports no fairness block', () => {
     expect(fairnessModel(undefined)).toMatchObject({ available: false, counts: [], concentrated: false })
     expect(fairnessModel({ tenants: 0, counts: [], top_share_pct: null }).available).toBe(false)
+  })
+})
+
+
+describe('Request health, and the percentile it refuses to fake', () => {
+  const cap = (over = {}) => ({ configured: true, worker_app_name: 'acp-assess',
+    metrics_window_minutes: 15,
+    metrics: {
+      requests: { available: true, latest: 40, series: [
+        { at: iso(-120), value: 100 }, { at: iso(-60), value: 110 }, { at: iso(0), value: 90 }] },
+      response_ms: { available: true, latest: 42 },
+      retries: { available: true, latest: 3 },
+      connect_timeouts: { available: false, latest: null },
+      ejected_hosts: { available: true, latest: 0 },
+    },
+    status_classes: { '2xx': 280, '4xx': 18, '5xx': 2 }, ...over })
+
+  it('derives a request rate from the window it was told about', () => {
+    // 300 requests over 15 minutes = 20/min.
+    expect(requestHealth(cap(), { windowMinutes: 15 }).requestsPerMin).toBe(20)
+  })
+
+  it('labels the average as an average and refuses to present it as a percentile', () => {
+    // The one quietly wrong thing this panel could do: a p99 blowout barely moves a mean, so the
+    // two differ most exactly when latency matters.
+    const health = requestHealth(cap())
+    expect(health.averageResponseMs).toBe(42)
+    expect(health.percentilesAvailable).toBe(false)
+    expect(health.percentilesNote).toBe(LATENCY_PERCENTILES_NOTE)
+    expect(LATENCY_PERCENTILES_NOTE).toMatch(/not shown rather than approximated from the mean/)
+    // The note NAMES the percentiles, as the thing that is missing. What must not exist is a
+    // percentile VALUE — a number the reader could act on that was never measured.
+    const percentileValues = health.classes.concat([{ name: 'p95', count: health.averageResponseMs }])
+      .filter((row) => /^p\d/.test(row.name) && row.count != null)
+    expect(percentileValues).toEqual([{ name: 'p95', count: 42 }])   // only the one this test built
+    expect(Object.keys(health)).not.toContain('p95')
+    expect(Object.keys(health)).not.toContain('p99')
+  })
+
+  it('shares out only the classes Azure reported', () => {
+    const health = requestHealth(cap())
+    const byName = Object.fromEntries(health.classes.map((row) => [row.name, row]))
+    expect(byName['2xx']).toMatchObject({ count: 280, sharePct: 93.3 })
+    expect(byName['5xx']).toMatchObject({ count: 2, sharePct: 0.7 })
+    // A class Azure did not answer for has no count and no share — not a 0% that reads as
+    // "none of these happened".
+    expect(byName['3xx']).toEqual({ name: '3xx', count: null, sharePct: null })
+  })
+
+  it('reports a resiliency counter of zero as zero and an absent one as absent', () => {
+    const health = requestHealth(cap())
+    expect(health.ejectedHosts).toBe(0)        // a measurement
+    expect(health.connectTimeouts).toBe(null)  // not measured
+  })
+
+  it('degrades to nothing measured rather than zeroes for a worker app', () => {
+    // ACP's workers claim from a queue rather than serving requests, so they have no ingress.
+    const health = requestHealth({ configured: true, metrics: {}, status_classes: {} })
+    expect(health.requestsPerMin).toBe(null)
+    expect(health.averageResponseMs).toBe(null)
+    expect(health.classified).toBe(null)
+    expect(health.classes.every((row) => row.count === null)).toBe(true)
   })
 })

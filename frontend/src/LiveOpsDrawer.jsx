@@ -5,8 +5,8 @@ import {
   capacityForService, componentState, defaultMetricFor, eventClock, eventsForNode, filterEvents,
   formatDuration,
   REPLICA_STATES, gaugeModel, metricGroups, nodeTypeLabel, outputModel, provenance, queueModel,
-  THROUGHPUT_SERIES, replicaLifecycle, reported, saturationModel, scaleEvents, scaleExplanation,
-  throughputModel, workerJobHealth,
+  THROUGHPUT_SERIES, replicaLifecycle, reported, requestHealth, saturationModel, scaleEvents,
+  scaleExplanation, throughputModel, workerJobHealth,
   revisionLabel, runModel, seriesForMetric, sourceModel, tenantConcentration, trendMarkers,
   updatedAgo,
 } from './liveOpsDrawer.js'
@@ -220,6 +220,60 @@ function ReplicaLifecycle({ lifecycle, nowMs, measuredAt }) {
       </li>)}
     </ul>}
     <Source kind="azure" at={measuredAt} nowMs={nowMs} detail="Container Apps control plane" />
+  </section>
+}
+
+/**
+ * Ingress behaviour: rate, response time, the response-class split and the resiliency counters.
+ *
+ * The average response time is labelled an AVERAGE, and the percentiles are named as unavailable
+ * rather than approximated from it. That is the point of the panel's most prominent caption: an
+ * average under a percentile's label is quietly wrong exactly when latency matters, since a p99
+ * blowout barely moves a mean.
+ */
+function RequestHealth({ health, measuredAt, nowMs }) {
+  const anything = health.requestsPerMin != null || health.averageResponseMs != null
+    || health.classified != null
+  return <section aria-label="Request health" style={{ ...PANEL, padding: 14 }}>
+    <b>Request health</b>
+    {!anything && <p className="muted" style={{ fontSize: 12, margin: '7px 0 0' }}>
+      Azure Monitor reports no ingress metrics for the measured app. ACP's workers claim from a
+      queue rather than serving requests, so a worker app has none to report.
+    </p>}
+    {anything && <>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 8, marginTop: 10 }}>
+        <Tile label="REQUEST RATE" nowMs={nowMs} at={measuredAt}
+          value={health.requestsPerMin == null ? NOT_REPORTED : `${health.requestsPerMin}/min`}
+          detail={health.requestsPerMin == null ? undefined : `Over ${health.windowMinutes} min`}
+          source={health.requestsPerMin == null ? 'unavailable' : 'azure'} />
+        <Tile label="AVERAGE RESPONSE TIME" nowMs={nowMs} at={measuredAt}
+          value={health.averageResponseMs == null ? NOT_REPORTED : `${health.averageResponseMs} ms`}
+          detail="An average, not a percentile"
+          source={health.averageResponseMs == null ? 'unavailable' : 'azure'} />
+        <Tile label="REQUEST RETRIES" nowMs={nowMs} at={measuredAt}
+          value={health.retries == null ? NOT_REPORTED : health.retries}
+          source={health.retries == null ? 'unavailable' : 'azure'} />
+        <Tile label="CONNECTION TIMEOUTS" nowMs={nowMs} at={measuredAt}
+          value={health.connectTimeouts == null ? NOT_REPORTED : health.connectTimeouts}
+          source={health.connectTimeouts == null ? 'unavailable' : 'azure'} />
+        <Tile label="EJECTED HOSTS" nowMs={nowMs} at={measuredAt}
+          value={health.ejectedHosts == null ? NOT_REPORTED : health.ejectedHosts}
+          source={health.ejectedHosts == null ? 'unavailable' : 'azure'} />
+      </div>
+      <ul style={{ listStyle: 'none', margin: '10px 0 0', padding: 0, display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit,minmax(110px,1fr))', gap: 6, fontSize: 12 }}>
+        {health.classes.map((row) => <li key={row.name} style={{ display: 'flex', gap: 7, alignItems: 'baseline' }}>
+          <span aria-hidden="true" style={{ color: row.name === '5xx' ? TONE.bad
+            : row.name === '4xx' ? TONE.warn : TONE.ok }}>
+            {row.name === '5xx' ? '■' : row.name === '4xx' ? '▲' : '●'}
+          </span>
+          <span style={{ flex: 1 }}>{row.name}</span>
+          <b>{row.count == null ? NOT_REPORTED : row.count}</b>
+          {row.sharePct != null && <span className="muted">{row.sharePct}%</span>}
+        </li>)}
+      </ul>
+    </>}
+    <p className="muted" style={{ fontSize: 11, margin: '9px 0 0' }}>{health.percentilesNote}</p>
   </section>
 }
 
@@ -772,7 +826,9 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
       model={runModel(node.run, shown.samples, { nowMs })} />
   } else if (node?.kind === 'intake') {
     primary = <><IntakeSummary snapshot={snapshot} state={state} />
-      <Throughput samples={shown.samples} nowMs={nowMs} /></>
+      <Throughput samples={shown.samples} nowMs={nowMs} />
+      <RequestHealth health={requestHealth(capacity, { windowMinutes: capacity?.metrics_window_minutes || 15 })}
+        measuredAt={capacity?.measured_at} nowMs={nowMs} /></>
   } else if (node?.kind === 'source') {
     primary = <SourceHealth model={sourceModel(node, snapshot)} state={state} nowMs={nowMs} />
   } else if (node?.kind === 'output') {
