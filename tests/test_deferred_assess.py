@@ -107,6 +107,39 @@ def test_assess_kicks_off_fanout_from_inventory(isolated_store, monkeypatch):
     assert sum(1 for j in jobs if j["type"] == "scan_file") == 2             # both files now enqueued
 
 
+def test_repeated_assess_click_reuses_the_exact_discovery_snapshot(isolated_store, monkeypatch):
+    import core
+    import handlers
+    import scanner
+    from fastapi.testclient import TestClient
+    from app import app
+    monkeypatch.setattr(core, "store", isolated_store)
+    monkeypatch.setenv("ACP_DEFER_ANALYSIS_TO_ASSESS", "1")
+    monkeypatch.setattr(scanner, "_list", lambda *a, **k: _items())
+    handlers._scan_discover(
+        {"scan_id": "s-assess-idem", "source": "local", "user": "demo"},
+        {"scan_id": "s-assess-idem"})
+
+    client = TestClient(app)
+    first = client.post("/scans/s-assess-idem/assess?level=AA").json()
+    second = client.post("/scans/s-assess-idem/assess?level=AA").json()
+
+    assert first["job_id"] == second["job_id"]
+    assert first["snapshot_id"] == second["snapshot_id"]
+    assert first["reused"] is False and second["reused"] is True
+    payload = isolated_store.get_job(first["job_id"])["payload"]
+    assert payload["snapshot_id"] == first["snapshot_id"]
+
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur, "UPDATE jobs SET status='done' WHERE id=%s",
+                                   (first["job_id"],))
+    isolated_store.mark_assessed("s-assess-idem", "2026-09-05T00:00:00Z")
+    isolated_store.set_scan_status("s-assess-idem", "completed")
+    completed_retry = client.post("/scans/s-assess-idem/assess?level=AA").json()
+    assert completed_retry["reused"] is True
+    assert completed_retry["job_id"] == first["job_id"]
+
+
 # ── metadata-only discovery is the DEFAULT, including the monolithic 'scan' job ──────────────────
 
 def test_default_is_metadata_only(monkeypatch):

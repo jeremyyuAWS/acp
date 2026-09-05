@@ -380,6 +380,46 @@ git fetch -q origin main && git show origin/main:<path> | grep -n "<the line you
 A squash title names the first commit, not the branch. Reading the title is how a missing
 correction stays missing.
 
+## Some writes are refused by the PROXY, not by GitHub — hand those to the user
+
+The refusal names itself, but only if you read the body rather than the status. Measured
+2026-09-05 with `GITHUB_TOKEN`:
+
+    DELETE /repos/{owner}/{repo}/git/refs/heads/{branch}
+        403 {"message":"Write access to this GitHub API path is not permitted through this proxy."}
+
+    PATCH /repos/{owner}/{repo}          (e.g. delete_branch_on_merge)
+        403 {"message":"Repository settings writes are not permitted through this proxy."}
+
+`git push origin --delete <branch>` hits the same wall over the git transport
+(`error: RPC failed; HTTP 403`), so it is not a REST-only gate, and
+`curl "$HTTPS_PROXY/__agentproxy/status"` reported `recentRelayFailures: []` throughout — nothing
+was broken. This is policy, so the usual diagnoses are all wrong: it is not the scope, not a
+missing PAT, and not something a second route gets around.
+
+**What still works**, so the boundary is usable rather than just a warning:
+
+- `git push` of a branch (the git protocol — which also does not count against the API budget)
+- `POST /issues/{n}/labels`, which is exactly why the `automerge` label is this repo's arming
+  recipe and the endpoints above are not
+- every READ, including `GET /repos/{owner}/{repo}`
+
+**Do NOT predict the boundary from `permissions`.** That same GET reports
+`{"admin": false, "maintain": false, "push": false, "triage": false, "pull": false}` in a session
+whose `git push` of a branch had succeeded seconds earlier. It describes the app's own grant, not
+what the proxy will relay: read as the gate, it predicts failures that do not happen and successes
+that do.
+
+**The practical consequence.** A session cannot retire its own remote branch after a merge, and
+cannot enable "Automatically delete head branches" to stop that recurring. Both are one click for
+the owner — the Delete branch button on the merged PR, and Settings → Pull Requests → Automatically
+delete head branches — so say which one, once, and stop.
+
+**Why this is written down.** On 2026-09-05 a session asked to delete its merged branch tried the
+REST delete, then the git delete, and reported the 403 as *GitHub* declining for that token. Same
+outcome, wrong culprit — and the wrong one sends the next reader hunting for a bigger token instead
+of clicking the button. The body was there in the first response; only the status had been read.
+
 ## Don't exhaust the shared GitHub API budget — stop polling
 
 The authenticated GitHub API limit is **5,000 requests/hour PER ACCOUNT, not per session** — every

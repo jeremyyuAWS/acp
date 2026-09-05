@@ -543,7 +543,6 @@ async def remediate_scan(sid: str, request: Request):
     # honest response to a failed run) used to make its dead jobs accumulate against one total:
     # two 147-document batches reported "294 failed" out of 147, and the UI subtracted its way
     # to -147 remediated. See store.remediation_status.
-    batch_id = uuid.uuid4().hex[:16]
     # THE KEY THE CACHE WAS WRITTEN UNDER. ADR 0020 keys a cached original by its content
     # checksum whenever the listing carried one — {owner}/{checksum} — and only falls back to
     # {owner}/{scan_id}/{filename} when it did not. SharePoint listings have carried
@@ -559,7 +558,7 @@ async def remediate_scan(sid: str, request: Request):
     except Exception:
         swallowed("routes.scans.remediate_scan: reading the scan's source checksums failed", sid)
         checksums = {}
-    enqueued = []
+    payloads = []
     for f in res["files"]:
         # Honour the triage scope: skip files the user marked N/A or deferred.
         if scope_set is not None and f["file"] not in scope_set:
@@ -584,16 +583,22 @@ async def remediate_scan(sid: str, request: Request):
         # are valid remediation inputs and produce the primary Blob artifact.
         if source == "drive" and not drive_file_id:
             continue
-        jid = core.store.enqueue_job(
-            "remediate_file",
+        payloads.append(
             {"scan_id": sid, "file": f["file"], "drive_file_id": drive_file_id,
              "remediated_folder_id": remediated_folder_id, "drive_token": token,
              "source": source, "owner": owner,
-             "checksum": checksums.get(f["file"]) or f.get("checksum")},
-            scan_id=sid, batch_id=batch_id)
-        enqueued.append(jid)
-    return {"scan_id": sid, "enqueued": len(enqueued), "job_ids": enqueued,
-            "batch_id": batch_id,
+             "checksum": checksums.get(f["file"]) or f.get("checksum")})
+    snapshot_id = core.store.stage_snapshot_id(sid)
+    # Fingerprint the EFFECTIVE file set, not raw request spelling: adding a nonexistent name or
+    # reordering the same names is still the same work and must reuse the same execution.
+    request_fingerprint = _json.dumps(
+        {"files": sorted(p["file"] for p in payloads)}, sort_keys=True)
+    execution = core.store.enqueue_stage_batch(
+        sid, "remediate", "remediate_file", payloads, snapshot_id=snapshot_id,
+        request_fingerprint=request_fingerprint)
+    return {"scan_id": sid, "enqueued": len(execution["job_ids"]),
+            "job_ids": execution["job_ids"], "batch_id": execution["batch_id"],
+            "snapshot_id": snapshot_id, "reused": execution["reused"],
             "workers": core.WORKERS, "worker_tier_alive": core.store.worker_tier_alive()}
 
 
@@ -1203,17 +1208,32 @@ def assess(sid: str, request: Request, level: str = Query("AA"),
             _live = _active_scope(core.store)
             if _live:
                 core.store.merge_scan_scope(sid, {"scan_scope": _scope_as_json(_live)})
-        jid = core.store.enqueue_job(
-            "scan_assess",
-            {"scan_id": sid, "user": _owner(request),
-             "include_lifecycle_flagged": include_lifecycle_flagged}, scan_id=sid)
+        snapshot_id = core.store.stage_snapshot_id(sid)
+        request_fingerprint = _json.dumps(
+            {"level": level, "include_lifecycle_flagged": include_lifecycle_flagged},
+            sort_keys=True)
+        execution = core.store.enqueue_stage_batch(
+            sid, "assess", "scan_assess",
+            [{"scan_id": sid, "user": _owner(request),
+              "include_lifecycle_flagged": include_lifecycle_flagged}],
+            snapshot_id=snapshot_id, request_fingerprint=request_fingerprint)
+        jid = execution["job_ids"][0]
         return {"scan_id": sid, "level": level, "job_id": jid, "workers": core.WORKERS,
                 "worker_tier_alive": core.store.worker_tier_alive(),
-                "phase": "assessing", "deferred": True}
+                "phase": "assessing", "deferred": True,
+                "snapshot_id": snapshot_id, "reused": execution["reused"]}
     # Immediate model — the results views gate on assessed_at; stamp it + build the assess trace.
     core.store.mark_assessed(sid, _dt.datetime.now(_dt.timezone.utc).isoformat())
-    jid = core.store.enqueue_job("assess_trace", {"scan_id": sid, "level": level}, scan_id=sid)
-    return {"scan_id": sid, "level": level, "job_id": jid, "workers": core.WORKERS}
+    snapshot_id = core.store.stage_snapshot_id(sid)
+    request_fingerprint = _json.dumps(
+        {"level": level, "include_lifecycle_flagged": include_lifecycle_flagged},
+        sort_keys=True)
+    execution = core.store.enqueue_stage_batch(
+        sid, "assess", "assess_trace", [{"scan_id": sid, "level": level}],
+        snapshot_id=snapshot_id, request_fingerprint=request_fingerprint)
+    return {"scan_id": sid, "level": level, "job_id": execution["job_ids"][0],
+            "workers": core.WORKERS, "snapshot_id": snapshot_id,
+            "reused": execution["reused"]}
 
 
 @router.get("/scans/{sid}/trace/session/data")
