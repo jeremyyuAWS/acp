@@ -190,7 +190,15 @@ describe('Admin live traffic graph', () => {
     expect(source).toContain("type: 'infra'")
     expect(source).toMatch(/onNodeClick=.*setSelectedKey/)
     expect(source).toContain('infrastructureDetail(selectedNode, snapshot, liveCapacity).facts')
-    expect(drawer).toContain('facts.map(([label, value])')
+    // The drawer no longer maps the flat `facts` array directly: it groups it first
+    // (Capacity / Processing / Deployment / Source / Audit / Other) and renders each group behind
+    // its own `<button aria-expanded>`. What this line was protecting — the SAME drawer consumes
+    // the `facts` prop the tile handed it — is asserted by the wiring below. That every fact
+    // actually reaches the reader, including one whose label the group map does not know, is
+    // asserted at the DOM level in liveOpsDrawerRender.test.jsx, which is the better place for it:
+    // a source grep for one expression cannot tell a rendered fact from a dropped one.
+    expect(drawer).toContain('factGroups(facts)')
+    expect(drawer).toContain('group.facts.map(')
     expect(source).toContain('Idle · select any tile to inspect the ready processing path')
   })
 })
