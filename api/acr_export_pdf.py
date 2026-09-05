@@ -144,12 +144,30 @@ def with_limitations(html: str, notice: str = UNRUN_GATES) -> str:
     return html[:at] + para + html[at:]
 
 
+def render_projection(projection: dict) -> bytes:
+    """One projection to one PDF — THE only way production code turns a projection into bytes.
+
+    Why this exists rather than callers composing the three steps themselves. #1416 added
+    `with_limitations` and wired it into `render()` below, and the disclosure reached nobody: the
+    route that actually serves the download had built its projection already and called
+    `render_html(to_html(projection))` directly, so the notice was in a function no production
+    code path called. A conformant PDF, a green suite, a merged PR, and an export still making the
+    claim the notice exists to qualify.
+
+    Composing it here makes that class of miss structural instead of remembered. A caller who has
+    a projection cannot reach the renderer without the notice, because this is the function that
+    takes a projection — and `test_acr_export_pdf_notice.py` asserts no module under `api/` calls
+    `render_html` directly, which is the check that would have caught the original seam.
+    """
+    return render_html(with_limitations(acr_export_preview.to_html(projection)))
+
+
 def render(report: dict, criteria: list[dict], *, evidence_by_criterion=None,
            stale_ids=None) -> bytes:
     """The report's accessible PDF, built from the same projection the preview screens use."""
     projection = acr_export_preview.project(
         report, criteria, evidence_by_criterion=evidence_by_criterion, stale_ids=stale_ids)
-    return render_html(with_limitations(acr_export_preview.to_html(projection)))
+    return render_projection(projection)
 
 
 def filename_for(report: dict) -> str:

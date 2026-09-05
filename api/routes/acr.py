@@ -854,7 +854,7 @@ def preview(report_id: str, request: Request, format: str = "json"):
         # except the reader it exists for, so a deployment that cannot tag must say so rather than
         # hand over a conformance document that quietly lost its structure tree.
         try:
-            pdf = acr_export_pdf.render_html(acr_export_preview.to_html(projection))
+            pdf = acr_export_pdf.render_projection(projection)
         except acr_export_pdf.RendererUnavailable as exc:
             raise HTTPException(503, str(exc)) from exc
         return Response(
