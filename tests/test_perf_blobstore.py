@@ -200,16 +200,17 @@ def test_inventory_attrs_bulk_loads_on_first_miss(isolated_store):
     with isolated_store._db.cursor() as cur:
         isolated_store._db.executemany(
             cur,
-            "INSERT INTO scan_inventory(scan_id, file, path, owner, parent_folder) "
-            "VALUES(%s,%s,%s,%s,%s)",
+            "INSERT INTO scan_inventory(scan_id, file, path, owner, parent_folder, content_type) "
+            "VALUES(%s,%s,%s,%s,%s,%s)",
             [
-                ("s_inv", "a.docx", "/docs/a.docx", "alice@x.com", "Legal"),
-                ("s_inv", "b.docx", "/docs/b.docx", "bob@x.com", "Finance"),
+                ("s_inv", "a.docx", "/docs/a.docx", "alice@x.com", "Legal", "Policy"),
+                ("s_inv", "b.docx", "/docs/b.docx", "bob@x.com", "Finance", "Report"),
             ],
         )
     # Prime the cache
     attrs_a = isolated_store._inventory_attrs("s_inv", "a.docx")
     assert attrs_a["owner"] == "alice@x.com"
+    assert attrs_a["content_type"] == "Policy"
     assert "s_inv" in isolated_store._inventory_cache, "cache must be populated after first call"
 
     # Second call for a DIFFERENT file in the same scan must use the cache

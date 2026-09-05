@@ -554,7 +554,8 @@ _SCHEMA = [
     "CREATE INDEX IF NOT EXISTS idx_lifecycle_evaluation_scan ON lifecycle_evaluation(scan_id, owner_email)",
     "CREATE INDEX IF NOT EXISTS idx_lifecycle_evaluation_file ON lifecycle_evaluation(scan_id, document_id)",
     # Per-file WCAG scope rules (Discover/Assess Lifecycle PRD §4.4 / AC-09, "C4"). A rule
-    # targets files by folder / owner / department and assigns a Core-17 subset; the effective
+    # targets files by folder / owner / department / SharePoint Content Type and assigns a
+    # Core-17 subset; the effective
     # code-set for a file is resolved from matching rules (union, or a higher-priority override
     # replaces — see api/scope_resolver.py). `codes` is a JSON array of SC ids; `is_override`
     # and `enabled` are 0/1; `priority` orders overlapping overrides. Config, not scan output —
@@ -5074,9 +5075,9 @@ class Store:
         return result
 
     def _inventory_attrs(self, scan_id: str, file: str) -> dict:
-        """The file's path / owner / parent_folder from its scan_inventory row — the attributes a
-        per-file scope rule matches on (department is not on scan_inventory today, so
-        department-selector rules do not resolve at this layer; folder/owner do).
+        """The file's path / owner / parent_folder / SharePoint Content Type from its
+        scan_inventory row — the attributes a per-file scope rule matches on. Department has no
+        scan-derived inventory source today; folder, owner, and content_type do.
 
         Lazy bulk-load: first call for a given scan_id fetches ALL inventory rows for the
         scan at once and caches them by filename, so subsequent calls (other files in the same
@@ -5084,7 +5085,8 @@ class Store:
         if scan_id not in self._inventory_cache:
             with self._db.cursor() as cur:
                 self._db.execute(cur,
-                    "SELECT file, path, owner, parent_folder FROM scan_inventory WHERE scan_id=%s",
+                    "SELECT file, path, owner, parent_folder, content_type "
+                    "FROM scan_inventory WHERE scan_id=%s",
                     (scan_id,))
                 rows = self._db.fetchall(cur)
             self._inventory_cache[scan_id] = {r["file"]: r for r in rows}

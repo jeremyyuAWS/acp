@@ -2037,7 +2037,8 @@ export const fetchEligibility = (codes = null) => {
 }
 
 // ── Scope rules (Phase C4d, Discover/Assess PRD §4.4 / AC-09) ────────────────────────
-// Per-file WCAG scope rules: admins target files by folder / owner / department and assign a
+// Per-file WCAG scope rules: admins target files by folder / owner / department / SharePoint
+// Content Type and assign a
 // Core-17 subset, with union / override precedence (see api/scope_resolver.py). The editor UI
 // (ScopeRules.jsx) reads the selector+catalog from /scope/selectors, lists/creates/toggles/deletes
 // rules over /scope/rules, and shows the scope-aware eligible-file count from
@@ -2048,7 +2049,7 @@ export const fetchEligibility = (codes = null) => {
 
 // The Core-17 catalog the SIM selector endpoint serves — same generated tables the rest of the UI
 // reads, so the picker shows "1.4.3 — Contrast (Minimum)" identically online and offline.
-const _SIM_SCOPE_SELECTORS = ['folder', 'owner', 'department']
+const _SIM_SCOPE_SELECTORS = ['folder', 'owner', 'department', 'content_type']
 let _simScopeRules = []          // in-memory rule store for the demo build
 let _simScopeSeq = 0
 const _simAllowedCodes = () => new Set(_SIM_CORE17.map((c) => c.code))

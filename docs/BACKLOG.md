@@ -446,20 +446,16 @@ third is the correctness fix with the widest blast radius.
   `scan_scope` are `ScanSetup` (on Overview) and `AssessSetup` (in App), and they own different
   axes. Both retired components are kept in the tree per CLAUDE.md; if either is mounted again this
   item comes back with it.
-- [ ] **P2.3 — Document-type scoping. BLOCKED, and this row's premise was wrong.** It read: *"the
-  ontology data already exists."* It does not. Verified against `origin/main` on 2026-08-21:
-  `file_records` (`store.py:70`) has no `department` and no `tags`; `get_scan` (`store.py:1752`)
-  projects that table alone and joins nothing; `documents` is the only table carrying `department`
-  and `store.py:4647` says outright that *"department has no scan-derived source yet, so on most
-  estates that bucket IS the estate"*; `store.py:1902` adds that department-selector scope rules
-  therefore do not resolve. So on every real estate `f.department` is undefined and `f.tags` is
-  empty — Discover's whole triage surface was SIM-only, which is now said on the screen rather
-  than rendered as zeros (`classificationData.js`).
-  **The blocker is a scan-derived source for classification, not a scoping control.** Building
-  "assess only legal-hold" on top of this would scope a customer's estate by an empty column. The
-  nearest real source is SharePoint's own managed metadata / content types / sensitivity labels —
-  listed in `docs/sharepoint-gaps.md` as a build within the read-only scopes (`listItem/fields`).
-  Do that first; the scoping control is small once the data is real.
+- [x] **P2.3 — Document-type scoping.** Done against a real scan-derived classification rather
+  than the empty ontology fields this row originally assumed existed. SharePoint discovery now
+  persists native Content Type from `listItem/fields`; WCAG scope rules expose **SharePoint Content
+  Type** as a selector, and both the eligibility preview and actual assessment score/trace path
+  resolve that value from `scan_inventory`. Matching is case-insensitive exact equality; missing
+  or unread Content Type safely does not match and leaves the global Assess selection in force.
+  File-format selection remains in Assess, where it already applies across connectors. Department,
+  managed columns, and sensitivity labels still have no universal scan-derived value and were not
+  presented as working aliases. Real-tenant proof remains an onboarding/validation item, not a
+  missing code path.
 - [x] **P2.4 — The three unassessed DOCX criteria.** Done — all three built rather than disclaimed.
   1.4.1 and 1.4.11 landed as declarations with guided lanes (#202) and then prefilled proposers
   (#203), which moved both from `human` to `assisted`: the criterion is editorial, but the SIGNAL

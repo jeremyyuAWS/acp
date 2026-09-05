@@ -1,6 +1,7 @@
 """Scope-rule CRUD (Discover/Assess Lifecycle PRD §4.4 / AC-09, Phase C4c).
 
-A *scope rule* targets files by folder / owner / department and assigns a WCAG code-set
+A *scope rule* targets files by folder / owner / department / SharePoint Content Type and
+assigns a WCAG code-set
 (a subset of Core-17), so different parts of the estate can be assessed against different
 criteria. The pure resolution logic lives in `api/scope_resolver.py` and persistence in
 `api/store.py` (both merged in C4a); this module is the owner-gated control surface over
