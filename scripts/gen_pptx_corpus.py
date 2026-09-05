@@ -162,6 +162,12 @@ def _table(slide, *, first_row: bool):
     """
     from pptx.util import Inches
     frame = slide.shapes.add_table(3, 2, Inches(1), Inches(2), Inches(6), Inches(2))
+    # ALT TEXT ON A TABLE, WHICH LOOKS UNNECESSARY AND IS NOT. Pptx/Rules/AltTextRule.cs walks
+    # `Descendants<GraphicFrame>()` as well as `Descendants<Picture>()`, and a table IS a graphic
+    # frame — so a table with no `descr` raises 1.1.1. The first-party
+    # office_non_text_content_checks only reads pictures, so a bare checkout sees nothing and the
+    # fixture looked single-criterion right up until CI ran the analyser.
+    frame._element.nvGraphicFramePr.cNvPr.set("descr", "Revenue by region, two columns")
     table = frame.table
     table.first_row = first_row
     for r, row in enumerate((("Region", "Revenue"), ("North", "412"), ("South", "388"))):

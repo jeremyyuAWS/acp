@@ -592,7 +592,14 @@ def test_the_engine_confirms_the_declared_pairs(corpus, name, sc, fires):
     out, rows = corpus
     path = out / rows[name]["file"]
     fd, _ = analyse_and_assess(path.parent, path.name, detect_pii=False)
-    found = {sc for i in (fd or {}).get("issues", []) if (sc := _extract_sc(i.get("wcag", "")))}
+    # NOT a walrus in a comprehension. PEP 572 binds an assignment expression in the CONTAINING
+    # scope, so `{sc for i in ... if (sc := ...)}` rebinds the parametrised `sc` to whichever
+    # criterion the last issue happened to carry. Every assertion below then judged the wrong
+    # criterion — and in the `fires=True` direction it asserted that a value just extracted from
+    # `found` was in `found`, which is true by construction. Those rows passed vacuously in CI
+    # until a `fires=False` row happened to leak a criterion that WAS present and failed with the
+    # give-away message "table-header-ok is the clean control for 1.1.1".
+    found = {s for i in (fd or {}).get("issues", []) if (s := _extract_sc(i.get("wcag", "")))}
     if fires:
         assert sc in found, (
             f"{name} declares {sc} but the analyser reported {sorted(found) or 'nothing'}")
@@ -655,3 +662,38 @@ def test_the_reading_order_control_has_margin_not_luck(corpus):
         "rule's threshold, where an unrelated edit flips it into a false positive")
     assert _reading_order_gap(out / rows["reading-order"]["file"]) > 1, (
         "the violation no longer exceeds the rule's threshold")
+
+
+def _graphic_frame_without_alt_text(path: Path) -> str | None:
+    """AltTextRule's graphic-frame branch — the one a table falls into.
+
+    The rule walks `Descendants<GraphicFrame>()` as well as `Descendants<Picture>()`, so a table
+    with no `descr` raises 1.1.1. The first-party `office_non_text_content_checks` reads pictures
+    only, which is why a bare checkout cannot see this and CI can.
+    """
+    from pptx import Presentation
+    from pptx.oxml.ns import qn
+    for index, slide in enumerate(Presentation(str(path)).slides):
+        for frame in slide.shapes._spTree.iter(qn("p:graphicFrame")):
+            properties = frame.find(qn("p:nvGraphicFramePr") + "/" + qn("p:cNvPr"))
+            if properties is None or not (properties.get("descr") or "").strip():
+                return f"slide {index}: graphic frame with no descr"
+    return None
+
+
+def test_no_fixture_carries_a_graphic_frame_without_alt_text(corpus):
+    """THE FAILURE CI FOUND AND A BARE CHECKOUT STRUCTURALLY CANNOT, swept across the corpus.
+
+    The 1.3.1 table fixtures raised an undeclared 1.1.1 because a table is a GraphicFrame and
+    AltTextRule reads those. Every fixture that declares 1.1.1 may carry the finding; nothing else
+    may. This is the picture-only sibling of the engine sweep above, kept separate because 1.1.1
+    is a first-party DECLARED pair whose first-party detector disagrees with the analyser about
+    what counts as non-text content.
+    """
+    out, rows = corpus
+    for name, row in rows.items():
+        reason = _graphic_frame_without_alt_text(out / row["file"])
+        if reason and "1.1.1" not in row["expect"]:
+            raise AssertionError(
+                f"{name} has a graphic frame with no alt text ({reason}), so the analyser raises "
+                f"1.1.1 — which it does not declare. Give the frame a descr, or declare 1.1.1.")
