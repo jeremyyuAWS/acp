@@ -523,8 +523,9 @@ NOT_RENDERED = {
         "A RELEASE IMAGE with no template. inventory.IMAGES lists `acp-ollama-gateway`, the "
         "service wants a persistent model volume so a restart does not re-pull multi-GB models, "
         "and production runs it (deploy/public/ creates acp-ollama). The chart declares "
-        "`ai.ollama.enabled` in values.yaml and no template reads it. Whether the ACP chart "
-        "should own the model runtime is a design decision nobody has recorded."),
+        "`ai.ollama.enabled` in values.yaml and no template reads it. And the answer is not "
+        "\"the platform supplies it\": deploy/compose/docker-compose.yml runs ollama/ollama "
+        "ungated, so the evaluation path ships a model runtime the production path drops."),
     "acp-otel-collector": (
         "The only one with a seam. `_helpers.tpl` DOES read "
         "`observability.openTelemetry.enabled` and sets OTEL_SDK_DISABLED plus an endpoint — so "
@@ -537,9 +538,10 @@ NOT_RENDERED = {
         "`observability.grafana.enabled` is a values knob no template reads, and unlike langfuse "
         "and the OTel collector NOTHING else in the render refers to it either — no endpoint, no "
         "credential, no env var. So this and ollama are the two that are simply absent rather "
-        "than expected from outside. Plausibly a platform concern the adapter supplies, but "
-        "presets.PLATFORM_ADAPTER lists Postgres, Redis, Blob and Key Vault and does not claim "
-        "observability, so nothing in the repository says who provides it."),
+        "than expected from outside. NOT a platform concern the adapter supplies, either: "
+        "deploy/compose/docker-compose.yml deploys grafana ungated, so the EVALUATION path ships "
+        "it and the production path does not — see "
+        "test_compose_deploys_what_the_chart_omits."),
     "acp-langfuse": (
         "Self-hosted LLM tracing, and the same shape as the OTel collector rather than the same "
         "shape as grafana — which is a distinction the first draft of these tests got wrong. No "
@@ -748,3 +750,36 @@ def test_the_otel_endpoint_is_never_actually_set():
         assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in env, (
             "an OTLP endpoint now reaches the workload — good, and this test needs rewriting to "
             "assert it matches the document's exporter")
+
+
+def test_compose_deploys_what_the_chart_omits():
+    """THE COMPARISON THAT DECIDES WHICH SIDE IS WRONG, and it refutes the comfortable reading.
+
+    While writing the entries above it was tempting to record "these are platform concerns the
+    infrastructure adapter supplies" as the likely rationale — it is plausible, and
+    presets.PLATFORM_ADAPTER not claiming observability is at least consistent with it.
+
+    `deploy/compose/docker-compose.yml` refutes it. The evaluation path deploys `ollama`,
+    `grafana` and `langfuse` as ordinary services with no profile gate, which is to say the
+    product includes them. So the inventory is not over-claiming when it calls them in-cluster;
+    it agrees with Compose, and the Helm chart — the layer ADR 0048 makes PRIMARY for production
+    — is the one outlier. An installation moved from the evaluation path to the production one
+    loses three services and nothing says so.
+
+    Asserted rather than written down, because the moment somebody adds these templates (or
+    removes them from Compose) the two paths agree again and this test should stop passing for
+    the reason it currently does.
+    """
+    compose = yaml.safe_load(
+        (PACKAGING.parent / "deploy" / "compose" / "docker-compose.yml").read_text())
+    ungated = {name for name, body in (compose.get("services") or {}).items()
+               if not (body or {}).get("profiles")}
+
+    for service in ("ollama", "grafana", "langfuse"):
+        assert service in ungated, (
+            f"deploy/compose no longer runs {service} ungated — the two deployment paths may "
+            f"have converged, and the NOT_RENDERED entries above need re-reading")
+
+    # And the chart still does not. Named as the exact set so closing one moves both sides.
+    chart_side = {"acp-ollama-gateway", "acp-grafana", "acp-langfuse"}
+    assert chart_side <= set(NOT_RENDERED), sorted(NOT_RENDERED)
