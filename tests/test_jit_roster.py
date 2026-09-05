@@ -22,7 +22,6 @@ people who actually sign in or are explicitly invited."
 """
 from __future__ import annotations
 
-import importlib
 import sys
 import tempfile
 from pathlib import Path
@@ -40,6 +39,22 @@ NEWCOMER = "newcomer@hosp.org"       # admitted by the DOMAIN alone — on no li
 OUTSIDER = "someone@elsewhere.test"
 
 
+# NO `importlib.reload` ANYWHERE IN THIS FILE, DELIBERATELY.
+#
+# The first version of it reloaded `routes.system` and `routes.workspace_roles_admin` inside four
+# tests, to be sure they saw the monkeypatched core. They already did: those modules do
+# `import core` and read `core.store` / `core.OWNER_EMAIL` at CALL time, so patching the attribute
+# is enough and the reloads bought nothing.
+#
+# What they cost was real and showed up nowhere near here. A reload rebinds the module object's
+# globals while every module that already imported FROM it keeps the old references, so the suite
+# ends up with two live copies of one module and no way to tell which a given caller holds. Two
+# SharePoint cursor tests — test_sp_freshness and test_sp_live_coverage, which have nothing to do
+# with roles — began failing in the full-suite run only, passing in isolation and passing next to
+# this file, which is the signature of exactly that.
+#
+# If a test here ever seems to need a fresh module, the thing to reach for is another monkeypatch,
+# not a reload.
 @pytest.fixture
 def env(monkeypatch):
     """A workspace with a domain rule, an owner, and a store nobody has touched.
@@ -146,7 +161,6 @@ def test_the_person_appears_on_the_people_screen_immediately(env):
     core.note_signed_in(NEWCOMER, provider="google")
 
     import routes.system as system
-    importlib.reload(system)
     listed = {p["email"] for p in system._people_payload()["people"]}
     assert NEWCOMER in listed
 
@@ -159,7 +173,6 @@ def test_an_administrator_can_then_change_the_role(env):
     core.note_signed_in(NEWCOMER, provider="google")
 
     import routes.workspace_roles_admin as adm
-    importlib.reload(adm)
     adm.assign_person_role(NEWCOMER, {"role_id": rbac.REMEDIATION_REVIEWER},
                            request=SimpleNamespace(state=SimpleNamespace(user_email=OWNER)))
     assert core.person_with_access(NEWCOMER)[wr.ROLE_FIELD] == rbac.REMEDIATION_REVIEWER
@@ -276,7 +289,6 @@ def test_an_administrator_can_lift_a_pending_person_out_of_the_queue(env):
     core.note_signed_in(NEWCOMER, provider="microsoft")
 
     import routes.workspace_roles_admin as adm
-    importlib.reload(adm)
     adm.assign_person_role(NEWCOMER, {"role_id": rbac.VIEWER},
                            request=SimpleNamespace(state=SimpleNamespace(user_email=OWNER)))
     lifted = access(st, NEWCOMER)
@@ -313,7 +325,6 @@ def test_an_administrators_later_change_names_the_administrator(env):
     core, st = env("viewer")
     core.note_signed_in(NEWCOMER, provider="google")
     import routes.workspace_roles_admin as adm
-    importlib.reload(adm)
     adm.assign_person_role(NEWCOMER, {"role_id": rbac.ANALYST},
                            request=SimpleNamespace(state=SimpleNamespace(user_email=OWNER)))
     assigned = [d for d in st.list_decisions() if d["action"] == "role.assigned"]
