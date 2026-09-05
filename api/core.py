@@ -1374,6 +1374,30 @@ ASSESS_LANE_JOB_TYPES = (
 REMEDIATE_LANE_JOB_TYPES = ("remediate_file", "rescore_file", "apply_approved_values")
 
 
+def _replica_id() -> str:
+    """This replica's identity, for a globally unique worker id.
+
+    Read through joblog rather than re-reading the environment, so log attribution and job
+    attribution cannot drift. Falls back to a random suffix only when the platform supplies
+    nothing: "unknown:w0" from every replica would recreate the collision this exists to remove.
+    """
+    try:
+        import joblog  # noqa: PLC0415
+        replica = (joblog.REPLICA or "").strip()
+    except Exception:  # noqa: BLE001 — identity must never take the worker pool down
+        replica = ""
+    if replica and replica != "unknown":
+        return replica
+    global _REPLICA_FALLBACK
+    if _REPLICA_FALLBACK is None:
+        import uuid  # noqa: PLC0415
+        _REPLICA_FALLBACK = f"unknown-{uuid.uuid4().hex[:8]}"
+    return _REPLICA_FALLBACK
+
+
+_REPLICA_FALLBACK = None
+
+
 def _worker_job_types(index, pool_size):
     """Route dedicated services before falling back to the mixed pool reservation."""
     from worker import HANDLERS
@@ -1403,7 +1427,15 @@ def _spawn_worker() -> None:
     # poll/SSE stream without worker.py importing core (it is deliberately infra-only — see its
     # own docstring). See _job_is_stale's phase=='retrying' exemption below for why this signal
     # can outlive the normal 90s staleness window (backoff can run up to 600s).
-    w = JobWorker(get_store(), worker_id=f"w{_worker_seq}", on_retry=update_job)
+    # GLOBALLY UNIQUE, not "w0". The id was a per-PROCESS sequence, so every replica minted the
+    # same handful of names — production ran ten Assess replicas and `locked_by` held only `w0`
+    # and `w1`. Counting distinct values therefore counted workers per replica, never replicas,
+    # and a diagnosis built on it (2026-09-05, a suspected stuck queue) could not have been right
+    # whatever the data said. Prefixing the replica makes the id identify one worker in the fleet.
+    #
+    # joblog.REPLICA is the same resolution used for log attribution — the Container Apps replica
+    # name, else HOSTNAME, else "unknown" — so the two agree rather than inventing a second answer.
+    w = JobWorker(get_store(), worker_id=f"{_replica_id()}:w{_worker_seq}", on_retry=update_job)
     w.job_types = _worker_job_types(len(_worker_handles), WORKERS)
     t = threading.Thread(target=w.run_forever, daemon=True, name=f"jobworker-{_worker_seq}")
     _worker_seq += 1

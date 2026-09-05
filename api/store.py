@@ -410,6 +410,24 @@ _SCHEMA = [
     # touch_job heartbeat. reclaim_stuck_jobs uses this instead of the opaque locked_at
     # arithmetic so operators can see exactly when a lease will expire.
     "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS lease_expires_at TEXT",
+    # WHEN THE JOB WAS CLAIMED, set once and never touched again — the column `locked_at` was
+    # mistaken for.
+    #
+    # `touch_job` does `SET locked_at=%s` on every heartbeat, so locked_at measures TIME SINCE THE
+    # LAST HEARTBEAT, not how long a handler has been running. With HEARTBEAT_INTERVAL_S=120 a job
+    # wedged for an hour reads as two minutes old. Two consumers had already been built on the
+    # wrong reading and shipped it under honest-sounding names — `current_job_started_at` and
+    # `worker_assigned_at` in admin_live_activity, both feeding the Live Operations drawer, where
+    # every "started at" silently reset every two minutes.
+    #
+    # Found 2026-09-05 by the owner checking a suspected stuck queue against production: the
+    # diagnosis offered ("locked_at tells you how long the lease has been held") was not answerable
+    # from this schema at all. This column is what makes it answerable.
+    #
+    # NULL on rows claimed before this migration, and NULL is reported as unknown — never as the
+    # epoch and never silently substituted with locked_at, which would reintroduce the same
+    # falsehood behind a better name.
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS claimed_at TEXT",
     # Error class persisted on failure so operators can diagnose dead-lettered jobs by
     # category (rate_limit / auth / corrupt / transient) without parsing last_error text.
     "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS error_class TEXT",
@@ -1770,8 +1788,12 @@ class _PgAdapter:
     # indexes. Additive on the usual terms: an older replica never reads or writes this table, and
     # every route behind it is guarded by the new capability-map entries, so a replica without
     # this code keeps serving all existing surfaces unchanged.
-    _SCHEMA_VERSION = 15
-    _SCHEMA_CHECKSUM_AT_VERSION = "78973be69cc99a58230bde5306c6423e"
+    # v16 adds jobs.claimed_at — an immutable claim timestamp, because touch_job overwrites
+    # locked_at on every heartbeat and two shipped consumers were reading it as a start time.
+    # Additive on the usual terms: nullable, defaulted NULL, written only by claim_job. An older
+    # replica never writes it and every reader treats NULL as unknown rather than as a time.
+    _SCHEMA_VERSION = 16
+    _SCHEMA_CHECKSUM_AT_VERSION = "0fe97bc49d238af8f6143ec2e42691c8"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -9088,6 +9110,7 @@ class Store:
                                  (self._FAIR_CLAIM_ADVISORY_KEY,))
                 self._db.execute(cur,
                     "UPDATE jobs SET status='running', locked_at=%s, locked_by=%s, "
+                    "claimed_at=%s, "
                     "attempts=attempts+1, updated_at=%s, lease_expires_at=%s, phase=NULL "
                     "WHERE id = ("
                     "  SELECT qj.id" + candidate_from +
@@ -9097,7 +9120,7 @@ class Store:
                     # may be absent, so PostgreSQL must not try to lock their nullable sides.
                     "  FOR UPDATE OF qj SKIP LOCKED LIMIT 1"
                     ") RETURNING id",
-                    (now, worker_id, now, expires, lane_key, now, *fair_params))
+                    (now, worker_id, now, now, expires, lane_key, now, *fair_params))
                 row = self._db.fetchone(cur)
                 if row:
                     self._db.execute(cur, record_claim, (lane_key, now, row["id"]))
@@ -9117,9 +9140,10 @@ class Store:
                 jid = row["id"]
                 self._db.execute(cur,
                     "UPDATE jobs SET status='running', locked_at=%s, locked_by=%s, "
+                    "claimed_at=%s, "
                     "attempts=attempts+1, updated_at=%s, lease_expires_at=%s, phase=NULL "
                     "WHERE id=%s AND status='queued'",
-                    (now, worker_id, now, expires, jid))
+                    (now, worker_id, now, now, expires, jid))
                 claimed = getattr(cur, "rowcount", 1) == 1
                 if claimed:
                     self._db.execute(cur, record_claim, (lane_key, now, jid))
@@ -10014,14 +10038,19 @@ class Store:
         }
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                # locked_at answers "how long has a worker been on this", which a status of
+                # claimed_at answers "how long has a worker been on this". locked_at does NOT:
+                # touch_job rewrites it on every heartbeat, so it measures heartbeat recency and
+                # a job wedged for an hour reads as two minutes old. This comment used to claim
+                # the opposite, and two fields below were built on it. See the column's own note
+                # in _SCHEMA. NULL for rows claimed before v16 — reported as unknown, never
+                # backfilled from locked_at.
                 # 'running' cannot: a job claimed 40 seconds ago and one claimed at boot look
                 # identical without it. error_class and attempts answer "has this been failing",
                 # from the CLOSED ERROR_CLASS_VOCABULARY rather than the free-text last_error —
                 # this method is cross-user, and an error string can carry another tenant's
                 # filename, while a vocabulary term cannot.
                 "SELECT j.scan_id,j.type,j.status,j.created_at,j.updated_at,j.payload,"
-                "j.locked_at,j.error_class,j.attempts,"
+                "j.locked_at,j.claimed_at,j.error_class,j.attempts,"
                 "sr.owner_email,sr.source,sr.files,sr.files_done,sr.live_checkpoint "
                 "FROM jobs j JOIN scan_runs sr ON sr.id=j.scan_id "
                 "WHERE j.scan_id IN (SELECT DISTINCT scan_id FROM jobs "
@@ -10077,7 +10106,11 @@ class Store:
             if row.get("error_class") and not item["last_error_class"]:
                 item["last_error_class"] = row.get("error_class")
             if status == "running" and not item["current_job_started_at"]:
-                item["current_job_started_at"] = row.get("locked_at")
+                # The claim instant, or None. Never locked_at: that is the last heartbeat.
+                item["current_job_started_at"] = row.get("claimed_at")
+                # Kept, and now named for what it actually is, so the drawer can show lease
+                # freshness and run duration as the two different facts they are.
+                item["current_job_heartbeat_at"] = row.get("locked_at")
             if status == "running" and not item["current_file"]:
                 try:
                     payload = row.get("payload") or {}
@@ -10199,7 +10232,8 @@ class Store:
 
             if job["status"] == "running":
                 return {"available": True, "state": "claimed", "job_type": job["type"],
-                        "worker_assigned_at": job.get("locked_at"), "phase": job.get("phase"),
+                        "worker_assigned_at": job.get("claimed_at"),
+                        "worker_heartbeat_at": job.get("locked_at"), "phase": job.get("phase"),
                         "estimated_at": now}
 
             if job.get("run_after") and job["run_after"] > now:
