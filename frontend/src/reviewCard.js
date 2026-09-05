@@ -722,6 +722,28 @@ const _SCAFFOLD = {
 }
 export function authoringScaffold(sc) { return _SCAFFOLD[String(sc || '')] || null }
 
+// Natural, context-aware guidance sentence for WCAG 1.1.1 — replaces the terse static reason.
+// Returns a string for 1.1.1 findings; null for all other criteria (caller uses card.problem).
+// Deterministic: no model call. The premium-model path layers on top when a cloud provider is
+// configured and the card has a failed draft (future work).
+export function guidanceSentence(card) {
+  const c = card || {}
+  if (String(c.sc || '').trim() !== '1.1.1') return null
+  const ext = String(c.file || '').split('.').pop().toLowerCase()
+  const noun = ext === 'pptx' ? 'slide' : ext === 'xlsx' ? 'worksheet' : 'page'
+  const imgType = describedImageType(c)
+  const count = (proposalsOf(c).length || evidenceOf(c).length) || 1
+  const kindPhrase = imgType
+    ? `a${/^[aeiou]/i.test(imgType.label) ? 'n' : ''} ${imgType.label.toLowerCase()}`
+    : count > 1 ? `${count} images` : 'an image'
+  const hasDraft = proposalsOf(c).some((p) => (p?.proposed_value || '').trim())
+  return `This ${noun} has ${kindPhrase} that screen-reader users cannot perceive. ${
+    hasDraft
+      ? 'ACP drafted a description — review and approve it below.'
+      : 'ACP could not verify a grounded description — write what the image conveys.'
+  }`
+}
+
 // The WCAG exception a reviewer may APPLY on an images-of-text finding (1.4.5 / 1.4.9), routed by the
 // detected image KIND (#130 describedImageType — the model's own words, never guessed). The only
 // standard exemption here is a logotype / brand mark, so "Is this a logo?" is the right question for a

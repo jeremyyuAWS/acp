@@ -22,6 +22,13 @@ Only the first of the three consequences is cosmetic:
 The fix records the decision without executing — what execute=false already does, and what the
 route's own docstring calls "the honest half of the operation". It is deliberately narrow: a
 genuinely deleted Drive-backed document must still report that it no longer exists.
+
+SINCE EXECUTION LANDED, this file pins the half of that behaviour that survives it. A lifecycle
+candidate WITH a drive_file_id is now executed (see test_lifecycle_execution.py); the fixture
+here gives its inventory row none, on purpose, because "not Drive-backed" is the case that still
+has nothing to execute and must still record the decision rather than destroy it. The stated
+reason moved with the truth: the blocker is no longer "not represented in the governance layer",
+which is now resolvable, but that this particular row has no file id any connector could act on.
 """
 from __future__ import annotations
 import sys
@@ -64,6 +71,9 @@ def queued(isolated_store):
     with st._db.cursor() as cur:
         st._db.execute(cur, "INSERT INTO scan_runs(id,owner_email,status,source) VALUES(%s,%s,%s,%s)",
                        ("s1", OWNER, "discovered", "drive"))
+    # NO drive_file_id, deliberately: this is the candidate that cannot be executed even now,
+    # and the record-only outcome below is its contract rather than a stage everything passes
+    # through. A row WITH one is executed — test_lifecycle_execution.py covers that.
     st.add_inventory("s1", [{"file": "a.docx", "path": "/estate/a.docx", "owner": OWNER}])
     st.create_disposition_policy("retention", name="Retention", match="[]", action="archive",
                                  action_config="{}", requires_approval=True, enabled=True,
@@ -102,15 +112,24 @@ def test_the_reviewers_decision_survives(gated_client, queued):
 
 def test_the_response_says_plainly_that_nothing_was_executed(gated_client, queued):
     """The caller asked for execute=true and did not get it. A response identical to a real
-    execution would be the same lie in a politer form."""
+    execution would be the same lie in a politer form.
+
+    The REASON has to keep pace with what is actually true, which is the part that rots quietly:
+    "no governance-layer document" described a real blocker until the resolution existed, and
+    repeating it afterwards would send a reader looking for a gap that had been closed."""
     body = gated_client(OWNER).post("/disposition/approvals/aud-lifecycle/approve?execute=true").json()
     assert body["executed"] is False
-    assert "governance-layer document" in body["why_not_executed"]
+    assert "no Drive file id" in body["why_not_executed"]
+    assert "governance-layer" not in body["why_not_executed"], (
+        "the stated reason still names a blocker that no longer applies")
 
 
 def test_no_source_action_is_attempted(gated_client, queued, monkeypatch):
     """Recorded, not executed — so execute_action must not be reached at all. Without this the
-    test above passes on a route that tried to touch Drive and merely failed quietly."""
+    test above passes on a route that tried to touch Drive and merely failed quietly.
+
+    Still true with execution shipped, and it is the assertion that says why: a row with no Drive
+    id does not reach the connector at all, rather than reaching it and being turned away."""
     import disposition
     called = {"n": 0}
     real = disposition.execute_action

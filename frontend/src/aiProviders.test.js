@@ -25,8 +25,14 @@ describe('AI Providers settings — the key is never entered in the UI (ADR 0019
     expect(save).toMatch(/key_secret_ref:/)
     expect(save).not.toMatch(/\bapi_key\b/)
     expect(save).not.toMatch(/[^_]\bkey:/)          // no bare `key:` field in the payload
-    // explicit user-facing guarantee + a present/absent indicator, never the value
-    expect(s).toMatch(/key is never entered here/i)
+    // explicit user-facing guarantee + a present/absent indicator, never the value.
+    //
+    // This used to assert the sentence "the key is never entered here". That stopped being true
+    // when the Key Vault write-through shipped — and the test kept passing anyway, because the
+    // sentence still existed in a COMMENT above the panel. The load-bearing property was never
+    // "no key is typed"; it is "no key value reaches the database", which the assertions above
+    // (the config PUT carries only key_secret_ref) and below pin directly.
+    expect(s).toMatch(/never reaches the database/i)
     expect(s).toMatch(/key_present/)
     expect(s).toMatch(/reference name/i)
   })

@@ -7,12 +7,17 @@ deployment into one with roles:
     seed_builtin_roles()   put the six built-in roles into a tenant, idempotently
     migrate_people()       give every existing person the role PRD §15 maps them to
 
-THE FLAG IS OFF BY DEFAULT AND THAT IS A SECURITY DECISION, not caution about polish. Seeding and
-migrating are safe (they only write rows nothing reads yet); ENFORCEMENT is what changes who can
-do what, and it arrives in later slices behind the same flag. api/core.py already carries the
-lesson in TEST_BYPASS_ENABLED's comment: a control must not depend on a variable being absent.
-Here the same rule points the other way round — the feature is the new thing, so its ABSENCE must
-leave today's behaviour exactly as it is.
+THE ROLLOUT IS OFF BY DEFAULT AND THAT IS A SECURITY DECISION, not caution about polish. Seeding
+and migrating are safe (they only write rows nothing reads yet); ENFORCEMENT is what changes who
+can do what. api/core.py already carries the lesson in TEST_BYPASS_ENABLED's comment: a control
+must not depend on a variable being absent. Here the same rule points the other way round — the
+feature is the new thing, so its ABSENCE must leave today's behaviour exactly as it is.
+
+SINCE SLICE 6 THERE ARE FOUR STATES, NOT TWO. api/workspace_rollout.py owns the ladder
+(off → observe → navigation → enforce) and this module asks it rather than reading an environment
+variable directly. The distinction that matters here: `rbac_enabled()` means the SERVER REFUSES,
+and rollout.navigation_active() — true one rung lower — means a role's tabs govern what the SPA
+shows. access_for_email below turns on the second, not the first.
 
 MIGRATION MUST NOT REMOVE ACCESS (PRD §15). An existing standard user becomes a Compliance
 Manager, not a Viewer, because today every admitted user sees every workflow tab (core.py's
@@ -22,18 +27,30 @@ having seen the generated assignments.
 """
 from __future__ import annotations
 
-import os
-
 import workspace_rbac as rbac
+import workspace_rollout as rollout
 
 # Explicit opt-in, matching api/core.py's idiom. Read at call time rather than captured at import
 # so a test can set it without reloading the module — and so a deployment that flips the variable
 # does not need a different process to notice.
-FLAG = "ACP_WORKSPACE_RBAC_ENABLED"
+#
+# SLICE 6 SPLIT THIS IN TWO, and the split is the point of that slice. This variable is now the
+# TOP rung of api/workspace_rollout.py's ladder rather than the whole feature: setting it still
+# means "enforce", exactly as before, but `ACP_WORKSPACE_RBAC_MODE` can also select the observe
+# and navigation rungs in between. Ask rollout.* for the state; FLAG stays here because it is the
+# name a deployed environment already carries.
+FLAG = rollout.LEGACY_VAR
 
 
 def rbac_enabled() -> bool:
-    return os.environ.get(FLAG, "").strip().lower() in ("1", "true", "yes", "on")
+    """Is the SERVER refusing? The narrow question, and the only one this name ever meant.
+
+    Kept as a name because callers and tests use it; delegated so there is one ladder rather than
+    two ideas of what "enabled" means. Code that wants "do a role's tabs govern the navigation?"
+    must ask rollout.navigation_active() — that is true one rung lower, and conflating the two is
+    how a stage stops being a stage.
+    """
+    return rollout.enforcement_active()
 
 
 def tenant_id_for(owner_email: str | None) -> str:
@@ -109,8 +126,14 @@ def assign_role(store, *, email: str, role_id: str, actor: str | None = None) ->
     previous = (current or {}).get(ROLE_FIELD)
     record = store.upsert_person({"email": target, ROLE_FIELD: role_id,
                                   ASSIGNED_BY_FIELD: actor, ASSIGNED_AT_FIELD: now})
-    store.log_decision(actor or "system", "role.assigned",
-                       detail=f"{target} · {previous or 'none'} → {role_id}")
+    # PRD §12 asks for `role.assigned` AND `role.unassigned`, and they are not the same event to
+    # somebody reading the log: assigning is a grant, removing the last role is a REVOCATION, and
+    # an auditor scanning for revocations should not have to notice that the arrow on an
+    # `role.assigned` row happens to point at "none". Recorded under the action that names what
+    # happened, with both values either way.
+    action = "role.unassigned" if not role_id else "role.assigned"
+    store.log_decision(actor or "system", action,
+                       detail=f"{target} · {previous or 'none'} → {role_id or 'none'}")
     return record
 
 
@@ -187,7 +210,7 @@ def migrate_people(store, *, tenant_id: str, owner_email: str | None,
 
 # ── resolving one identity's access (PRD §13) ─────────────────────────────────
 
-def _legacy_access() -> tuple[dict[str, str], frozenset[str]]:
+def legacy_access() -> tuple[dict[str, str], frozenset[str]]:
     """What every admitted user has TODAY, before this feature enforces anything.
 
     Every governed tab at Operate and every capability, because that is the truth about ACP as it
@@ -252,23 +275,55 @@ def access_for_email(store, email: str | None, *, owner_email: str | None,
     #    grant the role back.
     owner = (owner_email or "").strip().lower()
     if owner and who == owner:
-        tabs, caps = _legacy_access()
+        tabs, caps = legacy_access()
         return {"role": role or {"id": rbac.OWNER, "name": "Owner"},
                 "tabs": rbac.tabs_payload(tabs), "capabilities": sorted(caps),
-                "version": version, "enforced": rbac_enabled(), "owner": True}
+                "version": version, "enforced": rollout.navigation_active(), "owner": True,
+                "mode": rollout.mode()}
 
-    # 2. Off means off. Nothing about anyone's access changes until an operator says so.
-    if not rbac_enabled():
-        tabs, caps = _legacy_access()
-        would = _stored_access(store, tenant_id=tenant, role_id=role_id) if role_id else None
-        calculated = ({"tabs": rbac.tabs_payload(would[0]), "capabilities": sorted(would[1])}
-                      if would else {"tabs": rbac.tabs_payload({}), "capabilities": []})
+    # 2. Below the `navigation` rung, nothing about anyone's access changes. That covers BOTH
+    #    `off` and `observe` (PRD §15 step 1: "calculate roles but preserve current access"), and
+    #    the `calculated` block below is what makes observe worth running — it is the calculation,
+    #    served next to the access it has not yet replaced.
+    if not rollout.navigation_active():
+        tabs, caps = legacy_access()
+        # THE PREVIEW IS THE REAL DECISION, RUN. Not a second implementation of it — the same
+        # function, called with the same arguments it will be called with when the rung advances.
+        #
+        # It was a second implementation until slice 6, and it was WRONG in the one direction that
+        # matters: it read only the assigned role, so an UNASSIGNED person previewed as "loses
+        # everything" when enforcement would in fact hand them the default Platform User role.
+        # An operator reading that preview would have seen a workspace-wide lockout that was never
+        # going to happen, and either abandoned the rollout or gone assigning roles nobody needed.
+        # A preview that can differ from the thing it previews is worse than no preview, because
+        # it is believed.
+        would = _enforced_decision(store, who, tenant=tenant, role_id=role_id, role=role,
+                                   version=version, is_suspended=is_suspended)
+        calculated = {"tabs": would["tabs"], "capabilities": would["capabilities"],
+                      "role": would.get("role")}
         return {"role": role, "tabs": rbac.tabs_payload(tabs), "capabilities": sorted(caps),
                 "version": version, "enforced": False, "owner": False,
-                "calculated": calculated}
+                "mode": rollout.mode(), "calculated": calculated}
 
-    # 3/4. Enforcing. A suspended user has no effective permissions (PRD §14) and is checked
-    #      before the role, because a suspended person may still carry a perfectly valid one.
+    decision = _enforced_decision(store, who, tenant=tenant, role_id=role_id, role=role,
+                                  version=version, is_suspended=is_suspended)
+    decision["mode"] = rollout.mode()
+    return decision
+
+
+def _enforced_decision(store, who: str, *, tenant: str, role_id: str | None, role: dict | None,
+                       version: int, is_suspended=None) -> dict:
+    """What this person may do WHEN THE RULES APPLY — steps 3 and 4 of access_for_email's order.
+
+    Split out of that function in slice 6 for one reason: observe mode has to be able to ask this
+    question WITHOUT acting on the answer, and the only preview worth trusting is the decision
+    itself. See the call site above for what the duplicated version got wrong.
+
+    Deliberately does NOT consult the rollout rung. The caller decides whether this answer is
+    binding; this function only computes it, which is what makes it safe to run a stage early.
+    """
+    # A suspended user has no effective permissions (PRD §14) and is checked before the role,
+    # because a suspended person may still carry a perfectly valid one.
     if is_suspended and is_suspended(who):
         return {"role": role, "tabs": rbac.tabs_payload({}), "capabilities": [],
                 "version": version, "enforced": True, "owner": False}
@@ -335,6 +390,34 @@ def access_for_email(store, email: str | None, *, owner_email: str | None,
             "version": version, "enforced": True, "owner": False}
 
 
+def planned_access(store, email: str | None, *, owner_email: str | None,
+                   is_suspended=None) -> dict:
+    """What this person WOULD have under enforcement, whatever rung the rollout is on.
+
+    The public form of _enforced_decision, for the preflight report — which has to answer "who
+    loses access if I advance?" while the answer is still hypothetical. access_for_email cannot
+    serve that: below `navigation` it correctly returns today's access, which is the question
+    already answered.
+
+    The owner is short-circuited here exactly as they are there. Reporting the owner as losing
+    access would be false — the carve-out returns before any of this — and a false alarm on the
+    one person who cannot be locked out is the kind of noise that gets a whole report ignored.
+    """
+    who = (email or "").strip().lower()
+    owner = (owner_email or "").strip().lower()
+    tenant = tenant_id_for(owner_email)
+    if owner and who == owner:
+        tabs, caps = legacy_access()
+        return {"role": {"id": rbac.OWNER, "name": "Owner"}, "tabs": rbac.tabs_payload(tabs),
+                "capabilities": sorted(caps), "version": 0, "enforced": True, "owner": True}
+    role_id = role_id_for_email(store, who)
+    row = store.get_workspace_role(tenant_id=tenant, role_id=role_id) if role_id else None
+    role = {"id": role_id, "name": (row or {}).get("name") or role_id} if role_id else None
+    return _enforced_decision(store, who, tenant=tenant, role_id=role_id, role=role,
+                              version=int((row or {}).get("version") or 0),
+                              is_suspended=is_suspended)
+
+
 def bootstrap(store, *, owner_email: str | None, actor: str | None = None,
               dry_run: bool = False) -> dict:
     """Seed the built-in roles and migrate existing people, in that order.
@@ -349,4 +432,4 @@ def bootstrap(store, *, owner_email: str | None, actor: str | None = None,
     plan = migrate_people(store, tenant_id=tenant, owner_email=owner_email, actor=actor,
                           dry_run=dry_run)
     return {"tenant_id": tenant, "roles_created": created, "assignments": plan,
-            "dry_run": dry_run, "enabled": rbac_enabled()}
+            "dry_run": dry_run, "enabled": rbac_enabled(), "rollout": rollout.describe()}

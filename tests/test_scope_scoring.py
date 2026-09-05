@@ -96,3 +96,16 @@ def test_scope_for_file_noop_without_rules(st):
     st.add_inventory("s1", [{"file": "a.docx", "path": "a.docx"}])
     g = st.get_scan_scope("s1")
     assert st.scope_for_file("s1", "a.docx", g) is g   # no frozen rules → global untouched
+
+
+def test_scope_for_file_matches_sharepoint_content_type(st):
+    rules = [{"rule_id": "r1", "selector": "content_type", "value": "Policy",
+              "codes": ["1.4.3"], "priority": 0, "is_override": False, "enabled": True}]
+    _freeze(st, "s1", {"1.1.1": ["docx"], "1.4.3": ["docx", "pdf"]}, rules)
+    st.add_inventory("s1", [
+        {"file": "policy.docx", "path": "policy.docx", "content_type": "Policy"},
+        {"file": "report.docx", "path": "report.docx", "content_type": "Report"},
+    ])
+    g = st.get_scan_scope("s1")
+    assert set(st.scope_for_file("s1", "policy.docx", g)) == {"1.4.3"}
+    assert st.scope_for_file("s1", "report.docx", g) is g

@@ -20,6 +20,8 @@ coverage number this corpus exists to report honestly.
     1.3.3   a sensory-only instruction, in a cell        textchecks.detect_sensory
     4.1.2   an embedded form control (same fixture)      office_control_review_checks
     ----    confirmed only where the .NET analyser is built (DECLARED_ENGINE) ----
+    1.3.1   a table part with headerRowCount=0            .NET TableHeaderRule
+    1.3.2   a hidden row that still holds data            .NET HiddenContentRule
     2.4.2   no dc:title in the core properties           XLSX-TITLE-001
     3.1.1   no dc:language in the core properties        XLSX-LANG-001
 
@@ -109,6 +111,24 @@ def _say(ws, ref: str, text: str, *, colour: str = INK, fill: str = PAPER):
     ws[ref].fill = PatternFill("solid", fgColor=fill)
 
 
+def _revenue_table(ws, *, header_rows: int):
+    """A real Excel table part over three rows, with the header row declared or not.
+
+    A TABLE PART, NOT A RANGE OF CELLS. TableHeaderRule walks
+    `worksheetPart.TableDefinitionParts` — a block of cells that merely looks like a table has no
+    part for it to find, and a fixture built that way would declare the pair and detect nothing.
+    """
+    from openpyxl.worksheet.table import Table, TableStyleInfo
+    for ref, value in (("A1", "Region"), ("B1", "Revenue"),
+                       ("A2", "North"), ("B2", "412"),
+                       ("A3", "South"), ("B3", "388")):
+        _say(ws, ref, value)
+    table = Table(displayName="Revenue", ref="A1:B3", headerRowCount=header_rows)
+    table.tableStyleInfo = TableStyleInfo(name="TableStyleMedium9", showRowStripes=True)
+    ws.add_table(table)
+    return table
+
+
 # A 1x1 PNG, inline. Keeps a binary asset out of the repo — the fixture needs an image to embed,
 # not a picture of anything, and a file whose provenance a reviewer has to take on trust is
 # exactly what a generated corpus avoids.
@@ -194,9 +214,23 @@ def f_link_descriptive_ok(wb, ws):
 # ── 2.4.6 Headings and Labels ────────────────────────────────────────────────────
 
 def f_default_sheet_tabs(wb, ws):
+    """AN EMPTY EXTRA SHEET IS ALSO A 1.3.2 VIOLATION, which is why these sheets carry a cell.
+
+    BlankWorksheetRule raises 1.3.2 on any VISIBLE sheet with no cell content and no anchored
+    drawing. Both sheet-tab fixtures created bare extra sheets, so under the analyser each carried
+    an undeclared 1.3.2 alongside the 2.4.6 it declares — and the adversarial one carried it too,
+    which is worse: a control that fires is not a control.
+
+    Nothing here caught it, because 1.3.2 was not declared and no first-party detector reports it.
+    The sweep that found it (test_no_fixture_carries_an_undeclared_engine_finding) is the same one
+    that caught `title-empty` on pptx 2.4.2, run before declaring the pair rather than after.
+
+    A cell per sheet fixes it without touching what the fixture is about: these are about the TAB
+    NAMES, and the content is incidental.
+    """
     ws.title = "Sheet1"
-    wb.create_sheet("Sheet2")
-    wb.create_sheet("Sheet3")
+    _say(wb.create_sheet("Sheet2"), "A1", "Headcount by region")
+    _say(wb.create_sheet("Sheet3"), "A1", "Planning assumptions")
     _say(ws, "A1", "Regional totals")
     return {"2.4.6": "REVIEW"}, "three default SheetN tabs — the structure labels say nothing"
 
@@ -211,8 +245,8 @@ def f_one_default_tab_ok(wb, ws):
 
 def f_named_tabs_ok(wb, ws):
     ws.title = "Regional totals"
-    wb.create_sheet("Headcount")
-    wb.create_sheet("Assumptions")
+    _say(wb.create_sheet("Headcount"), "A1", "Headcount by region")
+    _say(wb.create_sheet("Assumptions"), "A1", "Planning assumptions")
     _say(ws, "A1", "Regional totals")
     return {"2.4.6": "REVIEW"}, "three named tabs — must not be flagged (adversarial)"
 
@@ -347,6 +381,61 @@ def f_no_document_language(wb, ws):
 def f_document_language_ok(wb, ws):
     _say(ws, "A1", "Quarterly revenue summary for the finance committee")
     return {"3.1.1": "PASS"}, f"language set to {DOC_LANG!r} (adversarial)"
+
+
+# ── 1.3.1 Info and Relationships and 1.3.2 Meaningful Sequence — ENGINE-VERIFIED too ──
+# Xlsx/Rules/TableHeaderRule.cs and Xlsx/Rules/HiddenContentRule.cs. Both certifying pairs, so a
+# false clean result is a certification rather than an advisory — the same reason 2.4.2 and 3.1.1
+# were worth the DECLARED_ENGINE asymmetry.
+#
+# 1.3.2 HAS THREE RULES BEHIND IT, NOT ONE, and that shapes both the fixture and the sweep:
+#
+#   HiddenContentRule    a hidden row or column holding non-blank data
+#   MergedCellsRule      more than 20 merged ranges on a sheet
+#   BlankWorksheetRule   a VISIBLE sheet with no cell content and no anchored drawing
+#
+# The fixture uses the hidden row because it is the one precise trigger of the three: >20 merges
+# is a threshold a fixture would sit near rather than on, and a blank sheet changes the shape of
+# the workbook. But the SWEEP has to check all three, because a fixture only has to trip one of
+# them to carry an undeclared finding — and two already did (see f_default_sheet_tabs).
+#
+# 1.3.1 reads a real Excel TABLE part, not a range of cells: TableDefinitionPart with
+# HeaderRowCount == 0. An absent attribute means 1, so the violation needs an explicit zero.
+
+def f_table_no_header(wb, ws):
+    _revenue_table(ws, header_rows=0)
+    return ({"1.3.1": "FAIL"},
+            "a table part with headerRowCount=0 — no column context for a screen reader")
+
+
+def f_table_header_ok(wb, ws):
+    _revenue_table(ws, header_rows=1)
+    return ({"1.3.1": "PASS"},
+            "the same table with its header row declared (adversarial)")
+
+
+def f_hidden_row(wb, ws):
+    _say(ws, "A1", "Region")
+    _say(ws, "B1", "Revenue")
+    _say(ws, "A2", "North")
+    _say(ws, "B2", "412")
+    _say(ws, "A3", "South")
+    _say(ws, "B3", "388")
+    ws.row_dimensions[3].hidden = True
+    return ({"1.3.2": "FAIL"},
+            "a hidden row that still holds data — present in the file, absent from the reading "
+            "sequence")
+
+
+def f_hidden_row_ok(wb, ws):
+    _say(ws, "A1", "Region")
+    _say(ws, "B1", "Revenue")
+    _say(ws, "A2", "North")
+    _say(ws, "B2", "412")
+    _say(ws, "A3", "South")
+    _say(ws, "B3", "388")
+    return ({"1.3.2": "PASS"},
+            "the same rows with none of them hidden (adversarial)")
 
 
 # ── 1.3.3 Sensory Characteristics — decided by the prose, not the workbook ──────
@@ -535,6 +624,10 @@ FIXTURES = [
     ("shape-strong-outline-ok", f_shape_strong_outline_ok, "adversarial"),
     ("form-control",         f_form_control,           "violation"),
     ("no-controls-ok",       f_no_controls_ok,         "adversarial"),
+    ("table-no-header",      f_table_no_header,        "violation"),
+    ("table-header-ok",      f_table_header_ok,        "adversarial"),
+    ("hidden-row",           f_hidden_row,             "violation"),
+    ("hidden-row-ok",        f_hidden_row_ok,          "adversarial"),
 ]
 
 # The criteria this corpus declares. Kept explicit so gen_fixture_coverage and the tests agree
@@ -547,7 +640,7 @@ DECLARED = ("1.1.1", "1.3.3", "1.4.1", "1.4.11", "1.4.3", "1.4.5", "2.1.2", "2.4
 # meaning: DECLARED is "a detector was driven against this fixture anywhere the suite runs",
 # and merging the two would quietly make the coverage column mean two different things in the
 # same row. gen_fixture_coverage counts both and reports the split.
-DECLARED_ENGINE = ("2.4.2", "3.1.1")
+DECLARED_ENGINE = ("1.3.1", "1.3.2", "2.4.2", "3.1.1")
 
 
 def _validate(name: str, expectations: dict[str, str]) -> list[str]:

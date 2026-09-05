@@ -56,34 +56,51 @@ don't just generate text.
 
 ## P1 — auto-escalation + copilot rewriting (needs the gateway + the refine palette)
 
-- [ ] **Auto-escalation before the card is shown.** Wire the existing `describe_image_structured`
-  escalation (local → cloud when a customer provider is configured) into the **assess-time batch
-  pre-draft** path, so "manual authoring required" becomes rare. Card shows the transparent numbered
-  path ("✓ local attempted → no grounded description → escalated to {provider} → grounded"), never
-  the failed attempt as a dead end.
-- [ ] **One-click "Improve" palette** (extend the #131 refine, which already has Shorter / More
-  detail / Regenerate): add **Mention the numbers · Ignore colours · Professional tone · Plain
-  language**. Local model handles these today; premium models when configured.
-- [ ] **LLM-written guidance instead of the terse system string.** Replace "No faithful alt-text
-  source in the document…" with a natural, generated sentence: "This slide has a comparison chart
-  that screen-reader users currently can't perceive. ACP couldn't verify a grounded description, so
-  it needs your wording." (Deterministic template first; premium-model phrasing when available.)
-- [ ] **Empty-state honesty tie-in.** When escalation is OFF and local produced nothing, the card
-  says *why* it's manual (not "Ollama not running") and links the admin to enable a governed cloud
-  provider (Settings → AI Providers).
+- [x] **Auto-escalation before the card is shown.** *(shipped #1292)* Wired the existing
+  `describe_image_structured` escalation (local → cloud when a customer provider is configured) into
+  the **assess-time batch pre-draft** path, so "manual authoring required" becomes rare. Card shows
+  the transparent numbered path ("✓ local attempted → no grounded description → escalated to
+  {provider} → grounded"), never the failed attempt as a dead end.
+- [x] **One-click "Improve" palette** *(shipped #1294)* — Shorter / More detail / Regenerate already
+  in `ProposalEditors.jsx`; added **Mention the numbers · Ignore colours · Professional tone · Plain
+  language**. `ai.py` maps all seven steer keys to distinct vision prompts; unknown keys fall back to
+  the default prompt, not an error. Local model handles these today; premium models when configured.
+- [x] **LLM-written guidance instead of the terse system string.** *(shipped #1296)* `guidanceSentence(card)`
+  in `reviewCard.js` replaces "No faithful alt-text source in the document…" with a natural sentence:
+  noun from file extension (slide/worksheet/page), image kind from `describedImageType`, draft status
+  from proposals. "This slide has a comparison chart that screen-reader users cannot perceive. ACP
+  drafted a description — review and approve it below." Deterministic; no model call.
+- [x] **Empty-state honesty tie-in.** *(shipped — `emptyStateHonesty.test.jsx` + `EvidenceCard.jsx` #403-435)*
+  `manualCloudHint` shows when `draftFailed && !escalation && cloudStatus !== null`. Two honest
+  branches: cloud enabled but couldn't ground → names the provider; no cloud configured → links
+  admin to Settings → AI Providers. Fetched lazily via `loadAiModels` (module-cached; one
+  `/ai/status` call for the whole inbox).
 
 ## P2 — visual evidence + premium-model copilot (the differentiators)
 
-- [ ] **Describe THIS image, not the whole slide.** Use ADR 0018 shape geometry to crop/bounding-box
-  the specific flagged image on the slide render (the card currently shows the whole slide at page
-  size). Add zoom + "open slide". Label it "Describe this chart."
-- [ ] **"Help me" copilot (premium models).** A button that returns *guidance*, not another alt
-  draft: "This chart compares compliance scores across departments — focus on the trend, not the
-  colours." A better use of Claude/GPT than a second text generator. Requires a customer cloud
+- [x] **Describe THIS image, not the whole slide.** *(ADR 0018 Slices 2–3 shipped; zoom label
+  context-aware via #1299)* `Thumbnail.jsx` fetches per-shape geometry via `getFileGeometry`, draws a
+  red overlay on the exact object, renders that object's own page, and offers a CSS-crop close-up
+  toggle. `EvidenceCard.jsx` passes `kindLabel={imgKind?.label?.toLowerCase()}` so the toggle reads
+  "⤢ Zoom to chart" / "Hide chart" instead of generic text. **Remaining sub-item:** "Open slide"
+  deep-link (source file + page anchor) — **shipped**: `GET /scans/{id}/files/{f}/source_link?page=N`
+  returns `{url, label}` for Drive (constructed from stored `drive_file_id`) and SharePoint (live
+  Graph call with caller-supplied `x-sp-token`, `?web=1&slide=N` appended for pptx), `{url:null}`
+  for local uploads. `EvidenceCard.jsx` renders "↗ Open in Drive/SharePoint" anchor beneath the
+  hero thumbnail when `url` is non-null.
+- [x] **"Help me" copilot (premium models).** *(shipped #1301)* A "✨ Help me understand this image"
+  button on 1.1.1 evidence-only cards (gated on `cloudEnabled`): calls `GET /ai/copilot` →
+  `copilot_guidance()` in `ai.py` (cloud-only, traces via `_trace_ai("copilot", ...)`), returns
+  1–2 sentences of interpretive guidance rendered in a clearly-distinct italic callout ("AI
+  guidance — not a draft"). Never writes to the proposal value. Cloud status fetched eagerly for
+  these cards so the button appears without a prior draft failure. Requires a customer cloud
   provider (BYOAI) — governed, opt-in, provenance-logged.
-- [ ] **Reviewer-behaviour → automation-mode migration.** Feed HITL edit-rate / acceptance
-  (`hitl_events`) back so a criterion with consistently low edit-distance surfaces as ready to move
-  Human-Assisted → AI-Assisted (ties to the automation maturity funnel + ADR 0019 §8.5).
+- [x] **Reviewer-behaviour → automation-mode migration.** *(shipped #1302)* `hitl_analytics()` now
+  SELECTs `ai_value`/`final_value` and computes `avg_edit_distance` (normalised difflib SequenceMatcher
+  ratio) per rule. Rules that meet all three thresholds (≥10 approvals, ≤20% edit rate, ≥90% approval
+  rate) are flagged `ready_to_promote: true` in `by_rule` and listed in top-level `promotable_rules`.
+  `Remediate.jsx` renders a "↑ {rule} ready for AI-Assisted" chip with a tooltip pointing to
+  Settings → Automation. ADR 0019 §8.5 — no fabricated score, only real reviewer-decision counts.
 
 ## Dependency — unblocks P1/P2 premium-model items (ADR 0019 Phase 2)
 

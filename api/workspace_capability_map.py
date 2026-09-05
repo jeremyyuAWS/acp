@@ -60,6 +60,10 @@ _map_many([
     ("GET", "/sources"), ("GET", "/sources/locations"), ("GET", "/folders"),
     ("GET", "/sharepoint/sites"), ("GET", "/sharepoint/folders"),
     ("GET", "/sharepoint/sites/{site_id:path}/drives"),
+    # Reading a tenant's onboarding readiness is the same right as reading its sites: it names
+    # which permissions this sign-in carries and which metadata the tenant will answer, and it
+    # issues nothing but the bounded read-only probes the picker beside it already makes.
+    ("GET", "/sharepoint/readiness"),
     ("GET", "/drive/folder-name"), ("GET", "/drive/adc-scopes"),
 ], _SOURCES_READ)
 # Changing where ACP looks is `sources.manage` (PRD §5), not merely seeing the tab.
@@ -76,7 +80,8 @@ _map_many([
     ("GET", "/scans/{sid}/timeline"), ("GET", "/scans/{sid}/timings"),
     ("GET", "/scans/{sid}/manifest"), ("GET", "/scans/{sid}/digest"),
     ("GET", "/scans/{sid}/inventory"), ("GET", "/scans/{sid}/inventory-diff"),
-    ("GET", "/scans/{sid}/inventory.csv"), ("GET", "/scans/{sid}/source-status"),
+    ("GET", "/scans/{sid}/inventory.csv"), ("GET", "/scans/{sid}/exceptions.csv"),
+    ("GET", "/scans/{sid}/source-status"),
     ("GET", "/scans/{sid}/queue-estimate"), ("GET", "/scans/{sid}/pii"),
     ("GET", "/scans/jobs/{job_id}"), ("GET", "/scans/{sid}/comment-counts"),
     ("GET", "/scans/{sid}/comments"), ("GET", "/decisions"), ("GET", "/scans/{sid}/decisions"),
@@ -120,12 +125,18 @@ _map_many([
     ("GET", "/scans/{scan_id}/files/{filename:path}/thumbnail"),
     ("GET", "/scans/{scan_id}/files/{filename:path}/page/{page}"),
     ("GET", "/scans/{scan_id}/files/{filename:path}/geometry"),
+    ("GET", "/scans/{scan_id}/files/{filename:path}/source_link"),
     ("GET", "/scans/{scan_id}/files/{filename:path}/heading-outline"),
     ("GET", "/scans/{scan_id}/files/{filename:path}/table-structure"),
     ("GET", "/scans/{scan_id}/files/{filename:path}/verify-contrast"),
     ("GET", "/scans/{scan_id}/files/{filename:path}/verify-resize"),
     ("GET", "/scans/{scan_id}/files/{filename:path}/verify-pdf-contrast"),
+    ("GET", "/scans/{scan_id}/files/{filename:path}/dispositions"),
+    ("GET", "/scans/{scan_id}/files/{filename:path}/scanned-layout"),
 ], _ASSESS_READ)
+_map_many([
+    ("POST", "/scans/{scan_id}/files/{filename:path}/dispose"),
+], {"assess.run"})
 # The rubric is what "compliant" MEANS. Reading it is part of assessing; changing it is a
 # platform-configuration act, which is why it sits behind Settings rather than Assess.
 _map_many([("GET", "/rubric")], _ASSESS_READ)
@@ -138,7 +149,13 @@ _map_many([
     ("POST", "/scans/{sid}/files/{filename:path}/undo-fix"),
 ], {"remediate.run"})
 _map_many([
-    ("GET", "/scans/{sid}/remediation-status"), ("GET", "/scans/{sid}/remediation-diffs"),
+    ("GET", "/scans/{sid}/remediation-status"),
+    # The reconciled run snapshot reads the same run as remediation-status and carries strictly
+    # more of it — filenames, SharePoint site and library names, the run's own state — so it takes
+    # the same capability. Anything narrower would let the summary be read where the detail it
+    # summarises cannot be.
+    ("GET", "/scans/{sid}/remediation/snapshot"),
+    ("GET", "/scans/{sid}/remediation-diffs"),
     ("GET", "/scans/{sid}/files/{filename:path}/remediation-diffs"),
     ("GET", "/scans/{sid}/files/{filename:path}/remediation-state"),
     ("GET", "/scans/{sid}/applied-fixes"), ("GET", "/scans/{sid}/diff"),
@@ -153,7 +170,8 @@ _map_many([
     ("POST", "/hitl/queue/{scan_id}/auto"), ("POST", "/hitl/queue/{scan_id}/verify"),
 ], {"remediate.review"})
 # AI drafting assists a reviewer; it writes nothing to a document on its own.
-_map_many([("GET", "/ai/suggest"), ("GET", "/ai/explain"), ("GET", "/ai/validate")],
+_map_many([("GET", "/ai/suggest"), ("GET", "/ai/explain"), ("GET", "/ai/validate"),
+           ("GET", "/ai/copilot")],
           {"remediate.review", "remediate.run"})
 
 # ── Release ───────────────────────────────────────────────────────────────────
@@ -169,6 +187,7 @@ _map_many([("PUT", "/schedule")], {"monitor.view", "settings.view"})
 # ── Live Operations ───────────────────────────────────────────────────────────
 _map_many([("GET", "/admin/activity"), ("GET", "/jobs"), ("GET", "/jobs/{job_id}"),
            ("GET", "/control/estate"), ("GET", "/control/workers/capacity"),
+           ("GET", "/control/costs"),
            ("GET", "/control/workers/replicas"), ("GET", "/control/workers/revisions")],
           {"operations.view"})
 _map_many([("POST", "/admin/jobs/clear-dead"), ("PATCH", "/control/workers/replicas")],
@@ -180,7 +199,8 @@ _map_many([("GET", "/admin/analytics/overview"), ("GET", "/ai/costs")], {"analyt
 # ── Settings and platform administration ──────────────────────────────────────
 _map_many([("GET", "/settings"), ("GET", "/ai/providers"), ("GET", "/ai/status")],
           {"settings.view"})
-_map_many([("PUT", "/settings"), ("PUT", "/ai/providers"), ("POST", "/ai/providers/test")],
+_map_many([("PUT", "/settings"), ("PUT", "/ai/providers"), ("POST", "/ai/providers/test"),
+           ("POST", "/ai/providers/{provider}/secret")],
           {"settings.view"})
 _map_many([("PUT", "/workers")], {"workers.manage"})
 _map_many([("GET", "/admin/people"), ("GET", "/admin/allowlist"), ("GET", "/admin/admins")],
@@ -196,6 +216,7 @@ _map_many([
     ("GET", "/admin/roles"), ("GET", "/admin/roles/{role_id}"), ("GET", "/admin/capabilities"),
     ("POST", "/admin/roles"), ("PUT", "/admin/roles/{role_id}"),
     ("DELETE", "/admin/roles/{role_id}"), ("POST", "/admin/workspace-roles/bootstrap"),
+    ("GET", "/admin/workspace-roles/preflight"),
 ], {"roles.manage"})
 # Wiping the workspace is the most destructive action ACP has; it stays owner-only at the route
 # (_require_owner) and is additionally mapped here so it can never be reached by a role.

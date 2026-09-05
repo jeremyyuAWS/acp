@@ -269,6 +269,19 @@ def _remediation_scope(filename: str, scan_id: str):
         return None
 
 
+def _remediation_fix_scope(filename: str, scan_id: str, failing_auto_rules):
+    """Gate mutations by both frozen policy scope and Assessment evidence.
+
+    Scan scope says what ACP may inspect; it does not say every criterion failed. Previously a
+    PDF with one auto-fixable failure still traversed every document-wide fixer allowed by that
+    broad scope. Only criteria that Assessment observed failing in deterministic ``auto`` mode
+    are eligible to mutate here. An empty/unavailable evidence list permits no mutation.
+    """
+    configured = _remediation_scope(filename, scan_id)
+    eligible = frozenset(str(rule) for rule in (failing_auto_rules or ()) if rule)
+    return lambda sc: sc in eligible and (configured is None or bool(configured(sc)))
+
+
 def _verify_residual(fixed_bytes: bytes, filename: str):
     """Re-scan the remediated bytes and return a `proposals.Verification` — verified-cleared,
     verified-still-failing, or COULD-NOT-VERIFY. Delegates to the single shared implementation
@@ -576,6 +589,28 @@ def _enqueue_proposals(scan_id: str, filename: str, sc: str, rule_name: str,
     except Exception:
         swallowed("_enqueue_proposals: store.enqueue_proposals failed — EVERY proposal for this (file, "
                    "criterion) is lost, and the reviewer sees a document with no suggested fixes", scan_id)
+        return
+    # ADR 0041 auto-apply gate: skip human review for Group A SCs whose fix was already written
+    # inline AND confirmed by structural re-scan (validated=True). The gate is at this choke
+    # point because every proposal for every SC passes through here — one gate, not one per caller.
+    if validated and sc in {"2.4.4", "2.4.9", "4.1.2"}:
+        try:
+            item_id = core.store.auto_approve_proposals(scan_id, filename, sc)
+            if item_id:
+                core.store.log_decision(
+                    "system", "hitl.auto_approved", scan_id=scan_id, file=filename,
+                    detail=f"{sc}: validated fix auto-approved by ADR 0041 gate (no human review)")
+                try:
+                    if core.store.mark_file_compliant_if_reviewed(scan_id, filename):
+                        core.store.log_decision(
+                            "system", "revalidate.certified", scan_id=scan_id, file=filename,
+                            detail="all findings resolved — certified & advanced to Publish "
+                                   "(ADR 0041 auto-approve)")
+                except Exception:
+                    swallowed("_enqueue_proposals: certify after auto-approve failed", scan_id)
+        except Exception:
+            swallowed("_enqueue_proposals: ADR 0041 auto-approve gate failed — "
+                      "proposal stays pending for human review", scan_id)
 
 
 # Media extensions the remediation lane admits. A SUBSET of scan_formats' "av" list, and
@@ -621,11 +656,14 @@ def _propose_media_captions(scan_id: str, filename: str, drive_file_id: str,
     import tempfile
     from pathlib import Path as _P
 
-    token = payload.get("drive_token") or core.get_scan_tokens(scan_id).get("drive")
-    if not token:
-        raise FatalJobError("no Drive token for this scan (expired/restarted) — re-trigger")
+    # Through the same source dispatch as the document lane: a local or SharePoint media file
+    # reads the bytes Assess cached, and only a Drive job asks for a Drive token. This branch
+    # used to demand one unconditionally, so the caption draft for a SharePoint (or local)
+    # recording died on a token that source never had.
     try:
-        data = _drive_client(token).files().get_media(fileId=drive_file_id).execute()
+        data, _svc = _remediation_source_bytes(scan_id, filename, payload, drive_file_id)
+    except FatalJobError:
+        raise          # no bytes and no way to get them — the job's own failure, not a swallow
     except Exception:
         swallowed(f"_propose_media_captions: downloading {filename} failed", scan_id)
         return
@@ -664,6 +702,103 @@ def _propose_media_captions(scan_id: str, filename: str, drive_file_id: str,
         swallowed(f"_propose_media_captions: enqueueing the {sc} proposal failed", scan_id)
 
 
+# Every source a remediate_file job can carry. Anything else is a bug in the enqueuer, and the
+# `else` that used to catch it sent the job to Drive (see _remediation_source_bytes).
+REMEDIATION_SOURCES = ("drive", "local", "sharepoint")
+
+
+def _remediation_source_bytes(scan_id: str, filename: str, payload: dict,
+                              drive_file_id: str | None = None):
+    """Original bytes for one remediation job, chosen by the job's OWN source. Returns
+    (data, drive_service) — the service is None for every source but Drive, which needs the
+    same client again for the mirror write.
+
+    LOCAL AND SHAREPOINT READ THE CACHE, DRIVE DOWNLOADS. Assess already fetched every file and
+    stashed the original bytes (ADR 0020, scanner.cache_source_bytes) whatever the source was,
+    so remediation of a SharePoint document needs no Graph call and — the part that broke — no
+    Drive call either.
+
+    Live 2026-09-04, scan 8b83e9e1ca5c: this function's predecessor special-cased `local` and
+    let everything else fall through to the Drive client, so all 147 SharePoint jobs asked for a
+    Drive token they were never given and died with "no Drive token for this scan
+    (expired/restarted)". Nothing about that message named SharePoint, and the batch was
+    resubmitted (twice, on two worker revisions) on the strength of the "re-trigger" it asks for.
+    An unsupported source now fails by NAME instead of borrowing Drive's identity.
+    """
+    source = payload.get("source") or "drive"
+    if source in ("local", "sharepoint"):
+        from scanner import read_cached_source
+        owner = payload.get("owner")
+        checksum = payload.get("checksum")
+        if not checksum:
+            # BOTH KEY SHAPES ARE LIVE, and a job that carries no checksum can still have its
+            # bytes under the checksum key — every job enqueued before the route learned to
+            # stamp one does, and jobs are durable, so those are still in the queue. Resolve it
+            # from scan_inventory (store.get_source_checksum) rather than treating a payload
+            # without one as proof the cache used the scan-keyed shape.
+            try:
+                checksum = core.store.get_source_checksum(scan_id, filename)
+            except Exception:
+                swallowed("_remediation_source_bytes: resolving the source checksum failed", scan_id)
+        data = read_cached_source(scan_id, filename, owner, checksum=checksum)
+        if data is None and checksum:
+            # The checksum key only holds bytes when the LISTING carried that checksum. A file
+            # whose recorded checksum was computed after the download (or has changed since)
+            # misses it and is still in the cache under this scan's own scan_id/filename key.
+            # Reading only the first key is a cache miss that looks like "never cached".
+            data = read_cached_source(scan_id, filename, owner)
+        if data is not None:
+            return data, None
+        if source == "local":
+            # Local corpus remains the deterministic development/demo fallback when Blob caching
+            # is disabled. Resolve beneath the configured corpus and never accept a path from the
+            # job payload.
+            import scanner as _scanner
+            corpus = _Path(_os.environ.get("ACP_LOCAL_CORPUS") or
+                           (_scanner.ACP / "test-corpus/files")).resolve()
+            candidate = (corpus / filename).resolve()
+            if corpus not in candidate.parents or not candidate.is_file():
+                raise FatalJobError("local source bytes are unavailable — re-run Assess")
+            return candidate.read_bytes(), None
+        # No corpus fallback for SharePoint, and deliberately no Graph download: the remediation
+        # worker holds no SharePoint token, and re-running Assess is what repopulates the cache.
+        raise FatalJobError("no cached SharePoint source bytes for this scan — re-run Assess")
+    if source == "drive":
+        # Prefer the token carried in the durable job payload: the in-memory scan-token
+        # store is per-replica and is wiped by a restart/redeploy, so a durable remediate
+        # job that later runs on another replica (or after a restart) would otherwise fail
+        # with "no Drive token". The payload token survives both; fall back to in-memory.
+        token = payload.get("drive_token") or core.get_scan_tokens(scan_id).get("drive")
+        if not token:
+            raise FatalJobError("no Drive token for this scan (expired/restarted) — re-trigger")
+        svc = _drive_client(token)
+        file_id = drive_file_id or payload.get("drive_file_id")
+        return svc.files().get_media(fileId=file_id).execute(), svc
+    raise FatalJobError(f"unsupported remediation source {source!r} — expected one of "
+                        f"{', '.join(REMEDIATION_SOURCES)}")
+
+
+def _rem_event(scan_id: str, kind: str, job: dict | None, file: str | None, **detail) -> None:
+    """One remediation lifecycle event, carrying the job identity the panel correlates on.
+
+    A thin wrapper over `scan_event` rather than a second mechanism: it exists only so every
+    remediation emit site carries the same identity fields (job id, attempt, filename) without
+    thirteen call sites each remembering to. `scan_event` itself never raises — a narration line
+    must never be able to fail the work it narrates — so this cannot either.
+
+    `file` goes in the DETAIL payload, not a column: `scan_events` has no file column, and adding
+    one for this would migrate a table five other event kinds share. The detail is JSON and the
+    readers already decode it.
+
+    FILENAMES ARE IN HERE. That is deliberate and it is why the read path is owner-scoped —
+    `list_scan_events(owner=...)` plus the route's own `get_scan(owner=...)` gate, exactly as PRD
+    §13 requires. Nothing here carries extracted document CONTENT, only its name and the counts.
+    """
+    scan_event(scan_id, kind, job_id=(job or {}).get("id"),
+               attempt=(job or {}).get("attempts"),
+               detail={"file": file, **detail} if file else (detail or None))
+
+
 @handler("remediate_file")
 def _remediate_file(payload: dict, job: dict) -> None:
     """Apply server-side remediation to one file and write the fixed copy to Drive.
@@ -677,16 +812,13 @@ def _remediate_file(payload: dict, job: dict) -> None:
     source = payload.get("source") or "drive"
     if not (scan_id and filename) or (source == "drive" and not drive_file_id):
         raise FatalJobError("remediate_file job missing scan_id/file/source identity")
-
-    import activity as _activity
-    try:
-        _eligible_rules = core.store.list_auto_fail_rules(scan_id, filename)
-    except Exception:
-        _eligible_rules = []
-    _rule_detail = ("WCAG " + ", ".join(sorted(_eligible_rules))
-                    if _eligible_rules else "checking eligible WCAG criteria")
-    _activity.record(scan_id, file=filename, action="starting automated remediation",
-                     detail=_rule_detail, phase="remediating", force=True)
+    # Fail an unknown source HERE, before the job spends an activity row, a rule lookup and a
+    # format branch on work whose bytes can never be read. The check is cheap and it is the one
+    # that names the source: the old code had no such check at all, and an unrecognised source
+    # simply fell into the Drive branch and reported a missing Drive token.
+    if source not in REMEDIATION_SOURCES:
+        raise FatalJobError(f"unsupported remediation source {source!r} — expected one of "
+                            f"{', '.join(REMEDIATION_SOURCES)}")
 
     # Never remediate ACP's own remediated copy. POST /scans/{sid}/remediate already can't
     # enqueue one — it iterates get_scan's filtered file list — but jobs are DURABLE: a job
@@ -722,35 +854,24 @@ def _remediate_file(payload: dict, job: dict) -> None:
         _propose_media_captions(scan_id, filename, drive_file_id, payload)
         return
 
-    # Prefer the token carried in the durable job payload: the in-memory scan-token
-    # store is per-replica and is wiped by a restart/redeploy, so a durable remediate
-    # job that later runs on another replica (or after a restart) would otherwise fail
-    # with "no Drive token". The payload token survives both; fall back to in-memory.
+    import activity as _activity
+    # This evidence controls which mutations may run, so failure to read it must retry the job;
+    # treating a database error as an empty list would complete successfully after doing no work.
+    # Media returns above: caption proposals are not automatic document mutations and must not
+    # depend on this format-fixer query (or on test doubles implementing it).
+    _eligible_rules = core.store.list_auto_fail_rules(scan_id, filename)
+    _rule_detail = ("WCAG " + ", ".join(sorted(_eligible_rules))
+                    if _eligible_rules else "checking eligible WCAG criteria")
+    _activity.record(scan_id, file=filename, action="starting automated remediation",
+                     detail=_rule_detail, phase="remediating", force=True)
+
     _phase(job, f"downloading {filename}")
     _activity.record(scan_id, file=filename, action="opening source document",
                      detail=_rule_detail, phase="downloading", force=True)
-    svc = None
-    if source == "local":
-        from scanner import read_cached_source
-        owner = payload.get("owner")
-        data = read_cached_source(scan_id, filename, owner, checksum=payload.get("checksum"))
-        if data is None:
-            # Local corpus remains the deterministic development/demo fallback when Blob caching
-            # is disabled. Resolve beneath the configured corpus and never accept a path from the
-            # job payload.
-            import scanner as _scanner
-            corpus = _Path(_os.environ.get("ACP_LOCAL_CORPUS") or
-                           (_scanner.ACP / "test-corpus/files")).resolve()
-            candidate = (corpus / filename).resolve()
-            if corpus not in candidate.parents or not candidate.is_file():
-                raise FatalJobError("local source bytes are unavailable — re-run Assess")
-            data = candidate.read_bytes()
-    else:
-        token = payload.get("drive_token") or core.get_scan_tokens(scan_id).get("drive")
-        if not token:
-            raise FatalJobError("no Drive token for this scan (expired/restarted) — re-trigger")
-        svc = _drive_client(token)
-        data = svc.files().get_media(fileId=drive_file_id).execute()
+    # One dispatch on the job's own source, for every source (see _remediation_source_bytes).
+    # `svc` stays None unless this really is a Drive job, so the mirror block below cannot
+    # reach a client a non-Drive job never built.
+    data, svc = _remediation_source_bytes(scan_id, filename, payload, drive_file_id)
 
     # Format-agnostic text proposers (3.1.2 language-of-parts + 1.3.3 sensory rewrite) run on
     # the original bytes — the prose these check is unchanged by remediation, and running
@@ -782,7 +903,10 @@ def _remediate_file(payload: dict, job: dict) -> None:
     _phase(job, f"applying fixes to {filename}")
     _activity.record(scan_id, file=filename, action="applying eligible WCAG fixes",
                      detail=_rule_detail, phase="remediating", force=True)
-    _scope_allows = _remediation_scope(filename, scan_id)
+    # Scope alone is deliberately too broad: it describes what may be assessed, not what this
+    # document failed. Restrict expensive format-wide mutations to the auto-fixable FAIL rows
+    # already produced by Assessment.
+    _scope_allows = _remediation_fix_scope(filename, scan_id, _eligible_rules)
     # The gap #137 recorded here as `remediate.scope_partial` is CLOSED. The office/pdf
     # deterministic fixers now take the same `in_scope` predicate the HTML fixer does, gated at
     # each individual fix by the SC it actually writes (remediate_office._sc_ok /
@@ -796,10 +920,13 @@ def _remediate_file(payload: dict, job: dict) -> None:
     # pins the closure per format, including an empty-scope case that catches an ungated fix
     # generically rather than relying on this list staying complete.
     if ext in ("html", "htm"):
-        fixed_html, applied, _deferred = remediate_html(
-            data.decode("utf-8", errors="replace"),
-            ai_enabled=core.store.get_ai_enabled(), diffs=rem_diffs,
-            proposals=inline_proposals, in_scope=_scope_allows)
+        import joblog as _joblog
+        with _joblog.stage("remediate.html", doc=_joblog.doc_id(filename),
+                           scan_id=scan_id, eligible_rules=len(_eligible_rules)):
+            fixed_html, applied, _deferred = remediate_html(
+                data.decode("utf-8", errors="replace"),
+                ai_enabled=core.store.get_ai_enabled(), diffs=rem_diffs,
+                proposals=inline_proposals, in_scope=_scope_allows)
         rem_skipped = _deferred
         fixed_bytes = fixed_html.encode("utf-8")
         mimetype = "text/html"
@@ -813,16 +940,21 @@ def _remediate_file(payload: dict, job: dict) -> None:
                 from remediate_pdf import remediate_pdf
                 _pdf_proposals: list = []
                 _applied_fixes: list = []
-                out_path, applied, _skipped = remediate_pdf(
-                    src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id,
-                    diffs=rem_diffs, proposals=_pdf_proposals, applied_fixes=_applied_fixes,
-                    in_scope=_scope_allows)
+                import joblog as _joblog
+                with _joblog.stage("remediate.pdf", doc=_joblog.doc_id(filename),
+                                   scan_id=scan_id, eligible_rules=len(_eligible_rules)):
+                    out_path, applied, _skipped = remediate_pdf(
+                        src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id,
+                        diffs=rem_diffs, proposals=_pdf_proposals,
+                        applied_fixes=_applied_fixes, in_scope=_scope_allows)
                 rem_skipped = _skipped
                 mimetype = "application/pdf"
                 # A PDF's AI-written alt text is evidence exactly like an Office document's.
                 # It used to be dropped: remediate_pdf returned only prose, so no row reached
                 # applied_fixes and the certification record showed the fix had never happened.
                 _record_applied_fixes(scan_id, filename, _applied_fixes)
+                _rem_event(scan_id, "remediate.fix_applied", job, filename,
+                           fixes=len(_applied_fixes))
                 # Untagged-PDF proposals, split by kind — 1.3.2 reading order (vision) and
                 # 1.3.1 structure map (deterministic font rank). Surfaced for one-click
                 # confirm, never auto-applied. Before the no-fixes early return.
@@ -854,13 +986,18 @@ def _remediate_file(payload: dict, job: dict) -> None:
                 _applied_fixes: list = []
                 _proposals: list = []
                 _evidence: list = []
-                out_path, applied, _skipped = remediate_office(
-                    src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id,
-                    applied_fixes=_applied_fixes, proposals=_proposals,
-                    evidence=_evidence, diffs=rem_diffs, in_scope=_scope_allows)
+                import joblog as _joblog
+                with _joblog.stage("remediate.office", doc=_joblog.doc_id(filename),
+                                   scan_id=scan_id, eligible_rules=len(_eligible_rules), ext=ext):
+                    out_path, applied, _skipped = remediate_office(
+                        src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id,
+                        applied_fixes=_applied_fixes, proposals=_proposals,
+                        evidence=_evidence, diffs=rem_diffs, in_scope=_scope_allows)
                 rem_skipped = _skipped
                 mimetype = _OFFICE_MIME[ext]
                 _record_applied_fixes(scan_id, filename, _applied_fixes)
+                _rem_event(scan_id, "remediate.fix_applied", job, filename,
+                           fixes=len(_applied_fixes))
                 # AI-proposed (but not auto-applied) alt: an ungrounded vision guess is
                 # surfaced for one-click approval rather than silently written (WCAG 1.1.1
                 # intent stays human). Attach the prefilled drafts to the file's 1.1.1 HITL
@@ -898,8 +1035,15 @@ def _remediate_file(payload: dict, job: dict) -> None:
                             # Merges into this file's 1.1.1 row when one already exists (the
                             # proposals row queued just above). rule_name so a row created here
                             # is headed "Non-text Content", not the raw deferral note.
-                            core.store.queue_hitl_deferral(scan_id, filename, _msg, _n,
-                                                           rule_name="Non-text Content")
+                            _queued_item = core.store.queue_hitl_deferral(
+                                scan_id, filename, _msg, _n, rule_name="Non-text Content")
+                            # None means it MERGED into an existing 1.1.1 row rather than creating
+                            # one (queue_hitl_deferral is idempotent per scan/file/criterion). Only
+                            # a genuinely new item is a new thing for a person to do; emitting on
+                            # the merge would narrate the same review request once per retry.
+                            if _queued_item:
+                                _rem_event(scan_id, "remediate.review_requested", job, filename,
+                                           criterion="1.1.1", findings=_n)
                         except Exception:
                             swallowed("_remediate_file: queueing the 1.1.1 HITL deferral failed", scan_id)
                 # Attach the deferred images to whichever 1.1.1 row now exists — the
@@ -1010,6 +1154,12 @@ def _remediate_file(payload: dict, job: dict) -> None:
               "stored in ACP", flush=True)
 
     core.store.record_remediation(scan_id, filename, drive_write_url=web_url, blob_url=blob_url)
+    # `delivered` names the DESTINATION write, not the correction. A corrected copy that
+    # reached blob but not the provider is stored-not-delivered — PRD §11's delivery-failure
+    # class — and the snapshot counts it as pending. Saying `delivered` for it would make a
+    # lost corrected copy invisible, which is the whole reason the two are counted apart.
+    _rem_event(scan_id, "remediate.delivered" if web_url else "remediate.delivery_failed",
+               job, filename, destination="provider" if web_url else "acp_only")
     # G4: the Remediate span now carries what the fix pass DID — how many fixes applied vs
     # skipped/deferred — not just where the copy was written. `applied` and `rem_skipped` are
     # lists of prose messages; only their counts reach the trace (lf.remediate_span is PHI-safe).
@@ -1026,7 +1176,10 @@ def _remediate_file(payload: dict, job: dict) -> None:
     _phase(job, "re-verifying the corrected copy")
     _activity.record(scan_id, file=filename, action="re-checking corrected document",
                      detail=_rule_detail, phase="verifying", force=True)
-    verification = _verify_residual(fixed_bytes, filename)
+    import joblog as _joblog
+    with _joblog.stage("remediate.verify", doc=_joblog.doc_id(filename),
+                       scan_id=scan_id, ext=ext):
+        verification = _verify_residual(fixed_bytes, filename)
     # Enqueue the inline AI proposals (2.4.4 link text …) now that the re-scan has run, so a
     # deterministic fix that verifiably cleared carries validated=True (confidence.js reads
     # it as a High, one-click confirm) while a fix still failing / a model draft stays
@@ -1053,6 +1206,16 @@ def _remediate_file(payload: dict, job: dict) -> None:
         verified_diffs = [d for d in rem_diffs
                           if verification.cleared({d.get("rule_id")})]
         core.store.record_remediation_diffs(scan_id, filename, verified_diffs)
+        # rem_diffs is what the fixer produced; verified_diffs is what the re-scan confirmed
+        # cleared. The difference is a verification FAILURE, and it is the number PRD §17.8
+        # requires never to reach the delivery counter.
+        _unverified = len(rem_diffs) - len(verified_diffs)
+        if verified_diffs:
+            _rem_event(scan_id, "remediate.verified", job, filename,
+                       fixes=len(verified_diffs))
+        if _unverified > 0:
+            _rem_event(scan_id, "remediate.verification_failed", job, filename,
+                       fixes=_unverified)
     except Exception:
         swallowed("_remediate_file: recording the verified remediation diffs failed", scan_id)
     try:
@@ -1145,6 +1308,141 @@ def _count_inventory_classes(scan_id: str) -> dict:
 # in precedence order; nothing here needs to re-sort. The archive-vs-delete precedence decision
 # itself lives in disposition.resolve_candidate — shared with the conflicts report
 # (routes/disposition.list_conflicts) so both make the same call from one place.
+
+
+def _sp_scan_cursors(user: str, plan: dict) -> dict:
+    """The Graph deltaLink each library stood at when this scan listed it.
+
+    Read from the store AFTER the plan ran, because that is when they are correct: building the
+    plan advances (or seeds) every library's cursor to "now", immediately before the walk. So the
+    stored value is the position this scan's estate describes, and replaying the delta from it
+    later answers "what has changed since ACP listed this" — one Graph call per LIBRARY, not one
+    per document, which is the only reason freshness is affordable for SharePoint at all.
+
+    Best-effort per library: a cursor that cannot be read is simply absent, and freshness for that
+    library reports `untracked` rather than a guess. Never raises — this is a diagnostic recorded
+    on the way past, and it must not be able to fail a scan that has already listed its estate.
+    """
+    out: dict = {}
+    for drive_id in list((plan.get("delta") or {}).keys()) + list((plan.get("full") or {}).keys()):
+        try:
+            cur = core.store.get_sync_cursor(core._sp_interactive_cursor_key(user, drive_id))
+            if cur and cur.get("page_token"):
+                # "" is the OneDrive/no-drive key: JSON object keys must be strings, and the
+                # reader maps it back (routes/scans._sp_freshness).
+                out[drive_id or ""] = cur["page_token"]
+        except Exception:  # noqa: BLE001
+            logger.debug("could not record the delta cursor for drive %s", drive_id, exc_info=True)
+    return out
+
+
+def _sp_site_delta_plan(user: str, token: str, folder, folders) -> dict | None:
+    """Phase 3: the per-library incremental plan for a SITE-scoped SharePoint request.
+
+    Resolving it needs the libraries, and the libraries need one Graph call per selected site —
+    the same `_sp_drives` call the walk is about to make anyway. Paying it here buys the chance
+    to not walk those libraries at all, which on an estate where most documents have not changed
+    is the entire point of the feature.
+
+    Returns None — meaning "walk everything, as before" — for any request this cannot answer for:
+    a folder-narrowed scan (Graph's delta query has no folder filter, so a reconstruction could
+    not honour the narrowing), no sites, or a Graph failure while listing them. Uncertainty
+    resolves to the full, already-correct listing every time; that is the same contract
+    `_sp_delta_check` keeps one level down, and it is why this feature cannot under-report.
+    """
+    try:
+        from scanner import _sp_drives, _sp_locations
+        roots = [f for f in (list(folders) if folders else ([folder] if folder else []))
+                 if f and f != "root"]
+        locs, sites = _sp_locations(roots)
+        if locs or not sites:
+            return None
+        drive_ids: list[str] = []
+        for site in sites:
+            drive_ids += [d["id"] for d in _sp_drives(token, site) if d.get("id")]
+        if not drive_ids:
+            return None
+        plan = core.sp_multi_sync_plan(user, token, drive_ids)
+        return plan if plan.get("delta") or plan.get("full") else None
+    except Exception:  # noqa: BLE001
+        # THE WHOLE BODY, not just the Graph call. This function's only job is to decide whether
+        # a shortcut is available; every failure mode of that decision — a Graph error, a shape
+        # this code did not expect, a cursor row it could not read — has the same correct answer,
+        # which is the full listing that would have run anyway. An optimisation that can fail a
+        # scan is worse than no optimisation, and the failure would land on the largest estates
+        # first.
+        logger.debug("sharepoint site delta plan unavailable; walking in full", exc_info=True)
+        return None
+
+
+def _sp_scannable_metadata(it: dict) -> dict:
+    """The inventory columns a SCANNABLE SharePoint item's normalized metadata contributes.
+
+    scanner builds the full row itself for the non-scannable half (_sp_inventory_row); the
+    scannable half comes back as an analysis record and is reshaped here. Both must land the same
+    columns from the same normalized record, or one inventory ends up describing its media and
+    its documents in different vocabularies.
+
+    Reuses scanner._inv_row rather than re-deriving the mapping: a second copy of "which field of
+    the metadata record becomes which column" is the drift this repo keeps paying for.
+    """
+    meta = it.get("sp_metadata")
+    if not isinstance(meta, dict):
+        return {}
+    from scanner import _inv_row
+    row = _inv_row(file=it.get("name") or "", sp_meta=meta)
+    return {k: row.get(k) for k in ("content_type", "retention_label", "sensitivity_label",
+                                    "sharing_scope", "item_kind", "checked_out_by",
+                                    "sp_version", "modified_by", "sp_metadata")}
+
+
+def _sp_rule_inputs(row: dict) -> dict:
+    """The SharePoint-native half of a lifecycle rule's input document, from one inventory row.
+
+    Two kinds of thing come out of `sp_metadata`, and they are not the same kind:
+
+      * the tenant's own MANAGED COLUMNS, which a `managed:<Column>` condition reads;
+      * the per-field AVAILABILITY and its reasons, which no condition reads — they exist so the
+        rule's EVIDENCE can say "'retention_label' was not read from SharePoint" instead of
+        "'retention_label' not recorded". A rule matches nothing either way; only the human
+        reading why can act on the difference, and only if it reaches them.
+
+    Never raises on a malformed blob: `sp_metadata` is JSON written by an older build or a
+    partially-rolled-forward replica, and a lifecycle evaluation that died on it would take the
+    whole Discover run with it for a field nothing had to have.
+    """
+    import json as _json
+    out = {k: row.get(k) for k in ("content_type", "retention_label", "sensitivity_label",
+                                   "sharing_scope", "item_kind", "checked_out_by",
+                                   "site_name", "library_name")}
+    raw = row.get("sp_metadata")
+    if not raw:
+        return out
+    try:
+        blob = _json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:  # noqa: BLE001 — a rule input must never fail a scan
+        return out
+    if not isinstance(blob, dict):
+        return out
+    out["managed_columns"] = blob.get("managed_columns") or {}
+    # SMART ARCHIVAL. `collaborator_count` is what a rule keys on — "archive if older than seven
+    # years AND at most one person was ever involved" — and `collaborator_basis` is what stops it
+    # being read as more than it is: under `authorship` the count is a FLOOR off the listing page
+    # (creator + last editor), under `permissions` it is everyone with access. A rule written as
+    # `<= 1` is correct under both, which is the shape to recommend.
+    collab = blob.get("collaborators") or {}
+    out["collaborator_count"] = collab.get("count")
+    out["collaborator_basis"] = collab.get("basis")
+    # ACCESS IS NOT USE. `collaborator_count` says who CAN open a document; this says whether
+    # anybody HAS, over Graph's own seven-day window. None when the analytics container was not
+    # read — a rule keyed on it then matches nothing, which is correct and is why the count must
+    # never be defaulted to 0 on the way through here.
+    activity = blob.get("activity") or {}
+    out["recent_actor_count"] = activity.get("actors")
+    out["recent_action_count"] = activity.get("actions")
+    out["sp_availability"] = blob.get("availability") or {}
+    out["sp_reasons"] = blob.get("reasons") or {}
+    return out
 
 
 def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | None,
@@ -1270,6 +1568,10 @@ def _evaluate_discover_lifecycle_rules(scan_id: str, source: str, actor: str | N
                 # `size_kb`) read a key this dict never set. Both are already on the inventory row.
                 "doc_class": r.get("doc_class"),
                 "size_kb": r.get("size_kb"),
+                # SharePoint-native rule inputs (Phase 2). Same wiring lesson as doc_class and
+                # size_kb above: a field in disposition.FIELDS that this dict never sets is a
+                # rule that validates, saves, and then silently matches nothing forever.
+                **_sp_rule_inputs(r),
             }
             matched = []
             evaluated = []
@@ -1457,6 +1759,58 @@ def _mark_discovered(scan_id: str) -> None:
                            scan_id, exc_info=True)
 
 
+def _discover_norm_row(it: dict) -> dict:
+    """One scanner listing item as the discover-phase normalised record.
+
+    Lifted out of _scan_discover's listing block so the PER-SITE CHECKPOINT can build exactly the
+    same row. A checkpoint that persisted a site through a second, parallel mapping would drift
+    from the end-of-scan one the moment either grew a field — and the drift would show up as a
+    resumed scan whose early sites are missing metadata the late ones have, which reads as a
+    tenant that labels some sites and not others.
+    """
+    return {"file": it["name"], "drive_file_id": it.get("id"), "mime": it.get("mime"),
+            "path": it.get("path"), "checksum": it.get("checksum"),
+            "drive_id": it.get("driveId"),
+            # WHICH SharePoint site and library this document came from. Carried on the
+            # scannable record by the walk (scanner._sp_classify_item) and persisted per
+            # row: a run now spans a SET of sites, so the scan's scope can no longer answer
+            # "which site is this file in" for any individual document.
+            "site_id": it.get("siteId"), "library_name": it.get("libraryName"),
+            "site_name": it.get("siteName"),
+            # The SharePoint-native metadata for the ANALYSED half of the estate. The
+            # non-scannable half already carries it (scanner._sp_inventory_row builds the
+            # row itself); without this the two halves of one inventory would disagree —
+            # a retention label on every video and none on any document, which reads as a
+            # tenant that labels media and is in fact a wiring gap.
+            **_sp_scannable_metadata(it),
+            "drive_account_id": it.get("drive_account_id"),
+            "source_modified": it.get("source_modified"),
+            "source_mime": it.get("source_mime"), "created_at": it.get("created_at"),
+            "owner": it.get("owner"), "parent_folder": it.get("parent_folder"),
+            "size_kb": it.get("size_kb"),
+            "content_type": it.get("content_type")}
+
+
+def _discover_inventory_row(it: dict) -> dict:
+    """One normalised record as the scan_inventory row add_inventory persists. See
+    _discover_norm_row for why this is a function rather than a comprehension."""
+    import classify as _cls
+    return {"file": it["file"], "drive_file_id": it.get("drive_file_id"),
+            "mime": it.get("source_mime"), "size_kb": it.get("size_kb"),
+            "doc_class": _cls.classify_from_metadata(it["file"], it.get("source_mime"))["doc_class"],
+            "checksum": it.get("checksum"), "path": it.get("path"),
+            "created_at": it.get("created_at"), "source_modified": it.get("source_modified"),
+            "owner": it.get("owner"), "parent_folder": it.get("parent_folder"),
+            "drive_id": it.get("drive_id"),
+            "site_id": it.get("site_id"), "library_name": it.get("library_name"),
+            "site_name": it.get("site_name"),
+            **{k: it.get(k) for k in ("retention_label", "sensitivity_label",
+                                      "sharing_scope", "item_kind", "checked_out_by",
+                                      "sp_version", "modified_by", "sp_metadata")},
+            "drive_account_id": it.get("drive_account_id"),
+            "content_type": it.get("content_type")}
+
+
 def _scope_collapse(current_count: int, baseline_count: int) -> dict | None:
     """Describe a material suspicious non-zero listing collapse, if one occurred."""
     import os as _os
@@ -1474,11 +1828,25 @@ def _scope_collapse(current_count: int, baseline_count: int) -> dict | None:
 
 
 def _enforce_scope_collapse_guard(scan_id: str, user: str | None, scope: dict,
-                                  items: list[dict], inventory: list[dict] | None = None) -> None:
-    """Fail a severely collapsed whole-source discovery before its inventory is published."""
+                                  items: list[dict], inventory: list[dict] | None = None,
+                                  prior_count: int = 0) -> None:
+    """Fail a severely collapsed whole-source discovery before its inventory is published.
+
+    `prior_count` is the estate THIS scan already persisted on an earlier attempt — the sites a
+    per-site checkpoint completed before the run died. It is the load-bearing argument for
+    resumable scans and it is easy to leave out: a resumed run lists only the sites it has left,
+    so a 30-site estate that got 28 sites in on attempt 1 arrives here with two sites' worth of
+    files and looks exactly like the permissions collapse this guard exists to catch. The scan
+    would then be failed and blocked, with a message telling the operator to check access that is
+    not the problem — strictly worse than having no resume at all, because the first attempt at
+    least finished with a bad count rather than a wrong diagnosis.
+    """
     whole_source = (scope.get("kind") == "drive" or
                     (scope.get("kind") == "sharepoint" and not scope.get("folders")))
-    if not (whole_source and user and items and not scope.get("truncated")):
+    # `(items or prior_count)` rather than `items`: a resumed run whose remaining sites list
+    # nothing still has an estate — the one a previous attempt persisted — and skipping the guard
+    # on it would make "die once, retry" a way to walk a genuine collapse straight past the check.
+    if not (whole_source and user and (items or prior_count) and not scope.get("truncated")):
         return
     current_account = next(
         (it.get("drive_account_id") for it in items if it.get("drive_account_id")), None)
@@ -1491,7 +1859,7 @@ def _enforce_scope_collapse_guard(scan_id: str, user: str | None, scope: dict,
     # the two collections that together form the inventory.
     raw_count = scope.get("raw")
     current_count = (int(raw_count) if isinstance(raw_count, (int, float))
-                     else len(items) + len(inventory or []))
+                     else len(items) + len(inventory or [])) + prior_count
     integrity = _scope_collapse(current_count, baseline["count"])
     if not integrity:
         return
@@ -1503,7 +1871,10 @@ def _enforce_scope_collapse_guard(scan_id: str, user: str | None, scope: dict,
     integrity["message"] = message
     scope["integrity"] = integrity
     scope.setdefault("enumeration", {})["complete"] = False
-    core.store.set_scan_files(scan_id, len(items))
+    # `current_count`, not `len(items)`: on a resumed run those differ, and the number left on the
+    # row must be the one the refusal is about — otherwise the message and the estate a reader
+    # sees beside it disagree, on the screen where the disagreement is the whole question.
+    core.store.set_scan_files(scan_id, current_count)
     core.store.merge_scan_scope(scan_id, scope)
     core.store.set_scan_status(scan_id, "failed")
     core.store.log_decision("system", "scan.scope_collapse", scan_id=scan_id, detail=message)
@@ -1868,21 +2239,70 @@ def _scan_discover(payload: dict, job: dict) -> None:
     # is a cheap COUNT(*) query; the threshold > 0 is correct because add_inventory is
     # idempotent (ON CONFLICT) and the only writer for this scan_id is us.
     _checkpoint_resume = False
+    # Sites a previous attempt of THIS scan listed and persisted, as
+    # {site_id: {listed, estate, name}} — what the scanner needs to skip them AND to keep
+    # reporting what each held. Empty on every run that is not a SharePoint partial resume, which
+    # is every run today that did not die mid-listing.
+    _sp_resume_sites: dict = {}
+    _existing_inv_count = 0
+    # The ASSESSABLE half of what a previous attempt persisted. Tracked separately from the row
+    # count because scan_runs.files has always meant "assessable files", and a resumed run that
+    # reported only the tail it listed would show a thirty-site estate as a two-site one on every
+    # screen that reads that column.
+    _sp_prior_assessable = 0
     if defer:
         _existing_inv_count = core.store.count_inventory(scan_id)
         if _existing_inv_count > 0:
-            _checkpoint_resume = True
             # The listing boundary and enumeration evidence were persisted before inventory.
             # Reload them so retry-time integrity checks do not silently see an empty scope.
             scope = (((core.store.get_scan(scan_id, owner=user) or {}).get("run") or {})
                      .get("scope") or {})
+            _cp = scope.get("sp_checkpoint") or {}
+            if _cp and not _cp.get("listing_complete"):
+                # PARTIAL, not finished. `count_inventory > 0` used to mean one thing — a run
+                # that listed the WHOLE estate and died afterwards — and the resume below skips
+                # the listing entirely on the strength of it. Per-site checkpoints break that
+                # equivalence: rows now appear mid-listing, so without this branch a 30-site scan
+                # that died at site 3 would resume by declaring three sites the whole estate and
+                # publishing it. The marker is what distinguishes the two, and it is written by
+                # the same call that records the last site.
+                # WHAT EACH SITE HELD, not just which sites are done. A resumed site the
+                # scanner reports `complete` beside the zero this attempt walked is a WRONG
+                # number rather than a missing one — indistinguishable, to the reader, from a
+                # site that genuinely held nothing, which is the one confusion the per-site
+                # report exists to remove. The counts are in this scan's own inventory, so
+                # reading them here costs one pass over rows already being read.
+                _sp_resume_sites = {str(x): {"listed": 0, "estate": 0, "name": None}
+                                    for x in (_cp.get("sites") or []) if x}
+                _persisted_rows = core.store.list_inventory(scan_id)
+                for r in _persisted_rows:
+                    assessable = r.get("doc_class") not in (None, "unsupported", "media")
+                    _sp_prior_assessable += 1 if assessable else 0
+                    known = _sp_resume_sites.get(str(r.get("site_id") or ""))
+                    if known is None:
+                        continue
+                    known["estate"] += 1
+                    known["listed"] += 1 if assessable else 0
+                    known["name"] = known["name"] or r.get("site_name")
+                # Carried through init_scan_run below, which writes scope=EXCLUDED.scope and
+                # would otherwise NULL it — losing attempt 1's sites on attempt 2, so a run that
+                # died twice would re-walk everything the first attempt had already paid for.
+                scope = {"sp_checkpoint": dict(_cp)}
+                print(f"[scan] {scan_id}: resuming a partial SharePoint listing — "
+                      f"{len(_sp_resume_sites)} site(s) already persisted "
+                      f"({_existing_inv_count} rows), listing only what is left", flush=True)
+            else:
+                _checkpoint_resume = True
 
     if not _checkpoint_resume:
         # Create the scan_runs row NOW, before the file listing, so GET /scans/{id} returns a
         # result as soon as a worker claims the job.  Skipped on retry: the row already exists
         # and re-initing would reset status and scope to their discover-start defaults.
         core.store.init_scan_run(scan_id, source, 0, started, rb.name, rb.hash, owner=user,
-                                 status="running")
+                                 status="running",
+                                 # Only ever set on a partial-listing resume; None on a first
+                                 # attempt, which is the argument this call has always passed.
+                                 scope=(scope or None) if _sp_resume_sites else None)
 
         # Claim the active-Discovery slot before listing. Two concurrent requests for the same
         # source will both reach init_scan_run (each with their own scan_id), but only one will
@@ -1944,7 +2364,8 @@ def _scan_discover(payload: dict, job: dict) -> None:
         # for the full duration. Throttled to one DB write every 2 s — the scanner does the timing
         # inside _search_drive/_search_folder; this callback just persists whatever count arrived.
         def _listing_progress(count: int, folders: int | None = None,
-                               active: list | None = None, recent: list | None = None) -> None:
+                               active: list | None = None, recent: list | None = None,
+                               sites: list | None = None) -> None:
             try:
                 core.store.set_scan_files(scan_id, count)
                 _jid = job.get("id")
@@ -1976,6 +2397,15 @@ def _scan_discover(payload: dict, job: dict) -> None:
                     # None for the flat Drive-query path, same "omit rather than clobber" rule as
                     # folders_found above. A frontend without this field yet (or a scan predating
                     # it) simply never sees `active`/`recent` — nothing downstream requires them.
+                    # Per-SITE progress for a multi-site SharePoint run: which sites are done,
+                    # which are still queued, which are blocked and why. Emitted as each site
+                    # resolves rather than per file — a thirty-site walk is otherwise one silent
+                    # bar, and "which site is it on, and did any fail?" is the question an
+                    # operator watching a long estate scan actually has. Same "omit rather than
+                    # clobber" rule as folders_found: a later tick with nothing to report must
+                    # not blank a breakdown an earlier one produced.
+                    if sites is not None:
+                        patch["sites"] = sites
                     if active is not None:
                         patch["active_folders"] = active
                     if recent is not None:
@@ -2025,6 +2455,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
         # eligibility here is the whole-source shape check alone, independent of `incremental`.
         drive_delta = None
         sp_delta = None
+        sp_delta_plan = None
         if user:
             if source == "drive" and drive_token and not folder and not folders:
                 drive_delta = core._interactive_drive_sync_plan(user, svc)
@@ -2033,13 +2464,65 @@ def _scan_discover(payload: dict, job: dict) -> None:
                 eligible, sp_drive_id = _sp_whole_library_target(folder, folders)
                 if eligible:
                     sp_delta = core._interactive_sp_sync_plan(user, sp_tok, sp_drive_id)
+                else:
+                    # PHASE 3. `_sp_whole_library_target` answers only for the one shape a
+                    # single-drive delta can serve — the whole of exactly one library. A SITE
+                    # request covers several, and until now every one of them fell through to a
+                    # complete re-walk on every scan: the case the incremental feature was built
+                    # for and the only one a 30-site estate is ever in.
+                    #
+                    # The plan is per LIBRARY, so a site whose libraries are individually fresh,
+                    # expired, never-synced and due-for-reconciliation gets the right answer for
+                    # each instead of one answer for all of them.
+                    sp_delta_plan = _sp_site_delta_plan(user, sp_tok, folder, folders)
+
+        # ── PER-SITE CHECKPOINT (Phase 4) ────────────────────────────────────────────────────
+        #
+        # A thirty-site estate is a long listing, and until now it was also an ATOMIC one: the
+        # inventory was persisted in a single write after the last site, so a run that died at
+        # site 28 threw away twenty-eight sites' worth of Graph calls and started again at site
+        # one. That is the failure mode a large tenant hits most, because it is the tenant whose
+        # listing runs long enough to be interrupted.
+        #
+        # This persists each site AS IT FINISHES and records which sites are done. add_inventory
+        # is idempotent per (scan_id, file), so a row written here and again by the end-of-listing
+        # write is one row — which is what makes the checkpoint safe to be wrong about: the worst
+        # case is redundant work, never a duplicate or a missing document.
+        #
+        # ONLY COMPLETE SITES ARRIVE HERE. The scanner does not emit a site the cap truncated or
+        # a library that failed (see _sp_list's _emit_site), because `sites` below is what the
+        # resume SKIPS — and skipping a half-listed site would publish the half as the whole.
+        _sp_checkpoint_sites: list[str] = sorted(_sp_resume_sites)
+
+        def _sp_site_done(site_id: str, site_files: list, site_inventory: list) -> None:
+            rows = ([_discover_inventory_row(_discover_norm_row(it)) for it in (site_files or [])]
+                    + list(site_inventory or []))
+            from scanner import _dedupe_inventory_files
+            _dedupe_inventory_files(rows)
+            if rows:
+                core.store.add_inventory(scan_id, rows)
+            if site_id not in _sp_checkpoint_sites:
+                _sp_checkpoint_sites.append(site_id)
+            # Written AFTER add_inventory, never before. The marker is a claim that this site's
+            # rows are durable; a resume trusts it enough to not walk the site again, so a marker
+            # that outran its own rows would silently delete a site from the estate.
+            core.store.merge_scan_scope(scan_id, {"sp_checkpoint": {
+                "sites": list(_sp_checkpoint_sites), "listing_complete": False}})
+            print(f"[scan] {scan_id}: SharePoint site {site_id} checkpointed "
+                  f"({len(rows)} row(s)); {len(_sp_checkpoint_sites)} site(s) durable", flush=True)
+
+        _sp_checkpointing = (source == "sharepoint" and defer
+                             and _os.environ.get("ACP_SP_CHECKPOINT", "1").strip() != "0")
         try:
             items = _list(source, svc, folder=effective_folder, sp_token=sp_tok,
                           max_files=FANOUT_MAX_FILES, **({"folders": folders} if folders else {}),
                           **({"exclude_folders": exclude_folders} if exclude_folders else {}),
                           exclude_remediated=bool(payload.get("exclude_remediated", False)),
                           scope_out=scope, scope_files=_scope_for_listing(user), inventory_out=inventory,
-                          progress_cb=_listing_progress, drive_delta=drive_delta, sp_delta=sp_delta)
+                          progress_cb=_listing_progress, drive_delta=drive_delta, sp_delta=sp_delta,
+                          **({"sp_delta_plan": sp_delta_plan} if sp_delta_plan else {}),
+                          **({"sp_site_done": _sp_site_done} if _sp_checkpointing else {}),
+                          **({"sp_skip_sites": _sp_resume_sites} if _sp_resume_sites else {}))
         except JobCancelledError:
             # A user pressed Stop. Before this clause existed the blanket handler below caught it
             # and recorded scan_runs.status='failed' with a 'listing_failed' event — so the one
@@ -2049,9 +2532,16 @@ def _scan_discover(payload: dict, job: dict) -> None:
             # Reached only after scanner._search_folder's drain has returned, so by here the
             # discovery pool is shut down and joined: no folder fetch can still be running or
             # writing. That is what makes 'cancelled' honest rather than optimistic — it is the
-            # STOPPED state, not merely the observed one. Nothing partial is persisted: `items`
-            # was never assigned, and the merge_scan_scope/add_inventory writes below are all
-            # downstream of this raise.
+            # STOPPED state, not merely the observed one.
+            #
+            # A SHAREPOINT RUN MAY LEAVE ROWS BEHIND, and that is new. `items` is still never
+            # assigned and every write below this raise is still skipped, but the per-site
+            # checkpoint above has already persisted each site that finished before the Stop.
+            # They stay: they are real, correctly attributed rows of a run the store marks
+            # 'cancelled', never published (mark_published is downstream of this raise and gated
+            # on a complete enumeration) and so never a collapse baseline. What they DO become is
+            # a suspicious-zero baseline for a later scan of the same source, which is the
+            # conservative direction — a subsequent zero is refused rather than published.
             try:
                 core.store.set_scan_status(scan_id, "cancelled")
                 core.store.log_decision("system", "scan.discover_cancelled", scan_id=scan_id,
@@ -2135,7 +2625,12 @@ def _scan_discover(payload: dict, job: dict) -> None:
         # loudly here avoids publishing an empty inventory that overwrites a real one. Skipped
         # when the listing was truncated (truncated means large estate, not empty) and when the
         # source is new (no previous scan → legitimate first run can return 0).
-        if not items and not _truncated:
+        # `not _existing_inv_count` because a RESUMED listing only covers the sites the previous
+        # attempt did not reach, and "the remaining two sites held nothing assessable" is not the
+        # silent zero this whole block exists to refuse. Without it a resume that finished an
+        # estate whose tail happens to be media would be failed as a suspicious zero, against a
+        # baseline that includes the twenty-eight sites already sitting in its own inventory.
+        if not items and not _truncated and not _existing_inv_count:
             _first_scan = True   # updated below once we know
             _baseline_id = None  # updated below once we know; initialized here so the
                                  # except block can test it safely even if the try raises
@@ -2277,8 +2772,26 @@ def _scan_discover(payload: dict, job: dict) -> None:
                     # and owns its job state precisely because nothing else will touch it.
                     raise RuntimeError(_msg)
 
-        _enforce_scope_collapse_guard(scan_id, user, scope, items, inventory)
-        core.store.set_scan_files(scan_id, len(items))
+        # THE DELTA POSITION THIS SCAN LISTED FROM, recorded on the scan's own scope so freshness
+        # is answerable later. Without it, "has SharePoint changed since this scan?" can only be
+        # asked as "since the LAST sync", which is a different question the moment a second scan
+        # runs — and the answer to the wrong question is indistinguishable from the answer to the
+        # right one.
+        #
+        # In the scope blob rather than a new column: the scope is already persisted per scan
+        # (merge_scan_scope, below), already the place a run records what it covered, and a
+        # migration for a per-scan JSON fact would be a schema change bought for nothing.
+        if source == "sharepoint" and sp_delta_plan:
+            scope["sp_cursors"] = _sp_scan_cursors(user, sp_delta_plan)
+        # THE LISTING IS OVER. Recorded before anything reads the checkpoint back, and recorded
+        # even when no site was checkpointed, because its absence is what a resume treats as "the
+        # whole estate is here" — see the resume branch at the top of this function.
+        if _sp_checkpointing:
+            scope["sp_checkpoint"] = {"sites": list(_sp_checkpoint_sites),
+                                      "listing_complete": True}
+        _enforce_scope_collapse_guard(scan_id, user, scope, items, inventory,
+                                      prior_count=_existing_inv_count)
+        core.store.set_scan_files(scan_id, len(items) + _sp_prior_assessable)
         core.store.merge_scan_scope(scan_id, scope)
         # ADR 0042, ordered AFTER both durable writes above rather than after _list() returned:
         # the count and the enumeration evidence are what this event asserts, so it must not be
@@ -2292,29 +2805,11 @@ def _scan_discover(payload: dict, job: dict) -> None:
                            "folders_visited": _enum.get("folders_visited"),
                            "truncated": bool(_enum.get("truncated")),
                            "complete": bool(_enum.get("complete"))})
-        norm = [{"file": it["name"], "drive_file_id": it.get("id"), "mime": it.get("mime"),
-                 "path": it.get("path"), "checksum": it.get("checksum"),
-                 "drive_id": it.get("driveId"),
-                 "drive_account_id": it.get("drive_account_id"),
-                 "source_modified": it.get("source_modified"),
-                 "source_mime": it.get("source_mime"), "created_at": it.get("created_at"),
-                 "owner": it.get("owner"), "parent_folder": it.get("parent_folder"),
-                 "size_kb": it.get("size_kb"),
-                 "content_type": it.get("content_type")} for it in items]
+        norm = [_discover_norm_row(it) for it in items]
     if defer:
         if not _checkpoint_resume:
-            import classify as _cls
             from scanner import _dedupe_inventory_files
-            inv = [{"file": it["file"], "drive_file_id": it.get("drive_file_id"),
-                    "mime": it.get("source_mime"), "size_kb": it.get("size_kb"),
-                    "doc_class": _cls.classify_from_metadata(it["file"], it.get("source_mime"))["doc_class"],
-                    "checksum": it.get("checksum"), "path": it.get("path"),
-                    "created_at": it.get("created_at"), "source_modified": it.get("source_modified"),
-                    "owner": it.get("owner"), "parent_folder": it.get("parent_folder"),
-                    "drive_id": it.get("drive_id"),
-                    "drive_account_id": it.get("drive_account_id"),
-                    "content_type": it.get("content_type")}
-                   for it in norm] + inventory
+            inv = [_discover_inventory_row(it) for it in norm] + inventory
             _dedupe_inventory_files(inv)
             if inv:
                 _job_id = job.get("id")
@@ -2361,6 +2856,23 @@ def _scan_discover(payload: dict, job: dict) -> None:
                                    "updated": _inv_outcome.get("updated"),
                                    "unchanged": _inv_outcome.get("unchanged"),
                                    "failed": _inv_outcome.get("failed")})
+        if _sp_resume_sites:
+            # THE ESTATE IS THE STORE'S, not this attempt's. Everything below — the lifecycle
+            # denominator, the assessable/empty decision, the discovered event's count, the
+            # decision log — reads `items` and `inv`, and on a resumed run those hold only the
+            # sites this attempt had left to list. A 30-site scan that finished its last two
+            # sites here would otherwise close as a two-site estate and, if those two held
+            # nothing assessable, finalize instead of offering Assess over the other twenty-eight.
+            #
+            # Read back rather than concatenated: the rows this attempt just wrote and the rows
+            # attempt 1 wrote are the same table, and re-deriving from it is the only version of
+            # this that cannot double-count a site both attempts happened to touch.
+            inv = core.store.list_inventory(scan_id)
+            items = [r for r in inv
+                     if r.get("doc_class") not in (None, "unsupported", "media")]
+            norm = items
+            core.store.set_scan_files(scan_id, len(items))
+
         # Phase B4 — with the inventory persisted, run enabled disposition rules against it and
         # record candidate lifecycle outcomes (never executing the Drive move/delete here). Runs
         # before the no-assessable-items short-circuit below because a rule may match a

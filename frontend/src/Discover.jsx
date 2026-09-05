@@ -6,6 +6,7 @@ import FileDrawer from './FileDrawer.jsx'
 import { retentionBucket, isAcceptable } from './retentionSignal.js'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import SitePicker from './SitePicker.jsx'
+import SiteActivity from './SiteActivity.jsx'
 import DispositionRules from './DispositionRules.jsx'
 import { Bars } from './charts.jsx'
 import { DEPARTMENTS } from './sim.js'
@@ -161,6 +162,15 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // whole placeholder exists to name rather than hide.
   const [showPreviousResults, setShowPreviousResults] = useState(false)
   useEffect(() => { if (busy) setShowPreviousResults(false) }, [busy, activeScanId])
+  // `busy`/`progress` describe the job this browser most recently started, while `run`/`scope`
+  // describe the scan selected in Scan History. Those are deliberately allowed to diverge: a
+  // newer scan can finish while somebody keeps reviewing an older one. Never combine the newer
+  // job's live labels, timer, folders or worker warning with the historical run's source and
+  // inventory. App's "New scan available" banner already offers the explicit way back.
+  const newestScanId = scanList?.[0]?.id ?? null
+  const viewingHistoricalScan = Boolean(newestScanId && scanId && newestScanId !== scanId)
+  const displayBusy = busy && !viewingHistoricalScan
+  const displayProgress = displayBusy ? progress : null
   const [open, setOpen] = useState(() => new Set())
   const toggle = (d) => setOpen((s) => { const n = new Set(s); n.has(d) ? n.delete(d) : n.add(d); return n })
   // Cross-department search + facet filters — a match auto-expands ITS department
@@ -510,8 +520,8 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   const discoveredCount = scope?.inventory?.discovered ?? files.length
   // App keeps the previous run's inventory until the active run settles. Live progress does
   // not make that inventory current: preserve the separation through every active phase.
-  const showQueuedPlaceholder = busy
-    || (!busy && run?.status === 'queued')
+  const showQueuedPlaceholder = displayBusy
+    || (!displayBusy && run?.status === 'queued')
   const hidePreviousInventory = showQueuedPlaceholder && !showPreviousResults
   // Stated against the raw discovered count — the estate line describes discovery, which the
   // location view filter never restricts.
@@ -533,7 +543,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // SSE progress is browser-memory state and is absent after a refresh. Reconstruct only the
   // terminal checklist facts from the durable scan record so the completed card remains visible
   // when the user returns to Discover. No timing, rate, or live-connection state is inferred.
-  const completedDiscoveryProgress = !busy && (run?.discovered_at || run?.status === 'discovered')
+  const completedDiscoveryProgress = !displayBusy && (run?.discovered_at || run?.status === 'discovered')
     ? {
         phase: 'done',
         files_found: completionDiscoveredCount,
@@ -542,9 +552,16 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         lifecycle_matches: (Number(scope?.lifecycle_archive) || 0)
           + (Number(scope?.lifecycle_delete) || 0)
           + (Number(scope?.lifecycle_tagged) || 0),
+        // The live job supplies these during the SSE run. Rehydrate the SAME fields from the
+        // persisted inventory delta after a refresh so SharePoint's per-library delta scan does
+        // not lose its new/updated/unchanged result the moment the stream closes. Drive and
+        // SharePoint both finish through add_inventory(), so one rendering path covers both.
+        save_new: scope?.inventory_delta?.new ?? null,
+        save_updated: scope?.inventory_delta?.updated ?? null,
+        save_unchanged: scope?.inventory_delta?.unchanged ?? null,
       }
     : null
-  const discoveryProgressForCard = progress ?? completedDiscoveryProgress
+  const discoveryProgressForCard = displayProgress ?? completedDiscoveryProgress
   // Live-activity rate for the discovering/lifecycle stage (stakeholder review, 2026-08-28):
   // a "recent discovery rate" derived client-side from real (count, timestamp) poll samples —
   // not a backend field. progress.files_found is the true live counter here (the Redis job
@@ -553,14 +570,14 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // whole busy run). Keeps a short rolling window rather than a two-point instantaneous delta
   // so the rate doesn't swing between 0 and a spike on noisy ticks, and withholds a reading
   // entirely until the window spans a meaningful interval — no first-tick guess.
-  const liveDiscoveredCount = progress?.files_found ?? discoveredCount
+  const liveDiscoveredCount = displayProgress?.files_found ?? discoveredCount
   const [filesPerSec, setFilesPerSec] = useState(null)
   const [inventoryChangedSecsAgo, setInventoryChangedSecsAgo] = useState(null)
   const rateSamplesRef = useRef([])       // [{count, t}], oldest first, capped at 4
   const lastChangeAtRef = useRef(null)    // ms timestamp the count last increased
   useEffect(() => {
-    const phase = progress?.phase ?? null
-    const inDiscoveringStage = busy && phase && phase !== 'queued'
+    const phase = displayProgress?.phase ?? null
+    const inDiscoveringStage = displayBusy && phase && phase !== 'queued'
     if (!inDiscoveringStage || liveDiscoveredCount == null) {
       rateSamplesRef.current = []; lastChangeAtRef.current = null
       setFilesPerSec(null); setInventoryChangedSecsAgo(null)
@@ -582,7 +599,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
     }
     setInventoryChangedSecsAgo(lastChangeAtRef.current != null ? (now - lastChangeAtRef.current) / 1000 : null)
     return undefined
-  }, [busy, progress?.phase, liveDiscoveredCount])
+  }, [displayBusy, displayProgress?.phase, liveDiscoveredCount])
   const ownerOf = (f) => delegations[f.owner] || f.owner
   const isDelegated = (f) => !!delegations[f.owner]
 
@@ -766,7 +783,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
 
   return (
     <>
-      {!busy && (run?.discovered_at || run?.status === 'discovered') && (
+      {!displayBusy && (run?.discovered_at || run?.status === 'discovered') && (
         <DiscoverInventoryExport compact scanId={scanId} run={runForExport}
                                  inventory={scope?.inventory || null} rows={inv?.rows ?? null} />
       )}
@@ -823,11 +840,11 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           from the last GET /scans/{id} the outer `scan` state holds, which during an active run
           can be the PREVIOUS scan's terminal value until this one settles. */}
       {/* The queue/assignment card below owns status until listing starts. */}
-      {!(busy && ['queued', 'preparing', 'submitting'].includes(progress?.phase)) && <DiscoverRunProgress progress={discoveryProgressForCard} busy={busy} onStop={onStop} onContinue={onAdvance} sources={sources} inv={inv} preflightDegraded={preflightDegraded} freshness={progress?.freshness ?? run?.freshness ?? null} runStartedAt={run?.started_at ?? null} />}
+      {!(displayBusy && ['queued', 'preparing', 'submitting'].includes(displayProgress?.phase)) && <DiscoverRunProgress progress={discoveryProgressForCard} busy={displayBusy} onStop={onStop} onContinue={onAdvance} assessmentComplete={Boolean(run?.assessed_at)} sources={sources} source={run?.source} scope={scope} inv={inv} preflightDegraded={preflightDegraded} freshness={displayProgress?.freshness ?? run?.freshness ?? null} runStartedAt={run?.started_at ?? null} />}
 
       {(() => {
         const jobClaimed = !!(discoverJobInfo && discoverJobInfo.status && discoverJobInfo.status !== 'queued')
-        const queuedNotClaimed = busy && progress?.phase === 'queued' && !jobClaimed
+        const queuedNotClaimed = displayBusy && displayProgress?.phase === 'queued' && !jobClaimed
         // The consolidated "DISCOVERY · Queued" card (stakeholder UX review, 2026-08-30) replaces
         // WorkerAvailability + ProcessingStatusPanel for JUST this one window — the three separate,
         // sometimes-contradicting pieces they used to show here ("Loading…"/"Waiting for a
@@ -842,7 +859,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
               workersTotal={queueSnap?.workersTotal ?? null}
               workersOnline={queueSnap?.workersOnline ?? null}
               queueUpdatedSecsAgo={queueSnap?.polledAt ? (Date.now() - queueSnap.polledAt) / 1000 : null}
-              submittedSecsAgo={discoverJobInfo?.created_at && Number.isFinite(Date.parse(discoverJobInfo.created_at)) ? Math.max(0, (Date.now() - Date.parse(discoverJobInfo.created_at)) / 1000) : (progress?.started_at && Number.isFinite(Date.parse(progress.started_at)) ? Math.max(0, (Date.now() - Date.parse(progress.started_at)) / 1000) : null)}
+              submittedSecsAgo={discoverJobInfo?.created_at && Number.isFinite(Date.parse(discoverJobInfo.created_at)) ? Math.max(0, (Date.now() - Date.parse(discoverJobInfo.created_at)) / 1000) : (displayProgress?.started_at && Number.isFinite(Date.parse(displayProgress.started_at)) ? Math.max(0, (Date.now() - Date.parse(displayProgress.started_at)) / 1000) : null)}
               pickupEstimate={pickupEstimate}
               capacity={capacity}
               replicas={replicas}
@@ -859,7 +876,8 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
                 BEFORE a scan is even started. */}
             <WorkerAvailability snap={workerSnap}
                                 replicas={replicas}
-                                capacity={capacity} />
+                                capacity={capacity}
+                                suppressStall={viewingHistoricalScan} />
 
             {/* PRD "Processing status" — the Discover instance of the same panel Assess uses
                 (#922), reusing the exact signals this tab already computes for its own
@@ -869,9 +887,9 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
                 yet — same rollout shape as Assess's own panel. */}
             <ProcessingStatusPanel
               derived={deriveDiscoverProcessingState({
-                busy, phase: progress?.phase ?? null, freshness: progress?.freshness ?? run?.freshness ?? null,
+                busy: displayBusy, phase: displayProgress?.phase ?? null, freshness: displayProgress?.freshness ?? run?.freshness ?? null,
                 runStatus: run?.status ?? null, failureReason, capacityState: preflightCapacityState,
-                discoveredCount: liveDiscoveredCount, elapsedSecs: progress?.elapsed ?? null,
+                discoveredCount: liveDiscoveredCount, elapsedSecs: displayProgress?.elapsed ?? null,
                 jobClaimed,
                 assignedSecsAgo: discoverJobInfo?.locked_at
                   ? (Date.now() - Date.parse(discoverJobInfo.locked_at)) / 1000 : null,
@@ -879,11 +897,11 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
                 workersTotal: queueSnap?.workersTotal ?? null,
                 workersOnline: queueSnap?.workersOnline ?? null,
                 pickupEstimate,
-                submittedSecsAgo: progress?.started_at
-                  ? (Date.now() - Date.parse(progress.started_at)) / 1000 : null,
-                foldersFound: progress?.folders_found ?? null,
+                submittedSecsAgo: displayProgress?.started_at
+                  ? (Date.now() - Date.parse(displayProgress.started_at)) / 1000 : null,
+                foldersFound: displayProgress?.folders_found ?? null,
                 filesPerSec, inventoryChangedSecsAgo,
-                hasFolderActivity: !!(progress?.active_folders?.length || progress?.recent_folders?.length),
+                hasFolderActivity: !!(displayProgress?.active_folders?.length || displayProgress?.recent_folders?.length),
                 workerHeartbeatAgeS: workerSnap?.workerHeartbeatAgeS ?? null,
               })}
               onRerun={() => onScan('all')}
@@ -899,7 +917,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           comment above for why it now keeps going). Renders nothing on its own when there's
           nothing real to show yet (jobId not assigned, or attempts/max_attempts genuinely absent
           — SIM mode's getQueueJob fixture doesn't track them). */}
-      {busy && <QueueJobDetails jobId={jobId} attempts={discoverJobInfo?.attempts ?? null}
+      {displayBusy && <QueueJobDetails jobId={jobId} attempts={discoverJobInfo?.attempts ?? null}
                                 maxAttempts={discoverJobInfo?.max_attempts ?? null} />}
 
       {/* Folder-level detail underneath the aggregate counts above (#929's backend slice) — which
@@ -907,10 +925,17 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           on its own when there's nothing to show (the flat Drive-query path, a scan not yet
           discovering) — see FolderActivity.jsx's own header comment for why this stops short of
           the full tree view. */}
-      <FolderActivity active={progress?.active_folders} recent={progress?.recent_folders} />
+      <FolderActivity active={displayProgress?.active_folders} recent={displayProgress?.recent_folders} />
+
+      {/* Per-SITE coverage for a multi-site SharePoint run: which sites are done, which are still
+          queued, which could not be read and why, and the libraries covered on each. Live rows
+          while the scan runs, the run's own recorded rows afterwards — the same shape from both
+          sources on purpose (see SiteActivity.jsx). Renders nothing for OneDrive, a folder scan,
+          Drive or a local corpus, which have no sites. */}
+      <SiteActivity sites={displayProgress?.sites || scope?.sites} />
 
       {/* Discovery leads with facts from THIS listing. */}
-      {!busy && (run?.discovered_at || run?.status === 'discovered') && (
+      {!displayBusy && (run?.discovered_at || run?.status === 'discovered') && (
         <AccordionSection id="discover-latest" title="Latest discovery results"
                           ariaLabel="Latest discovery results" defaultOpen
                           style={{ marginBottom: 14 }}>
@@ -919,7 +944,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         </AccordionSection>
       )}
 
-      {!busy && scanId && (run?.discovered_at || run?.status === 'discovered') && (
+      {!displayBusy && scanId && (run?.discovered_at || run?.status === 'discovered') && (
         <AccordionSection id="discover-lifecycle-estate" title="Lifecycle estate summary"
                           ariaLabel="Lifecycle estate summary" defaultOpen
                           style={{ marginBottom: 14 }}>
@@ -929,7 +954,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
 
       {/* Only actionable rule matches return to the main flow. The old all-supported-documents
           presentation duplicated File inventory even when every row was Active. */}
-      {!busy && lifecycleCandidateRows.length > 0 && (
+      {!displayBusy && lifecycleCandidateRows.length > 0 && (
         <AccordionSection id="discover-lifecycle-results" title="Lifecycle rule matches"
                           meta={`${lifecycleCandidateRows.length.toLocaleString()} files`}
                           ariaLabel="Lifecycle rule matches" defaultOpen={false}
@@ -979,7 +1004,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           banner can never say something the log does not back up. Falls back to the old generic
           text only when nothing was recorded (e.g. a transient DB error mid-check logs no
           decision at all) — never fabricated. */}
-      {integrityBlocked && !busy && (
+      {integrityBlocked && !displayBusy && (
         <DiscoveryIntegrityRecovery
           integrity={discoveryIntegrity}
           source={run?.source}
@@ -989,7 +1014,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           onViewLiveOps={onViewLiveOps}
         />
       )}
-      {run?.status === 'failed' && !busy && !integrityBlocked && (
+      {run?.status === 'failed' && !displayBusy && !integrityBlocked && (
         <div className="err" role="alert" style={{ marginBottom: 12 }}>
           {failureReason
             ? <>Discovery did not finish: {failureReason}.</>
@@ -997,7 +1022,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           {' '}The counts below are incomplete or stale. Re-run discovery to get a current inventory.
         </div>
       )}
-      {(run?.status === 'cancelled' || run?.status === 'interrupted') && !busy && (
+      {(run?.status === 'cancelled' || run?.status === 'interrupted') && !displayBusy && (
         <div className="err" role="alert" style={{ marginBottom: 12 }}>
           {run.status === 'cancelled'
             ? 'Discovery was stopped before it finished.'
@@ -1006,7 +1031,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           source. Re-run discovery to get a current inventory.
         </div>
       )}
-      {run?.status === 'running' && !busy && (
+      {run?.status === 'running' && !displayBusy && (
         <div className="err" role="alert" style={{ marginBottom: 12 }}>
           This scan still shows as running, but nothing here is tracking its live progress right
           now — it may be stuck. The counts below are not final. Re-run discovery, or check back
@@ -1029,7 +1054,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           truncated run rendered its partial counts below exactly like a complete one, with the
           estate bar stating them as fact. Not shown while busy (the counts are openly provisional
           then) and not shown for a failed run, which has its own, stronger banner above. */}
-      {!busy && (() => {
+      {!displayBusy && (() => {
         const msg = snapshotTrustMessage(snapshotTrust(run))
         if (!msg) return null
         return (
@@ -1047,7 +1072,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
       {/* Capacity state notice — shown before/after a scan, not during (busy). Shows the most
           specific signal available: preflightCapacityState is set right after a user clicks a
           scan button; readiness is the background ambient probe. Prefer preflight when set. */}
-      {!busy && (() => {
+      {!displayBusy && (() => {
         const cs = preflightCapacityState
           || (readiness?.capacity_state !== 'ready' ? readiness?.capacity_state : null)
           // Legacy: older /readyz responses without capacity_state
@@ -1121,14 +1146,14 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
             contradicting each other ("loading" next to "waiting for a worker" for a job nothing
             has started on). The queued card already answers the question this placeholder exists
             to answer for that window, so it takes over instead of doubling it. */}
-        {pendingScanLoad && !busy && (
+        {pendingScanLoad && !displayBusy && (
           <div className="muted">Loading your inventory…</div>
         )}
-        {!pendingScanLoad && (busy || !(run?.discovered_at || run?.status === 'discovered'))
-          && progress?.phase !== 'queued' && run?.status !== 'queued' && (
+        {!pendingScanLoad && (displayBusy || !(run?.discovered_at || run?.status === 'discovered'))
+          && displayProgress?.phase !== 'queued' && run?.status !== 'queued' && (
           <div>
             <b>{discoveredCount} documents</b> discovered across {sources.length} sources · {Object.keys(groups).length} departments
-            {busy && (
+            {displayBusy && (
               <span className="muted" style={{ marginLeft: 8, fontSize: 12, fontStyle: 'italic' }}>
                 Counts are provisional until discovery completes
               </span>
@@ -1142,7 +1167,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
               <div className={isNarrowScope(scope) ? 'scopewarn' : 'muted'} style={{ marginTop: 3, fontSize: 12.5 }}
                    role={isNarrowScope(scope) ? 'status' : undefined}>
                 {isNarrowScope(scope) ? '⚠ ' : ''}{scopeLine}
-                {scope?.kind === 'folder' && hasDriveToken && !busy && (
+                {scope?.kind === 'folder' && hasDriveToken && !displayBusy && (
                   <> <button className="linklike" onClick={() => onScan('drive')}
                              title="Re-run discovery with no folder restriction, across your whole Drive">
                     Scan my whole Drive instead
@@ -1159,18 +1184,29 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
         {hasSPToken && (
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
             <button className="ghost" disabled={busy} onClick={() => setShowSites(true)}
-                    title="Choose a SharePoint site — every document library on it is scanned">
-              Choose SharePoint site…
+                    title="Start a new SharePoint scan — every document library on each selected site is scanned">
+              Start new SharePoint scan…
             </button>
           </div>
         )}
       </div>
 
-      {/* The site id travels as `folder`, which is what the backend reads it as — _list treats
-          `folder` as the site for source='sharepoint' (#156). One parameter, not two. */}
+      {/* ONE site travels as `folder`, which is what the backend reads it as — _list treats
+          `folder` as the site for source='sharepoint' (#156). One parameter, not two.
+
+          SEVERAL travel as `folders`, the repeatable multi-root form the same call already
+          accepts: scanner._sp_locations splits those roots into folder pairs (`<drive>/<item>`)
+          and bare site ids, so a list of site ids needs no third parameter either. The single
+          case keeps the old shape deliberately — a saved link, a queued job and every existing
+          test still name one site the way they always did. */}
       {showSites && (
         <SitePicker
-          onScan={(siteId) => { setShowSites(false); onScan('sharepoint', siteId) }}
+          onScan={(siteIds) => {
+            setShowSites(false)
+            const ids = Array.isArray(siteIds) ? siteIds : [siteIds]
+            if (ids.length <= 1) onScan('sharepoint', ids[0] || null)
+            else onScan('sharepoint', null, { folders: ids })
+          }}
           onClose={() => setShowSites(false)} />
       )}
 

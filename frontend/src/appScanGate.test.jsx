@@ -249,7 +249,7 @@ describe('Discover carries no scan entry point of its own', () => {
 
   it('keeps the folder-first path wired, so an entry point can be restored in one commit', () => {
     const app = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'App.jsx'), 'utf8')
-    expect(app).toMatch(/const requestScan = \(source, folder = null, \{ folderFirst = false/)
+    expect(app).toMatch(/const requestScan = \(source, folder = null,\s+\{ folderFirst = false/)
     expect(app).toMatch(/startInFolderMode=\{pendingScan\.folderFirst\}/)
     // …and nothing calls it, which is why the DOM test above can assert the button is gone.
     const callers = readdirSync(dirname(fileURLToPath(import.meta.url)))

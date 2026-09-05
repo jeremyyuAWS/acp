@@ -24,6 +24,7 @@ export default function WorkspaceRoles() {
   const [roles, setRoles] = useState([])
   const [catalog, setCatalog] = useState(null)
   const [enforced, setEnforced] = useState(false)
+  const [rollout, setRollout] = useState(null)
   const [editing, setEditing] = useState(null)     // the role in the drawer, or null
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
@@ -31,7 +32,8 @@ export default function WorkspaceRoles() {
   const createRef = useRef(null)
 
   const load = () => Promise.all([getWorkspaceRoles(), getRoleCapabilities()])
-    .then(([r, c]) => { setRoles(r.roles || []); setEnforced(!!r.enforced); setCatalog(c) })
+    .then(([r, c]) => { setRoles(r.roles || []); setEnforced(!!r.enforced)
+                    setRollout(r.rollout || null); setCatalog(c) })
     .catch((e) => setError(e.message || 'Could not load roles.'))
     .finally(() => setLoaded(true))
   useEffect(() => { load() }, [])
@@ -59,14 +61,34 @@ export default function WorkspaceRoles() {
       </button>
     </div>
 
-    {/* THE MOST IMPORTANT LINE ON THIS SCREEN when the flag is off. Without it an administrator
-        designs roles, assigns them, and reasonably believes access is now restricted — while every
-        route still admits everyone. Saying so here is the difference between a staged rollout and
-        a false sense of security. */}
+    {/* THE MOST IMPORTANT LINE ON THIS SCREEN when the server is not refusing. Without it an
+        administrator designs roles, assigns them, and reasonably believes access is now
+        restricted — while every route still admits everyone. Saying so here is the difference
+        between a staged rollout and a false sense of security.
+
+        IT NAMES THE RUNG, not just "off", because the three unenforced rungs mean genuinely
+        different things to the person reading this: at `navigation` their roles ARE hiding tabs
+        and a direct URL still works, which is a materially different claim from "nothing changes
+        for anyone". Collapsing them to one sentence would make this banner wrong two thirds of
+        the time it appears.
+
+        The wording comes from the SERVER (rollout.means), so it cannot drift from what the code
+        does — the rung's description lives next to its definition in api/workspace_rollout.py. */}
     {loaded && !enforced && (
       <div role="note" className="roles-not-enforced">
-        <b>Roles are not being enforced yet.</b> You can design and assign them now; nothing
-        changes for anyone until <code>ACP_WORKSPACE_RBAC_ENABLED</code> is turned on.
+        <b>Roles are not being enforced yet.</b>{' '}
+        {rollout?.means || 'You can design and assign them now; nothing changes for anyone.'}
+        {rollout?.next && <> Next stage: <code>{rollout.next}</code>.</>}
+      </div>
+    )}
+
+    {/* An unreadable mode is the one configuration that looks identical to a workspace nobody has
+        got to yet: the operator set the variable, believes it took effect, and it did not. */}
+    {loaded && rollout?.invalid_mode && (
+      <div role="alert" className="roles-not-enforced">
+        <b>The rollout stage is misconfigured.</b> <code>ACP_WORKSPACE_RBAC_MODE</code> is set to
+        {' '}<code>{rollout.invalid_mode}</code>, which is not a stage. ACP is running as
+        {' '}<code>{rollout.mode}</code>.
       </div>
     )}
 

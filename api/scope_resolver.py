@@ -2,7 +2,8 @@
 no DB — mirrors the `api/disposition.py` seam (validation + evaluation, persistence lives in
 `api/store.py`).
 
-A *scope rule* targets a set of files by **folder / owner / department** and assigns a WCAG
+A *scope rule* targets a set of files by **folder / owner / department / SharePoint Content
+Type** and assigns a WCAG
 code-set (a subset of Core-17). At assessment time a file's *effective* code-set is resolved
 from the rules that match it, so e.g. Finance folders can be assessed against one code-set while
 HR-owned content uses another.
@@ -17,13 +18,14 @@ explicit higher-priority override":
   * if no rule matches, the file keeps `default_codes` (the global Assess selection) — scope
     rules are refinements over the default, never a silent narrowing to the empty set.
 
-A `file` is a dict with any subset of `path`, `parent_folder`, `owner`, `department`. A `rule`
+A `file` is a dict with any subset of `path`, `parent_folder`, `owner`, `department`,
+`content_type`. A `rule`
 is a dict: {rule_id, selector, value, codes(list), priority(int), is_override(bool),
 enabled(bool)}; `selector` ∈ SELECTORS.
 """
 from __future__ import annotations
 
-SELECTORS = ("folder", "owner", "department")
+SELECTORS = ("folder", "owner", "department", "content_type")
 
 
 def _norm(s) -> str:
@@ -37,6 +39,7 @@ def matches(file: dict, rule: dict) -> bool:
                  `parent_folder`), so a rule value of "Finance" targets everything under it.
     owner       — case-insensitive equality against `owner`.
     department  — case-insensitive equality against `department`.
+    content_type — case-insensitive equality against SharePoint's native Content Type.
 
     A blank rule value never matches — a rule that silently targeted every file would be a
     footgun, not a feature.
@@ -53,6 +56,8 @@ def matches(file: dict, rule: dict) -> bool:
         return _norm(file.get("owner")) == val
     if sel == "department":
         return _norm(file.get("department")) == val
+    if sel == "content_type":
+        return _norm(file.get("content_type")) == val
     return False
 
 

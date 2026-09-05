@@ -34,6 +34,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 import core
 import workspace_rbac as rbac
+import workspace_rollout as rollout
 import workspace_roles as wr
 
 router = APIRouter()
@@ -191,7 +192,7 @@ def list_roles(request: Request):
     # cannot revert an administrator's edits — it only fills in what is missing.
     wr.seed_builtin_roles(core.store, tenant_id=tenant, actor=_actor(request) or "system")
     return {"roles": [_role_out(r, counts) for r in core.store.list_workspace_roles(tenant_id=tenant)],
-            "enforced": wr.rbac_enabled()}
+            "enforced": wr.rbac_enabled(), "rollout": rollout.describe()}
 
 
 @router.get("/admin/roles/{role_id}")
@@ -435,5 +436,5 @@ def role_impact(email: str, request: Request, role_id: str = ""):
                         if not before.get("enforced") else before.get("capabilities") or ())
     return {"email": target, "role_id": role_id or None,
             "gains": sorted(after_caps - current), "loses": sorted(current - after_caps),
-            "enforced": wr.rbac_enabled(),
+            "enforced": wr.rbac_enabled(), "mode": rollout.mode(),
             "now": datetime.now(timezone.utc).isoformat(timespec="seconds")}

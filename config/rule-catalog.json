@@ -26,7 +26,7 @@
       "wcag_level": "A",
       "severity": "SERIOUS",
       "fix_mode": "auto",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/DocumentTitleRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Docx/Rules/DocumentTitleRule.cs"
     },
     {
       "id": "DOCX-LANG-001",
@@ -38,7 +38,7 @@
       "wcag_level": "A",
       "severity": "SERIOUS",
       "fix_mode": "auto",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/DocumentLanguageRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Docx/Rules/DocumentLanguageRule.cs"
     },
     {
       "id": "DOCX-TABLE-001",
@@ -50,7 +50,7 @@
       "wcag_level": "A",
       "severity": "SERIOUS",
       "fix_mode": "auto",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/TableHeaderRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Docx/Rules/TableHeaderRule.cs"
     },
     {
       "id": "DOCX-CONTRAST-001",
@@ -62,7 +62,7 @@
       "wcag_level": "AA",
       "severity": "SERIOUS",
       "fix_mode": "auto",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/ColourContrastRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Docx/Rules/ColourContrastRule.cs"
     },
     {
       "id": "DOCX-HEAD-001",
@@ -74,7 +74,7 @@
       "wcag_level": "A",
       "severity": "MODERATE",
       "fix_mode": "auto",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/HeadingStructureRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Docx/Rules/HeadingStructureRule.cs"
     },
     {
       "id": "DOCX-LINK-001",
@@ -86,7 +86,7 @@
       "wcag_level": "A",
       "severity": "MODERATE",
       "fix_mode": "ai-assisted",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/LinkPurposeRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Docx/Rules/LinkPurposeRule.cs"
     },
     {
       "id": "DOCX-LANGPART-001",
@@ -98,7 +98,7 @@
       "wcag_level": "AA",
       "severity": "MODERATE",
       "fix_mode": "ai-assisted",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/LanguageOfPartsRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Docx/Rules/LanguageOfPartsRule.cs"
     },
     {
       "id": "DOCX-BOOKMARK-001",
@@ -110,7 +110,7 @@
       "wcag_level": "A",
       "severity": "MINOR",
       "fix_mode": "auto",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Docx/Rules/BookmarksRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Docx/Rules/BookmarksRule.cs"
     },
     {
       "id": "DOCX-ORDER-001",
@@ -232,7 +232,7 @@
       "wcag_level": "A",
       "severity": "SERIOUS",
       "fix_mode": "auto",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/SlideTitleRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Pptx/Rules/SlideTitleRule.cs"
     },
     {
       "id": "PPTX-TITLE-002",
@@ -244,7 +244,7 @@
       "wcag_level": "A",
       "severity": "MODERATE",
       "fix_mode": "auto",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/SlideTitleUniquenessRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Pptx/Rules/SlideTitleUniquenessRule.cs"
     },
     {
       "id": "PPTX-LANG-001",
@@ -256,7 +256,7 @@
       "wcag_level": "A",
       "severity": "SERIOUS",
       "fix_mode": "auto",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/DocumentLanguageRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Pptx/Rules/DocumentLanguageRule.cs"
     },
     {
       "id": "PPTX-ORDER-001",
@@ -268,7 +268,7 @@
       "wcag_level": "A",
       "severity": "SERIOUS",
       "fix_mode": "auto",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/ReadingOrderRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Pptx/Rules/ReadingOrderRule.cs"
     },
     {
       "id": "PPTX-TABLE-001",
@@ -280,7 +280,7 @@
       "wcag_level": "A",
       "severity": "SERIOUS",
       "fix_mode": "auto",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/TableHeaderRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Pptx/Rules/TableHeaderRule.cs"
     },
     {
       "id": "PPTX-CONTRAST-001",
@@ -304,7 +304,7 @@
       "wcag_level": "A",
       "severity": "MODERATE",
       "fix_mode": "ai-assisted",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/LinkPurposeRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Pptx/Rules/LinkPurposeRule.cs"
     },
     {
       "id": "PPTX-ANIM-001",
@@ -316,7 +316,7 @@
       "wcag_level": "A",
       "severity": "MODERATE",
       "fix_mode": "human-only",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Pptx/Rules/AnimationOrderRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Pptx/Rules/AnimationOrderRule.cs"
     },
     {
       "id": "PPTX-SENSORY-001",
@@ -474,7 +474,7 @@
       "wcag_level": "A",
       "severity": "SERIOUS",
       "fix_mode": "auto",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/DocumentTitleRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Xlsx/Rules/DocumentTitleRule.cs"
     },
     {
       "id": "XLSX-LANG-001",
@@ -486,7 +486,7 @@
       "wcag_level": "A",
       "severity": "SERIOUS",
       "fix_mode": "auto",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/DocumentLanguageRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Xlsx/Rules/DocumentLanguageRule.cs"
     },
     {
       "id": "XLSX-TABLE-001",
@@ -498,7 +498,7 @@
       "wcag_level": "A",
       "severity": "SERIOUS",
       "fix_mode": "auto",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/TableHeaderRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Xlsx/Rules/TableHeaderRule.cs"
     },
     {
       "id": "XLSX-TABLE-NAME-001",
@@ -510,7 +510,7 @@
       "wcag_level": "A",
       "severity": "MODERATE",
       "fix_mode": "auto",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/TableNameRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Xlsx/Rules/TableNameRule.cs"
     },
     {
       "id": "XLSX-SHEET-002",
@@ -522,7 +522,7 @@
       "wcag_level": "AA",
       "severity": "MODERATE",
       "fix_mode": "auto",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/SheetNameUniquenessRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Xlsx/Rules/SheetNameUniquenessRule.cs"
     },
     {
       "id": "XLSX-SHEET-001",
@@ -534,7 +534,7 @@
       "wcag_level": "AA",
       "severity": "MODERATE",
       "fix_mode": "auto",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/SheetNameRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Xlsx/Rules/SheetNameRule.cs"
     },
     {
       "id": "XLSX-MERGE-001",
@@ -546,7 +546,7 @@
       "wcag_level": "A",
       "severity": "MODERATE",
       "fix_mode": "human-only",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/MergedCellsRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Xlsx/Rules/MergedCellsRule.cs"
     },
     {
       "id": "XLSX-HIDDEN-001",
@@ -558,7 +558,7 @@
       "wcag_level": "A",
       "severity": "MODERATE",
       "fix_mode": "human-only",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/HiddenContentRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Xlsx/Rules/HiddenContentRule.cs"
     },
     {
       "id": "XLSX-BLANK-001",
@@ -570,7 +570,7 @@
       "wcag_level": "A",
       "severity": "MODERATE",
       "fix_mode": "human-only",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/BlankWorksheetRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Xlsx/Rules/BlankWorksheetRule.cs"
     },
     {
       "id": "XLSX-LINK-001",
@@ -582,7 +582,7 @@
       "wcag_level": "A",
       "severity": "MODERATE",
       "fix_mode": "ai-assisted",
-      "source": "digital-accessibility/DigitalA11y.Analysers.DotNet/Xlsx/Rules/LinkPurposeRule.cs"
+      "source": "engine/office-analysers/DigitalA11y.Analysers.DotNet/Xlsx/Rules/LinkPurposeRule.cs"
     },
     {
       "id": "XLSX-SENSORY-001",
@@ -692,7 +692,7 @@
       "wcag_level": "A",
       "severity": "SERIOUS",
       "fix_mode": "ai-assisted",
-      "source": "deploy/public/vendor/worker-python/analysers/rules/pdf/tagged_pdf.py"
+      "source": "engine/pdf-analyser/analysers/rules/pdf/tagged_pdf.py"
     },
     {
       "id": "pdf.document-title",
@@ -704,7 +704,7 @@
       "wcag_level": "A",
       "severity": "SERIOUS",
       "fix_mode": "auto",
-      "source": "deploy/public/vendor/worker-python/analysers/rules/pdf/document_title.py"
+      "source": "engine/pdf-analyser/analysers/rules/pdf/document_title.py"
     },
     {
       "id": "pdf.document-language",
@@ -716,7 +716,7 @@
       "wcag_level": "A",
       "severity": "SERIOUS",
       "fix_mode": "auto",
-      "source": "deploy/public/vendor/worker-python/analysers/rules/pdf/document_language.py"
+      "source": "engine/pdf-analyser/analysers/rules/pdf/document_language.py"
     },
     {
       "id": "pdf.reading-order",
@@ -728,7 +728,7 @@
       "wcag_level": "A",
       "severity": "MODERATE",
       "fix_mode": "ai-assisted",
-      "source": "deploy/public/vendor/worker-python/analysers/rules/pdf/reading_order.py"
+      "source": "engine/pdf-analyser/analysers/rules/pdf/reading_order.py"
     },
     {
       "id": "pdf.display-doc-title",
@@ -740,7 +740,7 @@
       "wcag_level": "A",
       "severity": "MODERATE",
       "fix_mode": "auto",
-      "source": "deploy/public/vendor/worker-python/analysers/rules/pdf/display_title.py"
+      "source": "engine/pdf-analyser/analysers/rules/pdf/display_title.py"
     },
     {
       "id": "pdf.missing-bookmarks",
@@ -752,7 +752,7 @@
       "wcag_level": "A",
       "severity": "MINOR",
       "fix_mode": "auto",
-      "source": "deploy/public/vendor/worker-python/analysers/rules/pdf/bookmarks.py"
+      "source": "engine/pdf-analyser/analysers/rules/pdf/bookmarks.py"
     },
     {
       "id": "pdf.sensory-characteristics",

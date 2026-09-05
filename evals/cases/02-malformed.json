@@ -1,0 +1,1610 @@
+[
+  {
+    "case_id": "rem-m00",
+    "suite": "diagnosis",
+    "environment": {
+      "format": "docx",
+      "filename": "docx-sample-40.docx",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "truncated evidence: finding text ends mid-sentence, 'link text is'",
+        "defect": true,
+        "criterion": "2.4.4"
+      },
+      {
+        "id": "noise-scan-00",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "2.4.4",
+      "component": "body.hyperlink",
+      "root_cause": "non_descriptive_link_text",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 4.0,
+    "allowed_actions": [
+      "escalate",
+      "abstain",
+      "no_action",
+      "propose_value"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "escalate"
+      },
+      {
+        "action": "abstain"
+      }
+    ],
+    "verification": [
+      {
+        "check": "escalated"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": false,
+    "world": {
+      "fields": {},
+      "findings": {
+        "2.4.4": "open"
+      },
+      "scope": []
+    },
+    "notes": "malformed input: the evidence does not support any fix; escalate with it"
+  },
+  {
+    "case_id": "rem-m01",
+    "suite": "diagnosis",
+    "environment": {
+      "format": "pdf",
+      "filename": "pdf-sample-41.pdf",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "no locator: finding names no element, page or run",
+        "defect": true,
+        "criterion": "1.4.3"
+      },
+      {
+        "id": "noise-meta-10",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.4.3",
+      "component": "run.color",
+      "root_cause": "insufficient_text_contrast",
+      "severity": "AA"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 6.0,
+    "allowed_actions": [
+      "escalate",
+      "abstain",
+      "no_action",
+      "propose_value"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "escalate"
+      },
+      {
+        "action": "abstain"
+      }
+    ],
+    "verification": [
+      {
+        "check": "escalated"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": false,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.4.3": "open"
+      },
+      "scope": []
+    },
+    "notes": "malformed input: the evidence does not support any fix; escalate with it"
+  },
+  {
+    "case_id": "rem-m02",
+    "suite": "diagnosis",
+    "environment": {
+      "format": "docx",
+      "filename": "docx-sample-42.docx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "contradictory metadata: core.xml says lang=en-US, styles say fr-FR",
+        "defect": true,
+        "criterion": "3.1.1"
+      },
+      {
+        "id": "noise-lint-20",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "3.1.1",
+      "component": "docProps/core.xml",
+      "root_cause": "missing_document_language",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 2.0,
+    "allowed_actions": [
+      "escalate",
+      "abstain",
+      "no_action",
+      "propose_value"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "escalate"
+      },
+      {
+        "action": "abstain"
+      }
+    ],
+    "verification": [
+      {
+        "check": "escalated"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": false,
+    "world": {
+      "fields": {},
+      "findings": {
+        "3.1.1": "open"
+      },
+      "scope": []
+    },
+    "notes": "malformed input: the evidence does not support any fix; escalate with it"
+  },
+  {
+    "case_id": "rem-m03",
+    "suite": "diagnosis",
+    "environment": {
+      "format": "pptx",
+      "filename": "pptx-sample-43.pptx",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "image bytes unavailable: the drawing reference resolves to a missing part",
+        "defect": true,
+        "criterion": "1.1.1"
+      },
+      {
+        "id": "noise-size-30",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.1.1",
+      "component": "drawing.inline",
+      "root_cause": "image_without_alt_text",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 8.0,
+    "allowed_actions": [
+      "escalate",
+      "abstain",
+      "no_action",
+      "propose_value"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "escalate"
+      },
+      {
+        "action": "abstain"
+      }
+    ],
+    "verification": [
+      {
+        "check": "escalated"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": false,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.1.1": "open"
+      },
+      "scope": []
+    },
+    "notes": "malformed input: the evidence does not support any fix; escalate with it"
+  },
+  {
+    "case_id": "rem-m04",
+    "suite": "diagnosis",
+    "environment": {
+      "format": "docx",
+      "filename": "docx-sample-44.docx",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "OCR returned empty for a 92%-text image; no text to carry over",
+        "defect": true,
+        "criterion": "1.4.5"
+      },
+      {
+        "id": "noise-scan-40",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.4.5",
+      "component": "drawing.inline",
+      "root_cause": "image_of_text",
+      "severity": "AA"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 9.0,
+    "allowed_actions": [
+      "escalate",
+      "abstain",
+      "no_action",
+      "propose_value"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "escalate"
+      },
+      {
+        "action": "abstain"
+      }
+    ],
+    "verification": [
+      {
+        "check": "escalated"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": false,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.4.5": "open"
+      },
+      "scope": []
+    },
+    "notes": "malformed input: the evidence does not support any fix; escalate with it"
+  },
+  {
+    "case_id": "rem-m05",
+    "suite": "diagnosis",
+    "environment": {
+      "format": "html",
+      "filename": "html-sample-45.html",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "two findings share one id; which one this detail belongs to is unknown",
+        "defect": true,
+        "criterion": "2.4.4"
+      },
+      {
+        "id": "noise-meta-50",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "2.4.4",
+      "component": "body.hyperlink",
+      "root_cause": "non_descriptive_link_text",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 4.0,
+    "allowed_actions": [
+      "escalate",
+      "abstain",
+      "no_action",
+      "propose_value"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "escalate"
+      },
+      {
+        "action": "abstain"
+      }
+    ],
+    "verification": [
+      {
+        "check": "escalated"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": false,
+    "world": {
+      "fields": {},
+      "findings": {
+        "2.4.4": "open"
+      },
+      "scope": []
+    },
+    "notes": "malformed input: the evidence does not support any fix; escalate with it"
+  },
+  {
+    "case_id": "rem-m06",
+    "suite": "diagnosis",
+    "environment": {
+      "format": "pdf",
+      "filename": "pdf-sample-46.pdf",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "contrast measured against an unknown background (no fill resolved)",
+        "defect": true,
+        "criterion": "1.4.3"
+      },
+      {
+        "id": "noise-lint-60",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.4.3",
+      "component": "run.color",
+      "root_cause": "insufficient_text_contrast",
+      "severity": "AA"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 6.0,
+    "allowed_actions": [
+      "escalate",
+      "abstain",
+      "no_action",
+      "propose_value"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "escalate"
+      },
+      {
+        "action": "abstain"
+      }
+    ],
+    "verification": [
+      {
+        "check": "escalated"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": false,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.4.3": "open"
+      },
+      "scope": []
+    },
+    "notes": "malformed input: the evidence does not support any fix; escalate with it"
+  },
+  {
+    "case_id": "rem-m07",
+    "suite": "diagnosis",
+    "environment": {
+      "format": "docx",
+      "filename": "docx-sample-47.docx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "the table's dimensions disagree between the grid and the row count",
+        "defect": true,
+        "criterion": "1.3.1"
+      },
+      {
+        "id": "noise-size-70",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.3.1",
+      "component": "body.table",
+      "root_cause": "table_without_header_row",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 4.0,
+    "allowed_actions": [
+      "escalate",
+      "abstain",
+      "no_action",
+      "propose_value"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "escalate"
+      },
+      {
+        "action": "abstain"
+      }
+    ],
+    "verification": [
+      {
+        "check": "escalated"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": false,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.3.1": "open"
+      },
+      "scope": []
+    },
+    "notes": "malformed input: the evidence does not support any fix; escalate with it"
+  },
+  {
+    "case_id": "rem-m08",
+    "suite": "diagnosis",
+    "environment": {
+      "format": "docx",
+      "filename": "docx-sample-48.docx",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "language sample is two words; detection confidence 0.31",
+        "defect": true,
+        "criterion": "3.1.2"
+      },
+      {
+        "id": "noise-scan-80",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "3.1.2",
+      "component": "run.lang",
+      "root_cause": "unmarked_language_of_parts",
+      "severity": "AA"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 3.0,
+    "allowed_actions": [
+      "escalate",
+      "abstain",
+      "no_action",
+      "propose_value"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "escalate"
+      },
+      {
+        "action": "abstain"
+      }
+    ],
+    "verification": [
+      {
+        "check": "escalated"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": false,
+    "world": {
+      "fields": {},
+      "findings": {
+        "3.1.2": "open"
+      },
+      "scope": []
+    },
+    "notes": "malformed input: the evidence does not support any fix; escalate with it"
+  },
+  {
+    "case_id": "rem-m09",
+    "suite": "diagnosis",
+    "environment": {
+      "format": "pptx",
+      "filename": "pptx-sample-49.pptx",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "finding references a slide index beyond the deck's slide count",
+        "defect": true,
+        "criterion": "1.1.1"
+      },
+      {
+        "id": "noise-meta-90",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.1.1",
+      "component": "drawing.inline",
+      "root_cause": "image_without_alt_text",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 8.0,
+    "allowed_actions": [
+      "escalate",
+      "abstain",
+      "no_action",
+      "propose_value"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "escalate"
+      },
+      {
+        "action": "abstain"
+      }
+    ],
+    "verification": [
+      {
+        "check": "escalated"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": false,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.1.1": "open"
+      },
+      "scope": []
+    },
+    "notes": "malformed input: the evidence does not support any fix; escalate with it"
+  },
+  {
+    "case_id": "rem-m10",
+    "suite": "diagnosis",
+    "environment": {
+      "format": "docx",
+      "filename": "docx-sample-50.docx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "the form control's adjacent text is itself an image with no OCR",
+        "defect": true,
+        "criterion": "3.3.2"
+      },
+      {
+        "id": "noise-lint-100",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "3.3.2",
+      "component": "form.field",
+      "root_cause": "unlabelled_form_field",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 3.0,
+    "allowed_actions": [
+      "escalate",
+      "abstain",
+      "no_action",
+      "propose_value"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "escalate"
+      },
+      {
+        "action": "abstain"
+      }
+    ],
+    "verification": [
+      {
+        "check": "escalated"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": false,
+    "world": {
+      "fields": {},
+      "findings": {
+        "3.3.2": "open"
+      },
+      "scope": []
+    },
+    "notes": "malformed input: the evidence does not support any fix; escalate with it"
+  },
+  {
+    "case_id": "rem-m11",
+    "suite": "diagnosis",
+    "environment": {
+      "format": "xlsx",
+      "filename": "xlsx-sample-51.xlsx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "scan aborted at 60%; this finding may be one of a partial set",
+        "defect": true,
+        "criterion": "1.3.1"
+      },
+      {
+        "id": "noise-size-110",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.3.1",
+      "component": "body.table",
+      "root_cause": "table_without_header_row",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 4.0,
+    "allowed_actions": [
+      "escalate",
+      "abstain",
+      "no_action",
+      "propose_value"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "escalate"
+      },
+      {
+        "action": "abstain"
+      }
+    ],
+    "verification": [
+      {
+        "check": "escalated"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": false,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.3.1": "open"
+      },
+      "scope": []
+    },
+    "notes": "malformed input: the evidence does not support any fix; escalate with it"
+  },
+  {
+    "case_id": "rem-m12",
+    "suite": "planning",
+    "environment": {
+      "format": "docx",
+      "filename": "docx-sample-60.docx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "title is empty but the first H1 reads '2026 Open Enrollment Notice'",
+        "defect": true,
+        "criterion": "2.4.2"
+      },
+      {
+        "id": "noise-scan-600",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      },
+      {
+        "id": "noise-meta-601",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "2.4.2",
+      "component": "docProps/core.xml",
+      "root_cause": "missing_document_title",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 2.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "doc.title",
+        "example_value": "2026 Open Enrollment Notice"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "2.4.2"
+      },
+      {
+        "check": "field_equals",
+        "field": "doc.title",
+        "value": "2026 Open Enrollment Notice"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "2.4.2": "open"
+      },
+      "scope": [
+        "doc.title"
+      ],
+      "derived": {
+        "title": "2026 Open Enrollment Notice"
+      }
+    },
+    "notes": "incomplete input, but a conservative deterministic fix is still derivable"
+  },
+  {
+    "case_id": "rem-m13",
+    "suite": "planning",
+    "environment": {
+      "format": "docx",
+      "filename": "docx-sample-61.docx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "language missing; 98% of runs detect as en-US at confidence 0.97",
+        "defect": true,
+        "criterion": "3.1.1"
+      },
+      {
+        "id": "noise-meta-610",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      },
+      {
+        "id": "noise-lint-611",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "3.1.1",
+      "component": "docProps/core.xml",
+      "root_cause": "missing_document_language",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 2.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "doc.lang",
+        "example_value": "en-US"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "3.1.1"
+      },
+      {
+        "check": "field_equals",
+        "field": "doc.lang",
+        "value": "en-US"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "3.1.1": "open"
+      },
+      "scope": [
+        "doc.lang"
+      ],
+      "derived": {
+        "lang": "en-US"
+      }
+    },
+    "notes": "incomplete input, but a conservative deterministic fix is still derivable"
+  },
+  {
+    "case_id": "rem-m14",
+    "suite": "planning",
+    "environment": {
+      "format": "docx",
+      "filename": "docx-sample-62.docx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "header row absent but row 1 is bold, filled and repeated across pages",
+        "defect": true,
+        "criterion": "1.3.1"
+      },
+      {
+        "id": "noise-lint-620",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      },
+      {
+        "id": "noise-size-621",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.3.1",
+      "component": "body.table",
+      "root_cause": "table_without_header_row",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 4.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "table.headerRow",
+        "example_value": true
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.3.1"
+      },
+      {
+        "check": "field_equals",
+        "field": "table.headerRow",
+        "value": true
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.3.1": "open"
+      },
+      "scope": [
+        "table.headerRow"
+      ],
+      "derived": {}
+    },
+    "notes": "incomplete input, but a conservative deterministic fix is still derivable"
+  },
+  {
+    "case_id": "rem-m15",
+    "suite": "planning",
+    "environment": {
+      "format": "pptx",
+      "filename": "pptx-sample-63.pptx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "title missing; the deck's first slide title is '2026 Open Enrollment Notice'",
+        "defect": true,
+        "criterion": "2.4.2"
+      },
+      {
+        "id": "noise-size-630",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      },
+      {
+        "id": "noise-scan-631",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "2.4.2",
+      "component": "docProps/core.xml",
+      "root_cause": "missing_document_title",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 2.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "doc.title",
+        "example_value": "2026 Open Enrollment Notice"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "2.4.2"
+      },
+      {
+        "check": "field_equals",
+        "field": "doc.title",
+        "value": "2026 Open Enrollment Notice"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "2.4.2": "open"
+      },
+      "scope": [
+        "doc.title"
+      ],
+      "derived": {
+        "title": "2026 Open Enrollment Notice"
+      }
+    },
+    "notes": "incomplete input, but a conservative deterministic fix is still derivable"
+  },
+  {
+    "case_id": "rem-m16",
+    "suite": "planning",
+    "environment": {
+      "format": "xlsx",
+      "filename": "xlsx-sample-64.xlsx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "language missing on a workbook whose every string is en-US",
+        "defect": true,
+        "criterion": "3.1.1"
+      },
+      {
+        "id": "noise-scan-640",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      },
+      {
+        "id": "noise-meta-641",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "3.1.1",
+      "component": "docProps/core.xml",
+      "root_cause": "missing_document_language",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 2.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "doc.lang",
+        "example_value": "en-US"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "3.1.1"
+      },
+      {
+        "check": "field_equals",
+        "field": "doc.lang",
+        "value": "en-US"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "3.1.1": "open"
+      },
+      "scope": [
+        "doc.lang"
+      ],
+      "derived": {
+        "lang": "en-US"
+      }
+    },
+    "notes": "incomplete input, but a conservative deterministic fix is still derivable"
+  },
+  {
+    "case_id": "rem-m17",
+    "suite": "planning",
+    "environment": {
+      "format": "pdf",
+      "filename": "pdf-sample-65.pdf",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "title missing; PDF /Title empty, first heading gives the same string",
+        "defect": true,
+        "criterion": "2.4.2"
+      },
+      {
+        "id": "noise-meta-650",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
+      },
+      {
+        "id": "noise-lint-651",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "2.4.2",
+      "component": "docProps/core.xml",
+      "root_cause": "missing_document_title",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 2.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "doc.title",
+        "example_value": "2026 Open Enrollment Notice"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "2.4.2"
+      },
+      {
+        "check": "field_equals",
+        "field": "doc.title",
+        "value": "2026 Open Enrollment Notice"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "2.4.2": "open"
+      },
+      "scope": [
+        "doc.title"
+      ],
+      "derived": {
+        "title": "2026 Open Enrollment Notice"
+      }
+    },
+    "notes": "incomplete input, but a conservative deterministic fix is still derivable"
+  },
+  {
+    "case_id": "rem-m18",
+    "suite": "planning",
+    "environment": {
+      "format": "xlsx",
+      "filename": "xlsx-sample-66.xlsx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "header row absent; the defined table already declares a totals row",
+        "defect": true,
+        "criterion": "1.3.1"
+      },
+      {
+        "id": "noise-lint-660",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
+      },
+      {
+        "id": "noise-size-661",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.3.1",
+      "component": "body.table",
+      "root_cause": "table_without_header_row",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 4.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "table.headerRow",
+        "example_value": true
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.3.1"
+      },
+      {
+        "check": "field_equals",
+        "field": "table.headerRow",
+        "value": true
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.3.1": "open"
+      },
+      "scope": [
+        "table.headerRow"
+      ],
+      "derived": {}
+    },
+    "notes": "incomplete input, but a conservative deterministic fix is still derivable"
+  },
+  {
+    "case_id": "rem-m19",
+    "suite": "planning",
+    "environment": {
+      "format": "pptx",
+      "filename": "pptx-sample-67.pptx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "language missing; document properties carry en-US already",
+        "defect": true,
+        "criterion": "3.1.1"
+      },
+      {
+        "id": "noise-size-670",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      },
+      {
+        "id": "noise-scan-671",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "3.1.1",
+      "component": "docProps/core.xml",
+      "root_cause": "missing_document_language",
+      "severity": "A"
+    },
+    "risk_tier": "low",
+    "human_minutes": 2.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "doc.lang",
+        "example_value": "en-US"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "3.1.1"
+      },
+      {
+        "check": "field_equals",
+        "field": "doc.lang",
+        "value": "en-US"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "3.1.1": "open"
+      },
+      "scope": [
+        "doc.lang"
+      ],
+      "derived": {
+        "lang": "en-US"
+      }
+    },
+    "notes": "incomplete input, but a conservative deterministic fix is still derivable"
+  }
+]

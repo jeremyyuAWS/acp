@@ -1,7 +1,32 @@
 # Postgres connection budget — proposal (H-02)
 
-**Status:** Proposal for the platform owner. **Nothing here is applied**, and no Azure setting was
-read or changed to produce it. **Created:** 30 August 2026.
+**Status:** The original analysis below is retained for audit history. The reviewed production
+baseline now explicitly limits every dedicated worker replica to two database connections and
+allows `acp-remediate` to scale from 5 to 10 replicas from its own queue. The executable model in
+`tests/test_db_connection_budget.py` gives an 82-connection steady ceiling and a 120-connection
+rolling-deploy ceiling; with the 15-connection reserve, both fit the measured 150-connection
+server limit. **Created:** 30 August 2026. **Capacity correction:** 5 September 2026.
+
+The scale rule counts only `remediate_file`, `rescore_file`, and `apply_approved_values` jobs and
+targets four queued jobs per replica. The connection cap is what makes that throughput increase
+safe; raising replicas without it would reproduce the over-budget topology documented below.
+
+> **Correction, 4 September 2026 — the topology in §1 and §2 is stale, and the headline number is
+> an understatement.** Everything below models ONE worker tier at 3–10 replicas. Production runs
+> `acp-app` plus THREE role-restricted worker apps (`acp-discovery` 1–2, `acp-assess` 5–5,
+> `acp-remediate` 5–5 — `deploy/public/rightsize-production.sh`, and `docs/worker-split.md`). The
+> split multiplied the term that already dominated: the steady ceiling is **384**, not 328, at the
+> same carried `ACP_WORKERS=12`.
+>
+> Two consequences for §3. There is no tier at max 10 for "worker `--max-replicas` 10 → 4" to act
+> on; and carried onto the deployed shape, that cut does **not** reach the budget — 328 on its own,
+> and still **156** with `ACP_DB_MAX_CONN=12` on every app. It would pay the throughput cost
+> (rightsize-production.sh keeps five replicas warm deliberately, for the batch stages' performance
+> baseline) without buying the margin.
+>
+> `tests/test_db_connection_budget.py` now computes over N tiers and pins all of the above. §4's
+> preconditions are unchanged and still come first — `docs/runbooks/verify-connection-budget-inputs.md`
+> is the read-only procedure for step 1.
 
 The arithmetic below is executable: `tests/test_db_connection_budget.py` derives every pool from
 the same `db_max_conn()` the containers use, so a change to the formula moves these numbers
@@ -30,6 +55,21 @@ access; reading live configuration is a separate authorised step):
 | `ACP_WORKERS` (worker tier) | 12 | 2 |
 | `max_connections` | 150 (user override) | 50 (system default) |
 | Observed 24h peak connections | 74 | 27 |
+| Mean database CPU | 98.36% | 16.55% |
+| Database SKU | `Standard_B1ms` | `Standard_B1ms` |
+
+**Where the CPU figure comes from, because tracing it leads somewhere misleading.**
+`docs/prd-reliability-hardening.md` §"Review window and method" is the source: Azure Monitor
+one-minute database metrics over 29 Aug 16:45 UTC – 30 Aug 16:45 UTC, reported as the 24-hour mean
+of minute averages, with **1,434 of 1,440 minutes averaging at least 90%** and staging at 16.55%
+over the same sampling as a control. That is a stated method with a corroborating distribution,
+not an impression.
+
+Cite it when repeating the number. `api/store.py` describes the same finding as coming from "a
+separate, parallel incident-review thread (not independently verified from this PR)", which reads
+as *unverified* if you stop there — it means not verified from within THAT PR, and the parallel
+workstream it points at is the document above. A reader tracing the figure through `store.py`
+alone will conclude it is hearsay and discount it. It is not.
 
 > **These two sets disagree, and that matters.** `deploy.sh` passes replica flags only on
 > `containerapp create`, never on `update`, so live limits persist from whatever was set out of
@@ -55,7 +95,7 @@ doubling of everything.
 Both environments' ceilings exceed their servers. These are **potential** ceilings — pools grow on
 demand, and the observed peaks were 74 and 27 — so nothing is breached today. What has changed is
 that the gap is now wider than when the incident was analysed, and the binding constraint in
-production is CPU (98.36% mean over 24h), not connection slots.
+production is CPU (98.36% mean over 24h — see §1's provenance note), not connection slots.
 
 **Why the fix is not "shrink the pools".** At 10 worker replicas the worker term dominates: even a
 pool of 10 per process — below one connection per thread, so every job thread would contend — still
@@ -64,6 +104,25 @@ leaves nothing for the API within 150. There is a test for exactly this
 down, or the database tier has to go up.
 
 ## 3. Proposal
+
+> **Everything in this section acts on the CONNECTION dimension, and that may not be the binding
+> one.** Read it together with the tier, which §1 records and which nothing below accounts for:
+> both environments run `Standard_B1ms`, a **burstable** SKU, and at the incident minute the
+> CPU-credit metric reported **1 remaining credit**. A burstable instance out of credits is
+> throttled to its baseline whatever `max_connections` says and however many replicas are running.
+> The observed connection peak was 74 of 150 — the ceiling this section lowers was never reached.
+>
+> **The two decisions are coupled, and that is the part most easily missed.** PRD H-16
+> (`docs/prd-reliability-hardening.md`): Azure's built-in PgBouncer is **not supported on the
+> Burstable tier**, so "put a pooler in front of it" and "change the tier" are one decision rather
+> than two independent options. The same PRD lists "database tier/proxy cost" as unresolved before
+> release and asks for a tier proposal with cost and rollout for separate approval.
+>
+> Tracked as issue #1307. This note exists because a reader acting from THIS document would
+> otherwise never encounter the constraint: the tier is specified in the reliability PRD and was
+> absent from the proposal that reached implementation. Nothing below is withdrawn — lowering a
+> ceiling the fleet can exceed is still worth doing — but do not read it as addressing the
+> saturation.
 
 Role-specific and explicit, because one formula for every role is what took the worker tier from
 20 to 28 as a side effect of fixing the API. `ACP_DB_MAX_CONN` is the override that breaks the
@@ -117,14 +176,24 @@ and therefore the owner's, not this document's.
 
 ## 4. What must happen before any of this is applied
 
-1. **Re-read live configuration from Azure** — replica minima/maxima, `ACP_WORKERS`, and
-   `max_connections` for both environments. §1 says which numbers are carried rather than
-   verified; do not apply a budget on top of stale inputs.
+1. **Re-read live configuration from Azure** — replica minima/maxima, `ACP_WORKERS`,
+   `max_connections`, and the **SKU plus `cpu_credits_remaining`** for both environments. §1 says
+   which numbers are carried rather than verified; do not apply a budget on top of stale inputs.
+   `docs/runbooks/verify-connection-budget-inputs.md` has the read-only commands, including the
+   two for the tier. The tier is not an afterthought in this list: if the server is a burstable
+   instance running out of credits, every other number here is describing a constraint that is not
+   the one binding.
 2. **Confirm the reserve** by counting real non-application clients rather than accepting 15/8.
 3. **Validate in staging first**, after its `max_connections` is raised — otherwise the validation
    environment is the constraint.
-4. **Watch CPU, not only connections.** Production sat at 98.36% mean CPU for 24h. Fewer, better
-   queries move that; more connections do not. The inventory fix (#1051, 8.0× → 1.0× read
+4. **Watch CPU, not only connections.** Production sat at 98.36% mean CPU for 24h, and
+   1,434 of its 1,440 minutes averaged at least 90% (`docs/prd-reliability-hardening.md`).
+   Fewer, better queries move that; more connections do not. Note also what the same document
+   records about the tier: both environments run **`Standard_B1ms`**, a burstable SKU, and at the
+   incident minute the CPU-credit metric reported **1 remaining credit** — so "add connections" and
+   "add replicas" are both being proposed against a server that was out of burst headroom. That
+   observation is the reviewers' own, and they were careful to say credits were not seen at zero;
+   do not upgrade it to proven credit exhaustion. The inventory fix (#1051, 8.0× → 1.0× read
    amplification) and shared `/jobs` polling (#1054, five pollers → one) both reduce the load this
    budget has to accommodate, and are worth measuring before re-tuning anything.
 

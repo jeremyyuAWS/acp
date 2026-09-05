@@ -84,6 +84,11 @@ def test_no_command_writes_anything(path, capsys, monkeypatch):
     monkeypatch.setattr(builtins, "open", guarded)
     for command in ("validate", "plan", "inventory", "values"):
         assert run([command, str(path)], capsys)[0] == 0
+    # `init` takes no spec and CAN write — but only with -o. Included here rather than exempted,
+    # because "the command that may write a file writes nothing when you do not ask it to" is a
+    # stronger statement than leaving it outside the sweep. tests/test_packaging_init.py owns the
+    # -o path and the refusal to overwrite.
+    assert run(["init", "--profile", "standard", "--platform", "azure"], capsys)[0] == 0
 
 
 @pytest.mark.parametrize("path", EXAMPLES, ids=EXAMPLE_IDS)
@@ -94,17 +99,44 @@ def test_no_command_prints_a_secret_value(path, capsys):
         text = out.out + out.err
         for marker in ("hunter2", "-----BEGIN", "sk-lf-", "AKIA"):
             assert marker not in text, f"{command} printed {marker}"
+    # init GENERATES a document, so it is the command most able to invent a credential — a
+    # placeholder password in generated output is one that gets committed with it.
+    _, out = run(["init", "--profile", "standard", "--platform", "azure"], capsys)
+    generated = out.out + out.err
+    for marker in ("hunter2", "-----BEGIN", "sk-lf-", "AKIA"):
+        assert marker not in generated, f"init printed {marker}"
 
 
-@pytest.mark.parametrize("command", sorted({
-    "init", "install", "status", "doctor", "upgrade", "rollback", "backup", "restore",
-    "uninstall", "support-bundle"}))
+def _unimplemented_commands():
+    """DERIVED, NOT LISTED. This was a hardcoded set and it went stale the moment `doctor` was
+    implemented — the test then demanded that a working command exit 2, which is a failure that
+    says "you built the thing" rather than "you broke something". Reading the CLI's own table
+    means implementing a command updates this test by construction."""
+    from acpctl.cli import NOT_YET_IMPLEMENTED
+    return sorted(NOT_YET_IMPLEMENTED)
+
+
+@pytest.mark.parametrize("command", _unimplemented_commands())
 def test_unimplemented_commands_refuse_rather_than_silently_succeeding(command, capsys):
     """PRD S10 names twelve commands. The ones this release does not implement exit 2 and say so;
     accepting-and-ignoring is how an operator comes to believe a backup ran."""
     code, out = run([command], capsys)
     assert code == 2
     assert "not implemented" in out.err
+
+
+def test_the_implemented_commands_are_not_also_listed_as_unimplemented():
+    """The other direction. A command can be built and left in NOT_YET_IMPLEMENTED, in which case
+    argparse registers the stub over the real one and the feature is unreachable from the CLI
+    while every unit test of its module passes."""
+    from acpctl.cli import NOT_YET_IMPLEMENTED, build_parser
+    parser = build_parser()
+    sub = next(a for a in parser._actions if hasattr(a, "choices") and a.choices)
+    for name in ("validate", "plan", "inventory", "values", "doctor"):
+        assert name in sub.choices, f"{name} is not registered as a command"
+        assert name not in NOT_YET_IMPLEMENTED, (
+            f"{name} is implemented but still listed as not-yet-implemented, so the CLI serves "
+            "the stub")
 
 
 def test_the_cli_lists_every_prd_command():

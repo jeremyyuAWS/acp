@@ -34,6 +34,7 @@ ACP = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ACP / "api"))
 
 import workspace_rbac as rbac        # noqa: E402
+import workspace_rollout as rollout   # noqa: E402
 import workspace_roles as wr         # noqa: E402
 
 OWNER = "owner@hosp.org"
@@ -68,11 +69,34 @@ def env(monkeypatch):
 @pytest.fixture
 def enforcing(monkeypatch):
     monkeypatch.setenv(wr.FLAG, "1")
+    monkeypatch.delenv(rollout.MODE_VAR, raising=False)
 
 
 @pytest.fixture
 def observing(monkeypatch):
+    """The rollout at `off`.
+
+    BOTH variables are cleared, not just the legacy one. Slice 6 added a second way to select a
+    rung, and a fixture that clears one of two switches is a fixture whose result depends on the
+    environment the suite happens to run in — green locally, and something else on a machine that
+    exports the other. The same reason `enforcing` clears MODE: it must mean enforce because it
+    said so, not because nothing contradicted it.
+    """
     monkeypatch.delenv(wr.FLAG, raising=False)
+    monkeypatch.delenv(rollout.MODE_VAR, raising=False)
+
+
+@pytest.fixture
+def observe_rung(monkeypatch):
+    """PRD §15 step 1 proper — roles resolved, nobody's access changed."""
+    monkeypatch.delenv(wr.FLAG, raising=False)
+    monkeypatch.setenv(rollout.MODE_VAR, rollout.OBSERVE)
+
+
+@pytest.fixture
+def navigation_rung(monkeypatch):
+    monkeypatch.delenv(wr.FLAG, raising=False)
+    monkeypatch.setenv(rollout.MODE_VAR, rollout.NAVIGATION)
 
 
 # ── the payload PRD §13 specifies ─────────────────────────────────────────────
@@ -169,14 +193,62 @@ def test_the_calculated_half_is_absent_once_enforcement_is_on(env, enforcing):
     assert "calculated" not in s.my_access(request=_req(REVIEWER))
 
 
-def test_an_unassigned_person_calculates_to_nothing_rather_than_to_everything(env, observing):
-    """Their EFFECTIVE access is untouched (the flag is off), but the preview must show what they
-    would get, and that is nothing — which is the signal an operator needs before flipping it."""
+def test_the_preview_for_an_unassigned_person_matches_what_enforcing_actually_does(env, observing):
+    """Their EFFECTIVE access is untouched, and the preview shows what enforcement WOULD give.
+
+    THIS TEST ASSERTED THE OPPOSITE UNTIL SLICE 6, and the two halves of this file disagreed
+    without either failing. It required `calculated` to be nothing for an unassigned person,
+    while test_an_unassigned_person_gets_the_default_role_once_enforcement_is_on — twelve lines
+    below — required enforcement to hand that same person the full default Platform User role.
+    Both passed, because the preview was computed by a SECOND code path that read only the
+    assigned role and never learned about the default that slice 4 added.
+
+    What that shipped was a rollout report saying every unassigned person was about to lose
+    everything. The operator response to reading that is to halt the rollout, or to spend a day
+    assigning roles nobody needed. A preview is only worth serving if it is the decision itself,
+    which is now what it is: access_for_email calls _enforced_decision for both.
+    """
     s, _core, _st = env
     out = s.my_access(request=_req(NOBODY))
-    assert set(out["tabs"].values()) == {"operate"}
-    assert set(out["calculated"]["tabs"].values()) == {"hidden"}
-    assert out["calculated"]["capabilities"] == []
+    assert set(out["tabs"].values()) == {"operate"}, "today's access must be untouched"
+    assert set(out["calculated"]["tabs"].values()) == {"operate"}
+    assert out["calculated"]["role"]["id"] == rbac.PLATFORM_USER
+    assert out["calculated"]["capabilities"], "the default role grants something"
+
+
+def test_the_preview_is_the_same_object_the_enforcing_path_returns(env, monkeypatch):
+    """The guarantee stated as a comparison rather than as two constants.
+
+    Constants go stale independently — that is exactly how the contradiction above survived. This
+    reads the preview at `observe` and the real answer at `enforce` for the same person and
+    requires them equal, so a future change to either path fails here rather than in production.
+    """
+    s, _core, _st = env
+    monkeypatch.delenv(wr.FLAG, raising=False)
+
+    monkeypatch.setenv(rollout.MODE_VAR, rollout.OBSERVE)
+    previewed = s.my_access(request=_req(NOBODY))["calculated"]
+
+    monkeypatch.setenv(rollout.MODE_VAR, rollout.ENFORCE)
+    actual = s.my_access(request=_req(NOBODY))
+
+    assert previewed["tabs"] == actual["tabs"]
+    assert previewed["capabilities"] == actual["capabilities"]
+    assert previewed["role"]["id"] == actual["role"]["id"]
+
+
+def test_a_narrowed_role_previews_the_loss_it_will_cause(env, observing):
+    """The other direction: somebody an administrator DID narrow must preview as narrowed.
+
+    Without this the test above is satisfiable by a preview that just echoes today's access —
+    which would be a preview that can never report bad news, and bad news is the only reason to
+    look at one.
+    """
+    s, _core, _st = env
+    out = s.my_access(request=_req(REVIEWER))
+    assert set(out["tabs"].values()) == {"operate"}, "today's access must be untouched"
+    assert out["calculated"]["tabs"]["liveops"] == "hidden"
+    assert out["calculated"]["role"]["id"] == rbac.REMEDIATION_REVIEWER
 
 
 # ── 4. the three ways access cannot be established ────────────────────────────

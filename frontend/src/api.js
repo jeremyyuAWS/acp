@@ -1006,6 +1006,18 @@ export const getRemediationStatus = (scanId) => {
                { headers: headers(), cache: 'no-store' }).then(j)
 }
 
+// The reconciled, revisioned run snapshot (PRD "Remediation Real-Time Operations Panel" §8) —
+// run state, the six-way document partition, phase rail, and the server's own invariant check.
+// Distinct from getRemediationStatus, which stays as-is and still feeds the progress bar.
+//
+// SIM RETURNS NOTHING, deliberately. Every other SIM answer is a plausible literal; a plausible
+// literal here would be a hand-written run state and a hand-balanced partition — i.e. a second,
+// fabricated implementation of the one contract this endpoint exists to make impossible to fake.
+// The panel renders nothing rather than a demo of a guarantee that was not checked.
+export const getRemediationSnapshot = (scanId) => (SIM
+  ? sim(null)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/snapshot`,
+          { headers: headers(), cache: 'no-store' }).then(j))
 // Authenticated Remediate progress stream.  Native EventSource cannot send ACP's bearer header,
 // so this shares Discover's fetch + ReadableStream SSE parser and exposes the same close contract.
 export function openRemediationStream(scanId, { onMessage, onDone, onError } = {}) {
@@ -1079,6 +1091,18 @@ export const putAiProvider = (patch) => (SIM
       method: 'PUT',
       headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(patch),
+    }).then(j))
+// The ONE call that carries a key value, and only to hand it to the deployment's Key Vault: the
+// backend stores the resulting reference name and never the value, and no read path returns it.
+// Available only where GET /ai/providers reports secret_write.available — a deployment without a
+// vault refuses (422) rather than storing the value anywhere else, so the panel hides the field
+// instead of offering a box that cannot work.
+export const putAiProviderSecret = (provider, value) => (SIM
+  ? sim({ providers: [], simulated: true })
+  : fetch(`${BASE}/ai/providers/${encodeURIComponent(provider)}/secret`, {
+      method: 'POST',
+      headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ value }),
     }).then(j))
 // Ask the server to send its own SYNTHETIC probe image to one provider and report what came back.
 // The body carries a provider NAME and nothing else — no key, and no document: the image is
@@ -1313,6 +1337,12 @@ export const suggestFix = (scanId, file, ruleId, locator = null, style = null) =
       + (style ? `&style=${encodeURIComponent(style)}` : ''),
       { headers: headers() }).then(j))
 
+export const getCopilotGuidance = (scanId, file, ruleId, locator = null) => (SIM
+  ? sim({ guidance: 'This chart compares quarterly revenue across regions — focus on the trend and which region leads.', provider: 'demo' }, 800)
+  : fetch(`${BASE}/ai/copilot?scan_id=${encodeURIComponent(scanId)}&file=${encodeURIComponent(file)}&rule_id=${encodeURIComponent(ruleId)}`
+      + (locator ? `&locator=${encodeURIComponent(locator)}` : ''),
+      { headers: headers() }).then(j))
+
 // Re-download and re-score ONE file the user fixed externally. Returns {job_id} for polling.
 export const rescoreFile = (scanId, file) => (SIM
   ? sim({ job_id: 'sim-rescore', workers: 1 }, 200)
@@ -1357,7 +1387,18 @@ export const getAdminActivity = () => (SIM
   ? sim(_simActivity(), 80)
   : fetch(`${BASE}/admin/activity`, { headers: headers(), cache: 'no-store' }).then(j))
 
-export function openAdminActivityStream({ onMessage, onError } = {}) {
+/**
+ * The live map's stream. Two event types on one connection:
+ *
+ *   `activity` — the job topology, emitted whenever it changes (several times a minute under load)
+ *   `azure`    — the Azure Monitor capacity block, emitted when the reading is RE-MEASURED
+ *
+ * They are separate because the Azure block is a comparatively large payload (fourteen metrics,
+ * each with its own fifteen-minute series) that Azure itself only resamples once a minute.
+ * Attaching it to every activity frame would multiply the stream's size for data that had not
+ * changed. `onAzure` is optional — a caller that does not want it simply omits it.
+ */
+export function openAdminActivityStream({ onMessage, onAzure, onError } = {}) {
   if (SIM) {
     onMessage?.(_simActivity())
     return { close: () => {} }
@@ -1378,8 +1419,10 @@ export function openAdminActivityStream({ onMessage, onError } = {}) {
         const parsed = parseSSEFrames(buffer)
         buffer = parsed.rest
         for (const frame of parsed.frames) {
-          if (frame.event !== 'activity' && frame.event !== 'message') continue
-          try { onMessage?.(JSON.parse(frame.data)) } catch { /* skip malformed event */ }
+          const handler = frame.event === 'azure' ? onAzure
+            : (frame.event === 'activity' || frame.event === 'message') ? onMessage : null
+          if (!handler) continue
+          try { handler(JSON.parse(frame.data)) } catch { /* skip malformed event */ }
         }
       }
       if (!controller.signal.aborted) onError?.(new Error('activity stream disconnected'))
@@ -1423,8 +1466,17 @@ export const setWorkerReplicas = (minReplicas) => (SIM
 // per-field graceful degradation, not a fetch failure; never rendered as a fabricated 0/'—'.
 export const getWorkerCapacity = () => (SIM
   ? sim({ configured: false, current_replicas: null, min_replicas: null, max_replicas: null,
-          cpu_percent: null, memory_percent: null, metrics_available: false, measured_at: null })
+          cpu_percent: null, memory_percent: null, cpu_cores_per_replica: null,
+          memory_per_replica: null, ephemeral_storage_per_replica: null,
+          workload_profile_name: null, active_revision_name: null,
+          metrics_available: false, measured_at: null })
   : fetch(`${BASE}/control/workers/capacity`, { headers: headers() }).then(j))
+// Cost transparency is deliberately separate from capacity telemetry: it distinguishes an
+// operations-configured estimate from delayed Azure billing actuals and always returns provenance.
+export const getLiveOpsCosts = () => (SIM
+  ? sim({ configured: false, services: [], estimated_hourly_usd: null, estimated_daily_usd: null,
+          billing: { configured: false, freshness_label: 'Azure billing feed not configured' } })
+  : fetch(`${BASE}/control/costs`, { headers: headers() }).then(j))
 // The FULL deploy/revision history for the acp-worker Container App — every revision, not just
 // the active one getWorkerCapacity() extracts a handful of fields from. Read-only, open to any
 // signed-in user, same reasoning as getWorkerCapacity/getWorkerReplicas. Revisions change only
@@ -1513,6 +1565,14 @@ export const getFileGeometry = (scanId, file, locator) => (SIM || !scanId || !fi
       .then(r => (r.ok ? r.json() : null))
       .then(d => (d && d.bbox) || null)
       .catch(() => null))
+
+// Deep link back to the source document at the given slide/page. Returns {url, label} on success,
+// {url: null} when no link is possible (local, missing SP token, Graph error). Non-blocking.
+export const getSourceLink = (scanId, file, page = 1) => (SIM || !scanId || !file
+  ? sim({ url: null })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/source_link?page=${page}`, { headers: headers() })
+      .then(r => (r.ok ? r.json() : { url: null }))
+      .catch(() => ({ url: null })))
 
 // The docx heading outline {before,after} for a heading finding's Structure evidence — computed on
 // demand from the document (mirrors getFileGeometry). null when unavailable (non-docx, <2 headings,
@@ -1977,7 +2037,8 @@ export const fetchEligibility = (codes = null) => {
 }
 
 // ── Scope rules (Phase C4d, Discover/Assess PRD §4.4 / AC-09) ────────────────────────
-// Per-file WCAG scope rules: admins target files by folder / owner / department and assign a
+// Per-file WCAG scope rules: admins target files by folder / owner / department / SharePoint
+// Content Type and assign a
 // Core-17 subset, with union / override precedence (see api/scope_resolver.py). The editor UI
 // (ScopeRules.jsx) reads the selector+catalog from /scope/selectors, lists/creates/toggles/deletes
 // rules over /scope/rules, and shows the scope-aware eligible-file count from
@@ -1988,7 +2049,7 @@ export const fetchEligibility = (codes = null) => {
 
 // The Core-17 catalog the SIM selector endpoint serves — same generated tables the rest of the UI
 // reads, so the picker shows "1.4.3 — Contrast (Minimum)" identically online and offline.
-const _SIM_SCOPE_SELECTORS = ['folder', 'owner', 'department']
+const _SIM_SCOPE_SELECTORS = ['folder', 'owner', 'department', 'content_type']
 let _simScopeRules = []          // in-memory rule store for the demo build
 let _simScopeSeq = 0
 const _simAllowedCodes = () => new Set(_SIM_CORE17.map((c) => c.code))

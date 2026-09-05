@@ -196,6 +196,29 @@ def test_the_assignment_appears_in_the_audit_trail_with_both_values(isolated_sto
     assert "analyst → viewer" in details, details
 
 
+def test_removing_a_role_is_recorded_as_an_unassignment_not_an_assignment(isolated_store):
+    """PRD §12 lists `role.assigned` AND `role.unassigned`, and they are not the same event to
+    somebody reading the log: assigning is a grant, removing the last role is a REVOCATION.
+
+    An auditor scanning for revocations should not have to notice that the arrow on a
+    `role.assigned` row happens to point at "none" — that is the kind of reading nobody does
+    reliably, and the row they miss is the one that matters.
+    """
+    st = isolated_store
+    st.upsert_person({"email": "jane@acp.test", "role": "user"})
+    wr.assign_role(st, email="jane@acp.test", role_id=rbac.ANALYST, actor="owner@acp.test")
+    wr.assign_role(st, email="jane@acp.test", role_id=None, actor="owner@acp.test")
+
+    actions = [d["action"] for d in st.list_decisions() if d["action"].startswith("role.")]
+    assert "role.assigned" in actions
+    assert "role.unassigned" in actions
+
+    removed = next(d for d in st.list_decisions() if d["action"] == "role.unassigned")
+    assert "analyst → none" in removed["detail"], (
+        f"the revocation row should carry both values: {removed['detail']}")
+    assert wr.role_id_for_email(st, "jane@acp.test") is None
+
+
 def test_an_unassigned_person_reads_as_None_not_as_a_default_role(isolated_store):
     """`None` is what makes the gate able to fail closed. If this returned 'viewer', a person the
     migration had not reached would silently acquire a role nobody granted them."""

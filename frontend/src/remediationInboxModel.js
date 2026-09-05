@@ -199,8 +199,8 @@ export function tabCounts(list, decisions = {}) {
 // still inferred only from a genuine decision, never an invented marker.
 export const WORKFLOW_TABS = ['needs-review', 'manual', 'awaiting-validation', 'blocked', 'completed']
 export const WORKFLOW_LABELS = {
-  'needs-review': 'Needs review', manual: 'Manual fixes',
-  'awaiting-validation': 'Awaiting validation', blocked: 'Blocked', completed: 'Completed',
+  'needs-review': 'Review AI suggestions', manual: 'Complete manual work',
+  'awaiting-validation': 'Awaiting verification', blocked: 'Blocked', completed: 'Completed',
 }
 
 /** The pipeline stage a finding sits in, for the workflow top tabs. */

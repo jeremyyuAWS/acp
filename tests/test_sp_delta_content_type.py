@@ -73,8 +73,13 @@ def test_the_carrier_key_is_marked_as_acps_own():
     """The dict is otherwise a faithful raw driveItem. A Graph-shaped name (`contentType`) would
     leave a reader unable to tell which fields Graph sent and which ACP invented."""
     raw = scanner._sp_file_from_inventory_row(_inv_row("F1", "policy.docx", "Contract"))
-    ours = [k for k in raw if k.startswith("_acp_")]
-    assert ours == ["_acp_content_type"]
+    ours = sorted(k for k in raw if k.startswith("_acp_"))
+    # Phase 3 carries the rest of the stored SharePoint metadata forward on the same convention
+    # (_acp_sp_carried) and for the same reason: re-reading it is a Graph call per file, which is
+    # the cost delta sync exists to avoid. Every ACP-invented key stays namespaced; no field here
+    # can be mistaken for something Graph sent.
+    assert ours == ["_acp_content_type", "_acp_sp_carried"]
+    assert all(not k.startswith("_acp_") or k in ours for k in raw)
     assert "contentType" not in raw
 
 

@@ -182,3 +182,52 @@ property. Four profiles whose names have enforced meaning.
 - A measurement of per-worker scratch use that moves the storage floor materially.
 - The Azure AKS adapter failing to reach parity with the Container Apps deployment, which would
   make "one Helm release" cost more than the divergence it prevents.
+
+## Addendum — phase 2, the chart (2026-09-04)
+
+The chart this ADR specified now exists at `packaging/chart/acp`, and building it settled three
+things the contract left open. Recorded here rather than in a new ADR because none of them changes
+a decision above; they are what those decisions turned out to mean in practice.
+
+**The chart does not vendor data-service subcharts, and a document asking for in-cluster data
+services fails the render.** `acpctl values` emits `chart: bitnami/postgresql`,
+`bitnami/redis` and `minio` for `self-hosted` and `embedded` modes. Vendoring those would make
+the ACP application package depend on three third-party charts whose registries, cadence and
+licensing ACP does not control — Bitnami's own chart README now points readers at a separate
+"Bitnami Legacy" registry for the previous image generation, which is the kind of change that
+breaks an install months after review. It would also blur the boundary this ADR is built on: a
+chart that ships its own Postgres has quietly answered the question the adapter exists to answer.
+
+So the chart consumes an *endpoint*, and `helm template` fails with a message naming the mode
+when asked for anything else. The alternative — render the application and note the gap — installs
+an ACP that cannot start and reports success doing it. **The practical consequence is that the
+`regulated` example as shipped does not render without an override** (`--set
+postgresql.external=true`, etc.), because that profile asks for `self-hosted`. That is a real
+limitation and the escape path is tested; whether `self-hosted` should mean "in-cluster, and the
+operator provisions it" rather than "in-cluster, and the chart provisions it" is a contract
+question worth deciding deliberately, and this addendum does not decide it.
+
+**The worker autoscaler had to learn what the queue actually looks like.** The natural KEDA
+trigger from reading the values file is `WHERE role = '<role>'`. The `jobs` table has no `role`
+column — it has `type`, and a role maps to a *tuple of job types* in `api/core.py`. A scaler
+against a missing column is a Postgres error that KEDA logs while scaling nothing: the tier sits
+at its floor, the backlog grows, and the only symptom is autoscaling that never happens. The lane
+lists are now emitted by `acpctl` from `inventory.LANE_JOB_TYPES`, which
+`tests/test_packaging_chart.py` pins against `core`'s own tuples and against the handler registry.
+
+**The portability claim is now checked on rendered objects, not just on values.**
+`test_packaging_values.py` establishes that the application half of the *values* is identical
+across platforms — a claim about the renderer. `test_packaging_chart.py` renders four platforms
+through `helm template` and requires the Deployments and Jobs to match, with the adapter-owned
+fields (image registry, platform label, `ACP_PLATFORM`) normalised away and a companion test
+asserting the adapter half genuinely differs. A template *can* special-case a cloud
+(`if eq .Values.acpDeployment.platform "azure"`) and no values test would notice; this one does.
+`ACP_PLATFORM` is normalised only because nothing reads it, which is itself asserted — the moment
+application code branches on it, the normalisation would be hiding the fork it exists to catch.
+
+Three cluster prerequisites are rendered-but-unenforceable, and two of them fail **silently**:
+a `ScaledObject` without KEDA and a `NetworkPolicy` under a CNI that does not implement them are
+both accepted by the API server and quietly do nothing. `acpctl doctor` now checks both against
+a live cluster (KEDA directly; NetworkPolicy enforcement by inference from the CNI, since it has
+no API to query) and reports a check it could not RUN as a blocker rather than a pass — the
+checks that cannot run are the ones guarding the failures that are silent.

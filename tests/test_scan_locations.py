@@ -159,28 +159,49 @@ def test_a_sharepoint_location_carries_its_drive():
     """A Graph item id is unique only WITHIN a drive, so a bare id does not identify a folder.
     _sp_list already stamps driveId per file for this reason; a scope that dropped it would pick
     the signed-in user's folder of that id, or nothing."""
-    locs, site = scanner._sp_locations(["b!drive1/01ITEM"])
+    locs, sites = scanner._sp_locations(["b!drive1/01ITEM"])
     assert locs == [("b!drive1", "01ITEM")]
-    assert site is None
+    assert sites == []
 
 
 def test_a_bare_id_is_still_read_as_a_site():
     """The site picker has always sent one, so an existing caller must be unchanged."""
-    locs, site = scanner._sp_locations(["contoso.sharepoint.com,guid,guid"])
+    locs, sites = scanner._sp_locations(["contoso.sharepoint.com,guid,guid"])
     assert locs == []
-    assert site == "contoso.sharepoint.com,guid,guid"
+    assert sites == ["contoso.sharepoint.com,guid,guid"]
+
+
+def test_every_selected_site_is_returned_not_just_the_first():
+    """THE multi-site defect, at its source.
+
+    This used to keep the first bare root (`elif site is None`) and drop the rest, silently: a
+    request naming three sites was answered with one site's documents, with no error and no
+    truncation flag, and every count downstream — coverage, the compliance assertion — was
+    computed from a third of the estate the operator asked about.
+    """
+    locs, sites = scanner._sp_locations(["contoso,a,1", "contoso,b,2", "contoso,c,3"])
+    assert locs == []
+    assert sites == ["contoso,a,1", "contoso,b,2", "contoso,c,3"]
+
+
+def test_the_same_site_twice_is_one_site():
+    """Not twice the estate — and the duplicate walk would spend budget belonging to a site that
+    has not been walked yet."""
+    _, sites = scanner._sp_locations(["contoso,a,1", "contoso,a,1"])
+    assert sites == ["contoso,a,1"]
 
 
 def test_sites_and_folders_can_be_mixed():
-    locs, site = scanner._sp_locations(["contoso,a,b", "b!d/01A", "b!d/01B"])
-    assert site == "contoso,a,b"
+    locs, sites = scanner._sp_locations(["contoso,a,b", "b!d/01A", "b!d/01B"])
+    assert sites == ["contoso,a,b"]
     assert locs == [("b!d", "01A"), ("b!d", "01B")]
 
 
 def test_a_malformed_location_is_dropped_rather_than_scanning_everything(monkeypatch):
     """A half-written location must not silently widen the scan back to the whole drive."""
-    locs, site = scanner._sp_locations(["b!drive-with-no-item/", "/01ITEM"])
+    locs, sites = scanner._sp_locations(["b!drive-with-no-item/", "/01ITEM"])
     assert locs == []
+    assert sites == []
 
 
 def test_onedrive_folder_narrowing_is_recorded_as_a_boundary(monkeypatch):

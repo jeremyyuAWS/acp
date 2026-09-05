@@ -211,6 +211,12 @@
         },
         "autoscale": {
           "$ref": "#/$defs/autoscale"
+        },
+        "connectionPool": {
+          "description": "ACP_DB_MAX_CONN: this tier's per-replica Postgres pool size, overriding the derived ACP_WORKERS + headroom formula. api/store.py's db_max_conn() returns max(2, this) and ignores the formula entirely when it is set, so declaring it here is the only way a document can describe a fleet that is safe BECAUSE its pools are capped. Production pins 2 on every worker tier (deploy/public/rightsize-production.sh, PR #1370); without this key the same fleet computes 384 worst-case connections against a 150-connection server and reads as unsafe.",
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 1000
         }
       }
     },
@@ -454,6 +460,14 @@
         "publicIngress": {
           "type": "boolean"
         },
+        "privateDataServices": {
+          "description": "The managed data services are reached over a private endpoint and refuse public network access. PRD S21 phase 3's private-network option, declared once rather than per service because an installation that reaches Postgres privately and Blob Storage over the internet has the posture of the weaker one. Absent means public endpoints, which is what today's Azure runs.",
+          "type": "boolean"
+        },
+        "privateControlPlane": {
+          "description": "The Kubernetes API server has no public endpoint. Separate from privateDataServices because they fail differently: a public API server is an administrative exposure, a public data endpoint is a data one, and a regulated installation is usually required to close both.",
+          "type": "boolean"
+        },
         "allowedEgress": {
           "description": "Hostnames this installation is permitted to reach. Empty means deny-all egress, which is a valid regulated posture and is checked against sources and ai.mode.",
           "type": "array",
@@ -488,6 +502,15 @@
           "type": "object",
           "additionalProperties": {
             "$ref": "#/$defs/secretRef"
+          }
+        },
+        "workloadIdentity": {
+          "description": "Required references satisfied by the platform's workload identity instead of by a stored secret — AKS/EKS/GKE workload identity, or an Azure Container Apps managed identity. Naming one here is a stronger posture than declaring a reference, not a weaker one: there is no credential to rotate, leak or mount. Today's Azure production reaches Blob Storage exactly this way (deploy/public/deploy.sh grants the worker's managed identity Storage Blob Data Contributor and stores no storage secret at all), and without this key the contract would require an operator to invent a credential the deployment does not need.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
           }
         }
       }

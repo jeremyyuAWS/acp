@@ -143,10 +143,20 @@ def build_snapshot(store, scan_id: str, owner: str | None = None, now_iso: str |
     if findings_so_far is None:
         pending.append("findings_so_far")
 
+    raw_scope = run.get("scope")
+    # The live card needs the repository boundary, not the whole inventory summary. Keep this
+    # small because this endpoint is polled; retain library names for SharePoint visibility.
+    visibility_scope = None
+    if isinstance(raw_scope, dict):
+        visibility_scope = {key: raw_scope[key] for key in (
+            "kind", "folder_name", "folders", "site", "site_name", "sites",
+        ) if key in raw_scope}
+
     snap = {
         "available": True,
         "run_id": scan_id,
         "source": run.get("source"),
+        "scope": visibility_scope,
         "state": state,
         "phase": phase,
         "active": state in _ACTIVE_STATES,

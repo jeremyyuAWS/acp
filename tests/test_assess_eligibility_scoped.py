@@ -2,7 +2,7 @@
 
 The plain `/assess/eligibility` counts a file eligible if any selected code has a lane for
 its format. The scoped variant first RESOLVES each file's effective code-set from the
-enabled scope rules (folder / owner / department), so a folder narrowed to a pptx-only
+enabled scope rules (folder / owner / department / SharePoint Content Type), so a folder narrowed to a pptx-only
 criterion drops the docx/xlsx/pdf files in it. Under test:
 
   * a folder rule that narrows a subset of files changes the eligible count and by-format,
@@ -43,15 +43,15 @@ def client(monkeypatch, isolated_store):
 # One document of each supported format under Finance/, plus one docx outside it.
 _INVENTORY = [
     {"file": "Finance/report.docx", "mime": "", "path": "Finance/report.docx",
-     "parent_folder": "Finance", "owner": "cfo@x.com"},
+     "parent_folder": "Finance", "owner": "cfo@x.com", "content_type": "Report"},
     {"file": "Finance/budget.xlsx", "mime": "", "path": "Finance/budget.xlsx",
-     "parent_folder": "Finance", "owner": "cfo@x.com"},
+     "parent_folder": "Finance", "owner": "cfo@x.com", "content_type": "Budget"},
     {"file": "Finance/deck.pptx", "mime": "", "path": "Finance/deck.pptx",
-     "parent_folder": "Finance", "owner": "cfo@x.com"},
+     "parent_folder": "Finance", "owner": "cfo@x.com", "content_type": "Presentation"},
     {"file": "Finance/manual.pdf", "mime": "", "path": "Finance/manual.pdf",
-     "parent_folder": "Finance", "owner": "cfo@x.com"},
+     "parent_folder": "Finance", "owner": "cfo@x.com", "content_type": "Policy"},
     {"file": "HR/handbook.docx", "mime": "", "path": "HR/handbook.docx",
-     "parent_folder": "HR", "owner": "hr@x.com"},
+     "parent_folder": "HR", "owner": "hr@x.com", "content_type": "Policy"},
     {"file": "HR/logo.png", "mime": "image/png", "path": "HR/logo.png",
      "parent_folder": "HR", "owner": "hr@x.com"},          # metadata-only, never eligible
 ]
@@ -115,6 +115,20 @@ def test_disabled_rule_does_not_apply(client):
     # enabled_only=True means the disabled rule is invisible → full Core-17 estate.
     assert body["eligible"] == 5
     assert body["rules_applied"] == 0
+
+
+def test_sharepoint_content_type_rule_reaches_inventory(client):
+    c, store = client
+    _seed(store)
+    store.create_scope_rule(
+        "r-policy", name="Policy keyboard-only", selector="content_type", value="policy",
+        codes=["2.1.1"], priority=10, is_override=True, enabled=True, created_by="demo")
+
+    body = c.get("/assess/eligibility/scoped").json()
+    # Both Policy documents are docx/pdf and 2.1.1 has only a PowerPoint lane, so they drop.
+    assert body["eligible"] == 3
+    assert body["by_format"] == {"pptx": 1, "xlsx": 1, "docx": 1}
+    assert body["rules_applied"] == 1
 
 
 def test_codes_query_sets_the_default_for_unmatched_files(client):

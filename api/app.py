@@ -125,18 +125,28 @@ if _pg_pool is not None:
 # table and how tests/test_capability_map_is_complete.py makes "100% of routes mapped" (PRD §18)
 # a checkable claim rather than an assertion.
 #
-# COST, STATED PLAINLY: when enforcement is ON this resolves the caller's role per request, which
-# is a settings read (the people record) plus a role read. There is deliberately NO cache —
-# PRD §9 requires a changed role to take effect on the user's NEXT request, and any TTL is a
-# window in which a revoked permission still works. With the flag OFF the middleware returns
-# before touching the store at all, so the default path pays nothing. Whether that per-request
-# cost is acceptable under real load is a slice-6 question, and it is not answered here.
+# COST, STATED PLAINLY: from the `observe` rung upward this resolves the caller's role per
+# request, which is a settings read (the people record) plus a role read. There is deliberately NO
+# cache — PRD §9 requires a changed role to take effect on the user's NEXT request, and any TTL is
+# a window in which a revoked permission still works. At `off` the middleware returns before
+# touching the store at all, so the default path pays nothing.
+#
+# Whether that per-request cost is acceptable under real load was left open in slice 4 and is now
+# ANSWERABLE rather than answered: `observe` pays exactly the same cost as `enforce` while changing
+# nobody's access, so a workspace measures it on its own traffic before anything depends on it.
+# That is a second reason to run the rung, beyond the permission evidence it was added for.
 @app.middleware("http")
 async def _workspace_capability_gate(request, call_next):
     import workspace_capability_map as capmap
+    import workspace_rollout as rollout
     import workspace_roles as wr
 
-    if not wr.rbac_enabled():
+    # `off` returns before touching the store, so the default path still pays nothing. From
+    # `observe` up the decision is COMPUTED on every mapped request — including the two rungs that
+    # do not act on it, which is the entire point: observe mode buys the answer to "would this
+    # have refused anybody?" and, incidentally, the answer to the per-request cost question the
+    # comment above leaves open, measured on real traffic instead of guessed at.
+    if not rollout.roles_resolved():
         return await call_next(request)
 
     route = core.match_registered_route(request.scope.get("path", ""), request.method)
@@ -149,7 +159,19 @@ async def _workspace_capability_gate(request, call_next):
     email = getattr(request.state, "user_email", None)
     access = wr.access_for_email(core.store, email, owner_email=core.OWNER_EMAIL,
                                  is_suspended=_capability_gate_suspended)
-    held = frozenset(access.get("capabilities") or ())
+
+    # BELOW `navigation`, `access` IS TODAY'S ACCESS AND ANSWERS THE WRONG QUESTION. It reports
+    # what the caller has now — everything, because OPEN_ACCESS — and `calculated` is what their
+    # role would grant. Reading the first would make observe mode measure nothing at all: the
+    # check below would always pass, no would-deny row would ever be written, and the rollout
+    # would report a clean run because it never asked the question. A monitor that cannot go
+    # wrong is not a monitor.
+    #
+    # Above that rung there is no `calculated` — the decision IS the access — so this collapses
+    # to `access` and the enforcing path is unchanged. The owner has no `calculated` at any rung,
+    # which is the carve-out doing its job: they cannot be measured into a denial either.
+    effective = access.get("calculated") or access
+    held = frozenset(effective.get("capabilities") or ())
     if held & needed:
         return await call_next(request)
 
@@ -159,12 +181,64 @@ async def _workspace_capability_gate(request, call_next):
     # about the CAPABILITY, and a role that lacks it is not being told about anyone else's data
     # by being told it lacks it. Conflating the two would make every permission error look like a
     # missing page, which is unactionable for the user and unloggable for an operator.
-    role = (access.get("role") or {}).get("name")
+    # The role enforcement WOULD use, which below `navigation` is not necessarily the assigned
+    # one — an unassigned person resolves to the default Platform User, and naming their assigned
+    # role (none) in the row would misreport why they were about to be refused.
+    role = (effective.get("role") or access.get("role") or {}).get("name")
+
+    # BELOW `enforce`, THE REQUEST STILL SUCCEEDS — and that is a decision, not a gap. PRD §15
+    # step 1: "Calculate roles but preserve current access; log differences." This is the
+    # difference, and logging it is the only way the rollout is ever evidence-based rather than
+    # hopeful: a capability map that is subtly wrong shows up here as real people hitting real
+    # routes, days before it could show up as a 403 during someone's workday.
+    #
+    # `navigation` records too, even though the SPA is already hiding the tab. What reaches this
+    # point at that rung is precisely what the hiding did NOT cover — a direct URL, a stale open
+    # tab, a background poll from a page loaded before the role changed — which is the exact list
+    # an operator needs before making the server refuse.
+    if not rollout.enforcement_active():
+        _record_denial(email, needed, role=role, method=request.method, path=route.path,
+                       prospective=True)
+        return await call_next(request)
+
     detail = (f"your {role} role does not include this action" if role
               else "you have no workspace role, so this action is not available")
+    _record_denial(email, needed, role=role, method=request.method, path=route.path)
     return Response(status_code=403, media_type="application/json",
                     content=json.dumps({"detail": detail,
                                         "required": sorted(needed), "capability_denied": True}))
+
+
+def _record_denial(email, needed, *, role, method, path, prospective: bool = False) -> None:
+    """PRD §12's `role.access_denied`, coalesced — see api/workspace_denials.py for why writing
+    one row per refusal is the wrong shape.
+
+    `prospective` writes `role.access_would_deny` instead: observe/navigation mode, where the call
+    was ALLOWED and this records that enforcement would have stopped it. Two action names rather
+    than one with a flag inside the text, because an operator counting refusals must not have to
+    parse prose to find out which rows were real — and because the count of would-denies is the
+    number the decision to advance a rung actually turns on.
+
+    BEST-EFFORT, AND THAT IS THE POINT OF THE try/except. The refusal has already been decided;
+    this only records it. If the audit write fails — the database is busy, the pool is exhausted —
+    the user must still get their 403. An exception escaping here would turn a correct denial into
+    a 500, which reads to the client as "the server broke" rather than "you may not do this", and
+    would make the gate itself the outage.
+    """
+    try:
+        import workspace_denials as denials
+        kind = "would_deny" if prospective else "denied"
+        record, suppressed = denials.should_record(email, needed, kind=kind)
+        if not record:
+            return
+        core.store.log_decision(
+            (email or "anonymous"),
+            "role.access_would_deny" if prospective else "role.access_denied",
+            detail=denials.detail(email, needed, role=role, method=method, path=path,
+                                  suppressed=suppressed, prospective=prospective))
+    except Exception:
+        from swallowed import swallowed
+        swallowed("app._record_denial: recording a capability denial failed", path)
 
 
 def _capability_gate_suspended(email: str) -> bool:
@@ -250,6 +324,18 @@ def _start_job_workers():
     it; the scheduler thread then starts with its jobs already pending."""
     core.get_store()
     _announce_isolation_mode()
+    # Tracing first, so the scheduler and worker spans below are captured from the first tick
+    # rather than from whenever the first HTTP request happened to arrive. A no-op without
+    # APPLICATIONINSIGHTS_CONNECTION_STRING — see api/telemetry.py.
+    try:
+        import telemetry as _telemetry  # noqa: PLC0415
+        from datetime import datetime as _now_dt, timezone as _now_tz  # noqa: PLC0415
+        _state = _telemetry.configure(now_iso=_now_dt.now(_now_tz.utc).isoformat())
+        if _state.get("enabled"):
+            print(f"[telemetry] Application Insights on · sampling {_state['sampling_ratio']} "
+                  f"· correlation {_state['correlation']}", flush=True)
+    except Exception:  # noqa: BLE001 — never take startup down for telemetry.
+        swallowed("app.startup: configuring Application Insights tracing failed")
     core.reload_scheduler()
     core.start_scheduler()
     n = core.start_workers()

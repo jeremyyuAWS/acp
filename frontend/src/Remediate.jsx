@@ -27,14 +27,17 @@ import FileDrawer, { SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_RANK } from './ontology.js'
-import { remediateScan, getRemediationStatus, openRemediationStream, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, assignHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl, getQueueEstimate } from './api.js'
+import { remediateScan, getRemediationStatus, getRemediationSnapshot, openRemediationStream, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, assignHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl, getQueueEstimate } from './api.js'
 import { SIM, simProposalsFor } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
 import QueuePanel from './QueuePanel.jsx'
 import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
+import RemediationOpsPanel from './RemediationOpsPanel.jsx'
+import { isNewer } from './remediationSnapshot.js'
 import { deriveRemediateProcessingState } from './remediateProcessingState.js'
 import { groupFixesByRule, summarizeImpact, totalFixes, scOf } from './fixSummary.js'
 import { remediationWork, batchScope } from './remediationWork.js'
+import { remediationResume } from './resumeInFlight.js'
 import { firstProposed, firstBefore, firstThumb, firstKind, firstRationale, firstSource, pageOf,
          appliedFixAlt } from './reviewCard.js'
 import ProposalThumb from './ProposalThumb.jsx'
@@ -403,6 +406,14 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [remMsg, setRemMsg] = useState('')
   const [remProg, setRemProg] = useState(null)   // authoritative SSE status + client-known batch total
   const [remUpdates, setRemUpdates] = useState('idle') // live | polling | idle
+  // The server-owned run snapshot (api/remediation_run.py). Held separately from `remProg`
+  // because the two answer different questions and must not be merged into one client-side
+  // object: remProg is the batch progress bar's denominator and its latest filename; this is the
+  // authoritative state, the reconciled partition, and the server's own integrity verdict.
+  // NOTHING here is derived — see RemediationOpsPanel for why the derivation moved to the server.
+  const [ops, setOps] = useState(null)
+  const [opsAt, setOpsAt] = useState(null)
+  const opsRef = useRef(null)
   const [serverFixed, setServerFixed] = useState(0)  // files fixed server-side this scan (persists after each batch)
   const [staleDismissed, setStaleDismissed] = useState(false)
   const [runDetailsOpen, setRunDetailsOpen] = useState(false)  // the Run details disclosure (PRD §11)
@@ -430,15 +441,24 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   }, [remBusy, remProg?.done, runId])
   const REMKEY = (id) => `acp-remed-${id || 'none'}`
 
+  // A batch of N documents cannot report more than N failures. The server scopes its own count
+  // to the latest batch now, so this is the last line of defence rather than the fix: on
+  // 2026-09-04 an unscoped `failed` of 294 against a 147-document batch reached this component
+  // and was rendered as "-147 documents remediated". Clamping here means no future counting bug
+  // upstream can produce an impossible number on screen.
+  const clampFailed = (total, failed) =>
+    Math.min(Math.max(0, Number(total || 0)), Math.max(0, Number(failed || 0)))
+
   const finishRemediation = (total, status = {}) => {
     clearInterval(pollRef.current); streamRef.current?.close?.(); streamRef.current = null
+    const failed = clampFailed(total, status.failed)
     setRemProg((previous) => ({ ...previous, total, done: total,
                  latest: status.latest_file || previous?.latest || null,
-                 failed: status.failed || 0, activity: null, history: previous?.history || [] }))
+                 failed, activity: null, history: previous?.history || [] }))
     setRemBusy(false); setRemUpdates('idle')
-    const ok = Math.max(0, total - (status.failed || 0))
+    const ok = Math.max(0, total - failed)
     setServerFixed((n) => n + ok)
-    setRemMsg(`✓ Remediation complete — ${ok} document${ok === 1 ? '' : 's'} fixed${status.failed ? `, ${status.failed} failed` : ''}.`)
+    setRemMsg(`✓ Remediation complete — ${ok} document${ok === 1 ? '' : 's'} fixed${failed ? `, ${failed} failed` : ''}.`)
     try { sessionStorage.removeItem(REMKEY(runId)) } catch { /* ignore */ }
     onRefresh?.(); fetchFixes()
     if (!SIM) listHitlQueue(runId, 'pending')
@@ -446,7 +466,40 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       .catch(() => {})
   }
 
+  // One place a snapshot is accepted, whichever transport carried it. A frame from a superseded
+  // read (a revision that went BACKWARDS) is dropped rather than rendered — applying it would
+  // walk the panel backwards, which looks exactly like the run regressing.
+  const acceptSnapshot = (next) => {
+    if (!next) return
+    setOps((previous) => {
+      const winner = isNewer(previous, next) ? next : previous
+      opsRef.current = winner
+      return winner
+    })
+    setOpsAt(Date.now())
+  }
+
+  // The snapshot's own poll. Slower than the batch poll on purpose: that one runs at 1.5s to keep
+  // a progress bar smooth, and rebuilding the reconciled snapshot at that cadence would multiply
+  // the run's database reads for a panel whose numbers change on durable events, not on ticks.
+  // Stops on a terminal run — the server says when that is, and this never decides it locally.
+  useEffect(() => {
+    if (!runId) { setOps(null); setOpsAt(null); return undefined }
+    let on = true
+    const load = () => getRemediationSnapshot(runId)
+      .then((snap) => { if (on) acceptSnapshot(snap) })
+      .catch(() => { /* transient: the last confirmed snapshot and its age stay on screen */ })
+    load()
+    // Read the run's terminality off a REF, not off `ops`. The interval closure captures state
+    // from the render that created it, so `ops` here would be null forever and the "stop when
+    // terminal" it was written to express would never once be true.
+    const id = setInterval(() => { if (!opsRef.current?.terminal) load() }, 5000)
+    return () => { on = false; clearInterval(id) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runId])
+
   const applyRemediationStatus = (total, s) => {
+    acceptSnapshot(s.snapshot)
     const done = Math.max(0, total - (s.in_flight || 0))
     setRemProg((previous) => {
       const activity = s.activity || null
@@ -455,16 +508,17 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         history.unshift(activity)
         history.splice(6)
       }
+      const failed = clampFailed(total, s.failed)
       const metrics = {
         fixes: Number(s.fixes_applied || 0), verified: Number(s.verified_documents || 0),
-        stored: Number(s.stored_documents || 0), failed: Number(s.failed || 0),
+        stored: Number(s.stored_documents || 0), failed,
       }
       const before = previous?.metrics || {}
       const deltas = previous?.metrics
         ? Object.fromEntries(Object.entries(metrics).map(([key, value]) =>
             [key, Math.max(0, value - Number(before[key] || 0))]))
         : {}
-      return { total, done, latest: s.latest_file, failed: s.failed || 0, activity, history,
+      return { total, done, latest: s.latest_file, failed, activity, history,
                metrics, deltas, queued: s.queued, running: s.running, workers: s.workers,
                byRule: s.by_rule || [], recentFiles: s.recent_files || [] }
     })
@@ -514,6 +568,26 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     let saved = null
     try { saved = JSON.parse(sessionStorage.getItem(REMKEY(runId)) || 'null') } catch { /* ignore */ }
     if (saved?.total) { setRemBusy(true); setRemProg({ total: saved.total, done: 0, latest: null, failed: 0, history: [] }); startLiveUpdates(saved.total) }
+    // NO LOCAL MEMORY IS NOT NO RUN. Sign out wipes every `acp-` key and reloads (App.jsx), so a
+    // batch still running server-side comes back to a browser that has never heard of it — and
+    // before this, to no card at all. Ask the server instead of assuming: it is the same snapshot
+    // the live view already consumes, and it knows the batch and its size.
+    if (!saved?.total) {
+      let cancelled = false
+      getRemediationStatus(runId).then((s) => {
+        if (cancelled) return
+        const resume = remediationResume(s)
+        if (!resume) return
+        // Re-seed the denominator so a later remount in this tab costs nothing, exactly as
+        // starting a run does.
+        try { sessionStorage.setItem(REMKEY(runId), JSON.stringify({ total: resume.total })) } catch { /* ignore */ }
+        setRemBusy(true)
+        setRemProg({ ...resume, activity: null, history: [] })
+        startLiveUpdates(resume.total)
+      }).catch(() => { /* no reconnect available — the card stays idle, as before */ })
+      return () => { cancelled = true }
+    }
+    return undefined
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runId])
   // SIM: rebuild queue when triage changes (real mode: queue is DB-driven, unaffected by triage).
@@ -1368,6 +1442,27 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
               )}
             </div>
           )}
+          {/* Automation maturity signal (ADR 0019 §8.5): rules whose reviewer edit-rate and
+              approval-rate pass the three-threshold gate are surfaced as promotion candidates.
+              This is evidence from real reviewer decisions, never a fabricated confidence score. */}
+          {reviewStats && (reviewStats.promotable_rules || []).length > 0 && (
+            <div className="rev-maturity" style={{ marginTop: 8, fontSize: 12 }}>
+              {(reviewStats.promotable_rules).map((ruleKey) => (
+                <span
+                  key={ruleKey}
+                  title={`Rule ${ruleKey} has ≥10 approvals, ≤20% edit rate, and ≥90% approval rate — consistently low reviewer intervention. Consider migrating this criterion to AI-Assisted mode in Settings → Automation.`}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 4,
+                    background: 'var(--success-bg, #EDF7EE)', color: 'var(--success-fg, #1A6B2A)',
+                    border: '1px solid var(--success-border, #A3D9A8)',
+                    borderRadius: 12, padding: '2px 8px', marginRight: 6, cursor: 'default',
+                  }}
+                >
+                  ↑ {ruleKey} ready for AI-Assisted
+                </span>
+              ))}
+            </div>
+          )}
         </div>
         {/* A decision the server refused. It rolled back, so the card is in the queue again —
             say so loudly, because a reviewer who thinks they signed something off and did not
@@ -1383,7 +1478,19 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
             ESTATE, so the "N could not be analysed" caveat is appended to whichever one renders
             rather than living inside one of them — which is how the original defect happened. */}
         {inboxQueue.length === 0 ? (
-          <p className="muted">{reviewEmptyLine(files, { totalHitl, acted })}</p>
+          <div className="remediation-complete" role="status">
+            <h3>All review items are complete.</h3>
+            <p className="muted">{reviewEmptyLine(files, { totalHitl, acted })}</p>
+            <div className="remediation-complete-counts" aria-label="Remediation completion summary">
+              <span><b>{acted.approved || 0}</b> approved</span>
+              <span><b>{revalidated.length}</b> verified</span>
+              <span><b>{acted.deferred || 0}</b> manual or deferred</span>
+              <span><b>{blockedCount || 0}</b> blocked</span>
+            </div>
+            {verifyState === 'complete' || revalidated.length > 0
+              ? <button className="primary" onClick={() => onNavigate?.('publish')}>Continue to Release</button>
+              : <p className="muted remediation-release-blocked">Release is not available yet because no corrected copy has completed verification.</p>}
+          </div>
         ) : (
           // R4, R7 and R10 ride in the detail pane, beside the finding they describe. `sel` is
           // null when nothing is selected and each component self-guards on that, so an empty
@@ -1516,10 +1623,16 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         primary={primary}
         readOnly={readOnly}
         onOpenRunDetails={() => setRunDetailsOpen((v) => !v)} />
+      {/* Region A/B/C of the operations panel. It sits above the progress bar because it is the
+          authoritative account of the run and the bar is one number from it: when the two would
+          ever disagree, the one with the server's revision and integrity verdict is the one to
+          read first. `connected` is the transport's own answer, not an inference from data age. */}
+      <RemediationOpsPanel snapshot={ops} connected={remUpdates === 'live'} receivedAt={opsAt} />
       {/* The authenticated remediation SSE already supplies these values. Keep its progress in
           the main workflow, rather than hiding the only live signal inside Run details. */}
       {remProg && (
-        <RemediationRunProgress progress={remProg} updateMode={remUpdates} runId={runId} />
+        <RemediationRunProgress progress={remProg} updateMode={remUpdates} runId={runId}
+                                source={run?.source} scope={run?.scope} />
       )}
       {/* THE WORK. Second on the page, not eleventh — the review workspace is the only part of this
           screen that needs a person, so nothing but the run header and a blocking warning precedes

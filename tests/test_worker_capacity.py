@@ -72,12 +72,14 @@ def test_open_to_a_non_admin_caller(open_client, monkeypatch):
 
 
 def _fake_app(min_replicas=1, max_replicas=5, latest_revision="acp-worker--rev1", app_id="/subs/x/app",
-              traffic=None):
+              traffic=None, cpu=2.0, memory="4Gi", storage="8Gi", profile="Consumption"):
     scale = SimpleNamespace(min_replicas=min_replicas, max_replicas=max_replicas)
-    template = SimpleNamespace(scale=scale)
+    resources = SimpleNamespace(cpu=cpu, memory=memory, ephemeral_storage=storage)
+    template = SimpleNamespace(scale=scale, containers=[SimpleNamespace(resources=resources)])
     ingress = SimpleNamespace(traffic=traffic) if traffic is not None else None
     configuration = SimpleNamespace(ingress=ingress)
     properties = SimpleNamespace(template=template, latest_ready_revision_name=latest_revision,
+                                 workload_profile_name=profile,
                                  configuration=configuration)
     return SimpleNamespace(properties=properties, id=app_id)
 
@@ -119,6 +121,11 @@ def test_returns_min_max_and_current_replicas_when_everything_succeeds(open_clie
     assert body["memory_percent"] == 40.0
     assert body["metrics_available"] is True
     assert body["measured_at"] is not None
+    assert body["cpu_cores_per_replica"] == 2.0
+    assert body["memory_per_replica"] == "4Gi"
+    assert body["ephemeral_storage_per_replica"] == "8Gi"
+    assert body["workload_profile_name"] == "Consumption"
+    assert body["active_revision_name"] == "acp-worker--rev1"
 
 
 def test_min_max_still_returned_when_the_replica_list_call_fails(open_client, monkeypatch):
@@ -521,3 +528,52 @@ def test_capacity_unconfigured_response_includes_revision_health_keys_as_none(op
     assert body["revision_health"] is None
     assert body["revision_provisioning_state"] is None
     assert body["draining_replicas"] is None
+
+
+def test_worker_app_name_has_no_default(monkeypatch):
+    """WORKER_APP_NAME must not fall back to a name nobody chose.
+
+    It defaulted to "acp-worker" — the generic worker app docs/worker-split.md records as
+    RETIRED — and no deploy script in this repository sets the variable, so that default was
+    what production ran with. A lookup against a missing app degrades to all-None while still
+    reporting `configured: true`, so Live Operations showed a panel of dashes and nothing said
+    the name was wrong.
+
+    Asserted on the source rather than by reimporting, because the module reads its environment
+    once at import and this repository's other tests monkeypatch the derived flags directly.
+    """
+    src = (ACP / "api" / "routes" / "control.py").read_text()
+    assert 'os.environ.get("WORKER_APP_NAME", "acp-worker")' not in src, (
+        "WORKER_APP_NAME defaults to the retired acp-worker app again")
+    assert 'os.environ.get("WORKER_APP_NAME")' in src
+    # Unset app name must make the feature unconfigured rather than silently pointed somewhere.
+    # Widened for WORKER_APP_NAMES (the multi-app read) while keeping the guarantee this test
+    # exists for: neither name has a default, so unset still means unconfigured.
+    assert "_AZ_CONFIGURED = bool(_AZ_SUB and (_AZ_APP or _AZ_APP_NAMES))" in src
+    assert 'os.environ.get("WORKER_APP_NAMES") or ""' in src
+
+
+def test_an_unreadable_container_app_is_distinguishable_from_late_metrics(
+        open_client, monkeypatch):
+    """A renamed, deleted or mistyped app must not look like a healthy one awaiting samples.
+
+    The sibling test above this one pins that the endpoint still answers `configured: true` and
+    degrades to all-None; that contract is unchanged. What is added is a flag saying which of the
+    two situations produced the Nones.
+    """
+    import routes.control as control_module
+    monkeypatch.setattr(control_module, "_AZ_CONFIGURED", True)
+    az_client = SimpleNamespace(container_apps=SimpleNamespace(
+        get=lambda rg, name: (_ for _ in ()).throw(RuntimeError("not found"))))
+    monkeypatch.setattr(control_module, "_az_client", lambda: az_client)
+
+    body = open_client.get("/control/workers/capacity").json()
+    assert body["configured"] is True          # unchanged contract
+    assert body["app_unavailable"] is True     # and now, why it is empty
+
+
+def test_app_unavailable_is_false_when_the_app_reads_fine(open_client, monkeypatch):
+    """The bite check for the flag: if it were always true it would say nothing."""
+    import routes.control as control_module
+    monkeypatch.setattr(control_module, "_AZ_CONFIGURED", False)
+    assert open_client.get("/control/workers/capacity").json()["app_unavailable"] is False

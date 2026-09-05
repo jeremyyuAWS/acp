@@ -1078,6 +1078,48 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .schednext { font-size: 12px; color: var(--ink); font-weight: 600; white-space: nowrap; }
 
 /* --- self-remediation (Remediate) --- */
+.remediation-comparison { margin-top: 18px; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+.remediation-comparison > div { display: grid; grid-template-columns: minmax(90px, 22%) 1fr; gap: 14px; padding: 12px 14px; align-items: start; }
+.remediation-comparison > div + div { border-top: 1px solid var(--line); background: var(--surface-2, #f6f5f8); }
+.remediation-comparison b { font-size: 12px; }
+.remediation-comparison span { min-width: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13.5px; line-height: 1.5; }
+.remediation-change { padding: 0 2px; border-radius: 3px; color: inherit; background: #fff0b8; box-shadow: inset 0 -1px #b7791f; }
+.remediation-match-preview { margin: 8px 0 4px; padding-left: 20px; }
+.remediation-match-preview li { margin: 5px 0; }
+.remediation-match-preview b, .remediation-match-preview span { display: block; overflow-wrap: anywhere; }
+.remediation-match-preview span { color: var(--muted); margin-top: 1px; }
+.remediation-details-list { margin: 10px 0 0; }
+.remediation-details-list > div { display: grid; grid-template-columns: minmax(150px, 32%) 1fr; gap: 14px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.remediation-details-list dt { font-size: 12px; font-weight: 600; }
+.remediation-details-list dd { margin: 0; min-width: 0; overflow-wrap: anywhere; font-size: 12.5px; }
+.remediation-detail-actions { position: sticky; bottom: 0; z-index: 2; box-shadow: 0 -5px 14px rgba(31, 43, 58, .07); }
+.remediation-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 8px; }
+.remediation-filters select { min-width: 112px; max-width: 100%; padding: 4px 7px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--ink); font-size: 11.5px; }
+.remediation-shortcuts { margin-left: auto; font-size: 11.5px; }
+.remediation-shortcuts summary { cursor: pointer; font-weight: 600; }
+.remediation-shortcuts span { display: block; max-width: 300px; padding-top: 5px; color: var(--muted); line-height: 1.45; }
+.remediation-saved { margin-bottom: 8px; padding: 9px 12px; border: 1px solid #b9d6aa; border-radius: 8px; background: #edf7e8; color: #244d1d; font-size: 13px; animation: remediation-saved-in .18s ease-out; }
+.remediation-review-header { position: sticky; top: -18px; z-index: 3; margin: -18px -22px 0; padding: 18px 22px 10px; background: var(--bg, #fff); border-bottom: 1px solid transparent; }
+.remediation-copy-value { display: block; margin-top: 7px; font-size: 11.5px; }
+.documentaudit-loading { min-height: 72px; display: grid; place-items: center; color: var(--muted); font-size: 13px; }
+.remediation-complete { padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+.remediation-complete h3 { margin: 0 0 6px; }
+.remediation-complete-counts { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 12px 0; font-size: 13px; }
+.remediation-release-blocked { margin: 12px 0 0; }
+.audit-copy-correlation { display: block; margin-top: 4px; font-size: 11.5px; }
+@keyframes remediation-saved-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+@media (max-width: 520px) {
+  .remediation-comparison > div, .remediation-details-list > div { grid-template-columns: 1fr; gap: 4px; }
+  .remediation-detail-content { padding: 16px !important; }
+  .remediation-detail-actions > div { padding-left: 16px !important; padding-right: 16px !important; }
+}
+@media (prefers-reduced-motion: reduce) { .remediation-saved { animation: none; } }
+@media (forced-colors: active) {
+  .remediation-change, .remediation-saved, .remediation-complete { border: 1px solid CanvasText; background: Canvas; color: CanvasText; }
+  .remediation-change { text-decoration: underline; }
+  .rinbox-row[aria-current="true"] { outline: 2px solid Highlight; outline-offset: -2px; }
+}
+
 .qbtn.self { background: #fff; color: #185FA5; border-color: var(--line); }
 .qbtn.rescan { background: #185FA5; color: #fff; border-color: #185FA5; }
 .qbtn.rescan:disabled { opacity: 0.6; cursor: default; }
@@ -1250,6 +1292,12 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 /* Upload step done-badge: white on #639922 = 3.44:1 — 11px text needs 4.5:1 (FAIL 1.4.3).
    Darken to --success-fg-strong (#2F5310); white on #2F5310 = 8.4:1. */
 [data-wcag="on"] .upstep.done .upnum { background: var(--success-fg-strong); }
+/* Assess pipeline: active step indicator #4B861F on #F2F8EA = 4.10:1 (FAIL 1.4.3, need 4.5:1) */
+[data-wcag="on"] .assesslist li.active .alstate { color: var(--success-fg-strong); } /* #2F5310 on #F2F8EA = 8.2:1 */
+/* Coverage segment bars: review bar #e0900a on white = 2.57:1 (FAIL 1.4.11, need ≥3:1) */
+[data-wcag="on"] .seg-review { background: #8A5A00; } /* 5.93:1 on white */
+/* Verify-track progress bar: #BF8C00 on #faf8fb = 2.85:1 (FAIL 1.4.11); darken to match amber fix pattern */
+[data-wcag="on"] .verify-track > i { background: #7A5000; } /* 6.68:1 on --bg */
 .setoverlay { position: fixed; inset: 0; background: rgba(40, 30, 48, 0.38); backdrop-filter: blur(2px); z-index: 80; display: flex; align-items: flex-start; justify-content: center; padding: 36px 20px; overflow-y: auto; }
 .setpanel { background: var(--bg); border-radius: 16px; width: min(1360px, 97vw); box-shadow: 0 24px 64px rgba(30, 22, 34, 0.4); overflow: hidden; }
 .sethead { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 22px; background: var(--card); border-bottom: 1px solid var(--line); font-size: 15px; position: sticky; top: 0; }
@@ -2836,3 +2884,26 @@ html[data-wcag="on"] .wcag-toggle--on {
   border: 1px solid #E5C875; font-size: 12px; line-height: 1.5; }
 .people-role-cell { display: grid; gap: 4px; }
 .people-role-impact { font-size: 11.5px; line-height: 1.45; }
+
+/* Live Operations drawer — the "this is live" indicator. A slow opacity pulse on a dot that is
+   already legible without it: the connection state is also spelled out in text beside it, so the
+   animation carries no information of its own (WCAG 1.4.1). The global prefers-reduced-motion rule
+   at the top of this file neutralizes it, and LiveOpsDrawer additionally drops the class entirely
+   under reduced motion rather than relying on a 0.001ms duration. */
+@keyframes liveops-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+.liveops-pulse { animation: liveops-pulse 1.8s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .liveops-pulse { animation: none; opacity: 1; } }
+
+/* Live Operations map — the moving lines.
+   ReactFlow animates an active edge by marching its dash pattern (`.react-flow__edge.animated`).
+   The global prefers-reduced-motion rule near the top of this file only shortens animations to
+   0.001ms, which on an INFINITE animation is not calm — it is the same motion at an unbounded
+   frame rate. Stop it outright instead. Nothing is lost by doing so: an active line is also
+   drawn thicker and fully opaque (see flowEdge in AdminLiveTraffic.jsx), so "carrying work" is
+   legible without motion, in a screenshot, and to anyone who cannot perceive the dashes. */
+@media (prefers-reduced-motion: reduce) {
+  .react-flow__edge.animated path.react-flow__edge-path { animation: none !important; }
+}
+/* The stroke is 1.4-2.4px; ReactFlow's own interaction layer widens the hit area, and this makes
+   the pointer say so before the click. */
+.react-flow__edge.animated { cursor: pointer; }

@@ -978,6 +978,134 @@ def _sp_interactive_cursor_key(owner: str | None, drive_id: str | None) -> str:
     return f"sharepoint:{json.dumps([owner, drive_id])}"
 
 
+def sp_reconcile_days() -> int:
+    """How old a stored delta cursor may get before its library is walked in FULL again.
+
+    A CORRECTNESS control, not a performance knob, and the reason it exists is specific: Graph's
+    delta feed reports changes to the driveItem, and a managed-column edit that does not touch
+    the driveItem may never appear in it. A library synced incrementally forever would carry a
+    stale retention label or records category indefinitely, with nothing anywhere saying so —
+    the failure mode is silent and it grows.
+
+    Seven days by default: a week of drift is a week of a rule keying on a column that has since
+    changed, which is recoverable; a quarter of it is not. 0 disables the forced reconciliation
+    for an operator who has measured their tenant and accepts the risk knowingly.
+    """
+    try:
+        n = int(os.environ.get("ACP_SP_RECONCILE_DAYS", "7") or 7)
+    except ValueError:
+        return 7
+    return max(0, n)
+
+
+def _sp_cursor_is_stale(cursor: dict | None) -> str | None:
+    """The reason this cursor's library is due a full reconciliation, or None to sync it.
+
+    A cursor with no readable `updated_at` is treated as DUE, not as fresh: an unparseable
+    timestamp is a fact we do not have, and defaulting the unknown to "recently synced" is how a
+    library would quietly never be reconciled again.
+    """
+    days = sp_reconcile_days()
+    if not days:
+        return None
+    if not cursor:
+        return None                       # no cursor at all is a seed, handled by the caller
+    from source_staleness import parse_rfc3339
+    when = parse_rfc3339(cursor.get("updated_at"))
+    if when is None:
+        return "the stored cursor has no readable timestamp, so its age cannot be trusted"
+    import datetime as _dt
+    age = (_dt.datetime.now(_dt.timezone.utc) - when).days
+    if age >= days:
+        return (f"the delta cursor is {age} days old (ACP_SP_RECONCILE_DAYS={days}) — a full "
+                f"re-list catches column edits Graph's delta feed does not report")
+    return None
+
+
+def sp_multi_sync_plan(owner: str, token: str, drive_ids: list[str | None]) -> dict:
+    """PRD Phase 3 at ESTATE SCALE: one plan covering several document libraries at once.
+
+    `_interactive_sp_sync_plan` answers for exactly one drive, because Graph's delta query is
+    scoped to one drive and has no folder filter. A 30-site estate is 30-plus drives, and the
+    question "can this scan skip walking?" stops having a single answer: one library's cursor is
+    fresh, another's expired last week, a third has never been synced, a fourth is due its
+    periodic reconciliation. Collapsing that to one yes/no means either walking everything
+    because one library needs it, or reconstructing everything and quietly serving a stale
+    estate for the one that did not.
+
+    So the answer is PER LIBRARY::
+
+        {"delta":  {drive_id: {"prior_files", "changed", "removed_ids"}},
+         "full":   {drive_id: "why this one has to be walked"},
+         "carried": int}     # documents carried forward without re-reading
+
+    A drive in `full` is walked exactly as it always was. A drive in `delta` is reconstructed.
+    One expired cursor degrades ONE library, and the estate is still mostly free.
+
+    UNCERTAINTY ALWAYS RESOLVES TO A FULL WALK of the library in question — never to a skip and
+    never to a reconstruction this function cannot vouch for. That is _sp_delta_check's own
+    contract (None means "fall back"), applied per drive instead of per scan.
+    """
+    plan: dict = {"delta": {}, "full": {}, "carried": 0}
+    if not drive_ids:
+        return plan
+    priors = _sp_prior_inventory_by_drive(owner, drive_ids)
+    for drive_id in drive_ids:
+        key = _sp_interactive_cursor_key(owner, drive_id)
+        stale = _sp_cursor_is_stale(get_store().get_sync_cursor(key))
+        if stale:
+            # Advance the cursor anyway, so the NEXT scan can go incremental again from a fresh
+            # baseline. Skipping that would make a reconciled library reconcile forever.
+            _sp_delta_check(key, owner, token, drive_id)
+            plan["full"][drive_id] = stale
+            continue
+        result = _sp_delta_check(key, owner, token, drive_id)
+        if result is None:
+            plan["full"][drive_id] = ("no usable delta cursor for this library yet (first sync, "
+                                      "an expired link, or the change-check failed) — walking it "
+                                      "in full and seeding one for next time")
+            continue
+        prior = priors.get(drive_id)
+        if prior is None:
+            plan["full"][drive_id] = ("no prior scan of this library to reconstruct from — "
+                                      "walking it in full to establish a baseline")
+            continue
+        changed, removed_ids = result
+        from scanner import _sp_file_from_inventory_row
+        plan["delta"][drive_id] = {
+            "prior_files": [_sp_file_from_inventory_row(r) for r in prior],
+            "changed": changed, "removed_ids": removed_ids}
+        plan["carried"] += max(0, len(prior) - len(changed))
+    return plan
+
+
+def _sp_prior_inventory_by_drive(owner: str | None,
+                                 drive_ids: list[str | None]) -> dict[str | None, list[dict]]:
+    """The most recent completed SharePoint scan's inventory, PARTITIONED by drive.
+
+    _sp_prior_inventory_for_drive answers the single-drive question by rejecting the whole
+    baseline if ANY row belongs to a different drive — correct when a scan covers one library,
+    and exactly wrong once a scan covers thirty: every row would "belong to a different drive"
+    from the perspective of twenty-nine of them, and no library would ever have a baseline.
+
+    Partitioning instead gives each library its own, and a library with no rows in the prior scan
+    simply has none — that library is walked, the others are not. A drive whose partition is
+    empty is absent from the result rather than present-and-empty, because those mean different
+    things to the caller: absent is "no baseline, walk it", and this function never returns the
+    other one for a drive the prior scan genuinely did not cover.
+    """
+    prior = get_store().latest_scan_inventory_items(owner, "sharepoint")
+    if prior is None:
+        return {}
+    wanted = set(drive_ids)
+    out: dict[str | None, list[dict]] = {}
+    for row in prior:
+        d = row.get("drive_id")
+        if d in wanted:
+            out.setdefault(d, []).append(row)
+    return out
+
+
 def _interactive_sp_sync_plan(owner: str, token: str, drive_id: str | None) -> dict | None:
     """PRD Phase 3, interactive SharePoint scans: the same delta reconstruction _sp_sync_plan
     gives the scheduled sweep, but for a user-initiated whole-library (or whole OneDrive,
@@ -1272,6 +1400,9 @@ def stop_workers() -> None:
             w.stop()
         except Exception:
             swallowed("core.stop_workers: stopping a worker failed")
+    # Production sets this to 540s alongside a 600s Container Apps termination grace period
+    # (deploy/public/redeploy.sh). Keep the short local/default window so an unstamped developer
+    # worker or test cannot hang shutdown for nine minutes.
     deadline = _t.monotonic() + float(os.environ.get("ACP_SHUTDOWN_DRAIN_SECONDS", "20"))
     for _w, t in _worker_handles:
         remaining = deadline - _t.monotonic()

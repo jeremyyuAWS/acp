@@ -16,10 +16,12 @@ def test_folder_is_case_insensitive_prefix():
     assert not sr.matches({"path": "HR/policy.docx"}, r)
 
 
-def test_owner_and_department_equality():
+def test_owner_department_and_content_type_equality():
     assert sr.matches({"owner": "CFO@x.com"}, {"selector": "owner", "value": "cfo@x.com"})
     assert not sr.matches({"owner": "cfo@x.com"}, {"selector": "owner", "value": "hr@x.com"})
     assert sr.matches({"department": "Legal"}, {"selector": "department", "value": "legal"})
+    assert sr.matches({"content_type": "Policy"}, {"selector": "content_type", "value": "policy"})
+    assert not sr.matches({"content_type": "Report"}, {"selector": "content_type", "value": "policy"})
 
 
 def test_blank_value_never_matches():
@@ -87,6 +89,7 @@ ALLOWED = {"1.1.1", "1.3.1", "1.4.3", "2.4.6"}
 
 def test_validate_accepts_good_rule():
     sr.validate_scope_rule({"selector": "folder", "value": "Finance", "codes": ["1.4.3"]}, ALLOWED)
+    sr.validate_scope_rule({"selector": "content_type", "value": "Policy", "codes": ["1.4.3"]}, ALLOWED)
 
 
 @pytest.mark.parametrize("bad", [

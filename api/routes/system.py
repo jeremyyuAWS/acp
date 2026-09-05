@@ -379,10 +379,11 @@ def bootstrap_workspace_roles(request: Request, body: dict | None = None):
     reassigned, so a second call after an administrator has tightened somebody's role does not
     undo it (tests/test_workspace_roles_store.py pins both).
 
-    NOTHING ENFORCES THESE ROWS YET. Enforcement arrives in later slices behind
-    ACP_WORKSPACE_RBAC_ENABLED, which is reported in the response so the caller can see whether
-    what they just wrote is inert — writing roles and believing they took effect is the one
-    misreading this endpoint could invite.
+    WHETHER THESE ROWS ENFORCE ANYTHING DEPENDS ON THE ROLLOUT RUNG, which is reported in the
+    response as `rollout` so the caller can see whether what they just wrote is inert — writing
+    roles and believing they took effect is the one misreading this endpoint could invite. See
+    api/workspace_rollout.py for the ladder, and GET /admin/workspace-roles/preflight for whether
+    it is safe to climb it.
     """
     _require_owner(request)
     import workspace_roles as wr
@@ -398,6 +399,26 @@ def bootstrap_workspace_roles(request: Request, body: dict | None = None):
                                 detail=f"seeded {len(out['roles_created'])} role(s), "
                                        f"assigned {sum(1 for a in out['assignments'] if a['applied'])}")
     return out
+
+
+@router.get("/admin/workspace-roles/preflight")
+def workspace_roles_preflight(request: Request):
+    """Would advancing the rollout one rung break anybody? (PRD §15.)
+
+    OWNER-ONLY, AND NOT BECAUSE IT WRITES — it writes nothing. It reports every managed person's
+    email next to the capabilities they are about to lose, which is a personnel-shaped answer, and
+    it is read at exactly the moment somebody is deciding whether to narrow other people's access.
+    The person making that decision is the owner; `roles.manage` is the wrong gate because a role
+    holding it could use this to enumerate the whole workspace's standing.
+
+    READ IT, DO NOT POLL IT. It walks every person and resolves each one's role, so its cost is
+    linear in headcount — fine once before a deployment, wasteful on a dashboard refresh.
+    """
+    _require_owner(request)
+    import workspace_preflight as preflight
+    return preflight.report(core.store, owner_email=core.OWNER_EMAIL,
+                            routes=core.enumerate_api_routes(request.app),
+                            is_suspended=_is_suspended)
 
 
 @router.put("/workers")
@@ -770,6 +791,7 @@ def config(request: Request = None):
     import lf as _lf
     lf_project = _lf._project_id()
     import ai as _ai   # AI provenance (ADR 0019 Phase 0): active model + local/cloud zone
+    import scanner
     return {"google_client_id": core.GOOGLE_CLIENT_ID,
             "drive_scope": core.DRIVE_SCOPES[0],
             # Entra app for the SharePoint/OneDrive connect — runtime so the tenant can be set per
@@ -784,6 +806,13 @@ def config(request: Request = None):
             # source does not change who is allowed to use the app. [] when unconfigured — same
             # "hide the button" contract as the singular fields.
             "microsoft_tenants": core.MICROSOFT_TENANTS,
+            # How many SharePoint sites one scan may span (ACP_SP_MAX_SITES, default 30). Served
+            # rather than hardcoded in the SPA because the enforcement is the SERVER's — the scan
+            # route refuses a larger selection and the walk caps itself — and a picker holding its
+            # own copy of the number would disagree with the deployment the moment an operator
+            # raised it: the UI would either block a selection the server would accept, or wave
+            # through one it will refuse after the operator has finished choosing.
+            "sharepoint_max_sites": scanner._sp_max_sites(),
             "auth": "gis" if core.GOOGLE_CLIENT_ID else "demo",
             **_build_info(),
             "ai": _ai.provenance(),
@@ -1117,10 +1146,19 @@ class AIProviderUpdate(BaseModel):
 def get_ai_providers(request: Request):
     """Admin: the configurable cloud AI providers as SAFE views — endpoint, model, whether the
     referenced secret is present, and who owns it — never a key value (ADR 0019 §6). Admin-gated:
-    provider governance config isn't exposed to non-owners."""
+    provider governance config isn't exposed to non-owners.
+
+    `secret_write` tells the page whether THIS deployment can accept a pasted key at all (a Key
+    Vault is configured and its SDK is installed). The field exists so the UI never renders an
+    input that cannot work: without it the only way to discover an unconfigured vault is to type
+    a live credential into a box and have it rejected."""
     _require_admin(request)
     import providers as _providers
-    return {"providers": _providers.list_provider_views()}
+    import secret_store as _secrets
+    store = _secrets.active_secret_store()
+    ok, reason = store.writable()
+    return {"providers": _providers.list_provider_views(),
+            "secret_write": {"available": ok, "kind": store.kind, "reason": reason}}
 
 
 @router.put("/ai/providers")
@@ -1188,6 +1226,64 @@ def put_ai_provider(body: AIProviderUpdate, request: Request):
     core.store.log_decision("admin", f"settings.ai_provider.{provider}",
                             detail=f"provider={provider} enabled={enabled} endpoint={endpoint or '—'} "
                                    f"key_secret_ref={ref or '—'} (key value never handled here)")
+    return {"providers": _providers.list_provider_views()}
+
+
+class AIProviderSecretWrite(BaseModel):
+    value: str
+
+
+@router.post("/ai/providers/{provider}/secret")
+def put_ai_provider_secret(provider: str, body: AIProviderSecretWrite, request: Request):
+    """Admin: set one provider's API key by writing it to the deployment's Key Vault.
+
+    The one place in this product where a key VALUE is accepted, and it is accepted only to hand
+    straight to the vault: nothing is written to the database except the resulting reference name
+    (`keyvault:acp-ai-<provider>-key`), nothing is logged but that name, and no read path can
+    return the value — `provider_view` has never carried it and still does not.
+
+    A deployment with no vault configured REFUSES (422) rather than falling back to storing the
+    value anywhere else. That refusal is the feature: it is what keeps "we could not do this
+    safely" from turning into "we did it unsafely".
+
+    The vault secret's name is derived from the provider, never supplied by the caller — a name
+    over HTTP would let one admin overwrite another provider's secret, or something else in a
+    shared vault, through a field that looks like a label.
+    """
+    _require_admin(request)
+    import providers as _providers
+    import secret_store as _secrets
+    provider = (provider or "").strip().lower()
+    if provider not in _providers.CLOUD_PROVIDERS:
+        raise HTTPException(422, f"unknown provider '{provider}' — one of {list(_providers.CLOUD_PROVIDERS)}")
+    try:
+        ref = _secrets.write_provider_secret(provider, body.value)
+    except ValueError:
+        raise HTTPException(422, "the key value is empty")
+    except RuntimeError as e:
+        # "no vault is configured", or "the SDK is not installed in this image" — an operator's
+        # fix, and one an admin cannot make from this page, so it is reported verbatim.
+        raise HTTPException(422, {"error": "this deployment cannot store a key value", "detail": str(e)})
+    except Exception as e:
+        # A vault that refused the write (identity lacks secrets/set, network, throttling). The
+        # TYPE and message are surfaced because "it did not work" sends someone to read code.
+        raise HTTPException(502, {"error": "the key vault rejected the write",
+                                  "detail": f"{type(e).__name__}: {e}"})
+
+    existing = core.store.get_ai_provider_config(provider) or {}
+    core.store.upsert_ai_provider_config(
+        provider,
+        enabled=bool(existing.get("enabled")),
+        endpoint=existing.get("endpoint"),
+        deployment=existing.get("deployment"),
+        model=existing.get("model"),
+        key_secret_ref=ref,
+        updated_by=getattr(request.state, "user_email", None) or "admin",
+    )
+    # The audit row names the reference, never the value — same rule as the config route above.
+    core.store.log_decision("admin", f"settings.ai_provider.{provider}.secret",
+                            detail=f"provider={provider} key_secret_ref={ref} "
+                                   f"(written to the key vault; value never stored or logged)")
     return {"providers": _providers.list_provider_views()}
 
 
@@ -1259,10 +1355,25 @@ def _admin_activity_snapshot() -> dict:
     for run in runs:
         stage = run.get("stage") or "unknown"
         stage_row = by_stage.setdefault(stage, {"runs": 0, "running": 0, "queued": 0,
-                                                  "completed": 0, "total": 0})
+                                                  "completed": 0, "total": 0, "findings": None})
         stage_row["runs"] += 1
         for field in ("running", "queued", "completed", "total"):
             stage_row[field] += int(run.get(field) or 0)
+        # Summed only where it was counted. A stage whose runs report no findings gets None rather
+        # than 0, so "no findings yet" and "findings not counted for this stage" stay different —
+        # only assess runs carry a count (see store.admin_live_activity).
+        if run.get("findings") is not None:
+            stage_row["findings"] = int(stage_row.get("findings") or 0) + int(run["findings"])
+    # The queue's own composition and rates, for the Live Operations queue visualization. Guarded
+    # because an older store may not carry it: the drawer renders a missing row as "Not reported"
+    # rather than as zero, so degrading to absent is honest and degrading to {} would not be.
+    composition = None
+    _qc = getattr(core.store, "queue_composition", None)
+    if callable(_qc):
+        try:
+            composition = _qc()
+        except Exception:
+            composition = None
     if queued and not wt.get("alive"):
         pressure = "stalled"
     elif queued and slots and running >= slots:
@@ -1290,16 +1401,69 @@ def _admin_activity_snapshot() -> dict:
             "worker_tier_alive": bool(wt.get("alive")),
             "worker_roles": worker_roles,
             "by_stage": by_stage,
+            # ACP CANNOT ATTRIBUTE A JOB TO A REPLICA, and saying so is the point of this key.
+            # The `worker_instances` registry that would carry it (replica_id, revision_name,
+            # software_version, per-instance state) exists in the schema with NO WRITER — it is
+            # PR 1 of a five-PR plan whose emit sites are deliberately deferred. Reading it would
+            # return [] and render as "no workers running", which is the opposite of the truth.
+            # So per-replica ACP health is reported as unavailable, with the reason, and what IS
+            # known is reported per SERVICE from the role heartbeats.
+            # Whether distributed tracing is on, and why not when it is off. Live Operations
+            # offers a trace drill-down from a workflow tile; a link to traces that do not exist
+            # is worse than no link, so the UI is given the reason rather than a bare boolean.
+            "tracing": _tracing_status(),
+            "worker_instance_attribution": {
+                "available": False,
+                "reason": "ACP does not record which replica ran a job. The worker_instances "
+                          "registry exists but has no writer yet, so job activity is attributed "
+                          "to a service, not to one of its replicas.",
+            },
+            # Absent, not empty, when the store cannot answer — see the guard above.
+            **({"queue": composition} if composition else {}),
         },
     }
 
 
+def _tracing_status() -> dict:
+    """Application Insights status for the live map. Guarded like every other optional block: a
+    branch without the telemetry module reports it as unavailable rather than failing the
+    snapshot."""
+    try:
+        import telemetry  # noqa: PLC0415
+        return telemetry.status()
+    except Exception:
+        return {"enabled": False, "reason": "telemetry module unavailable", "correlation": "off"}
+
+
+def _azure_block():
+    """The shared Azure capacity reading, or None when it cannot be taken.
+
+    Guarded on every axis because the live map must not go dark for an Azure problem: the control
+    module may not be importable, may not expose the cache on an older branch, and the read itself
+    may raise. None means "no Azure block" — the reader keeps whatever it last had rather than
+    replacing a real reading with an empty one.
+    """
+    try:
+        from routes import control as _control  # noqa: PLC0415 — optional, and imported lazily
+        fn = getattr(_control, "cached_capacity", None)
+        return fn() if callable(fn) else None
+    except Exception:
+        return None
+
+
 @router.get("/admin/activity")
 def admin_activity(request: Request, response: Response):
-    """Payload-sanitized cross-user processing topology for signed-in workspace users."""
+    """Payload-sanitized cross-user processing topology for signed-in workspace users.
+
+    Carries the Azure capacity block too, so a page that has just loaded has the infrastructure
+    reading immediately rather than waiting for the stream's next Azure frame."""
     _require_user(request)
     response.headers["Cache-Control"] = "no-store"
-    return _admin_activity_snapshot()
+    snapshot = _admin_activity_snapshot()
+    azure = _azure_block()
+    if azure is not None:
+        snapshot["azure"] = azure
+    return snapshot
 
 
 @router.get("/admin/activity/stream")
@@ -1311,6 +1475,7 @@ async def admin_activity_stream(request: Request):
 
     async def _gen():
         last = None
+        last_measured = None
         idle = 0
         while not await request.is_disconnected():
             snapshot = await asyncio.to_thread(_admin_activity_snapshot)
@@ -1325,6 +1490,24 @@ async def admin_activity_stream(request: Request):
                 if idle >= 5:
                     idle = 0
                     yield ": keep-alive\n\n"
+            # Azure rides the SAME stream, on its OWN event, and that separation is the point.
+            # The activity frame fires on any job change — several times a minute under load —
+            # while the Azure block is a comparatively large payload (fourteen metrics, each with
+            # its own fifteen-minute series) that Azure itself only resamples once a minute.
+            # Attaching it to every activity frame would multiply the stream's size for data that
+            # had not changed.
+            #
+            # Emitted when the reading was actually REFRESHED (measured_at moved), not when its
+            # values changed. A reading that comes back identical is still news: it is what makes
+            # "Azure Monitor · 20s ago" true. Gating on the values instead would leave the UI
+            # showing a stale age for a figure that had just been re-measured — understating
+            # freshness, which is the direction that misleads.
+            azure = await asyncio.to_thread(_azure_block)
+            measured = azure.get("measured_at") if isinstance(azure, dict) else None
+            if azure is not None and measured != last_measured:
+                last_measured = measured
+                idle = 0
+                yield f"event: azure\ndata: {json.dumps(azure, default=str)}\n\n"
             await asyncio.sleep(2)
 
     return StreamingResponse(_gen(), media_type="text/event-stream", headers={

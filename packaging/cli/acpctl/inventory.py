@@ -63,6 +63,26 @@ IMAGES = {
 # which is exactly the kind of mismatch that turns into a worker that claims every job.
 TIER_ROLE = {"discover": "discovery", "assess": "assess", "remediate": "remediate"}
 
+# The job types each worker role claims — api/core.py's DISCOVERY/ASSESS/REMEDIATE_LANE_JOB_TYPES.
+#
+# COPIED, AND GUARDED BY A TEST THAT READS THE ORIGINAL. acpctl must not import api/core.py: that
+# module pulls in the whole application (the store, the worker pool, the connectors), and a
+# packaging CLI that cannot run without a database is not a packaging CLI. So the lists live here
+# too — and tests/test_packaging_chart.py::test_the_queue_lanes_match_the_application asserts
+# these tuples equal core's, so the copy cannot drift.
+#
+# WHY IT MATTERS THAT THEY ARE JOB TYPES AND NOT THE ROLE NAME. The `jobs` table has no `role`
+# column; it has `type`. A queue-depth scaler written against a `role` column returns a Postgres
+# error, KEDA logs it and scales nothing, and the worker tier sits at its floor while the backlog
+# grows — a failure whose only symptom is that autoscaling silently does not happen. That is the
+# query this table exists to make impossible to write from memory.
+LANE_JOB_TYPES = {
+    "discovery": ("scan_discover", "scan_folder"),
+    "assess": ("scan", "scan_assess", "scan_batch", "scan_file", "workspace_scan_file",
+               "workspace_scan_discover", "scan_finalize", "assess_trace"),
+    "remediate": ("remediate_file", "rescore_file", "apply_approved_values"),
+}
+
 
 @dataclass
 class Service:
@@ -118,8 +138,52 @@ class Service:
         return out
 
 
+# Connections a Postgres server spends on itself, and therefore cannot lend the fleet: the
+# superuser reservation, a migration job, an operator's psql session during an incident. Small and
+# deliberately so — the fleet's demand is already a worst case, so this is not a second safety
+# factor, it is the part of `max_connections` that was never available.
+#
+# It is stated here rather than folded into the demand because the two answer different questions:
+# demand is what the application will take, this is what the server keeps. A ceiling that clears
+# the first and not the second passes `data.connection-budget` and still refuses the operator's
+# session during the incident they opened it to investigate.
+SERVER_RESERVED_CONNECTIONS = 15
+
+
 def worker_threads(preset: str) -> int:
     return int(float(presets.PRESETS[preset]["cpu"]) * WORKER_THREADS_PER_CPU)
+
+
+def pool_per_replica(tier: dict[str, Any], *, threads: int) -> int:
+    """One replica's Postgres pool — api/store.py's `db_max_conn`, arithmetic for arithmetic.
+
+    THE OVERRIDE REPLACES THE FORMULA, it does not cap it. `db_max_conn` reads ACP_DB_MAX_CONN
+    first and returns `max(2, explicit)` without consulting ACP_WORKERS at all; only when it is
+    unset does it fall through to `workers + _API_HEADROOM_CONN`. A model that took the smaller
+    of the two would agree with production by luck today and disagree the moment somebody pins a
+    pool LARGER than the formula — which is the direction an operator raising a limit would move.
+
+    Why this exists at all: production pins 2 on every worker tier (#1370), which is what keeps a
+    fleet whose formula-derived demand is 384 inside a 150-connection server. Without the
+    override in the model, `acpctl plan` reports today's Azure as unsafe when it demonstrably is
+    not, and the document has no way to say why it is safe.
+    """
+    explicit = tier.get("connectionPool")
+    if explicit:
+        return max(2, int(explicit))
+    return threads + API_HEADROOM_CONN
+
+
+def _with_pool(env: dict[str, str], tier: dict[str, Any]) -> dict[str, str]:
+    """Add ACP_DB_MAX_CONN to a tier's environment when the document pins one.
+
+    The variable is what the RUNNING container reads; putting it in the inventory rather than
+    only in the arithmetic is what lets the chart and every adapter reproduce the pool, instead
+    of each one re-deciding it from the replica count.
+    """
+    if tier.get("connectionPool"):
+        return {**env, "ACP_DB_MAX_CONN": str(int(tier["connectionPool"]))}
+    return env
 
 
 def _resources(tier: dict) -> dict[str, str]:
@@ -171,10 +235,12 @@ def build_inventory(doc: dict[str, Any]) -> list[Service]:
         resources=_resources(api_tier), ports=(8077,),
         # ACP_WORKERS=0 is the split topology, not a tuning choice: it is what stops an API
         # deploy from restarting a running scan (docs/worker-split.md, #113).
-        env={"ACP_WORKERS": "0", "PORT": "8077"},
+        env=_with_pool({"ACP_WORKERS": "0", "PORT": "8077"}, api_tier),
         secret_refs=tuple(_api_secrets(doc)),
         depends_on=("acp-migrations", "postgres", "redis", "object-storage"),
-        db_connections_max=api_max * API_HEADROOM_CONN,
+        # The API runs ACP_WORKERS=0, so its formula term is the headroom alone — but a pinned
+        # pool overrides that here exactly as it does on a worker.
+        db_connections_max=api_max * pool_per_replica(api_tier, threads=0),
         notes="Serves the SPA and the API. Claims no jobs."))
 
     # ── the three worker tiers ─────────────────────────────────────────────────
@@ -189,11 +255,12 @@ def build_inventory(doc: dict[str, Any]) -> list[Service]:
             name=f"acp-{TIER_ROLE[tier_name]}", kind="service", ingress="none",
             image=IMAGES[tier_name], image_version=version,
             role=TIER_ROLE[tier_name], replicas=(lo, hi), resources=_resources(tier),
-            env={"ACP_WORKERS": str(threads), "ACP_WORKER_ROLE": TIER_ROLE[tier_name]},
+            env=_with_pool(
+                {"ACP_WORKERS": str(threads), "ACP_WORKER_ROLE": TIER_ROLE[tier_name]}, tier),
             secret_refs=tuple(_worker_secrets(doc)),
             volumes=(f"scratch:{presets.PRESETS[tier['resources']['preset']]['ephemeralStorage']}",),
             depends_on=tuple(depends),
-            db_connections_max=hi * (threads + API_HEADROOM_CONN),
+            db_connections_max=hi * pool_per_replica(tier, threads=threads),
             notes="No ingress in any topology (PRD S13). Scratch volume is disposable — nothing "
                   "authoritative may exist only there."))
 

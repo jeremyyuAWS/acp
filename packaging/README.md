@@ -6,10 +6,12 @@ own cluster — with Docker Compose as the evaluation option. See
 decisions behind it, and [`docs/service-inventory.md`](docs/service-inventory.md) for what an
 installation actually consists of at each profile.
 
-**This release is read-only.** It defines the contract and the tools that read it. It provisions
-nothing, and it does not touch the existing Azure Container Apps deployment in `deploy/public/`
-or the Compose stack in `deploy/compose/` — those keep working exactly as they do today and are
-not retired until a replacement demonstrates parity.
+**Still read-only.** `acpctl` provisions nothing and contacts no cluster, and nothing here touches
+the existing Azure Container Apps deployment in `deploy/public/` or the Compose stack in
+`deploy/compose/` — those keep working exactly as they do today and are not retired until a
+replacement demonstrates parity. What phase 2 adds is the **chart** the values were always being
+rendered for: `helm template` produces real manifests, and `helm install` is a decision an
+operator makes, not something a tool here does for them.
 
 ## Layout
 
@@ -17,24 +19,199 @@ not retired until a replacement demonstrates parity.
 packaging/
   schema/acp-deployment.schema.json   the published contract
   cli/acpctl/                         validate · plan · inventory · values
+  chart/acp/                          the Helm chart the values install
   examples/                           one document per deployment profile
   docs/service-inventory.md           GENERATED — scripts/gen_service_inventory.py
 ```
+
+## The chart
+
+```bash
+python -m acpctl values packaging/examples/standard-production.acp-deployment.yaml > values.yaml
+helm template acp packaging/chart/acp -f values.yaml
+```
+
+It installs the **application**: the API tier, the three worker tiers, their autoscalers, the
+network policy, the secret wiring, and the migration and preflight hook jobs.
+
+It does **not** install Postgres, Redis or object storage, and a document asking for in-cluster
+data services (`mode: self-hosted` or `mode: embedded`) **fails the render** rather than
+proceeding. That is deliberate: the application package is what is identical across platforms and
+data services are what the adapter supplies, so rendering the app against a database nobody
+created would install a workload that cannot start and report success doing it.
+
+An operator who provisions those services by other means — their own Postgres operator,
+CloudNativePG, a managed instance — sets `external: true` and supplies the endpoint through
+`secrets.refs`. That is the supported path:
+
+```bash
+helm template acp packaging/chart/acp -f values.yaml \
+  --set postgresql.external=true --set redis.external=true --set objectStorage.external=true
+```
+
+### What the cluster must already have
+
+The chart renders these objects whether or not the cluster can act on them, and in two of the
+three cases **Kubernetes reports nothing when it cannot**:
+
+| Rendered | Needs | If absent |
+|---|---|---|
+| `ScaledObject` | KEDA | no error; workers stay at their floor and the queue grows |
+| `NetworkPolicy` | a CNI that enforces them | no error; pod networking stays open |
+| `ExternalSecret` | External Secrets Operator | pods stay in `CreateContainerConfigError` |
+
+Only the third is loud. **`acpctl doctor` is where these become checkable** — run it against
+the target cluster before installing (see below).
 
 ## Using it
 
 ```bash
 export PYTHONPATH=packaging/cli
 
+python -m acpctl init      --profile standard --platform azure --name acp-prod
 python -m acpctl validate  packaging/examples/standard-production.acp-deployment.yaml
 python -m acpctl plan      packaging/examples/standard-production.acp-deployment.yaml
 python -m acpctl inventory packaging/examples/regulated.acp-deployment.yaml --json
 python -m acpctl values    packaging/examples/regulated.acp-deployment.yaml
+python -m acpctl doctor    packaging/examples/standard-production.acp-deployment.yaml
+python -m acpctl status    packaging/examples/standard-production.acp-deployment.yaml
 ```
 
-`validate` exits 0 on success and 1 on any error; warnings are printed and never fail. The other
-eight commands from the PRD's command list exit 2 and name the phase they belong to, rather than
-accepting arguments and doing nothing.
+`validate` exits 0 on success and 1 on any error; warnings are printed and never fail. The
+remaining commands from the PRD's command list exit 2 and name the phase they belong to, rather
+than accepting arguments and doing nothing.
+
+## `init` — start from something valid
+
+```bash
+python -m acpctl init --profile regulated --platform azure --name acp-prod \
+  --region eastus2 --registry acr.example.org/acp -o acp.yaml
+```
+
+Writes to **stdout** unless you pass `-o`, so `acpctl init > acp.yaml` is the ordinary use and the
+read-only guarantee holds by default. With `-o` it **refuses to overwrite** an existing file —
+that file is the record of a deployment and may describe something already installed. There is
+deliberately no `--force`.
+
+### Why this is more than a template
+
+The contract has 37 semantic rules on top of its schema, and they interact: `regulated` needs
+local-only AI *and* local telemetry *and* customer-managed keys *and* ≥30-day retention;
+`evaluation` is Compose-only, and Compose has no managed data services; which secret providers are
+legal depends on the platform; which secret refs are *required* depends on which data services are
+external and which connectors are on. Starting from a copied example means meeting those rules one
+validation error at a time.
+
+So the defaults are **derived from the same policy tables the validator enforces** —
+`presets.PLATFORM_DATA_MODES`, `PLATFORM_SECRET_PROVIDERS`, `PROFILE_MIN_REPLICAS` — and the
+required secret refs come from `spec.required_secret_names`, the function `validate` itself uses.
+A generator with its own idea of what `regulated` means would drift from the validator, and the
+result would be a document that init produced and validate rejects.
+
+**Every document `init` emits passes `validate`, for every legal (profile, platform) pair**, and
+`tests/test_packaging_init.py` checks all sixteen. That is not a formality: the first draft failed
+12 of the 16 twice over — once for invented telemetry exporter names, once for evaluation replica
+ceilings that needed 372 Postgres connections against a server declared at 100. Both were found by
+running the real validator over the real output.
+
+The generated file is **commented**, because it is the one an operator reads and keeps. It is also
+valid-but-not-finished: `runtime.publicUrl`, `runtime.imageRegistry` and every entry under
+`secrets.refs` are placeholders, and the file says so at the top.
+
+## `doctor` — can this cluster run it?
+
+The only command that leaves the machine. It reads a live cluster through `kubectl`, so it
+inherits your kubeconfig, context and credentials, and it **changes nothing**: an allow-list
+refuses any kubectl verb that is not `version`, `api-resources` or `get`, and that refusal is
+tested against a dozen mutating verbs. Phase 0 kept the read-only promise by patching `open` in a
+test, which cannot see a subprocess — this is the replacement, not an addition to it.
+
+```bash
+python -m acpctl doctor packaging/examples/standard-production.acp-deployment.yaml -n acp-prod
+python -m acpctl doctor <spec> --context staging --json
+```
+
+| Exit | Meaning |
+|---|---|
+| 0 | no blockers (warnings may still be printed, and are worth reading) |
+| 1 | a blocker, **or** a blocking check that could not be run |
+| 2 | the cluster could not be reached, so nothing was established — retryable |
+
+### It exists for two silent failures
+
+Most misconfigurations announce themselves. These two do not, and the chart renders both:
+
+- **A `ScaledObject` with no KEDA** is an object nothing reconciles. No error, no event, no
+  status. The worker tiers sit at their floor while the queue grows, and it looks like ACP being
+  slow.
+- **A `NetworkPolicy` under a CNI that does not implement them** is accepted by the API server and
+  enforces nothing. A regulated install can pass review with completely open pod networking.
+
+Everything else `doctor` checks is ordinary preflight. Those two are why there is a command.
+
+### Three outcomes, not two
+
+`pass`, `fail`, and **`unknown`** — and the third is what keeps the report honest. A check that
+could not run has established nothing, so folding it into "pass" because nothing went wrong is how
+a report comes to mean the opposite of what it says. An `unknown` on a check guarding a silent
+failure counts as a blocker.
+
+`doctor` cannot prove NetworkPolicy enforcement — no API reports it — so it infers from the CNI
+and says so in the finding rather than implying certainty. It does not connect to Postgres, Redis
+or object storage either; that would mean shipping credentials to a laptop. The connection-budget
+rule in `spec.py` is the static half of that question.
+
+## `status` — is what is running still what the document says?
+
+`doctor` asks whether a cluster *can* run the document, before an install. `status` asks whether
+what is running *is* the document, after one. Same read-only guarantee: it reuses the same kubectl
+allow-list, and the end-to-end test asserts on the log that every call it made was a read.
+
+```bash
+python -m acpctl status <spec> -n acp-production
+python -m acpctl status <spec> --context prod --json
+```
+
+| Exit | Meaning |
+|---|---|
+| 0 | installed, healthy, and matching the document |
+| 1 | degraded, drifted, nothing installed here, or a blocking check that could not run |
+| 2 | the cluster could not be reached — retryable, and deliberately not 1 |
+
+### The drift half is the part nothing else does
+
+`kubectl get pods` shows health. What no other tool checks is whether the deployment document
+still describes the installation — and `acpctl values` stamps this on every file it renders:
+
+> edit the deployment document and regenerate, or the two disagree and the document stops being
+> the record of what was installed
+
+A `kubectl scale`, a hand-edited values file, a half-finished upgrade: each leaves the document
+describing something that no longer exists, silently, and the document is what the next operator
+reads before making a change.
+
+### Autoscaling is not drift
+
+The obvious check compares running replicas against the document's `replicaCount` — and fires on
+**every healthy autoscaled tier**, because `replicaCount` is the floor and a KEDA tier configured
+3–10 and sitting at 7 is the system working. A report that is red on every correct installation is
+one nobody reads, and then the real drift is unread with it.
+
+So an autoscaled tier is judged on whether its count is inside its range; a tier with no
+autoscaler is judged on the exact number, since nothing legitimately changes it. Those are
+opposite rules and they are separate branches, not one comparison with a tolerance.
+
+Two more comparisons that look obvious and are wrong:
+
+- **The release is compared on the `app.kubernetes.io/version` label, not the image string.**
+  `acpctl install` pins digests, so a correctly-installed release runs `repo@sha256:…` while the
+  document names a tag — comparing image strings would call every properly-pinned install drifted.
+- **The document is checked against the installation before anything else.** Pass the wrong
+  environment's file and every comparison below is against the wrong baseline; the output would be
+  a list of confident falsehoods that sends somebody to "fix" a healthy installation. Profile and
+  platform are on the labels, so that case is detectable — and when it fires, the comparison
+  stops rather than continuing in colour. Health is still reported, because health does not depend
+  on the document at all.
 
 ## The four profiles
 
@@ -47,6 +224,15 @@ accepting arguments and doing nothing.
 
 A profile's name is enforced, not decorative: `regulated` with external AI, or
 `high-availability` without HA Postgres, is a validation error.
+
+## Changing the chart
+
+`tests/test_packaging_chart.py` renders it through `helm template` and asserts on the manifests,
+not on the template source — the interesting properties (what the object contains, whether
+`replicas` is present, whether two clouds produce the same Deployment) are properties of the
+render. It needs helm on PATH; CI installs it with `scripts/install_helm.sh`, and
+`test_ci_has_helm` fails rather than skips when CI has none, so the whole file cannot quietly
+stop running.
 
 ## Adding a rule
 

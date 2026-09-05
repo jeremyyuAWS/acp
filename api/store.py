@@ -554,7 +554,8 @@ _SCHEMA = [
     "CREATE INDEX IF NOT EXISTS idx_lifecycle_evaluation_scan ON lifecycle_evaluation(scan_id, owner_email)",
     "CREATE INDEX IF NOT EXISTS idx_lifecycle_evaluation_file ON lifecycle_evaluation(scan_id, document_id)",
     # Per-file WCAG scope rules (Discover/Assess Lifecycle PRD §4.4 / AC-09, "C4"). A rule
-    # targets files by folder / owner / department and assigns a Core-17 subset; the effective
+    # targets files by folder / owner / department / SharePoint Content Type and assigns a
+    # Core-17 subset; the effective
     # code-set for a file is resolved from matching rules (union, or a higher-priority override
     # replaces — see api/scope_resolver.py). `codes` is a JSON array of SC ids; `is_override`
     # and `enabled` are 0/1; `priority` orders overlapping overrides. Config, not scan output —
@@ -628,6 +629,49 @@ _SCHEMA = [
     # delta-sync baseline — the Drive mirror of drive_id's role in
     # core._sp_prior_inventory_for_drive.
     "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS drive_account_id TEXT",
+    # WHICH SharePoint site and WHICH document library each row came from. `drive_id` above is
+    # already the library's Graph drive id — half the identity — but a scan can now span up to 30
+    # sites, and a drive id names nothing to a reader and does not say which site it belongs to.
+    #
+    # Recorded at the grain the row is, not derived from the scan's scope, because the scope holds
+    # a SET of sites once a run spans several: "which site is this document in" stops being
+    # answerable from the run at all. Everything Phase 2 onwards depends on that boundary —
+    # per-site metadata, per-library delta cursors, per-site exception reports, write-back
+    # targeting — so it is stored now rather than reconstructed later from an id that was thrown
+    # away. NULL for every non-SharePoint source and for a OneDrive listing, which has no site.
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS site_id TEXT",
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS library_name TEXT",
+    # SharePoint-NATIVE metadata (Phase 2). Drive gives a file a name, a size, an owner and a
+    # folder; SharePoint gives it a content type, the managed columns that content type defines,
+    # a retention label, a sharing scope, a version and a check-out state. That is the difference
+    # between "we found a spreadsheet" and "we found a Research Data Management Plan under a
+    # 7-year retention label" — and it is what a records manager can write a rule against.
+    #
+    # The scalars are columns because a rule preview SELECTs them (store.
+    # list_pending_disposition_candidates) and a JSON extract per row in that query would be the
+    # N+1 this schema keeps avoiding. `sp_metadata` carries what cannot be columns: the tenant's
+    # OWN managed columns, whose names ACP cannot know in advance without a migration per
+    # customer, and the per-field AVAILABILITY map.
+    #
+    # The availability map is the load-bearing half. An empty `retention_label` cell is
+    # uninterpretable on its own — an estate with no retention plan and an estate whose labels
+    # Graph refused to hand over look identical — and those call for opposite responses. Stored
+    # at the row so the distinction survives to an export and an auditor, which is the Phase 2
+    # exit gate stated as a column.
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS site_name TEXT",
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS retention_label TEXT",
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS sensitivity_label TEXT",
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS sharing_scope TEXT",
+    # 'page' or 'document'. A SharePoint page is authored in SharePoint and has no downloadable
+    # source document, so assessing one as a document produces a finding about a file that does
+    # not exist in the form the report claims.
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS item_kind TEXT",
+    # A checked-out file is one a remediation write-back would silently fail against — the
+    # precondition Phase 5 has to check, recorded now while the walk is already reading it.
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS checked_out_by TEXT",
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS sp_version TEXT",
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS modified_by TEXT",
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS sp_metadata TEXT",
     # Per-document lifecycle status (PRD §4.3). One of: Active, Archive Candidate, Archived,
     # Delete Candidate, Deleted, Failed, Exempted. Defaults to Active on first discovery; a rule
     # run (Discover) or a manual action moves it. `lifecycle_rule_id`/`lifecycle_reason` record
@@ -1221,6 +1265,42 @@ _SCHEMA = [
       access_level TEXT NOT NULL,
       PRIMARY KEY (tenant_id, role_id, capability)
     )""",
+    # W4 criterion disposition — a human's recorded resolution for a criterion that would
+    # otherwise dead-end (UNCHECKED / GAP / AT). Immutable once written: correcting a wrong
+    # disposition means adding a new row (the most-recent row wins via list order), never
+    # updating an old one — same append-only discipline as decision_log. `sc` is the success
+    # criterion id ("1.1.1"), `kind` is 'attested' or 'out_of_scope', `reason` is the required
+    # human note, `actor` is who submitted it, `owner_email` is the scan owner for tenant
+    # isolation. Indexed on (scan_id, file) for the per-file reads and on (scan_id, file, sc)
+    # for exact-criterion lookups.
+    """CREATE TABLE IF NOT EXISTS criterion_disposition (
+      id TEXT PRIMARY KEY,
+      scan_id TEXT NOT NULL,
+      file TEXT NOT NULL,
+      sc TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      actor TEXT,
+      ts TEXT NOT NULL,
+      owner_email TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_criterion_disposition_file "
+    "ON criterion_disposition(scan_id, file)",
+    "CREATE INDEX IF NOT EXISTS idx_criterion_disposition_sc "
+    "ON criterion_disposition(scan_id, file, sc)",
+    # ADR 0027 Tier A — scanned-PDF vision layout results. One row per (scan_id, file, page);
+    # upsert on re-scan. description and evidence are model-generated text: they MUST NEVER
+    # contain tokens, image bytes, prompts, or PHI — only the structured layout description.
+    """CREATE TABLE IF NOT EXISTS scanned_pdf_layouts (
+      scan_id TEXT NOT NULL,
+      file TEXT NOT NULL,
+      page INT NOT NULL,
+      description TEXT,
+      evidence TEXT,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (scan_id, file, page)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_scanned_pdf_layouts_scan ON scanned_pdf_layouts(scan_id, file)",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -1553,7 +1633,12 @@ def db_max_conn(env: dict | None = None) -> int:
 #     fleet's real replica counts in db_max_conn's docstring and tests/test_db_pool.py.
 #   - CPU: a separate, parallel incident-review thread (not independently verified from this
 #     PR — see the PR body) reported the production Postgres server near-continuously
-#     CPU-saturated (~98% mean, ~24h). Connection-slot headroom and CPU headroom are ORTHOGONAL —
+#     CPU-saturated (~98% mean, ~24h). THAT WORKSTREAM'S WRITE-UP IS
+#     docs/prd-reliability-hardening.md, and "not independently verified" means not verified from
+#     within THIS PR, not that the number is soft: it is an Azure Monitor one-minute metric over
+#     29-30 Aug, a 24h mean of minute averages of 98.36%, with 1,434 of 1,440 minutes at >=90% and
+#     staging at 16.55% as a control. Named here because a reader tracing the figure lands on this
+#     comment, reads "not independently verified", and discounts a measured finding. Connection-slot headroom and CPU headroom are ORTHOGONAL —
 #     a server can have free connection slots while being fully CPU-bound — and more concurrent
 #     connections against an already CPU-saturated server can worsen contention rather than help.
 #     This constant cannot see that dimension at all, so it deliberately stops at "clearly enough
@@ -1662,8 +1747,31 @@ class _PgAdapter:
     # tables and enforces nothing from them, and a replica without the code never touches them at
     # all. Neither can lose access to a surface it has today, because nothing consults these rows
     # until the flag turns the enforcement on.
-    _SCHEMA_VERSION = 11
-    _SCHEMA_CHECKSUM_AT_VERSION = "9e2e7bf4ebbe9c9ab0e14376ffa0d3b9"
+    # v12 adds scan_inventory.site_id and .library_name — which SharePoint site and which document
+    # library each discovered row came from, now that one run can span up to 30 sites and the
+    # scan's scope holds a SET rather than one site id. Additive on the usual terms, and additive
+    # in BEHAVIOUR for the same reason v4's fence was: a replica without this code writes neither
+    # column, add_inventory COALESCEs both through its ON CONFLICT, and every consumer reads them
+    # as optional — so an older replica keeps listing and inventorying exactly as it does today,
+    # it simply records no site attribution. Nothing reads these columns to decide anything yet;
+    # they are the identity the later SharePoint phases (per-site metadata, per-library delta
+    # cursors, exception reports, write-back targeting) need preserved at the row grain, because
+    # once a run covers a set of sites the run itself can no longer answer "which site is this
+    # document in" for any individual file.
+    # v13 adds scan_inventory's SharePoint-native metadata columns (Phase 2) — retention_label,
+    # sensitivity_label, sharing_scope, item_kind, checked_out_by, sp_version, modified_by and
+    # the sp_metadata JSON that carries the tenant's own managed columns plus the per-field
+    # availability map. Additive on the usual terms, and additive in BEHAVIOUR: a replica without
+    # this code writes none of them, add_inventory COALESCEs every one through its ON CONFLICT so
+    # an older replica's re-list cannot erase a richer read, and every consumer treats them as
+    # optional. A replica that has not rolled forward keeps discovering and inventorying exactly
+    # as it does today, it simply records no SharePoint-native metadata.
+    # v14 adds criterion_disposition — the W4 per-criterion human disposition table plus its two
+    # indexes. Additive on the usual terms: an older replica never reads or writes this table, and
+    # every route behind it is guarded by the new capability-map entries, so a replica without
+    # this code keeps serving all existing surfaces unchanged.
+    _SCHEMA_VERSION = 15
+    _SCHEMA_CHECKSUM_AT_VERSION = "78973be69cc99a58230bde5306c6423e"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -1885,6 +1993,72 @@ DISCOVERY_JOB_PRIORITY = 10
 # actually enumerates the estate — drop back into the general queue behind the backlog. A
 # reserved lane without this covers the starting gun and not the race.
 _DISCOVERY_JOB_TYPES = frozenset({"scan_discover", "scan_folder", "scan"})
+
+
+def sharepoint_scope_sites(scope: dict | None) -> tuple[str, ...]:
+    """Every SharePoint site a recorded scope covered, as an order-independent key.
+
+    Two scopes describe the same BOUNDARY when they cover the same set of sites, whatever order
+    the operator picked them in — so this sorts, and callers compare the tuples rather than the
+    raw fields.
+
+    Reads `sites` (the multi-site list, `[{"id", "name"}, ...]`) and falls back to the singular
+    `site` for every run recorded before multi-site existed. That fallback is what keeps an
+    incremental comparison working across the change: without it every historical SharePoint run
+    would key to () and a one-site scan would match a baseline taken on a different site — the
+    boundary check silently disabled, which is worse than no check at all.
+
+    Non-SharePoint scopes have neither field and key to (), which is the constant the singular
+    comparison already produced for them.
+    """
+    scope = scope or {}
+    sites = scope.get("sites")
+    if isinstance(sites, list) and sites:
+        ids = [str(s.get("id")) if isinstance(s, dict) else str(s) for s in sites]
+        return tuple(sorted(i for i in ids if i and i != "None"))
+    one = scope.get("site")
+    return (str(one),) if one else ()
+
+
+def _sp_coverage(live_checkpoint) -> dict:
+    """Per-site coverage counts from a run's checkpointed listing progress, for the live map.
+
+    Returns an EMPTY dict — not zeros — when the run has no site data: a Drive scan, a OneDrive
+    run, a SharePoint scan that has not reached its first site yet. Zeros would render as "0 of 0
+    sites" on every non-SharePoint run in the operations map, which is a fact about the map
+    rather than about the estate.
+
+    Never raises. This is a JSON blob written by a worker and read by an admin screen; one that a
+    partially-rolled-forward replica wrote in a shape this code does not expect must cost the
+    coverage counts, never the map.
+    """
+    if not live_checkpoint:
+        return {}
+    try:
+        state = json.loads(live_checkpoint) if isinstance(live_checkpoint, str) else live_checkpoint
+    except Exception:  # noqa: BLE001
+        return {}
+    sites = (state or {}).get("sites") if isinstance(state, dict) else None
+    if not isinstance(sites, list) or not sites:
+        return {}
+    rows = [s for s in sites if isinstance(s, dict)]
+    return {
+        "sites_total": len(rows),
+        "sites_done": sum(1 for s in rows if s.get("status") == "complete"),
+        # Blocked and skipped are counted together as "not read": on this screen the operator is
+        # asking how much of the estate is covered, and both answer "not this bit". WHICH of the
+        # two, and why, is the exception report's job (/scans/{sid}/exceptions.csv).
+        "sites_unread": sum(1 for s in rows
+                            if s.get("status") in ("blocked", "skipped")),
+        "libraries_total": sum(len(s.get("libraries") or []) for s in rows),
+    }
+
+
+# Terminal statuses that mean the work FAILED, as distinct from `done`, which is terminal and
+# means it succeeded. The difference decides whether re-submitting a stage execution reuses it
+# (see enqueue_stage_batch): finished work must not be redone, failed work must be re-runnable —
+# and treating the two alike is how a retry came to report success while queueing nothing.
+_FAILED_TERMINAL_STATUSES = ("dead", "cancelled")
 
 
 def job_priority(job_type: str) -> int:
@@ -2361,8 +2535,12 @@ class Store:
         now = self._now()
         sql = ("INSERT INTO scan_inventory(scan_id,file,drive_file_id,mime,size_kb,doc_class,"
                "checksum,path,created_at,source_modified,owner,parent_folder,discovered_at,drive_id,"
-               "content_type,drive_account_id) "
-               "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(scan_id,file) DO UPDATE SET "
+               "content_type,drive_account_id,site_id,library_name,site_name,"
+               "retention_label,sensitivity_label,sharing_scope,item_kind,checked_out_by,"
+               "sp_version,modified_by,sp_metadata) "
+               "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,"
+               "%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+               "ON CONFLICT(scan_id,file) DO UPDATE SET "
                "drive_file_id=EXCLUDED.drive_file_id, mime=EXCLUDED.mime, size_kb=EXCLUDED.size_kb, "
                "doc_class=EXCLUDED.doc_class, checksum=EXCLUDED.checksum, path=EXCLUDED.path, "
                "created_at=EXCLUDED.created_at, source_modified=EXCLUDED.source_modified, "
@@ -2371,14 +2549,38 @@ class Store:
                # transient enrichment failure) must not blank out one recorded on a PRIOR
                # list of the same file — that would be a real answer thrown away for a gap.
                "content_type=COALESCE(EXCLUDED.content_type, scan_inventory.content_type), "
-               "drive_account_id=EXCLUDED.drive_account_id")
+               "drive_account_id=EXCLUDED.drive_account_id, "
+               # COALESCE for the same reason content_type uses it: a re-list of the same file
+               # through a narrower path (a folder scan of one library, a delta reconstruction)
+               # may not know the site, and a gap must not erase a site id an earlier list of the
+               # same row recorded.
+               "site_id=COALESCE(EXCLUDED.site_id, scan_inventory.site_id), "
+               "library_name=COALESCE(EXCLUDED.library_name, scan_inventory.library_name), "
+               "site_name=COALESCE(EXCLUDED.site_name, scan_inventory.site_name), "
+               # COALESCE for the same reason content_type uses it, and it matters more here: a
+               # re-list that fell back to a leaner Graph tier (the expansion refused this time,
+               # a transient 400) carries NULL for every column-sourced field. Overwriting would
+               # erase a retention label an earlier, richer read of the same row recorded — a
+               # real answer replaced by a gap, which is the direction that misleads.
+               "retention_label=COALESCE(EXCLUDED.retention_label, scan_inventory.retention_label), "
+               "sensitivity_label=COALESCE(EXCLUDED.sensitivity_label, scan_inventory.sensitivity_label), "
+               "sharing_scope=COALESCE(EXCLUDED.sharing_scope, scan_inventory.sharing_scope), "
+               "item_kind=COALESCE(EXCLUDED.item_kind, scan_inventory.item_kind), "
+               "checked_out_by=COALESCE(EXCLUDED.checked_out_by, scan_inventory.checked_out_by), "
+               "sp_version=COALESCE(EXCLUDED.sp_version, scan_inventory.sp_version), "
+               "modified_by=COALESCE(EXCLUDED.modified_by, scan_inventory.modified_by), "
+               "sp_metadata=COALESCE(EXCLUDED.sp_metadata, scan_inventory.sp_metadata)")
 
         def _params(it: dict) -> tuple:
             return (scan_id, it.get("file"), it.get("drive_file_id"), it.get("mime"),
                     it.get("size_kb"), it.get("doc_class"), it.get("checksum"), it.get("path"),
                     it.get("created_at"), it.get("source_modified"), it.get("owner"),
                     it.get("parent_folder"), it.get("discovered_at") or now, it.get("drive_id"),
-                    it.get("content_type"), it.get("drive_account_id"))
+                    it.get("content_type"), it.get("drive_account_id"),
+                    it.get("site_id"), it.get("library_name"), it.get("site_name"),
+                    it.get("retention_label"), it.get("sensitivity_label"),
+                    it.get("sharing_scope"), it.get("item_kind"), it.get("checked_out_by"),
+                    it.get("sp_version"), it.get("modified_by"), it.get("sp_metadata"))
 
         failed = 0
         with self._db.cursor() as cur:
@@ -2592,7 +2794,9 @@ class Store:
                  "created_at,source_modified,owner,parent_folder,discovered_at,drive_id,"
                  "lifecycle_status,lifecycle_rule_id,lifecycle_reason,exclusion_reason,"
                  "lifecycle_override_reason,lifecycle_overridden_by,lifecycle_overridden_at,"
-                 "content_type")
+                 "content_type,site_id,library_name,site_name,"
+                 "retention_label,sensitivity_label,sharing_scope,item_kind,checked_out_by,"
+                 "sp_version,modified_by,sp_metadata")
 
     def list_inventory(self, scan_id: str) -> list[dict]:
         with self._db.cursor() as cur:
@@ -2674,6 +2878,23 @@ class Store:
         fresh raw item (apply_sp_delta) and so legitimately have none this scan, exactly as
         before. Tracked as a known gap in docs/TODO.md P1e; this is that fix.
 
+        The SharePoint-NATIVE columns (site_id, site_name, library_name, retention_label,
+        sensitivity_label, sharing_scope, item_kind, checked_out_by, sp_version, modified_by,
+        sp_metadata) are selected for exactly the reason content_type is, one phase later. Phase 2
+        made them real columns and add_inventory populates them; leaving them out of THIS select
+        would have every unchanged file re-inventoried with no retention label, no content type
+        and no managed columns on every delta sync — the same silent erasure, on a wider set of
+        fields, and this time on the ones a records manager writes rules against.
+
+        Carrying them forward is correct for an unchanged file BY CONSTRUCTION: Graph's delta
+        feed reports the item, and a file the delta does not mention has not changed. The caveat
+        worth knowing is at the edge of that construction — a managed-column edit that does not
+        touch the driveItem may not surface in the delta feed at all, so a carried-forward column
+        can go stale without anything noticing. That is not a reason to re-read every file (which
+        would spend exactly the saving this feature exists for); it is the reason periodic full
+        reconciliation exists (ACP_SP_RECONCILE_DAYS), and it is why that setting is a correctness
+        control rather than a performance one.
+
         Rows with no drive_file_id are dropped (a local/non-Drive row, or one from a scan old
         enough to predate that column) — they carry nothing a delta could ever reconcile
         against."""
@@ -2691,7 +2912,9 @@ class Store:
             self._db.execute(cur,
                 "SELECT file, drive_file_id, mime, size_kb, checksum, created_at, "
                 "source_modified, owner, parent_folder, drive_id, drive_account_id, "
-                "content_type "
+                "content_type, site_id, site_name, library_name, retention_label, "
+                "sensitivity_label, sharing_scope, item_kind, checked_out_by, sp_version, "
+                "modified_by, sp_metadata "
                 "FROM scan_inventory WHERE scan_id=%s",
                 (row["id"],))
             return [r for r in self._db.fetchall(cur) if r.get("drive_file_id")]
@@ -3587,6 +3810,10 @@ class Store:
                          # a product version, on exactly the same footing as the run it belongs to.
                          "acr_manual_step",
                          "acr_decision_log",
+                         # W4 disposition records are customer data — a human's recorded attestation
+                         # or out-of-scope decision, scoped by owner_email, on the same footing as
+                         # decision_log and disposition_audit above.
+                         "criterion_disposition",
                          # Published snapshots included, and the tension is worth naming: they are
                          # immutable, which means never MODIFIED — not exempt from an explicit,
                          # owner-authorised wipe of the whole account. overview_snapshots is
@@ -3599,7 +3826,9 @@ class Store:
                          # anyone out: acr_authz gives the protected ACP_OWNER_EMAIL every role
                          # unconditionally, so the owner can always grant the first role again —
                          # the same anti-lockout property core.is_owner exists to provide.
-                         "acr_role"]
+                         "acr_role",
+                         # ADR 0027 Tier A — vision layout descriptions are per-scan customer data.
+                         "scanned_pdf_layouts"]
 
     def reset_analytics(self) -> list[str]:
         """Clear all scan results / activity so the Grafana + in-app charts start
@@ -4853,9 +5082,9 @@ class Store:
         return result
 
     def _inventory_attrs(self, scan_id: str, file: str) -> dict:
-        """The file's path / owner / parent_folder from its scan_inventory row — the attributes a
-        per-file scope rule matches on (department is not on scan_inventory today, so
-        department-selector rules do not resolve at this layer; folder/owner do).
+        """The file's path / owner / parent_folder / SharePoint Content Type from its
+        scan_inventory row — the attributes a per-file scope rule matches on. Department has no
+        scan-derived inventory source today; folder, owner, and content_type do.
 
         Lazy bulk-load: first call for a given scan_id fetches ALL inventory rows for the
         scan at once and caches them by filename, so subsequent calls (other files in the same
@@ -4863,7 +5092,8 @@ class Store:
         if scan_id not in self._inventory_cache:
             with self._db.cursor() as cur:
                 self._db.execute(cur,
-                    "SELECT file, path, owner, parent_folder FROM scan_inventory WHERE scan_id=%s",
+                    "SELECT file, path, owner, parent_folder, content_type "
+                    "FROM scan_inventory WHERE scan_id=%s",
                     (scan_id,))
                 rows = self._db.fetchall(cur)
             self._inventory_cache[scan_id] = {r["file"]: r for r in rows}
@@ -5144,7 +5374,13 @@ class Store:
                 scope_kind = current_scope.get("kind")
                 if prior_scope.get("kind") != scope_kind:
                     continue
-                if scope_kind == "sharepoint" and prior_scope.get("site") != current_scope.get("site"):
+                # The SITE SET, not one site id: a multi-site run has no singular `site`, so
+                # comparing that field alone made every multi-site scan look like every other
+                # one ("None == None") and would have matched a baseline covering a completely
+                # different set of sites. See store.sharepoint_scope_sites.
+                if scope_kind == "sharepoint" and (
+                        sharepoint_scope_sites(prior_scope)
+                        != sharepoint_scope_sites(current_scope)):
                     continue
                 if not (prior_scope.get("enumeration") or {}).get("complete"):
                     continue
@@ -5234,7 +5470,7 @@ class Store:
         # discovered file whatever its type, so a format scope does not remove rows from it. What
         # does is where we looked — kind/folder/site — and whether the listing completed.
         def _boundary(s):
-            return (s.get("kind"), s.get("folder"), s.get("site"))
+            return (s.get("kind"), s.get("folder"), sharepoint_scope_sites(s))
         boundary_changed = _boundary(ps) != _boundary(cs)
         truncated = bool(ps.get("truncated") or cs.get("truncated"))
         # Either condition makes "absent" unreadable as "gone", so both route prev-only files to
@@ -5563,6 +5799,13 @@ class Store:
                  1 if edited else 0, review_ms, ai_value or None, final_value or None,
                  reviewer, datetime.now(timezone.utc).isoformat(), reject_reason or None))
 
+    # ADR 0019 §8.5 — thresholds for surfacing a rule as ready to migrate
+    # Human-Assisted → AI-Assisted. All three conditions must hold simultaneously.
+    # These are conservative defaults; no fabricated score, only reviewer-decision counts.
+    _MATURITY_MIN_APPROVALS = 10
+    _MATURITY_MAX_EDIT_RATE = 0.20     # ≤20% of approvals were edited
+    _MATURITY_MIN_APPROVAL_RATE = 0.90  # ≥90% of decided reviews were approved
+
     def hitl_analytics(self, scan_id: str | None = None) -> dict:
         """Aggregate HITL review telemetry — headline metric is reviewer time eliminated,
         not % automated. Scoped to one scan when scan_id is given (owner-checked at the
@@ -5570,9 +5813,17 @@ class Store:
 
         Reviewer Feedback Intelligence: also rolls up per-RULE and per-FORMAT quality (which
         criteria/doc types the AI is weakest on) and the reject-reason histogram — every figure
-        a count of real reviewer decisions, never a fabricated score (ADR 0016)."""
+        a count of real reviewer decisions, never a fabricated score (ADR 0016).
+
+        Maturity signal (ADR 0019 §8.5): rules that pass the three-threshold gate
+        (_MATURITY_MIN_APPROVALS, _MATURITY_MAX_EDIT_RATE, _MATURITY_MIN_APPROVAL_RATE) are
+        flagged ready_to_promote so the UI can surface them as candidates for AI-Assisted mode.
+        avg_edit_distance (normalised Levenshtein ratio via difflib) is included for information
+        but is NOT part of the promotion gate — it requires ai_value/final_value to be populated,
+        which is not guaranteed for all rows."""
+        import difflib as _difflib
         with self._db.cursor() as cur:
-            cols = "action,edited,review_ms,rule_id,file,reject_reason"
+            cols = "action,edited,review_ms,rule_id,file,reject_reason,ai_value,final_value"
             if scan_id:
                 self._db.execute(cur,
                     f"SELECT {cols} FROM hitl_events WHERE scan_id=%s", (scan_id,))
@@ -5587,14 +5838,20 @@ class Store:
         edited_n = sum(1 for r in rows if r.get("edited"))
         ms = [r["review_ms"] for r in rows if r.get("review_ms") is not None]
 
-        def _bucket(rows_iter, keyfn):
+        def _edit_dist(ai_val: str | None, final_val: str | None) -> float | None:
+            if not ai_val or not final_val:
+                return None
+            ratio = _difflib.SequenceMatcher(None, ai_val, final_val).ratio()
+            return round(1.0 - ratio, 4)
+
+        def _bucket(rows_iter, keyfn, *, include_maturity: bool = False):
             out: dict[str, dict] = {}
             for r in rows_iter:
                 k = keyfn(r)
                 if not k:
                     continue
                 b = out.setdefault(k, {"reviewed": 0, "approved": 0, "rejected": 0, "edited": 0,
-                                       "reject_reasons": {}, "_ms": []})
+                                       "reject_reasons": {}, "_ms": [], "_dists": []})
                 a = r.get("action")
                 if a in ("approve", "edit", "reject"):
                     b["reviewed"] += 1
@@ -5609,13 +5866,37 @@ class Store:
                     b["edited"] += 1
                 if r.get("review_ms") is not None:
                     b["_ms"].append(r["review_ms"])
+                if include_maturity and r.get("edited"):
+                    d = _edit_dist(r.get("ai_value"), r.get("final_value"))
+                    if d is not None:
+                        b["_dists"].append(d)
             result = []
             for k, b in out.items():
-                result.append({"key": k, "reviewed": b["reviewed"], "approved": b["approved"],
-                               "rejected": b["rejected"], "edited": b["edited"],
-                               "approval_rate": round(b["approved"] / b["reviewed"], 3) if b["reviewed"] else None,
-                               "avg_review_ms": round(sum(b["_ms"]) / len(b["_ms"])) if b["_ms"] else None,
-                               "reject_reasons": b["reject_reasons"]})
+                rev = b["reviewed"]
+                appr = b["approved"]
+                edit_n = b["edited"]
+                approval_rate = round(appr / rev, 3) if rev else None
+                edit_rate = round(edit_n / appr, 3) if appr else None
+                avg_dist = round(sum(b["_dists"]) / len(b["_dists"]), 4) if b["_dists"] else None
+                entry: dict = {
+                    "key": k,
+                    "reviewed": rev,
+                    "approved": appr,
+                    "rejected": b["rejected"],
+                    "edited": edit_n,
+                    "approval_rate": approval_rate,
+                    "avg_review_ms": round(sum(b["_ms"]) / len(b["_ms"])) if b["_ms"] else None,
+                    "reject_reasons": b["reject_reasons"],
+                }
+                if include_maturity:
+                    entry["edit_rate"] = edit_rate
+                    entry["avg_edit_distance"] = avg_dist
+                    entry["ready_to_promote"] = (
+                        appr >= self._MATURITY_MIN_APPROVALS
+                        and (edit_rate is not None and edit_rate <= self._MATURITY_MAX_EDIT_RATE)
+                        and (approval_rate is not None and approval_rate >= self._MATURITY_MIN_APPROVAL_RATE)
+                    )
+                result.append(entry)
             # weakest first: most rejections, then lowest approval rate — the "where should
             # engineering invest next" ordering.
             result.sort(key=lambda x: (-x["rejected"], x["approval_rate"] if x["approval_rate"] is not None else 1.0))
@@ -5626,6 +5907,10 @@ class Store:
             rr = r.get("reject_reason")
             if r.get("action") == "reject" and rr:
                 reasons[rr] = reasons.get(rr, 0) + 1
+        by_rule = _bucket(rows,
+                          lambda r: (r.get("rule_id") or "").replace("SC_", "").replace("_", ".") or None,
+                          include_maturity=True)
+        promotable_rules = [b["key"] for b in by_rule if b.get("ready_to_promote")]
         return {
             "total": len(rows),
             "by_action": by,
@@ -5634,7 +5919,8 @@ class Store:
             "edit_rate": round(edited_n / approvals, 3) if approvals else None,   # calibration signal
             "avg_review_ms": round(sum(ms) / len(ms)) if ms else None,
             "reject_reasons": reasons,
-            "by_rule": _bucket(rows, lambda r: (r.get("rule_id") or "").replace("SC_", "").replace("_", ".") or None),
+            "promotable_rules": promotable_rules,
+            "by_rule": by_rule,
             "by_format": _bucket(rows, lambda r: (r.get("file") or "").rsplit(".", 1)[-1].lower() if "." in (r.get("file") or "") else None),
         }
 
@@ -6040,19 +6326,57 @@ class Store:
         Keep these as database facts rather than UI estimates: job state explains the queue,
         file_records proves a corrected copy was stored, and remediation_diff proves a fix
         survived the verification pass.
+
+        SCOPED TO THE LATEST BATCH, and counted one terminal outcome per document. Both halves
+        are needed, and they close the same defect from opposite ends. Live 2026-09-04, scan
+        8b83e9e1ca5c: 147 SharePoint documents failed, the batch was submitted again, the second
+        147 failed the same way, and this method — which counted every dead `remediate_file` row
+        the scan had ever produced — answered `failed: 294` against a batch of 147. The UI
+        subtracted and rendered "-147 documents remediated", a number no arrangement of facts can
+        justify. Scoping to the newest batch is the fix; counting distinct documents is what
+        keeps the number sane for jobs enqueued before `batch_id` was recorded (batch_id NULL),
+        where there is no batch to scope to.
         """
+        import json as _json
         with self._db.cursor() as cur:
+            # The batch a user is watching is the one most recently submitted. NULL for jobs
+            # enqueued before batch_id was stamped — the distinct-document count below carries
+            # those on its own.
+            self._db.execute(cur,
+                "SELECT batch_id FROM jobs WHERE scan_id=%s AND type='remediate_file' "
+                "ORDER BY created_at DESC, id DESC LIMIT 1", (scan_id,))
+            _row = self._db.fetchone(cur)
+            batch_id = (_row or {}).get("batch_id")
+            _scope = " AND batch_id=%s" if batch_id else ""
+            _args = (scan_id, batch_id) if batch_id else (scan_id,)
             self._db.execute(cur,
                 "SELECT status,COUNT(*) AS n FROM jobs WHERE scan_id=%s "
-                "AND type='remediate_file' AND status IN ('queued','running') GROUP BY status",
-                (scan_id,))
+                "AND type='remediate_file' AND status IN ('queued','running')" + _scope +
+                " GROUP BY status", _args)
             job_counts = {row["status"]: row["n"] for row in self._db.fetchall(cur)}
             queued = int(job_counts.get("queued", 0) or 0)
             running = int(job_counts.get("running", 0) or 0)
+            # Every job in scope, so a failure count can never exceed the work it is counted
+            # against — the last guard, independent of how the rows below are grouped.
             self._db.execute(cur,
-                "SELECT COUNT(*) AS n FROM jobs WHERE scan_id=%s AND type='remediate_file' "
-                "AND status='dead'", (scan_id,))
-            failed = self._db.fetchone(cur)["n"]
+                "SELECT COUNT(*) AS n FROM jobs WHERE scan_id=%s AND type='remediate_file'" +
+                _scope, _args)
+            batch_total = int((self._db.fetchone(cur) or {}).get("n", 0) or 0)
+            self._db.execute(cur,
+                "SELECT id,payload FROM jobs WHERE scan_id=%s AND type='remediate_file' "
+                "AND status='dead'" + _scope, _args)
+            _dead_docs: set[str] = set()
+            for row in self._db.fetchall(cur):
+                payload = row.get("payload")
+                if isinstance(payload, str):
+                    try:
+                        payload = _json.loads(payload)
+                    except Exception:
+                        payload = {}
+                # Fall back to the job id so a payload-less row still counts as one failure —
+                # dropping it would understate, and this method's job is to be exact.
+                _dead_docs.add((payload or {}).get("file") or f"job:{row.get('id')}")
+            failed = min(len(_dead_docs), batch_total) if batch_total else len(_dead_docs)
             self._db.execute(cur,
                 "SELECT file,drive_write_url,remediated_at FROM file_records WHERE scan_id=%s "
                 "AND remediated_at IS NOT NULL ORDER BY remediated_at DESC LIMIT 5", (scan_id,))
@@ -6073,6 +6397,9 @@ class Store:
         latest = recent[0] if recent else None
         return {"in_flight": queued + running, "queued": queued, "running": running,
                 "failed": failed, "stored_documents": stored,
+                # The batch these counts are scoped to, named so a client can tell "this scan"
+                # from "this run of it" — and can clamp against the same total the server used.
+                "batch_id": batch_id, "batch_documents": batch_total,
                 "verified_documents": int(verified.get("documents", 0) or 0),
                 "fixes_applied": int(verified.get("fixes", 0) or 0), "by_rule": by_rule,
                 "latest_file": latest["file"] if latest else None,
@@ -6080,6 +6407,127 @@ class Store:
                 "recent_files": [{"file": row["file"], "at": row["remediated_at"]}
                                  for row in recent]}
 
+    def remediation_run_facts(self, scan_id: str) -> dict:
+        """Every row remediation_run.build_snapshot needs, from ONE read of the run.
+
+        Deliberately separate from `remediation_status`, which stays exactly as it is: that
+        method feeds a shipped progress bar and a shipped SSE stream, and rewriting it under them
+        to serve a different contract is how a "counter fix" becomes a regression. This gathers
+        FACTS ONLY — no state, no partition, no labels — so the judgement all lives in the pure
+        module that can be tested against literals.
+
+        SCOPED TO THE LATEST BATCH, and to ONE ROW PER DOCUMENT. Both for the reason
+        remediation_status documents at length: an unscoped count answered `failed: 294` against
+        a 147-document batch on 2026-09-04, and the panel rendered "-147 documents remediated".
+        A partition that is asserted to sum to its scope cannot survive a document appearing in
+        it twice, so the newest job per file wins and the rest are history.
+        """
+        import json as _json
+        out: dict = {"scan_id": scan_id, "run_id": scan_id}
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id,started_at,assessed_at,source,status FROM scan_runs WHERE id=%s",
+                (scan_id,))
+            run = self._db.fetchone(cur) or {}
+            self._db.execute(cur,
+                "SELECT batch_id FROM jobs WHERE scan_id=%s AND type='remediate_file' "
+                "ORDER BY created_at DESC, id DESC LIMIT 1", (scan_id,))
+            batch_id = (self._db.fetchone(cur) or {}).get("batch_id")
+            _scope = " AND batch_id=%s" if batch_id else ""
+            _args = (scan_id, batch_id) if batch_id else (scan_id,)
+            self._db.execute(cur,
+                "SELECT id,payload,status,attempts,max_attempts,run_after,locked_at,"
+                "lease_expires_at,updated_at,created_at,phase,cancel_requested_at "
+                "FROM jobs WHERE scan_id=%s AND type='remediate_file'" + _scope +
+                " ORDER BY created_at, id", _args)
+            rows = self._db.fetchall(cur)
+            # One row per document. Later rows win: a document requeued inside the same batch is
+            # represented by its current attempt, not by the corpse of the previous one.
+            jobs: dict[str, dict] = {}
+            for row in rows:
+                payload = row.get("payload")
+                if isinstance(payload, str):
+                    try:
+                        payload = _json.loads(payload)
+                    except Exception:
+                        payload = {}
+                # A payload-less row still counts as one document — dropping it would understate
+                # the scope, and the partition is checked against that scope.
+                file = (payload or {}).get("file") or f"job:{row.get('id')}"
+                jobs[file] = {"file": file, "status": row.get("status"),
+                              "attempts": row.get("attempts"), "run_after": row.get("run_after"),
+                              "locked_at": row.get("locked_at"), "phase": row.get("phase"),
+                              "lease_expires_at": row.get("lease_expires_at"),
+                              "updated_at": row.get("updated_at"),
+                              "created_at": row.get("created_at"),
+                              "cancel_requested_at": row.get("cancel_requested_at")}
+            out["jobs"] = list(jobs.values())
+            out["batch_id"] = batch_id
+            out["cancel_requested"] = any(j.get("cancel_requested_at") for j in jobs.values())
+            out["cancelled"] = bool(jobs) and all(j.get("status") == "cancelled"
+                                                  for j in jobs.values())
+            out["latest_progress_at"] = max(
+                [j["updated_at"] for j in jobs.values() if j.get("updated_at")], default=None)
+            out["started_at"] = min(
+                [j["created_at"] for j in jobs.values() if j.get("created_at")],
+                default=run.get("started_at"))
+
+            # Human review: the documents whose automatic work stopped for a decision, and how
+            # many individual items are waiting. Two different units, named apart (PRD §6C).
+            self._db.execute(cur,
+                "SELECT file,COUNT(*) AS n FROM hitl_queue WHERE scan_id=%s AND status='pending' "
+                "GROUP BY file", (scan_id,))
+            review = self._db.fetchall(cur)
+            out["review_documents"] = [r["file"] for r in review if r.get("file")]
+            out["review_items"] = sum(int(r.get("n") or 0) for r in review)
+
+            # Corrected copies. `remediated_at` proves ACP stored one; `drive_write_url` proves it
+            # reached the source provider. A delivery failure leaves the first set and the second
+            # unset, which is the state PRD §11 needs to be able to retry on its own.
+            self._db.execute(cur,
+                "SELECT file,drive_write_url,remediated_at FROM file_records "
+                "WHERE scan_id=%s AND remediated_at IS NOT NULL", (scan_id,))
+            corrected = self._db.fetchall(cur)
+            out["corrected_documents"] = [r["file"] for r in corrected if r.get("file")]
+            out["corrected_stored"] = len(corrected)
+            out["corrected_delivered"] = sum(1 for r in corrected if r.get("drive_write_url"))
+            out["latest_delivery_at"] = max(
+                [r["remediated_at"] for r in corrected if r.get("remediated_at")], default=None)
+
+            # Fixes APPLIED vs fixes VERIFIED are two tables, and they have always been two
+            # facts: applied_fixes is written by the appliers, remediation_diff only by the
+            # truthfulness gate in handlers._remediate_file, which records a before→after pair
+            # ONLY when the re-scan observed that criterion clear. remediation_status served the
+            # second under the name `fixes_applied`, which is the mislabel PRD §17.4 is about.
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM applied_fixes WHERE scan_id=%s", (scan_id,))
+            out["fixes_applied"] = int((self._db.fetchone(cur) or {}).get("n") or 0)
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n,COUNT(DISTINCT file) AS docs FROM remediation_diff "
+                "WHERE scan_id=%s", (scan_id,))
+            diffs = self._db.fetchone(cur) or {}
+            out["fixes_verified"] = int(diffs.get("n") or 0)
+            self._db.execute(cur,
+                "SELECT DISTINCT file FROM remediation_diff WHERE scan_id=%s", (scan_id,))
+            out["verified_documents"] = [r["file"] for r in self._db.fetchall(cur) if r.get("file")]
+
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM issue_records WHERE scan_id=%s", (scan_id,))
+            out["total_findings"] = int((self._db.fetchone(cur) or {}).get("n") or 0)
+
+            # WHERE the documents came from, from the run's OWN inventory — never from the
+            # signed-in account or a default connector (PRD §6A). NULL for every non-SharePoint
+            # source, which produces a provider label and no breadcrumb rather than a wrong one.
+            self._db.execute(cur,
+                "SELECT DISTINCT site_name,library_name FROM scan_inventory WHERE scan_id=%s "
+                "AND (site_name IS NOT NULL OR library_name IS NOT NULL)", (scan_id,))
+            out["locations"] = [{"site_name": r.get("site_name"),
+                                 "library_name": r.get("library_name")}
+                                for r in self._db.fetchall(cur)]
+        out["source"] = run.get("source")
+        out["assessed_at"] = run.get("assessed_at")
+        out["scan_snapshot_id"] = run.get("id") or scan_id
+        return out
     def get_file_drive_id(self, scan_id: str, file: str) -> str | None:
         with self._db.cursor() as cur:
             self._db.execute(cur,
@@ -6087,6 +6535,34 @@ class Store:
                 (scan_id, file))
             row = self._db.fetchone(cur)
         return row["drive_file_id"] if row else None
+
+    def get_source_checksum(self, scan_id: str, file: str) -> str | None:
+        """The content checksum Assess had for this file — Drive's md5Checksum or SharePoint's
+        quickXorHash — or None when the listing carried neither.
+
+        FROM scan_inventory, which is the only table that has it. `file_records.checksum` exists
+        as a column and is always NULL: the scan report's per-file rows carry no checksum for
+        save_scan to write, and get_scan does not select the column either. Anything that reads a
+        checksum off a scan's FILES therefore reads None, silently — which is how the remediation
+        job came to look for its cached source bytes under a key nothing had written (ADR 0020
+        keys the cache by this checksum when there is one). See routes/scans.remediate_scan.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT checksum FROM scan_inventory WHERE scan_id=%s AND file=%s",
+                (scan_id, file))
+            row = self._db.fetchone(cur)
+        return (row or {}).get("checksum") or None
+
+    def get_source_checksums(self, scan_id: str) -> dict[str, str]:
+        """Every file in the scan that has a checksum, {file: checksum}. One query for a batch,
+        rather than get_source_checksum per document across a 147-file estate."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT file,checksum FROM scan_inventory WHERE scan_id=%s AND checksum IS NOT NULL",
+                (scan_id,))
+            return {row["file"]: row["checksum"] for row in self._db.fetchall(cur)
+                    if row.get("checksum")}
 
     def record_publish(self, scan_id: str, file: str, published_url: str | None = None) -> str:
         """Mark a file published (ADR 0010 archive-copy). Stores the Drive URL of the
@@ -6125,6 +6601,19 @@ class Store:
                 "SELECT file,engine,status,score,compliant,drive_file_id,remediated_at,published_at "
                 "FROM file_records WHERE scan_id=%s AND file=%s",
                 (scan_id, file))
+            return self._db.fetchone(cur)
+
+    def get_source_link_data(self, scan_id: str, file: str, owner: str | None = None) -> dict | None:
+        """Return the scan source system and inventory identifiers needed to construct a deep link
+        back to the source document. Returns None when scan not found or not owned by `owner`.
+        Keys: source ('drive'|'sharepoint'|'local'), drive_file_id, drive_id (SharePoint only)."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT s.source, i.drive_file_id, i.drive_id "
+                "FROM scans s "
+                "LEFT JOIN scan_inventory i ON i.scan_id = s.id AND i.file = %s "
+                "WHERE s.id = %s" + (" AND s.owner = %s" if owner else ""),
+                (file, scan_id) + ((owner,) if owner else ()))
             return self._db.fetchone(cur)
 
     def record_remediation(self, scan_id: str, file: str, drive_write_url: str | None = None,
@@ -6595,6 +7084,44 @@ class Store:
                 "finding_count,status,proposals,validated) "
                 "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)",
                 (item_id, now, scan_id, file, sc, rule_name or sc, count, blob, vflag))
+        return item_id
+
+    def auto_approve_proposals(self, scan_id: str, file: str, sc: str) -> str | None:
+        """Auto-approve a validated hitl_queue row for a Group A SC (ADR 0041 gate).
+
+        Stamps each proposal's proposed_value as its approved_value, sets status='approved'
+        and applied=1. The fix is already in the document — validated=True is only set when
+        _applied_any=True (the fix was written inline) AND the structural re-scan confirmed
+        the criterion cleared. applied=1 prevents apply_approved_values from re-running it.
+
+        Returns the item_id, or None when no pending row exists for this (scan, file, sc).
+        """
+        import json as _json
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id, proposals FROM hitl_queue WHERE scan_id=%s AND file=%s AND rule_id=%s "
+                "AND status='pending'", (scan_id, file, sc))
+            row = self._db.fetchone(cur)
+            if not row:
+                return None
+            item_id = row["id"]
+            try:
+                props = _json.loads(row["proposals"] or "[]")
+            except (ValueError, TypeError):
+                props = []
+            for p in props:
+                if isinstance(p, dict):
+                    pv = (p.get("proposed_value") or "").strip()
+                    if pv:
+                        p["approved_value"] = pv
+            note = ("auto-approved: fix applied inline and confirmed by structural re-scan "
+                    "(ADR 0041 auto-apply gate)")
+            self._db.execute(cur,
+                "UPDATE hitl_queue SET status='approved', reviewed_at=%s, reviewer_note=%s, "
+                "proposals=%s, applied=1 WHERE id=%s",
+                (now, note, _json.dumps(props), item_id))
         return item_id
 
     def attach_hitl_evidence(self, scan_id: str, file: str, sc: str,
@@ -7794,6 +8321,74 @@ class Store:
                     "SELECT * FROM decision_log ORDER BY ts DESC LIMIT %s", (limit,))
             return self._db.fetchall(cur)
 
+    # ── W4 criterion disposition ──────────────────────────────────────────────
+
+    _DISPOSITION_KINDS = frozenset({"attested", "out_of_scope"})
+
+    def record_criterion_disposition(self, scan_id: str, file: str, sc: str, kind: str,
+                                     reason: str, actor: str, owner: str | None = None) -> dict:
+        """Append one disposition record for a criterion. Immutable once written — correct by
+        adding a new row, not updating. Returns the row that was just inserted."""
+        if kind not in self._DISPOSITION_KINDS:
+            raise ValueError(f"unknown disposition kind {kind!r}")
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        row_id = uuid.uuid4().hex[:12]
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO criterion_disposition"
+                "(id,scan_id,file,sc,kind,reason,actor,ts,owner_email) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (row_id, scan_id, file, sc, kind, reason, actor, now, owner))
+        return {"id": row_id, "scan_id": scan_id, "file": file, "sc": sc,
+                "kind": kind, "reason": reason, "actor": actor, "ts": now}
+
+    def list_criterion_dispositions(self, scan_id: str, file: str,
+                                    owner: str | None = None) -> list[dict]:
+        """Most-recent disposition per criterion for this file. Owner-scoped when owner is given.
+        Returns one row per (sc, kind) pair, ordered most-recent-first so the caller can take
+        the head entry per sc as the effective disposition."""
+        with self._db.cursor() as cur:
+            if owner:
+                self._db.execute(cur,
+                    "SELECT id,sc,kind,reason,actor,ts FROM criterion_disposition "
+                    "WHERE scan_id=%s AND file=%s AND owner_email=%s "
+                    "ORDER BY ts DESC",
+                    (scan_id, file, owner))
+            else:
+                self._db.execute(cur,
+                    "SELECT id,sc,kind,reason,actor,ts FROM criterion_disposition "
+                    "WHERE scan_id=%s AND file=%s ORDER BY ts DESC",
+                    (scan_id, file))
+            return self._db.fetchall(cur)
+
+    # ── ADR 0027 Tier A — scanned-PDF layout store ──────────────────────────────
+
+    def save_scanned_pdf_layout(self, scan_id: str, file: str, pages: list[dict]) -> None:
+        """Upsert vision-layout rows for a scanned PDF. One row per page; idempotent on re-scan."""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        with self._db.cursor() as cur:
+            for p in pages:
+                self._db.execute(cur,
+                    "INSERT INTO scanned_pdf_layouts"
+                    "(scan_id,file,page,description,evidence,created_at)"
+                    " VALUES(%s,%s,%s,%s,%s,%s)"
+                    " ON CONFLICT(scan_id,file,page) DO UPDATE SET"
+                    " description=EXCLUDED.description,"
+                    " evidence=EXCLUDED.evidence,"
+                    " created_at=EXCLUDED.created_at",
+                    (scan_id, file, p.get("page"), p.get("description"), p.get("evidence"), now))
+
+    def get_scanned_pdf_layouts(self, scan_id: str, file: str) -> list[dict]:
+        """Return per-page vision layout rows for a file, ordered by page number."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT page,description,evidence,created_at FROM scanned_pdf_layouts"
+                " WHERE scan_id=%s AND file=%s ORDER BY page",
+                (scan_id, file))
+            return self._db.fetchall(cur)
+
     # ── Durable scan-lifecycle event log (ADR 0042) ───────────────────────────
     #
     # NO CALLER YET, deliberately: this is PR 1 of the ADR's four, which lands the table and its
@@ -7809,6 +8404,26 @@ class Store:
         "scan.inventory_saved", "scan.lifecycle_applied", "scan.discovered",
         "scan.assess_started", "scan.retrying", "scan.paused", "scan.resumed",
         "scan.cancelled", "scan.completed", "scan.failed", "scan.interrupted",
+        # ── remediation (PRD "Remediation Real-Time Operations Panel" §8) ──────────
+        #
+        # ONE LOG, NOT A SECOND ONE. The panel needs a resumable, durable narrative of a
+        # remediation run, and that is precisely what this table already is — a monotonic per-scan
+        # `seq` behind a UNIQUE index, with `list_scan_events(after_seq=...)` as the resume read.
+        # Adding a remediation_events table beside it would fork the ordering guarantee: two logs
+        # anchored on the same scan, with no defined interleaving, is worse than either alone.
+        #
+        # THESE ARE PER-DOCUMENT, which the scan.* kinds above are not, and the docstring on
+        # append_scan_event says this path is "barely contended (run-level transitions come one at
+        # a time per job)". Remediation fans out, so that assumption does not carry — but the
+        # design does: test_scan_events_store.py MEASURED a 12-thread race landing 12/12 with a
+        # gap-free sequence (the naive SELECT-MAX-then-INSERT landed 2/12). Production runs two
+        # remediate slots, well inside what was proven.
+        #
+        # Every one of these is emitted AFTER the durable write it describes — the ordering rule
+        # test_scan_events_emitted.py pins — so an event can lag reality but never lead it.
+        "remediate.accepted", "remediate.fix_applied", "remediate.verified",
+        "remediate.verification_failed", "remediate.delivered", "remediate.delivery_failed",
+        "remediate.review_requested", "remediate.document_completed",
     })
 
     _SCAN_EVENT_SEQ_ATTEMPTS = 4
@@ -8279,6 +8894,127 @@ class Store:
                 (job_id, type, _json.dumps(payload or {}), priority, max_attempts,
                  run_after or now, campaign_id, batch_id, scan_id, now, now))
         return job_id
+
+    def stage_snapshot_id(self, scan_id: str) -> str:
+        """Stable identity of the immutable Discover/Assess input consumed downstream."""
+        import hashlib as _hashlib
+        import json as _json
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id,source,rubric_hash,scope,discovered_at "
+                "FROM scan_runs WHERE id=%s", (scan_id,))
+            run = self._db.fetchone(cur)
+            if not run:
+                raise ValueError(f"scan not found: {scan_id}")
+            self._db.execute(cur,
+                "SELECT file,checksum,size_kb,source_modified FROM scan_inventory "
+                "WHERE scan_id=%s ORDER BY file", (scan_id,))
+            inventory = self._db.fetchall(cur)
+        encoded = _json.dumps({"run": run, "inventory": inventory}, sort_keys=True,
+                              separators=(",", ":"), default=str)
+        return _hashlib.sha256(encoded.encode()).hexdigest()
+
+    def enqueue_stage_batch(self, scan_id: str, stage: str, job_type: str,
+                            payloads: list[dict], *, snapshot_id: str,
+                            request_fingerprint: str) -> dict:
+        """Atomically enqueue or reuse equivalent queued, running or completed stage work.
+
+        A FAILED EXECUTION IS NOT REUSED — it is re-queued in place. `batch_id` is derived from
+        (scan_id, stage, snapshot_id, request_fingerprint), so re-submitting the same scan and
+        scope lands on the same id by construction; the lookup that made that reuse used to match
+        rows of ANY status, dead included. Re-running a batch that had died therefore handed the
+        dead rows straight back with `reused: True` and queued nothing, while the route still
+        answered `enqueued: <len(job_ids)>` — a retry that reports success and does nothing, which
+        is the failure the 2026-09-04 SharePoint incident consisted of.
+
+        Demonstrated against this method before the change: two jobs, both marked dead, re-submitted
+        with the same snapshot and fingerprint → `reused: True`, `statuses: ['dead', 'dead']`, zero
+        queued rows.
+
+        Two deliberate departures from "just exclude terminal statuses from the lookup":
+
+          * `done` STAYS REUSABLE. It is terminal too, but re-submitting finished work must not
+            redo it — that idempotency is the point of the snapshot execution, and
+            test_remediate_sharepoint_enqueue.py pins it. Only the FAILED terminals (dead,
+            cancelled) are excluded.
+          * The failed rows are RE-QUEUED IN PLACE rather than skipped so fresh rows insert
+            alongside them. With a deterministic batch_id an insert would leave both generations
+            under one id, and `remediation_status` scopes its counts to exactly that — so a
+            147-document retry would report 294 documents. Rewriting the row keeps one row per
+            document, which is what makes the batch total mean anything.
+
+        The re-queued row also takes the CURRENT payload for its file. A retry exists to carry
+        what changed since the failure — a refreshed Drive token most of all, that being what the
+        incident's jobs died for want of.
+        """
+        import hashlib as _hashlib
+        import json as _json
+        key = _json.dumps([scan_id, stage, snapshot_id, request_fingerprint],
+                          separators=(",", ":"))
+        batch_id = _hashlib.sha256(key.encode()).hexdigest()[:24]
+        now = self._now()
+        with self._db.cursor() as cur:
+            if self._db.supports_skip_locked:
+                self._db.execute(cur,
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                    (f"stage:{scan_id}:{stage}",))
+            self._db.execute(cur,
+                "SELECT id,status,payload FROM jobs WHERE scan_id=%s AND batch_id=%s "
+                "ORDER BY created_at,id", (scan_id, batch_id))
+            existing = self._db.fetchall(cur)
+            if existing:
+                by_file = {}
+                for original in payloads:
+                    if original.get("file"):
+                        by_file[original["file"]] = original
+                statuses = []
+                requeued = 0
+                for row in existing:
+                    if row["status"] not in _FAILED_TERMINAL_STATUSES:
+                        statuses.append(row["status"])
+                        continue
+                    # Carry whatever changed since the failure into the row being revived, keyed
+                    # by file. The snapshot fields are re-stamped from this call's own values, so
+                    # a revived row can never claim a snapshot it was not planned under.
+                    payload = row.get("payload")
+                    if isinstance(payload, str):
+                        try:
+                            payload = _json.loads(payload)
+                        except Exception:
+                            payload = {}
+                    payload = payload or {}
+                    fresh = by_file.get(payload.get("file"))
+                    if fresh:
+                        payload = dict(fresh, snapshot_id=snapshot_id,
+                                       stage_execution_id=batch_id)
+                    self._db.execute(cur,
+                        "UPDATE jobs SET status='queued',attempts=0,payload=%s,run_after=%s,"
+                        "locked_at=NULL,locked_by=NULL,lease_expires_at=NULL,phase=NULL,"
+                        "last_error=NULL,cancel_requested_at=NULL,updated_at=%s WHERE id=%s",
+                        (_json.dumps(payload), now, now, row["id"]))
+                    statuses.append("queued")
+                    requeued += 1
+                return {"batch_id": batch_id, "job_ids": [r["id"] for r in existing],
+                        # `reused` answers "did this call queue nothing?" — a retry that revived
+                        # dead work did queue something, and a caller that reads it to decide
+                        # whether to watch a run has to be told so.
+                        "reused": requeued == 0, "statuses": statuses, "requeued": requeued}
+            priority = job_priority(job_type)
+            job_ids = []
+            for original in payloads:
+                job_id = uuid.uuid4().hex[:16]
+                payload = dict(original, snapshot_id=snapshot_id, stage_execution_id=batch_id)
+                self._db.execute(cur,
+                    "INSERT INTO jobs(id,type,payload,status,priority,attempts,max_attempts,"
+                    "run_after,batch_id,scan_id,created_at,updated_at) "
+                    "VALUES(%s,%s,%s,'queued',%s,0,5,%s,%s,%s,%s,%s)",
+                    (job_id, job_type, _json.dumps(payload), priority, now, batch_id,
+                     scan_id, now, now))
+                job_ids.append(job_id)
+        return {"batch_id": batch_id, "job_ids": job_ids, "reused": False,
+                # Uniform shape with the reuse/revive path above, so a caller can read `requeued`
+                # without knowing which branch answered it.
+                "requeued": 0, "statuses": ["queued"] * len(job_ids)}
 
     def get_job(self, job_id: str) -> dict | None:
         with self._db.cursor() as cur:
@@ -9139,6 +9875,112 @@ class Store:
                 (self._now(), owner) if owner else (self._now(),))
             return self._db.fetchone(cur)
 
+    def queue_composition(self, *, window_s: int = 900) -> dict:
+        """The shared queue as the four states a job is actually in, plus the two rates, for the
+        Live Operations queue visualization. Global (not owner-scoped) like `oldest_queued_job`:
+        the question it answers is whether the SHARED queue is draining, which scoping to one
+        caller would answer wrongly the moment that caller has nothing queued. No payload, error
+        text or filename is read, so nothing crosses tenants.
+
+        `waiting` and `retrying` split the same `status='queued'` rows by `attempts`: a job with
+        attempts > 0 has already failed at least once and been requeued in place by fail_job (it
+        does not insert a new row). Counting the two together is what makes a retry storm read as
+        demand for more capacity, which is the opposite of what it is.
+
+        `failed` is dead-lettered jobs within the window, and EXCLUDES deliberate stops via the
+        same _FAILED split dead_letter_breakdown uses — pressing Stop on a 200-document scan marks
+        200 jobs 'dead' and those are not faults. It is windowed rather than all-time because this
+        is a composition bar next to live counts: an all-time total would dwarf them and would not
+        describe the queue as it is now.
+
+        `arrived` / `completed` are counts over the window, not per-minute rates — the caller
+        divides by `window_s`, which is returned so it cannot be assumed.
+        """
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+        cutoff = (_dt.now(_tz.utc) - _td(seconds=max(0, window_s))).isoformat()
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE status='running'", ())
+            running = int((self._db.fetchone(cur) or {}).get("n") or 0)
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE status='queued' AND COALESCE(attempts,0)=0", ())
+            waiting = int((self._db.fetchone(cur) or {}).get("n") or 0)
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE status='queued' AND COALESCE(attempts,0)>0", ())
+            retrying = int((self._db.fetchone(cur) or {}).get("n") or 0)
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE status='dead'" + self._FAILED
+                + " AND updated_at>=%s", (cutoff,))
+            failed = int((self._db.fetchone(cur) or {}).get("n") or 0)
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE created_at>=%s", (cutoff,))
+            arrived = int((self._db.fetchone(cur) or {}).get("n") or 0)
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE status='done' AND updated_at>=%s", (cutoff,))
+            completed = int((self._db.fetchone(cur) or {}).get("n") or 0)
+            # The longest-waiting CLAIMABLE job, using claim_job's own run_after<=now gate so a job
+            # parked behind retry backoff is not counted as evidence the queue is stalled.
+            self._db.execute(cur,
+                "SELECT created_at FROM jobs WHERE status='queued' AND run_after<=%s "
+                "ORDER BY created_at ASC LIMIT 1", (now,))
+            oldest = (self._db.fetchone(cur) or {}).get("created_at")
+        # ── Wait percentiles ────────────────────────────────────────────────────────────────
+        # The oldest wait is one job's; it says nothing about whether the queue is broadly slow or
+        # holding one straggler. The median and the 95th say which.
+        #
+        # Computed by OFFSET rather than by pulling every queued row: a deep queue is thousands of
+        # rows and this runs on the live map's read path. Two extra single-row selects cost the
+        # same whether ten jobs are waiting or ten thousand, and neither SQLite nor Postgres shares
+        # a percentile function this code could use portably.
+        #
+        # Ordered by created_at ASC, so the OLDEST job is rank 0 and the longest wait is the
+        # smallest index. The 95th percentile of WAIT is therefore the 5% oldest — index
+        # floor(0.05 * n) — not the 95% mark, which would report the newest arrival instead.
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE status='queued' AND run_after<=%s", (now,))
+            eligible = int((self._db.fetchone(cur) or {}).get("n") or 0)
+
+            def _at_rank(rank: int):
+                if eligible <= 0:
+                    return None
+                self._db.execute(cur,
+                    "SELECT created_at FROM jobs WHERE status='queued' AND run_after<=%s "
+                    "ORDER BY created_at ASC LIMIT 1 OFFSET %s",
+                    (now, max(0, min(rank, eligible - 1))))
+                return (self._db.fetchone(cur) or {}).get("created_at")
+
+            median_at = _at_rank(eligible // 2)
+            p95_at = _at_rank(int(eligible * 0.05))
+
+        # ── Fairness ────────────────────────────────────────────────────────────────────────
+        # How the waiting work is spread across tenants, WITHOUT naming them. The counts alone
+        # answer "is one customer holding the queue", which is what tenant-fair scheduling is
+        # judged on; adding the identities would put a list of customer addresses on a screen any
+        # signed-in workspace user can open, to answer a question that does not need them.
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs j JOIN scan_runs sr ON sr.id=j.scan_id "
+                "WHERE j.status='queued' GROUP BY sr.owner_email ORDER BY n DESC", ())
+            per_tenant = [int(r["n"] or 0) for r in self._db.fetchall(cur)]
+        total_waiting = sum(per_tenant)
+
+        # Every instant here is returned as an INSTANT, not as elapsed seconds. The activity SSE
+        # stream emits only when its payload changes (routes/system.py), and a seconds counter
+        # changes on every two-second build — which would turn a queue with one waiting job into a
+        # frame every two seconds forever. The reader computes the elapsed time from these.
+        return {"running": running, "waiting": waiting, "retrying": retrying, "failed": failed,
+                "arrived": arrived, "completed": completed, "window_s": int(max(0, window_s)),
+                "oldest_queued_at": oldest,
+                "median_queued_at": median_at, "p95_queued_at": p95_at,
+                "wait_sampled": eligible,
+                "fairness": {
+                    "tenants": len(per_tenant),
+                    "counts": per_tenant[:10],
+                    "top_share_pct": round((per_tenant[0] / total_waiting) * 100) if total_waiting else None,
+                }}
+
     def list_jobs(self, status: str | None = None, limit: int = 200, owner: str | None = None) -> list[dict]:
         clauses, params = [], []
         if status:
@@ -9172,8 +10014,15 @@ class Store:
         }
         with self._db.cursor() as cur:
             self._db.execute(cur,
+                # locked_at answers "how long has a worker been on this", which a status of
+                # 'running' cannot: a job claimed 40 seconds ago and one claimed at boot look
+                # identical without it. error_class and attempts answer "has this been failing",
+                # from the CLOSED ERROR_CLASS_VOCABULARY rather than the free-text last_error —
+                # this method is cross-user, and an error string can carry another tenant's
+                # filename, while a vocabulary term cannot.
                 "SELECT j.scan_id,j.type,j.status,j.created_at,j.updated_at,j.payload,"
-                "sr.owner_email,sr.source,sr.files,sr.files_done "
+                "j.locked_at,j.error_class,j.attempts,"
+                "sr.owner_email,sr.source,sr.files,sr.files_done,sr.live_checkpoint "
                 "FROM jobs j JOIN scan_runs sr ON sr.id=j.scan_id "
                 "WHERE j.scan_id IN (SELECT DISTINCT scan_id FROM jobs "
                 "WHERE status IN ('queued','running')) OR "
@@ -9196,6 +10045,14 @@ class Store:
                 "started_at": row.get("created_at"), "updated_at": row.get("updated_at"),
                 "oldest_queued_at": None, "current_file": None,
                 "current_job_type": None, "current_rule_id": None,
+                "current_job_started_at": None, "last_error_class": None, "max_attempts_seen": 0,
+                # SharePoint COVERAGE, for the operations map. A 30-site walk is one long
+                # "discovering" bar there today: the file count ticks and nothing says which
+                # sites are done, which are queued, or that one is blocked on a consent that
+                # lapsed this morning. The per-site report is already checkpointed on the run
+                # (core._maybe_checkpoint accumulates the listing's own progress patches), so
+                # this is a read of something already written, not new instrumentation.
+                **_sp_coverage(row.get("live_checkpoint")),
             })
             status = row.get("status")
             item["total"] += 1
@@ -9211,6 +10068,16 @@ class Store:
                     recent.add(key)
             if status in ("queued", "running"):
                 active.add(key)
+            # Retry pressure and the classified reason, for every job in the group rather than
+            # only the running one: a stage that is retrying is a different situation from one
+            # that is merely busy, and the newest running job may be the one attempt that is fine.
+            attempts = int(row.get("attempts") or 0)
+            if attempts > item["max_attempts_seen"]:
+                item["max_attempts_seen"] = attempts
+            if row.get("error_class") and not item["last_error_class"]:
+                item["last_error_class"] = row.get("error_class")
+            if status == "running" and not item["current_job_started_at"]:
+                item["current_job_started_at"] = row.get("locked_at")
             if status == "running" and not item["current_file"]:
                 try:
                     payload = row.get("payload") or {}
@@ -9231,6 +10098,22 @@ class Store:
         result = [grouped[key] for key in active | recent]
         for item in result:
             item["status"] = "active" if (item["queued"] or item["running"]) else "recent"
+        # Confirmed findings so far, for the throughput panel's findings-per-minute. One aggregate
+        # per ACTIVE assess run — bounded by concurrent runs, not by estate size — and deliberately
+        # not taken for recent ones, which are finished and whose count no longer moves. It is the
+        # SAME SUM the certification report totals (live_findings_count), so a rate derived from it
+        # reconciles with the final cert rather than being a second, divergent tally.
+        #
+        # None, never 0, when the store cannot answer: a run with no findings and a run whose
+        # findings could not be counted are different facts.
+        _findings = getattr(self, "live_findings_count", None)
+        for item in result:
+            item["findings"] = None
+            if callable(_findings) and item["status"] == "active" and item["stage"] == "assess":
+                try:
+                    item["findings"] = int(_findings(item["scan_id"]))
+                except Exception:
+                    item["findings"] = None
         waiting = sorted((r for r in result if r["queued"]),
                          key=lambda r: str(r.get("oldest_queued_at") or ""))
         for position, item in enumerate(waiting, 1):
@@ -9736,8 +10619,15 @@ class Store:
         both, and the two lists never need deduplicating against each other.
         """
         with self._db.cursor() as cur:
+            # The SharePoint-native columns are selected here for the same reason doc_class and
+            # size_kb are: this is the PREVIEW path, and a preview that cannot see a field the
+            # Discover-time evaluator can see reports "would match: 0" for a rule that will in
+            # fact tag the estate. A preview that disagrees with the run is worse than no preview.
             q = ("SELECT si.scan_id, si.file, si.path, si.parent_folder, si.created_at, "
                  "si.source_modified, si.owner, si.doc_class, si.size_kb, "
+                 "si.content_type, si.retention_label, si.sensitivity_label, si.sharing_scope, "
+                 "si.item_kind, si.checked_out_by, si.site_name, si.library_name, "
+                 "si.sp_metadata, "
                  "si.lifecycle_status, sr.source "
                  "FROM scan_inventory si JOIN scan_runs sr ON sr.id = si.scan_id "
                  "WHERE sr.status='discovered'")
@@ -9747,11 +10637,16 @@ class Store:
                 params = (owner,)
             self._db.execute(cur, q, params)
             rows = self._db.fetchall(cur)
+        import handlers as _handlers      # local: handlers imports store at module scope
         return [{"doc_id": f"scan:{r['scan_id']}:{r['file']}", "source": r.get("source"),
                  "path": r.get("path"), "parent_folder": r.get("parent_folder"),
                  "created_at": r.get("created_at"), "source_modified": r.get("source_modified"),
                  "owner": r.get("owner"), "doc_class": r.get("doc_class"),
                  "size_kb": r.get("size_kb"),
+                 # THE SAME reshaping the Discover-time evaluator uses, called rather than
+                 # copied: two hand-maintained versions of "which columns become which rule
+                 # inputs" is how a preview and a run come to disagree about the same rule.
+                 **_handlers._sp_rule_inputs(r),
                  "lifecycle_status": r.get("lifecycle_status")}
                 for r in rows]
 

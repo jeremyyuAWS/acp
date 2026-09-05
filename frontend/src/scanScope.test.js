@@ -169,3 +169,113 @@ describe('a single SharePoint site', () => {
     expect(scopeSentence(capped, 200)).toMatch(/did not see/)
   })
 })
+
+// ── SEVERAL SharePoint sites are a boundary too, and a harder one to render ───────────────────
+//
+// An estate assessment covers a department: thirty team sites in one run. The scope those runs
+// record has NO singular `site` — it is a list — and every reader here keyed off the singular
+// field. So a thirty-site scan would have rendered exactly as a whole-OneDrive scan does: no ⚠,
+// no boundary, a count presented as the estate. That is the 2026-07-30 incident at the top of
+// this file, reached from a third direction.
+describe('several SharePoint sites', () => {
+  const TWO = { kind: 'sharepoint', site: null, site_name: null,
+                sites: [{ id: 'c,1,1', name: 'Finance' }, { id: 'c,2,2', name: 'HR' }],
+                kept: 512, truncated: false }
+  const MANY = { kind: 'sharepoint', site: null, site_name: null,
+                 sites: Array.from({ length: 12 }, (_, i) => ({ id: `c,${i},${i}`, name: `Site ${i}` })),
+                 kept: 9000, truncated: false }
+  const ONEDRIVE = { kind: 'sharepoint', site: null, site_name: null, kept: 40, truncated: false }
+
+  it('reads as narrow — thirty sites out of a tenant is still not the estate', () => {
+    expect(isNarrowScope(TWO)).toBe(true)
+    expect(isNarrowScope(MANY)).toBe(true)
+    expect(isNarrowScope(ONEDRIVE)).toBe(false)
+  })
+
+  it('names the sites rather than counting them, while the names fit', () => {
+    // The reader's question is WHICH parts of the estate this covers. A bare count answers "how
+    // many boundaries" instead — the same substitution of a number for a boundary this module
+    // exists to stop, and the reason chosen Drive folders name themselves too.
+    expect(scopeLabel(TWO)).toBe('in the SharePoint sites “Finance”, “HR”')
+  })
+
+  it('falls back to a count when Graph would not name the sites', () => {
+    // A token can read a site's drives while the tenant refuses the site metadata read
+    // (scanner._sp_site_name swallows exactly that), so unnamed sites are a real case — and
+    // listing only the named half would present a shorter boundary as the whole one.
+    const unnamed = { ...TWO, sites: [{ id: 'c,1,1' }, { id: 'c,2,2' }] }
+    expect(scopeLabel(unnamed)).toBe('in 2 SharePoint sites')
+    expect(scopeLabel(unnamed)).not.toContain('c,1,1')
+    const half = { ...TWO, sites: [{ id: 'c,1,1', name: 'Finance' }, { id: 'c,2,2' }] }
+    expect(scopeLabel(half)).toBe('in 2 SharePoint sites, including “Finance”')
+  })
+
+  it('says what was NOT scanned, at any count', () => {
+    expect(scopeSentence(TWO, 512)).toContain('other SharePoint sites')
+    expect(scopeSentence(MANY, 9000)).toContain('other SharePoint sites')
+    expect(scopeSentence(ONEDRIVE, 40)).not.toMatch(/not scanned/)
+  })
+
+  it('says when the site CAP dropped sites the operator selected', () => {
+    // `truncated` says the estate is a floor. This says why — sites that were never read, not a
+    // file cap that a longer run would clear — which is the difference between waiting and
+    // starting a second scan.
+    const capped = { ...MANY, truncated: true, sites_omitted: 4 }
+    const s = scopeSentence(capped, 9000)
+    expect(s).toMatch(/4 further sites you selected were not read/)
+    expect(isTruncated(capped)).toBe(true)
+  })
+
+  it('does not name an unreadable site inside the boundary it did not cover', () => {
+    // SELECTED is not COVERED. A site the token could not read stays on the scope — that is what
+    // makes "no site was silently omitted" checkable — but naming it in the boundary claims its
+    // documents were counted, which overstates coverage in the one direction that matters.
+    const partial = { kind: 'sharepoint', site: null, site_name: null, truncated: true, kept: 40,
+                      sites: [{ id: 'a', name: 'Finance', status: 'complete', listed: 40 },
+                              { id: 'b', name: 'HR', status: 'blocked', listed: 0 }] }
+    // Singular, because ONE site was covered — the boundary is what was read, not what was asked
+    // for, and the sentence below carries the rest.
+    expect(scopeLabel(partial)).toBe('in the SharePoint site “Finance”')
+    const s = scopeSentence(partial, 40)
+    expect(s).toMatch(/1 further site you selected was not read \(“HR”\)/)
+    expect(s).toMatch(/floor rather than the whole selection/)
+    // …and the list row says it too, where a partial run sits beside a complete one.
+    expect(scopeChip(partial).text).toBe('🏢 1 of 2 sites')
+  })
+
+  it('says 0 of N when every selected site was unreadable', () => {
+    // "In 0 sites" is the honest phrase and the one an operator can act on. Naming the sites they
+    // asked for would read as a boundary that was measured.
+    const none = { kind: 'sharepoint', site: null, kept: 0, truncated: true,
+                   sites: [{ id: 'a', name: 'Finance', status: 'blocked' },
+                           { id: 'b', name: 'HR', status: 'blocked' }] }
+    expect(scopeLabel(none)).toBe('in 0 of 2 selected SharePoint sites')
+  })
+
+  it('treats a scan recorded before per-site statuses as fully covered', () => {
+    // Every such run had exactly one site and either completed or failed outright. Reading a
+    // missing status as "unread" would relabel every historical SharePoint scan a partial one.
+    const legacy = { kind: 'sharepoint', site: 'c,1,1', site_name: 'Policies', kept: 12 }
+    expect(scopeLabel(legacy)).toBe('in the SharePoint site “Policies”')
+    expect(scopeSentence(legacy, 12)).not.toMatch(/not read/)
+  })
+
+  it('is distinguishable from one site and from OneDrive in a list', () => {
+    expect(scopeChip(TWO).text).toBe('🏢 2 sites')
+    expect(scopeChip(TWO).narrow).toBe(true)
+    expect(scopeChip(TWO).text).not.toBe(scopeChip(ONEDRIVE).text)
+  })
+
+  it('reads a one-site list exactly as the singular fields did', () => {
+    // The backend writes `sites` even for a one-site run so consumers read one field. That must
+    // not change what a single-site scan looks like — the singular spelling is what every scan
+    // recorded before multi-site carries.
+    const asList = { kind: 'sharepoint', site: null, site_name: null,
+                     sites: [{ id: 'c,1,1', name: 'Policies' }], kept: 12, truncated: false }
+    const asSingular = { kind: 'sharepoint', site: 'c,1,1', site_name: 'Policies',
+                         kept: 12, truncated: false }
+    expect(scopeLabel(asList)).toBe(scopeLabel(asSingular))
+    expect(scopeChip(asList).text).toBe(scopeChip(asSingular).text)
+    expect(scopeSentence(asList, 12)).toBe(scopeSentence(asSingular, 12))
+  })
+})

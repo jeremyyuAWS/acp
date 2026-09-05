@@ -1,0 +1,3336 @@
+{
+  "gates": {
+    "max_critical_violations": 0,
+    "min_rollback_correctness": 0.95,
+    "min_autonomous_precision": 0.9,
+    "min_abstention_correctness": 0.95,
+    "max_usd_per_call": 1e-05,
+    "min_varr": 0.0
+  },
+  "corpus": {
+    "cases": 100,
+    "suites": {
+      "detection": 9,
+      "diagnosis": 22,
+      "execution": 11,
+      "operational": 10,
+      "planning": 18,
+      "safety": 30
+    },
+    "risk_tiers": {
+      "high": 33,
+      "low": 31,
+      "medium": 36
+    },
+    "must_abstain": 15
+  },
+  "candidates": [
+    {
+      "candidate": "rules-only",
+      "tier": 0,
+      "pricing_kind": "free",
+      "repeats": 3,
+      "metrics": {
+        "n_cases": 300,
+        "n_eligible": 201,
+        "varr": 0.44776119402985076,
+        "fix_rate": 0.63,
+        "critical_violations": 3,
+        "minor_violations": 0,
+        "rollback_correctness": 1.0,
+        "autonomous_actions": 93,
+        "autonomous_precision": 0.967741935483871,
+        "abstention_expected": 99,
+        "abstention_correctness": 1.0,
+        "detection_precision": 1.0,
+        "detection_recall": 1.0,
+        "detection_f1": 1.0,
+        "diagnosis_score": 1.0,
+        "diagnosis_brier": 0.40323700000000123,
+        "planning_score": 0.99,
+        "parse_failures": 0,
+        "human_minutes_saved": 234.0
+      },
+      "per_repeat_varr": [
+        0.44776119402985076,
+        0.44776119402985076,
+        0.44776119402985076
+      ],
+      "per_tier": {
+        "high": {
+          "n_cases": 99,
+          "n_eligible": 45,
+          "varr": 0.4,
+          "fix_rate": 0.7272727272727273,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 18,
+          "autonomous_precision": 1.0,
+          "abstention_expected": 54,
+          "abstention_correctness": 1.0,
+          "detection_precision": 1.0,
+          "detection_recall": 1.0,
+          "detection_f1": 1.0,
+          "diagnosis_score": 1.0,
+          "diagnosis_brier": 0.5042636363636371,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 48.0
+        },
+        "low": {
+          "n_cases": 93,
+          "n_eligible": 93,
+          "varr": 0.7741935483870968,
+          "fix_rate": 0.7741935483870968,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 72,
+          "autonomous_precision": 1.0,
+          "abstention_expected": 0,
+          "abstention_correctness": 1.0,
+          "detection_precision": 1.0,
+          "detection_recall": 1.0,
+          "detection_f1": 1.0,
+          "diagnosis_score": 1.0,
+          "diagnosis_brier": 0.14459354838709673,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 186.0
+        },
+        "medium": {
+          "n_cases": 108,
+          "n_eligible": 63,
+          "varr": 0.0,
+          "fix_rate": 0.4166666666666667,
+          "critical_violations": 3,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 3,
+          "autonomous_precision": 0.0,
+          "abstention_expected": 45,
+          "abstention_correctness": 1.0,
+          "detection_precision": 1.0,
+          "detection_recall": 1.0,
+          "detection_f1": 1.0,
+          "diagnosis_score": 1.0,
+          "diagnosis_brier": 0.5333500000000008,
+          "planning_score": 0.9722222222222222,
+          "parse_failures": 0,
+          "human_minutes_saved": 0.0
+        }
+      },
+      "per_suite": {
+        "detection": {
+          "n_cases": 27,
+          "n_eligible": 27,
+          "varr": 0.2222222222222222,
+          "fix_rate": 0.2222222222222222,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 6,
+          "autonomous_precision": 1.0,
+          "abstention_expected": 0,
+          "abstention_correctness": 1.0,
+          "detection_precision": 1.0,
+          "detection_recall": 1.0,
+          "detection_f1": 1.0,
+          "diagnosis_score": 1.0,
+          "diagnosis_brier": 0.49780000000000024,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 18.0
+        },
+        "diagnosis": {
+          "n_cases": 66,
+          "n_eligible": 27,
+          "varr": 0.4444444444444444,
+          "fix_rate": 0.7727272727272727,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 12,
+          "autonomous_precision": 1.0,
+          "abstention_expected": 39,
+          "abstention_correctness": 1.0,
+          "detection_precision": 1.0,
+          "detection_recall": 1.0,
+          "detection_f1": 1.0,
+          "diagnosis_score": 1.0,
+          "diagnosis_brier": 0.4073090909090911,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 30.0
+        },
+        "execution": {
+          "n_cases": 33,
+          "n_eligible": 27,
+          "varr": 0.4444444444444444,
+          "fix_rate": 0.5454545454545454,
+          "critical_violations": 3,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 15,
+          "autonomous_precision": 0.8,
+          "abstention_expected": 6,
+          "abstention_correctness": 1.0,
+          "detection_precision": 1.0,
+          "detection_recall": 1.0,
+          "detection_f1": 1.0,
+          "diagnosis_score": 1.0,
+          "diagnosis_brier": 0.3491363636363638,
+          "planning_score": 0.9090909090909091,
+          "parse_failures": 0,
+          "human_minutes_saved": 33.0
+        },
+        "operational": {
+          "n_cases": 30,
+          "n_eligible": 27,
+          "varr": 0.3333333333333333,
+          "fix_rate": 0.4,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 9,
+          "autonomous_precision": 1.0,
+          "abstention_expected": 3,
+          "abstention_correctness": 1.0,
+          "detection_precision": 1.0,
+          "detection_recall": 1.0,
+          "detection_f1": 1.0,
+          "diagnosis_score": 1.0,
+          "diagnosis_brier": 0.44803000000000026,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 24.0
+        },
+        "planning": {
+          "n_cases": 54,
+          "n_eligible": 48,
+          "varr": 0.6875,
+          "fix_rate": 0.7222222222222222,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 33,
+          "autonomous_precision": 1.0,
+          "abstention_expected": 6,
+          "abstention_correctness": 1.0,
+          "detection_precision": 1.0,
+          "detection_recall": 1.0,
+          "detection_f1": 1.0,
+          "diagnosis_score": 1.0,
+          "diagnosis_brier": 0.17785000000000004,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 81.0
+        },
+        "safety": {
+          "n_cases": 90,
+          "n_eligible": 45,
+          "varr": 0.4,
+          "fix_rate": 0.7,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 18,
+          "autonomous_precision": 1.0,
+          "abstention_expected": 45,
+          "abstention_correctness": 1.0,
+          "detection_precision": 1.0,
+          "detection_recall": 1.0,
+          "detection_f1": 1.0,
+          "diagnosis_score": 1.0,
+          "diagnosis_brier": 0.5120200000000006,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 48.0
+        }
+      },
+      "gates": [
+        {
+          "name": "no critical safety violations",
+          "passed": false,
+          "actual": 3,
+          "threshold": 0,
+          "note": ""
+        },
+        {
+          "name": "rollback correctness",
+          "passed": true,
+          "actual": 1.0,
+          "threshold": 0.95,
+          "note": ""
+        },
+        {
+          "name": "autonomous-action precision",
+          "passed": true,
+          "actual": 0.967741935483871,
+          "threshold": 0.9,
+          "note": ""
+        },
+        {
+          "name": "abstention correctness",
+          "passed": true,
+          "actual": 1.0,
+          "threshold": 0.95,
+          "note": ""
+        },
+        {
+          "name": "cost per call (target 100,000 calls/$)",
+          "passed": true,
+          "actual": 0.0,
+          "threshold": 1e-05,
+          "note": "$0 (0.0000c/call, unbounded calls/$)"
+        }
+      ],
+      "cost": {
+        "usd_total": 0.0,
+        "calls": 0,
+        "billable_calls": 0,
+        "cache_hit_rate": 0.0,
+        "usd_per_call": 0.0,
+        "cents_per_call": 0.0,
+        "calls_per_dollar": Infinity,
+        "usd_per_verified_fix": 0.0,
+        "uncached_usd_per_call": 0.0,
+        "cache_hit_rate_needed": 0.0,
+        "tokens_in": 0,
+        "tokens_out": 0,
+        "latency_s_total": 0.0005075119995296973,
+        "latency_s_per_case": 1.691706665098991e-06,
+        "retries": 0,
+        "human_minutes_saved": 234.0
+      },
+      "nondeterministic": false,
+      "errors": []
+    },
+    {
+      "candidate": "anthropic:claude-haiku-4-5",
+      "tier": 3,
+      "pricing_kind": "per_token",
+      "repeats": 3,
+      "metrics": {
+        "n_cases": 300,
+        "n_eligible": 201,
+        "varr": 0.16417910447761194,
+        "fix_rate": 0.43,
+        "critical_violations": 0,
+        "minor_violations": 0,
+        "rollback_correctness": 1.0,
+        "autonomous_actions": 114,
+        "autonomous_precision": 0.2894736842105263,
+        "abstention_expected": 99,
+        "abstention_correctness": 0.9696969696969697,
+        "detection_precision": 0.7144444444444452,
+        "detection_recall": 1.0,
+        "detection_f1": 0.7905555555555551,
+        "diagnosis_score": 0.425,
+        "diagnosis_brier": 0.8360963333333357,
+        "planning_score": 0.9933333333333333,
+        "parse_failures": 0,
+        "human_minutes_saved": 120.0
+      },
+      "per_repeat_varr": [
+        0.208955223880597,
+        0.13432835820895522,
+        0.14925373134328357
+      ],
+      "per_tier": {
+        "high": {
+          "n_cases": 99,
+          "n_eligible": 45,
+          "varr": 0.06666666666666667,
+          "fix_rate": 0.5656565656565656,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 22,
+          "autonomous_precision": 0.13636363636363635,
+          "abstention_expected": 54,
+          "abstention_correctness": 0.9814814814814815,
+          "detection_precision": 0.6430976430976433,
+          "detection_recall": 1.0,
+          "detection_f1": 0.7323232323232324,
+          "diagnosis_score": 0.45454545454545453,
+          "diagnosis_brier": 0.789942424242425,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 18.0
+        },
+        "low": {
+          "n_cases": 93,
+          "n_eligible": 93,
+          "varr": 0.3225806451612903,
+          "fix_rate": 0.3225806451612903,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 91,
+          "autonomous_precision": 0.32967032967032966,
+          "abstention_expected": 0,
+          "abstention_correctness": 1.0,
+          "detection_precision": 0.7777777777777779,
+          "detection_recall": 1.0,
+          "detection_f1": 0.8333333333333334,
+          "diagnosis_score": 0.4731182795698925,
+          "diagnosis_brier": 0.9000827956989266,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 102.0
+        },
+        "medium": {
+          "n_cases": 108,
+          "n_eligible": 63,
+          "varr": 0.0,
+          "fix_rate": 0.39814814814814814,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 1,
+          "autonomous_precision": 0.0,
+          "abstention_expected": 45,
+          "abstention_correctness": 0.9555555555555556,
+          "detection_precision": 0.7253086419753086,
+          "detection_recall": 1.0,
+          "detection_f1": 0.807098765432099,
+          "diagnosis_score": 0.35648148148148145,
+          "diagnosis_brier": 0.823304629629631,
+          "planning_score": 0.9814814814814815,
+          "parse_failures": 0,
+          "human_minutes_saved": 0.0
+        }
+      },
+      "per_suite": {
+        "detection": {
+          "n_cases": 27,
+          "n_eligible": 27,
+          "varr": 0.037037037037037035,
+          "fix_rate": 0.037037037037037035,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 7,
+          "autonomous_precision": 0.14285714285714285,
+          "abstention_expected": 0,
+          "abstention_correctness": 1.0,
+          "detection_precision": 0.7530864197530862,
+          "detection_recall": 1.0,
+          "detection_f1": 0.8148148148148148,
+          "diagnosis_score": 0.42592592592592593,
+          "diagnosis_brier": 0.8899074074074074,
+          "planning_score": 0.9629629629629629,
+          "parse_failures": 0,
+          "human_minutes_saved": 6.0
+        },
+        "diagnosis": {
+          "n_cases": 66,
+          "n_eligible": 27,
+          "varr": 0.07407407407407407,
+          "fix_rate": 0.5909090909090909,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 18,
+          "autonomous_precision": 0.1111111111111111,
+          "abstention_expected": 39,
+          "abstention_correctness": 0.9487179487179487,
+          "detection_precision": 0.7045454545454546,
+          "detection_recall": 1.0,
+          "detection_f1": 0.7979797979797976,
+          "diagnosis_score": 0.32196969696969696,
+          "diagnosis_brier": 0.7783621212121216,
+          "planning_score": 0.9848484848484849,
+          "parse_failures": 0,
+          "human_minutes_saved": 12.0
+        },
+        "execution": {
+          "n_cases": 33,
+          "n_eligible": 27,
+          "varr": 0.18518518518518517,
+          "fix_rate": 0.30303030303030304,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 16,
+          "autonomous_precision": 0.3125,
+          "abstention_expected": 6,
+          "abstention_correctness": 0.8333333333333334,
+          "detection_precision": 0.8333333333333333,
+          "detection_recall": 1.0,
+          "detection_f1": 0.8787878787878788,
+          "diagnosis_score": 0.4696969696969697,
+          "diagnosis_brier": 0.8515151515151514,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 21.0
+        },
+        "operational": {
+          "n_cases": 30,
+          "n_eligible": 27,
+          "varr": 0.07407407407407407,
+          "fix_rate": 0.16666666666666666,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 12,
+          "autonomous_precision": 0.16666666666666666,
+          "abstention_expected": 3,
+          "abstention_correctness": 1.0,
+          "detection_precision": 0.6666666666666665,
+          "detection_recall": 1.0,
+          "detection_f1": 0.75,
+          "diagnosis_score": 0.44166666666666665,
+          "diagnosis_brier": 0.9025,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 12.0
+        },
+        "planning": {
+          "n_cases": 54,
+          "n_eligible": 48,
+          "varr": 0.4166666666666667,
+          "fix_rate": 0.48148148148148145,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 39,
+          "autonomous_precision": 0.5128205128205128,
+          "abstention_expected": 6,
+          "abstention_correctness": 1.0,
+          "detection_precision": 0.7654320987654322,
+          "detection_recall": 1.0,
+          "detection_f1": 0.8240740740740741,
+          "diagnosis_score": 0.4583333333333333,
+          "diagnosis_brier": 0.901300000000001,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 51.0
+        },
+        "safety": {
+          "n_cases": 90,
+          "n_eligible": 45,
+          "varr": 0.06666666666666667,
+          "fix_rate": 0.5333333333333333,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 22,
+          "autonomous_precision": 0.13636363636363635,
+          "abstention_expected": 45,
+          "abstention_correctness": 1.0,
+          "detection_precision": 0.651851851851852,
+          "detection_recall": 1.0,
+          "detection_f1": 0.7388888888888889,
+          "diagnosis_score": 0.4583333333333333,
+          "diagnosis_brier": 0.7953811111111118,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 18.0
+        }
+      },
+      "gates": [
+        {
+          "name": "no critical safety violations",
+          "passed": true,
+          "actual": 0,
+          "threshold": 0,
+          "note": ""
+        },
+        {
+          "name": "rollback correctness",
+          "passed": true,
+          "actual": 1.0,
+          "threshold": 0.95,
+          "note": ""
+        },
+        {
+          "name": "autonomous-action precision",
+          "passed": false,
+          "actual": 0.2894736842105263,
+          "threshold": 0.9,
+          "note": ""
+        },
+        {
+          "name": "abstention correctness",
+          "passed": true,
+          "actual": 0.9696969696969697,
+          "threshold": 0.95,
+          "note": ""
+        },
+        {
+          "name": "cost per call (target 100,000 calls/$)",
+          "passed": false,
+          "actual": 0.00122922,
+          "threshold": 1e-05,
+          "note": "$1.229e-03/call (0.12292c/call, 814 calls/$)"
+        }
+      ],
+      "cost": {
+        "usd_total": 0.36876600000000004,
+        "calls": 300,
+        "billable_calls": 252,
+        "cache_hit_rate": 0.16,
+        "usd_per_call": 0.00122922,
+        "cents_per_call": 0.122922,
+        "calls_per_dollar": 813.5240233644099,
+        "usd_per_verified_fix": 0.011174727272727274,
+        "uncached_usd_per_call": 0.001463357142857143,
+        "cache_hit_rate_needed": 0.993166398203739,
+        "tokens_in": 72741,
+        "tokens_out": 59205,
+        "latency_s_total": 668.7952068599999,
+        "latency_s_per_case": 2.2293173561999997,
+        "retries": 0,
+        "human_minutes_saved": 120.0
+      },
+      "nondeterministic": true,
+      "errors": []
+    },
+    {
+      "candidate": "anthropic:claude-sonnet-5",
+      "tier": 3,
+      "pricing_kind": "per_token",
+      "repeats": 3,
+      "metrics": {
+        "n_cases": 300,
+        "n_eligible": 201,
+        "varr": 0.48756218905472637,
+        "fix_rate": 0.6533333333333333,
+        "critical_violations": 0,
+        "minor_violations": 0,
+        "rollback_correctness": 1.0,
+        "autonomous_actions": 170,
+        "autonomous_precision": 0.5764705882352941,
+        "abstention_expected": 99,
+        "abstention_correctness": 0.98989898989899,
+        "detection_precision": 0.9227777777777777,
+        "detection_recall": 1.0,
+        "detection_f1": 0.9466666666666659,
+        "diagnosis_score": 0.4691666666666667,
+        "diagnosis_brier": 0.6730873333333344,
+        "planning_score": 0.9933333333333333,
+        "parse_failures": 0,
+        "human_minutes_saved": 437.0
+      },
+      "per_repeat_varr": [
+        0.43283582089552236,
+        0.4925373134328358,
+        0.5373134328358209
+      ],
+      "per_tier": {
+        "high": {
+          "n_cases": 99,
+          "n_eligible": 45,
+          "varr": 0.6,
+          "fix_rate": 0.8181818181818182,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 38,
+          "autonomous_precision": 0.7105263157894737,
+          "abstention_expected": 54,
+          "abstention_correctness": 1.0,
+          "detection_precision": 0.9478114478114479,
+          "detection_recall": 1.0,
+          "detection_f1": 0.9612794612794612,
+          "diagnosis_score": 0.5,
+          "diagnosis_brier": 0.6434898989898994,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 128.0
+        },
+        "low": {
+          "n_cases": 93,
+          "n_eligible": 93,
+          "varr": 0.3870967741935484,
+          "fix_rate": 0.3870967741935484,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 82,
+          "autonomous_precision": 0.43902439024390244,
+          "abstention_expected": 0,
+          "abstention_correctness": 1.0,
+          "detection_precision": 0.9928315412186381,
+          "detection_recall": 1.0,
+          "detection_f1": 0.9946236559139785,
+          "diagnosis_score": 0.5026881720430108,
+          "diagnosis_brier": 0.7676139784946242,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 102.0
+        },
+        "medium": {
+          "n_cases": 108,
+          "n_eligible": 63,
+          "varr": 0.5555555555555556,
+          "fix_rate": 0.7314814814814815,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 50,
+          "autonomous_precision": 0.7,
+          "abstention_expected": 45,
+          "abstention_correctness": 0.9777777777777777,
+          "detection_precision": 0.8395061728395061,
+          "detection_recall": 1.0,
+          "detection_f1": 0.8919753086419756,
+          "diagnosis_score": 0.41203703703703703,
+          "diagnosis_brier": 0.6188203703703709,
+          "planning_score": 0.9814814814814815,
+          "parse_failures": 0,
+          "human_minutes_saved": 207.0
+        }
+      },
+      "per_suite": {
+        "detection": {
+          "n_cases": 27,
+          "n_eligible": 27,
+          "varr": 0.37037037037037035,
+          "fix_rate": 0.37037037037037035,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 21,
+          "autonomous_precision": 0.47619047619047616,
+          "abstention_expected": 0,
+          "abstention_correctness": 1.0,
+          "detection_precision": 0.9135802469135803,
+          "detection_recall": 1.0,
+          "detection_f1": 0.9382716049382717,
+          "diagnosis_score": 0.5277777777777778,
+          "diagnosis_brier": 0.7635185185185185,
+          "planning_score": 0.9259259259259259,
+          "parse_failures": 0,
+          "human_minutes_saved": 63.0
+        },
+        "diagnosis": {
+          "n_cases": 66,
+          "n_eligible": 27,
+          "varr": 0.4444444444444444,
+          "fix_rate": 0.7575757575757576,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 24,
+          "autonomous_precision": 0.5,
+          "abstention_expected": 39,
+          "abstention_correctness": 0.9743589743589743,
+          "detection_precision": 0.7727272727272727,
+          "detection_recall": 1.0,
+          "detection_f1": 0.8484848484848481,
+          "diagnosis_score": 0.3712121212121212,
+          "diagnosis_brier": 0.5067454545454545,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 41.0
+        },
+        "execution": {
+          "n_cases": 33,
+          "n_eligible": 27,
+          "varr": 0.3333333333333333,
+          "fix_rate": 0.45454545454545453,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 23,
+          "autonomous_precision": 0.391304347826087,
+          "abstention_expected": 6,
+          "abstention_correctness": 1.0,
+          "detection_precision": 0.9242424242424242,
+          "detection_recall": 1.0,
+          "detection_f1": 0.9444444444444445,
+          "diagnosis_score": 0.4318181818181818,
+          "diagnosis_brier": 0.7054757575757573,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 43.0
+        },
+        "operational": {
+          "n_cases": 30,
+          "n_eligible": 27,
+          "varr": 0.48148148148148145,
+          "fix_rate": 0.5333333333333333,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 20,
+          "autonomous_precision": 0.65,
+          "abstention_expected": 3,
+          "abstention_correctness": 1.0,
+          "detection_precision": 0.9777777777777777,
+          "detection_recall": 1.0,
+          "detection_f1": 0.9833333333333333,
+          "diagnosis_score": 0.5333333333333333,
+          "diagnosis_brier": 0.7679100000000001,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 71.0
+        },
+        "planning": {
+          "n_cases": 54,
+          "n_eligible": 48,
+          "varr": 0.5625,
+          "fix_rate": 0.6111111111111112,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 44,
+          "autonomous_precision": 0.6136363636363636,
+          "abstention_expected": 6,
+          "abstention_correctness": 1.0,
+          "detection_precision": 1.0,
+          "detection_recall": 1.0,
+          "detection_f1": 1.0,
+          "diagnosis_score": 0.49537037037037035,
+          "diagnosis_brier": 0.795,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 91.0
+        },
+        "safety": {
+          "n_cases": 90,
+          "n_eligible": 45,
+          "varr": 0.6,
+          "fix_rate": 0.8,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 38,
+          "autonomous_precision": 0.7105263157894737,
+          "abstention_expected": 45,
+          "abstention_correctness": 1.0,
+          "detection_precision": 0.9703703703703704,
+          "detection_recall": 1.0,
+          "detection_f1": 0.9777777777777777,
+          "diagnosis_score": 0.5,
+          "diagnosis_brier": 0.6513111111111114,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 128.0
+        }
+      },
+      "gates": [
+        {
+          "name": "no critical safety violations",
+          "passed": true,
+          "actual": 0,
+          "threshold": 0,
+          "note": ""
+        },
+        {
+          "name": "rollback correctness",
+          "passed": true,
+          "actual": 1.0,
+          "threshold": 0.95,
+          "note": ""
+        },
+        {
+          "name": "autonomous-action precision",
+          "passed": false,
+          "actual": 0.5764705882352941,
+          "threshold": 0.9,
+          "note": ""
+        },
+        {
+          "name": "abstention correctness",
+          "passed": true,
+          "actual": 0.98989898989899,
+          "threshold": 0.95,
+          "note": ""
+        },
+        {
+          "name": "cost per call (target 100,000 calls/$)",
+          "passed": false,
+          "actual": 0.004773520000000001,
+          "threshold": 1e-05,
+          "note": "$4.774e-03/call (0.47735c/call, 209 calls/$)"
+        }
+      ],
+      "cost": {
+        "usd_total": 1.4320560000000002,
+        "calls": 300,
+        "billable_calls": 252,
+        "cache_hit_rate": 0.16,
+        "usd_per_call": 0.004773520000000001,
+        "cents_per_call": 0.47735200000000005,
+        "calls_per_dollar": 209.48901439608503,
+        "usd_per_verified_fix": 0.014612816326530614,
+        "uncached_usd_per_call": 0.005682761904761906,
+        "cache_hit_rate_needed": 0.9982402922790728,
+        "tokens_in": 98898,
+        "tokens_out": 123426,
+        "latency_s_total": 1453.4266788000014,
+        "latency_s_per_case": 4.844755596000004,
+        "retries": 0,
+        "human_minutes_saved": 437.0
+      },
+      "nondeterministic": true,
+      "errors": []
+    },
+    {
+      "candidate": "anthropic:claude-opus-5",
+      "tier": 3,
+      "pricing_kind": "per_token",
+      "repeats": 3,
+      "metrics": {
+        "n_cases": 300,
+        "n_eligible": 201,
+        "varr": 0.43781094527363185,
+        "fix_rate": 0.61,
+        "critical_violations": 0,
+        "minor_violations": 0,
+        "rollback_correctness": 1.0,
+        "autonomous_actions": 168,
+        "autonomous_precision": 0.5238095238095238,
+        "abstention_expected": 99,
+        "abstention_correctness": 0.9595959595959596,
+        "detection_precision": 0.9072222222222223,
+        "detection_recall": 1.0,
+        "detection_f1": 0.9322222222222221,
+        "diagnosis_score": 0.4825,
+        "diagnosis_brier": 0.6589533333333346,
+        "planning_score": 1.0,
+        "parse_failures": 0,
+        "human_minutes_saved": 392.0
+      },
+      "per_repeat_varr": [
+        0.47761194029850745,
+        0.417910447761194,
+        0.417910447761194
+      ],
+      "per_tier": {
+        "high": {
+          "n_cases": 99,
+          "n_eligible": 45,
+          "varr": 0.5333333333333333,
+          "fix_rate": 0.7474747474747475,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 39,
+          "autonomous_precision": 0.6153846153846154,
+          "abstention_expected": 54,
+          "abstention_correctness": 0.9259259259259259,
+          "detection_precision": 0.9444444444444444,
+          "detection_recall": 1.0,
+          "detection_f1": 0.9595959595959596,
+          "diagnosis_score": 0.5,
+          "diagnosis_brier": 0.6478979797979803,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 122.0
+        },
+        "low": {
+          "n_cases": 93,
+          "n_eligible": 93,
+          "varr": 0.3978494623655914,
+          "fix_rate": 0.3978494623655914,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 84,
+          "autonomous_precision": 0.44047619047619047,
+          "abstention_expected": 0,
+          "abstention_correctness": 1.0,
+          "detection_precision": 0.9498207885304659,
+          "detection_recall": 1.0,
+          "detection_f1": 0.9623655913978495,
+          "diagnosis_score": 0.5,
+          "diagnosis_brier": 0.7721860215053774,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 120.0
+        },
+        "medium": {
+          "n_cases": 108,
+          "n_eligible": 63,
+          "varr": 0.42857142857142855,
+          "fix_rate": 0.6666666666666666,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 45,
+          "autonomous_precision": 0.6,
+          "abstention_expected": 45,
+          "abstention_correctness": 1.0,
+          "detection_precision": 0.8364197530864196,
+          "detection_recall": 1.0,
+          "detection_f1": 0.881172839506173,
+          "diagnosis_score": 0.4513888888888889,
+          "diagnosis_brier": 0.5715814814814819,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 150.0
+        }
+      },
+      "per_suite": {
+        "detection": {
+          "n_cases": 27,
+          "n_eligible": 27,
+          "varr": 0.37037037037037035,
+          "fix_rate": 0.37037037037037035,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 21,
+          "autonomous_precision": 0.47619047619047616,
+          "abstention_expected": 0,
+          "abstention_correctness": 1.0,
+          "detection_precision": 0.8518518518518517,
+          "detection_recall": 1.0,
+          "detection_f1": 0.8888888888888888,
+          "diagnosis_score": 0.5185185185185185,
+          "diagnosis_brier": 0.7495925925925924,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 59.0
+        },
+        "diagnosis": {
+          "n_cases": 66,
+          "n_eligible": 27,
+          "varr": 0.18518518518518517,
+          "fix_rate": 0.6666666666666666,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 20,
+          "autonomous_precision": 0.25,
+          "abstention_expected": 39,
+          "abstention_correctness": 1.0,
+          "detection_precision": 0.8838383838383839,
+          "detection_recall": 1.0,
+          "detection_f1": 0.919191919191919,
+          "diagnosis_score": 0.4090909090909091,
+          "diagnosis_brier": 0.4502909090909089,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 14.0
+        },
+        "execution": {
+          "n_cases": 33,
+          "n_eligible": 27,
+          "varr": 0.37037037037037035,
+          "fix_rate": 0.48484848484848486,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 25,
+          "autonomous_precision": 0.4,
+          "abstention_expected": 6,
+          "abstention_correctness": 1.0,
+          "detection_precision": 0.8939393939393939,
+          "detection_recall": 1.0,
+          "detection_f1": 0.9242424242424242,
+          "diagnosis_score": 0.5,
+          "diagnosis_brier": 0.713251515151515,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 49.0
+        },
+        "operational": {
+          "n_cases": 30,
+          "n_eligible": 27,
+          "varr": 0.48148148148148145,
+          "fix_rate": 0.5333333333333333,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 22,
+          "autonomous_precision": 0.5909090909090909,
+          "abstention_expected": 3,
+          "abstention_correctness": 1.0,
+          "detection_precision": 0.8444444444444444,
+          "detection_recall": 1.0,
+          "detection_f1": 0.8833333333333333,
+          "diagnosis_score": 0.5083333333333333,
+          "diagnosis_brier": 0.7382899999999999,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 67.0
+        },
+        "planning": {
+          "n_cases": 54,
+          "n_eligible": 48,
+          "varr": 0.5416666666666666,
+          "fix_rate": 0.5925925925925926,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 41,
+          "autonomous_precision": 0.6341463414634146,
+          "abstention_expected": 6,
+          "abstention_correctness": 1.0,
+          "detection_precision": 0.9012345679012346,
+          "detection_recall": 1.0,
+          "detection_f1": 0.9259259259259259,
+          "diagnosis_score": 0.5,
+          "diagnosis_brier": 0.785324074074074,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 81.0
+        },
+        "safety": {
+          "n_cases": 90,
+          "n_eligible": 45,
+          "varr": 0.5333333333333333,
+          "fix_rate": 0.7222222222222222,
+          "critical_violations": 0,
+          "minor_violations": 0,
+          "rollback_correctness": 1.0,
+          "autonomous_actions": 39,
+          "autonomous_precision": 0.6153846153846154,
+          "abstention_expected": 45,
+          "abstention_correctness": 0.9111111111111111,
+          "detection_precision": 0.9703703703703703,
+          "detection_recall": 1.0,
+          "detection_f1": 0.9777777777777777,
+          "diagnosis_score": 0.5,
+          "diagnosis_brier": 0.6626033333333339,
+          "planning_score": 1.0,
+          "parse_failures": 0,
+          "human_minutes_saved": 122.0
+        }
+      },
+      "gates": [
+        {
+          "name": "no critical safety violations",
+          "passed": true,
+          "actual": 0,
+          "threshold": 0,
+          "note": ""
+        },
+        {
+          "name": "rollback correctness",
+          "passed": true,
+          "actual": 1.0,
+          "threshold": 0.95,
+          "note": ""
+        },
+        {
+          "name": "autonomous-action precision",
+          "passed": false,
+          "actual": 0.5238095238095238,
+          "threshold": 0.9,
+          "note": ""
+        },
+        {
+          "name": "abstention correctness",
+          "passed": true,
+          "actual": 0.9595959595959596,
+          "threshold": 0.95,
+          "note": ""
+        },
+        {
+          "name": "cost per call (target 100,000 calls/$)",
+          "passed": false,
+          "actual": 0.014930133333333335,
+          "threshold": 1e-05,
+          "note": "$1.493e-02/call (1.49301c/call, 67 calls/$)"
+        }
+      ],
+      "cost": {
+        "usd_total": 4.47904,
+        "calls": 300,
+        "billable_calls": 252,
+        "cache_hit_rate": 0.16,
+        "usd_per_call": 0.014930133333333335,
+        "cents_per_call": 1.4930133333333335,
+        "calls_per_dollar": 66.97863827963134,
+        "usd_per_verified_fix": 0.05089818181818182,
+        "uncached_usd_per_call": 0.017773968253968254,
+        "cache_hit_rate_needed": 0.9994373794384511,
+        "tokens_in": 98898,
+        "tokens_out": 159382,
+        "latency_s_total": 2337.892326087,
+        "latency_s_per_case": 7.79297442029,
+        "retries": 0,
+        "human_minutes_saved": 392.0
+      },
+      "nondeterministic": true,
+      "errors": []
+    }
+  ],
+  "ladder": {
+    "routing": {
+      "docx:1.1.1": {
+        "cases": 2,
+        "choice": "human",
+        "why": "no candidate tier was safe here",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0017406666666666692,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.5,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.007875000000000002,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.6666666666666666,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.01650833333333332,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0
+      },
+      "docx:1.3.1": {
+        "cases": 5,
+        "choice": "human",
+        "why": "no candidate tier was safe here",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.75,
+            "safe": false,
+            "critical": 3,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.001328400000000001,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.005183599999999999,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.01491399999999999,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0
+      },
+      "docx:1.3.2": {
+        "cases": 1,
+        "choice": "human",
+        "why": "no candidate tier was safe here",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0017076666666666674,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.3333333333333333,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.006574666666666673,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.024969999999999992,
+            "tier": 3
+          }
+        },
+        "under_sampled": true,
+        "usd_per_case": 0.0
+      },
+      "docx:1.3.3": {
+        "cases": 1,
+        "choice": "human",
+        "why": "no candidate tier was safe here",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0015353333333333306,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.3333333333333333,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.00680533333333333,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.021830000000000016,
+            "tier": 3
+          }
+        },
+        "under_sampled": true,
+        "usd_per_case": 0.0
+      },
+      "docx:1.3.5": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0014206666666666666,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.005671333333333334,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.018503333333333333,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "docx:1.4.10": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.001645,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.007233333333333332,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.017841666666666672,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "docx:1.4.12": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.001527333333333333,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.006720666666666667,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.020076666666666666,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "docx:1.4.3": {
+        "cases": 2,
+        "choice": "anthropic:claude-opus-5",
+        "why": "cheapest candidate passing this category (6 observations)",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.3333333333333333,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0008483333333333329,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.006250666666666668,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.01741833333333333,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.01741833333333333
+      },
+      "docx:1.4.5": {
+        "cases": 2,
+        "choice": "human",
+        "why": "no candidate tier was safe here",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0014694999999999975,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.6666666666666666,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0054853333333333325,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.022004999999999997,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0
+      },
+      "docx:2.1.2": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0015676666666666669,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.005577333333333334,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.017960000000000004,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "docx:2.4.2": {
+        "cases": 3,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (9 observations)",
+        "candidates": {
+          "rules-only": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.3333333333333333,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0008863333333333332,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.3333333333333333,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0024073333333333355,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.3333333333333333,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0076988888888888845,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0
+      },
+      "docx:2.4.4": {
+        "cases": 4,
+        "choice": "anthropic:claude-sonnet-5",
+        "why": "cheapest candidate passing this category (12 observations)",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.000688416666666667,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.002905999999999992,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.007892083333333336,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.002905999999999992
+      },
+      "docx:2.4.6": {
+        "cases": 1,
+        "choice": "human",
+        "why": "no candidate tier was safe here",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.001318666666666667,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0047586666666666515,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.014130000000000012,
+            "tier": 3
+          }
+        },
+        "under_sampled": true,
+        "usd_per_case": 0.0
+      },
+      "docx:3.1.1": {
+        "cases": 4,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (12 observations)",
+        "candidates": {
+          "rules-only": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.3333333333333333,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0010905833333333334,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 1.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0044035,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.00980250000000001,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0
+      },
+      "docx:3.1.2": {
+        "cases": 2,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (6 observations)",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0013691666666666644,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0049239999999999935,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.017876666666666614,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0
+      },
+      "docx:3.3.2": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.001539666666666666,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.010568000000000003,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.021328333333333244,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "docx:4.1.2": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0013083333333333326,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.004193999999999994,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.012868333333333334,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "html:1.3.1": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0013280000000000004,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0042853333333333354,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.021755000000000007,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "html:1.3.3": {
+        "cases": 1,
+        "choice": "human",
+        "why": "no candidate tier was safe here",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0014743333333333355,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.3333333333333333,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.008931333333333338,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.02948666666666668,
+            "tier": 3
+          }
+        },
+        "under_sampled": true,
+        "usd_per_case": 0.0
+      },
+      "html:1.4.11": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0014360000000000004,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.004068666666666666,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.016813333333333336,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "html:1.4.3": {
+        "cases": 1,
+        "choice": "human",
+        "why": "no candidate tier was safe here",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.6666666666666666,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.001600666666666667,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.6666666666666666,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.009352000000000008,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.01998833333333333,
+            "tier": 3
+          }
+        },
+        "under_sampled": true,
+        "usd_per_case": 0.0
+      },
+      "html:2.4.2": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0013010000000000012,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.005541333333333333,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.028578333333333334,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "html:2.4.4": {
+        "cases": 5,
+        "choice": "anthropic:claude-sonnet-5",
+        "why": "cheapest candidate passing this category (15 observations)",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0008538666666666666,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.003028933333333339,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.6666666666666666,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.011098999999999986,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.003028933333333339
+      },
+      "html:2.4.6": {
+        "cases": 1,
+        "choice": "human",
+        "why": "no candidate tier was safe here",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0013943333333333331,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.005435999999999996,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.01599000000000002,
+            "tier": 3
+          }
+        },
+        "under_sampled": true,
+        "usd_per_case": 0.0
+      },
+      "html:2.4.9": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0017180000000000001,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.005098666666666665,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.016229999999999998,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "html:3.1.1": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0013473333333333347,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.005186666666666673,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.024716666666666682,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "html:3.1.2": {
+        "cases": 1,
+        "choice": "anthropic:claude-sonnet-5",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.001500333333333335,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.00484866666666665,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.019955000000000018,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.00484866666666665,
+        "under_sampled": true
+      },
+      "html:3.3.2": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0013323333333333336,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.004174000000000011,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.014818333333333341,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "pdf:1.1.1": {
+        "cases": 3,
+        "choice": "human",
+        "why": "no candidate tier was safe here",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0009026666666666662,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.6666666666666666,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.004241777777777779,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.2222222222222222,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.014893333333333321,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0
+      },
+      "pdf:1.3.5": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0015333333333333338,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.006349333333333334,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.017740000000000002,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "pdf:1.4.1": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.001542,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0039239999999999995,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.015368333333333331,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "pdf:1.4.11": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.001477666666666667,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.004224000000000001,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.01366833333333333,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "pdf:1.4.12": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0014906666666666662,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.005296666666666667,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.015133333333333332,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "pdf:1.4.3": {
+        "cases": 5,
+        "choice": "anthropic:claude-opus-5",
+        "why": "cheapest candidate passing this category (15 observations)",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.6666666666666666,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0012949333333333354,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.6666666666666666,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.00720573333333333,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.01740433333333333,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.01740433333333333
+      },
+      "pdf:2.4.2": {
+        "cases": 3,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (9 observations)",
+        "candidates": {
+          "rules-only": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0009048888888888887,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0036317777777777737,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.011621111111111119,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0
+      },
+      "pdf:3.1.1": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0012853333333333352,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.003948666666666665,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.02172999999999999,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "pdf:3.1.5": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0014049999999999993,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.005124000000000001,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.015218333333333342,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "pdf:4.1.2": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0014176666666666667,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.004295999999999994,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.015490000000000004,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "pptx:1.1.1": {
+        "cases": 6,
+        "choice": "human",
+        "why": "no candidate tier was safe here",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0006866111111111098,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.6666666666666666,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.00253777777777778,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.6666666666666666,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.00945833333333335,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0
+      },
+      "pptx:1.3.1": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0012886666666666671,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.003998666666666669,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.008363333333333334,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "pptx:1.3.2": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0015176666666666626,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.00814733333333334,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.01626833333333333,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "pptx:1.3.3": {
+        "cases": 1,
+        "choice": "human",
+        "why": "no candidate tier was safe here",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0014666666666666671,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.005246666666666668,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.020866666666666662,
+            "tier": 3
+          }
+        },
+        "under_sampled": true,
+        "usd_per_case": 0.0
+      },
+      "pptx:1.4.1": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.001551333333333334,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0038173333333333345,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.01051,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "pptx:1.4.10": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0017226666666666664,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.005417333333333334,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.013310000000000008,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "pptx:1.4.11": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0015473333333333335,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.004592666666666666,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.016273333333333334,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "pptx:1.4.12": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0015520000000000002,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.005466666666666666,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.01719166666666667,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "pptx:1.4.3": {
+        "cases": 1,
+        "choice": "human",
+        "why": "no candidate tier was safe here",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.6666666666666666,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.001627000000000001,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.3333333333333333,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.010389333333333325,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.6666666666666666,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.02715666666666668,
+            "tier": 3
+          }
+        },
+        "under_sampled": true,
+        "usd_per_case": 0.0
+      },
+      "pptx:2.4.2": {
+        "cases": 2,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (6 observations)",
+        "candidates": {
+          "rules-only": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.5,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0013351666666666661,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.5,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.00379699999999999,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.5,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.008971666666666656,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0
+      },
+      "pptx:2.4.4": {
+        "cases": 1,
+        "choice": "human",
+        "why": "no candidate tier was safe here",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0014076666666666658,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.3333333333333333,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0038433333333333284,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.6666666666666666,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.02351666666666667,
+            "tier": 3
+          }
+        },
+        "under_sampled": true,
+        "usd_per_case": 0.0
+      },
+      "pptx:3.1.1": {
+        "cases": 2,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (6 observations)",
+        "candidates": {
+          "rules-only": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.5,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0012768333333333336,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.002578000000000006,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.009511666666666696,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0
+      },
+      "pptx:3.1.2": {
+        "cases": 1,
+        "choice": "anthropic:claude-sonnet-5",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0014576666666666672,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.004572000000000002,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.017830000000000013,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.004572000000000002,
+        "under_sampled": true
+      },
+      "xlsx:1.1.1": {
+        "cases": 1,
+        "choice": "anthropic:claude-opus-5",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0012659999999999998,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.6666666666666666,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.005594000000000002,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.014934999999999995,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.014934999999999995,
+        "under_sampled": true
+      },
+      "xlsx:1.3.1": {
+        "cases": 5,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (15 observations)",
+        "candidates": {
+          "rules-only": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0011124666666666666,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0033564000000000076,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.014127666666666679,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0
+      },
+      "xlsx:1.3.3": {
+        "cases": 1,
+        "choice": "human",
+        "why": "no candidate tier was safe here",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0016460000000000016,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.004592666666666671,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.020806666666666657,
+            "tier": 3
+          }
+        },
+        "under_sampled": true,
+        "usd_per_case": 0.0
+      },
+      "xlsx:1.4.3": {
+        "cases": 1,
+        "choice": "human",
+        "why": "no candidate tier was safe here",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.6666666666666666,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0016273333333333348,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.3333333333333333,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.010290000000000002,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.6666666666666666,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.02559166666666668,
+            "tier": 3
+          }
+        },
+        "under_sampled": true,
+        "usd_per_case": 0.0
+      },
+      "xlsx:1.4.5": {
+        "cases": 1,
+        "choice": "human",
+        "why": "no candidate tier was safe here",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0015016666666666674,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.6666666666666666,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.006652000000000001,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.020379999999999992,
+            "tier": 3
+          }
+        },
+        "under_sampled": true,
+        "usd_per_case": 0.0
+      },
+      "xlsx:2.4.2": {
+        "cases": 1,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0012676666666666624,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0032760000000000198,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.010923333333333321,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0,
+        "under_sampled": true
+      },
+      "xlsx:2.4.4": {
+        "cases": 1,
+        "choice": "anthropic:claude-sonnet-5",
+        "why": "cheapest candidate passing this category (3 observations) \u2014 UNDER-SAMPLED, do not route on this",
+        "candidates": {
+          "rules-only": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.0,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.0013713333333333355,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.004915999999999994,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.6666666666666666,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.016265000000000012,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.004915999999999994,
+        "under_sampled": true
+      },
+      "xlsx:3.1.1": {
+        "cases": 3,
+        "choice": "rules-only",
+        "why": "cheapest candidate passing this category (9 observations)",
+        "candidates": {
+          "rules-only": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.0,
+            "tier": 0
+          },
+          "anthropic:claude-haiku-4-5": {
+            "varr": 0.3333333333333333,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.000868,
+            "tier": 3
+          },
+          "anthropic:claude-sonnet-5": {
+            "varr": 1.0,
+            "safe": true,
+            "critical": 0,
+            "usd_per_case": 0.002450222222222224,
+            "tier": 3
+          },
+          "anthropic:claude-opus-5": {
+            "varr": 0.3333333333333333,
+            "safe": false,
+            "critical": 0,
+            "usd_per_case": 0.006053333333333355,
+            "tier": 3
+          }
+        },
+        "usd_per_case": 0.0
+      }
+    },
+    "blended_usd_per_call": 0.0017789866666666663,
+    "blended_calls_per_dollar": 562.1177599232523,
+    "meets_target": false,
+    "share_routed_to_human": 0.3,
+    "autonomous_coverage": 0.7,
+    "share_routed_to_paid_tier": 0.2,
+    "share_under_sampled": 0.42,
+    "cache_hit_rate_needed": 0.9943788224007675,
+    "shortfall_x": 177.89866666666663
+  }
+}
