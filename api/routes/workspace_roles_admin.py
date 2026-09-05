@@ -333,7 +333,7 @@ def delete_role(role_id: str, request: Request):
 
 # ── assignment (PRD §9) ───────────────────────────────────────────────────────
 
-@router.put("/admin/people/{email:path}/role")
+@router.put("/admin/people/{email}/role")
 def assign_person_role(email: str, body: dict, request: Request):
     """Give one person a workspace role.
 
@@ -423,7 +423,7 @@ def _guard_last_role_manager(tenant: str, target: str, new_role_id: str) -> None
                                  "active user a role with the roles.manage permission first")
 
 
-@router.get("/admin/people/{email:path}/role-impact")
+@router.get("/admin/people/{email}/role-impact")
 def role_impact(email: str, request: Request, role_id: str = ""):
     """What changes if this person is given this role (PRD §9's confirmation).
 

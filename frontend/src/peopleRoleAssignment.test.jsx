@@ -208,7 +208,7 @@ describe('an assignment that will not do anything yet says so', () => {
   // got no signal that the step has not taken effect yet.
   //
   // The server has always sent the rung on this very request — `enforced` and `rollout` ride back
-  // from GET /admin/workspace-roles beside the roles the dropdown is built from — so the
+  // from GET /admin/roles beside the roles the dropdown is built from — so the
   // information was in the response this component was discarding.
 
   const note = (c) => byText(c, '[role="note"]', /not being enforced/i)

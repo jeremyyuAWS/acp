@@ -255,7 +255,25 @@ def add_person(body: dict, request: Request):
     return {"person": record, **_people_payload()}
 
 
-@router.put("/admin/people/{email:path}")
+# `{email}`, NOT `{email:path}`, AND THAT ONE WORD IS A BUG FIX (2026-09-05).
+#
+# The `:path` converter matches `.*` — slashes included — so `PUT /admin/people/{email:path}`
+# also matched `/admin/people/alice@hosp.org/role`, binding email to "alice@hosp.org/role".
+# `routes/__init__.py` includes `system` first and `workspace_roles_admin` last, so this route
+# won the match and `assign_person_role` — the endpoint the People screen's workspace-role
+# dropdown calls — was UNREACHABLE. Every assignment landed here instead, failed the roster
+# lookup on an address with "/role" glued to it, and answered `404 person not found`: the red
+# line an administrator saw on the row they had just used, and the original bug report.
+#
+# It survived because every test for the shadowed endpoint calls the Python function directly
+# (`adm.assign_person_role(...)` — tests/test_workspace_roles_admin.py) rather than issuing a
+# request, so the routing layer was never exercised by anything. The function was correct the
+# whole time. See tests/test_people_route_shadowing.py, which asks the app over HTTP.
+#
+# The default converter is `[^/]+`, which is the right shape for an address in one path segment:
+# the SPA sends it through encodeURIComponent and no provider issues an address containing a
+# literal slash. `:path` bought nothing here and cost the feature.
+@router.put("/admin/people/{email}")
 def update_person(email: str, body: dict, request: Request):
     _require_owner(request)
     target = email.strip().lower()
@@ -285,7 +303,11 @@ def update_person(email: str, body: dict, request: Request):
     return {"person": record, **_people_payload()}
 
 
-@router.delete("/admin/people/{email:path}")
+# `{email}` for the same reason as the PUT above. Nothing registers a DELETE under a person
+# today, so this one shadows nothing yet — which is exactly why it is worth narrowing now: the
+# next `/admin/people/{email}/<something>` endpoint would be swallowed silently, and the failure
+# reads as "that person does not exist" rather than as a routing problem.
+@router.delete("/admin/people/{email}")
 def delete_person(email: str, request: Request):
     _require_owner(request)
     target = email.strip().lower()

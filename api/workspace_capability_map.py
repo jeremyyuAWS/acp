@@ -208,12 +208,12 @@ _map_many([("PUT", "/workers")], {"workers.manage"})
 _map_many([("GET", "/admin/people"), ("GET", "/admin/allowlist"), ("GET", "/admin/admins")],
           {"people.manage"})
 _map_many([
-    ("POST", "/admin/people"), ("PUT", "/admin/people/{email:path}"),
-    ("DELETE", "/admin/people/{email:path}"), ("PUT", "/admin/allowlist"),
+    ("POST", "/admin/people"), ("PUT", "/admin/people/{email}"),
+    ("DELETE", "/admin/people/{email}"), ("PUT", "/admin/allowlist"),
     ("POST", "/admin/invite"), ("PUT", "/admin/admins"),
 ], {"people.manage"})
-_map_many([("PUT", "/admin/people/{email:path}/role"),
-           ("GET", "/admin/people/{email:path}/role-impact")], {"people.manage"})
+_map_many([("PUT", "/admin/people/{email}/role"),
+           ("GET", "/admin/people/{email}/role-impact")], {"people.manage"})
 _map_many([
     ("GET", "/admin/roles"), ("GET", "/admin/roles/{role_id}"), ("GET", "/admin/capabilities"),
     ("POST", "/admin/roles"), ("PUT", "/admin/roles/{role_id}"),
