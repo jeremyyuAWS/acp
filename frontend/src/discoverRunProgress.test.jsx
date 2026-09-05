@@ -813,6 +813,16 @@ describe('stopped card (§9): scan ended before completion', () => {
     expect(html).toContain('Continue to Assessment')
     expect(html).not.toContain('Discovery stopped')
   })
+
+  it('does not offer to rerun Assessment for an already-assessed snapshot', () => {
+    const prog = { phase: 'done', files_found: 100 }
+    const html = renderToStaticMarkup(createElement(DiscoverRunProgress, {
+      progress: prog, busy: false, onContinue: () => {}, assessmentComplete: true,
+    }))
+    expect(html).toContain('Assessment complete')
+    expect(html).toContain('disabled=""')
+    expect(html).not.toContain('Continue to Assessment')
+  })
 })
 
 // discovery/preflight returned 'degraded' when this run started — allowed through rather than
