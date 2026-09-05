@@ -142,6 +142,40 @@ describe('an enforced role decides which tabs exist', () => {
     expect(tabLabels(c)).toContain('Remediate')
   })
 
+  // ── settings: the governed tab that is not in the tab bar ──────────────────
+  //
+  // `settings` is the tenth entry of api/workspace_rbac.TABS and the only one the SPA renders as
+  // a MODAL rather than a pane, so `visibleTabs(access, TABS)` — which every test above exercises
+  // — never covered it. Until 2026-09-05 nothing else did either: the gear, its click handler and
+  // the modal all tested `me.allow`, which App.jsx unions with EVERY tab key under the temporary
+  // 2026-09-04 navigation policy. `settings: hidden` was therefore true of four built-in roles
+  // and meant nothing for any of them.
+  //
+  // Note what the fixture above already contained: `settings: 'hidden'` on the reviewer, sitting
+  // there unasserted. The payload was right, the app ignored it, and the suite was green — which
+  // is why the fix needed a test more than it needed the fix.
+  //
+  // Queried without opening the account menu: it renders inside <details>, whose children are in
+  // the DOM in jsdom whether or not it is open. Asserting on presence rather than on visibility
+  // is the stricter claim anyway — a hidden tab should not put the control in the document.
+
+  const settingsButton = (c) => [...c.querySelectorAll('button')]
+    .find((b) => /Platform settings/i.test(b.getAttribute('aria-label') || ''))
+
+  it('hides the Settings gear from a role whose settings tab is hidden', async () => {
+    ACCESS = reviewer          // settings: 'hidden', straight from the fixture above
+    expect(settingsButton(await signIn())).toBeFalsy()
+  })
+
+  // NO PRESENCE CONTROL HERE, DELIBERATELY, and the reason is a finding rather than a shortcut.
+  // The first draft asserted the gear APPEARS with `settings: 'operate'` and it failed — the demo
+  // persona this harness signs in as does not carry `settings` in `me.allow` at all (sim.js gives
+  // it to one persona of four), so the gear is absent for a reason that has nothing to do with
+  // the payload under test. Writing a control that cannot pass, or loosening the predicate until
+  // it did, would both have been worse than moving it: `canOpenSettings` now lives in access.js
+  // and access.test.js holds it with BOTH inputs controlled, which is where a two-source
+  // predicate belongs. See "the settings modal" there.
+
   it('keeps a view-only tab present — visible is not the same as operable', async () => {
     // The distinction PRD §5 exists for. A Reviewer can SEE Assess; collapsing view into hidden
     // would take away the context they review against.

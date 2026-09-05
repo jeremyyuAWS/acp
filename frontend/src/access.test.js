@@ -16,10 +16,7 @@
 // because a implementation that hid things when not told would pass every test written about
 // hiding, and take the app down for every signed-out visitor.
 import { describe, it, expect } from 'vitest'
-import {
-  levelFor, isVisible, canOperate, isViewOnly, hasCapability,
-  visibleTabs, firstPermittedTab, ctaFor, restrictionReason, UNGOVERNED,
-} from './access.js'
+import { levelFor, isVisible, canOperate, isViewOnly, hasCapability, visibleTabs, firstPermittedTab, ctaFor, restrictionReason, UNGOVERNED, canOpenSettings } from './access.js'
 
 // The shape App.jsx's TABS has: [key, label, rubric-gloss, workflow step].
 const TABS = [
@@ -210,5 +207,43 @@ describe('restrictionReason', () => {
     expect(msg).not.toMatch(/\d/)
     expect(msg.toLowerCase()).not.toContain('document')
     expect(msg.toLowerCase()).not.toContain('finding')
+  })
+})
+
+
+describe('the settings modal', () => {
+  // `settings` is a governed tab that renders as a modal, so `visibleTabs` never covers it and
+  // App.jsx gated it on `me.allow` alone — a list the temporary 2026-09-04 navigation policy
+  // unions with every tab key, making `settings: hidden` meaningless for the four built-in roles
+  // that specify it. Both inputs are held here because the two sources genuinely disagree, in
+  // both directions, and a predicate over two sources cannot be tested from one of them.
+  const allowed = { allow: ['overview', 'settings'] }
+
+  it('opens when the persona allows it and the role does not hide it', () => {
+    expect(canOpenSettings(allowed, { tabs: { settings: 'operate' } })).toBe(true)
+    expect(canOpenSettings(allowed, { tabs: { settings: 'view' } })).toBe(true)
+  })
+
+  it('is closed to a role whose settings tab is hidden', () => {
+    expect(canOpenSettings(allowed, { tabs: { settings: 'hidden' } })).toBe(false)
+  })
+
+  it('is closed to a persona without it, whatever the role says', () => {
+    // The other direction, and it is not symmetric: SIM personas are narrower than any role.
+    expect(canOpenSettings({ allow: ['overview'] }, { tabs: { settings: 'operate' } })).toBe(false)
+  })
+
+  it('opens with no access payload at all — the deliberate fail-open', () => {
+    // access.js's header: an ABSENT payload means "not told", and this is presentation rather
+    // than protection. A signed-out shell, the first render before bootstrap answers, SIM mode
+    // and an older server all land here; blanking the panel in those would break the UI while
+    // protecting nothing, since every route behind it enforces its own capability.
+    expect(canOpenSettings(allowed, null)).toBe(true)
+    expect(canOpenSettings(allowed, {})).toBe(true)
+  })
+
+  it('is closed to nobody at all', () => {
+    expect(canOpenSettings(null, { tabs: { settings: 'operate' } })).toBe(false)
+    expect(canOpenSettings(undefined, null)).toBe(false)
   })
 })
