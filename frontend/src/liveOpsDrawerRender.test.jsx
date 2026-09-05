@@ -136,6 +136,20 @@ describe('Primary visualization per node', () => {
     expect(container.textContent).toContain('Amber from 75% of slots, red at 100%')
   })
 
+  it('shows one ACP replica row with its aggregated worker processes and slots', async () => {
+    const measured = { ...service, instances: [{ replica_id: 'assess-replica-a', healthy: true,
+      fresh: true, process_count: 2, concurrency_limit: 4, active_job_count: 3,
+      revision_name: 'acp-assess--v25', last_heartbeat_at: iso(-4) }] }
+    const container = await mount({ nodeId: 'stage:assess',
+      node: { kind: 'worker', label: 'Assess workers', service: measured } })
+    const panel = container.querySelector('[aria-label="ACP worker replicas"]')
+    expect(panel).toBeTruthy()
+    expect(panel.textContent).toContain('1 unique reported')
+    expect(panel.textContent).toContain('assess-replica-a')
+    expect(panel.textContent).toContain('2 worker processes')
+    expect(panel.textContent).toContain('3 of 4 slots busy')
+  })
+
   it('does not render an impossible utilisation percentage', async () => {
     // The screenshot that prompted this: "51 of 2 worker slots active (2550%)".
     const container = await mount({ nodeId: 'stage:assess',
@@ -361,6 +375,77 @@ describe('Primary visualization per node', () => {
     expect(container.textContent).not.toContain('0 of 0 sites')
   })
 
+  const driveNode = { kind: 'source', label: 'Google Drive', source: 'drive', active: 1 }
+
+  it('reports documents, which the snapshot publishes, alongside the run count', async () => {
+    const container = await mount({ nodeId: 'source:drive', node: driveNode })
+    expect(container.textContent).toContain('DOCUMENTS')
+    expect(container.textContent).toContain('8 of 20')
+  })
+
+  it('lists classified failures by class and stage, without claiming the connector caused them', async () => {
+    const runs = [
+      { ...snapshot.runs[0], last_error_class: 'rate_limit', max_attempts_seen: 4 },
+      { scan_id: 's9', source: 'drive', stage: 'discover', status: 'active',
+        last_error_class: 'auth', max_attempts_seen: 2, completed: 0 },
+    ]
+    const container = await mount({ nodeId: 'source:drive', node: driveNode,
+      snapshot: { ...snapshot, runs } })
+    expect(container.textContent).toContain('CLASSIFIED FAILURES')
+    // The label map fix: these render as words, not as raw tokens.
+    expect(container.textContent).toContain('Rate limited')
+    expect(container.textContent).toContain('Authentication failed')
+    expect(container.textContent).not.toMatch(/\brate_limit\b/)
+    expect(container.textContent).toContain('while assess')
+    expect(container.textContent).toContain('up to 4 attempts')
+    // And the caption that stops it being read as connector attribution.
+    expect(container.textContent).toContain('may be the AI provider rather than this connector')
+  })
+
+  it('says nothing has failed rather than showing an empty failures list', async () => {
+    const container = await mount({ nodeId: 'source:drive', node: driveNode })
+    expect(container.textContent).toContain('No classified failure has been recorded')
+    expect(container.textContent).not.toContain('CLASSIFIED FAILURES')
+  })
+
+  it('sums site coverage across the connector’s runs, and omits it where there is none', async () => {
+    const withSites = [
+      { ...snapshot.runs[0], sites_total: 30, sites_done: 12, sites_unread: 2, libraries_total: 61 },
+      { scan_id: 's9', source: 'drive', stage: 'discover', status: 'active',
+        sites_total: 10, sites_done: 10, sites_unread: 0, libraries_total: 14, completed: 0 },
+    ]
+    const container = await mount({ nodeId: 'source:drive', node: driveNode,
+      snapshot: { ...snapshot, runs: withSites } })
+    expect(container.querySelector('[aria-label="22 of 40 sites read across 2 runs"]')).toBeTruthy()
+    expect(container.textContent).toContain('75 libraries')
+    expect(container.textContent).toContain('2 sites not read (blocked or skipped)')
+
+    // The default fixture has no site data at all.
+    const plain = await mount({ nodeId: 'source:drive', node: driveNode })
+    expect(plain.textContent).not.toContain('SITE COVERAGE')
+  })
+
+  it('lists the runs on the connector, failing first, and names no scan or owner', async () => {
+    const runs = [
+      { ...snapshot.runs[0] },
+      { scan_id: 's9', source: 'drive', stage: 'discover', status: 'active', completed: 0,
+        last_error_class: 'auth', owner: 'someone@example.org', updated_at: iso(-30) },
+    ]
+    const container = await mount({ nodeId: 'source:drive', node: driveNode,
+      snapshot: { ...snapshot, runs } })
+    const list = container.querySelector('ul[aria-labelledby="source-run-list"]')
+    expect(list).toBeTruthy()
+    // Lowercase on purpose: the stage is capitalised by CSS, so this is what a screen reader
+    // and textContent actually see. Asserting the rendered casing would be asserting the
+    // stylesheet.
+    expect(list.querySelectorAll('li')[0].textContent).toContain('discover')
+    expect(list.querySelectorAll('li')[0].textContent).toContain('Authentication failed')
+    // Cross-tenant screen: no scan id, no owner.
+    expect(container.textContent).not.toContain('s9')
+    expect(container.textContent).not.toMatch(/@example\.org/)
+    expect(container.textContent).toContain('never names a scan or its owner')
+  })
+
   it('shows a source connector health and names what it cannot measure', async () => {
     const container = await mount({ nodeId: 'source:drive',
       node: { kind: 'source', label: 'Google Drive', source: 'drive', active: 1 } })
@@ -369,6 +454,70 @@ describe('Primary visualization per node', () => {
     expect(container.textContent).toContain('RECENT THROTTLING')
     expect(container.textContent).toContain('AUTHENTICATION FRESHNESS')
     expect(container.textContent).toContain('Not reported')
+  })
+
+  const outputNode = { kind: 'output', label: 'Durable outputs' }
+
+  it('names the dead-letter count for what it counts, not as a storage failure', async () => {
+    const container = await mount({ nodeId: 'infra:output', node: outputNode })
+    expect(container.textContent).toContain('DEAD-LETTERED JOBS')
+    expect(container.textContent).toContain('Every job type, not only output writes')
+    expect(container.textContent).toContain('Deliberate stops excluded')
+    // The old heading claimed a subsystem this number says nothing about.
+    expect(container.textContent).not.toContain('STORAGE FAILURES')
+  })
+
+  it('names a storage-specific count as unavailable, with the reason', async () => {
+    const container = await mount({ nodeId: 'infra:output', node: outputNode })
+    expect(container.textContent).toMatch(/STORAGE-SPECIFIC FAILURES\s*Not reported/)
+    expect(container.textContent).toContain('failure classifier has no storage class')
+  })
+
+  it('reports in-flight work as unavailable when neither stage is in the snapshot', async () => {
+    const summary = { ...snapshot.summary, by_stage: { assess: { running: 2, queued: 10 } } }
+    const container = await mount({ nodeId: 'infra:output', node: outputNode,
+      snapshot: { ...snapshot, summary } })
+    expect(container.textContent).toMatch(/REMEDIATE AND RELEASE IN FLIGHT\s*Not reported/)
+    expect(container.textContent).toContain('Neither stage is reported in this snapshot')
+    // The defect: 0 + 0 read as a confident zero.
+    expect(container.textContent).not.toMatch(/REMEDIATE AND RELEASE IN FLIGHT\s*0/)
+  })
+
+  it('says a partial in-flight count is partial', async () => {
+    const summary = { ...snapshot.summary,
+      by_stage: { remediate: { completed: 12, running: 1 } } }
+    const container = await mount({ nodeId: 'infra:output', node: outputNode,
+      snapshot: { ...snapshot, summary } })
+    expect(container.textContent).toContain('Only one of the two stages is reported')
+  })
+
+  it('draws each output stage bounded against its own published total', async () => {
+    const summary = { ...snapshot.summary, by_stage: {
+      remediate: { completed: 12, total: 20, running: 1, queued: 2 },
+      release: { completed: 9, total: 9, running: 0, queued: 0 },
+    } }
+    const container = await mount({ nodeId: 'infra:output', node: outputNode,
+      snapshot: { ...snapshot, summary } })
+    expect(container.textContent).toContain('OUTPUT STAGES')
+    expect(container.querySelector('[aria-label="Corrected copies: 60% of 20 documents"]')).toBeTruthy()
+    expect(container.querySelector('[aria-label="Verified and released: 100% of 9 documents"]')).toBeTruthy()
+    expect(container.textContent).toContain('1 running, 2 waiting')
+  })
+
+  it('draws no bar for a stage that published no total', async () => {
+    const summary = { ...snapshot.summary, by_stage: { remediate: { completed: 12, running: 1 } } }
+    const container = await mount({ nodeId: 'infra:output', node: outputNode,
+      snapshot: { ...snapshot, summary } })
+    expect(container.textContent).toContain('the completed count is not divided by itself')
+    expect(container.querySelector('[aria-label^="Corrected copies:"]')).toBeFalsy()
+  })
+
+  it('reports an absent output stage as unreported, not as having produced nothing', async () => {
+    const summary = { ...snapshot.summary, by_stage: { remediate: { completed: 12, total: 20 } } }
+    const container = await mount({ nodeId: 'infra:output', node: outputNode,
+      snapshot: { ...snapshot, summary } })
+    expect(container.textContent).toContain('Verified and released: Not reported')
+    expect(container.textContent).toContain('never “produced nothing”')
   })
 
   it('shows durable output counts and refuses a total size Azure did not report', async () => {

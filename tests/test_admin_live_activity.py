@@ -201,6 +201,53 @@ def test_instance_capacity_uses_busy_slots_not_running_rows(monkeypatch):
     assert summary["utilization_pct"] == 100
 
 
+def test_multiple_processes_on_one_replica_count_as_one_replica(monkeypatch):
+    class ActivityStore:
+        def worker_tier_status(self): return {"alive": True, "pool_size": 2}
+        def worker_roles_status(self): return {"assess": {"alive": True, "pool_size": 2}}
+        def job_stats(self, owner=None): return {"done": 0}
+        def admin_live_activity(self):
+            return [{"stage": "assess", "status": "active", "running": 3, "queued": 0,
+                     "completed": 0, "total": 3}]
+        def list_worker_instances(self):
+            now = system.datetime.now(system.timezone.utc).isoformat()
+            return [
+                {"worker_id": "assess:replica-a:p1", "replica_id": "replica-a",
+                 "last_heartbeat_at": now, "state": "busy", "concurrency_limit": 2,
+                 "active_job_count": 2, "revision_name": "v1"},
+                {"worker_id": "assess:replica-a:p2", "replica_id": "replica-a",
+                 "last_heartbeat_at": now, "state": "busy", "concurrency_limit": 2,
+                 "active_job_count": 1, "revision_name": "v1"},
+            ]
+
+    monkeypatch.setattr(system.core, "store", ActivityStore())
+    assess = system._admin_activity_snapshot()["summary"]["worker_capacity_by_role"]["assess"]
+    assert assess["healthy_replicas"] == 1
+    assert assess["worker_slots"] == 4
+    assert assess["busy_slots"] == 3
+    assert assess["utilization_pct"] == 75
+    assert len(assess["instances"]) == 1
+    assert assess["instances"][0]["replica_id"] == "replica-a"
+    assert assess["instances"][0]["process_count"] == 2
+
+
+def test_one_stale_process_does_not_make_its_live_replica_stale():
+    now = system.datetime.now(system.timezone.utc)
+    rows = system._replica_capacity([
+        {"worker_id": "assess:r1:old", "replica_id": "r1", "state": "busy",
+         "last_heartbeat_at": "2020-01-01T00:00:00+00:00", "concurrency_limit": 9,
+         "active_job_count": 9},
+        {"worker_id": "assess:r1:live", "replica_id": "r1", "state": "ready",
+         "last_heartbeat_at": now.isoformat(), "concurrency_limit": 2,
+         "active_job_count": 0},
+    ], now=now)
+    assess = rows["assess"]
+    assert assess["healthy_replicas"] == 1
+    assert assess["stale_replicas"] == 0
+    assert assess["worker_slots"] == 2
+    assert assess["instances"][0]["process_count"] == 2
+
+
 def test_stale_instances_remain_visible_but_add_no_capacity(monkeypatch):
     class ActivityStore:
         def worker_tier_status(self): return {"alive": False, "pool_size": None}

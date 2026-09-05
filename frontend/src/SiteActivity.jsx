@@ -86,11 +86,28 @@ export default function SiteActivity({ sites }) {
                          Number.isFinite(l.removed) && `${l.removed.toLocaleString()} removed`]
                         .filter(Boolean).join(' · ')
                       : null
+                    const state = l.status === 'partial' ? 'partial' :
+                      l.status === 'blocked' ? 'could not read' :
+                      l.status === 'skipped' ? 'not scanned' :
+                      l.status === 'scanning' ? 'reading' :
+                      l.status === 'complete' ? 'complete' : null
+                    const count = Number.isFinite(l.listed)
+                      ? `${l.listed.toLocaleString()} document${l.listed === 1 ? '' : 's'}` : null
                     return <span key={l.id || `${s.id}-${i}`}>
                       {i > 0 && ', '}{l.name || l.id}
-                      {mode && <> ({mode}{changes ? ` · ${changes}` : ''})</>}
+                      {(mode || state || count) && <> ({[mode, changes, state, count].filter(Boolean).join(' · ')})</>}
+                      {l.throttled > 0 && <> · throttled {l.throttled.toLocaleString()} time{l.throttled === 1 ? '' : 's'}</>}
+                      {l.error && <> · {l.error}</>}
                     </span>
                   })}
+                </span>
+              )}
+              {s.status === 'scanning' && s.active_library && (
+                <span style={{ fontSize: 10.5, paddingLeft: 2, color: 'var(--ink)' }}>
+                  Reading {s.active_library.name || s.active_library.id || 'document library'}
+                  {s.active_library.mode === 'delta' ? ' incrementally' :
+                    s.active_library.mode === 'full' ? ' with a full walk' :
+                    s.active_library.mode === 'search' ? ' from the search index' : ''}
                 </span>
               )}
               {/* Verbatim. "Sites.Read.All" and "429" are different problems with different

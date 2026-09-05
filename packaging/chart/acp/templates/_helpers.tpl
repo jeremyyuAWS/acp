@@ -57,7 +57,14 @@ Call as: include "acp.image" (dict "root" $ "component" "api")
 {{- $root := .root -}}
 {{- $component := .component -}}
 {{- $img := $root.Values.image -}}
-{{- $repo := ternary $img.workerRepository $img.repository (eq $component "worker") -}}
+{{- /*
+  THREE repositories now, not two, and spelled as a lookup rather than a nested ternary. The
+  worker and the API share one image and differ by command; ollama is a genuinely different
+  artifact (deploy/ollama/Dockerfile, models baked in) and cannot be a tag on either.
+*/ -}}
+{{- $repo := $img.repository -}}
+{{- if eq $component "worker" -}}{{- $repo = $img.workerRepository -}}{{- end -}}
+{{- if eq $component "ollama" -}}{{- $repo = $img.ollamaRepository -}}{{- end -}}
 {{- $registry := $img.registry -}}
 {{- $digest := get ($img.digests | default dict) $component -}}
 {{- $base := $repo -}}
@@ -114,6 +121,21 @@ ACP_WORKER_ROLE) are added by the caller; everything below is identical by const
 {{- end }}
 - name: OTEL_SERVICE_NAME
   value: {{ include "acp.fullname" . | quote }}
+{{- end }}
+{{- if .Values.ai.ollama.enabled }}
+{{- /*
+  THE CLIENT HALF, and the reason rendering the Deployment alone would not have been a fix.
+  `api/ai.py` reaches Ollama through OLLAMA_BASE_URL; without it the workload runs against no
+  model runtime while a perfectly healthy one sits in the same namespace. Compose has always set
+  this (`OLLAMA_BASE_URL=http://ollama:11434`); the chart set nothing, so the seam existed on
+  both sides at once and each half looked like the other one's problem.
+*/}}
+- name: OLLAMA_BASE_URL
+  value: {{ printf "http://%s-ollama:%v" (include "acp.fullname" .) .Values.ai.ollama.port | quote }}
+{{- range $k, $v := .Values.ai.ollama.clientEnv }}
+- name: {{ $k }}
+  value: {{ $v | quote }}
+{{- end }}
 {{- end }}
 {{- if eq .Values.ai.mode "local-only" }}
 {{- /*

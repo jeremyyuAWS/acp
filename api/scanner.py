@@ -2708,8 +2708,13 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
             # be one Graph call per file. Best-effort, like _sp_site_name always was: a tenant
             # can let a token read a site's drives while refusing its metadata.
             rep["name"] = _sp_site_name(token, s_id)
-            rep["libraries"] = [{"id": d["id"], "name": d.get("name")} for d in drives]
+            rep["libraries"] = [{"id": d["id"], "name": d.get("name"), "status": "queued",
+                                  "listed": 0, "estate": 0} for d in drives]
             lib_by_id = {lib["id"]: lib for lib in rep["libraries"]}
+            # Announce the site before waiting on its first library.  Previously the first live
+            # row for a healthy site was often its terminal "complete" row, which made a long
+            # Graph walk look queued until it suddenly finished.
+            _tick()
             for d in drives:
                 # RECONSTRUCTED, not walked. The merged prior+delta set becomes this library's
                 # one batch and feeds the identical per-item loop below — same dedupe, same
@@ -2723,10 +2728,18 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                     lib_by_id[d["id"]]["mode"] = "delta"
                     lib_by_id[d["id"]]["changed"] = len(plan["changed"])
                     lib_by_id[d["id"]]["removed"] = len(plan["removed_ids"])
+                    lib_by_id[d["id"]]["status"] = "scanning"
+                    rep["active_library"] = {"id": d["id"], "name": d.get("name"),
+                                             "mode": "delta"}
+                    _tick()
                     budget -= len(merged)
                     targets.append((d["id"], iter([merged]), s_id, rep["name"], d.get("name")))
                     continue
                 lib_by_id[d["id"]]["mode"] = "full"
+                lib_by_id[d["id"]]["status"] = "scanning"
+                rep["active_library"] = {"id": d["id"], "name": d.get("name"),
+                                         "mode": "search" if use_search else "full"}
+                _tick()
                 why = (delta_plan or {}).get("full", {}).get(d["id"])
                 if why:
                     lib_by_id[d["id"]]["full_reason"] = why
@@ -2737,12 +2750,15 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                     continue
                 if budget <= 0:
                     rep["status"] = "partial"   # libraries left unlisted → the estate is a floor
+                    lib_by_id[d["id"]]["status"] = "skipped"
+                    lib_by_id[d["id"]]["error"] = "file budget exhausted before this library"
                     hit_cap = True
                     break
                 try:
                     walked, cut = _walks.result((s_id, d["id"]))
                 except Exception as e:  # noqa: BLE001 — same isolation, one library down
                     rep.update(status="partial", error=f"library {d.get('name') or d['id']}: {e}")
+                    lib_by_id[d["id"]].update(status="blocked", error=str(e))
                     print(f"[scan] SharePoint library {d.get('name') or d['id']} on site {s_id} "
                           f"failed: {e} — continuing", flush=True)
                     hit_cap = True
@@ -2750,6 +2766,7 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                 hit_cap = hit_cap or cut
                 if cut:
                     rep["status"] = "partial"
+                    lib_by_id[d["id"]]["status"] = "partial"
                 # NOT truncated here, and that is deliberate. `budget` counts raw items as a
                 # cheap proxy for deciding whether to walk the NEXT library; the real cap is
                 # enforced on the SCANNABLE set by the consumption loop below (`len(files) >=
@@ -2759,8 +2776,6 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                 # saw, which is the one number this connector must never understate.
                 budget -= len(walked)
                 targets.append((d["id"], iter([walked]), s_id, rep["name"], d.get("name")))
-            if rep["status"] == "scanning":
-                rep["status"] = "complete"
             # WHY this site was slow, not just that it was. "This took an hour" and "this took an
             # hour because Graph throttled us 240 times" are the same wall-clock and completely
             # different problems, and only the second is one an operator can act on — fewer sites
@@ -2772,8 +2787,14 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
             # library to the wrong site.
             _throttled = sum(n for (site_of, _drive), n in _walks.throttled.items()
                              if site_of == s_id)
+            for (site_of, drive_of), count in _walks.throttled.items():
+                if site_of == s_id and drive_of in lib_by_id and count:
+                    lib_by_id[drive_of]["throttled"] = count
             if _throttled:
                 rep["throttled"] = _throttled
+            # The walk may be complete, but its batches have not been classified and counted yet.
+            # Keep the site live until the consumption boundary below proves all of its targets
+            # were consumed.  "Complete" is an outcome, not shorthand for "Graph returned".
             _tick()
         _walks.close()
     elif use_search:
@@ -2826,13 +2847,44 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
             print(f"[scan] SharePoint site {s_id} checkpoint failed: {e} — the scan continues "
                   f"and this site will be re-listed if it is retried", flush=True)
 
-    cur_site, cur_files, cur_inv = None, 0, 0
+    cur_site, cur_drive, cur_files, cur_inv = None, None, 0, 0
+
+    def _finish_consumed_library(s_id, drive_id):
+        if not s_id or not drive_id:
+            return
+        rep = site_report.get(s_id) or {}
+        lib = next((row for row in (rep.get("libraries") or []) if row.get("id") == drive_id), None)
+        if lib and lib.get("status") == "scanning":
+            lib["status"] = "complete"
+
+    def _finish_consumed_site(s_id):
+        if not s_id:
+            return
+        rep = site_report.get(s_id) or {}
+        rep.pop("active_library", None)
+        if rep.get("status") == "scanning":
+            rep["status"] = "complete"
+        _tick()
+
     for i, (drive_id, pages, target_site, target_site_name, library_name) in enumerate(targets):
+        if drive_id != cur_drive or target_site != cur_site:
+            _finish_consumed_library(cur_site, cur_drive)
         if target_site != cur_site:
+            _finish_consumed_site(cur_site)
             _emit_site(cur_site, cur_files, cur_inv)
             cur_site = target_site
             cur_files = len(files)
             cur_inv = len(inventory_out) if inventory_out is not None else 0
+        cur_drive = drive_id
+        if target_site and target_site in site_report:
+            rep = site_report[target_site]
+            lib = next((row for row in (rep.get("libraries") or [])
+                        if row.get("id") == drive_id), {})
+            if lib.get("status") not in {"partial", "blocked", "skipped"}:
+                lib["status"] = "scanning"
+            rep["active_library"] = {"id": drive_id, "name": library_name,
+                                     "mode": lib.get("mode")}
+            _tick()
         for batch in pages:
             if len(files) >= max_files:
                 break
@@ -2856,13 +2908,19 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                 est_files.append(classified["est_row"])
                 if target_site and target_site in site_report:
                     site_report[target_site]["estate"] += 1
+                    lib["estate"] = int(lib.get("estate") or 0) + 1
                 if classified["scannable"] is not None:
                     files.append(classified["scannable"])
                     if target_site and target_site in site_report:
                         site_report[target_site]["listed"] += 1
+                        lib["listed"] = int(lib.get("listed") or 0) + 1
                 elif inventory_out is not None and classified["inventory_row"] is not None:
                     # Non-scannable item — inventoried with metadata, never analysed.
                     inventory_out.append(classified["inventory_row"])
+            # A Graph page is the natural bounded progress unit: frequent enough to show movement
+            # on a large library, without turning every document into a database/SSE write.
+            if target_site:
+                _tick()
         if len(files) >= max_files:
             # Truncated only if the cap left something unlisted: this library still has a batch
             # pending, or a later library was never reached. A page fully read is not truncation —
@@ -2880,6 +2938,8 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                         rep["status"] = "partial" if j == i else "skipped"
             break
 
+    _finish_consumed_library(cur_site, cur_drive)
+    _finish_consumed_site(cur_site)
     _emit_site(cur_site, cur_files, cur_inv)
     # A site with no libraries visible to the token completes without ever producing a target, so
     # the boundary above never reaches it. It is still a site the caller has finished with, and a

@@ -16,6 +16,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 import worker_main  # noqa: E402
 
 
+def _wait_until(predicate, timeout=5.0, interval=0.01):
+    """Wait for a condition instead of sleeping a fixed guess. See the fuller note on the copy in
+    tests/test_worker_tier_heartbeat.py — same race, same reason, and this file's 0.1s margin was
+    the tighter of the two."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return False
+
+
 def test_run_boots_then_drains(monkeypatch):
     import core
     calls = []
@@ -29,9 +41,14 @@ def test_run_boots_then_drains(monkeypatch):
     worker_main._stop.clear()
     t = threading.Thread(target=lambda: worker_main.run(poll_seconds=0.02, _install_signals=False))
     t.start()
-    time.sleep(0.1)
+    # Wait for the boot sequence this test asserts on, rather than sleeping a guess. The same race
+    # as tests/test_worker_tier_heartbeat.py's (see _wait_until there): `import core` happens on
+    # the thread, and if `_stop.set()` wins, `calls` is still short and the boot-order assertion
+    # below fails for a reason that has nothing to do with boot order.
+    booted = _wait_until(lambda: "start_workers" in calls)
     worker_main._stop.set()          # simulate SIGTERM
     t.join(timeout=2)
+    assert booted, "worker_main.run did not reach start_workers within the timeout"
     assert not t.is_alive()
 
     # boot order, then a clean drain

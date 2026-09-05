@@ -1342,6 +1342,69 @@ def jobs(request: Request, status: str | None = None, limit: int = 100):
             "jobs": core.store.list_jobs(status=status, limit=limit, owner=owner)}
 
 
+def _replica_capacity(instances: list[dict], *, now: datetime,
+                      freshness_seconds: int = 30) -> dict[str, dict]:
+    """Aggregate process heartbeats into physical replicas, then into service roles.
+
+    ``worker_id`` identifies a process (role:replica:process), so counting rows as replicas
+    inflates the fleet whenever a container runs more than one worker process. Capacity remains
+    the sum of fresh process pools, while replica health/counts and drawer rows use the stable
+    ``replica_id``. Rows without a replica id retain the legacy one-row-per-worker behavior.
+    """
+    replicas: dict[tuple[str, str], dict] = {}
+    for instance in instances:
+        worker_id = str(instance.get("worker_id") or "")
+        role = worker_id.split(":", 1)[0] if ":" in worker_id else "mixed"
+        replica_id = str(instance.get("replica_id") or worker_id or "unknown")
+        key = (role, replica_id)
+        try:
+            beat = datetime.fromisoformat(str(instance.get("last_heartbeat_at")).replace("Z", "+00:00"))
+            age_s = max(0, (now - beat).total_seconds())
+        except (TypeError, ValueError):
+            beat, age_s = None, float("inf")
+        fresh = age_s <= freshness_seconds
+        healthy_process = fresh and instance.get("state") in {"ready", "busy"}
+        replica = replicas.setdefault(key, {
+            **instance, "worker_id": worker_id, "replica_id": replica_id,
+            "process_count": 0, "concurrency_limit": 0, "active_job_count": 0,
+            "fresh": False, "healthy": False, "age_s": None,
+        })
+        replica["process_count"] += 1
+        replica["fresh"] = replica["fresh"] or fresh
+        replica["healthy"] = replica["healthy"] or healthy_process
+        if healthy_process:
+            replica["concurrency_limit"] += max(0, int(instance.get("concurrency_limit") or 0))
+            replica["active_job_count"] += max(0, int(instance.get("active_job_count") or 0))
+        if age_s != float("inf") and (replica["age_s"] is None or age_s < replica["age_s"]):
+            replica["age_s"] = round(age_s, 1)
+            replica["last_heartbeat_at"] = beat.isoformat() if beat else None
+            replica["revision_name"] = instance.get("revision_name")
+        if healthy_process and instance.get("state") == "busy":
+            replica["state"] = "busy"
+        elif healthy_process and replica.get("state") != "busy":
+            replica["state"] = "ready"
+
+    per_role: dict[str, dict] = {}
+    for (role, _replica_id), replica in replicas.items():
+        row = per_role.setdefault(role, {"role": role, "capacity_source": "worker_instances",
+            "freshness_threshold_seconds": freshness_seconds, "healthy_replicas": 0,
+            "stale_replicas": 0, "worker_slots": 0, "busy_slots": 0, "instances": []})
+        if replica["healthy"]:
+            row["healthy_replicas"] += 1
+            row["worker_slots"] += replica["concurrency_limit"]
+            row["busy_slots"] += replica["active_job_count"]
+        elif not replica["fresh"]:
+            row["stale_replicas"] += 1
+            replica["state"] = "stale"
+        row["instances"].append(replica)
+        measured = replica.get("last_heartbeat_at")
+        if measured and (not row.get("measured_at") or measured > row["measured_at"]):
+            row["measured_at"] = measured
+    for row in per_role.values():
+        row["instances"].sort(key=lambda item: str(item.get("replica_id") or ""))
+    return per_role
+
+
 def _admin_activity_snapshot() -> dict:
     wt = core.store.worker_tier_status()
     worker_roles = core.store.worker_roles_status()
@@ -1351,31 +1414,7 @@ def _admin_activity_snapshot() -> dict:
     instances = _list_instances() if callable(_list_instances) else []
     freshness_seconds = 30
     now = datetime.now(timezone.utc)
-    per_role: dict[str, dict] = {}
-    for instance in instances:
-        worker_id = str(instance.get("worker_id") or "")
-        role = worker_id.split(":", 1)[0] if ":" in worker_id else "mixed"
-        row = per_role.setdefault(role, {"role": role, "capacity_source": "worker_instances",
-            "freshness_threshold_seconds": freshness_seconds, "healthy_replicas": 0,
-            "stale_replicas": 0, "worker_slots": 0, "busy_slots": 0, "instances": []})
-        try:
-            beat = datetime.fromisoformat(str(instance.get("last_heartbeat_at")).replace("Z", "+00:00"))
-            age_s = max(0, (now - beat).total_seconds())
-        except (TypeError, ValueError):
-            beat, age_s = None, float("inf")
-        fresh = age_s <= freshness_seconds
-        state = instance.get("state")
-        healthy = fresh and state in {"ready", "busy"}
-        if healthy:
-            row["healthy_replicas"] += 1
-            row["worker_slots"] += max(0, int(instance.get("concurrency_limit") or 0))
-            row["busy_slots"] += max(0, int(instance.get("active_job_count") or 0))
-        elif not fresh:
-            row["stale_replicas"] += 1
-        row["instances"].append({**instance, "fresh": fresh, "age_s": None if age_s == float("inf") else round(age_s, 1)})
-        measured = beat.isoformat() if beat else None
-        if measured and (not row.get("measured_at") or measured > row["measured_at"]):
-            row["measured_at"] = measured
+    per_role = _replica_capacity(instances, now=now, freshness_seconds=freshness_seconds)
 
     # The shared heartbeat is last-writer-wins. In production each dedicated service writes its
     # own role heartbeat, so summing the live role pools is the only honest total capacity.

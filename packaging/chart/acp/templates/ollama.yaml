@@ -1,0 +1,146 @@
+{{- if .Values.ai.ollama.enabled }}
+{{- /*
+  The local model runtime, which every profile in the contract declares and the chart did not
+  render until now.
+
+  WHY THE CHART WAS THE SIDE THAT MOVED. Three deployment paths describe this service and two of
+  them deploy it: `deploy/compose/docker-compose.yml` runs it ungated for evaluation, and
+  `deploy/public/rightsize-production.sh` creates `acp-ollama` (4 CPU / 8Gi, 0-1 replicas) in
+  production. All four example documents set `ai.ollama.enabled: true`. The Helm chart — the
+  layer ADR 0048 makes PRIMARY for production — was the only one of the three that shipped
+  nothing, so an installation moved from the evaluation path to the production one lost its model
+  runtime and nothing said so.
+
+  NO PERSISTENT VOLUME, AND THAT IS THE OPPOSITE OF WHAT THE INVENTORY USED TO SAY.
+  `inventory.py` asked for a 200Gi model volume "so a restart does not re-pull multi-GB models".
+  The first-party image does not re-pull anything: `deploy/ollama/Dockerfile` bakes llama3.1:8b
+  and moondream into the image layer at build time and sets `OLLAMA_MODELS=/models` precisely so
+  they survive at runtime. Its own comment says why, and it is the trap this template would
+  otherwise have walked into:
+
+      The base image declares `VOLUME /root/.ollama`, so under a runtime that mounts an empty
+      volume there (Azure Container Apps / K8s emptyDir) the models baked into the image layer
+      are SHADOWED — the container starts with an empty model list and vision silently falls
+      back / templates.
+
+  So mounting the volume the inventory described, at the path the base image declares, would
+  produce a pod that starts clean, serves no models, and reports nothing wrong. Mounting one at
+  `/models` instead would shadow them just as thoroughly. The correct number of volumes is zero,
+  and `test_the_baked_model_path_is_never_mounted_over` keeps it that way.
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "acp.fullname" . }}-ollama
+  labels:
+    {{- include "acp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ollama
+spec:
+  {{- /*
+    One replica, pinned. Ollama holds models in memory per process; a second replica doubles the
+    memory bill and serves the same two models, and nothing here load-balances across them
+    intelligently. Production runs it 0-1 for the same reason.
+  */}}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "acp.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: ollama
+  template:
+    metadata:
+      labels:
+        {{- include "acp.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: ollama
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "acp.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: ollama
+          image: {{ include "acp.image" (dict "root" $ "component" "ollama") | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- /*
+            readOnlyRootFilesystem is dropped for this container alone. Ollama writes its runtime
+            state under the model root while serving; the shared securityContext sets it true,
+            which is right for the API and the workers and would make this pod crash-loop.
+          */}}
+          securityContext:
+            {{- toYaml (merge (dict "readOnlyRootFilesystem" false) .Values.securityContext) | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.ai.ollama.port }}
+              protocol: TCP
+          env:
+            - name: OLLAMA_HOST
+              value: {{ printf "0.0.0.0:%v" .Values.ai.ollama.port | quote }}
+            {{- range $k, $v := .Values.ai.ollama.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          {{- /*
+            A startup probe, not a readiness probe alone. Loading two baked models takes tens of
+            seconds on CPU; a liveness probe with an ordinary threshold would kill the pod
+            mid-load, forever. `/api/tags` is the endpoint the image's own build step polls.
+          */}}
+          startupProbe:
+            httpGet:
+              path: /api/tags
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /api/tags
+              port: http
+            periodSeconds: 10
+          {{- with .Values.ai.ollama.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- if .Values.ai.ollama.gpu }}
+      {{- /*
+        Only the limit is set: `nvidia.com/gpu` is an extended resource, and Kubernetes requires
+        request and limit to be equal for those — writing both invites them to drift apart, and
+        the API server rejects the pod when they do.
+      */}}
+      {{- with .Values.ai.ollama.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.ai.ollama.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "acp.fullname" . }}-ollama
+  labels:
+    {{- include "acp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ollama
+spec:
+  {{- /*
+    ClusterIP, always. The inventory calls this ingress "internal" and it means it: an Ollama
+    reachable from outside the cluster is an unauthenticated inference endpoint anyone can bill
+    you for. `test_ollama_is_never_exposed_outside_the_cluster` pins it.
+  */}}
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.ai.ollama.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "acp.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: ollama
+{{- end }}

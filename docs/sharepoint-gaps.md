@@ -30,6 +30,13 @@ rules), and `docs/pilot-scope.md`.
   carries a per-site breakdown — libraries, counts, status (`complete` / `partial` / `blocked` /
   `skipped`) and the error — so "no site was silently omitted" is checkable rather than asserted.
   Per-site progress reaches the SSE stream as each site resolves.
+- **Live per-library evidence (2026-09-05)** — the same SSE site rows now identify the library
+  currently being read, whether it is a full walk or delta reconstruction, and each library's own
+  queued/scanning/complete/partial outcome, document count, throttling tally and failure. A site is
+  declared complete only after its returned batches have been classified and counted, rather than
+  when Graph merely finishes returning them. The persisted final scope uses the same shape, so a
+  partial site names the specific library that failed instead of collapsing the evidence into one
+  site-level total.
 - **A refusal that names whose problem it is (2026-09-04)** — a Graph 401/403 used to produce one
   sentence for every case: grant `Sites.Read.All` with tenant admin consent. It is now three
   answers, because they have three different owners. A **401** is the token (expired, wrong
@@ -92,7 +99,7 @@ the read-only posture.
 
 ---
 
-## Three things to surface in the SOW / "UTSW Responsibilities"
+## Four things to surface in the SOW / "UTSW Responsibilities"
 
 1. ~~**Multi-site orchestration for the 30 locations** is the real engineering item.~~ **Built
    2026-09-04** — a "location" is a site, and a site's libraries are scanned together. What is left
@@ -110,6 +117,29 @@ the read-only posture.
    production verification of the RunPod `llava:13b` cloud path on 2026-08-25, including visible
    fallback reporting. Tenant acceptance should still exercise image content, but CPU/manual is a
    fallback state now, not the expected production route.
+4. **What counts as one of the thirty locations, and what is outside them.** Three real boundaries
+   that appear on no requirement row. None is a defect; each is cheaper to settle before onboarding
+   than to discover during it.
+
+   **Subsites are not expanded, and this one affects the count.** A "location" is a site id.
+   Graph's site search returns subsites as their own entries, so the picker CAN reach them — but
+   nothing expands a site into its subsites automatically, and the walk of a site covers its own
+   libraries only. A hub with twelve subsites is therefore thirteen selections against
+   `ACP_SP_MAX_SITES` (default 30), not one. If UTSW's "thirty locations" was counted as thirty
+   hubs, the real selection is larger than the cap and the estate will be truncated — reported
+   honestly as `skipped` with a reason, but truncated. **Ask how their thirty are counted before
+   the first run**, and raise the cap or narrow the selection deliberately rather than discovering
+   it in a scan's exception report.
+
+   **Tenant-wide OneDrive is out of reach.** Only the signed-in user's own drive is scannable;
+   `/users/{id}/drive` is never called, so every other user's OneDrive is invisible to an estate
+   sweep. That is consistent with a SOW naming thirty *SharePoint* locations, and it is a scope
+   statement rather than a gap — but it should be stated, because "SharePoint / OneDrive" as a
+   source label invites the other reading.
+
+   **Change detection is polled, not pushed.** A scheduled sweep (1440 min) plus per-library delta
+   cursors. Graph change-notification subscriptions would make detection near-real-time and are not
+   built; unnecessary at a daily cadence, and worth naming only if the pilot expects faster.
 
 ---
 
