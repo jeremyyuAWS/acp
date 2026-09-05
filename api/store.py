@@ -5773,6 +5773,71 @@ class Store:
                 "failure_reasons": failure_reasons,
             }
 
+    def ai_provider_health_stats(self, provider: str, *, window_hours: int = 24) -> dict:
+        """Endpoint health snapshot for one cloud provider (ADR 0019/0016). All numbers come
+        directly from ai_calls rows — nothing is fabricated or estimated.
+
+        Returns:
+          calls          total calls in window
+          ok             successful calls (ok=1)
+          errors         failed calls
+          avg_latency_ms mean latency of successful calls (0 when no successful calls)
+          p95_latency_ms 95th-percentile latency of successful calls (None when < 2 data points)
+          throttle_count calls that ended with reason='http_429' — HF rate-limits the endpoint
+          cold_start_count successful calls with latency > 30 000 ms — dedicated-endpoint cold start
+          last_call_ts   ISO timestamp of the most recent call (None when no calls in window)
+        """
+        from datetime import datetime, timedelta, timezone
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS calls, COALESCE(SUM(ok),0) AS ok_count, "
+                "COALESCE(AVG(CASE WHEN ok=1 THEN latency_ms END),0) AS avg_ok_ms, "
+                "MAX(ts) AS last_call_ts "
+                "FROM ai_calls WHERE provider=%s AND ts>=%s",
+                (provider, cutoff))
+            row = self._db.fetchone(cur) or {}
+
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM ai_calls "
+                "WHERE provider=%s AND ts>=%s AND reason='http_429'",
+                (provider, cutoff))
+            throttle_row = self._db.fetchone(cur) or {}
+
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM ai_calls "
+                "WHERE provider=%s AND ts>=%s AND ok=1 AND latency_ms>30000",
+                (provider, cutoff))
+            cs_row = self._db.fetchone(cur) or {}
+
+            # p95 computed in Python — percentile_cont is Postgres-only; SQLite is used in dev
+            self._db.execute(cur,
+                "SELECT latency_ms FROM ai_calls "
+                "WHERE provider=%s AND ts>=%s AND ok=1 ORDER BY latency_ms",
+                (provider, cutoff))
+            latencies = [r["latency_ms"] for r in self._db.fetchall(cur)
+                         if r.get("latency_ms") is not None]
+
+        calls = int(row.get("calls") or 0)
+        ok_count = int(row.get("ok_count") or 0)
+        p95: int | None = None
+        if len(latencies) >= 2:
+            p95 = int(latencies[min(int(len(latencies) * 0.95), len(latencies) - 1)])
+        elif len(latencies) == 1:
+            p95 = int(latencies[0])
+        return {
+            "provider": provider,
+            "window_hours": window_hours,
+            "calls": calls,
+            "ok": ok_count,
+            "errors": calls - ok_count,
+            "avg_latency_ms": int(row.get("avg_ok_ms") or 0),
+            "p95_latency_ms": p95,
+            "throttle_count": int(throttle_row.get("n") or 0),
+            "cold_start_count": int(cs_row.get("n") or 0),
+            "last_call_ts": row.get("last_call_ts"),
+        }
+
     def list_applied_fixes(self, scan_id: str, limit: int = 200) -> list[dict]:
         """The AI fixes that wrote a concrete value in this scan, newest first — real
         applied text + thumbnail for the 'Recent AI fixes' surface."""

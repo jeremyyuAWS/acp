@@ -1085,10 +1085,12 @@ def cloud_vision_provider() -> VisionProvider | None:
         setting = (core.store.get_setting("ai_vision_provider") or "").strip().lower()
     except Exception:
         setting = ""
-    # Fallback order: managed cloud providers first (azure_openai, openai, anthropic), then
-    # self-hosted HuggingFace Inference Endpoints. Admin's explicit setting is tried first.
+    # Fallback order: managed cloud providers first, then self-hosted HuggingFace Inference
+    # Endpoints. Admin's explicit setting is tried first; gemini and bedrock are included so
+    # they are reachable as auto-fallback, not only via explicit admin selection.
     order = ([setting] if setting in CLOUD_PROVIDERS else []) + \
-            [p for p in ("azure_openai", "openai", "anthropic", "huggingface") if p != setting]
+            [p for p in ("azure_openai", "openai", "anthropic", "gemini", "bedrock", "huggingface")
+             if p != setting]
     for name in order:
         try:
             cfg = core.store.get_ai_provider_config(name)
