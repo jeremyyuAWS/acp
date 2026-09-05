@@ -66,7 +66,16 @@ FIELDS = {"department", "business_criticality", "regulatory_tags", "triage_score
          #
          # The first is correct under either basis (a floor of 1 means one person made it and
          # nobody else ever touched it). The second refuses to act on the floor at all.
-         "collaborator_count", "collaborator_basis"}
+         "collaborator_count", "collaborator_basis",
+         # Whether anybody has actually USED it, over Graph's own seven-day analytics window
+         # (sp_metadata.ANALYTICS_WINDOW_DAYS — a fixed endpoint, not a choice). Access and use
+         # are different questions and the archival answer needs both:
+         #
+         #     modified_age_days > 2555 AND collaborator_count <= 1 AND recent_actor_count eq 0
+         #
+         # Both counts are None unless ACP_SP_ANALYTICS is on, so a rule keyed on them matches
+         # nothing on an estate that was never measured — correct, and never a false "idle".
+         "recent_actor_count", "recent_action_count"}
 
 #: A rule may also key on the tenant's OWN managed columns, written `managed:<Column Name>` —
 #: `{"field": "managed:Records Category", "op": "eq", "value": "Superseded"}`.
