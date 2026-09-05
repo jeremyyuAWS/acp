@@ -135,7 +135,7 @@ describe('Admin live traffic graph', () => {
     expect(graph.edges.every((edge) => !edge.animated)).toBe(true)
   })
 
-  it('shows dedicated worker capacity by service rather than one last-writer heartbeat', () => {
+  it('keeps legacy role heartbeats separate from unavailable per-replica capacity', () => {
     expect(workerServiceRows({
       by_stage: { discover: { running: 1 }, assess: { running: 2 }, remediate: { running: 0 } },
       worker_roles: {
@@ -144,10 +144,33 @@ describe('Admin live traffic graph', () => {
         remediate: { alive: false, pool_size: 2, age_s: 130, version: 'v9' },
       },
     })).toEqual([
-      { role: 'discovery', stage: 'discover', active: 1, slots: 3, available: 2, alive: true, age_s: 1.2, version: 'v10' },
-      { role: 'assess', stage: 'assess', active: 2, slots: 2, available: 0, alive: true, age_s: 4.6, version: 'v10' },
-      { role: 'remediate', stage: 'remediate', active: 0, slots: 2, available: 2, alive: false, age_s: 130, version: 'v9' },
+      { role: 'discovery', stage: 'discover', active: null, slots: null, available: null,
+        alive: true, age_s: 1.2, version: 'v10', status: 'unavailable', jobs_in_flight: 1,
+        utilization_pct: null, capacity_source: 'legacy_role_heartbeat', measured_at: null,
+        capacity_unavailable_reason: 'Per-replica capacity is not yet reporting. Jobs in flight are available, but slot utilization cannot be calculated honestly.' },
+      { role: 'assess', stage: 'assess', active: null, slots: null, available: null,
+        alive: true, age_s: 4.6, version: 'v10', status: 'unavailable', jobs_in_flight: 2,
+        utilization_pct: null, capacity_source: 'legacy_role_heartbeat', measured_at: null,
+        capacity_unavailable_reason: 'Per-replica capacity is not yet reporting. Jobs in flight are available, but slot utilization cannot be calculated honestly.' },
+      { role: 'remediate', stage: 'remediate', active: null, slots: null, available: null,
+        alive: false, age_s: 130, version: 'v9', status: 'unavailable', jobs_in_flight: 0,
+        utilization_pct: null, capacity_source: 'unavailable', measured_at: null,
+        capacity_unavailable_reason: 'Per-replica capacity is not yet reporting. Jobs in flight are available, but slot utilization cannot be calculated honestly.' },
     ])
+  })
+
+  it('does not turn legacy slots and durable running rows into a utilization gauge', () => {
+    const [assess] = workerServiceRows({
+      by_stage: { assess: { running: 40 } },
+      worker_roles: { assess: { alive: true, pool_size: 2, heartbeat_at: '2026-09-05T12:00:00Z' } },
+      worker_instance_attribution: { available: false, reason: 'Per-replica telemetry unavailable.' },
+    })
+    expect(assess).toMatchObject({ active: null, slots: null, jobs_in_flight: 40,
+      utilization_pct: null, capacity_source: 'legacy_role_heartbeat',
+      capacity_unavailable_reason: 'Per-replica telemetry unavailable.' })
+    expect(nodeGauge({ kind: 'worker', service: assess })).toEqual({
+      fraction: null, label: 'Per-replica worker utilization unavailable', over: false,
+    })
   })
 
   it('uses per-replica busy slots without turning extra running rows into utilization', () => {
@@ -352,7 +375,7 @@ describe('Idle map: scope and announcement', () => {
     const unlabelled = nodes.filter((n) => n.type === 'infra' && !n.ariaLabel)
     expect(unlabelled.map((n) => n.id)).toEqual([])
     expect(nodes.find((n) => n.id === 'stage:discover').ariaLabel)
-      .toMatch(/Discover workers, online, 0 busy of 3 slots/)
+      .toMatch(/Discover workers, unavailable, slot utilization unavailable/)
   })
 
   it('keeps worker tiles in non-overlapping lanes with dedicated queue and output ports', () => {
@@ -442,7 +465,9 @@ describe('The size figure says whose size it is', () => {
 
 describe('The map tiles carry a live gauge', () => {
   it('fills a worker tile by the share of its own slots that are busy', () => {
-    const gauge = nodeGauge({ kind: 'worker', service: { active: 2, slots: 4 } })
+    const gauge = nodeGauge({ kind: 'worker', service: {
+      active: 2, slots: 4, capacity_source: 'worker_instances',
+    } })
     expect(gauge).toEqual({ fraction: 0.5, over: false, label: '2 of 4 slots busy (50%)' })
   })
 
@@ -451,7 +476,9 @@ describe('The map tiles carry a live gauge', () => {
     // active (2550%)". More work in flight than slots is not a share of capacity — the slot count
     // comes from a last-writer-wins heartbeat describing ONE replica while the job count covers
     // them all, and a stale lease looks identical.
-    const gauge = nodeGauge({ kind: 'worker', service: { active: 51, slots: 2 } })
+    const gauge = nodeGauge({ kind: 'worker', service: {
+      active: 51, slots: 2, capacity_source: 'worker_instances',
+    } })
     expect(gauge.fraction).toBe(1)
     expect(gauge.over).toBe(true)
     expect(gauge.label).toBe('51 jobs against 2 reported slots')
@@ -483,7 +510,9 @@ describe('The map tiles carry a live gauge', () => {
 
   it('draws no bar at all when there is no denominator to be a share of', () => {
     // An unmeasured value gets no fill — not an empty one that reads as zero.
-    expect(nodeGauge({ kind: 'worker', service: { active: 2, slots: 0 } }))
+    expect(nodeGauge({ kind: 'worker', service: {
+      active: 2, slots: 0, capacity_source: 'worker_instances',
+    } }))
       .toEqual({ fraction: null, over: false, label: 'Worker slots not reported' })
     expect(nodeGauge({ kind: 'queue' }, { queued: 4 }).fraction).toBe(null)
     // A connector and the output store have no capacity to be a fraction of.
@@ -494,7 +523,9 @@ describe('The map tiles carry a live gauge', () => {
   it('attaches the gauge to the worker and queue tiles, and updates it from each snapshot', () => {
     const graph = buildTrafficGraph({ runs: [], summary: { queued: 5, worker_slots: 10,
       by_stage: { assess: { running: 1 } },
-      worker_roles: { assess: { alive: true, pool_size: 2, age_s: 1 } } } })
+      worker_roles: { assess: { alive: true, pool_size: 2, age_s: 1 } },
+      worker_capacity_by_role: { assess: { capacity_source: 'worker_instances', worker_slots: 2,
+        busy_slots: 1, jobs_in_flight: 1, healthy_replicas: 1 } } } })
     expect(graph.nodes.find((n) => n.id === 'stage:assess').data.gauge)
       .toMatchObject({ fraction: 0.5, label: '1 of 2 slots busy (50%)' })
     // The queue's waiting work now has to be attributed to a stage to be measured at all —
@@ -505,7 +536,9 @@ describe('The map tiles carry a live gauge', () => {
     // The next snapshot rebuilds the graph, so the bar is as live as the tile it sits on.
     const busier = buildTrafficGraph({ runs: [], summary: { queued: 9, worker_slots: 10,
       by_stage: { assess: { running: 2, queued: 9 } },
-      worker_roles: { assess: { alive: true, pool_size: 2, age_s: 1 } } } })
+      worker_roles: { assess: { alive: true, pool_size: 2, age_s: 1 } },
+      worker_capacity_by_role: { assess: { capacity_source: 'worker_instances', worker_slots: 2,
+        busy_slots: 2, jobs_in_flight: 2, healthy_replicas: 1 } } } })
     expect(busier.nodes.find((n) => n.id === 'stage:assess').data.gauge.fraction).toBe(1)
     // 9 waiting against assess's OWN 2 slots is over capacity — where the fleet's 10 would have
     // rendered it as a comfortable 0.9.
