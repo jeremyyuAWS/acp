@@ -2,7 +2,7 @@
 """A LABELLED .pptx corpus — the third format to get ground truth, after .docx and .xlsx.
 
 WHY THIS EXISTS. `scripts/gen_fixture_coverage.py` reports coverage per (criterion, format) pair;
-pptx sat at 0 of 17 because no labelled corpus existed. This declares FOURTEEN of them.
+pptx sat at 0 of 17 because no labelled corpus existed. This declares SIXTEEN of them.
 
 SAME RULE AS THE XLSX CORPUS: a pair is only declared when a FIRST-PARTY detector — pure Python
 in `api/office_structure.py`, no .NET engine — was driven against the fixture and confirmed to
@@ -21,6 +21,8 @@ number without raising what the number measures.
     1.3.3   a sensory-only instruction in a box    textchecks.detect_sensory
     4.1.2   an embedded control (same fixture)     office_control_review_checks
 
+    1.3.1   a table with no header row designated  .NET TableHeaderRule      (DECLARED_ENGINE)
+    1.3.2   three boxes out of visual order         .NET ReadingOrderRule     (DECLARED_ENGINE)
     2.4.2   a slide with no title placeholder      .NET SlideTitleRule       (DECLARED_ENGINE)
     3.1.1   no language anywhere in the package     .NET DocumentLanguageRule (DECLARED_ENGINE)
 
@@ -31,8 +33,8 @@ certifying pairs — 2.4.2 and 3.1.1 are among the seventeen (criterion, format)
 preset that can return a PASS, so a false clean result on them is a certification rather than an
 advisory, and before these fixtures nothing in the suite checked either.
 
-The three not here (1.3.1, 1.3.2, 2.1.1) run through the .NET analyser's table and reading-order
-rules or — for 2.1.1 — are human-only on pptx by registration. 1.3.3 was on that list until it
+The one not here is 2.1.1, which is human-only on pptx by registration and cannot certify a pass
+either way. 1.3.3 was on that list until it
 was checked: it is a TEXT predicate with no engine, and is declared below. A criterion's
 neighbours are not evidence of its reachability.
 
@@ -113,6 +115,59 @@ def _textbox(slide, text: str, *, colour=INK, fill=PAPER, underline=None, link: 
     if link:
         run.hyperlink.address = link
     return tb
+
+
+def _box(slide, text: str, top_in: float, left_in: float = 1.0):
+    """A textbox at an EXPLICIT position — which is what makes it visible to ReadingOrderRule.
+
+    Distinct from `_textbox` above, which exists for the contrast fixtures and carries an explicit
+    fill and run colour. This one carries neither: a 1.3.2 fixture that also set colours would be
+    seeding two criteria and could not be labelled single-criterion.
+    """
+    from pptx.util import Inches
+    tb = slide.shapes.add_textbox(Inches(left_in), Inches(top_in), Inches(4), Inches(0.8))
+    tb.text_frame.paragraphs[0].add_run().text = text
+    return tb
+
+
+def _position_title(slide):
+    """Give the title placeholder an EXPLICIT position, so it takes a visual rank as well as a
+    tab index.
+
+    THE CONTROL HAD NO MARGIN WITHOUT THIS, and a bite check is what found it. ReadingOrderRule
+    assigns tab order over every `p:sp` and then discards the ones with no `a:off`, so an
+    unpositioned placeholder consumes an index without taking a rank. A python-pptx placeholder
+    inherits its geometry from the layout and writes no `a:xfrm` — so with the title unpositioned,
+    a PERFECTLY ORDERED deck already sat at |visualRank - tabOrder| == 1, which is the rule's
+    tolerance exactly. One more unpositioned shape ahead of the boxes and the clean control would
+    have fired, and the false positive would have been blamed on the detector.
+
+    Positioning the title puts it at rank 0 and tab 0, so the ordered fixture sits at a gap of
+    zero — two clear of the threshold — while the violation still exceeds it.
+    tests/test_pptx_corpus.py::test_the_reading_order_control_has_margin_not_luck pins that gap
+    so it cannot silently erode again.
+    """
+    from pptx.util import Inches
+    title = slide.shapes.title
+    title.left, title.top = Inches(0.5), Inches(0.4)
+    title.width, title.height = Inches(9), Inches(1.2)
+    return title
+
+
+def _table(slide, *, first_row: bool):
+    """A three-row table, with the header row designated or not.
+
+    Three rows rather than two because the rule skips a table of one row entirely, and a
+    two-row table would leave no margin if that guard ever moved to two.
+    """
+    from pptx.util import Inches
+    frame = slide.shapes.add_table(3, 2, Inches(1), Inches(2), Inches(6), Inches(2))
+    table = frame.table
+    table.first_row = first_row
+    for r, row in enumerate((("Region", "Revenue"), ("North", "412"), ("South", "388"))):
+        for c, value in enumerate(row):
+            table.cell(r, c).text = value
+    return frame
 
 
 def _replace_parts(path: Path, parts: dict[str, str]) -> None:
@@ -496,6 +551,65 @@ def f_language_ok(prs, slide):
             f"metadata language set to {DOC_LANG!r} (adversarial)")
 
 
+# ── 1.3.1 Info and Relationships and 1.3.2 Meaningful Sequence — also ENGINE-VERIFIED ──
+# Pptx/Rules/TableHeaderRule.cs and Pptx/Rules/ReadingOrderRule.cs. Both are certifying pairs, so
+# a false clean result is a certification rather than an advisory — the same reason 2.4.2 and
+# 3.1.1 were worth the DECLARED_ENGINE asymmetry.
+#
+# READING ORDER IS NOT FOCUS ORDER, AND THE DIFFERENCE IS LOAD-BEARING HERE. This corpus already
+# has a 2.4.3 focus-order pair that moves the title placeholder to the end of document order, and
+# it looks like it should trip 1.3.2 as well. It does not, for two independent reasons, and both
+# were measured rather than assumed:
+#
+#   * ReadingOrderRule only counts shapes that carry an explicit `a:off`. A python-pptx
+#     PLACEHOLDER inherits its position from the layout and writes no `a:xfrm` at all, so the
+#     title and body of the focus-order decks are invisible to the rule — fewer than two
+#     positioned shapes, and it yields nothing.
+#   * Even with two positioned shapes, swapping them moves each by exactly one rank, and the rule
+#     fires only when |visualRank - tabOrder| EXCEEDS 1.
+#
+# So the 1.3.2 fixture needs THREE explicitly-positioned textboxes, ordered so that one of them
+# moves by two ranks. `reading-order` puts the visually-lowest box first in document order, which
+# is the smallest arrangement that trips the rule.
+#
+# One subtlety in the transcription, because it changes which shapes fire: the C# assigns tab
+# order BEFORE filtering out unpositioned shapes (`.Select((shape, tabOrder) => ...)` then
+# `.Where(s => s.HasPos)`), so an unpositioned placeholder consumes a tab index without taking a
+# visual rank. The test's predicate does the same.
+
+def f_table_no_header(prs, slide):
+    _table(slide, first_row=False)
+    return ({"1.3.1": "FAIL"},
+            "a three-row table with no header row designated — no column context for a screen "
+            "reader")
+
+
+def f_table_header_ok(prs, slide):
+    _table(slide, first_row=True)
+    return ({"1.3.1": "PASS"},
+            "the same table with its first row marked as the header (adversarial)")
+
+
+def f_reading_order(prs, slide):
+    """Three positioned boxes whose document order puts the visually-lowest one first."""
+    _position_title(slide)
+    _box(slide, "Third, visually", 5.0)
+    _box(slide, "First, visually", 2.0)
+    _box(slide, "Second, visually", 3.5)
+    return ({"1.3.2": "FAIL"},
+            "three boxes whose tab order runs bottom, top, middle — a screen reader announces "
+            "them in that order")
+
+
+def f_reading_order_ok(prs, slide):
+    _position_title(slide)
+    _box(slide, "First, visually", 2.0)
+    _box(slide, "Second, visually", 3.5)
+    _box(slide, "Third, visually", 5.0)
+    return ({"1.3.2": "PASS"},
+            "the same three boxes in visual order (adversarial)")
+
+
 # ── 3.1.2 Language of Parts — decided by the prose, like 1.3.3 ──────────────────
 # textchecks.detect_language_parts reads EXTRACTED TEXT: it needs at least two segments of
 # >= _MIN_SEG_WORDS (12) real words, in at least two confidently-detected languages, and it
@@ -587,6 +701,10 @@ FIXTURES = [
     ("slide-title-ok",          f_slide_title_ok,          "adversarial"),
     ("no-language",             f_no_language,             "violation"),
     ("language-ok",             f_language_ok,             "adversarial"),
+    ("table-no-header",         f_table_no_header,         "violation"),
+    ("table-header-ok",         f_table_header_ok,         "adversarial"),
+    ("reading-order",           f_reading_order,           "violation"),
+    ("reading-order-ok",        f_reading_order_ok,        "adversarial"),
 ]
 
 # Transforms applied AFTER python-pptx has written the package, keyed by fixture name. Only one
@@ -602,7 +720,7 @@ DECLARED = ("1.1.1", "1.3.3", "1.4.1", "1.4.11", "1.4.3", "1.4.5", "2.1.2", "2.4
 # DECLARED is "a detector was driven against this fixture anywhere the suite runs", and merging
 # the two would quietly make the coverage column mean two different things in the same row.
 # gen_fixture_coverage counts both and reports the split.
-DECLARED_ENGINE = ("2.4.2", "3.1.1")
+DECLARED_ENGINE = ("1.3.1", "1.3.2", "2.4.2", "3.1.1")
 
 
 def _validate(name: str, expectations: dict[str, str]) -> list[str]:
