@@ -177,6 +177,7 @@ _map_many([("GET", "/ai/suggest"), ("GET", "/ai/explain"), ("GET", "/ai/validate
 # ── Release ───────────────────────────────────────────────────────────────────
 # Publishing is a GRANT (PRD §5), never implied by seeing the Release tab.
 _map_many([("POST", "/scans/{sid}/publish")], {"release.publish"})
+_map_many([("GET", "/scans/{sid}/release")], {"release.view"})
 _map_many([("GET", "/scans/{sid}/report.pdf")], {"release.view", "reports.export"})
 
 # ── Monitor ───────────────────────────────────────────────────────────────────

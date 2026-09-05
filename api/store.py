@@ -896,6 +896,28 @@ _SCHEMA = [
     # named a second, non-unique index on the same two columns in the same order; it would be
     # pure dead weight beside this one, so only this ships.
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_scan_events_seq ON scan_events(scan_id, seq)",
+    # Structured releases are owner-scoped independently of provider credentials. One release
+    # may have several roots because a SharePoint scan can span multiple Graph drives.
+    """CREATE TABLE IF NOT EXISTS release_executions (
+      id TEXT PRIMARY KEY, scan_id TEXT NOT NULL, owner_email TEXT NOT NULL,
+      source TEXT NOT NULL, folder_name TEXT NOT NULL, documents_total INT NOT NULL,
+      status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    )""",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_release_scan_owner ON release_executions(scan_id,owner_email)",
+    "CREATE INDEX IF NOT EXISTS idx_release_owner ON release_executions(owner_email,created_at)",
+    """CREATE TABLE IF NOT EXISTS release_roots (
+      release_id TEXT NOT NULL, provider TEXT NOT NULL, provider_location TEXT NOT NULL,
+      folder_id TEXT NOT NULL, folder_name TEXT NOT NULL, folder_url TEXT, created_at TEXT NOT NULL,
+      PRIMARY KEY(release_id,provider_location)
+    )""",
+    """CREATE TABLE IF NOT EXISTS release_documents (
+      release_id TEXT NOT NULL, file TEXT NOT NULL, source_document_id TEXT,
+      source_relative_path TEXT NOT NULL, destination_relative_path TEXT,
+      released_document_id TEXT, released_document_url TEXT, corrected_checksum TEXT,
+      verification TEXT, status TEXT NOT NULL, failure_category TEXT, explanation TEXT,
+      created_result INT NOT NULL DEFAULT 0, published_at TEXT,
+      PRIMARY KEY(release_id,file)
+    )""",
     # ADR 0044 — ACP Managed Content Workspace, Phase 1. A workspace is the tenant-scoped
     # container a customer creates before uploading anything; `content_workspace_documents`/
     # `content_workspace_document_versions` (the actual upload targets) are deliberately NOT
@@ -1792,8 +1814,10 @@ class _PgAdapter:
     # locked_at on every heartbeat and two shipped consumers were reading it as a start time.
     # Additive on the usual terms: nullable, defaulted NULL, written only by claim_job. An older
     # replica never writes it and every reader treats NULL as unknown rather than as a time.
-    _SCHEMA_VERSION = 16
-    _SCHEMA_CHECKSUM_AT_VERSION = "0fe97bc49d238af8f6143ec2e42691c8"
+    # v17 adds structured-release execution, root and per-document records. All are additive;
+    # older replicas ignore them and keep serving during a rolling deployment.
+    _SCHEMA_VERSION = 17
+    _SCHEMA_CHECKSUM_AT_VERSION = "706808de16caa3f1391eda5aba972a73"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -3814,6 +3838,8 @@ class Store:
                          "sync_cursors",  # connector sync position is customer-derived, not config
                          "overview_snapshots",  # derived from scan results — customer data, not config
                          "scan_events",  # ADR 0042 lifecycle log — a record OF customer scans
+                         # Release executions and their provider destinations are customer data.
+                         "release_documents", "release_roots", "release_executions",
                          "content_workspaces",  # ADR 0044 — a customer's own workspace, not config
                          "content_workspace_documents", "content_workspace_document_versions",
                          "orchestration_events",  # operational log — carries owner_email, customer data
@@ -3924,6 +3950,16 @@ class Store:
         """
         cleared: list[str] = []
         with self._db.cursor() as cur:
+            # Release children key on release_id rather than scan_id. Remove them before their
+            # owner-scoped executions, while the join can still identify this user's rows.
+            for table in ("release_documents", "release_roots"):
+                self._db.execute(cur,
+                    f"DELETE FROM {table} WHERE release_id IN "
+                    "(SELECT id FROM release_executions WHERE owner_email=%s)", (owner_email,))
+                cleared.append(table)
+            self._db.execute(cur, "DELETE FROM release_executions WHERE owner_email=%s",
+                             (owner_email,))
+            cleared.append("release_executions")
             for t in self._RESET_USER_SCAN_TABLES:
                 self._db.execute(cur,
                     f"DELETE FROM {t} WHERE scan_id IN (SELECT id FROM scan_runs WHERE owner_email=%s)",
@@ -4011,6 +4047,14 @@ class Store:
                 return None
 
         with self._db.cursor() as cur:
+            for table in ("release_documents", "release_roots"):
+                self._db.execute(cur,
+                    f"DELETE FROM {table} WHERE release_id IN "
+                    "(SELECT id FROM release_executions WHERE scan_id=%s AND owner_email=%s)",
+                    (scan_id, owner_email))
+            self._db.execute(cur,
+                "DELETE FROM release_executions WHERE scan_id=%s AND owner_email=%s",
+                (scan_id, owner_email))
             for t in self._RESET_USER_SCAN_TABLES:
                 self._db.execute(cur, f"DELETE FROM {t} WHERE scan_id=%s", (scan_id,))
             self._db.execute(cur, "DELETE FROM scan_runs WHERE id=%s", (scan_id,))
@@ -4976,7 +5020,7 @@ class Store:
                 "SELECT fr.file,fr.engine,fr.status,fr.score,fr.compliant,fr.skipped_rules,"
                 "fr.remediated_at,fr.drive_write_url,fr.acp_stamped,fr.published_at,"
                 "fr.size_kb,fr.pages,fr.sheets,fr.drive_file_id,fr.source_modified,"
-                "si.owner,si.parent_folder "
+                "si.owner,si.parent_folder,si.path AS source_relative_path "
                 "FROM file_records fr "
                 "LEFT JOIN scan_inventory si ON si.scan_id=fr.scan_id AND si.file=fr.file "
                 "WHERE fr.scan_id=%s ORDER BY fr.file", (sid,))
@@ -4987,7 +5031,7 @@ class Store:
             # writes real file_records, those win and this fallback goes quiet.
             if not files:
                 self._db.execute(cur,
-                    "SELECT file,doc_class,size_kb,drive_file_id,owner,parent_folder "
+                    "SELECT file,doc_class,size_kb,drive_file_id,owner,parent_folder,path AS source_relative_path "
                     "FROM scan_inventory WHERE scan_id=%s ORDER BY file", (sid,))
                 inv = self._db.fetchall(cur)
                 files = [{"file": r["file"], "engine": r.get("doc_class") or "inventory",
@@ -4996,7 +5040,8 @@ class Store:
                           "acp_stamped": None, "published_at": None, "size_kb": r.get("size_kb"),
                           "pages": None, "sheets": None, "drive_file_id": r.get("drive_file_id"),
                           "source_modified": None, "owner": r.get("owner"),
-                          "parent_folder": r.get("parent_folder")}
+                          "parent_folder": r.get("parent_folder"),
+                          "source_relative_path": r.get("source_relative_path")}
                          for r in inv]
             # Drop ACP's own remediated copies when they shadow the source document they were
             # made from. They are artifacts, not documents in the estate: counting them
@@ -6719,6 +6764,128 @@ class Store:
                 self._bump_scan_revision(cur, scan_id)
         return now
 
+    def ensure_release_execution(self, scan_id: str, owner: str, source: str,
+                                 documents_total: int) -> dict:
+        """Return the one durable Release execution for a scan, creating it atomically."""
+        now = self._now()
+        release_id = uuid.uuid4().hex[:16]
+        from datetime import datetime, timezone
+        folder_name = datetime.fromisoformat(now).astimezone(timezone.utc).strftime(
+            "%Y-%m-%d %H-%M UTC")
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO release_executions(id,scan_id,owner_email,source,folder_name,"
+                "documents_total,status,created_at,updated_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s,'running',%s,%s) "
+                "ON CONFLICT(scan_id,owner_email) DO NOTHING",
+                (release_id, scan_id, owner, source, folder_name,
+                 max(0, int(documents_total)), now, now))
+            self._db.execute(cur,
+                "SELECT * FROM release_executions WHERE scan_id=%s AND owner_email=%s",
+                (scan_id, owner))
+            return self._db.fetchone(cur)
+
+    def get_release_root(self, release_id: str, provider_location: str,
+                         owner: str) -> dict | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT r.* FROM release_roots r JOIN release_executions e ON e.id=r.release_id "
+                "WHERE r.release_id=%s AND r.provider_location=%s AND e.owner_email=%s",
+                (release_id, provider_location, owner))
+            return self._db.fetchone(cur)
+
+    def record_release_root(self, release_id: str, owner: str, provider: str,
+                            provider_location: str, folder_id: str,
+                            folder_name: str, folder_url: str | None) -> dict:
+        """Persist a provider root once; a concurrent retry converges on the first row."""
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO release_roots(release_id,provider,provider_location,folder_id,"
+                "folder_name,folder_url,created_at) "
+                "SELECT %s,%s,%s,%s,%s,%s,%s WHERE EXISTS "
+                "(SELECT 1 FROM release_executions WHERE id=%s AND owner_email=%s) "
+                "ON CONFLICT(release_id,provider_location) DO NOTHING",
+                (release_id, provider, provider_location, folder_id, folder_name,
+                 folder_url, now, release_id, owner))
+            self._db.execute(cur,
+                "SELECT r.* FROM release_roots r JOIN release_executions e ON e.id=r.release_id "
+                "WHERE r.release_id=%s AND r.provider_location=%s AND e.owner_email=%s",
+                (release_id, provider_location, owner))
+            return self._db.fetchone(cur)
+
+    def get_release_document(self, release_id: str, file: str, owner: str) -> dict | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT d.* FROM release_documents d JOIN release_executions e "
+                "ON e.id=d.release_id WHERE d.release_id=%s AND d.file=%s AND e.owner_email=%s",
+                (release_id, file, owner))
+            return self._db.fetchone(cur)
+
+    def record_release_document(self, release_id: str, owner: str, result: dict) -> None:
+        """Upsert a safe per-document outcome without accepting a foreign release id."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO release_documents(release_id,file,source_document_id,"
+                "source_relative_path,destination_relative_path,released_document_id,"
+                "released_document_url,corrected_checksum,verification,status,failure_category,"
+                "explanation,created_result,published_at) "
+                "SELECT %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s WHERE EXISTS "
+                "(SELECT 1 FROM release_executions WHERE id=%s AND owner_email=%s) "
+                "ON CONFLICT(release_id,file) DO UPDATE SET "
+                "destination_relative_path=EXCLUDED.destination_relative_path,"
+                "released_document_id=COALESCE(EXCLUDED.released_document_id,release_documents.released_document_id),"
+                "released_document_url=COALESCE(EXCLUDED.released_document_url,release_documents.released_document_url),"
+                "corrected_checksum=COALESCE(EXCLUDED.corrected_checksum,release_documents.corrected_checksum),"
+                "verification=EXCLUDED.verification,status=EXCLUDED.status,"
+                "failure_category=EXCLUDED.failure_category,explanation=EXCLUDED.explanation,"
+                "created_result=EXCLUDED.created_result,"
+                "published_at=COALESCE(EXCLUDED.published_at,release_documents.published_at)",
+                (release_id, result["file"], result.get("source_document_id"),
+                 result.get("original_relative_path") or result["file"],
+                 result.get("released_relative_path"), result.get("released_document_id"),
+                 result.get("published_url"), result.get("corrected_checksum"),
+                 result.get("verification"), result["status"],
+                 result.get("failure_category"), result.get("explanation"),
+                 int(bool(result.get("created"))), result.get("published_at"),
+                 release_id, owner))
+
+    def release_status(self, release_id: str, owner: str) -> dict | None:
+        """Owner-scoped release, roots and document outcomes for retries and UI reloads."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM release_executions WHERE id=%s AND owner_email=%s",
+                (release_id, owner))
+            release = self._db.fetchone(cur)
+            if not release:
+                return None
+            self._db.execute(cur,
+                "SELECT * FROM release_roots WHERE release_id=%s ORDER BY provider_location",
+                (release_id,))
+            roots = self._db.fetchall(cur)
+            self._db.execute(cur,
+                "SELECT * FROM release_documents WHERE release_id=%s ORDER BY file",
+                (release_id,))
+            documents = self._db.fetchall(cur)
+            published = sum(d.get("status") == "published" for d in documents)
+            failed = sum(d.get("status") == "failed" for d in documents)
+            total = int(release.get("documents_total") or 0)
+            status = "completed" if total and published == total else "attention" if failed else "running"
+            self._db.execute(cur,
+                "UPDATE release_executions SET status=%s,updated_at=%s WHERE id=%s AND owner_email=%s",
+                (status, self._now(), release_id, owner))
+            return {**release, "status": status, "roots": roots, "documents": documents,
+                    "published": min(total, published), "failed": failed,
+                    "remaining": max(0, total - published - failed)}
+
+    def release_for_scan(self, scan_id: str, owner: str) -> dict | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id FROM release_executions WHERE scan_id=%s AND owner_email=%s",
+                (scan_id, owner))
+            row = self._db.fetchone(cur)
+        return self.release_status(row["id"], owner) if row else None
+
     def refresh_scan_aggregate(self, scan_id: str) -> dict:
         """Re-compute avg_score and certifiable from current file_records — called after
         a single-file rescore so the scan summary stays consistent without a full finalize."""
@@ -6735,11 +6902,16 @@ class Store:
             return self._db.fetchone(cur) or {}
 
     def get_file_record(self, scan_id: str, file: str) -> dict | None:
-        """Return the full file_records row for one file in a scan."""
+        """Return one file plus its immutable discovery path for release decisions."""
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT file,engine,status,score,compliant,drive_file_id,remediated_at,published_at "
-                "FROM file_records WHERE scan_id=%s AND file=%s",
+                "SELECT f.file,f.engine,f.status,f.score,f.compliant,f.drive_file_id,"
+                "f.remediated_at,f.published_at,f.published_url,f.checksum,"
+                "i.path AS source_relative_path,i.parent_folder,i.drive_id,i.site_id,"
+                "i.library_name,i.site_name "
+                "FROM file_records f LEFT JOIN scan_inventory i "
+                "ON i.scan_id=f.scan_id AND i.file=f.file "
+                "WHERE f.scan_id=%s AND f.file=%s",
                 (scan_id, file))
             return self._db.fetchone(cur)
 

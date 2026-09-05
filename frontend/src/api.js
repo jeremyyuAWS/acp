@@ -1398,6 +1398,9 @@ export const publishAllFiles = (scanId, files) => (SIM
       headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ files }),
     }).then(j))
+export const getReleaseStatus = (scanId) => (SIM
+  ? sim({ release_id: null, roots: [], documents: [], documents_total: 0, published: 0, failed: 0, remaining: 0 }, 50)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release`, { headers: headers() }).then(j))
 
 // Queue state: depth by status + recent jobs (drives the in-app queue panel).
 export const getJobs = (status = null) => (SIM

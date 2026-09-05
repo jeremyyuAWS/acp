@@ -6,16 +6,21 @@
 // Where a single file's released copy actually lands. A Drive-sourced file (it carries a
 // drive_file_id) gets the Drive mirror folder when the platform has that enabled; everything else —
 // and every file when the mirror is off — is delivered via the durable Azure Blob copy.
-export function releaseDestination({ driveFileId, driveMirrorEnabled, driveMirrorFolder } = {}) {
-  const toDrive = !!driveFileId && !!driveMirrorEnabled
+export function releaseDestination({ provider, driveFileId, driveMirrorEnabled, driveMirrorFolder } = {}) {
   const folder = driveMirrorFolder || 'Remediated'
-  return { toDrive, folder, label: toDrive ? `Drive “${folder}” + Blob` : 'Azure Blob' }
+  const toDrive = provider === 'drive' || (!provider && !!driveFileId && !!driveMirrorEnabled)
+  const toSharePoint = provider === 'sharepoint'
+  return { toDrive, toSharePoint, folder,
+    label: toSharePoint ? `SharePoint “${folder} / <release timestamp>” + Blob`
+      : toDrive ? `Drive “${folder} / <release timestamp>” + Blob` : 'Azure Blob' }
 }
 
 // The batch destination phrase for the panel and the confirmation modal. `anyDrive` = at least one
 // file in the batch is Drive-sourced. Mirror off (or no Drive files) → Blob is the only destination.
-export function releaseDestinationPhrase({ anyDrive, driveMirrorEnabled, driveMirrorFolder } = {}) {
+export function releaseDestinationPhrase({ provider, anyDrive, driveMirrorEnabled, driveMirrorFolder } = {}) {
   const folder = driveMirrorFolder || 'Remediated'
+  if (provider === 'sharepoint') return `a SharePoint “${folder} / <release timestamp>” folder in each source library and a durable Azure Blob copy`
+  if (provider === 'drive') return `the Drive “${folder} / <release timestamp>” folder and a durable Azure Blob copy`
   return (anyDrive && driveMirrorEnabled)
     ? `the Drive “${folder}” folder and a durable Azure Blob copy`
     : 'a durable Azure Blob copy (a download link)'
@@ -23,8 +28,8 @@ export function releaseDestinationPhrase({ anyDrive, driveMirrorEnabled, driveMi
 
 // The confirmation-modal body: the exact, checkable consequences of releasing. Deliberately never
 // says "certify" as a positive claim — only ever to disclaim it.
-export function releaseConfirmLines({ count = 0, anyDrive = false, driveMirrorEnabled = false, driveMirrorFolder = 'Remediated' } = {}) {
-  const dest = releaseDestinationPhrase({ anyDrive, driveMirrorEnabled, driveMirrorFolder })
+export function releaseConfirmLines({ count = 0, provider, anyDrive = false, driveMirrorEnabled = false, driveMirrorFolder = 'Remediated' } = {}) {
+  const dest = releaseDestinationPhrase({ provider, anyDrive, driveMirrorEnabled, driveMirrorFolder })
   return [
     `ACP writes a corrected copy of ${count === 1 ? 'this document' : `these ${count} documents`} to ${dest}.`,
     'Your original files are never overwritten.',
