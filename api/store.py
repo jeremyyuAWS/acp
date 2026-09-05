@@ -3838,6 +3838,8 @@ class Store:
                          "sync_cursors",  # connector sync position is customer-derived, not config
                          "overview_snapshots",  # derived from scan results — customer data, not config
                          "scan_events",  # ADR 0042 lifecycle log — a record OF customer scans
+                         # Release executions and their provider destinations are customer data.
+                         "release_documents", "release_roots", "release_executions",
                          "content_workspaces",  # ADR 0044 — a customer's own workspace, not config
                          "content_workspace_documents", "content_workspace_document_versions",
                          "orchestration_events",  # operational log — carries owner_email, customer data
@@ -3948,6 +3950,16 @@ class Store:
         """
         cleared: list[str] = []
         with self._db.cursor() as cur:
+            # Release children key on release_id rather than scan_id. Remove them before their
+            # owner-scoped executions, while the join can still identify this user's rows.
+            for table in ("release_documents", "release_roots"):
+                self._db.execute(cur,
+                    f"DELETE FROM {table} WHERE release_id IN "
+                    "(SELECT id FROM release_executions WHERE owner_email=%s)", (owner_email,))
+                cleared.append(table)
+            self._db.execute(cur, "DELETE FROM release_executions WHERE owner_email=%s",
+                             (owner_email,))
+            cleared.append("release_executions")
             for t in self._RESET_USER_SCAN_TABLES:
                 self._db.execute(cur,
                     f"DELETE FROM {t} WHERE scan_id IN (SELECT id FROM scan_runs WHERE owner_email=%s)",
@@ -4035,6 +4047,14 @@ class Store:
                 return None
 
         with self._db.cursor() as cur:
+            for table in ("release_documents", "release_roots"):
+                self._db.execute(cur,
+                    f"DELETE FROM {table} WHERE release_id IN "
+                    "(SELECT id FROM release_executions WHERE scan_id=%s AND owner_email=%s)",
+                    (scan_id, owner_email))
+            self._db.execute(cur,
+                "DELETE FROM release_executions WHERE scan_id=%s AND owner_email=%s",
+                (scan_id, owner_email))
             for t in self._RESET_USER_SCAN_TABLES:
                 self._db.execute(cur, f"DELETE FROM {t} WHERE scan_id=%s", (scan_id,))
             self._db.execute(cur, "DELETE FROM scan_runs WHERE id=%s", (scan_id,))

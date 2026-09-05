@@ -39,3 +39,19 @@ def test_release_status_counts_success_failure_and_remaining(isolated_store):
     status = isolated_store.release_status(release["id"], "owner@example.com")
     assert (status["published"], status["failed"], status["remaining"]) == (1, 1, 1)
     assert isolated_store.release_status(release["id"], "someone@example.com") is None
+
+
+def test_deleting_a_scan_also_removes_its_release_records(isolated_store):
+    _scan(isolated_store, "scan-delete", "owner@example.com")
+    release = isolated_store.ensure_release_execution(
+        "scan-delete", "owner@example.com", "sharepoint", 1)
+    isolated_store.record_release_root(
+        release["id"], "owner@example.com", "sharepoint", "graph:drive-a",
+        "folder-a", "2026-09-05 10-00 UTC", "https://sp/a")
+    isolated_store.record_release_document(release["id"], "owner@example.com", {
+        "file": "one.pdf", "status": "published", "created": True,
+    })
+
+    isolated_store.delete_scan("scan-delete", "owner@example.com")
+
+    assert isolated_store.release_status(release["id"], "owner@example.com") is None
