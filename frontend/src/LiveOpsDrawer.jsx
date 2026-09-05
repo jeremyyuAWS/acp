@@ -164,6 +164,7 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queu
         </div>
       </div>
     </div>
+    <WorkerReplicaTable replicas={service?.instances} nowMs={nowMs} />
     <Saturation saturation={saturation} nowMs={nowMs} measuredAt={capacity?.measured_at} />
     <ScalingActivity capacity={capacity} saturation={saturation} queueDepth={queueDepth}
       lifecycle={replicaLifecycle(capacity, service)} nowMs={nowMs} />
@@ -172,6 +173,41 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queu
     <ReplicaLifecycle lifecycle={replicaLifecycle(capacity, service)} nowMs={nowMs}
       measuredAt={capacity?.measured_at} />
     <AzureMetrics capacity={capacity} service={service} nowMs={nowMs} />
+  </section>
+}
+
+function WorkerReplicaTable({ replicas, nowMs }) {
+  if (!Array.isArray(replicas) || !replicas.length) return null
+  return <section aria-label="ACP worker replicas" style={{ marginTop: 12 }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+      <b style={{ fontSize: 13 }}>ACP worker replicas</b>
+      <span className="muted" style={{ fontSize: 11 }}>{replicas.length} unique reported</span>
+    </div>
+    <ul style={{ listStyle: 'none', margin: '8px 0 0', padding: 0, display: 'grid', gap: 6 }}>
+      {replicas.map((replica) => {
+        const slots = Number(replica.concurrency_limit || 0)
+        const active = Math.min(slots, Number(replica.active_job_count || 0))
+        const processes = Number(replica.process_count || 1)
+        return <li key={replica.replica_id || replica.worker_id} style={{ ...PANEL, padding: 9 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+            <b style={{ overflowWrap: 'anywhere' }}>{replica.replica_id || 'Replica identity unavailable'}</b>
+            <span style={{ fontSize: 11, fontWeight: 700, color: replica.healthy ? TONE.ok : TONE.warn }}>
+              {replica.healthy ? 'Healthy' : replica.fresh ? 'Not ready' : 'Stale'}
+            </span>
+            <span className="muted" style={{ marginLeft: 'auto', fontSize: 11 }}>
+              {replica.last_heartbeat_at ? updatedAgo(replica.last_heartbeat_at, nowMs) : 'Heartbeat not reported'}
+            </span>
+          </div>
+          <div className="muted" style={{ marginTop: 4, fontSize: 11 }}>
+            {processes} worker {processes === 1 ? 'process' : 'processes'} · {active} of {slots} slots busy
+            {replica.revision_name ? ` · ${replica.revision_name}` : ''}
+          </div>
+        </li>
+      })}
+    </ul>
+    <p className="muted" style={{ margin: '6px 0 0', fontSize: 10.5 }}>
+      Replica totals use unique replica identities; worker processes are shown within their container.
+    </p>
   </section>
 }
 

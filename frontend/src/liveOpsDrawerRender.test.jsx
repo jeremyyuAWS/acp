@@ -136,6 +136,20 @@ describe('Primary visualization per node', () => {
     expect(container.textContent).toContain('Amber from 75% of slots, red at 100%')
   })
 
+  it('shows one ACP replica row with its aggregated worker processes and slots', async () => {
+    const measured = { ...service, instances: [{ replica_id: 'assess-replica-a', healthy: true,
+      fresh: true, process_count: 2, concurrency_limit: 4, active_job_count: 3,
+      revision_name: 'acp-assess--v25', last_heartbeat_at: iso(-4) }] }
+    const container = await mount({ nodeId: 'stage:assess',
+      node: { kind: 'worker', label: 'Assess workers', service: measured } })
+    const panel = container.querySelector('[aria-label="ACP worker replicas"]')
+    expect(panel).toBeTruthy()
+    expect(panel.textContent).toContain('1 unique reported')
+    expect(panel.textContent).toContain('assess-replica-a')
+    expect(panel.textContent).toContain('2 worker processes')
+    expect(panel.textContent).toContain('3 of 4 slots busy')
+  })
+
   it('does not render an impossible utilisation percentage', async () => {
     // The screenshot that prompted this: "51 of 2 worker slots active (2550%)".
     const container = await mount({ nodeId: 'stage:assess',

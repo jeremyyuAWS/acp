@@ -85,6 +85,7 @@ export function workerServiceRows(summary = {}) {
         utilization_pct: measured.utilization_pct,
         capacity_source: measured.capacity_source,
         measured_at: measured.measured_at,
+        instances: measured.instances || [],
       } : {
         jobs_in_flight: Number(load[stage]?.running || 0),
         utilization_pct: null,
