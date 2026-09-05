@@ -26,7 +26,9 @@ describe('process-health chip', () => {
   })
 
   it('derives unreadable count from allFiles with status === error', () => {
-    expect(SRC).toContain("allFiles.filter(f => f.status === 'error')")
+    // Derived once, above the header, because the chip and the context bar both read it — see
+    // "never claims Verified while it is also reporting an exception".
+    expect(SRC).toContain("allFiles.filter((f) => f.status === 'error').length")
   })
 
   it('detects the worker-error state via run?.status === failed', () => {
@@ -43,14 +45,30 @@ describe('process-health chip', () => {
     expect(SRC).toContain('`${unreadable} unreadable`')
   })
 
-  it('labels the healthy state "Healthy"', () => {
-    expect(SRC).toContain("'Healthy'")
+  // THE HEALTHY STATE MOVED; it was not deleted. The compact header reports exceptions in this
+  // chip and reports health by the chip's ABSENCE, with "✓ Verified" in the context bar below
+  // carrying the affirmative signal. These two tests follow it there rather than being dropped:
+  // what the original guard protected — that all three states are covered and each is explained —
+  // still has to hold, or a clean run becomes indistinguishable from a run that never reported.
+  it('renders nothing at all when the run is healthy', () => {
+    expect(SRC).toContain("if (!workerError && unreadable === 0) return null")
   })
 
-  it('renders all three tooltip explanations', () => {
+  it('reports the healthy state affirmatively in the context bar', () => {
+    expect(SRC).toContain('context-verified')
+    expect(SRC).toContain('✓ Verified')
+  })
+
+  it('never claims Verified while it is also reporting an exception', () => {
+    // The two ends of one ordering (worker error > unreadable > healthy). Gated only on
+    // `status !== 'failed'`, the bar showed "✓ Verified" beside the amber "N unreadable" chip —
+    // one saying files were skipped, the other that everything checked out.
+    expect(SRC).toContain("{run?.completed_at && !workerError && unreadableFiles === 0 && (")
+  })
+
+  it('explains both exception states in a tooltip', () => {
     expect(SRC).toContain('Assessment stopped due to a processing failure')
     expect(SRC).toContain('could not be opened and were skipped')
-    expect(SRC).toContain('All files were processed successfully')
   })
 
   it('renders the chip as a <span> with a title tooltip (no click handler required)', () => {
@@ -64,12 +82,17 @@ describe('process-health chip', () => {
     expect(SRC).toContain('color: chipColor')
   })
 
-  it('chip is inside the header userbox', () => {
-    // Confirm the chip sits within the userbox div — not in the nav or main content.
-    const userboxStart = SRC.indexOf('<div className="userbox">')
-    const userboxEnd = SRC.indexOf('</div>', userboxStart)
+  it('chip is inside the header actions', () => {
+    // Confirm the chip sits within the header's action group — not in the nav or main content.
+    // The container was `.userbox` until the compact header replaced it with `.header-actions`;
+    // the assertion is about WHERE the chip lives, so it follows the container's new name rather
+    // than failing over it. (indexOf returns -1 for a missing container, which would make the
+    // ordering comparison below pass vacuously — hence the explicit presence check first.)
+    const actionsStart = SRC.indexOf('<div className="header-actions">')
+    expect(actionsStart).toBeGreaterThan(-1)
+    const actionsEnd = SRC.indexOf('</div>', actionsStart)
     const chipGate = SRC.indexOf('run?.completed_at')
-    expect(chipGate).toBeGreaterThan(userboxStart)
-    expect(chipGate).toBeLessThan(userboxEnd + 2000) // allow for deeply nested markup
+    expect(chipGate).toBeGreaterThan(actionsStart)
+    expect(chipGate).toBeLessThan(actionsEnd + 2000) // allow for deeply nested markup
   })
 })

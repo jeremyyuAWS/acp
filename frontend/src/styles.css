@@ -72,11 +72,9 @@ body {
   color: var(--ink);
 }
 .app { max-width: 1320px; margin: 0 auto; padding: 28px 32px 64px; }
-.scopebar { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); margin: 8px 0 -4px; }
-.scopebar b { color: var(--ink); font-weight: 500; }
 .scopedot { width: 7px; height: 7px; border-radius: 50%; background: #639922; display: inline-block; }
 
-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+header { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 38px; }
 .brand { display: flex; align-items: center; gap: 12px; }
 .logoimg { height: 28px; width: auto; display: block; }
 .logoimg.big { height: 48px; margin: 0 auto; }
@@ -256,7 +254,50 @@ td { padding: 10px 0; border-top: 1px solid var(--line); }
 .pscope { font-size: 12px; }
 .psso { font-size: 12px; flex: 0 0 auto; }
 
-.userbox { display: flex; align-items: center; gap: 10px; }
+.header-actions { display: flex; align-items: center; gap: 8px; }
+.header-context { display: flex; align-items: center; gap: 0; min-height: 30px; margin: 8px 0 -10px;
+  color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow-x: auto; scrollbar-width: thin; }
+.header-context > span { display: inline-flex; align-items: center; gap: 6px; }
+.header-context > span + span::before { content: ''; width: 1px; height: 14px; margin: 0 12px; background: var(--line); }
+.header-context b { color: var(--ink); font-weight: 600; }
+.header-context .context-verified { color: #287A3C; font-weight: 650; }
+.header-menu { position: relative; }
+.header-menu > summary { list-style: none; display: inline-flex; align-items: center; gap: 7px; min-height: 32px;
+  padding: 0 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--card); color: var(--ink);
+  font-size: 12.5px; font-weight: 600; cursor: pointer; user-select: none; }
+.header-menu > summary::-webkit-details-marker { display: none; }
+.header-menu > summary:hover { background: var(--bg); }
+.header-menu[open] > summary { border-color: var(--plum); box-shadow: 0 0 0 1px var(--plum); }
+.header-menu-panel { position: absolute; z-index: 90; top: calc(100% + 7px); right: 0; width: 290px;
+  padding: 8px; border: 1px solid var(--line); border-radius: 12px; background: var(--card);
+  box-shadow: 0 14px 36px rgba(49, 31, 47, .16); }
+.header-menu-heading { padding: 7px 8px 9px; color: var(--muted); font-size: 11px; font-weight: 700;
+  letter-spacing: .05em; text-transform: uppercase; }
+.menu-setting { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding: 10px; border: 0; border-radius: 8px; background: transparent; color: var(--ink); text-align: left; }
+.menu-setting:hover { background: var(--bg); opacity: 1; }
+.menu-setting > span:first-child { display: flex; flex-direction: column; gap: 2px; }
+.menu-setting b { font-size: 13px; }
+.menu-setting small { color: var(--muted); font-size: 11.5px; font-weight: 400; }
+.menu-setting > span:last-child { min-width: 34px; color: var(--muted); font-size: 11px; font-weight: 700; text-align: right; }
+.menu-setting--on > span:last-child { color: #287A3C; }
+.account-menu > summary { padding: 2px 7px 2px 3px; border: 0; background: transparent; }
+.account-avatar { width: 29px; height: 29px; display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 50%; background: var(--plum); color: #fff; font-size: 11px; font-weight: 750; letter-spacing: .02em; }
+.account-chevron { color: var(--muted); font-size: 13px; }
+.account-panel { width: 300px; }
+.account-identity { display: flex; flex-direction: column; gap: 3px; padding: 9px 10px 12px; }
+.account-identity b { font-size: 14px; }
+.account-identity span { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
+.account-meta { display: grid; grid-template-columns: 62px 1fr; gap: 8px; padding: 5px 10px; font-size: 11.5px; }
+.account-meta span { color: var(--muted); }
+.account-meta b { font-weight: 600; overflow-wrap: anywhere; }
+.menu-separator { height: 1px; margin: 8px 0; background: var(--line); }
+.menu-action { width: 100%; display: flex; align-items: center; gap: 9px; padding: 9px 10px; border: 0;
+  border-radius: 8px; background: transparent; color: var(--ink); text-align: left; font-size: 13px; }
+.menu-action:hover { background: var(--bg); opacity: 1; }
+.menu-action-label::first-letter { text-transform: uppercase; }
+.menu-action--danger { color: #8A2D25; }
 .user { font-size: 13px; color: var(--ink); }
 button.small { padding: 6px 12px; font-size: 13px; }
 .runinfo { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; padding: 5px 16px; background: var(--surface-1, #f7f6f3); border-bottom: 0.5px solid var(--line); font-size: 12px; }
@@ -1175,8 +1216,10 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 }
 @media (max-width: 640px) {
   .app { padding: 14px 12px 48px; }
-  .userbox { flex-wrap: wrap; gap: 6px; row-gap: 4px; }
-  .userbox .user { font-size: 12px; }
+  .accessibility-menu > summary { width: 34px; padding: 0; justify-content: center; font-size: 0; }
+  .accessibility-menu > summary span { font-size: 13px; }
+  .header-menu-panel { position: fixed; top: 62px; left: 12px; right: 12px; width: auto; }
+  .header-context { margin-top: 6px; }
   .estatebar { flex-direction: column; align-items: flex-start; }
   .estatebar > button { align-self: stretch; }
   .planhead { flex-direction: column; }
