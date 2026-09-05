@@ -2054,6 +2054,13 @@ def _sp_coverage(live_checkpoint) -> dict:
     }
 
 
+# Terminal statuses that mean the work FAILED, as distinct from `done`, which is terminal and
+# means it succeeded. The difference decides whether re-submitting a stage execution reuses it
+# (see enqueue_stage_batch): finished work must not be redone, failed work must be re-runnable —
+# and treating the two alike is how a retry came to report success while queueing nothing.
+_FAILED_TERMINAL_STATUSES = ("dead", "cancelled")
+
+
 def job_priority(job_type: str) -> int:
     """Queue precedence for a job type. Callers may still pass `priority=` explicitly to
     override — this only decides what happens when they say nothing, which is every caller
@@ -8910,7 +8917,36 @@ class Store:
     def enqueue_stage_batch(self, scan_id: str, stage: str, job_type: str,
                             payloads: list[dict], *, snapshot_id: str,
                             request_fingerprint: str) -> dict:
-        """Atomically enqueue or reuse equivalent queued, running, or completed stage work."""
+        """Atomically enqueue or reuse equivalent queued, running or completed stage work.
+
+        A FAILED EXECUTION IS NOT REUSED — it is re-queued in place. `batch_id` is derived from
+        (scan_id, stage, snapshot_id, request_fingerprint), so re-submitting the same scan and
+        scope lands on the same id by construction; the lookup that made that reuse used to match
+        rows of ANY status, dead included. Re-running a batch that had died therefore handed the
+        dead rows straight back with `reused: True` and queued nothing, while the route still
+        answered `enqueued: <len(job_ids)>` — a retry that reports success and does nothing, which
+        is the failure the 2026-09-04 SharePoint incident consisted of.
+
+        Demonstrated against this method before the change: two jobs, both marked dead, re-submitted
+        with the same snapshot and fingerprint → `reused: True`, `statuses: ['dead', 'dead']`, zero
+        queued rows.
+
+        Two deliberate departures from "just exclude terminal statuses from the lookup":
+
+          * `done` STAYS REUSABLE. It is terminal too, but re-submitting finished work must not
+            redo it — that idempotency is the point of the snapshot execution, and
+            test_remediate_sharepoint_enqueue.py pins it. Only the FAILED terminals (dead,
+            cancelled) are excluded.
+          * The failed rows are RE-QUEUED IN PLACE rather than skipped so fresh rows insert
+            alongside them. With a deterministic batch_id an insert would leave both generations
+            under one id, and `remediation_status` scopes its counts to exactly that — so a
+            147-document retry would report 294 documents. Rewriting the row keeps one row per
+            document, which is what makes the batch total mean anything.
+
+        The re-queued row also takes the CURRENT payload for its file. A retry exists to carry
+        what changed since the failure — a refreshed Drive token most of all, that being what the
+        incident's jobs died for want of.
+        """
         import hashlib as _hashlib
         import json as _json
         key = _json.dumps([scan_id, stage, snapshot_id, request_fingerprint],
@@ -8923,12 +8959,46 @@ class Store:
                     "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
                     (f"stage:{scan_id}:{stage}",))
             self._db.execute(cur,
-                "SELECT id,status FROM jobs WHERE scan_id=%s AND batch_id=%s "
+                "SELECT id,status,payload FROM jobs WHERE scan_id=%s AND batch_id=%s "
                 "ORDER BY created_at,id", (scan_id, batch_id))
             existing = self._db.fetchall(cur)
             if existing:
+                by_file = {}
+                for original in payloads:
+                    if original.get("file"):
+                        by_file[original["file"]] = original
+                statuses = []
+                requeued = 0
+                for row in existing:
+                    if row["status"] not in _FAILED_TERMINAL_STATUSES:
+                        statuses.append(row["status"])
+                        continue
+                    # Carry whatever changed since the failure into the row being revived, keyed
+                    # by file. The snapshot fields are re-stamped from this call's own values, so
+                    # a revived row can never claim a snapshot it was not planned under.
+                    payload = row.get("payload")
+                    if isinstance(payload, str):
+                        try:
+                            payload = _json.loads(payload)
+                        except Exception:
+                            payload = {}
+                    payload = payload or {}
+                    fresh = by_file.get(payload.get("file"))
+                    if fresh:
+                        payload = dict(fresh, snapshot_id=snapshot_id,
+                                       stage_execution_id=batch_id)
+                    self._db.execute(cur,
+                        "UPDATE jobs SET status='queued',attempts=0,payload=%s,run_after=%s,"
+                        "locked_at=NULL,locked_by=NULL,lease_expires_at=NULL,phase=NULL,"
+                        "last_error=NULL,cancel_requested_at=NULL,updated_at=%s WHERE id=%s",
+                        (_json.dumps(payload), now, now, row["id"]))
+                    statuses.append("queued")
+                    requeued += 1
                 return {"batch_id": batch_id, "job_ids": [r["id"] for r in existing],
-                        "reused": True, "statuses": [r["status"] for r in existing]}
+                        # `reused` answers "did this call queue nothing?" — a retry that revived
+                        # dead work did queue something, and a caller that reads it to decide
+                        # whether to watch a run has to be told so.
+                        "reused": requeued == 0, "statuses": statuses, "requeued": requeued}
             priority = job_priority(job_type)
             job_ids = []
             for original in payloads:
@@ -8942,7 +9012,9 @@ class Store:
                      scan_id, now, now))
                 job_ids.append(job_id)
         return {"batch_id": batch_id, "job_ids": job_ids, "reused": False,
-                "statuses": ["queued"] * len(job_ids)}
+                # Uniform shape with the reuse/revive path above, so a caller can read `requeued`
+                # without knowing which branch answered it.
+                "requeued": 0, "statuses": ["queued"] * len(job_ids)}
 
     def get_job(self, job_id: str) -> dict | None:
         with self._db.cursor() as cur:

@@ -614,6 +614,11 @@ async def remediate_scan(sid: str, request: Request):
     return {"scan_id": sid, "enqueued": len(execution["job_ids"]),
             "job_ids": execution["job_ids"], "batch_id": execution["batch_id"],
             "snapshot_id": snapshot_id, "reused": execution["reused"],
+            # How many DEAD documents this call revived. `enqueued` counts the execution's
+            # documents either way, so on its own it cannot tell a retry that queued work from one
+            # that matched an existing execution and queued none — which is exactly the question
+            # an operator re-submitting after a failure is asking.
+            "requeued": execution.get("requeued", 0),
             "workers": core.WORKERS, "worker_tier_alive": core.store.worker_tier_alive()}
 
 
