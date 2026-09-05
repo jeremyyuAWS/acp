@@ -86,6 +86,29 @@ def test_a_sharepoint_job_remediates_from_the_cached_source_bytes(monkeypatch, w
     assert wired["drive_client"] == 0, "a SharePoint job must never ask for a Drive token"
 
 
+def test_remediator_receives_only_assessed_auto_failures(monkeypatch, wired):
+    """A broad scan scope must not make every expensive format fixer run for every file."""
+    import core
+    import handlers
+    import scanner
+    import remediate_office
+
+    monkeypatch.setattr(core.store, "list_auto_fail_rules",
+                        lambda _sid, _file: ["1.4.3"])
+    monkeypatch.setattr(scanner, "read_cached_source", lambda *a, **k: b"bytes")
+
+    def _remediate(_path, **kwargs):
+        allows = kwargs["in_scope"]
+        assert allows("1.4.3") is True
+        assert allows("3.1.1") is False
+        raise _ReachedRemediator()
+
+    monkeypatch.setattr(remediate_office, "remediate_office", _remediate)
+
+    with pytest.raises(_ReachedRemediator):
+        handlers._remediate_file(_sp_payload(), {})
+
+
 def test_a_sharepoint_job_with_no_drive_file_id_is_still_admitted(monkeypatch, wired):
     """The identity guard applies `drive_file_id` to Drive jobs only. A SharePoint job carries a
     Graph item id that means nothing to Drive, and a local one carries no id at all."""

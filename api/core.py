@@ -1400,6 +1400,9 @@ def stop_workers() -> None:
             w.stop()
         except Exception:
             swallowed("core.stop_workers: stopping a worker failed")
+    # Production sets this to 540s alongside a 600s Container Apps termination grace period
+    # (deploy/public/redeploy.sh). Keep the short local/default window so an unstamped developer
+    # worker or test cannot hang shutdown for nine minutes.
     deadline = _t.monotonic() + float(os.environ.get("ACP_SHUTDOWN_DRAIN_SECONDS", "20"))
     for _w, t in _worker_handles:
         remaining = deadline - _t.monotonic()

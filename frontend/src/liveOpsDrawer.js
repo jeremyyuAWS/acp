@@ -31,6 +31,43 @@ export function reported(value, suffix = '') {
   return n == null ? NOT_REPORTED : `${n}${suffix}`
 }
 
+/* ───────────────────── Provenance and freshness ───────────────────── */
+
+/**
+ * Where a number came from and how stale it is, attached to the number itself.
+ *
+ * Live Operations mixes measurements with very different standing: a job tally from a two-second
+ * event stream, an Azure Monitor metric sampled once a minute, a Log Analytics row three minutes
+ * behind, a figure derived from configured capacity that was never measured at all, and billing
+ * data Microsoft refreshes roughly every four hours. Rendered identically they all read as "now",
+ * which is the quiet way a dashboard becomes untrustworthy — the reader cannot tell which numbers
+ * they may act on immediately.
+ *
+ * So every value carries its source. An estimate says it is an estimate, in the same place a
+ * measurement says when it was measured.
+ */
+export const PROVENANCE = {
+  live: { label: 'Live', detail: 'ACP event stream' },
+  azure: { label: 'Azure Monitor', detail: '1 min interval' },
+  session: { label: 'Observed in this session', detail: 'sampled from the live stream' },
+  logs: { label: 'Log Analytics', detail: 'delayed' },
+  estimate: { label: 'Estimated from configured capacity', detail: 'derived, not measured' },
+  billing: { label: 'Cost Management', detail: 'billing data, not live' },
+  unavailable: { label: 'Not reported', detail: 'no measurement available' },
+}
+
+/**
+ * "Live · 2s ago", "Azure Monitor · 1 min interval · 20s ago", "Estimated from configured
+ * capacity". An age is shown only when there is an instant to compute it from — a source with no
+ * timestamp says what it is and stops, rather than implying it was measured just now.
+ */
+export function provenance(kind, { at, nowMs = Date.now(), detail } = {}) {
+  const source = PROVENANCE[kind] || PROVENANCE.unavailable
+  const age = at ? secondsSince(at, nowMs) : null
+  const parts = [source.label, detail ?? source.detail, age == null ? null : `${formatDuration(age)} ago`]
+  return { kind, label: source.label, ageS: age, text: parts.filter(Boolean).join(' · ') }
+}
+
 /* ─────────────────────────── A. Live header ─────────────────────────── */
 
 /** Status is icon + text, never colour alone (WCAG 1.4.1). The glyphs are deliberately
@@ -176,6 +213,398 @@ export function capacityMatchesService(capacity, service = {}) {
   return app === `acp-${role}` || app.endsWith(`-${role}`)
 }
 
+/**
+ * THIS service's own Azure reading.
+ *
+ * The backend now reads every configured worker app and returns them keyed by name under `apps`,
+ * so a service whose app is in that list gets its OWN CPU, memory, replicas, restarts and
+ * lifecycle instead of having them suppressed. When only one app is configured — or the service's
+ * app is not among those read — this falls back to the old single-app behaviour: the top-level
+ * block if it IS this service's, and null otherwise.
+ *
+ * Returning null rather than the wrong block is the whole point. Two of three worker services
+ * used to show nothing because the one measured app was not theirs; showing that app's figures
+ * instead would have been worse than showing none.
+ */
+export function capacityForService(capacity, service = {}) {
+  if (!capacity || !service?.role) return null
+  const apps = capacity.apps
+  if (apps && typeof apps === 'object') {
+    for (const [name, block] of Object.entries(apps)) {
+      if (!block) continue
+      const named = { ...block, worker_app_name: block.worker_app_name || name }
+      if (capacityMatchesService(named, service)) return named
+    }
+  }
+  return capacityMatchesService(capacity, service) ? capacity : null
+}
+
+/* ─────────────────────── Tracing ─────────────────────── */
+
+/**
+ * Whether a trace drill-down exists, and what to say when it does not.
+ *
+ * A link to traces that were never collected is worse than no link — it sends an operator to an
+ * empty query during an incident. So the reason travels with the boolean, and the two degraded
+ * states are told apart: tracing OFF (no traces at all) and tracing ON WITHOUT A SALT, where
+ * spans do export and join by scan, but carry no tenant or document id, so a per-customer or
+ * per-document drill-down is not available even though a per-run one is.
+ */
+export function tracingModel(snapshot = {}) {
+  const tracing = snapshot?.summary?.tracing || null
+  if (!tracing) {
+    return { enabled: false, available: false, correlate: [],
+      note: 'This deployment does not report whether tracing is configured.' }
+  }
+  const correlation = tracing.correlation || 'off'
+  return {
+    enabled: Boolean(tracing.enabled),
+    available: Boolean(tracing.enabled),
+    samplingRatio: num(tracing.sampling_ratio),
+    correlation,
+    // What a reader can actually pivot on today, rather than the full wish list.
+    correlate: !tracing.enabled ? []
+      : correlation === 'full' ? ['run', 'batch', 'job', 'tenant', 'document']
+        : ['run', 'batch', 'job'],
+    note: tracing.enabled
+      ? (correlation === 'full'
+        ? null
+        : 'Traces are being collected, but tenant and document correlation is off: ACP_TELEMETRY_SALT '
+          + 'is unset, and an unsalted id would differ per replica rather than joining anything.')
+      : `Tracing is off — ${tracing.reason || 'no reason reported'}. No trace drill-down is `
+        + 'available, so none is offered.',
+  }
+}
+
+/* ─────────────────────── Request health ─────────────────────── */
+
+/**
+ * How the ingress surface is behaving: request rate, response time, the response-class split, and
+ * the resiliency counters Azure exposes.
+ *
+ * ONE THING IS DELIBERATELY NOT HERE. The request said P50/P95/P99 latency, and Azure Monitor's
+ * `ResponseTime` is an AVERAGE — there is no percentile in the Container Apps metric set. An
+ * average presented under a percentile's label is the most quietly wrong thing this panel could
+ * do, because the two differ most exactly when latency matters: a p99 blowout barely moves a mean.
+ * So the average is labelled an average, and the percentiles are named as needing Application
+ * Insights, which is where request-level telemetry with real percentiles would come from.
+ */
+export const LATENCY_PERCENTILES_NOTE =
+  'Azure Monitor reports an average response time for Container Apps, not percentiles. P50, P95 '
+  + 'and P99 need request-level telemetry (Application Insights) and are not shown rather than '
+  + 'approximated from the mean.'
+
+export function requestHealth(capacity = null, { windowMinutes = 15 } = {}) {
+  const metric = (key) => {
+    const found = capacity?.metrics?.[key]
+    return found?.available && found.latest != null ? { latest: num(found.latest), total: num(found.average) } : null
+  }
+  const requests = capacity?.metrics?.requests
+  const totalRequests = requests?.available
+    ? (requests.series || []).reduce((sum, point) => sum + (num(point.value) || 0), 0)
+    : null
+  const classes = capacity?.status_classes && typeof capacity.status_classes === 'object'
+    ? capacity.status_classes : {}
+  const classified = Object.values(classes).reduce((sum, value) => sum + (num(value) || 0), 0)
+  return {
+    requestsPerMin: totalRequests == null || !windowMinutes ? null
+      : Math.round((totalRequests / windowMinutes) * 10) / 10,
+    averageResponseMs: metric('response_ms')?.latest ?? null,
+    // Present with its own key so the UI cannot render it as a percentile by accident.
+    percentilesAvailable: false,
+    percentilesNote: LATENCY_PERCENTILES_NOTE,
+    classes: ['2xx', '3xx', '4xx', '5xx'].map((name) => ({
+      name,
+      count: num(classes[name]),
+      // A share only where the class was reported; a class Azure did not answer for has no share,
+      // rather than a 0% that reads as "none of these happened".
+      sharePct: classes[name] != null && classified
+        ? Math.round((num(classes[name]) / classified) * 1000) / 10 : null,
+    })),
+    classified: classified || null,
+    retries: metric('retries')?.latest ?? null,
+    connectTimeouts: metric('connect_timeouts')?.latest ?? null,
+    ejectedHosts: metric('ejected_hosts')?.latest ?? null,
+    windowMinutes,
+  }
+}
+
+/* ─────────────────────── Throughput ─────────────────────── */
+
+export const THROUGHPUT_SERIES = [
+  { key: 'documents', label: 'Documents', field: 'documents', unit: '/min' },
+  { key: 'findings', label: 'Findings', field: 'findings', unit: '/min' },
+  { key: 'fixes', label: 'Fixes', field: 'fixes', unit: '/min' },
+]
+
+/**
+ * A rate now, and how it compares with the five minutes before.
+ *
+ * Both halves are measured the same way — a cumulative counter's change divided by the real time
+ * between the first and last sample in each half — so the comparison is between like and like. It
+ * needs a full previous window to compare against, which is why a tab open for four minutes gets a
+ * current rate and an explicitly absent trend rather than a change computed from half a window and
+ * presented as if it meant the same thing.
+ *
+ * A counter that goes backwards (a redeploy, a run leaving the snapshot's fifteen-minute tail)
+ * yields null, not a negative rate: work is not un-done, so a fall in the counter is a change of
+ * what is being counted, not a measurement of throughput.
+ */
+export function throughputModel(series = [], field, { nowMs = Date.now(), halfMs = 5 * 60000 } = {}) {
+  const points = series
+    .map((point) => ({ t: new Date(point.at).getTime(), value: num(point[field]) }))
+    .filter((point) => Number.isFinite(point.t) && point.value != null)
+  const rateOver = (from, to) => {
+    const window = points.filter((point) => point.t >= from && point.t <= to)
+    if (window.length < 2) return null
+    const spanS = (window[window.length - 1].t - window[0].t) / 1000
+    if (spanS < 30) return null            // the same evidence rule the run ETA uses
+    const delta = window[window.length - 1].value - window[0].value
+    if (delta < 0) return null
+    return Math.round((delta / spanS) * 60 * 10) / 10
+  }
+  const current = rateOver(nowMs - halfMs, nowMs)
+  const previous = rateOver(nowMs - 2 * halfMs, nowMs - halfMs)
+  const change = current == null || previous == null ? null : Math.round((current - previous) * 10) / 10
+  return {
+    current, previous, change,
+    direction: change == null ? null : change > 0 ? 'up' : change < 0 ? 'down' : 'flat',
+    // Said, not implied by an empty space: the reader should know whether a missing trend means
+    // "nothing happened" or "not measured for long enough yet".
+    reason: current == null
+      ? 'Not enough samples yet — a rate needs two readings at least 30s apart.'
+      : previous == null
+        ? `No comparison yet — that needs a full ${Math.round(halfMs / 60000)} minutes before this one.`
+        : null,
+    windowMinutes: Math.round(halfMs / 60000),
+  }
+}
+
+/* ─────────────────────── Scaling activity ─────────────────────── */
+
+/**
+ * Why capacity has not grown, answered from the configuration rather than guessed.
+ *
+ * Every branch below is a FACT Azure or the scale rule reports, not an inference about what
+ * Azure "probably" did: the app is at its configured maximum; the active revision is not
+ * Provisioned so nothing can come up; replicas are still starting; or there is no scale rule at
+ * all so the app sits between min and max and nothing will trigger. When none of those hold, the
+ * honest answer is that Azure has not scaled YET and the reason is not reported — Container Apps
+ * publishes the rules and the replica count, never a decision log.
+ *
+ * `null` means there is nothing to explain: the queue is empty, or capacity is in fact growing.
+ */
+export function scaleExplanation({ capacity = null, saturation = null, lifecycle = null,
+  queueDepth = null } = {}) {
+  const depth = num(queueDepth)
+  if (!depth) return null
+  const scale = capacity?.scale || null
+  const replicas = saturation?.replicas || {}
+  if (lifecycle?.blocked) {
+    return { kind: 'revision', text: `The active revision is ${lifecycle.blocked.state}, so Azure `
+      + 'cannot bring up more capacity until it resolves.', detail: lifecycle.blocked.error }
+  }
+  if (replicas.atMax) {
+    return { kind: 'at_max', text: `Running ${replicas.running} replicas, the configured maximum. `
+      + 'Azure will not add more until the scale rule\u2019s maximum is raised.' }
+  }
+  const starting = lifecycle?.counts?.find((row) => row.state === 'starting')?.count
+  const allocating = lifecycle?.counts?.find((row) => row.state === 'allocating')?.count
+  if ((starting || 0) + (allocating || 0) > 0) {
+    return { kind: 'starting', text: `${(starting || 0) + (allocating || 0)} replica(s) are still `
+      + 'coming up — capacity is being added and is not ready yet.' }
+  }
+  if (scale && scale.rules_reported && scale.rules.length === 0) {
+    return { kind: 'no_rule', text: 'This app has no scale rule, so it stays between its minimum '
+      + 'and maximum and nothing will trigger a scale-out from queue depth.' }
+  }
+  if (scale?.rules?.length) {
+    const names = scale.rules.map((rule) => rule.name || rule.type).filter(Boolean)
+    return { kind: 'not_yet',
+      text: `Azure has not scaled out yet. ${names.length === 1 ? 'The rule that could' : 'The rules that could'} `
+        + `is ${names.join(', ')}` + (scale.polling_interval_s
+          ? `, polled every ${scale.polling_interval_s}s.` : '.'),
+      detail: scale.attribution }
+  }
+  return { kind: 'unreported',
+    text: 'Azure has not scaled out, and the scale rule for this app could not be read, so why is '
+      + 'not reported.' }
+}
+
+/**
+ * Scale-out and scale-in moments observed in Azure's own replica series. Azure reports the count
+ * over time, never a scale event, so a change between two one-minute samples is the event — and
+ * it is described as an observation rather than as something Azure announced.
+ */
+export function scaleEvents(capacity = null) {
+  const series = capacity?.metrics?.replicas?.series
+  if (!Array.isArray(series) || series.length < 2) return []
+  const events = []
+  for (let index = 1; index < series.length; index += 1) {
+    const before = num(series[index - 1].value)
+    const after = num(series[index].value)
+    if (before == null || after == null || before === after) continue
+    events.push({ at: series[index].at, from: before, to: after,
+      direction: after > before ? 'out' : 'in',
+      text: `Replicas ${after > before ? 'rose' : 'fell'} from ${before} to ${after}` })
+  }
+  return events
+}
+
+/* ─────────────────────── Per-worker job health ─────────────────────── */
+
+/** The closed vocabulary the backend classifies failures into, in the words an operator uses.
+ *  Free-text error messages are deliberately NOT carried across tenants — a message can name
+ *  another customer's document, a vocabulary term cannot. */
+export const ERROR_CLASS_LABELS = {
+  capacity: 'Capacity', worker_startup: 'Worker startup', worker_crash: 'Worker crash',
+  lease_expired: 'Lease expired', source_authentication: 'Source authentication',
+  source_authorization: 'Source authorization', source_rate_limit: 'Source rate limit',
+  source_unavailable: 'Source unavailable', storage: 'Storage', database: 'Database',
+  model_rate_limit: 'AI rate limit', model_safety: 'AI safety', model_unavailable: 'AI unavailable',
+  invalid_document: 'Invalid document', unsupported_document: 'Unsupported document',
+  timeout: 'Timeout', cancelled: 'Cancelled', unknown: 'Unclassified',
+}
+
+/**
+ * What each of this service's runs is doing right now — the file, the criterion, how long a
+ * worker has actually been on it, and whether the stage has been retrying.
+ *
+ * Runtime comes from the job's `locked_at`, not from its status: a job claimed forty seconds ago
+ * and one claimed at boot are both "running", and only the claim instant separates them. A queued
+ * job has no runtime and is given none.
+ *
+ * ATTRIBUTION IS TO A SERVICE, NEVER TO A REPLICA. ACP does not record which replica ran a job —
+ * the registry that would carry it has no writer — so this cannot say "replica r2 is working on
+ * X", and the snapshot's own `worker_instance_attribution` block says so rather than leaving a
+ * reader to assume the join exists.
+ */
+export function workerJobHealth(snapshot = {}, stage, { nowMs = Date.now() } = {}) {
+  const runs = (snapshot?.runs || []).filter((run) => run.stage === stage)
+  const jobs = runs
+    .filter((run) => run.current_file || run.current_job_started_at)
+    .map((run) => ({
+      scanId: run.scan_id,
+      owner: run.owner || null,
+      file: run.current_file || null,
+      ruleId: run.current_rule_id || null,
+      jobType: run.current_job_type ? String(run.current_job_type).replaceAll('_', ' ') : null,
+      runtimeS: secondsSince(run.current_job_started_at, nowMs),
+    }))
+  const failing = runs
+    .filter((run) => run.last_error_class)
+    .map((run) => ({ scanId: run.scan_id, kind: run.last_error_class,
+      label: ERROR_CLASS_LABELS[run.last_error_class] || run.last_error_class,
+      attempts: num(run.max_attempts_seen) }))
+  const attribution = snapshot?.summary?.worker_instance_attribution || null
+  return {
+    jobs, failing,
+    retrying: runs.some((run) => (num(run.max_attempts_seen) || 0) > 0),
+    perReplica: attribution?.available === true,
+    attributionReason: attribution?.available === false ? attribution.reason : null,
+  }
+}
+
+/* ─────────────────────── Worker saturation ─────────────────────── */
+
+/**
+ * Is this service's capacity sufficient, and when will its queue be clear?
+ *
+ * Two different capacities, kept apart because conflating them is how a saturated tier looks
+ * healthy: WORKER SLOTS are ACP's own concurrency inside a replica (the heartbeat's pool_size),
+ * while REPLICAS are Azure's — how many copies of the app are running against the scale rule's
+ * min/max. A service can have every slot busy with replicas to spare, or every replica up with
+ * slots idle, and those call for opposite responses.
+ *
+ * The drain estimate uses the SAME evidence rule as a run's ETA — at least two samples spanning
+ * 30 seconds with work actually completing — and says "not enough evidence" otherwise. A queue
+ * with no completions has no drain time, and a made-up one is worse than none: it is the number
+ * an operator would use to decide not to scale.
+ */
+export function saturationModel(service = {}, capacity = null, { samples = [], queueDepth = null } = {}) {
+  const mine = capacityMatchesService(capacity, service)
+  const replicaMetric = mine ? capacity?.metrics?.replicas : null
+  const running = replicaMetric?.available ? num(replicaMetric.latest) : (mine ? num(capacity?.current_replicas) : null)
+  const max = mine ? num(capacity?.max_replicas) : null
+  const min = mine ? num(capacity?.min_replicas) : null
+  const depth = num(queueDepth)
+  return {
+    slots: { active: num(service.active), total: num(service.slots), available: num(service.available) },
+    replicas: {
+      running, min, max,
+      // Headroom is only a number when both ends are measured. `max` with no `running` is a
+      // limit, not spare capacity, and reporting it as headroom would overstate what is available.
+      headroom: running == null || max == null ? null : Math.max(0, max - running),
+      atMax: running != null && max != null && running >= max,
+      source: mine ? 'azure' : 'unavailable',
+    },
+    queueDepth: depth,
+    drainSeconds: depth == null || depth === 0 ? (depth === 0 ? 0 : null) : etaSeconds(samples, depth),
+    // Stated so the UI can explain a missing estimate rather than just omitting it.
+    drainReason: depth == null ? 'Queue depth is not reported for this service.'
+      : depth === 0 ? null
+      : etaSeconds(samples, depth) == null
+        ? 'Needs 30s of samples with completions before a drain time can be measured.'
+        : null,
+  }
+}
+
+/* ─────────────────────── Replica lifecycle ─────────────────────── */
+
+/** Each state's word, its shape, and its tone. Shapes again, not colours alone (1.4.1). */
+export const REPLICA_STATES = {
+  ready: { label: 'Ready', icon: '●', tone: 'ok' },
+  starting: { label: 'Starting', icon: '◐', tone: 'warn' },
+  allocating: { label: 'Allocating', icon: '◇', tone: 'info' },
+  draining: { label: 'Draining', icon: '◑', tone: 'info' },
+  not_running: { label: 'Not running', icon: '■', tone: 'bad' },
+  unknown: { label: 'Unknown', icon: '—', tone: 'idle' },
+}
+
+/**
+ * The replica lifecycle for the service being shown, or a stated reason there is none.
+ *
+ * Scoped by the same one-app guard as every other Azure figure: `WORKER_APP_NAME` names one
+ * container app and production runs three, so another app's replicas are not this service's and
+ * are not shown as though they were.
+ *
+ * `unreported` carries the states Azure does not report — requested and failed — so the UI can
+ * say why a reader counting six states sees four, rather than showing a confident zero for
+ * something never measured.
+ */
+export function replicaLifecycle(capacity, service = null) {
+  if (!capacity?.configured) {
+    return { available: false, reason: 'Azure Monitor is not configured, so replica lifecycle is unavailable.' }
+  }
+  if (service && !capacityMatchesService(capacity, service)) {
+    return { available: false,
+      reason: `Azure measured ${capacity.worker_app_name || 'another container app'}, not this service, `
+        + 'so its replicas would not describe this one.' }
+  }
+  const replicas = Array.isArray(capacity.replicas) ? capacity.replicas : []
+  const lifecycle = capacity.replica_lifecycle || null
+  const revisions = Array.isArray(capacity.revisions) ? capacity.revisions : []
+  const active = revisions.find((revision) => revision.active) || null
+  return {
+    available: true,
+    replicas,
+    // Ordered as a rollout reads: what is serving, what is coming up, what is going away.
+    counts: ['ready', 'starting', 'allocating', 'draining', 'not_running', 'unknown']
+      .map((state) => ({ state, ...REPLICA_STATES[state], count: num(lifecycle?.counts?.[state]) }))
+      .filter((row) => row.count != null),
+    total: num(lifecycle?.total) ?? replicas.length,
+    unreported: lifecycle?.unreported_states || [],
+    unreportedReason: lifecycle?.unreported_reason || null,
+    active,
+    revisions,
+    // A revision that is not Provisioned is the answer to "where is my capacity"; its own error
+    // string is the answer to "why". Both come from Azure, neither is inferred.
+    blocked: active && active.provisioning_state && !/^provisioned$/i.test(active.provisioning_state)
+      ? { state: active.provisioning_state, error: active.provisioning_error || null, ageS: num(active.age_s) }
+      : null,
+  }
+}
+
 /* ──────────────────── B. Primary visualization models ──────────────────── */
 
 /**
@@ -197,24 +626,43 @@ export function gaugeModel(service = {}, options = {}) {
     return { available: false, reason: 'Worker slot counts are not reported by this service.', tone: 'idle', state: 'unavailable' }
   }
   const fraction = slots > 0 ? Math.min(1, active / slots) : 0
-  const pct = slots > 0 ? Math.round((active / slots) * 100) : null
+  // MORE WORK IN FLIGHT THAN SLOTS IS NOT A PERCENTAGE, and rendering it as one is how this gauge
+  // came to read "51 of 2 worker slots active (2550%)" against a real deployment. The two numbers
+  // are measured differently: `active` is running jobs across the whole service, while `slots` is
+  // the pool size carried in a heartbeat that is last-writer-wins across replicas — so a service
+  // with several replicas reports one replica's concurrency against every replica's work. A stale
+  // lease produces the same shape. Either way the ratio is not a utilisation, so the percentage is
+  // withheld and the condition is named instead of being dressed up as 2550% of capacity.
+  const overCommitted = slots > 0 && active > slots
+  const pct = slots > 0 && !overCommitted ? Math.round((active / slots) * 100) : null
   const availableSlots = Math.max(0, slots - active)
   let state = 'available'
   if (!service.alive) state = 'unavailable'
-  else if (options.stalled) state = 'saturated'
+  else if (options.stalled || overCommitted) state = 'saturated'
   else if (slots > 0 && active >= slots * CAPACITY_RULES.saturatedAt) state = 'saturated'
   else if (slots > 0 && active >= slots * CAPACITY_RULES.approachingAt) state = 'approaching'
   else if (active === 0) state = 'idle'
   const tone = { available: 'ok', approaching: 'warn', saturated: 'bad', idle: 'idle', unavailable: 'idle' }[state]
   return {
     available: true, active, slots, availableSlots, provisioning, fraction, pct, state, tone,
+    overCommitted,
     // The accessible equivalent the PRD requires: the gauge is decorative, this sentence is the data.
-    text: `${active} of ${slots} worker slots active`
-      + (pct == null ? '' : ` (${pct}%)`)
-      + `, ${availableSlots} available`
-      + (provisioning == null ? '' : `, ${provisioning} provisioning`),
-    stateLabel: { available: 'Capacity available', approaching: 'Approaching capacity',
-      saturated: 'At capacity', idle: 'Idle — capacity available', unavailable: 'Capacity unavailable' }[state],
+    text: overCommitted
+      ? `${active} jobs in flight against ${slots} reported worker slots`
+      : `${active} of ${slots} worker slots active`
+        + (pct == null ? '' : ` (${pct}%)`)
+        + `, ${availableSlots} available`
+        + (provisioning == null ? '' : `, ${provisioning} provisioning`),
+    // Named rather than computed: this is the condition, not a share of capacity.
+    overCommittedNote: overCommitted
+      ? 'More jobs are running than this service reports slots for. The slot count comes from a '
+        + 'heartbeat that is last-writer-wins across replicas, so it describes one replica while '
+        + 'the job count covers them all; a stale lease looks the same. No utilisation percentage '
+        + 'is shown, because this ratio is not one.'
+      : null,
+    stateLabel: overCommitted ? 'Over committed'
+      : { available: 'Capacity available', approaching: 'Approaching capacity',
+        saturated: 'At capacity', idle: 'Idle — capacity available', unavailable: 'Capacity unavailable' }[state],
   }
 }
 
@@ -271,8 +719,44 @@ export function queueModel(summary = {}, { nowMs = Date.now() } = {}) {
     // Elapsed from the instant the backend reports, not from a server-side seconds counter — a
     // counter would change on every two-second snapshot and defeat the stream's emit-on-change rule.
     oldestWaitS: secondsSince(queue.oldest_queued_at, nowMs),
+    // The oldest wait is one job's. The median says whether the queue is broadly slow; the 95th
+    // says whether a tail is being left behind. All three are derived from instants the backend
+    // returns, for the same reason: an elapsed counter would change on every snapshot.
+    medianWaitS: secondsSince(queue.median_queued_at, nowMs),
+    p95WaitS: secondsSince(queue.p95_queued_at, nowMs),
+    waitSampled: num(queue.wait_sampled),
+    fairness: fairnessModel(queue.fairness),
     waitingUsers: num(summary.waiting_users),
     schedulingPolicy: summary.scheduling_policy || null,
+  }
+}
+
+/**
+ * How the waiting work is spread across tenants — as a shape, never as a list of customers.
+ *
+ * The backend returns counts without identities on purpose: "is one customer holding the queue" is
+ * what tenant-fair scheduling is judged on, and the identities are not needed to answer it. So
+ * this models an even spread against a concentrated one and stops there.
+ *
+ * `even` is not a boolean dressed up as a measurement — a single tenant IS the whole queue and
+ * that is not unfairness, so one tenant reports concentrated: false with the share still shown.
+ */
+export function fairnessModel(fairness) {
+  const counts = Array.isArray(fairness?.counts) ? fairness.counts.map(num).filter((n) => n != null) : []
+  const tenants = num(fairness?.tenants)
+  const share = num(fairness?.top_share_pct)
+  if (!counts.length || tenants == null) {
+    return { available: false, tenants, topSharePct: share, counts: [], concentrated: false }
+  }
+  const total = counts.reduce((sum, count) => sum + count, 0)
+  return {
+    available: true, tenants, counts, total,
+    topSharePct: share,
+    // The same threshold the map's concentration banner uses, and the same exemption: one tenant
+    // holding 100% of a queue only it is using is not a fairness problem.
+    concentrated: tenants > 1 && share != null && share >= 70,
+    // A share of the bar each tenant holds, largest first, for a distribution the eye can read.
+    shares: counts.map((count) => (total ? Math.round((count / total) * 1000) / 10 : 0)),
   }
 }
 
@@ -381,28 +865,76 @@ export function outputModel(snapshot = {}) {
 
 /* ─────────────────────── C. Real-time trend strip ─────────────────────── */
 
+/**
+ * `azure` names the key in the capacity payload's `metrics` block that this trend is measured
+ * from. Those come with Azure Monitor's OWN fifteen-minute, one-minute-interval history, which
+ * covers time before this tab was opened — so where an Azure series exists it is preferred over
+ * the samples this browser collected, and the strip says which it is showing.
+ */
 export const TREND_METRICS = {
-  active_jobs: { key: 'active_jobs', label: 'Active jobs', field: 'active_jobs', unit: '' },
-  queue_depth: { key: 'queue_depth', label: 'Queue depth', field: 'queue_depth', unit: '' },
-  throughput: { key: 'throughput', label: 'Throughput', field: 'completed', rate: true, unit: '/min' },
-  cpu: { key: 'cpu', label: 'CPU utilization', field: 'cpu_pct', unit: '%' },
-  memory: { key: 'memory', label: 'Memory utilization', field: 'memory_pct', unit: '%' },
-  failure_rate: { key: 'failure_rate', label: 'Failure rate', field: 'failure_pct', unit: '%' },
-  replicas: { key: 'replicas', label: 'Replica count', field: 'replicas', unit: '' },
-  oldest_wait: { key: 'oldest_wait', label: 'Oldest queue wait', field: 'oldest_wait_s', unit: 's' },
+  active_jobs: { key: 'active_jobs', label: 'Active jobs', field: 'active_jobs', unit: '', source: 'live' },
+  queue_depth: { key: 'queue_depth', label: 'Queue depth', field: 'queue_depth', unit: '', source: 'live' },
+  throughput: { key: 'throughput', label: 'Throughput', field: 'completed', rate: true, unit: '/min', source: 'session' },
+  failure_rate: { key: 'failure_rate', label: 'Failure rate', field: 'failure_pct', unit: '%', source: 'live' },
+  oldest_wait: { key: 'oldest_wait', label: 'Oldest queue wait', field: 'oldest_wait_s', unit: 's', source: 'live' },
+  cpu: { key: 'cpu', label: 'CPU utilization', field: 'cpu_pct', unit: '%', source: 'azure', azure: 'cpu_percent' },
+  memory: { key: 'memory', label: 'Memory utilization', field: 'memory_pct', unit: '%', source: 'azure', azure: 'memory_percent' },
+  replicas: { key: 'replicas', label: 'Replica count', field: 'replicas', unit: '', source: 'azure', azure: 'replicas' },
+  cpu_cores: { key: 'cpu_cores', label: 'CPU in use', field: 'cpu_cores', unit: ' cores', source: 'azure', azure: 'cpu_cores_used' },
+  working_set: { key: 'working_set', label: 'Memory working set', field: 'working_set_bytes', unit: ' B', bytes: true, source: 'azure', azure: 'working_set_bytes' },
+  restarts: { key: 'restarts', label: 'Replica restarts', field: 'restarts', unit: '', source: 'azure', azure: 'restarts' },
+  network_in: { key: 'network_in', label: 'Network in', field: 'network_in_bytes', unit: ' B', bytes: true, source: 'azure', azure: 'network_in_bytes' },
+  network_out: { key: 'network_out', label: 'Network out', field: 'network_out_bytes', unit: ' B', bytes: true, source: 'azure', azure: 'network_out_bytes' },
+  requests: { key: 'requests', label: 'Requests', field: 'requests', unit: '', source: 'azure', azure: 'requests' },
+  response_ms: { key: 'response_ms', label: 'Average response time', field: 'response_ms', unit: ' ms', source: 'azure', azure: 'response_ms' },
+  retries: { key: 'retries', label: 'Request retries', field: 'retries', unit: '', source: 'azure', azure: 'retries' },
+  connect_timeouts: { key: 'connect_timeouts', label: 'Connection timeouts', field: 'connect_timeouts', unit: '', source: 'azure', azure: 'connect_timeouts' },
+  ejected_hosts: { key: 'ejected_hosts', label: 'Ejected hosts', field: 'ejected_hosts', unit: '', source: 'azure', azure: 'ejected_hosts' },
 }
 
 const METRICS_BY_KIND = {
-  worker: ['active_jobs', 'queue_depth', 'throughput', 'cpu', 'memory', 'replicas'],
+  worker: ['active_jobs', 'queue_depth', 'throughput',
+    'cpu', 'memory', 'replicas', 'cpu_cores', 'working_set', 'restarts', 'network_in', 'network_out'],
   queue: ['queue_depth', 'oldest_wait', 'throughput', 'failure_rate', 'active_jobs'],
   run: ['throughput', 'active_jobs', 'queue_depth'],
   source: ['active_jobs', 'throughput'],
   output: ['throughput', 'failure_rate'],
-  intake: ['active_jobs', 'queue_depth', 'throughput'],
+  intake: ['active_jobs', 'queue_depth', 'throughput',
+    'requests', 'response_ms', 'retries', 'connect_timeouts', 'ejected_hosts'],
 }
 
 export function metricsForKind(kind) {
   return (METRICS_BY_KIND[kind] || ['active_jobs', 'queue_depth', 'throughput']).map((key) => TREND_METRICS[key])
+}
+
+/** The same metrics, split by where they are measured, so the picker never puts a two-second ACP
+ *  reading and a one-minute Azure sample side by side as though they were the same kind of fact. */
+export function metricGroups(kind) {
+  const groups = new Map()
+  for (const metric of metricsForKind(kind)) {
+    const source = metric.source === 'azure' ? 'azure' : 'live'
+    if (!groups.has(source)) groups.set(source, { source, label: source === 'azure' ? 'Azure Monitor' : 'ACP live', metrics: [] })
+    groups.get(source).metrics.push(metric)
+  }
+  return [...groups.values()]
+}
+
+/**
+ * The samples to chart for one metric: Azure Monitor's own series when this component's app is
+ * the one Azure measured, otherwise what this browser observed.
+ *
+ * The guard is the same one that governs the CPU and memory numbers — production runs three
+ * differently sized worker apps and only one is measured, so charting the measured app's history
+ * on a service it does not describe would be a fabrication with real data in it.
+ */
+export function seriesForMetric(observed = [], metricKey, { capacity = null, service = null } = {}) {
+  const metric = TREND_METRICS[metricKey]
+  if (!metric?.azure) return { samples: observed, source: metric?.source || 'session' }
+  if (service && !capacityMatchesService(capacity, service)) return { samples: [], source: 'unavailable' }
+  const azure = capacity?.metrics?.[metric.azure]
+  if (!azure?.series?.length) return { samples: [], source: azure ? 'azure' : 'unavailable' }
+  return { samples: azure.series.map((point) => ({ at: point.at, [metric.field]: num(point.value) })),
+    source: 'azure', measuredAt: capacity?.measured_at }
 }
 
 export function defaultMetricFor(kind) {
@@ -426,23 +958,56 @@ export function sampleForNode(data = {}, ctx = {}) {
   const blank = {
     active_jobs: null, queue_depth: null, completed: null, cpu_pct: null,
     memory_pct: null, failure_pct: null, replicas: null, oldest_wait_s: null,
+    cpu_cores: null, working_set_bytes: null, restarts: null,
+    network_in_bytes: null, network_out_bytes: null,
+    documents: null, findings: null, fixes: null,
+    requests: null, response_ms: null, retries: null, connect_timeouts: null, ejected_hosts: null,
   }
   if (data.kind === 'worker') {
     const service = data.service || {}
     const stage = stages[service.stage] || {}
     const mine = capacityMatchesService(capacity, service)
+    // `latest` is the newest one-minute sample; the flat cpu_percent/memory_percent fields are the
+    // window AVERAGE and are the fallback for a backend that does not publish the metrics block.
+    const azure = (key, fallback) => {
+      if (!mine) return null
+      const metric = capacity?.metrics?.[key]
+      if (metric) return metric.available ? num(metric.latest) : null
+      return fallback === undefined ? null : num(fallback)
+    }
     return { ...blank, ...base,
       active_jobs: num(service.active), queue_depth: num(stage.queued),
       completed: num(stage.completed),
-      cpu_pct: mine && capacity?.metrics_available ? num(capacity.cpu_percent) : null,
-      memory_pct: mine && capacity?.metrics_available ? num(capacity.memory_percent) : null,
-      replicas: mine ? num(capacity.current_replicas) : null }
+      cpu_pct: azure('cpu_percent', capacity?.metrics_available ? capacity.cpu_percent : null),
+      memory_pct: azure('memory_percent', capacity?.metrics_available ? capacity.memory_percent : null),
+      replicas: azure('replicas', capacity?.current_replicas),
+      cpu_cores: azure('cpu_cores_used'),
+      working_set_bytes: azure('working_set_bytes'),
+      restarts: azure('restarts'),
+      network_in_bytes: azure('network_in_bytes'),
+      network_out_bytes: azure('network_out_bytes') }
   }
   if (data.kind === 'queue' || data.kind === 'intake') {
     const failed = num(queue.failed)
     const done = num(queue.completed)
     const denominator = (failed ?? 0) + (done ?? 0)
+    // Request health belongs to whatever app Azure measured. It is attached to intake rather than
+    // to a worker because these are ingress metrics and the workers claim from a queue instead of
+    // serving requests — on a worker app they would be a permanent row of zeroes.
+    const ingress = (key) => {
+      const metric = data.kind === 'intake' ? capacity?.metrics?.[key] : null
+      return metric?.available ? num(metric.latest) : null
+    }
     return { ...blank, ...base,
+      requests: ingress('requests'), response_ms: ingress('response_ms'),
+      retries: ingress('retries'), connect_timeouts: ingress('connect_timeouts'),
+      ejected_hosts: ingress('ejected_hosts'),
+      // Cumulative counters for the throughput panel. `findings` stays null unless a stage
+      // actually counted them — assess does, the others do not, and a 0 there would read as
+      // "no findings" rather than "not counted".
+      documents: num(summary.completed_jobs),
+      fixes: num(stages.remediate?.completed),
+      findings: num(stages.assess?.findings),
       active_jobs: num(summary.running), queue_depth: num(summary.queued),
       completed: num(summary.completed_jobs),
       failure_pct: failed == null || done == null || !denominator

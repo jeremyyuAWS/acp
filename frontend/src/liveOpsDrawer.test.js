@@ -8,8 +8,12 @@ import {
   CAPACITY_RULES, NOT_REPORTED, TREND_WINDOW_MS, appendSample, arcPath, capacityMatchesService,
   chartModel, componentState, defaultMetricFor, deriveEvents, etaSeconds, eventClock,
   eventsForNode, filterEvents, formatDuration, gaugeModel, mergeEvents, metricsForKind,
-  niceCeiling, num, outputModel, queueModel, rateSeries, reported, revisionLabel, runModel,
-  sampleForNode, secondsSince, sourceModel, tenantConcentration, trendMarkers, updatedAgo,
+  PROVENANCE, capacityForService, fairnessModel, metricGroups, niceCeiling, num, outputModel,
+  provenance, queueModel, rateSeries,
+  LATENCY_PERCENTILES_NOTE, replicaLifecycle, reported, requestHealth, revisionLabel, runModel,
+  sampleForNode, saturationModel, scaleEvents, tracingModel,
+  scaleExplanation, secondsSince, seriesForMetric, sourceModel, tenantConcentration, throughputModel,
+  trendMarkers, updatedAgo, workerJobHealth,
 } from './liveOpsDrawer.js'
 
 const NOW = Date.parse('2026-09-04T14:32:00Z')
@@ -103,6 +107,29 @@ describe('Worker gauge thresholds come from a documented rule', () => {
 
   it('treats a stalled queue as saturation however few slots are busy', () => {
     expect(gaugeModel({ ...service, active: 0, slots: 4 }, { stalled: true }).state).toBe('saturated')
+  })
+
+  it('withholds a percentage when more work is in flight than there are slots', () => {
+    // Seen against a real deployment: "51 of 2 worker slots active (2550%)". `active` counts
+    // running jobs across the whole service while `slots` is the pool size from a heartbeat that
+    // is last-writer-wins across replicas, so the two are not a ratio — and a stale lease produces
+    // the same shape. The condition is named instead of dressed up as 2550% of capacity.
+    const gauge = gaugeModel({ ...service, active: 51, slots: 2 })
+    expect(gauge.pct).toBe(null)
+    expect(gauge.overCommitted).toBe(true)
+    expect(gauge.state).toBe('saturated')
+    expect(gauge.stateLabel).toBe('Over committed')
+    expect(gauge.text).toBe('51 jobs in flight against 2 reported worker slots')
+    expect(gauge.text).not.toContain('%')
+    expect(gauge.fraction).toBe(1)          // the arc fills, it does not wrap
+    expect(gauge.overCommittedNote).toMatch(/last-writer-wins across replicas/)
+  })
+
+  it('still reports a real percentage when the counts are comparable', () => {
+    const gauge = gaugeModel({ ...service, active: 2, slots: 3 })
+    expect(gauge.overCommitted).toBe(false)
+    expect(gauge.pct).toBe(67)
+    expect(gauge.overCommittedNote).toBe(null)
   })
 
   it('carries the accessible text equivalent the visual gauge cannot', () => {
@@ -235,7 +262,90 @@ describe('The fifteen-minute trend keeps only what it measured', () => {
     expect(defaultMetricFor('queue')).toBe('queue_depth')
     expect(defaultMetricFor('run')).toBe('throughput')
     expect(metricsForKind('worker').map((m) => m.key))
-      .toEqual(['active_jobs', 'queue_depth', 'throughput', 'cpu', 'memory', 'replicas'])
+      .toEqual(['active_jobs', 'queue_depth', 'throughput', 'cpu', 'memory', 'replicas',
+        'cpu_cores', 'working_set', 'restarts', 'network_in', 'network_out'])
+  })
+
+  it('keeps a two-second ACP reading and a one-minute Azure sample in separate groups', () => {
+    // Rendered side by side in one picker they read as the same kind of fact; they are not, and
+    // the difference is exactly what the provenance line exists to state.
+    expect(metricGroups('worker').map((group) => [group.label, group.metrics.length]))
+      .toEqual([['ACP live', 3], ['Azure Monitor', 8]])
+  })
+
+  it('offers request health on intake, where the requests actually arrive', () => {
+    // The workers claim from a queue rather than serving requests, so ingress metrics on a worker
+    // node would be a permanent row of zeroes.
+    const intake = metricsForKind('intake').map((m) => m.key)
+    expect(intake).toContain('requests')
+    expect(intake).toContain('response_ms')
+    expect(metricsForKind('worker')).not.toContain('requests')
+  })
+})
+
+describe('Azure Monitor history is preferred over what this tab happened to see', () => {
+  const capacity = { worker_app_name: 'acp-assess', measured_at: iso(-20), metrics: {
+    cpu_percent: { available: true, latest: 54, average: 47,
+      series: [{ at: iso(-120), value: 40 }, { at: iso(-60), value: 47 }, { at: iso(0), value: 54 }] },
+    restarts: { available: false, latest: null, series: [] },
+  } }
+  const observed = [{ at: iso(-30), cpu_pct: 51 }]
+
+  it('charts Azure own fifteen minutes rather than the minute this tab has been open', () => {
+    const picked = seriesForMetric(observed, 'cpu', { capacity, service })
+    expect(picked.source).toBe('azure')
+    expect(picked.samples.map((sample) => sample.cpu_pct)).toEqual([40, 47, 54])
+    expect(picked.measuredAt).toBe(iso(-20))
+  })
+
+  it('refuses another container app history for a service it does not describe', () => {
+    const picked = seriesForMetric(observed, 'cpu', { capacity, service: { role: 'discovery' } })
+    expect(picked).toEqual({ samples: [], source: 'unavailable' })
+  })
+
+  it('reports an Azure metric with no data as Azure having none, not as no such metric', () => {
+    expect(seriesForMetric(observed, 'restarts', { capacity, service })).toEqual({ samples: [], source: 'azure' })
+    expect(seriesForMetric(observed, 'network_in', { capacity, service })).toEqual({ samples: [], source: 'unavailable' })
+  })
+
+  it('leaves an ACP-measured trend on what this session observed', () => {
+    expect(seriesForMetric(observed, 'active_jobs', { capacity, service }))
+      .toEqual({ samples: observed, source: 'live' })
+  })
+
+  it('prefers the newest one-minute sample over the window average for "right now"', () => {
+    const snapshot = { generated_at: iso(0), summary: { by_stage: { assess: { queued: 2, completed: 9 } } } }
+    const sample = sampleForNode({ kind: 'worker', service }, { snapshot, capacity })
+    expect(sample.cpu_pct).toBe(54)      // latest, not the 47 average
+    expect(sample.restarts).toBe(null)   // reported unavailable stays unavailable
+  })
+
+  it('falls back to the flat average for a backend that publishes no metrics block', () => {
+    const older = { worker_app_name: 'acp-assess', metrics_available: true, cpu_percent: 33, memory_percent: 44 }
+    const snapshot = { generated_at: iso(0), summary: { by_stage: {} } }
+    const sample = sampleForNode({ kind: 'worker', service }, { snapshot, capacity: older })
+    expect(sample.cpu_pct).toBe(33)
+    expect(sample.memory_pct).toBe(44)
+  })
+})
+
+describe('Every value says where it came from and how stale it is', () => {
+  it('states the source and the age together', () => {
+    expect(provenance('live', { at: iso(-2), nowMs: NOW }).text).toBe('Live · ACP event stream · 2s ago')
+    expect(provenance('azure', { at: iso(-20), nowMs: NOW }).text)
+      .toBe('Azure Monitor · 1 min interval · 20s ago')
+  })
+
+  it('does not imply an age it cannot compute', () => {
+    // A source with no timestamp says what it is and stops, rather than reading as "just now".
+    expect(provenance('estimate').text).toBe('Estimated from configured capacity · derived, not measured')
+    expect(provenance('estimate').ageS).toBe(null)
+  })
+
+  it('names an estimate as an estimate and billing as billing', () => {
+    expect(PROVENANCE.estimate.detail).toMatch(/not measured/)
+    expect(PROVENANCE.billing.detail).toMatch(/not live/)
+    expect(provenance('nonsense').label).toBe('Not reported')
   })
 })
 
@@ -380,5 +490,450 @@ describe('Source and output panels name what they cannot measure', () => {
     expect(secondsSince(iso(-90), NOW)).toBe(90)
     expect(secondsSince(null, NOW)).toBe(null)
     expect(secondsSince('nonsense', NOW)).toBe(null)
+  })
+})
+
+
+describe('Worker saturation keeps ACP slots and Azure replicas apart', () => {
+  const cap = (over = {}) => ({ configured: true, worker_app_name: 'acp-assess', measured_at: iso(-20),
+    min_replicas: 1, max_replicas: 4, current_replicas: 2,
+    metrics: { replicas: { available: true, latest: 3, series: [] } }, ...over })
+  const done = (points) => points.map(([offsetS, completed]) => ({ at: iso(offsetS), completed }))
+
+  it('reports the two capacities separately, because they are opposite problems', () => {
+    // Every slot busy with replicas to spare, and every replica up with slots idle, look identical
+    // once the two are added together — and call for opposite responses.
+    const model = saturationModel({ ...service, active: 3, slots: 3, available: 0 }, cap(),
+      { samples: [], queueDepth: 5 })
+    expect(model.slots).toEqual({ active: 3, total: 3, available: 0 })
+    expect(model.replicas).toMatchObject({ running: 3, min: 1, max: 4, headroom: 1, atMax: false, source: 'azure' })
+  })
+
+  it('prefers the Azure replica metric over the control-plane count', () => {
+    expect(saturationModel(service, cap()).replicas.running).toBe(3)   // metric latest, not current_replicas
+    const noMetric = saturationModel(service, cap({ metrics: {} }))
+    expect(noMetric.replicas.running).toBe(2)                          // falls back to current_replicas
+  })
+
+  it('says a service is at its scale ceiling rather than implying room', () => {
+    const model = saturationModel(service, cap({ metrics: { replicas: { available: true, latest: 4 } } }))
+    expect(model.replicas).toMatchObject({ running: 4, headroom: 0, atMax: true })
+  })
+
+  it('refuses to call a limit headroom when the running count is unmeasured', () => {
+    const model = saturationModel(service, cap({ current_replicas: null, metrics: {} }))
+    expect(model.replicas.running).toBe(null)
+    expect(model.replicas.headroom).toBe(null)      // max alone is a limit, not spare capacity
+    expect(model.replicas.atMax).toBe(false)
+  })
+
+  it('reports nothing about replicas for a service Azure did not measure', () => {
+    const model = saturationModel({ ...service, role: 'discovery' }, cap())
+    expect(model.replicas).toMatchObject({ running: null, min: null, max: null, source: 'unavailable' })
+  })
+
+  it('measures the drain from this service own completions', () => {
+    // 8 completed over 120s = 1 every 15s; 10 waiting → 150s.
+    const model = saturationModel(service, cap(), { samples: done([[-120, 4], [0, 12]]), queueDepth: 10 })
+    expect(model.drainSeconds).toBe(150)
+    expect(model.drainReason).toBe(null)
+  })
+
+  it('refuses a drain time it cannot measure, and says why', () => {
+    // The number an operator would use to decide NOT to scale, so a made-up one is worse than none.
+    const stalled = saturationModel(service, cap(), { samples: done([[-120, 4], [0, 4]]), queueDepth: 10 })
+    expect(stalled.drainSeconds).toBe(null)
+    expect(stalled.drainReason).toMatch(/30s of samples with completions/)
+    const unknown = saturationModel(service, cap(), { samples: done([[-120, 4], [0, 12]]), queueDepth: null })
+    expect(unknown.drainSeconds).toBe(null)
+    expect(unknown.drainReason).toMatch(/Queue depth is not reported/)
+  })
+
+  it('calls an empty queue clear rather than unmeasurable', () => {
+    const model = saturationModel(service, cap(), { samples: [], queueDepth: 0 })
+    expect(model.drainSeconds).toBe(0)
+    expect(model.drainReason).toBe(null)
+  })
+})
+
+describe('Replica lifecycle is scoped to the service Azure measured', () => {
+  const capacity = { configured: true, worker_app_name: 'acp-assess',
+    replicas: [{ name: 'r1', state: 'ready' }],
+    revisions: [{ name: 'acp-assess--v25', active: true, provisioning_state: 'Provisioned', traffic_percent: 100 }],
+    replica_lifecycle: { counts: { ready: 1, starting: 0, allocating: 0, not_running: 0, draining: 0, unknown: 0 },
+      total: 1, unreported_states: ['requested', 'failed'], unreported_reason: 'because Azure does not list them' } }
+
+  it('orders the counts as a rollout reads and carries the unreported states', () => {
+    const model = replicaLifecycle(capacity, service)
+    expect(model.available).toBe(true)
+    expect(model.counts.map((row) => row.state))
+      .toEqual(['ready', 'starting', 'allocating', 'draining', 'not_running', 'unknown'])
+    expect(model.unreported).toEqual(['requested', 'failed'])
+    expect(model.active.name).toBe('acp-assess--v25')
+    expect(model.blocked).toBe(null)
+  })
+
+  it('surfaces a revision that is not Provisioned as the blocker it is', () => {
+    const failed = { ...capacity, revisions: [{ name: 'v26', active: true, provisioning_state: 'Failed',
+      provisioning_error: 'ImagePullFailure', age_s: 240 }] }
+    expect(replicaLifecycle(failed, service).blocked)
+      .toEqual({ state: 'Failed', error: 'ImagePullFailure', ageS: 240 })
+  })
+
+  it('declines for a service the measured app does not describe, and when Azure is unconfigured', () => {
+    expect(replicaLifecycle(capacity, { role: 'discovery' }).available).toBe(false)
+    expect(replicaLifecycle(capacity, { role: 'discovery' }).reason).toMatch(/not this service/)
+    expect(replicaLifecycle({ configured: false }, service).reason).toMatch(/not configured/)
+  })
+})
+
+
+describe('Why Azure has not scaled, answered from the configuration', () => {
+  const scale = (over = {}) => ({ min_replicas: 1, max_replicas: 4, polling_interval_s: 30,
+    cooldown_period_s: 300, rules_reported: true,
+    rules: [{ name: 'queue-depth', type: 'azure-servicebus', metadata: { queueLength: '5' } }],
+    attribution: 'Azure Container Apps does not report which scale rule caused a given change; '
+      + 'the rules below are the ones that could be responsible.', ...over })
+  const counts = (over = {}) => ['ready', 'starting', 'allocating', 'draining', 'not_running', 'unknown']
+    .map((state) => ({ state, count: over[state] ?? 0 }))
+
+  it('has nothing to explain when nothing is waiting', () => {
+    expect(scaleExplanation({ queueDepth: 0 })).toBe(null)
+    expect(scaleExplanation({ queueDepth: null })).toBe(null)
+  })
+
+  it('names the configured ceiling when the app is at it', () => {
+    const why = scaleExplanation({ queueDepth: 10, capacity: { scale: scale() },
+      saturation: { replicas: { running: 4, max: 4, atMax: true } } })
+    expect(why.kind).toBe('at_max')
+    expect(why.text).toContain('Running 4 replicas, the configured maximum')
+  })
+
+  it('blames a revision that cannot come up before it blames the scale rule', () => {
+    const why = scaleExplanation({ queueDepth: 10, capacity: { scale: scale() },
+      saturation: { replicas: { atMax: true } },
+      lifecycle: { blocked: { state: 'Failed', error: 'ImagePullFailure' } } })
+    expect(why.kind).toBe('revision')
+    expect(why.detail).toBe('ImagePullFailure')
+  })
+
+  it('says capacity is arriving when replicas are still coming up', () => {
+    const why = scaleExplanation({ queueDepth: 10, capacity: { scale: scale() },
+      saturation: { replicas: { running: 2, max: 4, atMax: false } },
+      lifecycle: { counts: counts({ ready: 2, starting: 1, allocating: 1 }) } })
+    expect(why.kind).toBe('starting')
+    expect(why.text).toContain('2 replica(s) are still coming up')
+  })
+
+  it('says so when the app has no scale rule at all', () => {
+    // A real configuration, and a different answer from "the rules could not be read".
+    const why = scaleExplanation({ queueDepth: 10, capacity: { scale: scale({ rules: [] }) },
+      saturation: { replicas: { running: 1, max: 4, atMax: false } }, lifecycle: { counts: counts() } })
+    expect(why.kind).toBe('no_rule')
+    expect(why.text).toContain('no scale rule')
+  })
+
+  it('names the rules that could be responsible without claiming one fired', () => {
+    // Azure publishes the rules and the replica count, never a decision log.
+    const why = scaleExplanation({ queueDepth: 10, capacity: { scale: scale() },
+      saturation: { replicas: { running: 1, max: 4, atMax: false } }, lifecycle: { counts: counts() } })
+    expect(why.kind).toBe('not_yet')
+    expect(why.text).toContain('queue-depth')
+    expect(why.text).toContain('polled every 30s')
+    expect(why.detail).toMatch(/does not report which scale rule caused/)
+  })
+
+  it('admits it cannot say why when the scale rule could not be read', () => {
+    const why = scaleExplanation({ queueDepth: 10, capacity: {},
+      saturation: { replicas: { atMax: false } }, lifecycle: { counts: counts() } })
+    expect(why.kind).toBe('unreported')
+    expect(why.text).toMatch(/could not be read, so why is not reported/)
+  })
+})
+
+describe('Scale events are observations of Azure own replica series', () => {
+  const withSeries = (values) => ({ metrics: { replicas: { available: true,
+    series: values.map(([offsetS, value]) => ({ at: iso(offsetS), value })) } } })
+
+  it('reads a change between two samples as the event', () => {
+    // Azure reports the count over time, never a scale event, so the change IS the event.
+    const events = scaleEvents(withSeries([[-180, 1], [-120, 1], [-60, 3], [0, 2]]))
+    expect(events.map((e) => [e.from, e.to, e.direction]))
+      .toEqual([[1, 3, 'out'], [3, 2, 'in']])
+  })
+
+  it('reports nothing from a series too short or too flat to contain a change', () => {
+    expect(scaleEvents(withSeries([[0, 2]]))).toEqual([])
+    expect(scaleEvents(withSeries([[-60, 2], [0, 2]]))).toEqual([])
+    expect(scaleEvents(null)).toEqual([])
+    expect(scaleEvents({ metrics: {} })).toEqual([])
+  })
+
+  it('skips a gap rather than reading it as a scale to zero', () => {
+    const events = scaleEvents(withSeries([[-120, 2], [-60, null], [0, 4]]))
+    expect(events).toEqual([])
+  })
+})
+
+describe('Per-worker job health', () => {
+  const snapshot = { summary: { worker_instance_attribution: { available: false, reason: 'no writer yet' } },
+    runs: [{ scan_id: 's1', stage: 'assess', owner: 'a@example.org', current_file: 'Report.docx',
+      current_rule_id: 'WCAG 1.3.1', current_job_type: 'scan_file', current_job_started_at: iso(-45),
+      last_error_class: 'source_rate_limit', max_attempts_seen: 2 },
+      { scan_id: 's2', stage: 'remediate', current_file: 'Other.docx' }] }
+
+  it('reads runtime from the claim instant and scopes to the stage', () => {
+    const health = workerJobHealth(snapshot, 'assess', { nowMs: NOW })
+    expect(health.jobs).toHaveLength(1)
+    expect(health.jobs[0]).toMatchObject({ file: 'Report.docx', ruleId: 'WCAG 1.3.1', runtimeS: 45 })
+    expect(health.jobs[0].jobType).toBe('scan file')
+  })
+
+  it('translates the closed error vocabulary into an operator words', () => {
+    const health = workerJobHealth(snapshot, 'assess', { nowMs: NOW })
+    expect(health.failing[0]).toMatchObject({ kind: 'source_rate_limit', label: 'Source rate limit', attempts: 2 })
+    expect(health.retrying).toBe(true)
+  })
+
+  it('carries the reason ACP cannot attribute a job to a replica', () => {
+    const health = workerJobHealth(snapshot, 'assess', { nowMs: NOW })
+    expect(health.perReplica).toBe(false)
+    expect(health.attributionReason).toBe('no writer yet')
+  })
+
+  it('gives no runtime when no worker has claimed the job', () => {
+    const unclaimed = { ...snapshot,
+      runs: [{ ...snapshot.runs[0], current_job_started_at: null }] }
+    expect(workerJobHealth(unclaimed, 'assess', { nowMs: NOW }).jobs[0].runtimeS).toBe(null)
+  })
+})
+
+
+describe('Each worker service reads its own container app', () => {
+  const multi = { configured: true, worker_app_name: 'acp-discovery',
+    cpu_cores_per_replica: 1, apps: {
+      'acp-discovery': { worker_app_name: 'acp-discovery', cpu_cores_per_replica: 1, memory_per_replica: '2Gi' },
+      'acp-assess': { worker_app_name: 'acp-assess', cpu_cores_per_replica: 2, memory_per_replica: '4Gi' },
+      'acp-remediate': { worker_app_name: 'acp-remediate', cpu_cores_per_replica: 2, memory_per_replica: '4Gi' },
+    } }
+
+  it('gives every service its own reading instead of suppressing two of three', () => {
+    expect(capacityForService(multi, { role: 'assess' }).memory_per_replica).toBe('4Gi')
+    expect(capacityForService(multi, { role: 'discovery' }).memory_per_replica).toBe('2Gi')
+    expect(capacityForService(multi, { role: 'remediate' }).worker_app_name).toBe('acp-remediate')
+  })
+
+  it('names a block from its key when the block does not name itself', () => {
+    const unnamed = { configured: true, apps: { 'acp-assess': { cpu_cores_per_replica: 2 } } }
+    expect(capacityForService(unnamed, { role: 'assess' })).toMatchObject({
+      worker_app_name: 'acp-assess', cpu_cores_per_replica: 2 })
+  })
+
+  it('returns null rather than the wrong block for a service Azure did not read', () => {
+    // The whole point: two of three services used to show nothing because the one measured app
+    // was not theirs, and showing that app's figures instead would have been worse than none.
+    expect(capacityForService(multi, { role: 'release' })).toBe(null)
+    expect(capacityForService(null, { role: 'assess' })).toBe(null)
+    expect(capacityForService(multi, {})).toBe(null)
+  })
+
+  it('falls back to the single-app behaviour when no apps block is published', () => {
+    const single = { configured: true, worker_app_name: 'acp-assess', cpu_cores_per_replica: 2 }
+    expect(capacityForService(single, { role: 'assess' })).toBe(single)
+    expect(capacityForService(single, { role: 'discovery' })).toBe(null)
+  })
+})
+
+
+describe('Throughput, and how it compares with five minutes ago', () => {
+  const at = (offsetS, documents) => ({ at: iso(offsetS), documents })
+
+  it('measures the current rate from the counter change over real elapsed time', () => {
+    // 60 documents over 300s = 12/min.
+    const model = throughputModel([at(-300, 100), at(0, 160)], 'documents', { nowMs: NOW })
+    expect(model.current).toBe(12)
+  })
+
+  it('compares like with like, both halves measured the same way', () => {
+    // Previous five minutes: 30 over 300s = 6/min. Current: 60 over 300s = 12/min.
+    const model = throughputModel(
+      [at(-600, 70), at(-300, 100), at(-299, 100), at(0, 160)], 'documents', { nowMs: NOW })
+    expect(model.previous).toBe(6)
+    expect(model.current).toBe(12)
+    expect(model.change).toBe(6)
+    expect(model.direction).toBe('up')
+    expect(model.reason).toBe(null)
+  })
+
+  it('refuses a comparison against half a window, and says which half is missing', () => {
+    // A tab open four minutes has a rate but nothing honest to compare it against.
+    const model = throughputModel([at(-240, 100), at(0, 160)], 'documents', { nowMs: NOW })
+    expect(model.current).not.toBe(null)
+    expect(model.previous).toBe(null)
+    expect(model.change).toBe(null)
+    expect(model.reason).toMatch(/needs a full 5 minutes before this one/)
+  })
+
+  it('says when there is not even a rate yet', () => {
+    expect(throughputModel([at(0, 100)], 'documents', { nowMs: NOW }).reason)
+      .toMatch(/two readings at least 30s apart/)
+    // Two readings four seconds apart are not a rate either.
+    expect(throughputModel([at(-4, 100), at(0, 101)], 'documents', { nowMs: NOW }).current).toBe(null)
+  })
+
+  it('treats a counter going backwards as a change of subject, not negative throughput', () => {
+    // A redeploy, or a run ageing out of the snapshot's fifteen-minute tail. Work is not un-done.
+    expect(throughputModel([at(-300, 160), at(0, 100)], 'documents', { nowMs: NOW }).current).toBe(null)
+  })
+
+  it('reports a rate of nothing as nothing, which is a measurement', () => {
+    const model = throughputModel([at(-300, 100), at(0, 100)], 'documents', { nowMs: NOW })
+    expect(model.current).toBe(0)
+    expect(model.reason).toMatch(/needs a full 5 minutes/)
+  })
+
+  it('never counts findings that were not counted', () => {
+    // Only assess runs carry a findings count; a 0 would read as "no findings found".
+    const snapshot = { generated_at: iso(0), summary: { completed_jobs: 40,
+      by_stage: { assess: { findings: null }, remediate: { completed: 5 } } } }
+    const sample = sampleForNode({ kind: 'queue' }, { snapshot })
+    expect(sample.findings).toBe(null)
+    expect(sample.documents).toBe(40)
+    expect(sample.fixes).toBe(5)
+  })
+})
+
+
+describe('Queue health beyond the oldest job', () => {
+  const summary = (over = {}) => ({ queued: 10, running: 2, queue: {
+    running: 2, waiting: 8, retrying: 0, failed: 0, arrived: 30, completed: 45, window_s: 900,
+    oldest_queued_at: iso(-1000), median_queued_at: iso(-500), p95_queued_at: iso(-950),
+    wait_sampled: 10, fairness: { tenants: 3, counts: [8, 5, 2], top_share_pct: 53 }, ...over } })
+
+  it('reports the median and the tail, not just the worst job', () => {
+    const model = queueModel(summary(), { nowMs: NOW })
+    expect(model.oldestWaitS).toBe(1000)
+    expect(model.medianWaitS).toBe(500)
+    expect(model.p95WaitS).toBe(950)
+    expect(model.waitSampled).toBe(10)
+  })
+
+  it('leaves a percentile unreported when nothing was sampled', () => {
+    const model = queueModel(summary({ median_queued_at: null, p95_queued_at: null, wait_sampled: 0 }),
+      { nowMs: NOW })
+    expect(model.medianWaitS).toBe(null)
+    expect(model.p95WaitS).toBe(null)
+  })
+
+  it('models the spread as shares, and never as a list of customers', () => {
+    const fairness = fairnessModel({ tenants: 3, counts: [8, 5, 2], top_share_pct: 53 })
+    expect(fairness.available).toBe(true)
+    expect(fairness.shares).toEqual([53.3, 33.3, 13.3])
+    expect(fairness.concentrated).toBe(false)
+    expect(JSON.stringify(fairness)).not.toMatch(/@/)
+  })
+
+  it('flags a concentrated queue on the same threshold the map banner uses', () => {
+    expect(fairnessModel({ tenants: 2, counts: [9, 1], top_share_pct: 90 }).concentrated).toBe(true)
+    // One tenant holding all of a queue only it is using is not a fairness problem.
+    expect(fairnessModel({ tenants: 1, counts: [12], top_share_pct: 100 }).concentrated).toBe(false)
+    expect(fairnessModel({ tenants: 1, counts: [12], top_share_pct: 100 }).topSharePct).toBe(100)
+  })
+
+  it('is unavailable rather than empty when the backend reports no fairness block', () => {
+    expect(fairnessModel(undefined)).toMatchObject({ available: false, counts: [], concentrated: false })
+    expect(fairnessModel({ tenants: 0, counts: [], top_share_pct: null }).available).toBe(false)
+  })
+})
+
+
+describe('Request health, and the percentile it refuses to fake', () => {
+  const cap = (over = {}) => ({ configured: true, worker_app_name: 'acp-assess',
+    metrics_window_minutes: 15,
+    metrics: {
+      requests: { available: true, latest: 40, series: [
+        { at: iso(-120), value: 100 }, { at: iso(-60), value: 110 }, { at: iso(0), value: 90 }] },
+      response_ms: { available: true, latest: 42 },
+      retries: { available: true, latest: 3 },
+      connect_timeouts: { available: false, latest: null },
+      ejected_hosts: { available: true, latest: 0 },
+    },
+    status_classes: { '2xx': 280, '4xx': 18, '5xx': 2 }, ...over })
+
+  it('derives a request rate from the window it was told about', () => {
+    // 300 requests over 15 minutes = 20/min.
+    expect(requestHealth(cap(), { windowMinutes: 15 }).requestsPerMin).toBe(20)
+  })
+
+  it('labels the average as an average and refuses to present it as a percentile', () => {
+    // The one quietly wrong thing this panel could do: a p99 blowout barely moves a mean, so the
+    // two differ most exactly when latency matters.
+    const health = requestHealth(cap())
+    expect(health.averageResponseMs).toBe(42)
+    expect(health.percentilesAvailable).toBe(false)
+    expect(health.percentilesNote).toBe(LATENCY_PERCENTILES_NOTE)
+    expect(LATENCY_PERCENTILES_NOTE).toMatch(/not shown rather than approximated from the mean/)
+    // The note NAMES the percentiles, as the thing that is missing. What must not exist is a
+    // percentile VALUE — a number the reader could act on that was never measured.
+    const percentileValues = health.classes.concat([{ name: 'p95', count: health.averageResponseMs }])
+      .filter((row) => /^p\d/.test(row.name) && row.count != null)
+    expect(percentileValues).toEqual([{ name: 'p95', count: 42 }])   // only the one this test built
+    expect(Object.keys(health)).not.toContain('p95')
+    expect(Object.keys(health)).not.toContain('p99')
+  })
+
+  it('shares out only the classes Azure reported', () => {
+    const health = requestHealth(cap())
+    const byName = Object.fromEntries(health.classes.map((row) => [row.name, row]))
+    expect(byName['2xx']).toMatchObject({ count: 280, sharePct: 93.3 })
+    expect(byName['5xx']).toMatchObject({ count: 2, sharePct: 0.7 })
+    // A class Azure did not answer for has no count and no share — not a 0% that reads as
+    // "none of these happened".
+    expect(byName['3xx']).toEqual({ name: '3xx', count: null, sharePct: null })
+  })
+
+  it('reports a resiliency counter of zero as zero and an absent one as absent', () => {
+    const health = requestHealth(cap())
+    expect(health.ejectedHosts).toBe(0)        // a measurement
+    expect(health.connectTimeouts).toBe(null)  // not measured
+  })
+
+  it('degrades to nothing measured rather than zeroes for a worker app', () => {
+    // ACP's workers claim from a queue rather than serving requests, so they have no ingress.
+    const health = requestHealth({ configured: true, metrics: {}, status_classes: {} })
+    expect(health.requestsPerMin).toBe(null)
+    expect(health.averageResponseMs).toBe(null)
+    expect(health.classified).toBe(null)
+    expect(health.classes.every((row) => row.count === null)).toBe(true)
+  })
+})
+
+
+describe('Tracing tells you whether a drill-down exists', () => {
+  it('offers the full pivot set only when correlation is actually available', () => {
+    const full = tracingModel({ summary: { tracing: { enabled: true, correlation: 'full', sampling_ratio: 1 } } })
+    expect(full.enabled).toBe(true)
+    expect(full.correlate).toEqual(['run', 'batch', 'job', 'tenant', 'document'])
+    expect(full.note).toBe(null)
+  })
+
+  it('separates tracing off from tracing on without a salt', () => {
+    // Both look like "no per-customer drill-down", and they are different problems: one collects
+    // nothing, the other collects spans that join by run but carry no tenant or document id.
+    const idsOnly = tracingModel({ summary: { tracing: { enabled: true, correlation: 'ids_only' } } })
+    expect(idsOnly.enabled).toBe(true)
+    expect(idsOnly.correlate).toEqual(['run', 'batch', 'job'])
+    expect(idsOnly.note).toMatch(/ACP_TELEMETRY_SALT is unset/)
+
+    const off = tracingModel({ summary: { tracing: { enabled: false, reason: 'not configured' } } })
+    expect(off.correlate).toEqual([])
+    expect(off.note).toMatch(/Tracing is off — not configured/)
+  })
+
+  it('never offers a link to traces that do not exist', () => {
+    // A drill-down into an empty query during an incident is worse than no drill-down.
+    expect(tracingModel({ summary: { tracing: { enabled: false, reason: 'exporter failed to start: ValueError' } } }))
+      .toMatchObject({ available: false, correlate: [] })
+    expect(tracingModel({}).note).toMatch(/does not report whether tracing is configured/)
   })
 })

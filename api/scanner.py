@@ -217,7 +217,14 @@ def _inv_row(*, file: str, drive_file_id=None, mime=None, size=None, checksum=No
                   # travels without the basis: see sp_metadata's collaborator_count for why one
                   # without the other is a number that means two different things.
                   "collaborators": {"count": _v("collaborator_count"),
-                                    "basis": _v("collaborator_basis")}}
+                                    "basis": _v("collaborator_basis")},
+                  # Activity, on the same convention and for the same reason: derived from a
+                  # read that already happened, so no new column. Absent from the blob when the
+                  # analytics container was never read — which is what keeps a rule from seeing
+                  # a zero nobody measured.
+                  "activity": {"actors": _v("recent_actor_count"),
+                               "actions": _v("recent_action_count"),
+                               "window_days": sp_metadata.ANALYTICS_WINDOW_DAYS}}
     return {"file": file, "drive_file_id": drive_file_id, "mime": mime or None,
             "size_kb": _inv_size_kb(size), "doc_class": _estate_doc_class(file, mime),
             "checksum": checksum, "path": path, "created_at": created_at,
@@ -1625,6 +1632,84 @@ def _sp_item_permissions(token: str, drive_id: str | None, item_id: str) -> list
         return None
 
 
+def _sp_analytics_budget() -> int:
+    """How many per-document activity reads one listing may make. Third of its kind
+    (ACP_SP_CONTENT_TYPE_MAX, ACP_SP_PERMISSIONS_MAX) and for the same measured reason: one Graph
+    call per document is what tests/test_sp_scale.py exists to keep out of a 30-site walk."""
+    try:
+        return max(0, int(os.environ.get("ACP_SP_ANALYTICS_MAX", "1000")))
+    except (TypeError, ValueError):
+        return 1000
+
+
+def _sp_analytics_enabled() -> bool:
+    """Whether to read each item's activity. OFF by default — one Graph call per document."""
+    return os.environ.get("ACP_SP_ANALYTICS", "0").strip() == "1"
+
+
+def _sp_item_analytics(token: str, drive_id: str | None, item_id: str) -> dict | None:
+    """One item's activity over Graph's own seven-day window, or None when it could not be read.
+
+    `/analytics/lastSevenDays` rather than `getActivitiesByInterval`: one call, no date maths, and
+    the question here is "has anybody touched this at all lately", not a timeline.
+
+    NONE AND AN EMPTY PAYLOAD ARE DIFFERENT ANSWERS, and the caller depends on it. Analytics is
+    not served for every item or every tenant — a personal OneDrive, a library with reporting
+    disabled, an item too new to have a rollup — and a 404 there means "we cannot ask", while an
+    empty payload means "we asked and nobody touched it". Collapsing them reports an unmeasurable
+    estate as an idle one, which is the reading that archives it.
+    """
+    base = f"{GRAPH}/drives/{drive_id}" if drive_id else f"{GRAPH}/me/drive"
+    try:
+        return _sp_get(token, f"{base}/items/{item_id}/analytics/lastSevenDays") or {}
+    except Exception:  # noqa: BLE001 — an archival hint must never fail the scan
+        return None
+
+
+def _sp_enrich_analytics(token: str, files: list[dict]) -> dict:
+    """Fill in `recent_actor_count` / `recent_action_count` from Graph's item analytics.
+
+    ACCESS IS NOT USE. The collaborator fields say who CAN open a document; this says whether
+    anybody HAS. A document twelve people can reach and nobody has opened since 2019 is the
+    archival candidate, and no permissions read can tell you that.
+
+    Off by default and budgeted when on, exactly like the permissions read beside it. What the
+    budget running out costs is the field, not the scan: a document past it keeps
+    `recent_actor_count` `unavailable` with a reason, so a rule keyed on activity skips it rather
+    than reading a zero that was never measured.
+    """
+    if not _sp_analytics_enabled():
+        return {"attempted": 0, "read": 0, "capped": False, "disabled": True}
+    budget = _sp_analytics_budget()
+    attempted = read = 0
+    capped = False
+    for rec in files:
+        meta = rec.get("sp_metadata")
+        item_id = rec.get("id")
+        if not isinstance(meta, dict) or not item_id:
+            continue
+        if attempted >= budget:
+            capped = True
+            break
+        attempted += 1
+        blob = _sp_item_analytics(token, rec.get("driveId"), item_id)
+        if blob is None:
+            continue
+        actors, actions = sp_metadata._analytics_counts(blob)
+        fields = meta.get("fields") or {}
+        fields["recent_actor_count"] = {"value": actors, "state": sp_metadata.PRESENT,
+                                        "reason": None}
+        fields["recent_action_count"] = {"value": actions, "state": sp_metadata.PRESENT,
+                                         "reason": None}
+        read += 1
+    if capped:
+        print(f"[scan] SharePoint activity read for the first {budget} document(s) "
+              f"(ACP_SP_ANALYTICS_MAX); the rest report recent_actor_count as unavailable rather "
+              f"than as zero, so an activity rule skips them instead of reading an idle count "
+              f"that was never measured.", flush=True)
+    return {"attempted": attempted, "read": read, "capped": capped}
+
+
 def _sp_enrich_permissions(token: str, files: list[dict]) -> dict:
     """Upgrade `collaborator_count` from the authorship FLOOR to everyone with access.
 
@@ -2851,6 +2936,9 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
     _perm = _sp_enrich_permissions(token, result)
     if scope_out is not None and (_perm.get("attempted") or _perm.get("capped")):
         scope_out["permissions_read"] = _perm
+    _ana = _sp_enrich_analytics(token, result)
+    if scope_out is not None and (_ana.get("attempted") or _ana.get("capped")):
+        scope_out["activity_read"] = _ana
     if scope_out is not None and _ct and (_ct.get("attempted") or _ct.get("capped")):
         # Only when it actually ran. A tenant that answers the inline expansion pays nothing here
         # and gets no key, so the presence of this block on a scan is itself the signal that the
@@ -4913,6 +5001,7 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
     # ADR 0027 Tier A — scanned-PDF vision layout extraction. Feature-flagged via
     # ACP_SCANNED_PDF_TIER_A env var; a no-op when the flag is off or the file is not a
     # scanned/untagged PDF. Stores per-page layout descriptions; never raises.
+    # ADR 0027 Tier B — REVIEW findings injected from the layouts (same guard, same block).
     if ext == ".pdf" and scan_id:
         try:
             import pdf_vision_assess as _pva
@@ -4928,8 +5017,16 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
                             f"[scan] scanned-PDF Tier A: {name} → {len(_layouts)} page(s) assessed",
                             flush=True,
                         )
+                        import pdf_vision_review as _pvr
+                        _tier_b = _pvr.findings_from_layouts(_layouts, filename=name)
+                        if _tier_b:
+                            raw["issues"] = list(raw.get("issues", [])) + _tier_b
+                            print(
+                                f"[scan] scanned-PDF Tier B: {name} → {len(_tier_b)} REVIEW finding(s)",
+                                flush=True,
+                            )
         except Exception:
-            swallowed("scanner.analyse_and_assess: scanned-PDF Tier A failed", scan_id)
+            swallowed("scanner.analyse_and_assess: scanned-PDF Tier A/B failed", scan_id)
     # Score over the IN-SCOPE findings, but keep every finding on the record. `Rubric.assess`
     # computes `100 - sum(penalty(severity))` over whatever it is handed and knows nothing about
     # scope, so scoring the full list gave a scoped scan unscoped scores — a document with no

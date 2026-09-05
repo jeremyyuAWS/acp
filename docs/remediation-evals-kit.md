@@ -142,8 +142,13 @@ Adding a provider is a subclass with one method (`HttpModelCandidate._request`).
 
 ---
 
-**Measured against real models:** [First real-model run](remediation-evals-local-model-run.md) —
-two local models on CPU, both failing every safety gate, 0% of categories routed to a model.
+**Measured against real models:**
+
+- [First real-model run](remediation-evals-local-model-run.md) — two local models on CPU, both
+  failing every safety gate, 0% of categories routed to a model.
+- [Hosted run](remediation-evals-hosted-run.md) — the three Claude tiers. Zero critical
+  violations on all three, 20% of traffic routed to a paid model, and every one still failing
+  on autonomous-action precision and on cost (178x over budget after routing).
 
 ## 5. First run — what it found
 

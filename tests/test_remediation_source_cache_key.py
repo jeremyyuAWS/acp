@@ -43,7 +43,12 @@ class _FakeBlobClient:
     def upload_blob(self, data, overwrite=False, content_settings=None):
         self._store[self._key] = data
 
-    def download_blob(self):
+    def download_blob(self, **kwargs):
+        # The read must arrive with its transport budget — see tests/test_blob_read_timeout.py.
+        # Asserted here rather than merely tolerated: a fake that quietly accepted anything would
+        # keep passing if the timeouts were dropped, and this is the call they exist to bound.
+        assert kwargs.get("read_timeout"), "the cached-source read must carry a read timeout"
+        assert kwargs.get("connection_timeout"), "the cached-source read must carry a connect timeout"
         if self._key not in self._store:
             raise KeyError(self._key)
         payload = self._store[self._key]

@@ -1865,6 +1865,11 @@ def _sp_export_cells(raw) -> dict:
         # basis is what makes the number safe to act on — see sp_metadata.collaborator_count.
         "collaborator_count": (blob.get("collaborators") or {}).get("count"),
         "collaborator_basis": (blob.get("collaborators") or {}).get("basis"),
+        # Access is not use. An empty cell here is "not measured", never "idle" — the counts are
+        # absent from the blob entirely unless the analytics read actually happened, and
+        # `sp_availability` carries the state for a reader who needs to be sure.
+        "recent_actor_count": (blob.get("activity") or {}).get("actors"),
+        "recent_action_count": (blob.get("activity") or {}).get("actions"),
     }
 
 
@@ -1959,6 +1964,7 @@ def scan_inventory_csv(sid: str, request: Request):
             "sensitivity_label", "sharing_scope", "item_kind", "checked_out_by",
             "sp_version", "modified_by", "managed_columns",
             "collaborator_count", "collaborator_basis",
+            "recent_actor_count", "recent_action_count",
             "sp_availability", "sp_unread_reason",
             "path", "parent_folder", "created_at", "source_modified",
             "discovered_at", "drive_file_id"]

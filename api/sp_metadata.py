@@ -196,6 +196,62 @@ def _permission_people(perms: list | None) -> set[str]:
     return out
 
 
+#: Graph's own window for the cheap analytics surface. Named rather than inlined because it is
+#: NOT a choice ACP made — `/analytics/lastSevenDays` is a fixed endpoint, and a field called
+#: `recent_*` that silently meant something else would be the worst kind of approximation.
+ANALYTICS_WINDOW_DAYS = 7
+
+
+def _analytics_counts(blob: dict | None) -> tuple[int | None, int | None]:
+    """(actors, actions) from an itemAnalytics payload, or (None, None) if it says neither.
+
+    Graph shapes this as `{"access": {"actorCount": N, "actionCount": M}}`. A payload that
+    arrived but carries no `access` facet is a real answer about an item nothing has touched in
+    the window, so it reads as zero — but a payload that did not arrive is None, and the caller
+    must not turn that into zero. That distinction is the entire reason this returns a tuple of
+    optionals rather than defaulting.
+    """
+    if not isinstance(blob, dict):
+        return None, None
+    access = blob.get("access")
+    if not isinstance(access, dict):
+        # The item exists in analytics and nothing has been recorded against it in the window.
+        return 0, 0
+    def _n(key):
+        v = access.get(key)
+        return int(v) if isinstance(v, (int, float)) else 0
+    return _n("actorCount"), _n("actionCount")
+
+
+# ── the three columns a write-back has to respect ────────────────────────────────────────────
+#
+# Read through these rather than inline, because `normalize` (which records them per document)
+# and `sp_writeback` (which refuses a write on them) MUST agree about what the columns say. Two
+# readers of `_IsRecord` that disagree is a scan reporting a file as a declared record while the
+# write path overwrites it — the drift this repo keeps paying for, on the one field where the
+# cost is a compliance event rather than a wrong number.
+
+def checkout_user(fields: dict) -> str | None:
+    """Who has the item checked out, if anyone. `CheckoutUser` is the readable column;
+    `CheckoutUserLookupId` is the id-only shadow some tenants return instead — a name nobody can
+    read is still evidence that somebody holds the lock."""
+    f = fields or {}
+    return f.get("CheckoutUser") or f.get("CheckoutUserLookupId") or None
+
+
+def is_record(fields: dict) -> bool | None:
+    """Whether the item is a DECLARED RECORD. None when the column is absent — which is not the
+    same as False, and is the difference between "this tenant says it is not a record" and "this
+    tenant did not tell us"."""
+    f = fields or {}
+    return bool(f.get("_IsRecord")) if "_IsRecord" in f else None
+
+
+def compliance_tag(fields: dict):
+    """The retention/record label behind a declaration, for context in a refusal."""
+    return (fields or {}).get("_ComplianceTag")
+
+
 def _is_page(item: dict, content_type: str | None) -> bool:
     """A SharePoint PAGE, not a document. Both are list items in a library and both come back
     from the same walk, but a page is authored in SharePoint and has no downloadable source
@@ -213,6 +269,7 @@ def _is_page(item: dict, content_type: str | None) -> bool:
 
 def normalize(item: dict, *, list_item: Container, drive_item: Container | None = None,
               rich: Container | None = None, permissions: Container | None = None,
+              analytics: Container | None = None,
               site_id: str | None = None, site_name: str | None = None,
               library_name: str | None = None) -> dict:
     """One document's SharePoint-native metadata, normalized, with per-field availability.
@@ -238,6 +295,8 @@ def normalize(item: dict, *, list_item: Container, drive_item: Container | None 
     li = list_item
     perms = permissions if permissions is not None else Container.missing(
         "permissions not requested — one Graph call per item; set ACP_SP_PERMISSIONS=1 to read them")
+    ana = analytics if analytics is not None else Container.missing(
+        "activity not requested — one Graph call per item; set ACP_SP_ANALYTICS=1 to read it")
 
     lf = li.get("fields") or {} if li.ok else {}
     # `listItem.contentType.name` is the v1.0 shape; `fields.ContentType` is the column every list
@@ -286,8 +345,8 @@ def normalize(item: dict, *, list_item: Container, drive_item: Container | None 
             ((item or {}).get("sensitivityLabel") or {}).get("displayName")),
         # _ComplianceTag is the record-declaration column behind a retention label. Read from the
         # LIST container, so it carries that container's availability, not the driveItem's.
-        "compliance_tag": resolve(li, lf.get("_ComplianceTag")),
-        "is_record": resolve(li, bool(lf.get("_IsRecord")) if "_IsRecord" in lf else None),
+        "compliance_tag": resolve(li, compliance_tag(lf)),
+        "is_record": resolve(li, is_record(lf)),
 
         # ── people ───────────────────────────────────────────────────────────────────────────
         "created_by": resolve(di, _person(di.get("createdBy"))),
@@ -324,11 +383,26 @@ def normalize(item: dict, *, list_item: Container, drive_item: Container | None 
         "collaborator_basis": resolve(
             di, BASIS_PERMISSIONS if perms.ok else BASIS_AUTHORSHIP),
 
+        # ── whether anyone has actually USED it ──────────────────────────────────────────────
+        #
+        # ACCESS IS NOT USE, and the collaborator fields above measure access. A document twelve
+        # people can open and nobody has opened since 2019 is the archival candidate; one person
+        # with sole access who reads it every week is not. Graph's item analytics is the only
+        # surface that answers the second question.
+        #
+        # SOURCED FROM THE ANALYTICS CONTAINER, so a tenant that does not serve it reports
+        # `unavailable` and never 0. That distinction is load-bearing in the destructive
+        # direction: a rule reading "nobody has opened this in seven days" off a count that is
+        # really "we could not ask" would archive a live estate. `resolve` refuses to call it
+        # `not_configured` unless the container was actually read.
+        "recent_actor_count": resolve(ana, _analytics_counts(ana.data)[0] if ana.ok else None),
+        "recent_action_count": resolve(ana, _analytics_counts(ana.data)[1] if ana.ok else None),
+
         # ── version and lock state ───────────────────────────────────────────────────────────
         "version": resolve(li, lf.get("_UIVersionString")),
         # A checked-out file is one a remediation write-back would silently fail against, so this
         # is not decoration — it is the precondition Phase 5 has to check.
-        "checked_out_by": resolve(li, lf.get("CheckoutUser") or lf.get("CheckoutUserLookupId")),
+        "checked_out_by": resolve(li, checkout_user(lf)),
 
         # ── what KIND of thing this is ───────────────────────────────────────────────────────
         # Derived, not read, so it has no container of its own: it is a fact about the item that

@@ -2850,3 +2850,17 @@ html[data-wcag="on"] .wcag-toggle--on {
 @keyframes liveops-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 .liveops-pulse { animation: liveops-pulse 1.8s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .liveops-pulse { animation: none; opacity: 1; } }
+
+/* Live Operations map — the moving lines.
+   ReactFlow animates an active edge by marching its dash pattern (`.react-flow__edge.animated`).
+   The global prefers-reduced-motion rule near the top of this file only shortens animations to
+   0.001ms, which on an INFINITE animation is not calm — it is the same motion at an unbounded
+   frame rate. Stop it outright instead. Nothing is lost by doing so: an active line is also
+   drawn thicker and fully opaque (see flowEdge in AdminLiveTraffic.jsx), so "carrying work" is
+   legible without motion, in a screenshot, and to anyone who cannot perceive the dashes. */
+@media (prefers-reduced-motion: reduce) {
+  .react-flow__edge.animated path.react-flow__edge-path { animation: none !important; }
+}
+/* The stroke is 1.4-2.4px; ReactFlow's own interaction layer widens the hit area, and this makes
+   the pointer say so before the click. */
+.react-flow__edge.animated { cursor: pointer; }

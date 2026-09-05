@@ -66,7 +66,9 @@ const click = async (el) => { await act(async () => { el.dispatchEvent(new Mouse
 const btnByText = (t) => [...container.querySelectorAll('button')].find((b) => b.textContent.includes(t))
 const byLabel = (label) => container.querySelector(`[aria-label="${label}"]`)
 const setValue = async (el, val) => {
-  const proto = el.tagName === 'SELECT' ? window.HTMLSelectElement.prototype : window.HTMLInputElement.prototype
+  const proto = el.tagName === 'SELECT' ? window.HTMLSelectElement.prototype
+    : el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype
+      : window.HTMLInputElement.prototype
   const setter = Object.getOwnPropertyDescriptor(proto, 'value').set
   await act(async () => { setter.call(el, val); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })) })
 }
@@ -707,6 +709,18 @@ describe('the new-rule builder', () => {
       { field: 'parent_folder', op: 'prefix', value: 'HR/' },
       { field: 'modified_age_days', op: 'gt', value: 1095 },
     ], 'delete')
+  })
+
+  it('offers a pasted departed-employee roster and sends it as one membership condition', async () => {
+    await render(); await expand(); await flush()
+    await setValue(byLabel('Rule name'), 'Departed staff content')
+    const roster = byLabel('Owner is in departed-employee roster')
+    expect(roster.tagName).toBe('TEXTAREA')
+    await setValue(roster, 'jane@company.com\nbob@company.com; JANE@COMPANY.COM')
+    await click(btnByText('Add rule')); await flush()
+    expect(createDispositionPolicy).toHaveBeenCalledWith('Departed staff content', [
+      { field: 'owner', op: 'in', value: ['jane@company.com', 'bob@company.com'] },
+    ], 'archive')
   })
 
   // Product rule 2, and the deliverable's "preview of what a rule WOULD match before it is enabled".
