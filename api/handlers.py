@@ -1356,6 +1356,13 @@ def _sp_rule_inputs(row: dict) -> dict:
     collab = blob.get("collaborators") or {}
     out["collaborator_count"] = collab.get("count")
     out["collaborator_basis"] = collab.get("basis")
+    # ACCESS IS NOT USE. `collaborator_count` says who CAN open a document; this says whether
+    # anybody HAS, over Graph's own seven-day window. None when the analytics container was not
+    # read — a rule keyed on it then matches nothing, which is correct and is why the count must
+    # never be defaulted to 0 on the way through here.
+    activity = blob.get("activity") or {}
+    out["recent_actor_count"] = activity.get("actors")
+    out["recent_action_count"] = activity.get("actions")
     out["sp_availability"] = blob.get("availability") or {}
     out["sp_reasons"] = blob.get("reasons") or {}
     return out
