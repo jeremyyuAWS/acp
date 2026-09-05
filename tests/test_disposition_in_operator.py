@@ -171,7 +171,108 @@ def test_a_miss_says_so_too():
 
 def test_an_absent_field_is_distinguished_from_a_value_not_on_the_list():
     """"We could not read the owner" and "the owner is not a leaver" are different facts about
-    whether this document should be archived, and the evidence must not collapse them."""
+    whether this document should be archived, and the evidence must not collapse them. The
+    absent case says so in its own words rather than borrowing the ordinary miss's — it is the
+    same sentence `not_in` uses, because for both operators an unrecorded value is not
+    evidence."""
     ev = disposition.evaluate({"owner": None, "sp_availability": {"owner": "unavailable"}},
                               OWNED_BY_LEAVER)
-    assert "not one of" in ev["conditions"][0]["reason"]
+    why = ev["conditions"][0]["reason"]
+    assert "NOT READ from SharePoint" in why
+    assert "not counted as one of" in why and "not evidence" in why
+
+
+# ── `not_in` — the roster the other way up ───────────────────────────────────────────────────
+#
+# "Archive anything owned by nobody on the CURRENT staff list." With AND-only conditions there is
+# no way to express that at all without this operator — `in` at least had the N-policies
+# workaround, so this is the more blocked of the two.
+
+CURRENT_STAFF = ["dave@utsw.edu", "Erin@UTSW.edu"]
+OWNED_BY_NOBODY_HERE = [{"field": "owner", "op": "not_in", "value": CURRENT_STAFF}]
+
+
+def test_a_document_owned_by_somebody_who_left_is_selected():
+    assert disposition.matches({"owner": "alice@utsw.edu"}, OWNED_BY_NOBODY_HERE) is True
+
+
+def test_a_document_owned_by_current_staff_is_not():
+    assert disposition.matches({"owner": "dave@utsw.edu"}, OWNED_BY_NOBODY_HERE) is False
+
+
+def test_it_folds_case_the_same_way_in_does():
+    """Otherwise the operators disagree about who is on the list, and the one that disagrees
+    quietly is the one that archives a current employee's files."""
+    assert disposition.matches({"owner": "ERIN@utsw.edu"}, OWNED_BY_NOBODY_HERE) is False
+
+
+def test_any_overlap_disqualifies_a_multi_value_column():
+    """"This document's category is not one of the retired ones" — if any of its categories IS
+    retired, it is not clean."""
+    rule = [{"field": "managed:Records Category", "op": "not_in", "value": ["Superseded"]}]
+    assert disposition.matches({"managed_columns": {"Records Category": ["Draft"]}}, rule) is True
+    assert disposition.matches({"managed_columns": {"Records Category": ["Draft", "Superseded"]}},
+                               rule) is False
+
+
+# ── the property to know about the pair ──────────────────────────────────────────────────────
+
+def test_AN_ABSENT_VALUE_MATCHES_NEITHER_in_NOR_not_in():
+    """THE LOAD-BEARING CASE, and the reason `not_in` is not the boolean negation of `in`.
+
+    `not_in` selects documents FOR an action — archival. A document whose owner Graph refused to
+    hand over HAS an owner; ACP just could not read it. Reading that silence as "owned by nobody
+    on the staff list" is acting on an absence as though it were a fact, pointed at the
+    destructive direction — and on an estate where the owner column was refused, the complement
+    reading would flag EVERY document."""
+    doc = {"owner": None}
+    assert disposition.matches(doc, OWNED_BY_NOBODY_HERE) is False
+    assert disposition.matches(doc, [{"field": "owner", "op": "in",
+                                      "value": CURRENT_STAFF}]) is False
+
+
+def test_this_diverges_from_ne_and_ne_is_unchanged():
+    """`ne` passes on an absent value (`None != "x"`) and says so in its own evidence line. It is
+    NOT changed here — every existing rule using it would move — but the divergence is a decision
+    rather than an oversight: an unreadable field satisfying a negative condition is defensible
+    for one value and indefensible for a list standing in for "everyone who still works here"."""
+    absent = {"owner": None}
+    assert disposition.matches(absent, [{"field": "owner", "op": "ne",
+                                         "value": "dave@utsw.edu"}]) is True
+    assert disposition.matches(absent, OWNED_BY_NOBODY_HERE) is False
+
+
+def test_a_malformed_value_matches_NOTHING_rather_than_everything():
+    """validate_match refuses these at save time, but matches() does not re-validate — and the
+    failure mode of getting this wrong is a rule that silently selects the whole estate for
+    archival. `not (not a list)` is the shape that would do it."""
+    for bad in ("dave@utsw.edu", [], None, 7):
+        assert disposition.matches({"owner": "alice@utsw.edu"},
+                                   [{"field": "owner", "op": "not_in", "value": bad}]) is False
+
+
+def test_the_value_shape_is_refused_at_save_time_too():
+    with pytest.raises(ValueError, match="non-empty list"):
+        disposition.validate_match([{"field": "owner", "op": "not_in", "value": "dave@utsw.edu"}])
+    with pytest.raises(ValueError, match="never match"):
+        disposition.validate_match([{"field": "owner", "op": "not_in", "value": []}])
+    disposition.validate_match(OWNED_BY_NOBODY_HERE)
+
+
+# ── audit evidence ───────────────────────────────────────────────────────────────────────────
+
+def _why(doc):
+    return disposition.evaluate(doc, OWNED_BY_NOBODY_HERE)["conditions"][0]["reason"]
+
+
+def test_the_evidence_names_the_list_both_ways():
+    assert "is not one of" in _why({"owner": "alice@utsw.edu"})
+    assert "is one of" in _why({"owner": "dave@utsw.edu"})
+
+
+def test_an_unread_field_says_it_was_not_counted_either_way():
+    """"We could not read the owner" must not read as "the owner is not on the staff list" —
+    that is the sentence a records manager would be defending."""
+    why = _why({"owner": None, "sp_availability": {"owner": "unavailable"}})
+    assert "NOT READ from SharePoint" in why
+    assert "either way" in why and "not evidence" in why
