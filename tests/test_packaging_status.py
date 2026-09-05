@@ -98,13 +98,20 @@ def test_every_check_passes_on_a_healthy_installation(tmp_path):
 def test_an_autoscaled_tier_inside_its_range_is_not_drift(tmp_path):
     """THE TEST THIS FILE EXISTS FOR.
 
-    The assess tier is configured 3-10 in the document and running at 7. The obvious check —
+    The remediate tier is configured 3-10 in the document and running at 7. The obvious check —
     compare against `replicaCount`, which is the FLOOR (3) — calls that drift. It is not: it is
     KEDA doing exactly what it was installed to do, and a status command that reports it is red on
     every correctly-working installation.
+
+    Read on remediate rather than assess since the owner pinned the assess tier warm at 5-5
+    (2026-09-05). A pinned tier is judged by the opposite rule — exact count, any difference is
+    drift — so asserting the autoscaled rule there would have been asserting the wrong rule and
+    passing for the wrong reason.
     """
-    report = status_for(tmp_path, fake.HEALTHY)
-    finding = check(report, "replicas.assess")
+    fixture = fake.shape(deployments=deployments_with(**{
+        "acp-worker-remediate": {"replicas": None, "ready": 7}}))
+    report = status_for(tmp_path, fixture)
+    finding = check(report, "replicas.remediate")
     assert finding["status"] == "pass", finding
     assert "within" in finding["detail"]
     assert report["drifted"] is False
@@ -115,9 +122,9 @@ def test_an_autoscaled_tier_outside_its_range_is_drift(tmp_path):
     at all — which would miss a tier scaled by hand, or one whose ScaledObject was deleted so
     nothing is holding the range any more."""
     fixture = fake.shape(deployments=deployments_with(**{
-        "acp-worker-assess": {"replicas": 20, "ready": 20}}))
+        "acp-worker-remediate": {"replicas": 20, "ready": 20}}))
     report = status_for(tmp_path, fixture)
-    finding = check(report, "replicas.assess")
+    finding = check(report, "replicas.remediate")
     assert finding["status"] == "fail"
     assert "outside" in finding["detail"]
     assert "3-10" in finding["detail"]
@@ -286,10 +293,14 @@ def test_a_missing_scaledobject_is_reported(tmp_path):
     """doctor's silent failure from the other side: doctor asks whether KEDA is installed before
     the fact, this asks whether the scalers are actually there afterwards. One deleted by a
     partial upgrade leaves its tier pinned wherever it was, with nothing reporting it."""
-    report = status_for(tmp_path, fake.shape(scaled_objects=["acp-worker-assess"]))
+    # One of the two autoscaled tiers keeps its scaler. Naming a tier the document does NOT
+    # autoscale would not exercise this check at all — assess is pinned warm now, so a
+    # ScaledObject on it is a different finding, not a smaller version of this one.
+    report = status_for(tmp_path, fake.shape(scaled_objects=["acp-worker-discover"]))
     finding = check(report, "scalers.present")
     assert finding["status"] == "fail"
-    assert "3 worker tier(s)" in finding["detail"]
+    assert "2 worker tier(s)" in finding["detail"]
+    assert "only 1" in finding["detail"]
 
 
 def test_scalers_unknown_when_keda_is_not_served(tmp_path):

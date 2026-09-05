@@ -124,14 +124,14 @@ Platform `azure` · release `2026.9` · VALID
 | `acp-preflight` | job | in-cluster | none | — | — | — | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
 | `acp-web-api` | service | in-cluster | public | 2–4 | 1/2Gi | — | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
 | `acp-discovery` | service | in-cluster | none | 1–3 | 1/2Gi | discovery | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
-| `acp-assess` | service | in-cluster | none | 3–10 | 2/4Gi | assess | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
+| `acp-assess` | service | in-cluster | none | 5–5 | 2/4Gi | assess | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
 | `acp-remediate` | service | in-cluster | none | 3–10 | 2/4Gi | remediate | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
 | `acp-ollama-gateway` | service | in-cluster | internal | 1–1 | 4/8Gi | — | — |
 | `acp-otel-collector` | service | in-cluster | internal | — | — | — | — |
 | `acp-grafana` | service | in-cluster | internal | — | — | — | — |
 | `acp-langfuse` | service | in-cluster | internal | — | — | — | `langfuse-secret-key` |
 
-Postgres connections at maximum replicas: **518** of 700 (182 spare).
+Postgres connections at maximum replicas: **418** of 700 (282 spare).
 
 > ⚠ platform 'azure' is planned: no reference deployment in this repository runs the contract suite against it yet
 

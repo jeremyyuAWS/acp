@@ -165,7 +165,19 @@ def test_missing_keda_is_a_blocker_that_explains_the_silence(tmp_path):
     assert report["ok"] is False
     finding = check(report, "keda.installed")
     assert finding["severity"] == "blocker"
-    assert "assess" in finding["detail"] and "remediate" in finding["detail"]
+
+    # The tiers are read from the document rather than named here. This assertion said "assess and
+    # remediate" until the owner pinned assess warm at 5-5 (2026-09-05); the finding then correctly
+    # named discover and remediate, and the test failed on the document rather than on the doctor.
+    # Deriving it means the next scaling decision does not break this test either — with a
+    # non-empty guard, because "every autoscaled tier is named" is satisfied by naming none.
+    autoscaled = [name for name, tier in load_example("standard-production")["workers"].items()
+                  if tier.get("autoscale")]
+    assert autoscaled, "no worker tier autoscales in the example; this check proves nothing"
+    for tier in autoscaled:
+        assert tier in finding["detail"], (
+            f"{tier} autoscales but the KEDA blocker does not name it; an operator cannot tell "
+            "which tiers will sit silently at their floor")
     assert "do NOTHING" in finding["remedy"] or "DOING" in finding["remedy"].upper()
 
 

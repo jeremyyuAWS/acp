@@ -231,3 +231,23 @@ both accepted by the API server and quietly do nothing. `acpctl doctor` now chec
 a live cluster (KEDA directly; NetworkPolicy enforcement by inference from the CNI, since it has
 no API to query) and reports a check it could not RUN as a blocker rather than a pass — the
 checks that cannot run are the ones guarding the failures that are silent.
+
+## Amendment — 2026-09-05: the assess tier is pinned warm, and 518 is now 418
+
+The connection-budget finding above is stated against `packaging/examples/standard-production.acp-deployment.yaml`
+as it stood, with the assess tier autoscaling 3-10. On 2026-09-05 the owner settled the phase-3
+parity question recorded in `packaging/docs/azure-parity.md` — bring the contract to production,
+not production to the contract — and that example now pins assess at `{min: 5, max: 5}` with no
+`autoscale` block, matching what `deploy/public/rightsize-production.sh` actually runs.
+
+The assess ceiling was the largest single term in the arithmetic, so the standard-production
+figure moves from **518 to 418** connections, and the Azure adapter's derived Postgres requirement
+from `max_connections >= 533` to `>= 433`. The regulated figure of 604 is unchanged; that profile's
+example was not part of the decision.
+
+**The finding itself is not weakened by this.** 418 is still far above the 150 `max_connections`
+confirmed live on the production Postgres, so the illustrative ranges remain undeployable against
+that database and the rule that found it still fires. What changed is one input, and the number is
+now derived in `packaging/docs/service-inventory.md` and asserted in
+`tests/test_azure_parity.py::test_pinning_assess_lowered_what_postgres_has_to_be_provisioned_for`,
+so a future range change moves it again without anyone editing this paragraph.

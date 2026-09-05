@@ -93,10 +93,29 @@ def test_managed_data_services_disable_the_in_cluster_subchart():
 
 
 def test_queue_signals_select_keda_and_request_signals_select_hpa():
-    """PRD S11 prefers queue depth and oldest-job age; CPU lags a batch workload."""
+    """PRD S11 prefers queue depth and oldest-job age; CPU lags a batch workload.
+
+    Read on `remediate` rather than `assess`: the example pins assess warm at 5-5 with no
+    autoscale block (the owner's 2026-09-05 parity decision), so it has no scaler to select and
+    asserting one there would test the fixture rather than the rule.
+    """
     rendered = values(load_example("standard-production"))
-    assert rendered["workers"]["assess"]["autoscaling"]["scaler"] == "keda"
+    assert rendered["workers"]["remediate"]["autoscaling"]["scaler"] == "keda"
     assert rendered["api"]["autoscaling"]["scaler"] == "hpa"
+
+
+def test_a_pinned_tier_renders_a_fixed_replica_count_and_no_scaler():
+    """The other half of the same rule, and the half the parity decision now rests on.
+
+    A tier with no `autoscale` block must render `autoscaling.enabled: false` — that flag is what
+    the chart branches on to emit a `ScaledObject`, so a pinned tier that rendered `true` would
+    hand a warm pool to KEDA anyway, and the document would still read as pinned.
+    """
+    rendered = values(load_example("standard-production"))
+    assess = rendered["workers"]["assess"]
+    assert assess["autoscaling"]["enabled"] is False
+    assert "scaler" not in assess["autoscaling"]
+    assert assess["replicaCount"] == 5
 
 
 @pytest.mark.parametrize("path", EXAMPLES, ids=EXAMPLE_IDS)

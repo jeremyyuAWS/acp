@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import copy
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -344,7 +345,12 @@ def test_the_queue_scaler_filters_on_the_column_the_table_actually_has():
     """
     manifests = render(load_example("standard-production"))
     scaled = of_kind(manifests, "ScaledObject")
-    assert len(scaled) == 3, "expected one ScaledObject per worker role"
+    # TWO, not three: the example pins assess warm at 5-5 with no autoscale block (the owner's
+    # 2026-09-05 parity decision), so it gets no scaler. Asserted as the exact SET of roles rather
+    # than a count, because the loop below passes vacuously on an empty list — a chart that
+    # rendered no ScaledObject at all would otherwise read as a chart with no bad queries in it.
+    roles = {obj["metadata"]["labels"]["acp.mova.io/worker-role"] for obj in scaled}
+    assert roles == {"discover", "remediate"}, roles
     for obj in scaled:
         for trigger in obj["spec"]["triggers"]:
             query = trigger["metadata"]["query"]
@@ -354,27 +360,78 @@ def test_the_queue_scaler_filters_on_the_column_the_table_actually_has():
 
 @needs_helm
 def test_each_role_scales_on_its_own_backlog_only():
-    """Three tiers sharing one depth query would scale all of them on any one tier's backlog —
-    and the assess tier is the expensive one, so that is a real bill."""
+    """Tiers sharing one depth query would scale all of them on any one tier's backlog — and the
+    assess tier is the expensive one, so that is a real bill.
+
+    Assess is pinned warm and has no scaler of its own now, which makes the leak worth checking
+    run the OTHER way: no remaining query may count assess's job types. A scaler that did would
+    grow discover or remediate every time an assessment backlog built up, on a tier the operator
+    deliberately fixed at five replicas — the same wrong bill, arriving from the opposite side.
+    """
+    from acpctl.inventory import LANE_JOB_TYPES, TIER_ROLE
+
     manifests = render(load_example("standard-production"))
     queries = {}
     for obj in of_kind(manifests, "ScaledObject"):
         role = obj["metadata"]["labels"]["acp.mova.io/worker-role"]
         queries[role] = obj["spec"]["triggers"][0]["metadata"]["query"]
-    assert len(set(queries.values())) == 3, "worker roles share a scaler query"
+    assert set(queries) == {"discover", "remediate"}, sorted(queries)
+    assert len(set(queries.values())) == 2, "worker roles share a scaler query"
     assert "remediate_file" in queries["remediate"]
-    assert "remediate_file" not in queries["assess"]
     assert "scan_discover" in queries["discover"]
+    # Parsed out of the IN list rather than searched for as substrings. The assess lane owns the
+    # job type `scan`, which is a substring of discover's `scan_discover` and `scan_folder` — a
+    # containment check reports a leak on a query that is correct, and the first draft of this
+    # test did exactly that.
+    # The label carries the TIER name and LANE_JOB_TYPES is keyed by ROLE; they are the same
+    # string for assess and remediate and differ for discover/discovery, which is the mismatch
+    # inventory.TIER_ROLE exists for and the one a hand-written lookup gets wrong.
+    assess_lane = set(LANE_JOB_TYPES[TIER_ROLE["assess"]])
+    for tier, query in queries.items():
+        counted = set(re.findall(r"'([^']+)'", query)) - {"queued"}
+        leaked = counted & assess_lane
+        assert not leaked, (
+            f"the {tier} scaler counts the pinned assess tier's backlog: {sorted(leaked)}")
+        own = set(LANE_JOB_TYPES[TIER_ROLE[tier]])
+        assert counted == own, (
+            f"the {tier} scaler counts {sorted(counted)}, not its own lane {sorted(own)}")
 
 
 @needs_helm
-def test_an_autoscaled_tier_does_not_also_pin_its_replica_count():
-    """Setting both means every `helm upgrade` resets replicas to the floor and the autoscaler
-    climbs back — a scale-down at the exact moment a deploy is already adding load."""
+def test_replicas_are_pinned_exactly_where_no_autoscaler_owns_them():
+    """Both directions of one rule, and the example now exercises both.
+
+    An AUTOSCALED tier must not also set `spec.replicas`: every `helm upgrade` would reset it to
+    the floor and the autoscaler would climb back — a scale-down at the exact moment a deploy is
+    already adding load.
+
+    A PINNED tier must set it. The assess tier is pinned warm at 5-5 by the owner's parity
+    decision, and the only thing that actually makes five replicas exist is this field. Omitting
+    it leaves the Deployment on Kubernetes' default of one, with nothing to scale it up and
+    nothing anywhere reporting a difference — the document would say five, the estate would run
+    one, and both halves of the decision would read as applied.
+
+    Which tiers are which is read from the rendered manifests (what has a scaler pointed at it),
+    not from a list written here, so the two cannot drift apart.
+    """
     manifests = render(load_example("standard-production"))
+    autoscaled = {obj["spec"]["scaleTargetRef"]["name"]
+                  for kind in ("ScaledObject", "HorizontalPodAutoscaler")
+                  for obj in of_kind(manifests, kind)}
+    assert autoscaled, "nothing in the chart is autoscaled; this test would pass vacuously"
+
+    pinned = []
     for deployment in of_kind(manifests, "Deployment"):
-        assert "replicas" not in deployment["spec"], (
-            f"{deployment['metadata']['name']} pins replicas while an autoscaler owns them")
+        name = deployment["metadata"]["name"]
+        if name in autoscaled:
+            assert "replicas" not in deployment["spec"], (
+                f"{name} pins replicas while an autoscaler owns them")
+        else:
+            assert deployment["spec"].get("replicas"), (
+                f"{name} has no autoscaler and no replica count, so it will run one replica "
+                "whatever the document says")
+            pinned.append(name)
+    assert pinned, "no pinned tier was rendered; the second half of this test proved nothing"
 
 
 # ── the profile guarantees, on the rendered objects ───────────────────────────

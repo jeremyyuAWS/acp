@@ -84,9 +84,17 @@ class AzureApp:
     def autoscaled(self) -> bool:
         """Does this app scale at all?
 
-        A range whose min equals its max does not, whatever scale rules are attached — and that
-        distinction is the whole finding for the assess and remediate tiers, which production pins
-        warm at 5-5 while the contract's example describes them as autoscaling 3-10.
+        A range whose min equals its max does not, whatever scale rules are attached. That
+        distinction was the whole finding this comparison was built for: production pinned assess
+        and remediate warm at 5-5 while the contract's example described both as autoscaling 3-10.
+
+        BOTH HALVES OF THAT SENTENCE HAVE SINCE MOVED, in opposite directions, which is why it is
+        rewritten here rather than left standing. #1370 gave remediate a real queue-depth rule and
+        a 5-10 range, so production came to the contract on that tier. On 2026-09-05 the owner
+        decided the other one the other way, and the example now pins assess at 5-5 (see
+        packaging/docs/azure-parity.md), so the contract came to production there. The property
+        below is unchanged by either: min == max means it does not scale, and it is what the
+        parity report reads to say so.
         """
         if self.min_replicas is None or self.max_replicas is None:
             return False

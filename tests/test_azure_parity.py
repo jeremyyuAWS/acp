@@ -129,19 +129,28 @@ def test_a_decimal_memory_quantity_is_not_reported_as_a_difference(monkeypatch):
     assert not memory_differences, [d.render() for d in memory_differences]
 
 
-def test_the_assess_tier_is_still_pinned_warm_and_does_not_autoscale(report):
-    """THE HEADLINE FINDING, pinned so it cannot quietly change — and it already changed once.
+def test_the_assess_tier_stays_pinned_warm(report):
+    """THE DECISION, GUARDED ON BOTH SIDES — and this test has now outlived two states of it.
 
-    When this was first written it covered BOTH batch tiers: assess and remediate were each pinned
-    at five replicas. PR #1370 ("Autoscale remediation within the database budget") landed while
-    this branch was being built and gave remediate a real queue-depth scale rule and a 5-10 range.
-    Assess is still pinned, and `rightsize-production.sh` still says why: throughput-sensitive
-    batch stages kept warm on purpose, so a large run holds its performance baseline.
+    It began as the headline FINDING: production pinned assess at five warm replicas and the
+    contract described it autoscaling 3-10, so adopting the chart unchanged would have replaced a
+    deliberate warm pool with an autoscaler. On 2026-09-05 the owner decided that question — bring
+    the contract to production — and the example was changed to `{min: 5, max: 5}` with no
+    `autoscale` block. So the assertion below flipped: it used to require the two sides to DIFFER
+    and now requires them to AGREE.
 
-    So the finding narrowed rather than disappeared — adopting the chart unchanged would still
-    replace a deliberate warm pool with an autoscaler, on one tier instead of two. This test is
-    what made that visible within the hour: it failed on the merge rather than letting the
-    document keep making a claim about remediate that had stopped being true.
+    It covered both batch tiers once. PR #1370 gave remediate a real queue-depth scale rule and a
+    5-10 range while this file was being written, and this test failed on the merge rather than
+    letting the document keep a claim about remediate that had stopped being true. Same job now,
+    against a decision instead of a finding.
+
+    WHY THE CONTRACT HALF NEEDS THREE ASSERTIONS AND NOT ONE. `min == max` and the absent
+    `autoscale` block are two halves of one statement, and either alone is wrong in a way that
+    reads as configured: a scale rule on a tier that cannot move is a declaration with no
+    consequence, and a ceiling above the floor with nothing to scale describes capacity nothing
+    will ever reach. values.py derives `autoscaling.enabled` from the block's ABSENCE, so the
+    chart is only right when both hold. The way this decision gets lost is not an argument — it is
+    somebody restoring a plausible-looking autoscale block and nothing going red.
     """
     from acpctl.azure_baseline import baseline
     assess = baseline()["acp-assess"]
@@ -149,8 +158,46 @@ def test_the_assess_tier_is_still_pinned_warm_and_does_not_autoscale(report):
         "assess is no longer pinned at 5 in rightsize-production.sh — the parity document's "
         "central argument needs rewriting")
     assert not assess.autoscaled
-    assert report["contract"]["assess"]["autoscaled"] is True, (
-        "the contract no longer autoscales assess; the headline is stale from the other side")
+
+    contract = report["contract"]["assess"]
+    assert (contract["replicas.min"], contract["replicas.max"]) == (5, 5), (
+        "the contract no longer pins assess at 5-5; the owner's 2026-09-05 decision was to record "
+        "production's warm pool, and packaging/docs/azure-parity.md says it did")
+    assert contract["autoscaled"] is False, (
+        "an autoscale block is back on the assess tier. That is a performance change — it replaces "
+        "a warm pool with an autoscaler on a throughput-sensitive batch stage — so it needs the "
+        "owner's decision and a rewrite of azure-parity.md, not a passing test")
+
+
+def test_pinning_assess_lowered_what_postgres_has_to_be_provisioned_for():
+    """THE DECISION'S CONSEQUENCE, SO IT CANNOT BE MISREAD AS COSMETIC.
+
+    The assess ceiling was the largest single term in the fleet's connection demand: ten replicas
+    at `ACP_WORKERS` threads plus API headroom each. Pinning it at five takes the worst case from
+    518 to 418, and the Azure adapter's Postgres requirement from `max_connections >= 533` to
+    `>= 433`.
+
+    That is the seam the packaging contract exists to create, working in the direction that is
+    easy to miss — a latency decision, stated once in the document, moving the number a database
+    server has to be provisioned to reach. Asserted here rather than left to the generated table,
+    because a number in a generated table is not evidence that anything derived it.
+    """
+    import yaml
+
+    from acpctl.azure_parity import EXAMPLE
+    from acpctl.inventory import connection_budget
+
+    # The generator's own pointer to the example, not a second copy of the path — a comparison
+    # against a file the report does not read would prove nothing about the report.
+    doc = yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))
+    budget = connection_budget(doc)
+    assert budget["worstCaseConnections"] == 418, budget
+    assert budget["withinBudget"] is True
+
+    doc["workers"]["assess"]["replicas"]["max"] = 10
+    assert connection_budget(doc)["worstCaseConnections"] == 518, (
+        "restoring the 3-10 ceiling no longer moves the budget — the demand arithmetic has "
+        "stopped reading the replica maximum, and this test proves nothing")
 
 
 def test_remediation_now_autoscales_on_its_own_lane_job_types():
@@ -201,7 +248,6 @@ def test_the_known_divergences_are_exactly_these(report):
     assert found == {
         ("api", "replicas.max"),
         ("discover", "replicas.max"),
-        ("assess", "replicas.min"), ("assess", "replicas.max"), ("assess", "autoscaled"),
         ("remediate", "replicas.min"),
     }, sorted(found)
 
@@ -231,7 +277,7 @@ def test_every_acknowledgement_carries_a_reason():
 
 def test_the_report_does_not_claim_parity_while_divergences_exist(report):
     assert report["parity"] is False
-    assert report["divergences"] == 6
+    assert report["divergences"] == 3
 
 
 # ── what the repository can and cannot confirm ────────────────────────────────
@@ -301,8 +347,12 @@ def test_the_document_keeps_its_authored_half():
     """The decision — adopt the pinned-warm model or adopt autoscaling — is authored above the
     markers. A generator that overwrote it would delete the only part nobody can re-derive."""
     text = (PACKAGING / "docs" / "azure-parity.md").read_text(encoding="utf-8")
-    assert "The finding that matters" in text
-    assert text.index("The finding that matters") < text.index("BEGIN GENERATED")
+    assert "The finding that mattered, and the decision taken" in text
+    assert "Decided 2026-09-05 by the owner" in text, (
+        "the authored half no longer records WHO decided the pinned-warm question and when. That "
+        "sentence is the whole reason the example pins assess; without it the document reads as "
+        "though the contract simply happens to agree with production")
+    assert text.index("The finding that mattered") < text.index("BEGIN GENERATED")
 
 
 def test_the_check_fails_when_the_document_is_stale():
