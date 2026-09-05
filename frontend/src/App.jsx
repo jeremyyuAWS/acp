@@ -8,6 +8,8 @@ import { preflightVerdict } from './discoveryPreflightGate.js'
 import { scanPollDecision } from './scanPollDecision.js'
 import { scanFailureDetail, hasFallbackInventory } from './scanFailureMessage.js'
 import LiveAssessmentLive from './LiveAssessmentLive.jsx'
+import RemediationRunCard from './RemediationRunCard.jsx'
+import { useRemediationRun } from './useRemediationRun.js'
 import { armNotifyOnComplete, notifyScanComplete, notifyScanFailed, notificationsSupported, notifyPermission } from './scanNotify.js'
 import { refreshDriveToken } from './driveAuth.js'
 import { refreshSPToken } from './spAuth.js'
@@ -477,6 +479,17 @@ export default function App() {
     document.documentElement.dataset.wcag = wcagMode ? 'on' : ''
   }, [wcagMode])
   const [hitlCount, setHitlCount] = useState(0)  // pending HITL items, reported up from Remediate for the nav badge
+
+  // The remediation run's live state, held at App level so the persistent card survives a tab
+  // change — `<Remediate/>` is mounted only on its own tab, so anything it owns dies on a switch.
+  //
+  // POSITION IS LOAD-BEARING, TWICE. It reads `scan?.run?.id` rather than the `run` const derived
+  // further down, because that const is in the temporal dead zone up here. And it must sit ABOVE
+  // the `if (!me) return <SignIn/>` early return below: a hook after a conditional return is
+  // called on some renders and not others, which is "Rendered more hooks than during the previous
+  // render" and takes the whole app down. Both were caught by the full suite rather than by any
+  // test of this card.
+  const { snapshot: remRunSnapshot, receivedAt: remRunAt } = useRemediationRun(scan?.run?.id || null)
   // Durable (background queue) is the default (2026-08-21). The session-scoped path runs as a
   // bare in-process thread with no queue behind it — the code's own comment on it has always said
   // "lost if that replica restarts", and this app auto-deploys on every merge to main, so that was
@@ -2125,6 +2138,15 @@ export default function App() {
       <LiveAssessmentLive scanId={liveScanId || run?.id}
                           active={assessPhase === 'running' && view !== 'discover' && view !== 'remediate'}
                           onStop={() => stopScan(liveScanId || run?.id)} />
+
+      {/* THE PERSISTENT REMEDIATION CARD. Outside the tabpanel on purpose: `<Remediate/>` below
+          is mounted only while `view === 'remediate'`, so a card rendered inside it — and the
+          state feeding it — is torn down the instant the user opens any other tab. A run that is
+          still applying fixes must stay visible from wherever they are. `useRemediationRun` owns
+          the snapshot for the same reason. */}
+      <RemediationRunCard snapshot={remRunSnapshot} receivedAt={remRunAt}
+                          onOpen={view === 'remediate' ? null
+                                  : () => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
 
       <main id="main-content" tabIndex={-1}>
       <div id="workflow-panel" role="tabpanel" aria-labelledby={`workflow-tab-${view}`}>
