@@ -2905,7 +2905,13 @@ html[data-wcag="on"] .wcag-toggle--on {
 .access-restricted-none { margin: 0; font-size: 12.5px; line-height: 1.5; }
 
 /* Roles administration (PRD §8). */
-.roles-not-enforced { margin-top: 14px; padding: 12px; border: 1px solid #E5C875;
+/* The advisory note both access screens use. `.people-domain-note` was the same six declarations
+   written inline in PeopleAccess.jsx — the same border, tint, radius and size — so the two notes
+   already looked identical and only differed in how they were built. Sharing the rule means they
+   cannot drift apart, which matters here because they sit one above the other on the same screen
+   and a reader is meant to weigh them as the same kind of statement. */
+.roles-not-enforced,
+.people-domain-note { margin-top: 14px; padding: 12px; border: 1px solid #E5C875;
   border-radius: 9px; background: #FFF8E7; font-size: 13px; line-height: 1.5; }
 .roles-table { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .roles-row { display: grid; grid-template-columns: minmax(220px, 2fr) 90px 150px minmax(210px, 1fr);
@@ -2936,6 +2942,59 @@ html[data-wcag="on"] .wcag-toggle--on {
   border: 1px solid #E5C875; font-size: 12px; line-height: 1.5; }
 .people-role-cell { display: grid; gap: 4px; }
 .people-role-impact { font-size: 11.5px; line-height: 1.45; }
+
+/* ── The People row ────────────────────────────────────────────────────────────
+   A CLASS RATHER THAN AN INLINE TEMPLATE, and the column count is the reason.
+
+   The row was `gridTemplateColumns: 'minmax(210px,1.5fr) 110px 140px minmax(180px,1fr)'` —
+   FOUR tracks — written when the row had four cells. The workspace-role cell was added later
+   as a fifth without widening it, so grid placed the actions cell on an implicit SECOND ROW,
+   at column 1. Measured on the running app: 4 declared tracks, 5 children, children at four
+   distinct y offsets, with Suspend/Remove at x=57 (under the email) instead of right-aligned
+   beside the dropdowns.
+
+   Two selectors because the fifth cell is conditional: PeopleAccess renders the workspace-role
+   column only when roles exist, and a five-track template on a four-cell row would leave a gap
+   where nothing is. This is the same shape as `.roles-row` on the sibling Roles screen, which
+   is why that screen never had the bug. */
+.people-row { display: grid; grid-template-columns: minmax(210px, 1.5fr) 110px 140px
+              minmax(160px, 1fr); gap: 12px; align-items: center; padding: 13px 14px; }
+/* The actions track is sized to its CONTENT (two buttons plus their gap), not to a fraction.
+   A `1fr` share of what is left came out at ~150px against ~168px of buttons, so Suspend and
+   Remove wrapped onto separate lines and the row grew to three times its height. Everything
+   else flexes around this one fixed need. */
+.people-row.has-role-column { grid-template-columns: minmax(150px, 1.2fr) 104px minmax(112px, 0.8fr)
+              minmax(124px, 0.9fr) 178px; }
+.people-row + .people-row { border-top: 1px solid var(--line); }
+.people-row-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px;
+              flex-wrap: wrap; }
+
+/* ── The status badge ──────────────────────────────────────────────────────────
+   WRAPPED, BECAUSE A GRID ITEM IS BLOCKIFIED. The badge sets `display: inline-block` so the
+   pill hugs its label, but as a DIRECT grid child that computes to `display: block` (CSS
+   Grid §6.1 blockification) and the tint stretched across the whole 110px track as a band.
+   Measured: computed display "block", width 110px. The wrapper takes the grid slot so the
+   badge itself is back in an inline formatting context and sizes to its text.
+
+   COLOURS COME FROM THE SEMANTIC TOKENS. They were hardcoded hex — except `failed`, which
+   already used var(--error-fg-strong) and was the tell that the rest had drifted. Every
+   hardcoded pair did pass AA, so this is not a contrast fix; it is that `:root` defines a
+   token pair for each of these exact states and `active` was using a weaker green than the
+   one the app audited (4.72:1 against --success-fg-strong/--success-bg's 7.56:1). Inline JSX
+   colours are also invisible to wcagCssVariableUsage.test.jsx, which only scans this file. */
+.people-badge-cell { min-width: 0; }
+.people-badge { display: inline-block; padding: 3px 8px; border-radius: 99px; font-size: 12px;
+              font-weight: 700; white-space: nowrap; }
+.people-badge.is-active,
+.people-badge.is-access_ready   { color: var(--success-fg-strong); background: var(--success-bg); }
+.people-badge.is-invited        { color: var(--info-fg);           background: var(--info-bg); }
+.people-badge.is-setup_required { color: var(--warn-fg);           background: var(--warn-bg); }
+.people-badge.is-failed         { color: var(--error-fg-strong);   background: var(--error-bg); }
+/* Suspended and the unknown-status fallback are deliberately NEUTRAL: there is no semantic
+   token for "withdrawn", and borrowing the error palette would read as a fault rather than as
+   an administrator's decision. --muted follows the WCAG toggle. */
+.people-badge.is-suspended,
+.people-badge.is-unknown        { color: var(--muted); background: var(--line); }
 
 /* Live Operations drawer — the "this is live" indicator. A slow opacity pulse on a dot that is
    already legible without it: the connection state is also spelled out in text beside it, so the
