@@ -129,6 +129,38 @@ def _in(observed, allowed) -> bool:
     return any(_fold(h) in want for h in have)
 
 
+def _not_in(observed, allowed) -> bool:
+    """The complement of `in` over RECORDED values — and deliberately not its boolean negation.
+
+    THE ROSTER, THE OTHER WAY UP: "archive anything owned by nobody on the current staff list".
+    With AND-only conditions there is no way to express that at all without this operator; `in`
+    at least had the N-policies workaround.
+
+    AN ABSENT VALUE MATCHES NEITHER `in` NOR `not_in`, so `in(x) or not_in(x)` is NOT always true
+    and this is the property to know about the pair. `not_in` selects documents FOR an action —
+    typically archival — and a document whose owner Graph refused to hand over has an owner; ACP
+    just could not read it. Treating that silence as "owned by nobody on the staff list" is
+    acting on an absence as though it were a fact, which is the failure the whole availability
+    contract in sp_metadata exists to prevent, pointed at the destructive direction. On an estate
+    where the owner column was refused, the complement reading would flag EVERY document.
+
+    That does diverge from `ne`, which passes on an absent value (`None != "x"`) and says so in
+    its own evidence line. `ne` is not changed here — every existing rule using it would move —
+    but the divergence is deliberate rather than overlooked: an unreadable field satisfying a
+    negative condition is defensible for one value and indefensible for a list that stands in for
+    "everyone who still works here".
+
+    A malformed or empty `value` matches NOTHING rather than everything. validate_match refuses
+    both at save time, but `matches()` does not re-validate, and the failure mode of getting this
+    wrong is a rule that silently selects the entire estate for archival.
+    """
+    if not isinstance(allowed, (list, tuple, set)) or not allowed:
+        return False
+    if observed is None:
+        return False
+    return not _in(observed, allowed)
+
+
 _OPS = {
     "eq": lambda a, b: a == b,
     "ne": lambda a, b: a != b,
@@ -143,6 +175,8 @@ _OPS = {
     # exists for. `value` must be a list; validate_match refuses anything else, because a string
     # here would silently match nothing.
     "in": _in,
+    # The complement over RECORDED values only — an absent value matches neither. See _not_in.
+    "not_in": _not_in,
     # ISO-date comparisons for "modified before <date>" style lifecycle rules.
     "before": _iso_before,
     "after": lambda a, b: _iso_before(b, a),
@@ -168,12 +202,13 @@ def validate_match(match: list[dict]) -> None:
         # fire must not be saveable. A string value would match nothing (it is not a list), and
         # an empty list matches nothing by definition — both would validate, save, and sit in the
         # policy list looking like a working roster rule forever.
-        if cond["op"] == "in":
+        if cond["op"] in ("in", "not_in"):
             value = cond.get("value")
             if not isinstance(value, (list, tuple)) or not value:
                 raise ValueError(
-                    f"op 'in' needs a non-empty list of values, got {value!r} — a single value "
-                    f"is 'eq', and an empty list is a rule that can never match")
+                    f"op {cond['op']!r} needs a non-empty list of values, got {value!r} — a "
+                    f"single value is 'eq'/'ne', and an empty list is a rule that can never "
+                    f"match")
 
 
 def tag_list(action_config: dict | None) -> list[str]:
@@ -363,10 +398,16 @@ def _condition_reason(op: str, field: str, observed, expected, passed: bool,
     if not passed:
         if absent and op in ("gt", "gte", "lt", "lte", "before", "after", "eq"):
             return absent_label
-        if absent and op == "in":
-            return f"{absent_label}; a value that is not recorded is not one of {expected!r}"
+        if absent and op in ("in", "not_in"):
+            # Both, and for opposite reasons: `in` cannot match what is not there, and `not_in`
+            # REFUSES to, because selecting a document for archival on the strength of a field
+            # nobody could read is the one direction this must not fail in.
+            return (f"{absent_label}; not counted as {'one of' if op == 'in' else 'outside'} "
+                    f"{expected!r} either way, because an unrecorded value is not evidence")
         if op == "in":
             return f"'{observed}' is not one of {expected!r}"
+        if op == "not_in":
+            return f"'{observed}' is one of {expected!r}"
         if absent and op in ("contains", "prefix"):
             return f"{absent_label}; treated as empty string, which does not satisfy {op!r} {expected!r}"
         if op == "before":
@@ -389,6 +430,8 @@ def _condition_reason(op: str, field: str, observed, expected, passed: bool,
         return f"field not recorded; any absent value is not equal to '{expected}'"
     if op == "in":
         return f"'{observed}' is one of {expected!r}"
+    if op == "not_in":
+        return f"'{observed}' is not one of {expected!r}"
     if op == "before":
         return f"'{observed}' is before '{expected}'"
     if op == "after":

@@ -30,11 +30,11 @@ const read = (f) => readFileSync(join(HERE, f), 'utf8')
 const BACKEND_FIELDS = new Set(['department', 'business_criticality', 'regulatory_tags', 'triage_score',
   'source', 'owner', 'age_days', 'path', 'parent_folder', 'modified_age_days', 'modified_at', 'created_at',
   'doc_class', 'size_kb'])
-// `in` (set membership, for a departed-employee roster) is backend-only for now: the builder
-// offers no multi-value input, and a roster is pasted or POSTed rather than typed one name at a
-// time. It is listed so this mirror stays a mirror.
+// `in` / `not_in` (set membership, for a departed-employee roster and its complement) are
+// backend-only for now: the builder offers no multi-value input, and a roster is pasted or
+// POSTed rather than typed one name at a time. They are listed so this mirror stays a mirror.
 const BACKEND_OPS = new Set(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'contains', 'prefix', 'before',
-  'after', 'in'])
+  'after', 'in', 'not_in'])
 
 const draft = (over = {}) => ({ ...emptyDraft(), ...over, values: { ...emptyDraft().values, ...(over.values || {}) } })
 
