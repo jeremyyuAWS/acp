@@ -36,10 +36,10 @@ import UtilizationBar from './UtilizationBar.jsx'
 // distinction above.
 export default function WorkerAvailability({ snap, busy, msg, onAdjust,
                                               replicas, replicasBusy, replicasMsg, onAdjustReplicas,
-                                              capacity }) {
+                                              capacity, suppressStall = false }) {
   if (!snap) return null
   const externallyManaged = snap.runtime_mode === 'distributed' && snap.alive
-  const stalled = isQueueStalled(snap.alive, snap.oldestQueuedCreatedAt)
+  const stalled = !suppressStall && isQueueStalled(snap.alive, snap.oldestQueuedCreatedAt)
   const stalledAge = stalled ? queuedAgeSecs(snap.oldestQueuedCreatedAt) : null
   // diagnoseWorkerHealth (workerDiagnosis.js) covers strictly more ground than the stall check
   // above (offline reasons, revision health, capacity ceiling) but its own queue-stall rule

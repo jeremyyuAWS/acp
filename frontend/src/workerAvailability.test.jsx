@@ -164,6 +164,17 @@ describe('WorkerAvailability queue-stall warning', () => {
     expect(c.querySelector('[role="alert"]')).toBeTruthy()
   })
 
+  it('does not attach a current queue warning to a completed or historical scan', async () => {
+    const stale = new Date(Date.now() - 120_000).toISOString()
+    const c = await mount({
+      snap: { workers: 4, alive: true, oldestQueuedCreatedAt: stale },
+      suppressStall: true,
+    })
+    expect(c.textContent).toMatch(/online/i)
+    expect(c.textContent).not.toMatch(/may not be actually claiming work/i)
+    expect(c.querySelector('[role="alert"]')).toBeFalsy()
+  })
+
   it('does not warn when offline — that is already a separate, visible problem', async () => {
     const stale = new Date(Date.now() - 120_000).toISOString()
     const c = await mount({ snap: { workers: 0, alive: false, oldestQueuedCreatedAt: stale } })
