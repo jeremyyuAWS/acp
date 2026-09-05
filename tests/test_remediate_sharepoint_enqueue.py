@@ -58,21 +58,41 @@ def test_a_sharepoint_batch_carries_no_drive_token(client, isolated_store):
             "the missing-token failure is what took the 147-document batch down")
 
 
-def test_every_submission_is_stamped_with_its_own_batch(client, isolated_store):
+def test_equivalent_submission_reuses_the_snapshot_execution(client, isolated_store):
     _save(isolated_store, "sp-2", "sharepoint")
 
     first = client.post("/scans/sp-2/remediate", json={}).json()
     second = client.post("/scans/sp-2/remediate", json={}).json()
 
-    assert first["batch_id"] and second["batch_id"]
-    assert first["batch_id"] != second["batch_id"], (
-        "two submissions sharing a batch id are indistinguishable in the counts, which is the "
-        "state that reported 294 failures against 147 documents")
-    assert {isolated_store.get_job(j)["batch_id"] for j in second["job_ids"]} == {second["batch_id"]}
+    assert first["batch_id"] and second["batch_id"] == first["batch_id"]
+    assert first["snapshot_id"] == second["snapshot_id"]
+    assert first["reused"] is False and second["reused"] is True
+    assert set(first["job_ids"]) == set(second["job_ids"])
+    assert {isolated_store.get_job(j)["payload"]["snapshot_id"]
+            for j in second["job_ids"]} == {second["snapshot_id"]}
 
     status = isolated_store.remediation_status("sp-2")
     assert status["batch_id"] == second["batch_id"]
     assert status["queued"] == status["batch_documents"] == len(second["job_ids"])
+
+
+def test_completed_submission_is_reused_for_the_same_snapshot(client, isolated_store):
+    _save(isolated_store, "sp-complete", "sharepoint")
+    first = client.post("/scans/sp-complete/remediate", json={}).json()
+    with isolated_store._db.cursor() as cur:
+        for jid in first["job_ids"]:
+            isolated_store._db.execute(cur, "UPDATE jobs SET status='done' WHERE id=%s", (jid,))
+    second = client.post("/scans/sp-complete/remediate", json={}).json()
+    assert second["reused"] is True
+    assert set(second["job_ids"]) == set(first["job_ids"])
+
+
+def test_a_different_exact_scope_creates_a_distinct_execution(client, isolated_store):
+    _save(isolated_store, "sp-scope", "sharepoint")
+    first = client.post("/scans/sp-scope/remediate", json={"scope": ["a.docx"]}).json()
+    second = client.post("/scans/sp-scope/remediate", json={"scope": ["b.pptx"]}).json()
+    assert second["reused"] is False
+    assert second["batch_id"] != first["batch_id"]
 
 
 def test_a_drive_batch_still_carries_its_token(client, isolated_store):
