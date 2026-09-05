@@ -3996,6 +3996,11 @@ class Store:
                          "sync_cursors",  # connector sync position is customer-derived, not config
                          "overview_snapshots",  # derived from scan results — customer data, not config
                          "scan_events",  # ADR 0042 lifecycle log — a record OF customer scans
+                         # A delivery operation names a customer's document and the provider
+                         # container it was written into; a hold names a customer's run. Both are
+                         # a record OF customer work, not configuration, and neither survives a
+                         # reset — the same reading release_executions gets two lines below.
+                         "remediation_delivery", "remediation_run_hold",
                          # Release executions and their provider destinations are customer data.
                          "release_documents", "release_roots", "release_executions",
                          "content_workspaces",  # ADR 0044 — a customer's own workspace, not config
@@ -4057,7 +4062,10 @@ class Store:
                                "remediation_diff", "applied_fixes", "ai_calls",
                                "second_opinion_reservations", "finding_comments",
                                "jobs", "overview_snapshots", "scan_events", "orchestration_events",
-                               "scan_folder_completions"]
+                               "scan_folder_completions",
+                               # Both are scan_id-keyed, so the standard subquery scopes them to
+                               # this owner's runs exactly as it does the rest.
+                               "remediation_delivery", "remediation_run_hold"]
     # Tables that key on doc_id (not scan_id), scoped via a documents.owner_email join.
     _RESET_USER_DOC_TABLES = ["disposition_audit", "remediation_state"]
 
