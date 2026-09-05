@@ -5833,7 +5833,9 @@ class Store:
           ok             successful calls (ok=1)
           errors         failed calls
           avg_latency_ms mean latency of successful calls (0 when no successful calls)
-          p95_latency_ms 95th-percentile latency of successful calls (None when < 2 data points)
+          p95_latency_ms 95th-percentile latency of successful calls using the nearest-rank
+                         convention (same as SQL percentile_disc(0.95)): index
+                         min(ceil(N*0.95), N)-1 into the sorted list. None when no ok calls.
           throttle_count calls that ended with reason='http_429' — HF rate-limits the endpoint
           cold_start_count successful calls with latency > 30 000 ms — dedicated-endpoint cold start
           last_call_ts   ISO timestamp of the most recent call (None when no calls in window)
@@ -5869,13 +5871,13 @@ class Store:
             latencies = [r["latency_ms"] for r in self._db.fetchall(cur)
                          if r.get("latency_ms") is not None]
 
+        import math
         calls = int(row.get("calls") or 0)
         ok_count = int(row.get("ok_count") or 0)
         p95: int | None = None
-        if len(latencies) >= 2:
-            p95 = int(latencies[min(int(len(latencies) * 0.95), len(latencies) - 1)])
-        elif len(latencies) == 1:
-            p95 = int(latencies[0])
+        if latencies:
+            idx = min(math.ceil(len(latencies) * 0.95), len(latencies)) - 1
+            p95 = int(latencies[idx])
         return {
             "provider": provider,
             "window_hours": window_hours,
