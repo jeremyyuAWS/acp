@@ -1967,3 +1967,130 @@ describe('runCoverage', () => {
     expect(runCoverage({ sites_total: 4, sites_done: 4, sites_unread: 0 }).unreadNote).toBeNull()
   })
 })
+
+import {
+  ERROR_CLASS_LABELS, PRODUCED_ERROR_CLASSES,
+  sourceCoverage, sourceFailures, sourceRuns, sourceVolume,
+} from './liveOpsDrawer.js'
+
+describe('ERROR_CLASS_LABELS covers what the worker actually writes', () => {
+  it('labels every class classify_job_error can return', () => {
+    // The defect this fixes: the map carried only Store.ERROR_CLASS_VOCABULARY, whose own comment
+    // says it is for "a later PR's classification logic". None of the four produced classes was in
+    // it, so every failure rendered its raw token where a label was intended.
+    for (const kind of PRODUCED_ERROR_CLASSES) {
+      expect(ERROR_CLASS_LABELS[kind], `no label for produced class ${kind}`).toBeTruthy()
+      expect(ERROR_CLASS_LABELS[kind]).not.toBe(kind)
+    }
+  })
+
+  it('does not dress the catch-all class up as a diagnosis', () => {
+    // `transient` is "everything else" in the classifier's own words.
+    expect(ERROR_CLASS_LABELS.transient).toMatch(/unclassified/i)
+  })
+
+  it('keeps the not-yet-written vocabulary so it is labelled the day something writes it', () => {
+    expect(ERROR_CLASS_LABELS.source_rate_limit).toBe('Source rate limit')
+    expect(ERROR_CLASS_LABELS.lease_expired).toBe('Lease expired')
+  })
+})
+
+describe('sourceFailures', () => {
+  const snap = {
+    runs: [
+      { scan_id: 's1', source: 'sharepoint', stage: 'discover', last_error_class: 'auth', max_attempts_seen: 2 },
+      { scan_id: 's2', source: 'sharepoint', stage: 'assess', last_error_class: 'rate_limit', max_attempts_seen: 4 },
+      { scan_id: 's3', source: 'sharepoint', stage: 'remediate', last_error_class: 'rate_limit', max_attempts_seen: 1 },
+      { scan_id: 's4', source: 'sharepoint' },
+      { scan_id: 's5', source: 'drive', stage: 'discover', last_error_class: 'auth' },
+    ],
+  }
+
+  it('groups the classes seen on this source’s runs, worst first', () => {
+    const f = sourceFailures('sharepoint', snap)
+    expect(f.classes.map((c) => c.kind)).toEqual(['rate_limit', 'auth'])
+    expect(f.classes[0].runs).toBe(2)
+    expect(f.classes[0].label).toBe('Rate limited')
+    expect(f.classes[0].maxAttempts).toBe(4)
+    expect(f.total).toBe(3)
+  })
+
+  it('carries the stage, the only attribution the data supports', () => {
+    const f = sourceFailures('sharepoint', snap)
+    expect(f.classes.find((c) => c.kind === 'auth').stages).toEqual(['discover'])
+    expect(f.classes.find((c) => c.kind === 'rate_limit').stages).toEqual(['assess', 'remediate'])
+    expect(f.attributionNote).toMatch(/may be the AI provider rather than this connector/)
+  })
+
+  it('never counts another source’s failure', () => {
+    expect(sourceFailures('drive', snap).total).toBe(1)
+    expect(sourceFailures('drive', snap).classes[0].kind).toBe('auth')
+  })
+
+  it('is empty, not zero-filled, when nothing has failed', () => {
+    expect(sourceFailures('local', snap)).toMatchObject({ classes: [], total: 0 })
+  })
+})
+
+describe('sourceCoverage', () => {
+  const snap = {
+    runs: [
+      { source: 'sharepoint', sites_total: 30, sites_done: 12, sites_unread: 2, libraries_total: 61 },
+      { source: 'sharepoint', sites_total: 10, sites_done: 10, sites_unread: 0, libraries_total: 14 },
+      { source: 'sharepoint' },                       // no site data — must not dilute
+      { source: 'drive', completed: 4 },
+    ],
+  }
+
+  it('sums the sites across this source’s runs', () => {
+    const c = sourceCoverage('sharepoint', snap)
+    expect(c).toMatchObject({ available: true, runs: 2, total: 40, done: 22, unread: 2, libraries: 75 })
+    expect(c.pct).toBe(55)
+  })
+
+  it('is unavailable for a source that checkpoints no sites at all', () => {
+    expect(sourceCoverage('drive', snap).available).toBe(false)
+  })
+
+  it('does not let a run without site data count as zero sites', () => {
+    // Three sharepoint runs, only two with site data — the denominator is 2, not 3.
+    expect(sourceCoverage('sharepoint', snap).runs).toBe(2)
+  })
+})
+
+describe('sourceVolume', () => {
+  it('totals only the runs that published a size', () => {
+    const v = sourceVolume('drive', { runs: [
+      { source: 'drive', completed: 8, total: 20 },
+      { source: 'drive', completed: 3 },              // unsized
+    ] })
+    expect(v).toMatchObject({ runs: 2, completed: 11, total: 20, unsized: 1 })
+    expect(v.pct).toBe(55)
+  })
+
+  it('reports no total at all when no run published one', () => {
+    const v = sourceVolume('drive', { runs: [{ source: 'drive', completed: 3 }] })
+    expect(v.total).toBeNull()
+    expect(v.pct).toBeNull()
+    expect(v.completed).toBe(3)
+  })
+})
+
+describe('sourceRuns', () => {
+  const snap = { runs: [
+    { scan_id: 'quiet', source: 'drive', stage: 'assess', status: 'recent', completed: 5, total: 5 },
+    { scan_id: 'busy', source: 'drive', stage: 'assess', status: 'active', completed: 1, total: 9, running: 2, queued: 6 },
+    { scan_id: 'broken', source: 'drive', stage: 'discover', status: 'active', completed: 0, last_error_class: 'auth' },
+  ] }
+
+  it('puts a failing run first, then the busiest', () => {
+    const rows = sourceRuns('drive', snap, { nowMs: NOW })
+    expect(rows.map((r) => r.scanId)).toEqual(['broken', 'busy', 'quiet'])
+    expect(rows[0].errorLabel).toBe('Authentication failed')
+    expect(rows[2].status).toBe('recent')
+  })
+
+  it('keeps an unsized run’s total null rather than inventing one', () => {
+    expect(sourceRuns('drive', snap, { nowMs: NOW })[0].total).toBeNull()
+  })
+})
