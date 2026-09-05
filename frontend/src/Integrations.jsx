@@ -509,7 +509,10 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
                     {providerDestination && <a className="ghost small" href={providerDestination.url}
                       target="_blank" rel="noopener noreferrer"
                       aria-label={`${providerDestination.label} in a new tab`}
-                      style={{ display: 'inline-flex', alignItems: 'center', textDecoration: 'none' }}>
+                      style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                        padding: '6px 12px', border: '1px solid var(--line)', borderRadius: 9,
+                        background: '#fff', color: 'var(--plum)', fontSize: 13, lineHeight: 'normal',
+                        whiteSpace: 'nowrap', textDecoration: 'none' }}>
                       {providerDestination.label} ↗
                     </a>}
                     <button className="ghost small" onClick={() => openSrc(src)}>Manage</button>

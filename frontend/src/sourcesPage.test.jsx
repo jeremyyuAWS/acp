@@ -142,6 +142,9 @@ describe('the Sources page', () => {
     expect(provider?.getAttribute('href')).toBe('https://drive.google.com/drive/my-drive')
     expect(provider?.getAttribute('target')).toBe('_blank')
     expect(provider?.getAttribute('rel')).toContain('noopener')
+    expect(provider?.style.padding).toBe('6px 12px')
+    expect(provider?.style.borderRadius).toBe('9px')
+    expect(provider?.style.background).toBe('rgb(255, 255, 255)')
     expect(btn(card, /^Manage$/)).toBeTruthy()
   })
 
