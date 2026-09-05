@@ -489,7 +489,7 @@ export default function App() {
   // called on some renders and not others, which is "Rendered more hooks than during the previous
   // render" and takes the whole app down. Both were caught by the full suite rather than by any
   // test of this card.
-  const { snapshot: remRunSnapshot, receivedAt: remRunAt } = useRemediationRun(scan?.run?.id || null)
+  const remRun = useRemediationRun(scan?.run?.id || null)
   // Durable (background queue) is the default (2026-08-21). The session-scoped path runs as a
   // bare in-process thread with no queue behind it — the code's own comment on it has always said
   // "lost if that replica restarts", and this app auto-deploys on every merge to main, so that was
@@ -2144,7 +2144,8 @@ export default function App() {
           state feeding it — is torn down the instant the user opens any other tab. A run that is
           still applying fixes must stay visible from wherever they are. `useRemediationRun` owns
           the snapshot for the same reason. */}
-      <RemediationRunCard snapshot={remRunSnapshot} receivedAt={remRunAt}
+      <RemediationRunCard snapshot={remRun.snapshot} receivedAt={remRun.receivedAt}
+                          connected={remRun.connected}
                           onOpen={view === 'remediate' ? null
                                   : () => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
 
@@ -2311,7 +2312,7 @@ export default function App() {
           </>
         ) : (overviewPreview ? <AssessPreviewCard preview={overviewPreview} /> : placeholder))}
 
-        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} assignees={assignees} setAssignees={setAssignees} myEmail={me?.email} aiEnabled={aiEnabled} readOnly={isTimeTravel} onRefresh={() => getScan(run.id, run?.revision).then((r) => { if (r !== NOT_MODIFIED) setScan(r) }).catch(() => {})} onHitlCount={setHitlCount} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} onNavigate={(v) => { setView(v); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /> : placeholder)}
+        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} assignees={assignees} setAssignees={setAssignees} myEmail={me?.email} aiEnabled={aiEnabled} readOnly={isTimeTravel} onRefresh={() => getScan(run.id, run?.revision).then((r) => { if (r !== NOT_MODIFIED) setScan(r) }).catch(() => {})} onHitlCount={setHitlCount} runStream={remRun} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} onNavigate={(v) => { setView(v); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /> : placeholder)}
 
         {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} readOnly={isTimeTravel} triage={triage} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} /> : placeholder)}
 

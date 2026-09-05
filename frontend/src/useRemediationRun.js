@@ -1,58 +1,136 @@
-import { useEffect, useRef, useState } from 'react'
-import { getRemediationSnapshot } from './api.js'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { getRemediationSnapshot, openRemediationStream } from './api.js'
 import { isNewer } from './remediationSnapshot.js'
 
-// The run's live state, owned ABOVE the tab switch.
+// The run's live state, and THE ONE PLACE THAT HOLDS ITS STREAM.
 //
-// WHY IT LIVES HERE AND NOT IN Remediate.jsx. App.jsx renders `<Remediate/>` only while
-// `view === 'remediate'`, so everything that component owns — its poll, its stream, its
-// denominator — is torn down the moment a user opens any other tab, and rebuilt from nothing when
-// they come back. A run card that is supposed to survive tab changes therefore cannot be inside
-// it; it has to be fed by state that outlives the panel.
+// WHY OWNERSHIP LIVES HERE. App.jsx renders `<Remediate/>` only while `view === 'remediate'`, so a
+// stream opened inside that component is closed the moment the user opens any other tab and
+// reopened from scratch when they come back. Three things follow, and all three were true before
+// this hook took the connection over:
 //
-// Deliberately does NOT open a second SSE connection. Remediate.jsx already holds one for the
-// progress bar, and two streams per run would double the server's per-tick work to render one
-// more card. This polls the reconciled snapshot — the same projection the stream carries — on a
-// slow cadence, and reports its freshness honestly as polling rather than claiming "Live".
-// Adopting the stream is a later step, and one that should MOVE ownership rather than add a
-// second holder.
-const ACTIVE_MS = 5000
+//   * the persistent card could not say "Live" honestly — it polled, because opening a SECOND
+//     stream to feed it would double the server's per-tick work for one card;
+//   * ADR 0051's resume did nothing for a tab change. The cursor lived in Remediate's ref, so it
+//     died with the component, and the reconnect replayed nothing because it had no cursor;
+//   * a run went unwatched entirely while the user was on another tab.
+//
+// Now one stream outlives the tab switch, its cursor outlives it too, and a reconnect resumes
+// from the last event this browser actually rendered — across tabs, not just across a dropped
+// connection. Remediate.jsx consumes this rather than opening its own.
+//
+// THE POLL IS THE FALLBACK, NOT THE DEFAULT. The stream closes itself when the batch drains
+// (routes/scans.py ends it on `in_flight == 0`), and an idle or finished run has no stream at
+// all — so the snapshot is fetched once up front and then polled only while nothing is streaming.
+const IDLE_POLL_MS = 5000
 
 export function useRemediationRun(runId) {
   const [snapshot, setSnapshot] = useState(null)
   const [receivedAt, setReceivedAt] = useState(null)
+  const [connected, setConnected] = useState(false)
+  // The most recent legacy status frame. Remediate's progress bar is driven from this rather
+  // than from its own stream — one connection, two consumers.
+  const [status, setStatus] = useState(null)
+  // Bumped when the server closes the stream cleanly. Remediate watches it to finalize its batch;
+  // a counter rather than a boolean so a second run's completion is distinguishable from the
+  // first's still being set.
+  const [endedAt, setEndedAt] = useState(0)
+
   const snapRef = useRef(null)
+  const streamRef = useRef(null)
+  const pollRef = useRef(null)
+  // The resume cursor: the last scan_events.seq this browser actually rendered (ADR 0051). A ref,
+  // not state, because the NEXT connect attempt must read it without waiting for a render.
+  const cursorRef = useRef(null)
+
+  const accept = useCallback((next) => {
+    if (!next) return
+    // Drop a snapshot whose revision went backwards — a superseded read arriving late would walk
+    // the counters backwards, which reads as the run regressing.
+    if (!isNewer(snapRef.current, next)) return
+    snapRef.current = next
+    setSnapshot(next)
+    setReceivedAt(Date.now())
+  }, [])
 
   useEffect(() => {
-    // A different run is a different narrative. Clearing FIRST means the card can never show the
-    // previous run's counters against the new run's id for even one paint.
+    // A different run is a different narrative AND a different event log. Clearing the cursor
+    // matters as much as clearing the snapshot: carrying one across runs would ask the server to
+    // resume run B from run A's position, which it would (correctly) refuse as a cursor ahead of
+    // the log — a reconcile on every first connect.
     snapRef.current = null
-    setSnapshot(null)
-    setReceivedAt(null)
+    cursorRef.current = null
+    setSnapshot(null); setReceivedAt(null); setStatus(null); setConnected(false)
     if (!runId) return undefined
 
     let live = true
-    const load = () => getRemediationSnapshot(runId)
-      .then((next) => {
-        if (!live || !next) return
-        // Drop a snapshot whose revision went backwards — a superseded read arriving late would
-        // otherwise walk the card's counters backwards, which reads as the run regressing.
-        if (!isNewer(snapRef.current, next)) return
-        snapRef.current = next
-        setSnapshot(next)
-        setReceivedAt(Date.now())
-      })
+    const stopPoll = () => { clearInterval(pollRef.current); pollRef.current = null }
+
+    const loadSnapshot = () => getRemediationSnapshot(runId)
+      .then((next) => { if (live) accept(next) })
       .catch(() => { /* transient: the last confirmed snapshot and its age stay on screen */ })
 
-    load()
-    // Terminality is read off the ref, not off `snapshot`: this interval closes over the state
-    // from the render that created it, so `snapshot` here would be null forever and the
-    // stop-when-terminal it expresses would never once be true.
-    const id = setInterval(() => { if (!snapRef.current?.terminal) load() }, ACTIVE_MS)
-    // Stops when the component unmounts — the brief's rule, and the reason this returns a
-    // cleanup rather than relying on the run finishing.
-    return () => { live = false; clearInterval(id) }
-  }, [runId])
+    const startPoll = () => {
+      if (!live || pollRef.current) return
+      pollRef.current = setInterval(() => {
+        // Terminality is read off the REF: this closure captures state from the render that
+        // created it, so `snapshot` here would be null forever and the stop-when-terminal it
+        // expresses would never once be true.
+        if (!snapRef.current?.terminal) loadSnapshot()
+      }, IDLE_POLL_MS)
+    }
 
-  return { snapshot, receivedAt }
+    const connect = () => {
+      if (!live) return
+      streamRef.current?.close?.()
+      streamRef.current = openRemediationStream(runId, {
+        lastEventId: cursorRef.current,
+        onMessage: (frame) => {
+          if (!live) return
+          setConnected(true)
+          stopPoll()                       // a live frame supersedes the fallback
+          setStatus(frame)
+          accept(frame?.snapshot)
+        },
+        onEvent: (_event, id) => {
+          // The FRAME's id is the authority, not a field inside the payload: the cursor must only
+          // ever advance to something this client actually rendered.
+          if (id != null) cursorRef.current = id
+        },
+        onReconcile: () => {
+          // The server declined to replay — cursor ahead of the log, log pruned, cursor malformed.
+          // Drop it and re-fetch a snapshot BEFORE applying anything later (PRD §17.6); keeping a
+          // cursor the server has rejected would fail identically on every later reconnect.
+          cursorRef.current = null
+          loadSnapshot()
+        },
+        onDone: () => {
+          if (!live) return
+          setConnected(false)
+          setEndedAt(Date.now())
+          // The batch drained, but review, delivery and evidence may not have. Poll on so the
+          // card keeps reconciling until the SNAPSHOT says the run is terminal — the stream's
+          // own close is about in-flight jobs, not about the run being finished.
+          startPoll()
+        },
+        onError: () => {
+          if (!live) return
+          streamRef.current = null
+          setConnected(false)
+          startPoll()
+        },
+      })
+    }
+
+    loadSnapshot()   // so an idle or finished run has state even with no stream to open
+    connect()
+    return () => {
+      live = false
+      stopPoll()
+      streamRef.current?.close?.()
+      streamRef.current = null
+    }
+  }, [runId, accept])
+
+  return { snapshot, receivedAt, connected, status, endedAt }
 }

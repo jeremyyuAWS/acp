@@ -32,8 +32,23 @@ describe('the queue-estimate poll is wired into Remediate', () => {
   })
 
   it('prefers the authenticated remediation SSE stream and retains polling as fallback', () => {
-    expect(src).toMatch(/openRemediationStream\(runId/)
-    expect(src).toMatch(/onError: \(\) => \{ streamRef\.current = null; startPoll\(total\) \}/)
+    // THE GUARANTEE IS UNCHANGED; ITS OWNER MOVED. Remediate no longer opens the stream —
+    // `useRemediationRun` does, at App level, because this component is unmounted on every tab
+    // change and a connection that dies with it cannot keep a run watched, cannot keep ADR 0051's
+    // resume cursor across tabs, and cannot let the persistent card say "Live" honestly.
+    //
+    // So this asserts the same two properties at their new address: exactly one opener, and
+    // polling still covering the disconnected case.
+    const hook = readFileSync(join(here, 'useRemediationRun.js'), 'utf8')
+    expect(hook).toMatch(/openRemediationStream\(runId/)
+    expect(hook).toMatch(/onError:/)
+    expect(hook).toMatch(/startPoll\(\)/)
+    // Remediate consumes the frames rather than owning the socket. A second opener here would
+    // put two streams on one run, which is what moving ownership was for.
+    expect(src).not.toMatch(/openRemediationStream\(/)
+    // ...and it still polls the LEGACY status shape while disconnected, because the hook's own
+    // fallback fetches the reconciled snapshot, not the shape the progress bar reads.
+    expect(src).toMatch(/startPoll\(watchTotalRef\.current\)/)
   })
 
   it('puts the SSE-fed remediation progress card in the main workflow', () => {

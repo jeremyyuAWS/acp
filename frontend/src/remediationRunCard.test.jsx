@@ -176,10 +176,14 @@ describe('the card outlives a tab change', () => {
     expect(call).toBeLessThan(earlyReturn)
   })
 
-  it('stops polling when it unmounts', () => {
+  it('tears down both the poll and the stream when it unmounts', () => {
+    // Now that the hook owns the connection as well as the poll, unmounting has to close BOTH —
+    // a stream left open by a torn-down hook is a socket nothing will ever read from again.
     const hook = readFileSync(join(here, 'useRemediationRun.js'), 'utf8')
-    expect(hook).toContain('clearInterval')
-    expect(hook).toMatch(/return \(\) => \{ live = false; clearInterval\(id\) \}/)
+    const cleanup = hook.slice(hook.lastIndexOf('return () => {'))
+    expect(cleanup).toContain('live = false')
+    expect(cleanup).toContain('stopPoll()')
+    expect(cleanup).toContain('streamRef.current?.close?.()')
   })
 
   it('never lets an older snapshot overwrite newer progress', () => {
@@ -207,5 +211,63 @@ describe('corrected copies and verified documents stay distinct', () => {
     // Never a bare, unit-less "Verified" — it was read as documents on one line and fixes on the
     // next, from the same number.
     expect(html).not.toMatch(/>Verified</)
+  })
+})
+
+describe('one stream, owned above the tab switch', () => {
+  const hook = () => readFileSync(join(here, 'useRemediationRun.js'), 'utf8')
+  const remediate = () => readFileSync(join(here, 'Remediate.jsx'), 'utf8')
+
+  it('is opened in exactly one place', () => {
+    // Two openers would put two SSE connections on one run — the thing moving ownership was for.
+    // Remediate consumes frames through the `runStream` prop instead.
+    expect(hook()).toMatch(/openRemediationStream\(runId/)
+    expect(remediate()).not.toMatch(/openRemediationStream\(/)
+  })
+
+  it('keeps the resume cursor in the hook, so it survives a tab change', () => {
+    // THIS IS WHAT THE MOVE BUYS. ADR 0051's resume replays the events a browser missed, keyed on
+    // the last id it rendered. While that cursor lived in Remediate's ref it died with the
+    // component — so every tab change threw it away and the reconnect replayed nothing, which is
+    // the one case resume was built for. In the hook it outlives the unmount.
+    expect(hook()).toContain('cursorRef')
+    expect(hook()).toMatch(/lastEventId: cursorRef\.current/)
+    expect(remediate()).not.toContain('eventCursorRef')
+  })
+
+  it('never carries a cursor from one run into another', () => {
+    // A cursor from run A points at a position in A's log. Sent for run B the server correctly
+    // refuses it as ahead of the log — a reconcile on every first connect, forever.
+    const effect = hook().slice(hook().indexOf('useEffect'))
+    expect(effect.indexOf('cursorRef.current = null')).toBeLessThan(effect.indexOf('if (!runId)'))
+  })
+
+  it('advances the cursor only from the frame id, never from the payload', () => {
+    expect(hook()).toMatch(/onEvent: \(_event, id\) => \{/)
+    expect(hook()).toMatch(/if \(id != null\) cursorRef\.current = id/)
+  })
+
+  it('drops a rejected cursor and re-fetches rather than retrying it forever', () => {
+    const reconcile = hook().slice(hook().indexOf('onReconcile:'))
+    expect(reconcile.slice(0, 400)).toContain('cursorRef.current = null')
+    expect(reconcile.slice(0, 400)).toContain('loadSnapshot()')
+  })
+
+  it('polls only while nothing is streaming', () => {
+    // The poll is the FALLBACK. A live frame supersedes it, and the stream closing (which happens
+    // when the batch drains, not when the run finishes) turns it back on so the card keeps
+    // reconciling review, delivery and evidence.
+    const h = hook()
+    expect(h).toMatch(/stopPoll\(\)\s+\/\/ a live frame supersedes the fallback/)
+    const onDone = h.slice(h.indexOf('onDone:'))
+    expect(onDone.slice(0, 600)).toContain('startPoll()')
+  })
+
+  it('does not finalize a fresh batch on a previous run\'s stream close', () => {
+    // `endedAt` is a timestamp, not a flag, precisely so "the stream ended" for run A cannot be
+    // mistaken for run B's completion by a component that started watching afterwards.
+    expect(hook()).toContain('setEndedAt(Date.now())')
+    expect(remediate()).toContain('endedSeenRef.current = runStream?.endedAt || 0')
+    expect(remediate()).toMatch(/if \(!ended \|\| ended === endedSeenRef\.current \|\| !total\) return/)
   })
 })
