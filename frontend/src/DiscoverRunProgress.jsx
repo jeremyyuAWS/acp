@@ -142,6 +142,61 @@ function DiscoverStep({ label, kpi, status, sublines = [] }) {
   )
 }
 
+function SharePointLiveSummary({ source, scope, progress, freshness }) {
+  if (source !== 'sharepoint' && scope?.kind !== 'sharepoint') return null
+
+  const sites = Array.isArray(progress?.sites)
+    ? progress.sites.filter(Boolean)
+    : (Array.isArray(scope?.sites) ? scope.sites.filter(Boolean) : [])
+  const libraries = sites.flatMap((site) => Array.isArray(site.libraries) ? site.libraries : [])
+  const completedSites = sites.filter((site) => site.status === 'complete').length
+  const unreadSites = sites.filter((site) => ['partial', 'blocked', 'skipped'].includes(site.status)).length
+  const completedLibraries = libraries.filter((library) => library.status === 'complete').length
+  const throttles = libraries.reduce((sum, library) => sum + (Number(library.throttled) || 0), 0)
+  const modes = new Set(libraries.map((library) => library.mode).filter(Boolean))
+  const mode = modes.size > 1 ? 'Mixed enumeration'
+    : modes.has('delta') ? 'Incremental enumeration'
+      : modes.has('search') ? 'Search-index enumeration'
+        : modes.has('full') ? 'Full enumeration' : 'Enumeration starting'
+  const activeSite = sites.find((site) => site.status === 'scanning')
+  const activeLibrary = activeSite?.active_library
+  const streamLabel = freshness === 'live' ? 'Live updates connected'
+    : freshness === 'reconnecting' ? 'Live updates reconnecting'
+      : freshness === 'checkpoint' ? 'Showing latest checkpoint'
+        : freshness === 'stale' ? 'Live data is stale' : 'Update status unavailable'
+  const chips = [
+    sites.length > 0 && `${completedSites} of ${sites.length} sites read`,
+    libraries.length > 0 && `${completedLibraries} of ${libraries.length} libraries complete`,
+    mode,
+    throttles > 0 && `${n(throttles)} Graph retr${throttles === 1 ? 'y' : 'ies'}`,
+    unreadSites > 0 && `${unreadSites} site${unreadSites === 1 ? '' : 's'} need attention`,
+  ].filter(Boolean)
+
+  return (
+    <div aria-label="SharePoint integration status"
+         style={{ margin: '-3px 0 13px', padding: '9px 11px', borderRadius: 8,
+                  border: '1px solid var(--line,#e4e8ec)', background: 'var(--surface-2,#f7f7f9)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap' }}>
+        <strong style={{ fontSize: 12 }}>Microsoft Graph</strong>
+        <span className="muted" style={{ fontSize: 11.5 }}>{streamLabel}</span>
+        {activeLibrary && (
+          <span style={{ marginLeft: 'auto', fontSize: 11.5 }}>
+            Reading <strong>{activeSite?.name || 'SharePoint'}</strong> / {activeLibrary.name || activeLibrary.id}
+          </span>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 7 }}>
+        {chips.map((chip) => (
+          <span key={chip} style={{ fontSize: 10.5, padding: '2px 7px', borderRadius: 999,
+                                   border: '1px solid var(--line,#e4e8ec)', background: 'var(--panel,#fff)' }}>
+            {chip}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
+
 export default function DiscoverRunProgress({ progress, busy, onStop, sources, source = null, scope = null, inv = null, onReview, onContinue, assessmentComplete = false, preflightDegraded = null, freshness = null, runStartedAt = null }) {
   // MOUNT time, and named for it. This clock answers "how long has this VIEW been watching",
   // which is the right input for the stall and slow-lifecycle hints below — they are questions
@@ -703,6 +758,8 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, s
         </div>
 
         <SourceVisibility source={source} scope={scope} />
+
+        <SharePointLiveSummary source={source} scope={scope} progress={progress} freshness={freshness} />
 
         <div aria-live="polite" aria-atomic="false" role="list" aria-label="Discovery steps"
              style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
