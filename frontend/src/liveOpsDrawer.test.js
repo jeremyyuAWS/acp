@@ -1288,3 +1288,106 @@ describe('revisionComparisonModel', () => {
     expect(revisionComparisonModel(null).available).toBe(false)
   })
 })
+
+/* ─────────────────────── Section 6 and the uniform shape ─────────────────────── */
+
+import { configurationModel, isAzureBacked, notAzureBackedReason, DRAWER_SECTIONS } from './liveOpsDrawer.js'
+
+describe('DRAWER_SECTIONS', () => {
+  it('is one list of seven, numbered in order', () => {
+    // The drawer and its tests read the same list. A shape defined in two places is two shapes.
+    expect(DRAWER_SECTIONS).toHaveLength(7)
+    expect(DRAWER_SECTIONS.map(s => s.n)).toEqual([1, 2, 3, 4, 5, 6, 7])
+    expect(new Set(DRAWER_SECTIONS.map(s => s.key)).size).toBe(7)
+  })
+})
+
+describe('configurationModel', () => {
+  const cap = { min_replicas: 1, max_replicas: 6, cpu_cores_per_replica: 2,
+    memory_per_replica: '4Gi', workload_profile_name: 'D4' }
+
+  it('reports a worker’s limits, and marks them requested rather than used', () => {
+    const m = configurationModel({ kind: 'worker' }, cap)
+    const byLabel = Object.fromEntries(m.rows.map(r => [r.label, r]))
+    expect(byLabel['Replica range'].value).toBe('1 to 6')
+    expect(byLabel['CPU per replica'].value).toBe('2 cores')
+    expect(byLabel['Memory per replica'].value).toBe('4Gi')
+    expect(byLabel['Workload profile'].value).toBe('D4')
+    expect(byLabel['CPU per replica'].detail).toMatch(/Requested, not used/)
+  })
+
+  it('keeps string-valued limits instead of blanking them', () => {
+    // `reported` is numeric-only and answers NOT_REPORTED for "4Gi" and "D4". Routing those
+    // through it silently blanked two real values, which reads as an unreported limit.
+    const m = configurationModel({ kind: 'worker' }, cap)
+    expect(JSON.stringify(m.rows)).not.toMatch(/"value":"Not reported","detail":"Requested/)
+  })
+
+  it('never invents a limit that was not reported', () => {
+    const m = configurationModel({ kind: 'worker' }, {})
+    const values = m.rows.map(r => r.value)
+    expect(values).toContain('Not reported')
+    expect(values).not.toContain('0 cores')
+    expect(values.find(v => /^\d+ to \d+$/.test(v))).toBeUndefined()
+  })
+
+  it('shows a half-known replica range without filling in the other half', () => {
+    expect(configurationModel({ kind: 'worker' }, { min_replicas: 2 })
+      .rows.find(r => r.label === 'Replica range').value).toBe('2 to ?')
+  })
+
+  it('lists the scale rules and their thresholds', () => {
+    const m = configurationModel({ kind: 'worker' }, { ...cap, scale: {
+      rules: [{ name: 'queue-depth', type: 'postgresql', threshold: 4 }],
+      polling_interval: 30, cooldown: 300 } })
+    const labels = m.rows.map(r => r.label)
+    expect(labels).toContain('Scale rule · queue-depth')
+    expect(labels).toContain('Scale polling')
+    expect(labels).toContain('Scale cooldown')
+  })
+
+  it('gives the queue its own configuration rather than a worker’s', () => {
+    const m = configurationModel({ kind: 'queue' }, null,
+      { summary: { scheduling_policy: 'tenant_fair_least_loaded', worker_slots: 7,
+        queue: { window_s: 900 } } })
+    const byLabel = Object.fromEntries(m.rows.map(r => [r.label, r.value]))
+    expect(byLabel['Scheduling policy']).toBe('tenant_fair_least_loaded')
+    expect(byLabel['Worker slots']).toBe('7')
+    expect(byLabel['Queue window']).toBe('900s')
+  })
+
+  it('explains a thin section instead of returning nothing to render', () => {
+    // An empty section reads as "nothing to configure here". For a run that is wrong: its limits
+    // are the worker's, and the section says where to find them.
+    for (const kind of ['run', 'source', 'output']) {
+      const m = configurationModel({ kind })
+      expect(m.rows, kind).toEqual([])
+      expect(m.reason, kind).toBeTruthy()
+    }
+    expect(configurationModel({ kind: 'run' }).reason).toMatch(/open one of those/)
+  })
+})
+
+describe('isAzureBacked / notAzureBackedReason', () => {
+  it('is true only for a node Azure actually describes', () => {
+    expect(isAzureBacked({ kind: 'worker' })).toBe(true)
+    for (const kind of ['queue', 'run', 'source', 'output', 'intake']) {
+      expect(isAzureBacked({ kind }), kind).toBe(false)
+    }
+    expect(isAzureBacked(null)).toBe(false)
+  })
+
+  it('always says Azure reports nothing, never that nothing is wrong', () => {
+    // The distinction sections 5 and 7 depend on. "No alerts" and "Azure does not describe this
+    // node" are different claims, and only the second one is true here.
+    for (const kind of ['queue', 'run', 'source', 'output', 'intake', undefined]) {
+      const reason = notAzureBackedReason({ kind })
+      expect(reason, kind).toMatch(/Azure reports no|Azure does not describe/)
+      expect(reason, kind).not.toMatch(/healthy|no alerts firing|all clear/i)
+    }
+  })
+
+  it('sends a run to the worker service that does have the answers', () => {
+    expect(notAzureBackedReason({ kind: 'run' })).toMatch(/worker service running it has all three/)
+  })
+})
