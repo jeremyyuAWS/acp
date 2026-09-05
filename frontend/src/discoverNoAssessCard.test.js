@@ -1,8 +1,7 @@
 /**
- * The live Assessment card follows the user across every tab except Assess itself, where
- * AssessRunner owns the fuller version. This is deliberate workflow continuity: navigating to
- * Discover, Remediate, Overview or an operational view must not replace actual progress with a
- * generic “assessment is running” warning.
+ * The live Assessment card follows the user across every tab, including Assess itself. The
+ * detailed AssessRunner file list is complementary activity detail, not a replacement for the
+ * compact stage-level card directly below the tabs.
  *
  * Source-level, like assessSetupWiring.test.jsx and assessmentTimeline.test.js: App.jsx is far too
  * large to mount for a one-line gating fact, and this repo already reads it as text for exactly
@@ -24,25 +23,33 @@ const activeExpr = () => {
 }
 
 describe('the live-assess card follows the user across tabs', () => {
-  it('suppresses only the duplicate card on the Assess tab', () => {
+  it('does not suppress the card on any workflow tab', () => {
     const expr = activeExpr()
-    expect(expr).toMatch(/view !== 'assess'/)
-    expect(expr).not.toMatch(/view !== 'discover'/)
-    expect(expr).not.toMatch(/view !== 'remediate'/)
+    expect(expr).toBe("assessPhase === 'running'")
+    expect(expr).not.toMatch(/\bview\b/)
   })
 
   it('shows on Discover and Remediate while Assessment is running', () => {
     const gate = new Function('busy', 'assessPhase', 'view', `return (${activeExpr()})`)
     expect(gate(false, 'running', 'discover')).toBe(true)
     expect(gate(false, 'running', 'remediate')).toBe(true)
-    expect(gate(false, 'running', 'assess')).toBe(false)
+    expect(gate(false, 'running', 'assess')).toBe(true)
   })
 
   it('every away tab shows the live card', () => {
     const gate = new Function('busy', 'assessPhase', 'view', `return (${activeExpr()})`)
-    for (const view of ['discover', 'remediate', 'overview', 'publish', 'monitor', 'integrations', 'liveops']) {
+    for (const view of ['discover', 'assess', 'remediate', 'overview', 'publish', 'monitor',
+      'integrations', 'liveops', 'analytics', 'knowledge', 'acr', 'settings']) {
       expect(gate(false, 'running', view), `${view} should still show the live card`).toBe(true)
     }
+  })
+
+  it('is mounted once outside the changing tab content so navigation cannot tear it down', () => {
+    const card = app.indexOf('<LiveAssessmentLive')
+    const main = app.indexOf('<main id="main-content"')
+    expect(card).toBeGreaterThan(-1)
+    expect(main).toBeGreaterThan(card)
+    expect(app.match(/<LiveAssessmentLive/g)).toHaveLength(1)
   })
 
   it('a DISCOVER scan in flight does NOT activate the assess card on any tab', () => {

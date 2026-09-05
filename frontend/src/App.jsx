@@ -2119,12 +2119,12 @@ export default function App() {
           logic (and the OUTER scan-banner's Stop-suppression above, when view === 'assess' &&
           assessPhase === 'running') was written assuming this card would be live during assess.
           It never was, until this line. */}
-      {/* AssessRunner owns the full card while the Assess tab is open. Everywhere else, show this
-          same live Assessment card directly below the tabs so navigation never replaces real
-          progress with a generic warning. `busy` is a DISCOVER-only flag; assessPhase is the
-          authority for whether this card is active. */}
+      {/* Keep the authoritative live Assessment card directly below the tabs on EVERY view,
+          including Assess itself. AssessRunner's detailed file list answers a different question;
+          it is not a replacement for the compact stage-level card. `busy` is a DISCOVER-only
+          flag; assessPhase is the authority for whether this card is active. */}
       <LiveAssessmentLive scanId={liveScanId || run?.id}
-                          active={assessPhase === 'running' && view !== 'assess'}
+                          active={assessPhase === 'running'}
                           onStop={() => stopScan(liveScanId || run?.id)} />
 
       {/* THE PERSISTENT REMEDIATION CARD. Outside the tabpanel on purpose: `<Remediate/>` below
