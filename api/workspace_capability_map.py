@@ -315,6 +315,7 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("GET", "/me"): "identity — must answer before a role can be resolved",
     ("GET", "/me/access"): "the role answer itself; gating it on a capability is circular",
     ("GET", "/workspace/bootstrap"): "carries /me/access; same circularity",
+    ("GET", "/workspace/active-workflows"): "continuity status required before choosing a stage",
     ("POST", "/me/reset-data"): "self-service, scoped to the caller's OWN scans by construction",
     ("GET", "/settings/mine"): "the caller's own preferences",
     ("PUT", "/settings/mine"): "the caller's own preferences",

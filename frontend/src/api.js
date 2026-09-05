@@ -754,8 +754,12 @@ export const getWorkspaceBootstrap = () => {
     overview: cur ? { estate: { discovered: cur.files ?? 0 }, documents: { certifiable: cur.certifiable ?? 0 } } : null,
     scans,
     active_job: {},
+    active_workflows: [],
   })
 }
+export const getActiveWorkflows = () => (SIM
+  ? sim({ active_workflows: [] })
+  : fetch(`${BASE}/workspace/active-workflows`, { headers: headers() }).then(j))
 // ADR 0014: push a freshly-minted GIS token to a running scan so long scans keep Drive auth.
 export const refreshScanDriveToken = (scanId) => (SIM
   ? sim({ refreshed: true })
