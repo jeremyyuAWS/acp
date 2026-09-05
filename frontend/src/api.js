@@ -1028,6 +1028,32 @@ export const getRemediationSnapshot = (scanId) => (SIM
   ? sim(null)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/snapshot`,
           { headers: headers(), cache: 'no-store' }).then(j))
+// ── Exceptions and scoped recovery (PRD §6E, §11) ─────────────────────────────
+//
+// SIM RETURNS AN EMPTY VIEW, deliberately, exactly as getRemediationSnapshot returns null. A
+// simulated exception group would be a hand-written set of refusal codes and destinations — a
+// second, fabricated implementation of the one contract these endpoints exist to make impossible
+// to fake — and its retry buttons would appear to write to a customer's library and do nothing.
+export const getRemediationExceptions = (scanId) => (SIM
+  ? sim({ run_id: scanId, groups: [], controls: [] })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/exceptions`,
+          { headers: headers(), cache: 'no-store' }).then(j))
+// `files` is the SELECTION — the documents the user can currently see and has chosen. Always sent
+// explicitly, never omitted to mean "all": the server acts on exactly what it is given, so a
+// group action can never reach a row that scrolled out of view or was filtered away.
+const remediationAction = (scanId, path, files) => (SIM
+  ? sim({ requested: 0, started: 0, refused: 0, failed: 0, duplicate: 0, results: [],
+          complete_success: false, summary: 'Not available in the demo' })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/${path}`,
+          { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify(files === undefined ? {} : { files }) }).then(j))
+export const retryRemediationDelivery = (scanId, files) =>
+  remediationAction(scanId, 'exceptions/retry-delivery', files)
+export const retryRemediationDocuments = (scanId, files) =>
+  remediationAction(scanId, 'exceptions/retry-documents', files)
+export const cancelRemediationRun = (scanId) => remediationAction(scanId, 'cancel')
+export const pauseRemediationRun = (scanId) => remediationAction(scanId, 'pause')
+export const resumeRemediationRun = (scanId) => remediationAction(scanId, 'resume')
 // Authenticated Remediate progress stream.  Native EventSource cannot send ACP's bearer header,
 // so this shares Discover's fetch + ReadableStream SSE parser and exposes the same close contract.
 // `lastEventId` resumes the durable lifecycle log (ADR 0051): pass the last id this client

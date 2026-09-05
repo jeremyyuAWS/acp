@@ -437,7 +437,7 @@ Phase 1 ("one truthful snapshot") is implemented. What exists, and where:
 | The rows those functions judge | `store.remediation_run_facts` |
 | `GET /scans/{sid}/remediation/snapshot`, and the same snapshot on the SSE frame | `api/routes/scans.py` |
 | Client normalization + freshness (never run state) | `frontend/src/remediationSnapshot.js` |
-| Regions A, B and C | `frontend/src/RemediationOpsPanel.jsx`, mounted in `Remediate.jsx` |
+| Regions A, B, C and E | `frontend/src/RemediationOpsPanel.jsx` (+ `RemediationExceptions.jsx`), mounted in `Remediate.jsx` |
 | Contract tests for every invariant and precedence rule | `tests/test_remediation_run_snapshot.py`, `frontend/src/remediationOpsPanel.test.jsx` |
 
 Deliberately NOT implemented, and why — each of these would be a fabricated answer rather than a
@@ -453,11 +453,13 @@ missing feature:
   Per-format and per-lane calibration remains Phase 4 work once production history supports it.
 - **Phase-specific stall thresholds (§18)** collapse to one `STALL_AFTER_S`. Five invented
   thresholds are worse than one honest one until there is per-format evidence to set them from.
-- **`paused` (§7)** is declared in `RUN_STATES` and never derived: ACP has no pause control for a
-  remediation run, and inferring it from an idle queue is the same class of error as inferring
-  "Applying fixes" from a queued one.
-- **Regions D and E** (live workstream cards, grouped exception routing) are Phases 2-3. The
-  snapshot already carries `active_attempts` for D.
+- **`paused` (§7)** is now DERIVED, and only from a durable hold (`store.remediation_run_hold`,
+  written by `POST /scans/{sid}/remediation/pause`). The original rule is unchanged and is why
+  this reads as it does: an idle queue with no hold row is still `waiting`. A run whose documents
+  are all terminal is never reported as paused either — a hold over finished work holds nothing.
+  The pause defers UNCLAIMED jobs only; an attempt in flight runs to completion, and
+  `remediation_exceptions.CONTROL_SPECS['pause']['scope']` is the sentence the panel shows so the
+  limit is stated before the button is pressed rather than discovered afterwards.
 - **Resumable event IDs (§8)** are not implemented; the stream re-pushes a whole snapshot on
   change and the client drops any frame whose `revision` went backwards.
 
@@ -474,12 +476,14 @@ already exists.
 | Surface | Where | What it still owes |
 |---|---|---|
 | Run state, counters, phases, invariants | `api/remediation_run.py` | Nothing for Phase 1. Phase 2 adds phase events as an input rather than deriving the rail from counts alone. |
-| Snapshot facts | `store.remediation_run_facts` | Batch-scoped and one-row-per-document already. Owes per-attempt delivery state (§11's delivery-failure class is inferred from `drive_write_url`, not recorded as an outcome). |
+| Snapshot facts | `store.remediation_run_facts` | Batch-scoped and one-row-per-document already. §11's delivery-failure class is still *derived* from `remediated_at` + `drive_write_url` — which is the honest reading of two columns and needs no per-attempt outcome to be correct — but a delivery ATTEMPT is now a durable row (`remediation_delivery`, keyed by its idempotency key) carrying actor, destination, artifact digest and result. |
+| Exceptions and scoped recovery | `api/remediation_exceptions.py` (pure), `store.remediation_exception_facts`, `GET/POST /scans/{sid}/remediation/exceptions*` | The five groups of §6E, the refusal codes, the delivery-retry gate and the run controls. Owes per-lane policy labels (§6D's "deterministic / grouped approval / individual review"), which nothing records per document. |
+| Delivery-only retry | `api/remediation_delivery.py`, `handlers._deliver_corrected_copy` | SharePoint, OneDrive and Google Drive. Writes into the configured mirror folder, never in place over a source document. Owes an in-place replace lane, which is a destructive action and needs its own decision, not a retry button. |
 | Snapshot endpoint | `GET /scans/{sid}/remediation/snapshot` | Carries revision, state, reason, freshness thresholds and the reconciled partition. Owes `links` (currently always `{}`) and `policy_version` / `execution_mode`, which nothing records. |
 | Live updates | `GET /scans/{sid}/remediation/stream` | Owes resumable event IDs. It still closes when `in_flight` reaches zero, even though review, delivery and reconciliation may remain — the snapshot's own `completing` state exposes that gap but the stream does not stay open for it. |
 | Legacy status | `GET /scans/{sid}/remediation-status` | Unchanged and still feeding the progress bar. Its `fixes_applied` / `verified_documents` mislabelling is corrected in the snapshot, not in this endpoint; the two must not be mixed in one view. |
 | Activity | `activity.current(sid)` | One current line cannot represent parallel documents. Region D reads `snapshot.active_attempts` instead, which is already a list. |
-| Client | `remediationSnapshot.js`, `RemediationOpsPanel.jsx` | Regions D and E. `RemediationRunProgress` still renders a serial "last fixed ‹file›" beside the panel — two accounts of one run, and the older one implies serial work. |
+| Client | `remediationSnapshot.js`, `RemediationOpsPanel.jsx`, `RemediationExceptions.jsx` | Region E is served by its own endpoint and decides nothing locally. `RemediationRunProgress` still renders a serial "last fixed ‹file›" beside the panel — two accounts of one run, and the older one implies serial work. |
 
 ### On naming
 
