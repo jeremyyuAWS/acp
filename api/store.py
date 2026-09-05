@@ -8599,6 +8599,38 @@ class Store:
                 continue            # lost the seq race (or the store is unavailable) — try again
         return None
 
+    def scan_event_bounds(self, scan_id: str) -> tuple[int | None, int | None]:
+        """The oldest and newest `seq` this scan still has, or (None, None) when it has none.
+
+        The gap check a resuming stream needs (ADR 0051), in one query rather than two reads the
+        client would have to reconcile itself. Both halves answer a different failure:
+
+          * `newest` catches a cursor AHEAD of the log — from another scan, or from rows that were
+            removed. Replaying "everything after N" would return an empty list, which is
+            indistinguishable from "you are caught up", and that is the dangerous reading: the
+            client would believe it had missed nothing.
+          * `oldest` catches a cursor the log has been PRUNED past. Nothing prunes scan_events
+            today, so this cannot fire in production yet — it is here so that resume does not
+            silently start losing events the day retention lands (PRD §22: 24h or 10,000 events
+            per run), in exactly the window where nobody would be looking for it.
+
+        Never raises: an unreadable log degrades to "cannot answer", and the caller reconciles.
+        Deliberately NOT owner-scoped — it returns two integers about a scan the caller has
+        already been gated on by get_scan(owner=...), and events written before an owner was known
+        carry owner_email=NULL (see list_scan_events' own note), so an owner filter here would
+        report a narrower range than the one the replay read will actually use.
+        """
+        try:
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "SELECT MIN(seq) AS lo, MAX(seq) AS hi FROM scan_events WHERE scan_id=%s",
+                    (scan_id,))
+                row = self._db.fetchone(cur) or {}
+        except Exception:
+            return (None, None)
+        lo, hi = row.get("lo"), row.get("hi")
+        return (int(lo) if lo is not None else None, int(hi) if hi is not None else None)
+
     def list_scan_events(self, scan_id: str, *, after_seq: int | None = None,
                          owner: str | None = None, limit: int = 500) -> list[dict]:
         """This scan's lifecycle events in `seq` order, oldest first. Never raises — an unknown
@@ -8647,10 +8679,8 @@ class Store:
     # including events with NO scan_id at all. Coexisting, additive infrastructure; scan_events,
     # append_scan_event and its emit sites are untouched.
     #
-    # NO CALLER YET, deliberately, exactly like scan_events' own PR 1: this lands the tables and
-    # their store methods with ZERO behaviour change so the emit sites (a later PR, touching
-    # worker.py's claim/reclaim/zombie-write-suppression paths) can be reviewed on their own, with
-    # explicit human review — that PR is materially riskier than this one and is not started here.
+    # worker_main now writes the current-state registry. The append-only job transition emitters
+    # remain separate because claim/reclaim/zombie-write-suppression paths need their own review.
 
     # Closed set of operational transitions. Closed for the same reason SCAN_EVENT_KINDS is: a
     # future reader renders per-kind, so a typo'd or ad-hoc kind is a row nothing knows how to
@@ -9956,6 +9986,13 @@ class Store:
             self._db.execute(cur, "SELECT status, COUNT(*) AS n FROM jobs" + scope + " GROUP BY status",
                              (owner,) if owner else ())
             return {r["status"]: r["n"] for r in self._db.fetchall(cur)}
+
+    def running_jobs_by_type(self) -> dict[str, int]:
+        """Global durable running rows grouped by bounded job type; never reads payloads."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT type, COUNT(*) AS n FROM jobs WHERE status='running' GROUP BY type")
+            return {str(row["type"]): int(row["n"]) for row in self._db.fetchall(cur)}
 
     def oldest_queued_job(self, owner: str | None = None) -> dict | None:
         """The single longest-waiting eligible job (status='queued', run_after already due), or

@@ -156,7 +156,24 @@ def test_the_spawned_worker_actually_carries_the_replica_prefix(monkeypatch):
     core._spawn_worker()
 
     assert ":w" in seen["worker_id"], f"worker id carries no replica prefix: {seen['worker_id']!r}"
-    assert seen["worker_id"].split(":")[0] == core._replica_id()
+    role, replica, process, slot = seen["worker_id"].split(":")
+    assert role == "mixed"
+    assert replica == core._replica_id()
+    assert process
+    assert slot == "w0"
+
+
+def test_a_process_restart_on_one_replica_gets_a_new_identity(monkeypatch):
+    import core
+    import joblog
+    monkeypatch.setattr(joblog, "REPLICA", "replica-1")
+    monkeypatch.setattr(joblog, "PROC", "first")
+    first = core.worker_process_instance_id("assess")
+    monkeypatch.setattr(joblog, "PROC", "restart")
+    second = core.worker_process_instance_id("assess")
+    assert first == "assess:replica-1:first"
+    assert second == "assess:replica-1:restart"
+    assert first != second
 
 
 def test_the_replica_id_is_stable_within_a_process(monkeypatch):

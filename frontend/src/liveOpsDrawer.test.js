@@ -109,18 +109,24 @@ describe('Worker gauge thresholds come from a documented rule', () => {
     expect(gaugeModel({ ...service, active: 0, slots: 4 }, { stalled: true }).state).toBe('saturated')
   })
 
-  it('withholds a percentage when more work is in flight than there are slots', () => {
+  it('caps the percentage rather than withholding it when work exceeds slots', () => {
     // Seen against a real deployment: "51 of 2 worker slots active (2550%)". `active` counts
     // running jobs across the whole service while `slots` is the pool size from a heartbeat that
     // is last-writer-wins across replicas, so the two are not a ratio — and a stale lease produces
-    // the same shape. The condition is named instead of dressed up as 2550% of capacity.
+    // the same shape.
+    //
+    // THIS TEST CHANGED ITS EXPECTATION, deliberately. The first fix withheld the percentage
+    // entirely, which avoided printing 2550% and also removed the one number that is true: the
+    // two slots ARE both busy. The brief asks for a gauge bounded at 100% with the excess shown
+    // separately, so the reader now gets both facts instead of neither. The reason the ratio is
+    // not a utilisation survives in overCommittedNote, which is the part that must not be lost.
     const gauge = gaugeModel({ ...service, active: 51, slots: 2 })
-    expect(gauge.pct).toBe(null)
+    expect(gauge.pct).toBe(100)             // bounded, never 2550
+    expect(gauge.oversubscribed).toBe(49)   // and the excess is its own figure
     expect(gauge.overCommitted).toBe(true)
     expect(gauge.state).toBe('saturated')
     expect(gauge.stateLabel).toBe('Over committed')
-    expect(gauge.text).toBe('51 jobs in flight against 2 reported worker slots')
-    expect(gauge.text).not.toContain('%')
+    expect(gauge.text).not.toMatch(/2550/)
     expect(gauge.fraction).toBe(1)          // the arc fills, it does not wrap
     expect(gauge.overCommittedNote).toMatch(/last-writer-wins across replicas/)
   })
@@ -1597,5 +1603,367 @@ describe('queueRoleLoad', () => {
 
   it('ignores stages with nothing waiting', () => {
     expect(queueRoleLoad(PRODUCTION).rows.map(r => r.stage)).toEqual(['remediate'])
+  })
+})
+
+/* ─────────────────────── Task 19: worker and queue ─────────────────────── */
+
+import { streamState, STREAM_STATES, STALE_FRAME_S, provisioningTimeline, queueDrain }
+  from './liveOpsDrawer.js'
+
+describe('gaugeModel — bounded, with the excess counted separately', () => {
+  const svc = (over = {}) => ({ role: 'assess', stage: 'assess', alive: true, ...over })
+
+  it('caps the gauge at 100% instead of printing an impossible utilisation', () => {
+    // The production reading was "51 of 2 worker slots active (2550%)". A gauge cannot be more
+    // than full; the slots that exist ARE all busy, and that is the true half of it.
+    const g = gaugeModel(svc({ active: 51, slots: 2 }))
+    expect(g.pct).toBe(100)
+    expect(g.fraction).toBe(1)
+    expect(g.busyText).toBe('2 of 2 slots busy (100%)')
+  })
+
+  it('reports the excess as its own figure, not as utilisation', () => {
+    const g = gaugeModel(svc({ active: 51, slots: 2 }))
+    expect(g.oversubscribed).toBe(49)
+    expect(g.overCommitted).toBe(true)
+    expect(g.text).toMatch(/49 more jobs reported running than this service has slots/)
+    expect(g.text).not.toMatch(/2550|51 of 2/)
+  })
+
+  it('does not invent an excess when the service is merely full', () => {
+    const g = gaugeModel(svc({ active: 2, slots: 2 }))
+    expect(g.oversubscribed).toBeNull()
+    expect(g.pct).toBe(100)
+    expect(g.busyText).toBe('2 of 2 slots busy (100%)')
+  })
+
+  it('still explains why the two numbers can disagree', () => {
+    // The cap is presentation. The reason the ratio is not a utilisation has to survive it.
+    const note = gaugeModel(svc({ active: 51, slots: 2 })).overCommittedNote
+    expect(note).toMatch(/last-writer-wins across replicas/)
+    expect(note).toMatch(/capped at 100%/)
+  })
+
+  it('uses the singular for a single excess job', () => {
+    expect(gaugeModel(svc({ active: 3, slots: 2 })).text).toMatch(/1 more job reported running/)
+  })
+
+  it('reports nothing rather than zero when slots are unmeasured', () => {
+    expect(gaugeModel(svc({ active: 5, slots: null })).available).toBe(false)
+    expect(gaugeModel(svc({ active: null, slots: 2 })).available).toBe(false)
+  })
+})
+
+describe('streamState', () => {
+  const NOW = Date.parse('2026-09-05T14:00:00Z')
+  const at = (secondsAgo) => new Date(NOW - secondsAgo * 1000).toISOString()
+
+  it('distinguishes all four states the brief names', () => {
+    expect(Object.keys(STREAM_STATES)).toEqual(['live', 'reconnecting', 'stale', 'unavailable'])
+    const icons = Object.values(STREAM_STATES).map(s => s.icon)
+    const labels = Object.values(STREAM_STATES).map(s => s.label)
+    expect(new Set(icons).size).toBe(4)      // WCAG 1.4.1: not colour alone
+    expect(new Set(labels).size).toBe(4)
+  })
+
+  it('calls a connected but silent stream STALE, not live', () => {
+    // The state that was missing. An open socket delivering nothing renders identically to a
+    // healthy one unless silence is its own state — and that is exactly when a reader is most
+    // likely to act on a number that stopped being true.
+    const s = streamState('live', { generatedAt: at(STALE_FRAME_S + 10), nowMs: NOW })
+    expect(s.state).toBe('stale')
+    expect(s.tone).not.toBe('ok')
+    expect(s.detail).toMatch(/connected but has not delivered a frame/)
+  })
+
+  it('is live when frames are arriving', () => {
+    expect(streamState('live', { generatedAt: at(3), nowMs: NOW }).state).toBe('live')
+  })
+
+  it('carries the last measurement even when the stream is gone', () => {
+    // "We lost the stream" is only actionable beside "and this is how old what you see is".
+    const s = streamState('unavailable', { generatedAt: at(600), nowMs: NOW })
+    expect(s.state).toBe('unavailable')
+    expect(s.lastMeasuredAt).toBe(at(600))
+    expect(s.ageS).toBe(600)
+  })
+
+  it('says so when there is no last frame to fall back on', () => {
+    const s = streamState('unavailable', { generatedAt: null, nowMs: NOW })
+    expect(s.lastMeasuredAt).toBeNull()
+    expect(s.detail).toMatch(/no frame has arrived/)
+  })
+
+  it('reports reconnecting without pretending the values are current', () => {
+    const s = streamState('reconnecting', { generatedAt: at(45), nowMs: NOW })
+    expect(s.state).toBe('reconnecting')
+    expect(s.detail).toMatch(/last frame received/)
+  })
+})
+
+describe('provisioningTimeline', () => {
+  const lc = (replicas, over = {}) => ({ available: true, replicas, ...over })
+
+  it('walks Requested → Allocating → Starting → Healthy', () => {
+    const t = provisioningTimeline(lc([
+      { state: 'ready' }, { state: 'ready' }, { state: 'starting' }, { state: 'allocating' },
+    ], { desired: 5 }))
+    expect(t.stages.map(s => s.label))
+      .toEqual(['Requested', 'Allocating', 'Starting', 'Healthy'])
+    expect(t.stages.map(s => s.count)).toEqual([5, 1, 1, 2])
+  })
+
+  it('names the stage the fleet is actually waiting on', () => {
+    expect(provisioningTimeline(lc([{ state: 'ready' }, { state: 'allocating' }])).current)
+      .toBe('allocating')
+    expect(provisioningTimeline(lc([{ state: 'ready' }, { state: 'starting' }])).current)
+      .toBe('starting')
+    expect(provisioningTimeline(lc([{ state: 'ready' }])).settled).toBe(true)
+  })
+
+  it('falls back to what exists rather than claiming a target nobody reported', () => {
+    const t = provisioningTimeline(lc([{ state: 'ready' }, { state: 'starting' }]))
+    expect(t.stages[0].count).toBe(2)
+  })
+
+  it('passes the lifecycle’s own reason through when there is nothing to show', () => {
+    const t = provisioningTimeline({ available: false, reason: 'Azure Monitor is not configured.' })
+    expect(t.available).toBe(false)
+    expect(t.reason).toMatch(/not configured/)
+    expect(t.stages).toEqual([])
+  })
+})
+
+describe('queueDrain', () => {
+  it('estimates a drain time from the NET rate', () => {
+    // 100 waiting, completing 20/min against 10/min arriving → 10/min net → 10 minutes.
+    const d = queueDrain({ total: 100, arrivalPerMin: 10, completionPerMin: 20 })
+    expect(d.draining).toBe(true)
+    expect(d.etaS).toBe(600)
+  })
+
+  it('refuses an ETA for a queue that is growing', () => {
+    // Extrapolating one anyway would put a finishing time on a queue that is getting longer.
+    const d = queueDrain({ total: 100, arrivalPerMin: 30, completionPerMin: 20 })
+    expect(d.draining).toBe(false)
+    expect(d.etaS).toBeNull()
+    expect(d.reason).toMatch(/arriving faster than it completes by 10\/min/)
+  })
+
+  it('calls a queue holding steady what it is', () => {
+    const d = queueDrain({ total: 50, arrivalPerMin: 12, completionPerMin: 12 })
+    expect(d.draining).toBe(false)
+    expect(d.reason).toMatch(/holding steady/)
+  })
+
+  it('is unavailable, not zero, when the rates are not reported', () => {
+    expect(queueDrain({ total: 100 }).available).toBe(false)
+    expect(queueDrain({ total: 100, arrivalPerMin: 5 }).available).toBe(false)
+  })
+
+  it('reports an empty queue as already drained', () => {
+    const d = queueDrain({ total: 0, arrivalPerMin: 0, completionPerMin: 0 })
+    expect(d.etaS).toBe(0)
+    expect(d.reason).toBe('Nothing is waiting.')
+  })
+})
+
+import { FACT_GROUPS, factGroups } from './liveOpsDrawer.js'
+
+describe('factGroups', () => {
+  it('sorts the worker fact wall into its groups, in reading order', () => {
+    const groups = factGroups([
+      ['Service health', 'Online'],
+      ['Worker slots', '2 active · 1 available of 3'],
+      ['Job type', 'scan file'],
+      ['Active revision', 'acp-assess--v25'],
+    ])
+    expect(groups.map((g) => g.key)).toEqual(['capacity', 'processing', 'deployment'])
+    expect(groups[0].facts).toEqual([{ label: 'Worker slots', value: '2 active · 1 available of 3' }])
+    expect(groups[2].facts.map((f) => f.label)).toEqual(['Service health', 'Active revision'])
+  })
+
+  it('drops a group with nothing in it rather than showing an empty heading', () => {
+    const groups = factGroups([['Storage class', 'Durable application storage']])
+    expect(groups).toHaveLength(1)
+    expect(groups[0].key).toBe('audit')
+  })
+
+  it('puts an unrecognised label in Other instead of losing it', () => {
+    const groups = factGroups([['Worker slots', '3'], ['Quantum flux', 'Nominal']])
+    expect(groups.map((g) => g.key)).toEqual(['capacity', 'other'])
+    expect(groups[1].facts).toEqual([{ label: 'Quantum flux', value: 'Nominal' }])
+  })
+
+  it('keeps the caller’s order within a group, because it encodes pairings', () => {
+    // "Size measured from" says WHOSE size the row above it is. Re-sorting alphabetically would
+    // separate them, which is the one thing that row cannot survive.
+    const groups = factGroups([
+      ['Replica size', '2 vCPU · 4Gi RAM'],
+      ['Size measured from', 'acp-assess'],
+      ['Replicas', '2 running'],
+    ])
+    expect(groups[0].facts.map((f) => f.label)).toEqual(['Replica size', 'Size measured from', 'Replicas'])
+  })
+
+  it('ignores a malformed entry rather than rendering undefined', () => {
+    expect(factGroups([['Worker slots'], null, 'nope', ['Replicas', '2']])[0].facts)
+      .toEqual([{ label: 'Replicas', value: '2' }])
+  })
+
+  it('has no group key the render layer cannot address', () => {
+    expect(new Set(FACT_GROUPS.map((g) => g.key)).size).toBe(FACT_GROUPS.length)
+    for (const group of FACT_GROUPS) expect(group.key).toMatch(/^[a-z]+$/)
+  })
+})
+
+import {
+  RUN_STAGES, HEARTBEAT_INTERVAL_S, runCoverage, runFlow, runStagePipeline, runTiming, runTrouble,
+} from './liveOpsDrawer.js'
+
+describe('runStagePipeline', () => {
+  const snap = (runs) => ({ runs })
+
+  it('places the scan in the pipeline from its sibling stage rows', () => {
+    const p = runStagePipeline('s1', snap([
+      { scan_id: 's1', stage: 'discover', status: 'recent', completed: 40, total: 40 },
+      { scan_id: 's1', stage: 'assess', status: 'active', completed: 8, total: 20, running: 2, queued: 10 },
+      { scan_id: 's2', stage: 'assess', status: 'active', completed: 1, total: 9 },
+    ]))
+    expect(p.present.map((s) => s.key)).toEqual(['discover', 'assess'])
+    expect(p.stages[0].state).toBe('complete')
+    expect(p.stages[1].state).toBe('active')
+    expect(p.stages[1].pct).toBe(40)
+    expect(p.stages[1].queued).toBe(10)
+    // s2's row must not leak into s1's pipeline.
+    expect(p.stages[1].total).toBe(20)
+  })
+
+  it('calls an absent stage NOT REPORTED, never "not started"', () => {
+    // The distinction that matters: admin_live_activity drops a stage once its last job falls out
+    // of the recent tail, so absence cannot tell "finished an hour ago" from "never ran".
+    const p = runStagePipeline('s1', snap([
+      { scan_id: 's1', stage: 'assess', status: 'active', completed: 1, total: 2 },
+    ]))
+    expect(p.missing).toEqual(['Discover', 'Remediate', 'Release'])
+    expect(p.stages[0].state).toBe('unknown')
+    expect(p.missingReason).toMatch(/never “did not run”/)
+    expect(p.missingReason).not.toMatch(/not started/i)
+  })
+
+  it('keeps the pipeline in document order, not in row order', () => {
+    const p = runStagePipeline('s1', snap([
+      { scan_id: 's1', stage: 'remediate', status: 'active', completed: 0, total: 3 },
+      { scan_id: 's1', stage: 'discover', status: 'recent', completed: 3, total: 3 },
+    ]))
+    expect(p.present.map((s) => s.key)).toEqual(['discover', 'remediate'])
+    expect(RUN_STAGES.map((s) => s.key)).toEqual(['discover', 'assess', 'remediate', 'release'])
+  })
+})
+
+describe('runFlow', () => {
+  it('counts the four document states and totals only what was counted', () => {
+    const f = runFlow({ completed: 8, running: 2, queued: 10, failed: 1 })
+    expect(f.total).toBe(21)
+    expect(f.segments.map((s) => s.key)).toEqual(['completed', 'running', 'queued', 'failed'])
+    expect(f.partial).toBe(false)
+  })
+
+  it('leaves an unpublished failure count out of the total rather than calling it zero', () => {
+    const f = runFlow({ completed: 8, running: 2, queued: 10 })
+    expect(f.total).toBe(20)
+    expect(f.partial).toBe(true)
+    expect(f.rows.find((r) => r.key === 'failed').count).toBeNull()
+    expect(f.segments.map((s) => s.key)).not.toContain('failed')
+  })
+
+  it('drops empty states from the bar but keeps them in the rows', () => {
+    const f = runFlow({ completed: 5, running: 0, queued: 0, failed: 0 })
+    expect(f.segments.map((s) => s.key)).toEqual(['completed'])
+    expect(f.rows).toHaveLength(4)
+  })
+})
+
+describe('runTiming', () => {
+  const run = {
+    started_at: iso(-3600),
+    updated_at: iso(-4),
+    current_job_started_at: iso(-2820),
+    current_job_heartbeat_at: iso(-20),
+    current_file: 'a.docx',
+  }
+
+  it('separates run age, current-job runtime and heartbeat recency', () => {
+    const t = runTiming(run, { nowMs: NOW })
+    expect(t.elapsedS).toBe(3600)
+    expect(t.currentJobS).toBe(2820)       // 47 minutes on this job
+    expect(t.heartbeatAgeS).toBe(20)       // and beating 20 seconds ago
+    expect(t.leaseStale).toBe(false)
+  })
+
+  it('calls a lease stale only when the beat is several intervals old', () => {
+    expect(runTiming({ ...run, current_job_heartbeat_at: iso(-HEARTBEAT_INTERVAL_S * 2) },
+      { nowMs: NOW }).leaseStale).toBe(false)
+    expect(runTiming({ ...run, current_job_heartbeat_at: iso(-HEARTBEAT_INTERVAL_S * 4) },
+      { nowMs: NOW }).leaseStale).toBe(true)
+  })
+
+  it('reports a pre-v16 row as unknown rather than reading the heartbeat as a start', () => {
+    const t = runTiming({ ...run, current_job_started_at: null }, { nowMs: NOW })
+    expect(t.currentJobS).toBeNull()
+    expect(t.currentJobUnknown).toBe(true)
+    // The heartbeat is still available, and is still not a runtime.
+    expect(t.heartbeatAgeS).toBe(20)
+  })
+
+  it('has no runtime to report when nothing is being processed', () => {
+    const t = runTiming({ started_at: iso(-60) }, { nowMs: NOW })
+    expect(t.currentJobS).toBeNull()
+    expect(t.currentJobUnknown).toBe(false)
+    expect(t.leaseStale).toBe(false)
+  })
+})
+
+describe('runTrouble', () => {
+  it('reports the classified class and the retry count', () => {
+    const t = runTrouble({ max_attempts_seen: 3, last_error_class: 'source_rate_limit' })
+    expect(t.label).toBe('Source rate limit')
+    expect(t.retrying).toBe(true)
+    expect(t.note).toMatch(/vocabulary term, never the error text/)
+  })
+
+  it('does not call a first attempt a retry', () => {
+    expect(runTrouble({ max_attempts_seen: 1, last_error_class: 'timeout' }).retrying).toBe(false)
+  })
+
+  it('is empty when nothing failed', () => {
+    const t = runTrouble({ max_attempts_seen: 1 })
+    expect(t.kind).toBeNull()
+    expect(t.label).toBeNull()
+    expect(t.note).toBeNull()
+  })
+
+  it('shows an unmapped class verbatim rather than blanking it', () => {
+    expect(runTrouble({ last_error_class: 'brand_new_class' }).label).toBe('brand_new_class')
+  })
+})
+
+describe('runCoverage', () => {
+  it('reports site coverage when the run checkpointed any', () => {
+    const c = runCoverage({ sites_total: 30, sites_done: 12, sites_unread: 2, libraries_total: 61 })
+    expect(c.available).toBe(true)
+    expect(c.pct).toBe(40)
+    expect(c.unreadNote).toMatch(/2 sites not read \(blocked or skipped\)/)
+  })
+
+  it('is unavailable — not zero — for a run with no site data', () => {
+    // Drive and OneDrive runs: the backend returns an EMPTY dict, so "0 of 0 sites" would be a
+    // fact about the map rather than about the estate.
+    expect(runCoverage({ completed: 5 }).available).toBe(false)
+  })
+
+  it('says nothing about unread sites when none are', () => {
+    expect(runCoverage({ sites_total: 4, sites_done: 4, sites_unread: 0 }).unreadNote).toBeNull()
   })
 })
