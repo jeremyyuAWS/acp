@@ -51,9 +51,9 @@ describe('the queue-estimate poll is wired into Remediate', () => {
     expect(src).toMatch(/startPoll\(watchTotalRef\.current\)/)
   })
 
-  it('puts the SSE-fed remediation progress card in the main workflow', () => {
-    expect(src).toMatch(/import RemediationRunProgress from '\.\/RemediationRunProgress\.jsx'/)
-    // The card remains mounted for its final completed snapshot after remBusy turns false.
-    expect(src).toMatch(/remProg && \([\s\S]*?<RemediationRunProgress progress=\{remProg\} updateMode=\{remUpdates\}/)
+  it('uses one authoritative operations card and deliberately retires the duplicate progress card', () => {
+    expect(src).not.toMatch(/import RemediationRunProgress from '\.\/RemediationRunProgress\.jsx'/)
+    expect(src).not.toMatch(/<RemediationRunProgress/)
+    expect(src).toMatch(/<RemediationOpsPanel[\s\S]*?events=\{runStream\?\.events \|\| \[\]\}/)
   })
 })
