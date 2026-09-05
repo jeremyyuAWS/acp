@@ -2077,8 +2077,11 @@ export default function App() {
                   onClick={() => setStopped(null)}>Dismiss</button>
         </div>
       )}
+      {/* Assessment has a real live card immediately below this fallback. Do not stack a
+          generic “still running” banner above the richer card for the same work. */}
       <WorkflowContinuityBanner
-        workflow={primaryWorkflow}
+        workflow={primaryWorkflow?.stage === 'assess' && assessPhase === 'running'
+          ? null : primaryWorkflow}
         currentView={view}
         onReturn={(stage) => { goToView(stage); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
         onLiveOps={() => { goToView('liveops'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
@@ -2116,27 +2119,12 @@ export default function App() {
           logic (and the OUTER scan-banner's Stop-suppression above, when view === 'assess' &&
           assessPhase === 'running') was written assuming this card would be live during assess.
           It never was, until this line. */}
-      {/* Suppress when the Assess tab is open and an assess is running — AssessRunner.jsx owns
-          that view and shows an authoritative progress panel from the same data. Showing both
-          caused contradictory "Document 0 of 148" vs "10 of 148 · 7%" readings simultaneously.
-
-          DISCOVER is suppressed for the same reason, a step earlier in the funnel. That tab is
-          the inventory: it already carries its own scan progress and its own "148 documents
-          discovered across 1 source" panel. Adding an ASSESS card on top put two progress
-          readings of two different phases on one screen — "Assessing 148 documents · Document 0
-          of 148 · Idle" sitting directly above the discovery count it has nothing to do with.
-          Discover answers "what do we have"; how far the assessment has got belongs to Assess,
-          which owns a better view of it.
-
-          REMEDIATE is suppressed too. Once that stage starts, Remediate.jsx owns the live
-          RemediationRunProgress card. Keeping the completed Assessment card above it produced two
-          stage-status panels and made the finished stage look like the active one. Assessment
-          remains available on its own tab and the remediation card replaces it on Remediate.
-
-          `busy` means a DISCOVER run is live; the assess panel must not activate during
-          discovery. Only assessPhase==='running' should trigger it. */}
+      {/* AssessRunner owns the full card while the Assess tab is open. Everywhere else, show this
+          same live Assessment card directly below the tabs so navigation never replaces real
+          progress with a generic warning. `busy` is a DISCOVER-only flag; assessPhase is the
+          authority for whether this card is active. */}
       <LiveAssessmentLive scanId={liveScanId || run?.id}
-                          active={assessPhase === 'running' && view !== 'discover' && view !== 'remediate'}
+                          active={assessPhase === 'running' && view !== 'assess'}
                           onStop={() => stopScan(liveScanId || run?.id)} />
 
       {/* THE PERSISTENT REMEDIATION CARD. Outside the tabpanel on purpose: `<Remediate/>` below
