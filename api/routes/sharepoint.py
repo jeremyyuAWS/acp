@@ -341,6 +341,27 @@ async def sharepoint_upload(request: Request):
     content_type = upload_file.content_type or "application/octet-stream"
 
     if item_id:
+        # PRECONDITIONS BEFORE THE ARCHIVE, which is the whole point of where this sits. The
+        # archive is a copy taken immediately before the overwrite; a replace that was never
+        # going to succeed still leaves a dated copy behind, in the folder a customer would go to
+        # if they ever needed to roll a remediation back. And a declared record is not a failed
+        # write at all — it is a governance decision ACP must not make on the tenant's behalf.
+        #
+        # One Graph call per write-back, read LIVE rather than from the scan's inventory: a file
+        # checked out since the scan is exactly the case this catches, and a write-back is
+        # per-file and approval-gated, so the call is proportionate here where the same call in a
+        # 30-site listing is an outage (tests/test_sp_scale.py).
+        import sp_writeback
+        state = sp_writeback.read_state(token, drive_id or None, item_id)
+        if not state["ok"]:
+            raise HTTPException(status_code=409, detail={
+                "error": "write-back refused by SharePoint preconditions",
+                "blockers": state["blockers"],
+                "notes": state["notes"],
+                # Named so the caller can say "nothing was touched" with the same confidence the
+                # archive path's own failure message does.
+                "archived": False, "replaced": False,
+            })
         try:
             # Archive, THEN write. Ordered, and not wrapped in its own try: an archive failure
             # must propagate as a refusal to write, never be logged past.
@@ -358,7 +379,13 @@ async def sharepoint_upload(request: Request):
         if scan_id and filename:
             core.store.record_remediation(scan_id, filename, drive_write_url=web_url)
         return {"ok": True, "url": web_url, "replaced": True,
-                "archivedTo": scanner.SP_ARCHIVE_FOLDER, "driveId": drive_id}
+                "archivedTo": scanner.SP_ARCHIVE_FOLDER, "driveId": drive_id,
+                # Whether the preconditions were actually READ, not just whether they passed. A
+                # tenant that refuses the listItem expansion gets a write that proceeded without
+                # the check, and a response that says "clear" there would be claiming a check
+                # nobody ran — the distinction the availability contract exists for.
+                "preconditionsChecked": state["checked"],
+                **({"preconditionNotes": state["notes"]} if state["notes"] else {})}
 
     folder = core.store.get_drive_mirror_folder()
     try:

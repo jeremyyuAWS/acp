@@ -223,6 +223,35 @@ def _analytics_counts(blob: dict | None) -> tuple[int | None, int | None]:
     return _n("actorCount"), _n("actionCount")
 
 
+# ── the three columns a write-back has to respect ────────────────────────────────────────────
+#
+# Read through these rather than inline, because `normalize` (which records them per document)
+# and `sp_writeback` (which refuses a write on them) MUST agree about what the columns say. Two
+# readers of `_IsRecord` that disagree is a scan reporting a file as a declared record while the
+# write path overwrites it — the drift this repo keeps paying for, on the one field where the
+# cost is a compliance event rather than a wrong number.
+
+def checkout_user(fields: dict) -> str | None:
+    """Who has the item checked out, if anyone. `CheckoutUser` is the readable column;
+    `CheckoutUserLookupId` is the id-only shadow some tenants return instead — a name nobody can
+    read is still evidence that somebody holds the lock."""
+    f = fields or {}
+    return f.get("CheckoutUser") or f.get("CheckoutUserLookupId") or None
+
+
+def is_record(fields: dict) -> bool | None:
+    """Whether the item is a DECLARED RECORD. None when the column is absent — which is not the
+    same as False, and is the difference between "this tenant says it is not a record" and "this
+    tenant did not tell us"."""
+    f = fields or {}
+    return bool(f.get("_IsRecord")) if "_IsRecord" in f else None
+
+
+def compliance_tag(fields: dict):
+    """The retention/record label behind a declaration, for context in a refusal."""
+    return (fields or {}).get("_ComplianceTag")
+
+
 def _is_page(item: dict, content_type: str | None) -> bool:
     """A SharePoint PAGE, not a document. Both are list items in a library and both come back
     from the same walk, but a page is authored in SharePoint and has no downloadable source
@@ -316,8 +345,8 @@ def normalize(item: dict, *, list_item: Container, drive_item: Container | None 
             ((item or {}).get("sensitivityLabel") or {}).get("displayName")),
         # _ComplianceTag is the record-declaration column behind a retention label. Read from the
         # LIST container, so it carries that container's availability, not the driveItem's.
-        "compliance_tag": resolve(li, lf.get("_ComplianceTag")),
-        "is_record": resolve(li, bool(lf.get("_IsRecord")) if "_IsRecord" in lf else None),
+        "compliance_tag": resolve(li, compliance_tag(lf)),
+        "is_record": resolve(li, is_record(lf)),
 
         # ── people ───────────────────────────────────────────────────────────────────────────
         "created_by": resolve(di, _person(di.get("createdBy"))),
@@ -373,7 +402,7 @@ def normalize(item: dict, *, list_item: Container, drive_item: Container | None 
         "version": resolve(li, lf.get("_UIVersionString")),
         # A checked-out file is one a remediation write-back would silently fail against, so this
         # is not decoration — it is the precondition Phase 5 has to check.
-        "checked_out_by": resolve(li, lf.get("CheckoutUser") or lf.get("CheckoutUserLookupId")),
+        "checked_out_by": resolve(li, checkout_user(lf)),
 
         # ── what KIND of thing this is ───────────────────────────────────────────────────────
         # Derived, not read, so it has no container of its own: it is a fact about the item that
