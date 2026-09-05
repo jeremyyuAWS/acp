@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
-import { getAcrPublication, publishAcr, getAcrRevisions, reviseAcr } from './acrApi'
+import { getAcrPublication, publishAcr, getAcrRevisions, reviseAcr,
+         downloadAcrRevisionPdf } from './acrApi'
 
 /**
  * Publication and revision history (PRD §16, §17, Phase 4).
@@ -24,6 +25,7 @@ export default function AcrPublish({ reportId, onChange }) {
   const [ready, setReady] = useState(null)
   const [revs, setRevs] = useState(null)
   const [error, setError] = useState(null)
+  const [downloadError, setDownloadError] = useState(null)
   const [busy, setBusy] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [result, setResult] = useState(null)
@@ -45,6 +47,36 @@ export default function AcrPublish({ reportId, onChange }) {
       .then(() => { setError(null); onChange && onChange() })
       .catch((e) => setError(e.message))
       .finally(() => { setBusy(false); setConfirming(false) })
+  }
+
+  // The published revision as a document to send. Deliberately NOT an <a href> to the endpoint:
+  // the route needs the bearer token, an anchor cannot send one, and following it would navigate
+  // away from the workspace to a 401. So fetch it with the same headers as everything else and
+  // hand the browser a blob — the same shape AcrWorkspace uses for the draft export.
+  const downloadRevision = (revision) => {
+    setBusy(true)
+    setDownloadError(null)
+    return downloadAcrRevisionPdf(reportId, revision)
+      .then(({ blob, filename }) => {
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = filename
+        document.body.appendChild(a)
+        a.click()
+        a.remove()
+        URL.revokeObjectURL(url)
+      })
+      // The server's own sentence, not "download failed". A 409 here says the snapshot no longer
+      // matches its digest and a 503 names the missing renderer; both are things a person can act
+      // on, and neither survives being flattened into a generic failure.
+      //
+      // ITS OWN STATE, deliberately. `error` is the screen's LOAD failure and returns early from
+      // the component — setting it here would replace the whole publication view with one line,
+      // taking the revision table and the retry with it. A test caught exactly that: after a
+      // failed download there was no button left to press.
+      .catch((e) => setDownloadError(String(e.message || e)))
+      .finally(() => setBusy(false))
   }
 
   const published = ready.status === 'published'
@@ -131,6 +163,7 @@ export default function AcrPublish({ reportId, onChange }) {
       )}
 
       <h4>Revision history</h4>
+      {downloadError && <p role="alert">{downloadError}</p>}
       {!revs?.revisions?.length ? <p className="muted">No revision has been published yet.</p> : (
         <table>
           <caption className="sr-only">Published revisions of this report</caption>
@@ -138,6 +171,7 @@ export default function AcrPublish({ reportId, onChange }) {
             <tr>
               <th scope="col">Revision</th><th scope="col">Published</th>
               <th scope="col">By</th><th scope="col">Digest</th><th scope="col">Integrity</th>
+              <th scope="col">Document</th>
             </tr>
           </thead>
           <tbody>
@@ -151,6 +185,22 @@ export default function AcrPublish({ reportId, onChange }) {
                 <td>{r.digest_verified
                   ? 'Verified — contents match the recorded digest'
                   : `Not verified: ${r.digest_problem}`}</td>
+                {/* No download offered for a revision whose contents do not match its digest.
+                    The server refuses it too (409), and this is the belt to that braces: an
+                    altered record must not be one click from becoming a PDF in a procurement
+                    file. The reason is stated in words rather than left as a disabled control
+                    with no explanation. */}
+                <td>{r.digest_verified ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => downloadRevision(r.revision)}
+                  >
+                    Download revision {r.revision}
+                  </button>
+                ) : (
+                  <span className="muted">Not available — this snapshot failed verification</span>
+                )}</td>
               </tr>
             ))}
           </tbody>
