@@ -243,8 +243,9 @@ describe('one stream, owned above the tab switch', () => {
   })
 
   it('advances the cursor only from the frame id, never from the payload', () => {
-    expect(hook()).toMatch(/onEvent: \(_event, id\) => \{/)
+    expect(hook()).toMatch(/onEvent: \(event, id\) => \{/)
     expect(hook()).toMatch(/if \(id != null\) cursorRef\.current = id/)
+    expect(hook()).toMatch(/addRemediationEvent\(previous, event, id\)/)
   })
 
   it('drops a rejected cursor and re-fetches rather than retrying it forever', () => {

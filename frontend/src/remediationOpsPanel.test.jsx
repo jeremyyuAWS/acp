@@ -282,6 +282,23 @@ describe('the panel shows what is being worked right now', () => {
   })
 })
 
+describe('the durable lifecycle log is visible without becoming a second state model', () => {
+  it('renders bounded event narration without adding another live region', () => {
+    const events = [
+      { key: '42', line: '4 fixes independently verified for Patient Guide.docx',
+        kind: 'remediate.verified', tone: 'success', occurredAt: '2026-09-05T12:00:00Z' },
+      { key: '41', line: 'Manual review requested for Form.pdf · WCAG 1.1.1',
+        kind: 'remediate.review_requested', tone: 'attention', occurredAt: null },
+    ]
+    const html = render({ snapshot: SNAP, connected: true, receivedAt: Date.now(), events })
+    expect(html).toContain('Live activity')
+    expect(html).toContain('Patient Guide.docx')
+    expect(html).toContain('Manual review requested')
+    expect(html.match(/aria-live="polite"/g)).toHaveLength(1)
+    expect(html).toContain('aria-label="Recent remediation activity"')
+  })
+})
+
 describe('counters flash their increase like Discovery does', () => {
   it('routes known counts through the shared LiveCounter, not a second implementation', () => {
     const html = render({ snapshot: SNAP, connected: true, receivedAt: Date.now() })

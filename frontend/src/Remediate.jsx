@@ -1646,7 +1646,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           read first. `connected` is the transport's own answer, not an inference from data age. */}
       <RemediationOpsPanel snapshot={runStream?.snapshot || null}
                            connected={!!runStream?.connected}
-                           receivedAt={runStream?.receivedAt || null} />
+                           receivedAt={runStream?.receivedAt || null}
+                           events={runStream?.events || []} />
       {/* The authenticated remediation SSE already supplies these values. Keep its progress in
           the main workflow, rather than hiding the only live signal inside Run details. */}
       {remProg && (

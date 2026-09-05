@@ -209,6 +209,37 @@ function Workstream({ attempts, generatedAt }) {
   )
 }
 
+const EVENT_ICON = { success: '✓', attention: '!', error: '×', neutral: '·' }
+
+function ActivityFeed({ events }) {
+  const rows = Array.isArray(events) ? events : []
+  if (rows.length === 0) return null
+  return (
+    <details open className="rem-activity-feed">
+      <summary>Live activity <span className="muted">· latest {rows.length}</span></summary>
+      {/* Deliberately NOT aria-live. The panel's single polite region announces material run
+          state; narrating every fix and delivery would interrupt once per document. */}
+      <ol aria-label="Recent remediation activity">
+        {rows.map((row) => (
+          <li key={row.key} className={`rem-activity-feed__row rem-activity-feed__row--${row.tone}`}>
+            <span className="rem-activity-feed__icon" aria-hidden="true">
+              {EVENT_ICON[row.tone] || EVENT_ICON.neutral}
+            </span>
+            <span>{row.line}</span>
+            {row.occurredAt && (
+              <time dateTime={row.occurredAt}>
+                {new Date(row.occurredAt).toLocaleTimeString([], {
+                  hour: '2-digit', minute: '2-digit', second: '2-digit',
+                })}
+              </time>
+            )}
+          </li>
+        ))}
+      </ol>
+    </details>
+  )
+}
+
 /**
  * @param snapshot    GET /scans/{id}/remediation/snapshot, or null before the first one arrives.
  * @param connected   true while the SSE stream is open. The transport's own answer — see
@@ -217,7 +248,8 @@ function Workstream({ attempts, generatedAt }) {
  * @param onViewMonitor  optional; omit and no Monitor link renders.
  */
 export default function RemediationOpsPanel({ snapshot = null, connected = false,
-                                              receivedAt = null, onViewMonitor = null }) {
+                                              receivedAt = null, onViewMonitor = null,
+                                              events = [] }) {
   // No snapshot and no run is not an empty panel to fill with zeroes — it is nothing to show.
   if (!snapshot || snapshot.state === 'draft') return null
 
@@ -275,6 +307,7 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
 
       <PhaseRail phases={snapshot.phases} />
       <Workstream attempts={snapshot.active_attempts} generatedAt={snapshot.generated_at} />
+      <ActivityFeed events={events} />
       <Counters snapshot={snapshot} suspect={suspect} />
       <Secondary snapshot={snapshot} />
 
