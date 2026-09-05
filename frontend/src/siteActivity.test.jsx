@@ -88,6 +88,19 @@ describe('SiteActivity', () => {
     expect(c.textContent).toMatch(/Policies \(full scan\)/)
   })
 
+  it('shows per-library outcome, counts, throttling and failures', async () => {
+    const sites = [{ id: 'c,1,1', name: 'Finance', status: 'partial', listed: 12,
+      libraries: [
+        { id: 'd1', name: 'Policies', mode: 'full', status: 'complete', listed: 12, estate: 14,
+          throttled: 2 },
+        { id: 'd2', name: 'Records', mode: 'full', status: 'blocked', listed: 0,
+          error: 'Graph returned 403' },
+      ] }]
+    const c = await mount({ sites })
+    expect(c.textContent).toMatch(/Policies \(full scan · complete · 12 documents\) · throttled 2 times/)
+    expect(c.textContent).toMatch(/Records \(full scan · could not read · 0 documents\) · Graph returned 403/)
+  })
+
   it('never shows the raw Graph site id as a label', async () => {
     // (host,guid,guid) is the least recognisable string in this product.
     const c = await mount({ sites: SITES })
@@ -107,6 +120,12 @@ describe('SiteActivity', () => {
     expect(c.querySelector('.pulsedot')).toBeTruthy()
     const done = await mount({ sites: [{ id: 'a', name: 'A', status: 'complete', listed: 1 }] })
     expect(done.querySelector('.pulsedot')).toBeNull()
+  })
+
+  it('names the library currently being read and how it is being enumerated', async () => {
+    const c = await mount({ sites: [{ id: 'a', name: 'Clinical', status: 'scanning', listed: 200,
+      active_library: { id: 'd1', name: 'Policies', mode: 'delta' } }] })
+    expect(c.textContent).toMatch(/Reading Policies incrementally/)
   })
 })
 

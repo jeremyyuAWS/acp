@@ -252,6 +252,8 @@ def test_a_failing_library_does_not_lose_the_rest_of_its_site(monkeypatch):
     assert [f["name"] for f in files] == ["ok.docx"]
     [rep] = scope["sites"]
     assert rep["status"] == "partial" and "Broken" in rep["error"]
+    assert [(lib["name"], lib["status"], lib["listed"]) for lib in rep["libraries"]] == [
+        ("Broken", "blocked", 0), ("Fine", "complete", 1)]
     assert scope["inventory"]["truncated"] is True
 
 
@@ -268,6 +270,25 @@ def test_progress_is_reported_per_site_as_each_one_resolves(monkeypatch):
     assert len(ticks) >= 2, "no per-site tick — the operator sees one silent bar"
     final = {s["id"]: s["status"] for s in ticks[-1]}
     assert final == {"S1": "complete", "S2": "complete"}
+
+
+def test_progress_names_active_library_and_only_completes_after_counting(monkeypatch):
+    """A live site must not say complete while its listed count is still zero."""
+    import httpx
+    monkeypatch.setattr(httpx, "get", _two_site_tenant())
+    ticks: list[list[dict]] = []
+    scanner._sp_list("tok", 50, sites=["S1", "S2"],
+                     progress_cb=lambda n, sites=None: ticks.append(sites))
+
+    s1_ticks = [next(s for s in rows if s["id"] == "S1") for rows in ticks]
+    active = [s for s in s1_ticks if s["status"] == "scanning" and s.get("active_library")]
+    assert active, "the current library never reached the live progress stream"
+    assert active[0]["active_library"] == {"id": "d1", "name": "A", "mode": "full"}
+    terminal = [s for s in s1_ticks if s["status"] == "complete"]
+    assert terminal and terminal[-1]["listed"] == 1
+    assert "active_library" not in terminal[-1]
+    assert terminal[-1]["libraries"] == [{"id": "d1", "name": "A", "status": "complete",
+                                          "listed": 1, "estate": 1, "mode": "full"}]
 
 
 def test_an_older_progress_callback_without_sites_still_works(monkeypatch):
@@ -462,8 +483,12 @@ def test_the_scope_carries_auditable_per_site_totals(monkeypatch):
     # `mode` rides along from Phase 3: every library records whether it was WALKED or
     # reconstructed from its delta cursor, because the two produce the same documents and
     # different costs, and an estate report that cannot say which cannot be checked.
-    assert scope["sites"][0]["libraries"] == [{"id": "d1", "name": "A", "mode": "full"}]
-    assert scope["sites"][1]["libraries"] == [{"id": "d2", "name": "B", "mode": "full"}]
+    assert scope["sites"][0]["libraries"] == [
+        {"id": "d1", "name": "A", "mode": "full", "status": "complete",
+         "listed": 2, "estate": 2}]
+    assert scope["sites"][1]["libraries"] == [
+        {"id": "d2", "name": "B", "mode": "full", "status": "complete",
+         "listed": 2, "estate": 2}]
     assert sum(s["listed"] for s in scope["sites"]) == scope["kept"], \
         "the per-site totals must add up to the run's own count"
 
