@@ -38,6 +38,10 @@ const nothing = {
   enforced: true, role: null,
   tabs: { overview: 'hidden', remediate: 'hidden', liveops: 'hidden' }, capabilities: [],
 }
+// Someone who arrived through just-in-time roster creation on a deployment that configures no
+// default role. Structurally identical to `nothing` above except for the server's `pending` flag,
+// which is the whole point: the two states are indistinguishable from the tabs alone.
+const pending = { ...nothing, pending: true }
 
 async function mount(props) {
   const { container, root } = createTestRoot()
@@ -113,5 +117,43 @@ describe('it is announced and it is styled', () => {
     const used = new Set([...src.matchAll(/access-restricted[a-z-]*/g)].map((m) => m[0]))
     expect([...used].filter((cls) => !css.includes(`.${cls}`))).toEqual([])
     expect(used.size).toBeGreaterThan(2)
+  })
+})
+
+describe('access pending is not access restricted', () => {
+  // Owner decision, 2026-09-05: "If no default is configured, show 'Access pending' instead of a
+  // broken or empty application." A person held in the queue was never denied a permission — they
+  // are waiting for somebody to choose one — and a screen headed "Access restricted" naming a role
+  // they do not have sends them to argue about the wrong thing with the wrong person.
+  it('says pending, not restricted', async () => {
+    const c = await mount({ access: pending, tabKey: 'remediate', label: 'Remediate',
+                            onGo: vi.fn() })
+    expect(c.textContent).toContain('Access pending')
+    expect(c.textContent).not.toContain('Access restricted')
+  })
+
+  it('tells them what will change it, and that signing in again will not', async () => {
+    // Without the second half they retry the login, decide the product is broken, and report it
+    // as a bug — which is exactly the outcome this screen exists to replace.
+    const c = await mount({ access: pending, tabKey: 'remediate', label: 'Remediate',
+                            onGo: vi.fn() })
+    expect(c.textContent).toMatch(/administrator/i)
+    expect(c.textContent).toMatch(/signing in again will not/i)
+  })
+
+  it('offers no way on, because there is none', async () => {
+    const c = await mount({ access: pending, tabKey: 'remediate', label: 'Remediate',
+                            onGo: vi.fn() })
+    expect([...c.querySelectorAll('button')]).toHaveLength(0)
+  })
+
+  it('THE CONTROL: an identical payload without the flag still reads as restricted', async () => {
+    // Without this, "pending renders the pending screen" is satisfiable by rendering it for
+    // everyone with no role — including a suspended user, whose access was deliberately withdrawn
+    // and who must not be told they are awaiting approval.
+    const c = await mount({ access: nothing, tabKey: 'remediate', label: 'Remediate',
+                            onGo: vi.fn() })
+    expect(c.textContent).toContain('Access restricted')
+    expect(c.textContent).not.toContain('Access pending')
   })
 })

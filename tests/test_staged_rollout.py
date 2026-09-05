@@ -81,6 +81,12 @@ def client(monkeypatch):
                         raising=False)
     monkeypatch.setattr(core, "email_allowed", lambda e: bool(e), raising=False)
 
+    # The just-in-time roster memo is PROCESS-LOCAL and this suite shares a process, so a test
+    # that counts store reads would otherwise pass or fail on whether an earlier file had already
+    # signed the same address in. Cleared here rather than in the one test that noticed, because
+    # order-dependence is a property of the fixture, not of the assertion that trips over it.
+    core.forget_rostered()
+
     for email in (OWNER, ANALYST, UNASSIGNED):
         st.upsert_person({"email": email, "role": "user", "status": "access_ready"})
     wr.seed_builtin_roles(st, tenant_id=OWNER)
@@ -173,16 +179,49 @@ def test_next_stage_walks_up_and_stops(monkeypatch):
 
 # ── off: the store is never read ──────────────────────────────────────────────
 
-def test_off_does_not_touch_the_store_at_all(client, monkeypatch):
+def test_off_does_not_touch_the_store_per_request(client, monkeypatch):
     """The default path must stay free. The gate resolves a role per request from `observe` up,
     which is a settings read plus a role read — acceptable when something reads the answer, and
-    pure waste on a deployment that has not opted in at all."""
+    pure waste on a deployment that has not opted in at all.
+
+    MEASURED AFTER THE FIRST REQUEST, and the change of wording is load-bearing. Just-in-time
+    roster creation (2026-09-05) reconciles each identity against the roster ONCE per process, at
+    the access gate, whatever rung the rollout is on — it is a fact about who has signed in, not
+    about RBAC, and a deployment sitting at `off` is exactly the one that needs the roster built
+    before it advances. That is one read per person per process, not one per request.
+
+    So the invariant this test was written to protect is unchanged and is now stated precisely:
+    the per-request cost at `off` is still zero. Warming first is what makes it an assertion about
+    the steady state rather than about whichever test happened to run before this one.
+    """
     tc, _core, st = client
+    assert get(tc, FORBIDDEN, ANALYST).status_code != 403      # warms the roster memo
+
     calls = []
     original = st.get_people
     monkeypatch.setattr(st, "get_people", lambda: calls.append(1) or original())
-    assert get(tc, FORBIDDEN, ANALYST).status_code != 403
-    assert calls == [], "the gate read the person record with the rollout off"
+    for _ in range(3):
+        assert get(tc, FORBIDDEN, ANALYST).status_code != 403
+    assert calls == [], "the gate read the person record on a steady-state request with the rollout off"
+
+
+def test_the_roster_read_at_off_happens_once_and_not_per_request(client, monkeypatch):
+    """The control for the test above, which after warming can no longer see the roster read at
+    all — and a test that cannot see a thing cannot tell you it is bounded.
+
+    Counted from cold: the first request reconciles the identity, and the next three do not.
+    Without the memo this would be four, which is the regression the wording above would
+    otherwise quietly permit.
+    """
+    tc, core, st = client
+    core.forget_rostered()
+
+    calls = []
+    original = st.get_people
+    monkeypatch.setattr(st, "get_people", lambda: calls.append(1) or original())
+    for _ in range(4):
+        assert get(tc, FORBIDDEN, ANALYST).status_code != 403
+    assert len(calls) == 1, f"the roster was reconciled {len(calls)} times, not once"
 
 
 # ── observe: computed, recorded, and NOT applied ──────────────────────────────

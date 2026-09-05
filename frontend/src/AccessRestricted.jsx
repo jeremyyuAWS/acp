@@ -1,4 +1,4 @@
-import { firstPermittedTab, restrictionReason } from './access.js'
+import { firstPermittedTab, isAccessPending, restrictionReason } from './access.js'
 
 // The screen someone sees when they open a tab their role does not include (PRD §10).
 //
@@ -14,6 +14,28 @@ import { firstPermittedTab, restrictionReason } from './access.js'
 // await review" — which tells someone without access both that the tab exists and how much is
 // behind it. The name of the tab is already in the shipped JavaScript; its contents are not.
 export default function AccessRestricted({ access, tabKey, label, tabs, onGo }) {
+  // ACCESS PENDING IS NOT ACCESS RESTRICTED, and this is the branch the owner asked for on
+  // 2026-09-05: "if no default is configured, show 'Access pending' instead of a broken or empty
+  // application." A person who arrived through just-in-time roster creation on a deployment that
+  // holds new arrivals has every tab hidden, so without this they would meet a screen headed
+  // "Access restricted" naming a permission they were never denied — and would go and argue about
+  // the wrong thing with the wrong person. They are in a queue, and the screen says so.
+  if (isAccessPending(access)) {
+    return (
+      <section className="access-restricted" role="status" aria-live="polite">
+        <h2 className="access-restricted-hd">Access pending</h2>
+        <p className="access-restricted-why">
+          Your account is set up and an administrator has been asked to give you a role. Nothing in
+          this workspace opens until then.
+        </p>
+        <p className="muted access-restricted-none">
+          Signing in again will not change this. An administrator assigns roles from
+          Administration → People.
+        </p>
+      </section>
+    )
+  }
+
   const target = firstPermittedTab(access, tabs)
   const targetLabel = target ? (tabs.find(([k]) => k === target) || [])[1] : null
   return (

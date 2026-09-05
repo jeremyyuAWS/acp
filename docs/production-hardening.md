@@ -47,6 +47,39 @@ ACP_ALLOWED_EMAILS=alice@partner.com         # optional extra individuals
 `email_allowed()` admits an email only if it's in `ACP_ALLOWED_EMAILS` **or** its
 domain is in `ACP_ALLOWED_DOMAINS`. Leave both unset to lock everyone out.
 
+### A domain grants sign-in, not privileges
+
+`ACP_ALLOWED_DOMAINS` decides who may **authenticate**. What they may then **do** is a
+workspace role, and it is assigned — not inherited from the domain.
+
+The first time somebody signs in who is not already on the roster, ACP creates a person
+record for them and gives them one configurable role:
+
+```
+ACP_DEFAULT_SIGNIN_ROLE=viewer               # default; any role id, or empty to hold them
+```
+
+They appear on **Settings → Users** immediately, so an administrator can change that role
+the same way they would for anyone else. Set the variable **empty** (or `none`) and new
+arrivals are instead held at an **Access pending** screen until somebody assigns them a
+role by hand.
+
+Three properties worth knowing before you change it:
+
+- **Nothing is enumerated.** A record is created only for people who actually sign in or
+  are explicitly invited. ACP never reads your directory, so the roster grows to the size
+  of the team using the product, not the size of the company.
+- **The allow-list is not touched.** A record is a record; `ACP_ALLOWED_EMAILS` and the
+  runtime allow-list are *grants*. Removing a domain therefore still revokes everyone who
+  came in through it — their records remain, but the records admit nobody by themselves.
+- **Existing users are backfilled lazily**, on their next sign-in, one at a time. There is
+  no migration to run.
+
+**Before this existed, a domain-admitted user was not blocked — they were silently given
+the default Platform User role**, which carries every workflow tab. If you are upgrading and
+want the old behaviour, set `ACP_DEFAULT_SIGNIN_ROLE=platform-user` deliberately, rather
+than getting it from an authentication setting.
+
 ## 3. Google "Sign in with Google" — use an INTERNAL OAuth app
 
 For an internal/per-org deployment you can **skip Google's app verification + CASA**

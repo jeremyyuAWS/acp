@@ -294,6 +294,13 @@ def delete_person(email: str, request: Request):
     core.store.set_allowlist([e for e in core.store.get_allowlist() if e != target])
     core.store.set_admins([e for e in core.store.get_admins() if e != target])
     core.store.remove_person(target)
+    # Otherwise this process remembers them as rostered and never rebuilds the record, so a
+    # domain-admitted user removed here would sign in again and be invisible — the exact state
+    # just-in-time roster creation exists to end. Note that removal does NOT revoke a domain
+    # admission: they will be re-created with the configured default role on their next sign-in,
+    # which is why suspending is the action that withholds access and removing is the one that
+    # forgets. `forget_rostered` is what makes the re-creation actually happen.
+    core.forget_rostered(target)
     actor = getattr(request.state, "user_email", None) or "admin"
     core.store.log_decision(actor, "settings.person.remove", detail=target)
     return _people_payload()

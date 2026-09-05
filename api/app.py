@@ -297,6 +297,20 @@ async def _access_gate(request, call_next):
             return Response(status_code=403, media_type="application/json",
                             content='{"detail":"Access restricted to authorized accounts"}')
         request.state.user_email = email   # so routes can attribute the scan (Langfuse user)
+        # JUST-IN-TIME ROSTER (owner decision, 2026-09-05). This is the only point in the codebase
+        # where "somebody authenticated successfully" is known, so it is where a person first
+        # becomes visible to an administrator. Everything expensive is behind a process-local memo
+        # in core; the steady-state cost here is one set lookup.
+        #
+        # SWALLOWED ON PURPOSE, and this is the one judgement in the whole feature worth arguing
+        # about. Roster bookkeeping must never be able to 500 a request that authentication has
+        # already approved — an unwritable store would otherwise take the whole product down for
+        # everyone at the domain, to enforce a record nobody is reading yet. The next request
+        # tries again.
+        try:
+            core.note_signed_in(email, provider=provider or "google")
+        except Exception:
+            core.swallowed("app: just-in-time roster creation failed")
     return await call_next(request)
 
 
