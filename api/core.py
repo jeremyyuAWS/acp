@@ -543,6 +543,14 @@ ALWAYS_PUBLIC = {"/healthz", "/readyz", "/config", "/hub", "/ai/status", "/alert
                  "/openapi/health.json", "/docs/health"}
 # Shared secret for the Grafana alert webhook (public path, key-validated).
 ALERT_KEY = os.environ.get("ACP_ALERT_KEY", "acp-alert-demo-key")
+
+# A single freshness contract for emitters, API aggregation, UI labels and tests. Two missed
+# 15-second beats make a process stale by default; deployments may tune it without code changes.
+try:
+    WORKER_INSTANCE_FRESHNESS_SECONDS = max(
+        1, int(os.environ.get("ACP_WORKER_INSTANCE_FRESHNESS_SECONDS", "30")))
+except ValueError:
+    WORKER_INSTANCE_FRESHNESS_SECONDS = 30
 # Shared secret for the production monitor's aggregate endpoint (public path, key-validated —
 # the same posture as ALERT_KEY above, and deliberately NOT the X-E2E-Key gate bypass).
 #
