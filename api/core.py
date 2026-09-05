@@ -1805,6 +1805,37 @@ def _get_redis():
     return _redis
 
 
+def redis_dependency_status() -> dict:
+    """Sanitised Redis readiness and topology for deployment safety.
+
+    Never returns a hostname, credential, or URL.  ``topology`` is intentionally coarse: it lets
+    operations distinguish the production-grade managed target from a single self-hosted cache
+    without publishing connection details through the public readiness endpoint.
+    """
+    if not REDIS_URL:
+        return {"configured": False, "reachable": None, "tls": None,
+                "topology": "unconfigured"}
+    from urllib.parse import urlsplit
+    try:
+        parsed = urlsplit(REDIS_URL)
+        hostname = (parsed.hostname or "").lower()
+        topology = "managed" if hostname.endswith((
+            ".redis.azure.net", ".redis.cache.windows.net",
+            ".redisenterprise.cache.azure.net")) else "self_hosted"
+        tls = parsed.scheme.lower() == "rediss"
+    except Exception:
+        topology, tls = "unknown", None
+    try:
+        client = _get_redis()
+        reachable = bool(client and client.ping())
+        reason = None if reachable else "ping did not succeed"
+    except Exception as exc:  # no endpoint or credential detail in the response
+        reachable = False
+        reason = f"{exc.__class__.__name__}: Redis unavailable"
+    return {"configured": True, "reachable": reachable, "tls": tls,
+            "topology": topology, "reason": reason}
+
+
 def register_scan_tokens(scan_id: str, *, drive: str | None = None, sp: str | None = None,
                          require_shared: bool = False) -> None:
     # Refreshing one provider must not erase the other provider's still-live credential. This

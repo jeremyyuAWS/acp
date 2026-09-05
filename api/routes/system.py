@@ -586,6 +586,14 @@ def readyz():
     pdf = pdf_engine_status()
     if not pdf["available"]:
         degraded.append("pdf_engine_missing")
+    try:
+        redis_status = core.redis_dependency_status()
+    except Exception as exc:  # pragma: no cover - diagnostics must not 500 readiness
+        redis_status = {"configured": bool(getattr(core, "REDIS_URL", "")),
+                        "reachable": False, "tls": None, "topology": "unknown",
+                        "reason": f"{exc.__class__.__name__}: Redis status unavailable"}
+    if redis_status["configured"] and not redis_status["reachable"]:
+        degraded.append("redis_unavailable")
 
     # Source-adapter readiness, reported INFORMATIONALLY — deliberately NOT folded into `degraded`.
     # A deployment that scans only Drive/SharePoint legitimately has no SMB config, so an
@@ -657,6 +665,7 @@ def readyz():
                     # 2026-09-01. See store.worker_roles_status.
                     "roles": role_status},
         "queue": queue,
+        "dependencies": {"redis": redis_status},
         # `pdf` is the ANALYSER (can this deployment read a PDF); `pdf_renderer` is the tagged-PDF
         # WRITER (can it produce one). Deliberately not both under "pdf": they fail independently,
         # for unrelated reasons, and a single key would make one of them unanswerable.
