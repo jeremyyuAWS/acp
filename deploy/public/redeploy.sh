@@ -47,6 +47,12 @@ BUILD_TZ="${BUILD_TZ:-America/Los_Angeles}"
 MIN_MODULES=41                  # engine/pdf-analyser is tracked; this guards against truncation
 DRY="${ACP_DRY_RUN:-0}"
 BG="${ACP_BLUE_GREEN:-0}"       # 1 => green provisions at 0% traffic, is tested, then promoted
+# Worker jobs are document-sized and production PDFs commonly take 5–7 minutes. ACA's 30-second
+# default killed them during ordinary releases; the durable queue then kept their claims until
+# lease recovery, making active Remediation appear hung. Worker code drains for 540s, leaving a
+# minute for process shutdown before this platform deadline.
+WORKER_TERMINATION_GRACE_SECONDS="${ACP_WORKER_TERMINATION_GRACE_SECONDS:-600}"
+WORKER_DRAIN_SECONDS="${ACP_WORKER_DRAIN_SECONDS:-540}"
 
 # Keep the gate installer shared with the first-deploy path. This script is what deploy.yml
 # actually executes for production releases.
@@ -357,7 +363,9 @@ if [ "$BG" = 1 ]; then
 
   say "cutting ${LANE_WORKERS[*]} over to the same image (NOT blue-green — see header)"
   for a in "${LANE_WORKERS[@]}"; do
-    _aca_retry az containerapp update "${AZ[@]}" -g "$RG" -n "$a" --image "$IMG" --no-wait -o none
+    _aca_retry az containerapp update "${AZ[@]}" -g "$RG" -n "$a" --image "$IMG" \
+      --termination-grace-period "$WORKER_TERMINATION_GRACE_SECONDS" \
+      --set-env-vars "ACP_SHUTDOWN_DRAIN_SECONDS=$WORKER_DRAIN_SECONDS" --no-wait -o none
   done
   for a in "${LANE_WORKERS[@]}"; do
     printf '  %s ' "$a"
@@ -422,7 +430,9 @@ fi
 say "updating $APP + ${LANE_WORKERS[*]} concurrently"
 _aca_retry az containerapp update "${AZ[@]}" -g "$RG" -n "$APP" --image "$IMG" --no-wait -o none
 for a in "${LANE_WORKERS[@]}"; do
-  _aca_retry az containerapp update "${AZ[@]}" -g "$RG" -n "$a" --image "$IMG" --no-wait -o none
+  _aca_retry az containerapp update "${AZ[@]}" -g "$RG" -n "$a" --image "$IMG" \
+    --termination-grace-period "$WORKER_TERMINATION_GRACE_SECONDS" \
+    --set-env-vars "ACP_SHUTDOWN_DRAIN_SECONDS=$WORKER_DRAIN_SECONDS" --no-wait -o none
 done
 
 for a in "$APP" "${LANE_WORKERS[@]}"; do
