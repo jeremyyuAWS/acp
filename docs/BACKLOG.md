@@ -622,6 +622,27 @@ thing the PRD does not mention.
   re-scan says. Media parts are counted from the zip because `Document.inline_shapes` misses
   header, footer and floating images — the consent fixture's only image is in `word/header1.xml`.
 
+- [ ] **P4.10 — Govern and operate assessment-time cloud second opinions.** Draft PR #1283 adds
+  the narrow data path: LOW-confidence findings may be escalated to Hugging Face, and the bounded
+  provider/zone/escalated/cost provenance is persisted and shown on the finding. The remaining
+  product work is the management layer; it must not be inferred from environment variables or
+  hidden behind a chip on one finding.
+
+  An administrator can enable or disable escalation, choose an approved provider/model and region,
+  select the eligible criteria and confidence threshold, and set per-scan and daily request/cost
+  ceilings. The screen states what document material leaves ACP, where it is processed, the retention
+  posture, and which tenant policy authorised the call before enablement. It exposes endpoint health,
+  model revision, last successful call, error/fallback rate, latency and measured spend; every policy
+  change and every escalation is auditable without storing or displaying the model's free-text answer.
+  A kill switch takes effect for new calls immediately, in-flight work finishes or fails explicitly,
+  and local/HITL fallback remains available when the provider is disabled, unhealthy or over budget.
+
+  **Acceptance gate:** default off; owner-scoped RBAC; no token in browser state, logs or exports;
+  immutable policy snapshot on each assessment run; truthful `not measured` states; cost labelled
+  measured versus estimated; regression coverage for off/on, threshold boundary, budget exhaustion,
+  provider failure, deduplicated findings, and mid-run disable. This item depends on #1283 landing (or
+  an equivalent provenance contract) but does not require retaining provider-generated document text.
+
 ### From the PRD, deliberately not scheduled
 
 - **North-star framing.** "Maximise AVRR while minimising HER" puts autonomy in the numerator and
