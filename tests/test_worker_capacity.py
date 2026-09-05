@@ -547,7 +547,10 @@ def test_worker_app_name_has_no_default(monkeypatch):
         "WORKER_APP_NAME defaults to the retired acp-worker app again")
     assert 'os.environ.get("WORKER_APP_NAME")' in src
     # Unset app name must make the feature unconfigured rather than silently pointed somewhere.
-    assert "_AZ_CONFIGURED = bool(_AZ_SUB and _AZ_APP)" in src
+    # Widened for WORKER_APP_NAMES (the multi-app read) while keeping the guarantee this test
+    # exists for: neither name has a default, so unset still means unconfigured.
+    assert "_AZ_CONFIGURED = bool(_AZ_SUB and (_AZ_APP or _AZ_APP_NAMES))" in src
+    assert 'os.environ.get("WORKER_APP_NAMES") or ""' in src
 
 
 def test_an_unreadable_container_app_is_distinguishable_from_late_metrics(

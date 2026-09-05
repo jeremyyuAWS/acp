@@ -18,6 +18,8 @@ document nobody sees is recoverable, a document the wrong customer sees is not.
 from __future__ import annotations
 
 import os
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -48,7 +50,26 @@ from swallowed import swallowed
 _AZ_SUB  = os.environ.get("AZURE_SUBSCRIPTION_ID")
 _AZ_RG   = os.environ.get("AZURE_RESOURCE_GROUP", "mdk-accessibility")
 _AZ_APP  = os.environ.get("WORKER_APP_NAME") or None
-_AZ_CONFIGURED = bool(_AZ_SUB and _AZ_APP)
+# EVERY worker app, not one. Production runs acp-discovery (1 CPU / 2Gi), acp-assess and
+# acp-remediate (2 CPU / 4Gi) — deploy/public/rightsize-production.sh — so one app's CPU, memory,
+# replica count and restart count describe itself, possibly a same-sized sibling, and nothing
+# else. Reading a single app is why Live Operations has to SUPPRESS those figures on two of the
+# three worker services rather than show another app's numbers as theirs.
+#
+# WORKER_APP_NAMES is a comma-separated list and is optional: unset, this behaves exactly as
+# before, reading only WORKER_APP_NAME. There is still no default app name — CLAUDE.md records
+# the retired `acp-worker` default as a real incident, and a guessed list would repeat it three
+# times over.
+_AZ_APP_NAMES = tuple(n.strip() for n in (os.environ.get("WORKER_APP_NAMES") or "").split(",") if n.strip())
+
+
+def _configured_apps() -> tuple[str, ...]:
+    """The worker apps to read, resolved at CALL time rather than import time so a test (and a
+    reconfigured process) sees the current values."""
+    return _AZ_APP_NAMES or (_AZ_APP,)
+
+
+_AZ_CONFIGURED = bool(_AZ_SUB and (_AZ_APP or _AZ_APP_NAMES))
 
 
 def _az_client():
@@ -197,13 +218,196 @@ def set_replicas(body: ReplicaBody, request: Request):
 # metrics/read permission) on the acp-worker resource for the metrics half.
 # ---------------------------------------------------------------------------
 
-def _empty_capacity(configured: bool) -> dict:
+# ── The Azure Monitor metric set ────────────────────────────────────────────────────────────
+#
+# REST API names, aggregations and units taken from Microsoft's own supported-metrics reference
+# for Microsoft.App/containerApps (the 2026-07-31 revision of
+# learn.microsoft.com/azure/azure-monitor/reference/supported-metrics/microsoft-app-containerapps-metrics),
+# not from memory. That matters here more than usual: a wrong metric name is not an error — Azure
+# Monitor simply returns nothing for it, which is indistinguishable from a metric that has no data
+# yet, so a typo would present as "Azure has not reported this" forever.
+#
+# `agg` is the aggregation asked for AND the attribute the data point carries it in (Average →
+# `dp.average`, Total → `dp.total`, Maximum → `dp.maximum`). Metrics are requested in ONE call per
+# aggregation, because metrics.list takes a single aggregation for every name in the call.
+#
+# Deliberately NOT here: the Java (Jvm*) and Gpu categories. ACP's workers are Python and run no
+# GPU, so those would be permanently empty rows — "not reported" is only useful when it describes
+# something that could have been reported.
+_AZ_METRICS = (
+    # rest name,                   key,                 agg,       unit,     scale, label
+    ("CpuPercentage",              "cpu_percent",       "Average", "%",      1,     "CPU utilization"),
+    ("MemoryPercentage",           "memory_percent",    "Average", "%",      1,     "Memory utilization"),
+    ("Replicas",                   "replicas",          "Average", "",       1,     "Replica count"),
+    ("UsageNanoCores",             "cpu_cores_used",    "Average", " cores", 1e-9,  "CPU in use"),
+    ("WorkingSetBytes",            "working_set_bytes", "Average", " B",     1,     "Memory working set"),
+    ("ResponseTime",               "response_ms",       "Average", " ms",    1,     "Average response time"),
+    ("TotalCoresQuotaUsed",        "reserved_cores",    "Maximum", " cores", 1,     "Reserved cores"),
+    ("RestartCount",               "restarts",          "Total",   "",       1,     "Replica restarts"),
+    ("Requests",                   "requests",          "Total",   "",       1,     "Requests"),
+    ("RxBytes",                    "network_in_bytes",  "Total",   " B",     1,     "Network in"),
+    ("TxBytes",                    "network_out_bytes", "Total",   " B",     1,     "Network out"),
+    ("ResiliencyRequestRetries",   "retries",           "Total",   "",       1,     "Request retries"),
+    ("ResiliencyConnectTimeouts",  "connect_timeouts",  "Total",   "",       1,     "Connection timeouts"),
+    ("ResiliencyEjectedHosts",     "ejected_hosts",     "Total",   "",       1,     "Ejected hosts"),
+)
+
+# Azure Monitor samples these at PT1M, so 15 one-minute points is the finest real history there is
+# for a 15-minute strip. The window is REPORTED in the payload rather than assumed by the reader:
+# the panel used to hardcode "last 5 min" next to a figure whose window lived only in this file.
+_AZ_METRIC_WINDOW_MIN = 15
+_AZ_METRIC_INTERVAL = "PT1M"
+
+
+def _metric_points(metric, agg: str, scale: float) -> list[dict]:
+    """One Azure metric's data points as [{at, value}], newest last.
+
+    A point with no value for this aggregation is DROPPED rather than carried as a zero — Azure
+    returns gaps for minutes it has no sample for, and a zero in a gap is a measurement nobody
+    took. A point with no timestamp is kept for the average and left out of the series, because
+    something has to place it on a time axis and nothing here may invent that.
+    """
+    attr = agg.lower()
+    points = []
+    for series in (getattr(metric, "timeseries", None) or []):
+        for dp in (getattr(series, "data", None) or []):
+            value = getattr(dp, attr, None)
+            if value is None:
+                continue
+            stamp = getattr(dp, "time_stamp", None) or getattr(dp, "timestamp", None)
+            points.append({"at": _iso(stamp) if stamp is not None else None,
+                           "value": round(float(value) * scale, 4)})
+    points.sort(key=lambda p: (p["at"] is None, p["at"] or ""))
+    return points
+
+
+def _dimension_value(series) -> str | None:
+    """The dimension a split time series belongs to, e.g. "2xx" for a Requests series filtered by
+    statusCodeCategory.
+
+    Dual-path for the same reason `_rev_field` is: the two Azure monitor packages disagree about
+    this attribute. `azure-mgmt-monitor` (what this module uses) documents `metadatavalues` as a
+    list of MetadataValue with `.name.value` and `.value`, while the newer `azure-monitor-query`
+    documents `metadata_values` as a plain dict. Trying both costs nothing and avoids a shape
+    mismatch becoming a silently unsplit metric.
+    """
+    values = getattr(series, "metadatavalues", None)
+    if values:
+        for item in values:
+            value = getattr(item, "value", None)
+            if value:
+                return str(value)
+    mapping = getattr(series, "metadata_values", None)
+    if isinstance(mapping, dict) and mapping:
+        return str(next(iter(mapping.values())))
+    return None
+
+
+# Requests split by response class. Azure exposes `statusCodeCategory` as a DIMENSION on the
+# Requests metric rather than as separate metrics, so this is one extra call with a filter rather
+# than three more names in _AZ_METRICS.
+_STATUS_CLASSES = ("2xx", "3xx", "4xx", "5xx")
+
+
+def _status_split(app_id: str, now: datetime) -> dict:
+    """Requests per response class over the metric window, or {} when Azure does not answer.
+
+    A class Azure does not report is ABSENT from the result rather than zero — an app serving no
+    5xx and an app whose metrics have not arrived must not render alike, which is the same rule
+    every other metric here follows.
+    """
+    timespan = (f"{(now - timedelta(minutes=_AZ_METRIC_WINDOW_MIN)).isoformat()}"
+                f"/{now.isoformat()}")
+    try:
+        answer = _monitor_client().metrics.list(
+            app_id, metricnames="Requests", aggregation="Total", timespan=timespan,
+            interval=_AZ_METRIC_INTERVAL, filter="statusCodeCategory eq '*'")
+    except Exception:  # noqa: BLE001 — the unsplit Requests total is still reported by _gather_metrics.
+        swallowed("routes.control._status_split: splitting Requests by status class failed")
+        return {}
+    out: dict = {}
+    for metric in (getattr(answer, "value", None) or []):
+        for series in (getattr(metric, "timeseries", None) or []):
+            label = (_dimension_value(series) or "").lower()
+            if label not in _STATUS_CLASSES:
+                continue
+            total = 0.0
+            seen = False
+            for dp in (getattr(series, "data", None) or []):
+                value = getattr(dp, "total", None)
+                if value is None:
+                    continue
+                total += float(value)
+                seen = True
+            if seen:
+                out[label] = round(total, 2)
+    return out
+
+
+def _gather_metrics(app_id: str, now: datetime) -> tuple[dict, str | None]:
+    """Every metric in _AZ_METRICS, with its per-minute series, or ({}, reason) on failure.
+
+    One call per aggregation rather than one per metric: metrics.list accepts a comma-separated
+    name list but a single aggregation, so three calls cover fourteen metrics. A group that fails
+    degrades only its own metrics — the reason is recorded, the other groups still return.
+
+    A metric Azure does not answer for is present in the result with `available: false` and null
+    values, never absent and never zero. The distinction the UI needs is between "nothing is
+    happening" and "nobody measured", and dropping the key would erase it.
+    """
+    timespan = (f"{(now - timedelta(minutes=_AZ_METRIC_WINDOW_MIN)).isoformat()}"
+                f"/{now.isoformat()}")
+    out = {key: {"label": label, "unit": unit, "aggregation": agg, "azure_metric": rest,
+                 "available": False, "latest": None, "average": None, "series": []}
+           for rest, key, agg, unit, _scale, label in _AZ_METRICS}
+    by_agg: dict[str, dict[str, tuple]] = {}
+    for rest, key, agg, unit, scale, label in _AZ_METRICS:
+        by_agg.setdefault(agg, {})[rest] = (key, scale)
+    reason = None
+    client = _monitor_client()
+    for agg, group in by_agg.items():
+        try:
+            answer = client.metrics.list(
+                app_id, metricnames=",".join(group), aggregation=agg,
+                timespan=timespan, interval=_AZ_METRIC_INTERVAL)
+        except Exception as e:  # noqa: BLE001 — this group degrades; the others still run.
+            status = getattr(e, "status_code", None)
+            # 401/403 is the one actionable case: the identity is missing the Monitoring Reader
+            # role. Recorded once for the whole response rather than per group, since one missing
+            # grant fails every group identically.
+            reason = "permission" if status in (401, 403) else (reason or "error")
+            continue
+        for metric in (getattr(answer, "value", None) or []):
+            name = getattr(getattr(metric, "name", None), "value", None)
+            spec = group.get(name)
+            # A name this group did not ask for: ignore it rather than mapping it into whichever
+            # key happens to share the name under a different aggregation.
+            if spec is None:
+                continue
+            key, scale = spec
+            points = _metric_points(metric, agg, scale)
+            if not points:
+                continue
+            values = [p["value"] for p in points]
+            out[key].update(available=True, latest=values[-1],
+                            average=round(sum(values) / len(values), 4),
+                            series=[p for p in points if p["at"]])
+    if reason is None and not any(m["available"] for m in out.values()):
+        # The calls succeeded and came back empty. CpuPercentage and MemoryPercentage are
+        # Microsoft Preview metrics and are simply unpopulated on a fresh or freshly-scaled
+        # resource — "we asked and got nothing" wants a different operator response from
+        # "we could not ask", so it keeps its own reason.
+        reason = "no_data"
+    return out, reason
+
+
+def _empty_capacity(configured: bool, app_name: str | None = None) -> dict:
     return {
         "configured": configured, "current_replicas": None, "min_replicas": None,
         "max_replicas": None, "cpu_percent": None, "memory_percent": None,
         "cpu_cores_per_replica": None, "memory_per_replica": None,
         "ephemeral_storage_per_replica": None, "workload_profile_name": None,
-        "active_revision_name": None, "worker_app_name": _AZ_APP,
+        "active_revision_name": None, "worker_app_name": app_name or _AZ_APP,
         "metrics_available": False, "measured_at": None,
         "revision_health": None, "revision_provisioning_state": None, "draining_replicas": None,
         "revision_traffic_percent": None, "metrics_unavailable_reason": None,
@@ -212,6 +416,14 @@ def _empty_capacity(configured: bool) -> dict:
         # `configured: true` and every value None. The caller cannot tell the difference, which
         # is how a panel pointed at a retired app went unnoticed.
         "app_unavailable": False,
+        # Per-metric detail with each metric's own 15-minute PT1M series. Present in every shape
+        # (empty here) so a caller never has to test for the key's existence before the values.
+        "metrics": {}, "metrics_window_minutes": _AZ_METRIC_WINDOW_MIN,
+        "metrics_interval": _AZ_METRIC_INTERVAL,
+        # Per-replica and per-revision lifecycle. Empty here rather than absent, for the same
+        # reason as `metrics`: a caller should never have to test for the key before the values.
+        "replicas": [], "revisions": [], "replica_lifecycle": None, "scale": None,
+        "status_classes": {},
     }
 
 
@@ -232,61 +444,104 @@ def _rev_field(rev, name, default=None):
 
 @router.get("/control/workers/capacity")
 def get_capacity():
-    """Azure-side capacity evidence for the acp-worker Container App: how many replicas are
-    actually running right now, and recent CPU/memory utilization — as opposed to
-    GET /control/workers/replicas' CONFIGURED min/max scale rule, which says nothing about
-    whether Azure has actually provisioned that many, or how loaded they are.
+    """Azure-side capacity evidence for the worker Container Apps: how many replicas are actually
+    running right now, their lifecycle, the scale rule, and recent Azure Monitor metrics — as
+    opposed to GET /control/workers/replicas' CONFIGURED min/max scale rule, which says nothing
+    about whether Azure has actually provisioned that many, or how loaded they are.
 
-    Open to any authenticated user, same reasoning as GET /control/workers/replicas (#950) —
-    this is read-only visibility, not a control action, and costs nothing to expose.
+    Open to any authenticated user, same reasoning as GET /control/workers/replicas (#950) — this
+    is read-only visibility, not a control action, and costs nothing to expose.
 
-    Also reports revision health: `revision_health`/`revision_provisioning_state` (the active
-    revision's own Azure-reported state — "Healthy"/"Unhealthy"/"None" and "Provisioned"/
-    "Provisioning"/"Failed"/etc.) and `draining_replicas` (replicas still up on OLD, non-active
-    revisions — the practical signal that a rollout is mid-drain rather than done).
+    READS EVERY CONFIGURED WORKER APP. `WORKER_APP_NAMES` (comma-separated) names them all;
+    `WORKER_APP_NAME` remains the single-app path and the default when the list is unset. The
+    top-level fields are the FIRST app's, unchanged in shape and meaning so every existing caller
+    keeps working, and `apps` carries one block per app keyed by name. That is what lets each
+    worker service in Live Operations show its OWN CPU, memory, replicas and restarts: production
+    runs three differently sized worker apps, so a single reading is right for itself and wrong
+    for the rest, which is why the UI has had to suppress those figures on two of three services.
 
-    And `revision_traffic_percent`: the active revision's own share of ingress traffic
-    (`app.properties.configuration.ingress.traffic`, 0-100). This is a DIFFERENT question from
-    revision_health — a revision can be perfectly Healthy and Provisioned while still receiving
-    0% of traffic, which is exactly what a stuck blue-green rollout looks like (a real production
-    incident on this app: the new revision came up healthy but ingress was never repointed at it,
-    stranding it at 0% until someone noticed customer-facing requests were still hitting the old
-    one). `active` in list_revisions() and "receiving traffic" are independently-tracked Azure
-    states — this field is what closes that specific gap.
-
-    And `metrics_unavailable_reason`, set whenever `metrics_available` is false: `"permission"`
-    (the Azure Monitor call itself failed with a 401/403 — the identity is very likely missing
-    the Monitoring Reader role this docstring already asks for), `"no_data"` (the call succeeded
-    but came back with no data points — CpuPercentage/MemoryPercentage are Microsoft Preview
-    metrics and can simply be unpopulated on a fresh or freshly-scaled resource, nothing wrong),
-    or `"error"` (anything else — network, quota, a transient Azure fault). Before this field
-    existed, all three looked identical: silence. `None` when `metrics_available` is true.
-
-    Graceful at every step, matching the rest of this module: `configured: false` when Azure
-    isn't set up; `current_replicas`/`cpu_percent`/`memory_percent`/`revision_health`/
-    `draining_replicas` individually stay None (never a fabricated 0) if their specific Azure
-    call fails — a missing Monitoring Reader grant on this identity, CpuPercentage/
-    MemoryPercentage being unavailable (both are Microsoft Preview metrics as of 2026 and can be
-    withdrawn or renamed), or any other partial failure degrades that one field rather than
-    502ing the whole response and hiding the min/max data that DID come back. UNVERIFIED against
-    a live Azure account as of this PR — the Azure SDK response shapes here are built from
-    current published documentation, not exercised against a real Container App; treat the first
-    real deployment as this endpoint's actual proof, not this code review.
+    Graceful at every step, per app: `configured: false` when Azure isn't set up; a single
+    unreachable app degrades to its own `app_unavailable` block rather than taking the others
+    down; and within an app, `current_replicas` / `cpu_percent` / `revision_health` /
+    `draining_replicas` individually stay None (never a fabricated 0) when their specific Azure
+    call fails. UNVERIFIED against a live Azure account — the SDK response shapes here are built
+    from Microsoft's published REST reference, not exercised against a real Container App; treat
+    the first real deployment as this endpoint's actual proof.
     """
     if not _AZ_CONFIGURED:
         return _empty_capacity(False)
+    # Every configured worker app, keyed by name. The top-level fields stay the FIRST app's, so
+    # every existing caller of this endpoint is unaffected; `apps` is what lets each worker
+    # service in Live Operations show its own figures instead of suppressing them.
+    #
+    # `apps` is omitted entirely when no app is NAMED — _AZ_CONFIGURED can be true in a test that
+    # patches it directly, and a block keyed by a null name would be worse than none.
+    apps = [name for name in _configured_apps() if name]
+    blocks = {name: _capacity_for_app(name) for name in apps}
+    primary = blocks.get(_AZ_APP) or (next(iter(blocks.values())) if blocks else _capacity_for_app(_AZ_APP))
+    result = dict(primary)
+    if blocks:
+        result["apps"] = blocks
+        result["worker_app_names"] = apps
+    return result
 
+
+def _capacity_for_app(app_name: str) -> dict:
+    """One container app's capacity, replicas, revisions, scale rule and metrics.
+
+    Split out of get_capacity so the same reading can be taken for each worker app. Every failure
+    mode it had is unchanged and per-app: one unreachable app degrades to its own
+    `app_unavailable` block rather than taking the others down with it.
+
+    The field-by-field contract this carries, unchanged from when it was get_capacity's own body:
+
+        this is read-only visibility, not a control action, and costs nothing to expose.
+    
+        Also reports revision health: `revision_health`/`revision_provisioning_state` (the active
+        revision's own Azure-reported state — "Healthy"/"Unhealthy"/"None" and "Provisioned"/
+        "Provisioning"/"Failed"/etc.) and `draining_replicas` (replicas still up on OLD, non-active
+        revisions — the practical signal that a rollout is mid-drain rather than done).
+    
+        And `revision_traffic_percent`: the active revision's own share of ingress traffic
+        (`app.properties.configuration.ingress.traffic`, 0-100). This is a DIFFERENT question from
+        revision_health — a revision can be perfectly Healthy and Provisioned while still receiving
+        0% of traffic, which is exactly what a stuck blue-green rollout looks like (a real production
+        incident on this app: the new revision came up healthy but ingress was never repointed at it,
+        stranding it at 0% until someone noticed customer-facing requests were still hitting the old
+        one). `active` in list_revisions() and "receiving traffic" are independently-tracked Azure
+        states — this field is what closes that specific gap.
+    
+        And `metrics_unavailable_reason`, set whenever `metrics_available` is false: `"permission"`
+        (the Azure Monitor call itself failed with a 401/403 — the identity is very likely missing
+        the Monitoring Reader role this docstring already asks for), `"no_data"` (the call succeeded
+        but came back with no data points — CpuPercentage/MemoryPercentage are Microsoft Preview
+        metrics and can simply be unpopulated on a fresh or freshly-scaled resource, nothing wrong),
+        or `"error"` (anything else — network, quota, a transient Azure fault). Before this field
+        existed, all three looked identical: silence. `None` when `metrics_available` is true.
+    
+        Graceful at every step, matching the rest of this module: `configured: false` when Azure
+        isn't set up; `current_replicas`/`cpu_percent`/`memory_percent`/`revision_health`/
+        `draining_replicas` individually stay None (never a fabricated 0) if their specific Azure
+        call fails — a missing Monitoring Reader grant on this identity, CpuPercentage/
+        MemoryPercentage being unavailable (both are Microsoft Preview metrics as of 2026 and can be
+        withdrawn or renamed), or any other partial failure degrades that one field rather than
+        502ing the whole response and hiding the min/max data that DID come back. UNVERIFIED against
+        a live Azure account as of this PR — the Azure SDK response shapes here are built from
+        current published documentation, not exercised against a real Container App; treat the first
+        real deployment as this endpoint's actual proof, not this code review.
+    """
     now = datetime.now(timezone.utc)
-    result = _empty_capacity(True)
+    result = _empty_capacity(True, app_name)
     result["measured_at"] = now.isoformat()
 
     try:
         client = _az_client()
-        app = client.container_apps.get(_AZ_RG, _AZ_APP)
+        app = client.container_apps.get(_AZ_RG, app_name)
         scale = app.properties.template.scale
         result["min_replicas"] = scale.min_replicas
         result["max_replicas"] = scale.max_replicas
         result["workload_profile_name"] = getattr(app.properties, "workload_profile_name", None)
+        result["scale"] = _scale_block(app)
         result["active_revision_name"] = getattr(app.properties, "latest_ready_revision_name", None)
         containers = getattr(app.properties.template, "containers", None) or []
         if containers:
@@ -317,29 +572,22 @@ def get_capacity():
         swallowed("routes.control.get_capacity: listing the container-app revision replicas failed")
 
     try:
-        metrics = _monitor_client().metrics.list(
-            app.id, metricnames="CpuPercentage,MemoryPercentage", aggregation="Average",
-            timespan=f"{(now - timedelta(minutes=5)).isoformat()}/{now.isoformat()}",
-            interval="PT1M")
-        for m in metrics.value:
-            points = [dp.average for ts in (m.timeseries or []) for dp in ts.data
-                      if dp.average is not None]
-            if not points:
-                continue
-            avg = round(sum(points) / len(points), 1)
-            metric_name = getattr(m.name, "value", None)
-            if metric_name == "CpuPercentage":
-                result["cpu_percent"] = avg
-            elif metric_name == "MemoryPercentage":
-                result["memory_percent"] = avg
+        metrics, reason = _gather_metrics(app.id, now)
+        result["metrics"] = metrics
+        # cpu_percent / memory_percent keep exactly the meaning they have always had — the AVERAGE
+        # over the metric window — so every existing caller is unaffected. What changed is that
+        # the window is now REPORTED (metrics_window_minutes) instead of living only in this file
+        # while the panel next to the figure said "last 5 min" from a hardcoded string.
+        # Requests by response class — a dimension on the Requests metric, so one extra filtered
+        # call rather than three more metric names. Absent when Azure does not answer.
+        result["status_classes"] = _status_split(app.id, now)
+        result["cpu_percent"] = metrics["cpu_percent"]["average"]
+        result["memory_percent"] = metrics["memory_percent"]["average"]
         result["metrics_available"] = result["cpu_percent"] is not None or result["memory_percent"] is not None
-        if not result["metrics_available"]:
-            # The call succeeded — this is Azure Monitor genuinely having no data points yet
-            # (CpuPercentage/MemoryPercentage are Microsoft Preview metrics and can simply be
-            # unpopulated on a freshly-created or freshly-scaled resource), not a permission or
-            # network problem. Distinct from the except branch below on purpose: "we asked and
-            # got nothing back" and "we couldn't ask at all" want different operator responses.
-            result["metrics_unavailable_reason"] = "no_data"
+        # Unchanged in meaning: this flag and this reason are about UTILIZATION specifically. A
+        # deployment where CPU/memory are unpopulated but Replicas and RestartCount are not is
+        # real, and each metric carries its own `available` for exactly that case.
+        result["metrics_unavailable_reason"] = None if result["metrics_available"] else reason
     except Exception as e:  # noqa: BLE001 — metrics_available stays False; min/max/current_replicas
         # `status_code` is the standard azure-core HttpResponseError attribute — checked via
         # getattr rather than an isinstance import, since this module only imports the Azure SDK
@@ -354,23 +602,59 @@ def get_capacity():
         # (already gathered above) are still returned rather than lost.
 
     try:
-        revisions = client.container_apps_revisions.list_revisions(_AZ_RG, _AZ_APP)
+        revisions = client.container_apps_revisions.list_revisions(_AZ_RG, app_name)
         rev_list = getattr(revisions, "value", None)
         if rev_list is None:
             rev_list = list(revisions)
         draining = 0
         active_revision_name = None
+        rows = []
         for rev in rev_list:
-            if _rev_field(rev, "active", False):
+            active = bool(_rev_field(rev, "active", False))
+            # "name" is a standard Azure Resource field (like id/type), not part of
+            # RevisionProperties — _rev_field's nested-first lookup correctly falls through
+            # to the flat rev.name here, same dual-path safety as the fields below.
+            name = _rev_field(rev, "name")
+            created = _rev_field(rev, "created_time")
+            rows.append({
+                "name": name, "active": active,
+                "health": _rev_field(rev, "health_state"),
+                "provisioning_state": _rev_field(rev, "provisioning_state"),
+                # The platform's own error string for a Failed revision. This is where a
+                # deployment failure actually surfaces — a failed replica is simply absent from
+                # list_replicas, so without this a rollout that never came up reads as an app
+                # that merely has fewer replicas than expected.
+                "provisioning_error": _rev_field(rev, "provisioning_error"),
+                "running_state": _rev_field(rev, "running_state"),
+                "replicas": _rev_field(rev, "replicas"),
+                "traffic_percent": _rev_field(rev, "traffic_weight"),
+                "created_at": _iso(created) if created is not None else None,
+                # Elapsed since the revision was created. NOT a provisioning duration: Azure
+                # reports when a revision was created and what state it is in now, but never when
+                # it BECAME ready, so "how long did provisioning take" is not answerable from this
+                # API and is not invented. For a revision still Provisioning this elapsed time is
+                # the honest form of the question.
+                "age_s": _age_seconds(created),
+            })
+            if active:
                 result["revision_health"] = _rev_field(rev, "health_state")
                 result["revision_provisioning_state"] = _rev_field(rev, "provisioning_state")
-                # "name" is a standard Azure Resource field (like id/type), not part of
-                # RevisionProperties — _rev_field's nested-first lookup correctly falls through
-                # to the flat rev.name here, same dual-path safety as the fields above.
-                active_revision_name = _rev_field(rev, "name")
+                active_revision_name = name
             else:
                 draining += _rev_field(rev, "replicas", 0) or 0
         result["draining_replicas"] = draining
+        result["revisions"] = rows
+        # Per-replica lifecycle for the active revision, plus whatever is still draining on the
+        # superseded ones — the two together are what "is capacity actually there" means during a
+        # rollout, and the active revision alone would show a drain as though it were finished.
+        replicas = []
+        for row in rows:
+            if row["active"] and row["name"]:
+                replicas.extend(_replica_rows(client, row["name"], draining=False, app_name=app_name))
+            elif row["name"] and (row["replicas"] or 0) > 0:
+                replicas.extend(_replica_rows(client, row["name"], draining=True, app_name=app_name))
+        result["replicas"] = replicas
+        result["replica_lifecycle"] = _lifecycle_summary(replicas)
     except Exception:  # noqa: BLE001 — revision health stays None; everything gathered above
         pass           # is still returned rather than lost.
         active_revision_name = None
@@ -391,6 +675,250 @@ def get_capacity():
         swallowed("routes.control.get_capacity: reading a replica's capacity fields failed")
 
     return result
+
+
+# ── Scale rules ─────────────────────────────────────────────────────────────────────────────
+#
+# `app.properties.template.scale` carries the KEDA configuration: minReplicas, maxReplicas,
+# pollingInterval, cooldownPeriod, and the rules themselves. A ScaleRule is one of azureQueue,
+# custom, http or tcp, each with its own `metadata` map (Container Apps REST reference, Scale and
+# ScaleRule definitions).
+#
+# WHICH RULE CAUSED A GIVEN SCALE IS NOT REPORTED. Azure exposes the rules that are configured and
+# the replica count over time; it does not say "rule X fired at 14:31". So this names the rules
+# that COULD be responsible and never claims one was — an operator can read the thresholds against
+# the metrics beside them, which is the honest form of the question.
+_SECRETISH = ("connection", "secret", "key", "token", "password", "sas", "credential")
+
+
+def _scrub_metadata(metadata) -> dict:
+    """A scale rule's metadata minus anything that looks like a credential.
+
+    KEDA metadata is configuration — queue names, thresholds, poll intervals — and is genuinely
+    useful next to the live metric it thresholds on. But it is a free-form map an operator fills
+    in, so a key that reads like a credential is dropped rather than published on a screen any
+    signed-in workspace user can open. Auth blocks (`auth`, `identity`) are never included at all;
+    they are references, not values, and still name secrets.
+    """
+    if not isinstance(metadata, dict):
+        try:
+            metadata = dict(metadata or {})
+        except (TypeError, ValueError):
+            return {}
+    return {k: v for k, v in metadata.items()
+            if not any(marker in str(k).lower() for marker in _SECRETISH)}
+
+
+def _scale_block(app) -> dict | None:
+    """The scale rule as configured, or None when it cannot be read."""
+    try:
+        scale = app.properties.template.scale
+    except AttributeError:
+        return None
+    rules = []
+    for rule in (getattr(scale, "rules", None) or []):
+        # One of these four is populated per rule; the populated one names the trigger type.
+        for kind in ("azure_queue", "custom", "http", "tcp"):
+            body = getattr(rule, kind, None)
+            if body is None:
+                continue
+            rules.append({
+                "name": getattr(rule, "name", None),
+                "type": getattr(body, "type", None) or kind.replace("_", ""),
+                "metadata": _scrub_metadata(getattr(body, "metadata", None)),
+                # A queue rule carries its threshold as a field rather than in metadata.
+                "queue_length": getattr(body, "queue_length", None),
+                "queue_name": getattr(body, "queue_name", None),
+            })
+            break
+    return {
+        "min_replicas": getattr(scale, "min_replicas", None),
+        "max_replicas": getattr(scale, "max_replicas", None),
+        "polling_interval_s": getattr(scale, "polling_interval", None),
+        "cooldown_period_s": getattr(scale, "cooldown_period", None),
+        "rules": rules,
+        # Named rather than omitted: an empty rules list means the app scales only between min and
+        # max with no trigger, which is a real configuration and a different answer from "the
+        # rules could not be read".
+        "rules_reported": True,
+        # Azure reports the rules and the replica count over time, never which rule fired when.
+        "attribution": "Azure Container Apps does not report which scale rule caused a given "
+                       "change; the rules below are the ones that could be responsible.",
+    }
+
+
+# ── Replica lifecycle ───────────────────────────────────────────────────────────────────────
+#
+# WHAT AZURE ACTUALLY REPORTS, which is less than the lifecycle a reader wants.
+#
+# `Replica.properties.runningState` is a three-value enum — Running, NotRunning, Unknown
+# (ContainerAppReplicaRunningState in azure-mgmt-appcontainers). It does not distinguish a replica
+# that is allocating from one that is starting from one that is serving. What DOES distinguish
+# them is the container level: each `ReplicaContainer` carries `started` and `ready` booleans plus
+# `restartCount` and a `runningStateDetails` string. So the finer states below are DERIVED from
+# those two booleans and named for what they are, rather than read off a field that does not
+# exist.
+#
+# Two states in the operator's wish list are NOT derivable here and are not faked:
+#
+#   · REQUESTED — the gap between a scale rule asking for a replica and a replica existing. Azure
+#     exposes no pending-replica list; an unsatisfied request is visible only as replicas < the
+#     scale rule's target, which is a different statement and is reported separately.
+#   · FAILED — a replica that failed and was removed is simply absent from list_replicas. What IS
+#     reported is the REVISION's provisioningState ("Failed") and its provisioningError string,
+#     which is where a failure actually surfaces, so that is what the revision rows carry.
+#
+# Verified against Microsoft's Container Apps REST reference (Revision and Replica definitions,
+# 2025-01-01 and later) rather than assumed — the same reason _AZ_METRICS names are quoted from
+# the metrics reference.
+_REPLICA_STATES = ("ready", "starting", "allocating", "not_running", "draining", "unknown")
+
+
+def _replica_state(replica, draining: bool) -> tuple[str, str | None]:
+    """(state, detail) for one replica, derived from what Azure reports about its containers."""
+    running = str(_rev_field(replica, "running_state", "") or "").strip().lower()
+    detail = _rev_field(replica, "running_state_details")
+    containers = _rev_field(replica, "containers", None) or []
+    # A replica still up on a superseded revision is draining, whatever its own running state:
+    # that is the practical signal a rollout is mid-drain rather than done, and it is a fact about
+    # which revision it belongs to, not about the replica's health.
+    if draining:
+        return "draining", detail
+    if running in ("notrunning", "not_running"):
+        return "not_running", detail
+    if running == "unknown" or not running:
+        return "unknown", detail
+    if containers:
+        # `ready` is the container reporting it can take work; `started` is only that the process
+        # launched. Started-but-not-ready is the startup window a reader is looking for when they
+        # ask why capacity has not arrived yet.
+        if all(bool(_rev_field(c, "ready", False)) for c in containers):
+            return "ready", detail
+        if any(bool(_rev_field(c, "started", False)) for c in containers):
+            return "starting", detail
+        return "allocating", detail
+    return "ready", detail
+
+
+def _replica_rows(client, revision_name: str, draining: bool = False,
+                  app_name: str | None = None) -> list[dict]:
+    """Per-replica lifecycle rows for one revision. Never raises: a revision whose replicas cannot
+    be listed contributes nothing rather than failing the whole reading."""
+    try:
+        answer = client.container_apps_revision_replicas.list_replicas(
+            _AZ_RG, app_name or _AZ_APP, revision_name)
+    except Exception:  # noqa: BLE001
+        swallowed("routes.control._replica_rows: listing replicas for a revision failed")
+        return []
+    replicas = getattr(answer, "value", None)
+    if replicas is None:
+        try:
+            replicas = list(answer)
+        except Exception:  # noqa: BLE001
+            return []
+    rows = []
+    for replica in replicas:
+        state, detail = _replica_state(replica, draining)
+        created = _rev_field(replica, "created_time")
+        containers = _rev_field(replica, "containers", None) or []
+        # Summed across containers, because a replica's restarts are its containers' restarts and
+        # a reader asking "has this replica been crashing" means the pod, not one process in it.
+        restarts = [int(_rev_field(c, "restart_count", 0) or 0) for c in containers]
+        rows.append({
+            "name": getattr(replica, "name", None) or _rev_field(replica, "name"),
+            "revision": revision_name,
+            "state": state,
+            "state_detail": detail,
+            "created_at": _iso(created) if created is not None else None,
+            "age_s": _age_seconds(created),
+            "restarts": sum(restarts) if restarts else None,
+            "containers_ready": sum(1 for c in containers if _rev_field(c, "ready", False)),
+            "containers": len(containers),
+            # The image the replica is actually running, which is the version question a
+            # deployment reader is really asking. Absent when Azure does not report it.
+            "image": next((_rev_field(c, "image", None) for c in containers
+                           if _rev_field(c, "image", None)), None),
+        })
+    return rows
+
+
+def _age_seconds(value) -> int | None:
+    """Seconds since an Azure timestamp, or None. Tolerates a datetime, an ISO string, or a
+    malformed value — never raises and never returns a fabricated 0."""
+    if value is None:
+        return None
+    try:
+        if isinstance(value, str):
+            stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        else:
+            stamp = value
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        return max(0, int((datetime.now(timezone.utc) - stamp).total_seconds()))
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _lifecycle_summary(replicas: list[dict]) -> dict:
+    """The replica counts by state, with the two states Azure does not report named rather than
+    silently missing — a reader counting six states and seeing four should be told why."""
+    counts = {state: 0 for state in _REPLICA_STATES}
+    for row in replicas:
+        counts[row["state"]] = counts.get(row["state"], 0) + 1
+    return {
+        "counts": counts,
+        "total": len(replicas),
+        # Not zero: Azure exposes no pending-replica list and a failed replica is simply absent
+        # from list_replicas. Reported as unavailable so the UI can say so instead of showing a
+        # confident 0 for states it never measured.
+        "unreported_states": ["requested", "failed"],
+        "unreported_reason": "Azure Container Apps does not list pending or removed replicas; a "
+                             "failure surfaces on the revision's provisioningState and "
+                             "provisioningError instead.",
+    }
+
+
+# ── One Azure reading, shared by every SSE client ───────────────────────────────────────────
+#
+# The live map's SSE stream builds a frame every two seconds, and there is one stream per open
+# Live Operations tab. Calling Azure Monitor on that cadence, per client, would be both slow (the
+# metrics API is a network round trip on the critical path of a frame) and a good way to meet its
+# rate limit; it also answers PT1M metrics, so asking more than once a minute cannot return
+# anything new anyway.
+#
+# So the reading is taken at most once per TTL and shared. `measured_at` inside the payload says
+# when it was actually taken, which is what lets the UI label the value's freshness honestly
+# rather than implying the age of the frame it arrived in.
+_CAPACITY_TTL_S = float(os.environ.get("WORKER_CAPACITY_TTL_S") or 30)
+_capacity_lock = threading.Lock()
+_capacity_cache: dict = {"at": 0.0, "value": None}
+
+
+def cached_capacity(ttl_s: float | None = None) -> dict | None:
+    """The most recent Azure capacity reading, refreshed at most once per `ttl_s`.
+
+    Returns None only if the read itself raised — callers treat that as "no Azure block this
+    frame" and keep whatever they last had, rather than replacing a real reading with an empty
+    one. An UNCONFIGURED deployment is not that case: it returns the ordinary
+    `configured: false` payload, because "Azure is not set up" is an answer the UI shows.
+
+    Thread-safe because the SSE route calls it from asyncio.to_thread, so several event loops can
+    land here at once. The lock is held across the refresh deliberately: the alternative lets N
+    clients each start their own Azure call on the same expiry.
+    """
+    ttl = _CAPACITY_TTL_S if ttl_s is None else ttl_s
+    now = time.monotonic()
+    with _capacity_lock:
+        cached = _capacity_cache["value"]
+        if cached is not None and (now - _capacity_cache["at"]) < ttl:
+            return cached
+        try:
+            value = get_capacity()
+        except Exception:  # noqa: BLE001 — never take the live map down for a capacity read.
+            swallowed("routes.control.cached_capacity: refreshing the Azure capacity reading failed")
+            return cached
+        _capacity_cache.update(at=now, value=value)
+        return value
 
 
 def _iso(v):
@@ -457,6 +985,11 @@ def get_revisions():
         swallowed("routes.control.get_revisions: reading a revision's fields failed")
 
     try:
+        # _AZ_APP, not app_name: this endpoint reads the single named app, unlike get_capacity
+        # which reads every app in _configured_apps(). It briefly said `app_name` — a global
+        # rename that reached a scope with no such variable — and the NameError landed in the
+        # except below as an empty revision list. A bare except turns a typo into "Azure returned
+        # nothing", which is why the tests below assert the CONTENT and not just the status.
         revisions = client.container_apps_revisions.list_revisions(_AZ_RG, _AZ_APP)
         rev_list = getattr(revisions, "value", None)
         if rev_list is None:

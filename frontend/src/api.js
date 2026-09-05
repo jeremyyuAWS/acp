@@ -1375,7 +1375,18 @@ export const getAdminActivity = () => (SIM
   ? sim(_simActivity(), 80)
   : fetch(`${BASE}/admin/activity`, { headers: headers(), cache: 'no-store' }).then(j))
 
-export function openAdminActivityStream({ onMessage, onError } = {}) {
+/**
+ * The live map's stream. Two event types on one connection:
+ *
+ *   `activity` — the job topology, emitted whenever it changes (several times a minute under load)
+ *   `azure`    — the Azure Monitor capacity block, emitted when the reading is RE-MEASURED
+ *
+ * They are separate because the Azure block is a comparatively large payload (fourteen metrics,
+ * each with its own fifteen-minute series) that Azure itself only resamples once a minute.
+ * Attaching it to every activity frame would multiply the stream's size for data that had not
+ * changed. `onAzure` is optional — a caller that does not want it simply omits it.
+ */
+export function openAdminActivityStream({ onMessage, onAzure, onError } = {}) {
   if (SIM) {
     onMessage?.(_simActivity())
     return { close: () => {} }
@@ -1396,8 +1407,10 @@ export function openAdminActivityStream({ onMessage, onError } = {}) {
         const parsed = parseSSEFrames(buffer)
         buffer = parsed.rest
         for (const frame of parsed.frames) {
-          if (frame.event !== 'activity' && frame.event !== 'message') continue
-          try { onMessage?.(JSON.parse(frame.data)) } catch { /* skip malformed event */ }
+          const handler = frame.event === 'azure' ? onAzure
+            : (frame.event === 'activity' || frame.event === 'message') ? onMessage : null
+          if (!handler) continue
+          try { handler(JSON.parse(frame.data)) } catch { /* skip malformed event */ }
         }
       }
       if (!controller.signal.aborted) onError?.(new Error('activity stream disconnected'))

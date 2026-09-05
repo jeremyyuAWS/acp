@@ -1355,10 +1355,15 @@ def _admin_activity_snapshot() -> dict:
     for run in runs:
         stage = run.get("stage") or "unknown"
         stage_row = by_stage.setdefault(stage, {"runs": 0, "running": 0, "queued": 0,
-                                                  "completed": 0, "total": 0})
+                                                  "completed": 0, "total": 0, "findings": None})
         stage_row["runs"] += 1
         for field in ("running", "queued", "completed", "total"):
             stage_row[field] += int(run.get(field) or 0)
+        # Summed only where it was counted. A stage whose runs report no findings gets None rather
+        # than 0, so "no findings yet" and "findings not counted for this stage" stay different —
+        # only assess runs carry a count (see store.admin_live_activity).
+        if run.get("findings") is not None:
+            stage_row["findings"] = int(stage_row.get("findings") or 0) + int(run["findings"])
     # The queue's own composition and rates, for the Live Operations queue visualization. Guarded
     # because an older store may not carry it: the drawer renders a missing row as "Not reported"
     # rather than as zero, so degrading to absent is honest and degrading to {} would not be.
@@ -1396,18 +1401,69 @@ def _admin_activity_snapshot() -> dict:
             "worker_tier_alive": bool(wt.get("alive")),
             "worker_roles": worker_roles,
             "by_stage": by_stage,
+            # ACP CANNOT ATTRIBUTE A JOB TO A REPLICA, and saying so is the point of this key.
+            # The `worker_instances` registry that would carry it (replica_id, revision_name,
+            # software_version, per-instance state) exists in the schema with NO WRITER — it is
+            # PR 1 of a five-PR plan whose emit sites are deliberately deferred. Reading it would
+            # return [] and render as "no workers running", which is the opposite of the truth.
+            # So per-replica ACP health is reported as unavailable, with the reason, and what IS
+            # known is reported per SERVICE from the role heartbeats.
+            # Whether distributed tracing is on, and why not when it is off. Live Operations
+            # offers a trace drill-down from a workflow tile; a link to traces that do not exist
+            # is worse than no link, so the UI is given the reason rather than a bare boolean.
+            "tracing": _tracing_status(),
+            "worker_instance_attribution": {
+                "available": False,
+                "reason": "ACP does not record which replica ran a job. The worker_instances "
+                          "registry exists but has no writer yet, so job activity is attributed "
+                          "to a service, not to one of its replicas.",
+            },
             # Absent, not empty, when the store cannot answer — see the guard above.
             **({"queue": composition} if composition else {}),
         },
     }
 
 
+def _tracing_status() -> dict:
+    """Application Insights status for the live map. Guarded like every other optional block: a
+    branch without the telemetry module reports it as unavailable rather than failing the
+    snapshot."""
+    try:
+        import telemetry  # noqa: PLC0415
+        return telemetry.status()
+    except Exception:
+        return {"enabled": False, "reason": "telemetry module unavailable", "correlation": "off"}
+
+
+def _azure_block():
+    """The shared Azure capacity reading, or None when it cannot be taken.
+
+    Guarded on every axis because the live map must not go dark for an Azure problem: the control
+    module may not be importable, may not expose the cache on an older branch, and the read itself
+    may raise. None means "no Azure block" — the reader keeps whatever it last had rather than
+    replacing a real reading with an empty one.
+    """
+    try:
+        from routes import control as _control  # noqa: PLC0415 — optional, and imported lazily
+        fn = getattr(_control, "cached_capacity", None)
+        return fn() if callable(fn) else None
+    except Exception:
+        return None
+
+
 @router.get("/admin/activity")
 def admin_activity(request: Request, response: Response):
-    """Payload-sanitized cross-user processing topology for signed-in workspace users."""
+    """Payload-sanitized cross-user processing topology for signed-in workspace users.
+
+    Carries the Azure capacity block too, so a page that has just loaded has the infrastructure
+    reading immediately rather than waiting for the stream's next Azure frame."""
     _require_user(request)
     response.headers["Cache-Control"] = "no-store"
-    return _admin_activity_snapshot()
+    snapshot = _admin_activity_snapshot()
+    azure = _azure_block()
+    if azure is not None:
+        snapshot["azure"] = azure
+    return snapshot
 
 
 @router.get("/admin/activity/stream")
@@ -1419,6 +1475,7 @@ async def admin_activity_stream(request: Request):
 
     async def _gen():
         last = None
+        last_measured = None
         idle = 0
         while not await request.is_disconnected():
             snapshot = await asyncio.to_thread(_admin_activity_snapshot)
@@ -1433,6 +1490,24 @@ async def admin_activity_stream(request: Request):
                 if idle >= 5:
                     idle = 0
                     yield ": keep-alive\n\n"
+            # Azure rides the SAME stream, on its OWN event, and that separation is the point.
+            # The activity frame fires on any job change — several times a minute under load —
+            # while the Azure block is a comparatively large payload (fourteen metrics, each with
+            # its own fifteen-minute series) that Azure itself only resamples once a minute.
+            # Attaching it to every activity frame would multiply the stream's size for data that
+            # had not changed.
+            #
+            # Emitted when the reading was actually REFRESHED (measured_at moved), not when its
+            # values changed. A reading that comes back identical is still news: it is what makes
+            # "Azure Monitor · 20s ago" true. Gating on the values instead would leave the UI
+            # showing a stale age for a figure that had just been re-measured — understating
+            # freshness, which is the direction that misleads.
+            azure = await asyncio.to_thread(_azure_block)
+            measured = azure.get("measured_at") if isinstance(azure, dict) else None
+            if azure is not None and measured != last_measured:
+                last_measured = measured
+                idle = 0
+                yield f"event: azure\ndata: {json.dumps(azure, default=str)}\n\n"
             await asyncio.sleep(2)
 
     return StreamingResponse(_gen(), media_type="text/event-stream", headers={

@@ -55,6 +55,9 @@ function fmtElapsedSecs(s) {
 function workerDetail(queue) {
   const workers = queue?.workers
   if (!workers || workers.max == null) return 'Worker status unavailable for this run'
+  if (workers.capacityScope === 'per_replica') {
+    return `Assessment service online · ${workers.max.toLocaleString()} slots per replica`
+  }
   const active = workers.busy || 0
   const standingBy = workers.idle == null ? Math.max(0, workers.max - active) : workers.idle
   return `${active.toLocaleString()} active · ${standingBy.toLocaleString()} standing by · ${workers.max.toLocaleString()} total`

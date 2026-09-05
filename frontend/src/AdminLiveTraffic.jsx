@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Background, Controls, Handle, MiniMap, Position, ReactFlow } from '@xyflow/react'
+import { Background, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { getAdminActivity, getWorkerCapacity, openAdminActivityStream } from './api.js'
 import { ensureResizeObserver } from './resizeObserverFallback.js'
@@ -22,6 +22,12 @@ const PRESSURE = {
   saturated: { label: 'At capacity', color: '#B45309' },
   stalled: { label: 'Queue stalled', color: '#B4232F' },
 }
+
+// `bezier` rather than the stepped router this replaced: one continuous curve per line, with no
+// corners to round off, which is as smooth as this graph gets. `curvature` pushes the control
+// points further out so the three lines fanning out of the shared queue separate before they turn
+// — at the default they overlap for the first stretch and read as a single line.
+const EDGE_ROUTING = { type: 'bezier', pathOptions: { curvature: 0.42 } }
 
 function age(iso) {
   if (!iso) return '—'
@@ -108,6 +114,23 @@ export function capacityValue(value, suffix = '') {
   return value == null || value === '' ? 'Not reported' : `${value}${suffix}`
 }
 
+/** One Azure metric's newest one-minute sample, or "Not reported" — never a zero standing in for
+ *  a metric Azure did not answer for. */
+export function azureLatest(capacity, key, suffix = '') {
+  const metric = capacity?.metrics?.[key]
+  return metric?.available && metric.latest != null ? `${metric.latest}${suffix}` : 'Not reported'
+}
+
+export function azureBytes(capacity, key) {
+  const metric = capacity?.metrics?.[key]
+  if (!metric?.available || metric.latest == null) return 'Not reported'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let n = Number(metric.latest)
+  let unit = 0
+  while (n >= 1024 && unit < units.length - 1) { n /= 1024; unit += 1 }
+  return `${Math.round(n * 10) / 10} ${units[unit]}`
+}
+
 function AzureCapacity({ capacity, state }) {
   if (state === 'loading' && !capacity) return <div className="panel muted" style={{ padding: 12, marginBottom: 12 }}>Loading Azure capacity…</div>
   if (state === 'unavailable') return <div className="panel" role="status" style={{ padding: 12, marginBottom: 12 }}>
@@ -133,9 +156,20 @@ function AzureCapacity({ capacity, state }) {
     ['RUNNING REPLICAS', capacityValue(capacity.current_replicas), `${capacityValue(capacity.min_replicas)} min · ${capacityValue(capacity.max_replicas)} max`],
     ['COMPUTE / REPLICA', capacityValue(capacity.cpu_cores_per_replica, ' vCPU'), `${capacityValue(capacity.memory_per_replica)} memory`],
     ['EPHEMERAL STORAGE / REPLICA', capacityValue(capacity.ephemeral_storage_per_replica), 'Temporary worker disk; corrected files use durable storage'],
-    ['LIVE UTILIZATION', capacity.metrics_available ? `${capacityValue(capacity.cpu_percent, '%')} CPU` : 'Not reported', capacity.metrics_available ? `${capacityValue(capacity.memory_percent, '%')} memory · last 5 min` : metricReason],
+    // The window is READ from the payload, not written here. It used to say "last 5 min" from a
+    // string in this file while the actual timespan lived in routes/control.py — so widening the
+    // window there would have left this label quietly describing the wrong average.
+    ['LIVE UTILIZATION', capacity.metrics_available ? `${capacityValue(capacity.cpu_percent, '%')} CPU` : 'Not reported',
+      capacity.metrics_available
+        ? `${capacityValue(capacity.memory_percent, '%')} memory · average over ${capacityValue(capacity.metrics_window_minutes)} min`
+        : metricReason],
     ['ACTIVE REVISION', capacityValue(capacity.revision_health), `${capacityValue(capacity.revision_provisioning_state)} · ${capacityValue(capacity.revision_traffic_percent, '%')} traffic`],
     ['ROLLOUT', capacityValue(capacity.draining_replicas), `${capacityValue(capacity.workload_profile_name)} profile · ${capacity.active_revision_name || 'revision not reported'}`],
+    // What Azure Monitor reports beyond utilization. Each is null when Azure answered nothing for
+    // it, and renders as "Not reported" rather than as a zero that would read as a healthy app
+    // with no restarts and no traffic.
+    ['REPLICA RESTARTS', azureLatest(capacity, 'restarts'), 'Azure metric RestartCount · cumulative'],
+    ['NETWORK', `${azureBytes(capacity, 'network_in_bytes')} in`, `${azureBytes(capacity, 'network_out_bytes')} out · RxBytes / TxBytes`],
   ]
   return <section className="panel" aria-label="Azure worker infrastructure" style={{ padding: 12, marginBottom: 12 }}>
     <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 9 }}>
@@ -152,13 +186,62 @@ function AzureCapacity({ capacity, state }) {
   </section>
 }
 
+/**
+ * TWO KINDS OF TILE, TOLD APART WITHOUT READING THEM.
+ *
+ * The map mixes things that persist with things that pass through, and they were rendered nearly
+ * alike: a white card with a coloured border. That is what made "51 active" on a job tile beside
+ * "2 slots" on a service tile read as one contradiction rather than two different measurements.
+ *
+ * A SCAN JOB is transient — one user's run, here for minutes. It is filled with its stage's colour
+ * so it reads as a thing moving through the system, and carries a left accent bar.
+ *
+ * A DURABLE SERVICE is permanent infrastructure. It is backfilled with the flat surface tone, so a
+ * row of services reads as the fixed pipeline the jobs travel along.
+ *
+ * Colour is never the only cue (WCAG 1.4.1): every tile also carries a typed label — ACTIVE JOB,
+ * SERVICE, or DATA — and the map key spells the three out. The fill makes the grouping visible at
+ * a glance; the label is what actually says which is which.
+ */
+export const TILE_KINDS = {
+  job: { label: 'ACTIVE JOB', tint: 16, accent: 5, radius: 6 },
+  service: { label: 'SERVICE', tint: 0, accent: 0, radius: 10 },
+  data: { label: 'DATA', tint: 0, accent: 0, radius: 10 },
+}
+
+/** Which of the three a node is. Sources and outputs are where documents come from and go to —
+ *  neither a job nor a service — so they are their own kind rather than being lumped in with the
+ *  worker services they sit between. */
+export function tileKind(kind) {
+  if (kind === 'run') return 'job'
+  if (kind === 'source' || kind === 'output') return 'data'
+  return 'service'
+}
+
+export function tileStyle(kind, color) {
+  const spec = TILE_KINDS[tileKind(kind)] || TILE_KINDS.service
+  return {
+    background: spec.tint
+      ? `color-mix(in srgb, ${color} ${spec.tint}%, var(--panel))`
+      : 'var(--panel)',
+    borderLeft: spec.accent ? `${spec.accent}px solid ${color}` : undefined,
+    borderRadius: spec.radius,
+    label: spec.label,
+  }
+}
+
 function RunNode({ data }) {
   const cfg = STAGE[data.run.stage] || { label: data.run.stage, color: '#6B7280' }
   const pct = data.run.total ? Math.round((data.run.completed / data.run.total) * 100) : 0
   return <div title="Select for live run details; double-click to open charts"
-    style={{ width: 225, padding: 12, background: 'var(--panel)', border: `2px solid ${cfg.color}`,
-    borderRadius: 10, boxShadow: '0 3px 10px rgba(24,20,28,.10)' }}>
+    style={{ width: 225, padding: 12,
+      ...tileStyle('run', cfg.color),
+      border: `2px solid ${cfg.color}`,
+      borderLeft: `5px solid ${cfg.color}`,
+      boxShadow: `0 4px 12px color-mix(in srgb, ${cfg.color} 18%, transparent)` }}>
     <Handle type="target" position={Position.Left} />
+    <div style={{ color: cfg.color, fontSize: 9.5, fontWeight: 800, letterSpacing: '.09em',
+      marginBottom: 4 }}>{TILE_KINDS.job.label}</div>
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
       <b>{cfg.label}</b><span style={{ color: cfg.color, fontWeight: 700 }}>{data.run.status === 'recent' ? 'Complete' : `${pct}%`}</span>
     </div>
@@ -177,20 +260,94 @@ function RunNode({ data }) {
   </div>
 }
 
+/**
+ * The live bar on a map tile.
+ *
+ * The map answers "where is work" and the drawer answers "how much"; a tile with a fill answers
+ * the second at a glance, so a saturated service is visible without opening anything. It updates
+ * on every SSE snapshot because it is derived from the same node data the tile already renders.
+ *
+ * `fraction` is clamped to 1 and `over` is passed separately rather than letting the bar overflow:
+ * more work in flight than slots is not a share of capacity (see gaugeModel), so it is drawn as a
+ * full bar in the saturated tone and SAID in the label, never as a bar running past its own track.
+ * A fraction of null draws no bar at all — an unmeasured value gets no fill, not an empty one that
+ * reads as zero.
+ */
+function NodeGauge({ fraction, label, color, over = false, tone }) {
+  const measured = typeof fraction === 'number' && Number.isFinite(fraction)
+  const width = measured ? Math.min(1, Math.max(0, fraction)) * 100 : 0
+  return <div style={{ marginTop: 6 }}>
+    <div role="img" aria-label={label} style={{ height: 5, borderRadius: 3, background: 'var(--line)',
+      overflow: 'hidden' }}>
+      {measured && <div style={{ width: `${width}%`, height: '100%', borderRadius: 3,
+        background: over ? 'var(--error-fg)' : (tone || color) }} />}
+    </div>
+    <div className="muted" style={{ fontSize: 10, marginTop: 2, overflowWrap: 'anywhere' }}>{label}</div>
+  </div>
+}
+
+/**
+ * What each tile's bar measures, or null when nothing on that tile is a ratio.
+ *
+ * Only two node kinds have an honest denominator: a worker service (busy slots against its own
+ * slot count) and the shared queue (waiting work against the tier's total slots, which is what
+ * "can the queue be picked up now" means). A source connector and the output store have no
+ * capacity to be a fraction of, so they get no bar rather than an invented one.
+ */
+export function nodeGauge(data = {}, summary = {}) {
+  if (data.kind === 'worker') {
+    const service = data.service || {}
+    const active = Number(service.active || 0)
+    const slots = Number(service.slots || 0)
+    if (!slots) return { fraction: null, label: 'Worker slots not reported', over: false }
+    const over = active > slots
+    return {
+      fraction: Math.min(1, active / slots),
+      over,
+      label: over ? `${active} jobs against ${slots} reported slots`
+        : `${active} of ${slots} slots busy (${Math.round((active / slots) * 100)}%)`,
+    }
+  }
+  if (data.kind === 'queue') {
+    const queued = Number(summary.queued || 0)
+    const slots = Number(summary.worker_slots || 0)
+    if (!slots) return { fraction: null, label: `${queued} waiting · worker slots not reported`, over: false }
+    const over = queued > slots
+    return {
+      fraction: Math.min(1, queued / slots),
+      over,
+      label: over ? `${queued} waiting, more than the ${slots} slots that could pick them up`
+        : `${queued} waiting against ${slots} worker slots`,
+    }
+  }
+  if (data.kind === 'run') {
+    const run = data.run || {}
+    const total = Number(run.total || 0)
+    if (!total) return { fraction: null, label: 'Run total not reported', over: false }
+    return { fraction: Math.min(1, Number(run.completed || 0) / total), over: false,
+      label: `${run.completed || 0} of ${total} documents complete` }
+  }
+  return null
+}
+
 function InfraNode({ data }) {
   const color = data.color || '#51606D'
   return <div title="Select for infrastructure details; double-click for telemetry"
-    style={{ width: data.wide ? 205 : 175, minHeight: 68, padding: 11, background: 'var(--panel)',
-      border: `2px solid ${color}`, borderRadius: 10, boxShadow: '0 2px 8px rgba(24,20,28,.08)' }}>
+    style={{ width: data.wide ? 205 : 175, minHeight: 68, padding: 11,
+      ...tileStyle(data.kind, color),
+      border: `2px solid ${color}`, boxShadow: '0 2px 8px rgba(24,20,28,.08)' }}>
     {data.inputPorts?.length
       ? data.inputPorts.map(({ id, top }) => <Handle key={id} id={id} type="target"
           position={Position.Left} style={{ top }} />)
       : data.hasInput !== false && <Handle type="target" position={Position.Left} />}
+    <div style={{ color, fontSize: 9.5, fontWeight: 800, letterSpacing: '.09em',
+      marginBottom: 4 }}>{tileStyle(data.kind, color).label}</div>
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 7, alignItems: 'start' }}>
       <b style={{ overflowWrap: 'anywhere' }}>{data.label}</b>
       <span style={{ color, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap' }}>{data.status}</span>
     </div>
     <div className="muted" style={{ fontSize: 11, marginTop: 4, lineHeight: 1.3, overflowWrap: 'anywhere' }}>{data.detail}</div>
+    {data.gauge && <NodeGauge {...data.gauge} color={color} />}
     {data.metric && <div style={{ fontSize: 11, marginTop: 5, fontWeight: 700, overflowWrap: 'anywhere' }}>{data.metric}</div>}
     {data.outputPorts?.length
       ? data.outputPorts.map(({ id, top }) => <Handle key={id} id={id} type="source"
@@ -315,6 +472,37 @@ export function runFacts(run = {}, nowMs = Date.now()) {
   ]
 }
 
+/**
+ * One line on the map. Three things every edge needs and none of them are decoration:
+ *
+ * · A DIRECTION a reader can see. Work flows one way through this topology and a plain line does
+ *   not say which — the arrowhead does, and it is drawn in the line's own colour so a stage's
+ *   path stays followable where several converge on the same node.
+ *
+ * · ACTIVITY carried by more than the animation. `animated` alone fails WCAG 1.4.1's motion
+ *   equivalent and disappears entirely under prefers-reduced-motion, which is exactly when a
+ *   reader still needs to know which lines have work on them. A live line is thicker and more
+ *   opaque, so it reads as live in a screenshot and with animation off.
+ *
+ * · A DESTINATION for a click. `detail` names the node whose drawer explains the work on this
+ *   line, so selecting the line that is moving answers "what is that?" — the question the motion
+ *   provokes. `interactionWidth` widens the hit area well past the stroke; the same drawer is
+ *   reachable from either node the line joins, so a pointer is never the only way to it.
+ *
+ * The stroke itself comes from `trafficEdgeStyle`, so the crisp non-scaling geometry that landed
+ * in #1329 survives: that change was about how a line RENDERS at any zoom, this one is about what
+ * a line MEANS, and the two are independent.
+ */
+export function flowEdge({ id, source, target, color, active = false, detail, ...rest }) {
+  return {
+    id, source, target, animated: active, focusable: true, interactionWidth: 20,
+    data: { detail: detail || target, active },
+    style: { ...trafficEdgeStyle(color, active), cursor: 'pointer' },
+    markerEnd: { type: MarkerType.ArrowClosed, color, width: 15, height: 15 },
+    ...rest,
+  }
+}
+
 export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = null, connection = 'connecting') {
   const runs = snapshot?.runs || []
   const services = workerServiceRows(snapshot?.summary || {})
@@ -359,6 +547,7 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
       ariaLabel: `Shared queue, ${snapshot?.summary?.queued || 0} waiting. Select for details.`,
       data: { kind: 'queue', label: 'Shared queue',
       status: `${snapshot?.summary?.queued || 0} waiting`, detail: 'Durable · tenant-fair scheduling', color: '#A66A16',
+      gauge: nodeGauge({ kind: 'queue' }, snapshot?.summary || {}),
       outputPorts: [
         { id: 'discover', top: '22%' }, { id: 'assess', top: '50%' }, { id: 'remediate', top: '78%' },
       ] } },
@@ -380,7 +569,7 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
       metric: capacity?.configured && capacity.worker_app_name
         ? `${capacity.worker_app_name}: ${reportedWorkerSize(capacity)}`
         : reportedWorkerSize(capacity),
-      color: STAGE[stage].color, service } })
+      color: STAGE[stage].color, service, gauge: nodeGauge({ kind: 'worker', service }) } })
   })
   nodes.push({ id: 'infra:output', type: 'infra', position: { x: 1000, y: 158 },
     ariaLabel: 'Durable outputs, protected. Select for details.',
@@ -390,15 +579,19 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
       { id: 'discover', top: '22%' }, { id: 'assess', top: '50%' }, { id: 'remediate', top: '78%' },
     ] } })
   const edges = [
-    ...sourceKinds.map((source) => ({ id: `${source}:intake`, source: `source:${source}`, target: 'infra:intake',
-      style: trafficEdgeStyle('#246B79', runs.some((run) => run.source === source && run.status !== 'recent')) })),
-    { id: 'intake:queue', source: 'infra:intake', target: 'infra:queue',
-      style: trafficEdgeStyle('#51404E', Boolean(snapshot?.summary?.active_runs)) },
+    ...sourceKinds.map((source) => flowEdge({ id: `${source}:intake`, source: `source:${source}`,
+      target: 'infra:intake', color: '#246B79',
+      active: runs.some((run) => run.source === source && run.running > 0),
+      detail: `source:${source}` })),
+    flowEdge({ id: 'intake:queue', source: 'infra:intake', target: 'infra:queue', color: '#51404E',
+      active: Boolean(snapshot?.summary?.active_runs), detail: 'infra:queue' }),
     ...['discover', 'assess', 'remediate'].flatMap((stage) => [
-      { id: `queue:${stage}`, source: 'infra:queue', sourceHandle: stage, target: `stage:${stage}`,
-        style: trafficEdgeStyle(STAGE[stage].color, Boolean(serviceByStage.get(stage)?.active)) },
-      { id: `${stage}:output`, source: `stage:${stage}`, target: 'infra:output', targetHandle: stage,
-        style: trafficEdgeStyle(STAGE[stage].color, Boolean(serviceByStage.get(stage)?.active)) },
+      flowEdge({ id: `queue:${stage}`, source: 'infra:queue', sourceHandle: stage,
+        target: `stage:${stage}`, color: STAGE[stage].color,
+        active: Boolean(serviceByStage.get(stage)?.active), detail: `stage:${stage}` }),
+      flowEdge({ id: `${stage}:output`, source: `stage:${stage}`, target: 'infra:output',
+        targetHandle: stage, color: STAGE[stage].color,
+        active: Boolean(serviceByStage.get(stage)?.active), detail: `stage:${stage}` }),
     ]),
   ]
   runs.forEach((run, i) => {
@@ -409,11 +602,16 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
     const last = series.at(-1)
     if (!last || ['completed', 'running', 'queued'].some((field) => Number(last[field] || 0) !== sample[field])) series.push(sample)
     historyMap.set(key, series.slice(-30))
-    nodes.push({ id: key, type: 'run', position: { x: 335 + (i % 3) * 255, y: 455 + Math.floor(i / 3) * 145 }, data: { kind: 'run', run, history: series } })
-    edges.push({ id: `in:${key}`, source: sourceKinds.includes(run.source) ? `source:${run.source}` : 'infra:intake', target: key,
-      style: trafficEdgeStyle(STAGE[run.stage]?.color || '#6B7280', run.running > 0) })
-    edges.push({ id: `out:${key}`, source: key, target: `stage:${run.stage}`,
-      style: trafficEdgeStyle(STAGE[run.stage]?.color || '#6B7280', run.running > 0) })
+    nodes.push({ id: key, type: 'run', position: { x: 335 + (i % 3) * 255, y: 455 + Math.floor(i / 3) * 145 },
+      data: { kind: 'run', run, history: series } })
+    // Both of a run's lines resolve to the RUN's own drawer, not to the stage they end at: the
+    // work moving along them belongs to this run, and the stage node answers a different question
+    // (that service's capacity) that its own line already reaches.
+    edges.push(flowEdge({ id: `in:${key}`,
+      source: sourceKinds.includes(run.source) ? `source:${run.source}` : 'infra:intake',
+      target: key, color: STAGE[run.stage]?.color || '#6B7280', active: run.running > 0, detail: key }))
+    edges.push(flowEdge({ id: `out:${key}`, source: key, target: `stage:${run.stage}`,
+      color: STAGE[run.stage]?.color || '#6B7280', active: run.running > 0, detail: key }))
   })
   return { nodes, edges }
 }
@@ -433,24 +631,37 @@ export default function AdminLiveTraffic() {
   const eventLog = useRef([])
   const lastContext = useRef(null)
 
+  // Azure arrives on the SAME stream as the job topology, on its own `azure` event, so an
+  // infrastructure reading reaches the page the moment the server takes it rather than up to
+  // thirty seconds later. The first GET carries it too, so a tab that has just loaded is not
+  // blank while it waits for the first Azure frame.
   useEffect(() => {
     let active = true
-    getAdminActivity().then((d) => { if (active) { setSnapshot(d); setConnection('live') } })
-      .catch(() => { if (active) setConnection('unavailable') })
+    const takeAzure = (block) => { if (active && block) { setCapacity(block); setCapacityState('live') } }
+    getAdminActivity().then((d) => {
+      if (!active) return
+      setSnapshot(d); setConnection('live'); takeAzure(d.azure)
+    }).catch(() => { if (active) setConnection('unavailable') })
     const stream = openAdminActivityStream({
       onMessage: (d) => { if (active) { setSnapshot(d); setConnection('live') } },
+      onAzure: takeAzure,
       onError: () => { if (active) setConnection('reconnecting') },
     })
     return () => { active = false; stream.close() }
   }, [])
 
+  // The poll stays as the fallback for a backend that does not push `azure` on the stream, and as
+  // a recovery path if the stream drops. It is deliberately slower than the stream's own cadence:
+  // when the stream is delivering, this changes nothing, and when it is not, this is the only
+  // source. Kept rather than deleted because "the SSE path works" is a claim about the server the
+  // browser cannot make on its own.
   useEffect(() => {
     let active = true
     const refresh = () => getWorkerCapacity()
-      .then((data) => { if (active) { setCapacity(data); setCapacityState('live') } })
-      .catch(() => { if (active) setCapacityState('unavailable') })
+      .then((data) => { if (active) { setCapacity((held) => held || data); setCapacityState((s) => s === 'live' ? s : 'live') } })
+      .catch(() => { if (active) setCapacityState((s) => s === 'live' ? s : 'unavailable') })
     refresh()
-    const timer = window.setInterval(refresh, 30000)
+    const timer = window.setInterval(refresh, 60000)
     return () => { active = false; window.clearInterval(timer) }
   }, [])
 
@@ -540,13 +751,25 @@ export default function AdminLiveTraffic() {
     <div style={{ height: Math.max(540, 495 + Math.ceil((snapshot?.runs?.length || 0) / 3) * 145), maxHeight: 760,
       border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden', background: 'var(--page)' }}>
       <ReactFlow nodes={graph.nodes} edges={graph.edges} nodeTypes={nodeTypes}
-        defaultEdgeOptions={{ type: 'smoothstep', pathOptions: { borderRadius: 12, offset: 18 } }}
+        defaultEdgeOptions={EDGE_ROUTING}
         fitView minZoom={0.35} maxZoom={1.5}
         onNodeClick={(_, node) => setSelectedKey(node.id)}
-        onNodeDoubleClick={(_, node) => setSelectedKey(node.id)}>
+        onNodeDoubleClick={(_, node) => setSelectedKey(node.id)}
+        onEdgeClick={(_, edge) => setSelectedKey(edge.data?.detail || edge.target)}>
         <Background gap={18} size={1} /><MiniMap pannable zoomable /><Controls showInteractive={false} />
+        <div aria-label="Map key" style={{ position: 'absolute', zIndex: 3, right: 12, top: 12,
+          display: 'flex', gap: 12, padding: '6px 9px', border: '1px solid var(--border)',
+          borderRadius: 7, background: 'var(--panel)', boxShadow: '0 2px 7px rgba(24,20,28,.07)',
+          color: 'var(--muted)', fontSize: 10.5 }}>
+          <span><b style={{ color: 'var(--ink)' }}>SERVICE</b> · capacity</span>
+          <span><b style={{ color: 'var(--ink)' }}>ACTIVE JOB</b> · document progress</span>
+          <span><b style={{ color: 'var(--ink)' }}>DATA</b> · sources and outputs</span>
+        </div>
         {!snapshot?.runs?.length && <div className="chip" style={{ position: 'absolute', zIndex: 3, left: 12, bottom: 12 }}>
           Idle · select any tile to inspect the ready processing path
+        </div>}
+        {!!snapshot?.runs?.length && <div className="chip" style={{ position: 'absolute', zIndex: 3, left: 12, bottom: 12 }}>
+          Moving lines carry work in flight · select a line, or either tile it joins, for details
         </div>}
       </ReactFlow>
     </div>
