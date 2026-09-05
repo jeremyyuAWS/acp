@@ -247,6 +247,120 @@ describe('Primary visualization per node', () => {
     expect(thin.textContent).toContain('Not enough evidence')
   })
 
+  const runNode = { kind: 'run', run: snapshot.runs[0] }
+
+  it('labels the remaining-time figure as an estimate, and names what it projects from', async () => {
+    // WRITTEN WRONG FIRST, and the bite-check caught it: the original asserted /estimate/i against
+    // the whole tile, which the LABEL "ESTIMATED REMAINING" satisfies on its own — so it passed
+    // with the provenance line deleted. The assertion has to name the provenance text.
+    const container = await mount({ nodeId: 's1:assess', node: runNode })
+    const eta = [...container.querySelectorAll('div')]
+      .find((d) => d.textContent.startsWith('ESTIMATED REMAINING'))
+    expect(eta.textContent).toContain('projected from completions observed in this session')
+    // And it must not borrow the OTHER estimate's basis: this one is not from configured capacity.
+    expect(eta.textContent).not.toContain('configured capacity')
+  })
+
+  it('says the remaining time is not reported when the samples cannot support one', async () => {
+    const thin = await mount({ nodeId: 's1:assess', node: runNode, samples: samples.slice(-1) })
+    const eta = [...thin.querySelectorAll('div')]
+      .find((d) => d.textContent.startsWith('ESTIMATED REMAINING'))
+    expect(eta.textContent).toContain('Not enough evidence')
+    // No projection label on a figure there is no projection for.
+    expect(eta.textContent).not.toContain('projected from completions')
+  })
+
+  it('draws the four document states as one bar and lists them all', async () => {
+    const container = await mount({ nodeId: 's1:assess', node: runNode })
+    const bar = container.querySelector('[aria-label="8 completed, 2 processing, 10 waiting"]')
+    expect(bar).toBeTruthy()
+    expect(container.textContent).toContain('DOCUMENTS')
+    // failed is not published per run, so it is listed as unreported and left out of the bar.
+    expect(container.textContent).toMatch(/Failed\s*Not reported/)
+    expect(container.textContent).toContain('left out of the total rather than counted as zero')
+  })
+
+  it('keeps run age, time on this job and heartbeat recency as three different facts', async () => {
+    const run = { ...snapshot.runs[0], started_at: iso(-3600),
+      current_job_started_at: iso(-2820), current_job_heartbeat_at: iso(-20) }
+    const container = await mount({ nodeId: 's1:assess', node: { kind: 'run', run } })
+    expect(container.textContent).toMatch(/RUN ELAPSED\s*1h/)
+    expect(container.textContent).toMatch(/ON THIS JOB\s*47m/)
+    expect(container.textContent).toMatch(/LAST HEARTBEAT\s*20s ago/)
+    expect(container.textContent).toContain('From the claim, which does not move')
+    expect(container.textContent).toContain('Lease freshness, not run duration')
+  })
+
+  it('says a pre-v16 claim time is unknown instead of reading the heartbeat as a start', async () => {
+    const run = { ...snapshot.runs[0], started_at: iso(-3600),
+      current_job_started_at: null, current_job_heartbeat_at: iso(-20) }
+    const container = await mount({ nodeId: 's1:assess', node: { kind: 'run', run } })
+    expect(container.textContent).toContain('Claimed before the claim time was recorded')
+    expect(container.textContent).toContain('Not inferred from the heartbeat')
+    // The heartbeat is still shown — it is a real reading, just not this one.
+    expect(container.textContent).toMatch(/LAST HEARTBEAT\s*20s ago/)
+  })
+
+  it('calls out a worker that has stopped checking in while still holding the job', async () => {
+    const run = { ...snapshot.runs[0], started_at: iso(-3600),
+      current_job_started_at: iso(-2820), current_job_heartbeat_at: iso(-900) }
+    const container = await mount({ nodeId: 's1:assess', node: { kind: 'run', run } })
+    expect(container.textContent).toContain('Worker has stopped checking in')
+    expect(container.textContent).toContain('The job is still claimed, so nothing else can pick it up')
+  })
+
+  it('does not cry stale for a heartbeat that is merely a couple of intervals old', async () => {
+    const run = { ...snapshot.runs[0], current_job_started_at: iso(-2820),
+      current_job_heartbeat_at: iso(-200) }
+    const container = await mount({ nodeId: 's1:assess', node: { kind: 'run', run } })
+    expect(container.textContent).not.toContain('stopped checking in')
+  })
+
+  it('shows the classified failure class and the retries, never the error text', async () => {
+    const run = { ...snapshot.runs[0], max_attempts_seen: 3, last_error_class: 'source_rate_limit' }
+    const container = await mount({ nodeId: 's1:assess', node: { kind: 'run', run } })
+    expect(container.textContent).toContain('Source rate limit')
+    expect(container.textContent).toContain('3 attempts')
+    expect(container.textContent).toContain('vocabulary term, never the error text')
+  })
+
+  it('places the run in its pipeline from the scan’s other stage rows', async () => {
+    const runs = [
+      { ...snapshot.runs[0] },
+      { scan_id: 's1', stage: 'discover', status: 'recent', completed: 20, total: 20,
+        source: 'drive', owner: 'operator@example.org' },
+    ]
+    const container = await mount({ nodeId: 's1:assess', node: runNode,
+      snapshot: { ...snapshot, runs } })
+    expect(container.textContent).toContain('PIPELINE')
+    expect(container.textContent).toContain('Discover')
+    expect(container.textContent).toContain('(20/20)')
+    expect(container.textContent).toContain('(8/20)')
+  })
+
+  it('reports an absent pipeline stage as unreported, never as “not started”', async () => {
+    const container = await mount({ nodeId: 's1:assess', node: runNode })
+    // Only the assess row exists in the default fixture.
+    expect(container.textContent).toContain('Discover, Remediate, Release: Not reported')
+    expect(container.textContent).toContain('never “did not run”')
+    expect(container.textContent).not.toMatch(/not started/i)
+  })
+
+  it('draws SharePoint site coverage when the run checkpointed any', async () => {
+    const run = { ...snapshot.runs[0], sites_total: 30, sites_done: 12, sites_unread: 2,
+      libraries_total: 61 }
+    const container = await mount({ nodeId: 's1:assess', node: { kind: 'run', run } })
+    expect(container.querySelector('[aria-label="12 of 30 sites read"]')).toBeTruthy()
+    expect(container.textContent).toContain('61 libraries')
+    expect(container.textContent).toContain('2 sites not read (blocked or skipped)')
+  })
+
+  it('omits site coverage entirely for a run with no site data', async () => {
+    const container = await mount({ nodeId: 's1:assess', node: runNode })
+    expect(container.textContent).not.toContain('SITE COVERAGE')
+    expect(container.textContent).not.toContain('0 of 0 sites')
+  })
+
   it('shows a source connector health and names what it cannot measure', async () => {
     const container = await mount({ nodeId: 'source:drive',
       node: { kind: 'source', label: 'Google Drive', source: 'drive', active: 1 } })

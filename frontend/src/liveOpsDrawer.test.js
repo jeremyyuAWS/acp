@@ -1817,3 +1817,153 @@ describe('factGroups', () => {
     for (const group of FACT_GROUPS) expect(group.key).toMatch(/^[a-z]+$/)
   })
 })
+
+import {
+  RUN_STAGES, HEARTBEAT_INTERVAL_S, runCoverage, runFlow, runStagePipeline, runTiming, runTrouble,
+} from './liveOpsDrawer.js'
+
+describe('runStagePipeline', () => {
+  const snap = (runs) => ({ runs })
+
+  it('places the scan in the pipeline from its sibling stage rows', () => {
+    const p = runStagePipeline('s1', snap([
+      { scan_id: 's1', stage: 'discover', status: 'recent', completed: 40, total: 40 },
+      { scan_id: 's1', stage: 'assess', status: 'active', completed: 8, total: 20, running: 2, queued: 10 },
+      { scan_id: 's2', stage: 'assess', status: 'active', completed: 1, total: 9 },
+    ]))
+    expect(p.present.map((s) => s.key)).toEqual(['discover', 'assess'])
+    expect(p.stages[0].state).toBe('complete')
+    expect(p.stages[1].state).toBe('active')
+    expect(p.stages[1].pct).toBe(40)
+    expect(p.stages[1].queued).toBe(10)
+    // s2's row must not leak into s1's pipeline.
+    expect(p.stages[1].total).toBe(20)
+  })
+
+  it('calls an absent stage NOT REPORTED, never "not started"', () => {
+    // The distinction that matters: admin_live_activity drops a stage once its last job falls out
+    // of the recent tail, so absence cannot tell "finished an hour ago" from "never ran".
+    const p = runStagePipeline('s1', snap([
+      { scan_id: 's1', stage: 'assess', status: 'active', completed: 1, total: 2 },
+    ]))
+    expect(p.missing).toEqual(['Discover', 'Remediate', 'Release'])
+    expect(p.stages[0].state).toBe('unknown')
+    expect(p.missingReason).toMatch(/never “did not run”/)
+    expect(p.missingReason).not.toMatch(/not started/i)
+  })
+
+  it('keeps the pipeline in document order, not in row order', () => {
+    const p = runStagePipeline('s1', snap([
+      { scan_id: 's1', stage: 'remediate', status: 'active', completed: 0, total: 3 },
+      { scan_id: 's1', stage: 'discover', status: 'recent', completed: 3, total: 3 },
+    ]))
+    expect(p.present.map((s) => s.key)).toEqual(['discover', 'remediate'])
+    expect(RUN_STAGES.map((s) => s.key)).toEqual(['discover', 'assess', 'remediate', 'release'])
+  })
+})
+
+describe('runFlow', () => {
+  it('counts the four document states and totals only what was counted', () => {
+    const f = runFlow({ completed: 8, running: 2, queued: 10, failed: 1 })
+    expect(f.total).toBe(21)
+    expect(f.segments.map((s) => s.key)).toEqual(['completed', 'running', 'queued', 'failed'])
+    expect(f.partial).toBe(false)
+  })
+
+  it('leaves an unpublished failure count out of the total rather than calling it zero', () => {
+    const f = runFlow({ completed: 8, running: 2, queued: 10 })
+    expect(f.total).toBe(20)
+    expect(f.partial).toBe(true)
+    expect(f.rows.find((r) => r.key === 'failed').count).toBeNull()
+    expect(f.segments.map((s) => s.key)).not.toContain('failed')
+  })
+
+  it('drops empty states from the bar but keeps them in the rows', () => {
+    const f = runFlow({ completed: 5, running: 0, queued: 0, failed: 0 })
+    expect(f.segments.map((s) => s.key)).toEqual(['completed'])
+    expect(f.rows).toHaveLength(4)
+  })
+})
+
+describe('runTiming', () => {
+  const run = {
+    started_at: iso(-3600),
+    updated_at: iso(-4),
+    current_job_started_at: iso(-2820),
+    current_job_heartbeat_at: iso(-20),
+    current_file: 'a.docx',
+  }
+
+  it('separates run age, current-job runtime and heartbeat recency', () => {
+    const t = runTiming(run, { nowMs: NOW })
+    expect(t.elapsedS).toBe(3600)
+    expect(t.currentJobS).toBe(2820)       // 47 minutes on this job
+    expect(t.heartbeatAgeS).toBe(20)       // and beating 20 seconds ago
+    expect(t.leaseStale).toBe(false)
+  })
+
+  it('calls a lease stale only when the beat is several intervals old', () => {
+    expect(runTiming({ ...run, current_job_heartbeat_at: iso(-HEARTBEAT_INTERVAL_S * 2) },
+      { nowMs: NOW }).leaseStale).toBe(false)
+    expect(runTiming({ ...run, current_job_heartbeat_at: iso(-HEARTBEAT_INTERVAL_S * 4) },
+      { nowMs: NOW }).leaseStale).toBe(true)
+  })
+
+  it('reports a pre-v16 row as unknown rather than reading the heartbeat as a start', () => {
+    const t = runTiming({ ...run, current_job_started_at: null }, { nowMs: NOW })
+    expect(t.currentJobS).toBeNull()
+    expect(t.currentJobUnknown).toBe(true)
+    // The heartbeat is still available, and is still not a runtime.
+    expect(t.heartbeatAgeS).toBe(20)
+  })
+
+  it('has no runtime to report when nothing is being processed', () => {
+    const t = runTiming({ started_at: iso(-60) }, { nowMs: NOW })
+    expect(t.currentJobS).toBeNull()
+    expect(t.currentJobUnknown).toBe(false)
+    expect(t.leaseStale).toBe(false)
+  })
+})
+
+describe('runTrouble', () => {
+  it('reports the classified class and the retry count', () => {
+    const t = runTrouble({ max_attempts_seen: 3, last_error_class: 'source_rate_limit' })
+    expect(t.label).toBe('Source rate limit')
+    expect(t.retrying).toBe(true)
+    expect(t.note).toMatch(/vocabulary term, never the error text/)
+  })
+
+  it('does not call a first attempt a retry', () => {
+    expect(runTrouble({ max_attempts_seen: 1, last_error_class: 'timeout' }).retrying).toBe(false)
+  })
+
+  it('is empty when nothing failed', () => {
+    const t = runTrouble({ max_attempts_seen: 1 })
+    expect(t.kind).toBeNull()
+    expect(t.label).toBeNull()
+    expect(t.note).toBeNull()
+  })
+
+  it('shows an unmapped class verbatim rather than blanking it', () => {
+    expect(runTrouble({ last_error_class: 'brand_new_class' }).label).toBe('brand_new_class')
+  })
+})
+
+describe('runCoverage', () => {
+  it('reports site coverage when the run checkpointed any', () => {
+    const c = runCoverage({ sites_total: 30, sites_done: 12, sites_unread: 2, libraries_total: 61 })
+    expect(c.available).toBe(true)
+    expect(c.pct).toBe(40)
+    expect(c.unreadNote).toMatch(/2 sites not read \(blocked or skipped\)/)
+  })
+
+  it('is unavailable — not zero — for a run with no site data', () => {
+    // Drive and OneDrive runs: the backend returns an EMPTY dict, so "0 of 0 sites" would be a
+    // fact about the map rather than about the estate.
+    expect(runCoverage({ completed: 5 }).available).toBe(false)
+  })
+
+  it('says nothing about unread sites when none are', () => {
+    expect(runCoverage({ sites_total: 4, sites_done: 4, sites_unread: 0 }).unreadNote).toBeNull()
+  })
+})
