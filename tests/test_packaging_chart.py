@@ -578,6 +578,12 @@ RENDERS_AS = {
     # implementation wrong (the model volume the inventory asked for would have shadowed the
     # models baked into the image).
     "acp-ollama-gateway": "-ollama",
+    # CLOSED 2026-09-05, the second of the pair and for the same reason: Compose builds and runs
+    # grafana ungated, deploy/public/ creates `acp-grafana` in production, and every example
+    # document sets `observability.grafana: true`. The chart rendered nothing. Its datasource
+    # needed a DSN split into four fields, which the image's own entrypoint now does — see
+    # templates/grafana.yaml for why that belongs in the image rather than in the contract.
+    "acp-grafana": "-grafana",
     "acp-web-api": "api",
     "acp-discovery": "worker-discover",
     "acp-assess": "worker-assess",
@@ -598,15 +604,6 @@ NOT_RENDERED = {
         "coherent, and it contradicts the inventory, which calls this service `in-cluster`. One "
         "of the two is wrong; see test_the_otel_endpoint_is_never_actually_set for the sharper "
         "half of the same seam."),
-    "acp-grafana": (
-        "Upstream image, referenced not rebuilt (the inventory says so). "
-        "`observability.grafana.enabled` is a values knob no template reads, and unlike langfuse "
-        "and the OTel collector NOTHING else in the render refers to it either — no endpoint, no "
-        "credential, no env var. So this and ollama are the two that are simply absent rather "
-        "than expected from outside. NOT a platform concern the adapter supplies, either: "
-        "deploy/compose/docker-compose.yml deploys grafana ungated, so the EVALUATION path ships "
-        "it and the production path does not — see "
-        "test_compose_deploys_what_the_chart_omits."),
     "acp-langfuse": (
         "Self-hosted LLM tracing, and the same shape as the OTel collector rather than the same "
         "shape as grafana — which is a distinction the first draft of these tests got wrong. No "
@@ -637,7 +634,6 @@ def app_workloads(manifests):
 # rendering it, and the test failed with a message about a map that no longer mentioned it.
 NOT_RENDERED_TOKENS = {
     "acp-otel-collector": "otel",
-    "acp-grafana": "grafana",
     "acp-langfuse": "langfuse",
 }
 
@@ -720,16 +716,25 @@ def test_everything_in_the_not_rendered_map_really_is_absent():
 
 
 @needs_helm
-def test_the_derived_production_document_plans_three_services_it_would_not_install():
-    """THE HEADLINE, on the document that describes production rather than on an example.
+def test_the_derived_production_document_still_plans_a_service_it_would_not_install():
+    """THE HEADLINE, on the document that describes production rather than on an example — and
+    it is down to one.
 
     azure-current.acp-deployment.yaml declares `ai.ollama.enabled: true` and
-    `observability.grafana: true` because deploy/public/ creates both. `acpctl plan` lists them;
-    `helm install` creates neither. Adopting the chart as the Azure rebuild would silently drop
-    the local model runtime that ADR 0010's remediation lane depends on.
+    `observability.grafana: true` because deploy/public/ creates both. `acpctl plan` listed them
+    and `helm install` created neither, so adopting the chart as the Azure rebuild would have
+    silently dropped the local model runtime that ADR 0010's remediation lane depends on, and the
+    dashboards with it. Both now render.
 
-    Named as an exact set so that closing one of them fails here and the count in
-    packaging/docs/ has to move with it.
+    WHAT IS LEFT IS NOT THE SAME KIND OF THING, which is why the set shrank rather than emptied.
+    The OTel collector is planned in-cluster for a document whose exporter is `azure-monitor` —
+    telemetry going to a cloud backend, with no collector in any deployment path and none needed.
+    That is the inventory over-claiming rather than the chart lagging, and closing it means
+    deriving `provisioning` from `observability.exporter` (`local` -> in-cluster, a cloud backend
+    -> external), not writing a template.
+
+    Named as an exact set so that closing it fails here and the count in packaging/docs/ has to
+    move with it.
     """
     from acpctl.spec import load_document
     doc = load_document(PACKAGING / "docs" / "azure-current.acp-deployment.yaml")
@@ -737,8 +742,7 @@ def test_the_derived_production_document_plans_three_services_it_would_not_insta
     doc["data"]["postgres"]["backupRetentionDays"] = 35
 
     planned = _in_cluster(doc)
-    assert planned & set(NOT_RENDERED) == {
-        "acp-otel-collector", "acp-grafana"}, sorted(planned)
+    assert planned & set(NOT_RENDERED) == {"acp-otel-collector"}, sorted(planned)
 
 
 # ── values knobs the chart declares and no template reads ────────────────────────────────────
@@ -747,7 +751,6 @@ def test_the_derived_production_document_plans_three_services_it_would_not_insta
 # it faithfully, `helm install` accepts it without complaint, and an operator reading either sees
 # a configured feature. Listed with what is known, same as NOT_RENDERED.
 INERT_VALUES = {
-    "observability.grafana": "no template reads it; see NOT_RENDERED['acp-grafana']",
     "observability.langfuse": "no template reads it; see NOT_RENDERED['acp-langfuse']",
     "ai.externalProviders": (
         "FOUND BY FIXING THE GUARD ABOVE, not by looking. `acpctl values` emits the provider "
@@ -854,6 +857,72 @@ def test_the_otel_endpoint_is_never_actually_set():
             "assert it matches the document's exporter")
 
 
+def _grafana(manifests):
+    return next(d for d in of_kind(manifests, "Deployment")
+                if d["metadata"]["name"].endswith("-grafana"))
+
+
+@needs_helm
+def test_grafana_is_not_exposed_by_default():
+    """The image ships with ANONYMOUS ACCESS ON — GF_AUTH_ANONYMOUS_ENABLED=true, baked into
+    deploy/grafana/Dockerfile so the embedded dashboards work without a second login. That is a
+    reasonable default for something reachable only inside the cluster and a bad one for anything
+    else: a Service that published itself would put every ACP dashboard in front of whoever found
+    the address, with no credential to stop them.
+
+    Production does expose its Grafana, through Container Apps external ingress — a deliberate
+    per-installation act. The equivalent here is an Ingress rule the operator writes, not a
+    default this chart picks.
+    """
+    manifests = render(load_example("standard-production"))
+    svc = next(s for s in of_kind(manifests, "Service")
+               if s["metadata"]["name"].endswith("-grafana"))
+    assert svc["spec"]["type"] == "ClusterIP", svc["spec"]["type"]
+
+
+@needs_helm
+def test_grafana_gets_the_dsn_its_entrypoint_splits():
+    """The seam, from the chart's side. deploy/grafana/acp-entrypoint.sh derives the four
+    ACP_GRAFANA_PG_* variables Grafana's provisioning needs — but only if it is handed a DSN, and
+    only from the secret rather than a literal. Rendering the Deployment without this would give
+    a Grafana that starts, provisions a datasource with four unsubstituted `${VAR}` fields, and
+    reports the problem as empty dashboards.
+    """
+    env = {e["name"]: e for e in _grafana(render(load_example("standard-production")))
+           ["spec"]["template"]["spec"]["containers"][0]["env"]}
+    assert "DATABASE_URL" in env, sorted(env)
+    ref = env["DATABASE_URL"].get("valueFrom", {}).get("secretKeyRef", {})
+    assert ref.get("key") == "database-url", env["DATABASE_URL"]
+    assert "value" not in env["DATABASE_URL"], "the DSN is rendered as a literal, not a reference"
+
+
+@needs_helm
+def test_grafana_runs_as_the_uid_its_image_owns():
+    """472, not the chart's 10001. Read from the registry config of grafana/grafana:11.6.0 rather
+    than assumed. Under the shared podSecurityContext Grafana cannot write its own data directory,
+    and the symptom is a container that starts, logs a permissions error once, and serves an empty
+    UI — which reads as a configuration problem with the datasource.
+    """
+    pod = _grafana(render(load_example("standard-production")))["spec"]["template"]["spec"]
+    assert pod["securityContext"]["runAsUser"] == 472, pod["securityContext"]
+    assert pod["securityContext"]["fsGroup"] == 472, pod["securityContext"]
+    assert pod["securityContext"]["runAsNonRoot"] is True
+
+
+@needs_helm
+def test_neither_dependency_workload_renders_when_the_document_turns_it_off():
+    """THE OTHER DIRECTION, and the one that makes these templates a contract rather than a
+    preference. `observability.grafana: false` and `ai.ollama.enabled: false` are things a
+    document is allowed to say, and a chart that rendered them anyway would be deciding for the
+    operator — the same fault as not rendering them when asked, pointing the other way.
+    """
+    doc = load_example("standard-production")
+    doc["observability"]["grafana"] = False
+    doc["ai"]["ollama"]["enabled"] = False
+    names = {m["metadata"]["name"] for m in render(doc)}
+    assert not [n for n in names if n.endswith("-grafana") or n.endswith("-ollama")], sorted(names)
+
+
 def test_compose_deploys_what_the_chart_omits():
     """THE COMPARISON THAT DECIDES WHICH SIDE IS WRONG, and it refutes the comfortable reading.
 
@@ -885,14 +954,12 @@ def test_compose_deploys_what_the_chart_omits():
     # OLLAMA HAS BEEN CLOSED, on the chart's side, and this is where that is recorded. The other
     # two are still open and are not the same shape as each other:
     #
-    #   grafana   both real paths run it (Compose builds deploy/grafana, production creates
-    #             acp-grafana) and the chart renders nothing. Same finding ollama had; the chart
-    #             is still the side that has to move.
     #   langfuse  Compose runs it for EVALUATION and production runs none at all — the parity
     #             baseline has no acp-langfuse — so this one is not "the chart is behind", it is
     #             the contract claiming an in-cluster service no production deployment has ever
     #             had. Which side moves there is a decision, not a gap to fill.
-    assert "acp-ollama-gateway" not in NOT_RENDERED, (
-        "ollama is back in NOT_RENDERED — the chart stopped rendering the model runtime that "
-        "both Compose and production deploy")
-    assert {"acp-grafana", "acp-langfuse"} <= set(NOT_RENDERED), sorted(NOT_RENDERED)
+    for closed in ("acp-ollama-gateway", "acp-grafana"):
+        assert closed not in NOT_RENDERED, (
+            f"{closed} is back in NOT_RENDERED — the chart stopped rendering something both "
+            f"Compose and production deploy")
+    assert {"acp-langfuse"} <= set(NOT_RENDERED), sorted(NOT_RENDERED)
