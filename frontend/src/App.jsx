@@ -72,7 +72,7 @@ import ConfirmDialog from './ConfirmDialog.jsx'
 import { AdminInsights } from './AdminInsights.jsx'
 import AcrWorkspace from './AcrWorkspace.jsx'
 import AccessRestricted from './AccessRestricted.jsx'
-import { visibleTabs, isVisible, canOperate, firstPermittedTab } from './access.js'
+import { visibleTabs, isVisible, canOperate, firstPermittedTab, canOpenSettings } from './access.js'
 import { handleWorkflowTabKeyDown } from './workflowTabs.js'
 
 // Self-scan overlay: on in dev, or on the deployed demo via ?a11y
@@ -100,6 +100,7 @@ const TABS = [
 // workspace. API authorization remains authoritative for privileged mutations; in particular,
 // making these views discoverable must not turn a read-only user into a platform administrator.
 const ALL_TAB_KEYS = TABS.map(([key]) => key)
+
 
 function timeAgo(iso) {
   if (!iso) return null
@@ -669,10 +670,14 @@ export default function App() {
   // acp:session-expired / acp:scan-unavailable rather than threading a callback through the tree.
   // Gated on the settings permission exactly as the ⚙ button and the modal render already are.
   useEffect(() => {
-    const onOpenSettings = () => { if (me?.allow?.includes('settings')) setSettingsOpen(true) }
+    const onOpenSettings = () => { if (canOpenSettings(me, access)) setSettingsOpen(true) }
     window.addEventListener('acp:open-settings', onOpenSettings)
     return () => window.removeEventListener('acp:open-settings', onOpenSettings)
-  }, [me])
+    // `access` belongs here as well as `me`: it arrives from /workspace/bootstrap AFTER the first
+    // render, so a listener registered with only [me] would close over the null payload forever
+    // and keep answering from access.js's fail-open. That direction is the safe one, which is
+    // exactly why it would not have been noticed.
+  }, [me, access])
 
   // Refetch the scan when a remediation or a deferred assessment announces that the server's
   // file_records changed — see scanRefetch.js for which events and why.
@@ -1729,7 +1734,7 @@ export default function App() {
                 {void tick}v{platformVersion || __BUILD_VERSION__} PT · {timeAgo(__BUILD_TIME__)}
               </b></div>
               <div className="menu-separator" />
-              {me.allow?.includes('settings') && <button className="menu-action" aria-label="Platform settings" onClick={() => setSettingsOpen(true)}>⚙ <span>Settings</span></button>}
+              {canOpenSettings(me, access) && <button className="menu-action" aria-label="Platform settings" onClick={() => setSettingsOpen(true)}>⚙ <span>Settings</span></button>}
           {/* SWITCH ACCOUNT — a full teardown, then the sign-in screen, which now asks Google
               and Microsoft for an account chooser rather than reusing the browser's single
               signed-in session.
@@ -2390,7 +2395,7 @@ export default function App() {
       {/* onOntologyChange / onPrivilegeChange are gone with the Business ontology and Permissions
           panels. The ontology DATA path below is untouched — App still annotates the corpus from
           whatever was last published; only its editor left Settings. */}
-      {settingsOpen && me.allow?.includes('settings') && <Settings files={files} onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} onDelegationChange={setDelegations} onFileTypeChange={(cfg) => setFileTypeConfig(cfg)} me={me} />}
+      {settingsOpen && canOpenSettings(me, access) && <Settings files={files} onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} onDelegationChange={setDelegations} onFileTypeChange={(cfg) => setFileTypeConfig(cfg)} me={me} />}
 
       {/* The universal scan gate. Opened by `requestScan` from every entry point; the wizard's
           "Start scan" confirm is the only thing that dispatches `doScan`. The behavior toggles are

@@ -29,6 +29,10 @@ export default function PeopleAccess() {
   const addButtonRef = useRef(null)
 
   const [roles, setRoles] = useState([])
+  // The rollout rung, which GET /admin/workspace-roles has always returned and this screen has
+  // always thrown away. See the note it feeds, below the heading.
+  const [enforced, setEnforced] = useState(true)
+  const [rollout, setRollout] = useState(null)
   // The role change awaiting confirmation (PRD §9). Held rather than applied immediately because
   // the confirmation has to say what CHANGES, and that answer comes from the server.
   const [roleChange, setRoleChange] = useState(null)
@@ -38,7 +42,15 @@ export default function PeopleAccess() {
   // Best-effort: a caller without roles.manage gets a 403 here, and that is not an error worth
   // showing them — it means the role column is simply not theirs to use, and the People screen
   // still does everything else it did before.
-  useEffect(() => { getWorkspaceRoles().then((r) => setRoles(r.roles || [])).catch(() => setRoles([])) }, [])
+  useEffect(() => {
+    getWorkspaceRoles()
+      .then((r) => { setRoles(r.roles || []); setEnforced(r.enforced !== false); setRollout(r.rollout || null) })
+      // `enforced` stays TRUE on failure, deliberately. This note exists to warn that an
+      // assignment may do nothing; showing it because a request failed would cry wolf on a screen
+      // where the roles are also missing, and an operator who learns to ignore it once ignores it
+      // when it is true.
+      .catch(() => setRoles([]))
+  }, [])
 
   const askToChangeRole = (person, roleId) => {
     setError('')
@@ -114,6 +126,27 @@ export default function PeopleAccess() {
     {data.domains?.length > 0 && <div role="note" style={{ marginTop: 14, padding: 12, border: '1px solid #E5C875', borderRadius: 9, background: '#FFF8E7', fontSize: 13 }}>
       <b>Domain-wide access is on.</b> Anyone at {data.domains.map((d) => `@${d}`).join(', ')} can sign in even if they are not listed here.
     </div>}
+    {/* THE SAME WARNING THE ROLES SCREEN CARRIES, ON THE SCREEN WHERE ROLES ARE ACTUALLY GIVEN.
+        WorkspaceRoles.jsx says "Roles are not being enforced yet" because an administrator who
+        designs a role and believes access is now restricted is in a worse position than one who
+        knows it is not. Assigning is the same act with the same consequence, and this screen said
+        nothing: the dropdown changed, "Alice's role was updated" appeared in green, and every
+        route still admitted her exactly as before.
+
+        The server has always sent the rung on this very request — `enforced` and `rollout` come
+        back from GET /admin/workspace-roles alongside the roles the dropdown is built from — so
+        the information was already in the response this component throws away. Wording from
+        `rollout.means`, so it cannot drift from what the code does.
+
+        Only when roles EXIST: on a deployment with none there is no dropdown to qualify, and a
+        warning about the effect of an action nobody can take is noise. */}
+    {roles.length > 0 && !enforced && (
+      <div role="note" className="roles-not-enforced" style={{ marginTop: 10 }}>
+        <b>Roles are not being enforced yet.</b>{' '}
+        {rollout?.means || 'You can assign them now; nothing changes for anyone.'}
+        {rollout?.next && <> Next stage: <code>{rollout.next}</code>.</>}
+      </div>
+    )}
     <div role="status" aria-live="polite" style={{ minHeight: 22, marginTop: 10, color: error ? 'var(--error-fg-strong)' : '#287D3C', fontSize: 13 }}>{error || message}</div>
     <div style={{ border: '1px solid var(--line)', borderRadius: 10, overflow: 'hidden' }}>
       {data.people.length === 0 ? <p className="muted" style={{ padding: 18, margin: 0 }}>No people have been added yet.</p> : data.people.map((person, i) => <div key={person.email} style={{ display: 'grid', gridTemplateColumns: 'minmax(210px, 1.5fr) 110px 140px minmax(180px, 1fr)', gap: 12, alignItems: 'center', padding: '13px 14px', borderTop: i ? '1px solid var(--line)' : 0 }}>

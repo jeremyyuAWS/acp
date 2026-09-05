@@ -123,6 +123,33 @@ export function ctaFor(access, key, { start, view } = {}) {
  */
 export const isAccessPending = (access) => Boolean(access?.pending)
 
+/**
+ * May this user open Platform settings?
+ *
+ * `settings` IS A GOVERNED TAB — api/workspace_rbac.TABS lists it with the other nine — and it is
+ * the only one the SPA renders as a MODAL rather than a pane. So `visibleTabs` never covers it,
+ * and until 2026-09-05 nothing else did: App.jsx's gear, its click handler and the modal all
+ * tested `me.allow` alone, the legacy persona list, which App.jsx unions with EVERY tab key under
+ * the temporary 2026-09-04 navigation policy. `settings: hidden` was therefore true of four
+ * built-in roles — Compliance Manager, Remediation Reviewer, Analyst, Viewer — and meant nothing
+ * for any of them.
+ *
+ * Not an escalation: People and Roles management is gated server-side on `people.manage` /
+ * `roles.manage`, and the destructive actions are owner-only. But a tab the role says is hidden
+ * was fully reachable, which is exactly what the `navigation` rung exists to make untrue.
+ *
+ * BOTH SOURCES, and they genuinely disagree. `me.allow` is narrower than the RBAC payload in SIM
+ * and demo personas (sim.js gives `settings` to one of four), and the payload is narrower than
+ * `me.allow` under a real role. Requiring both means this can only ever hide the panel from
+ * somebody who could already see it — never reveal it to somebody who could not — which is the
+ * only safe direction for a change that ships ahead of the rollout it serves.
+ *
+ * Lives here rather than in App.jsx because this is the module that decides what the UI offers,
+ * and because a predicate inside a 2000-line component cannot be tested with both inputs held.
+ */
+export const canOpenSettings = (me, access) =>
+  Boolean(me?.allow?.includes('settings')) && isVisible(access, 'settings')
+
 export function restrictionReason(access, key, label) {
   const name = label || key
   if (!access?.enforced) return `${name} is not available in this workspace.`
