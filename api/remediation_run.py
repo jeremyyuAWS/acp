@@ -89,6 +89,12 @@ STALL_AFTER_S = 900
 #: between expiry and reclaim from flickering a document out of `processing` and back.
 LEASE_GRACE_S = 60
 
+# Ten server buckets cover the five-minute live window. The browser controls presentation
+# cadence, but never re-buckets raw events or derives a completion rate itself.
+THROUGHPUT_WINDOW_S = 300
+THROUGHPUT_BUCKET_S = 30
+THROUGHPUT_MIN_SAMPLE = 5
+
 #: Provider labels. "SharePoint / OneDrive" — the label every other surface in this repo uses —
 #: is deliberately NOT here: PRD §17.1 is that a SharePoint run must never be labelled OneDrive,
 #: and a slash-joined pair naming both providers is precisely the mismatch that made the panel
@@ -123,6 +129,70 @@ def _parse(ts) -> _dt.datetime | None:
 def _age_s(ts, now: _dt.datetime) -> float | None:
     parsed = _parse(ts)
     return None if parsed is None else (now - parsed).total_seconds()
+
+
+def _eta_label(low_minutes: int, high_minutes: int) -> str:
+    """A compact range without implying precision the sample does not support."""
+    if high_minutes < 90:
+        return f"about {low_minutes}–{high_minutes} min left"
+    low_hours = max(1, round(low_minutes / 60))
+    high_hours = max(low_hours, round(high_minutes / 60))
+    return f"about {low_hours}–{high_hours} hr left"
+
+
+def derive_throughput(completed_at: list, *, remaining: int,
+                      now: _dt.datetime) -> tuple[dict | None, dict]:
+    """Server-observed successful completion rate and evidence-gated ETA."""
+    stamps = [stamp for value in completed_at if (stamp := _parse(value)) is not None]
+    current_start = now - _dt.timedelta(seconds=THROUGHPUT_WINDOW_S)
+    previous_start = current_start - _dt.timedelta(seconds=THROUGHPUT_WINDOW_S)
+    current = [stamp for stamp in stamps if current_start < stamp <= now]
+    previous = [stamp for stamp in stamps if previous_start < stamp <= current_start]
+    buckets = [0] * (THROUGHPUT_WINDOW_S // THROUGHPUT_BUCKET_S)
+    for stamp in current:
+        index = min(len(buckets) - 1, int((stamp - current_start).total_seconds()
+                                         // THROUGHPUT_BUCKET_S))
+        buckets[index] += 1
+
+    if not current:
+        return None, {"available": False, "reason": "no_recent_completions"}
+
+    window_minutes = THROUGHPUT_WINDOW_S / 60
+    rate = len(current) / window_minutes
+    throughput = {
+        "window_seconds": THROUGHPUT_WINDOW_S,
+        "bucket_seconds": THROUGHPUT_BUCKET_S,
+        "documents_per_minute": round(rate, 1),
+        "sample_documents": len(current),
+        "buckets": buckets,
+        "change_percent": None,
+    }
+    if len(current) >= THROUGHPUT_MIN_SAMPLE and len(previous) >= THROUGHPUT_MIN_SAMPLE:
+        previous_rate = len(previous) / window_minutes
+        throughput["change_percent"] = round((rate - previous_rate) / previous_rate * 100)
+
+    if remaining <= 0:
+        return throughput, {"available": False, "reason": "run_complete"}
+    if len(current) < THROUGHPUT_MIN_SAMPLE:
+        return throughput, {"available": False, "reason": "insufficient_sample",
+                            "sample_documents": len(current),
+                            "minimum_documents": THROUGHPUT_MIN_SAMPLE}
+
+    # Approximate 95% Poisson interval for the observed count. It is deliberately wide with five
+    # samples and narrows only as evidence accumulates; no client-side smoothing invents certainty.
+    spread = 1.96 * (len(current) ** 0.5)
+    low_rate = max(0.01, (len(current) - spread) / window_minutes)
+    high_rate = (len(current) + spread) / window_minutes
+    low_minutes = max(1, round(remaining / high_rate))
+    high_minutes = max(low_minutes, round(remaining / low_rate))
+    return throughput, {
+        "available": True,
+        "label": _eta_label(low_minutes, high_minutes),
+        "low_minutes": low_minutes,
+        "high_minutes": high_minutes,
+        "sample_documents": len(current),
+        "method": "recent_completions_approximate_95_percent",
+    }
 
 
 # ── per-document outcome ─────────────────────────────────────────────────────
@@ -486,6 +556,7 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
     reasons: dict[str, int] = {}
     active: list[dict] = []
     retry_candidates: list[_dt.datetime] = []
+    completed_at: list = []
     claimed_any = False
 
     for job in jobs:
@@ -495,6 +566,8 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
             has_correction=file in corrected, has_verified_fix=file in verified_docs,
             lease_grace_s=lease_grace_s)
         counters[outcome] += 1
+        if outcome == "completed":
+            completed_at.append(job.get("updated_at"))
         reasons[reason] = reasons.get(reason, 0) + 1
         if int(job.get("attempts") or 0) > 0 or job.get("locked_at"):
             claimed_any = True
@@ -534,6 +607,8 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
 
     applied = int(facts.get("fixes_applied") or 0)
     verified = int(facts.get("fixes_verified") or 0)
+    remaining = counters["processing"] + counters["waiting"]
+    throughput, estimate = derive_throughput(completed_at, remaining=remaining, now=now)
 
     snapshot = {
         "run_id": facts.get("run_id"),
@@ -567,6 +642,8 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
                      "latest_at": facts.get("latest_delivery_at") or None},
         "review": {"documents": counters["review"],
                    "items": int(facts.get("review_items") or 0)},
+        "throughput": throughput,
+        "estimate": estimate,
         "phases": derive_phases(counters, total=total, state=state, applied_fixes=applied,
                                 verified_fixes=verified, corrected_stored=corrected_stored,
                                 corrected_pending_delivery=pending_delivery),

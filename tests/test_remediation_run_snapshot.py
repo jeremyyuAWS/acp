@@ -207,6 +207,51 @@ def test_applied_verified_and_delivered_are_separately_labelled():
     assert "verified" not in snap  # never a bare, unit-less count at the top level
 
 
+# ── throughput and estimate ──────────────────────────────────────────────────────
+
+def test_throughput_uses_successful_terminal_documents_not_old_completions():
+    completed = [_iso(seconds=-20), _iso(seconds=-40), _iso(seconds=-70),
+                 _iso(seconds=-100), _iso(seconds=-130), _iso(seconds=-160)]
+    throughput, estimate = rr.derive_throughput(
+        completed + [_iso(minutes=-8)], remaining=4, now=NOW)
+    assert throughput["documents_per_minute"] == 1.2
+    assert throughput["sample_documents"] == 6
+    assert sum(throughput["buckets"]) == 6
+    assert throughput["change_percent"] is None
+    assert estimate["available"] is True
+    assert estimate["low_minutes"] <= estimate["high_minutes"]
+    assert estimate["method"] == "recent_completions_approximate_95_percent"
+
+
+def test_small_or_idle_windows_abstain_instead_of_inventing_an_eta_or_zero_rate():
+    throughput, estimate = rr.derive_throughput([_iso(seconds=-20)], remaining=4, now=NOW)
+    assert throughput["sample_documents"] == 1
+    assert estimate == {"available": False, "reason": "insufficient_sample",
+                        "sample_documents": 1, "minimum_documents": 5}
+    assert rr.derive_throughput([], remaining=4, now=NOW) == (
+        None, {"available": False, "reason": "no_recent_completions"})
+
+
+def test_rate_change_requires_enough_documents_in_both_five_minute_windows():
+    current = [_iso(seconds=-(20 + i * 30)) for i in range(6)]
+    previous = [_iso(seconds=-(320 + i * 50)) for i in range(5)]
+    throughput, _ = rr.derive_throughput(current + previous, remaining=10, now=NOW)
+    assert throughput["change_percent"] == 20
+
+
+def test_snapshot_publishes_server_throughput_and_eta_from_completed_outcomes():
+    done = [_job(f"done-{i}.docx", "done", updated_at=_iso(seconds=-(20 + i * 30)))
+            for i in range(6)]
+    waiting = [_job(f"waiting-{i}.docx", "queued") for i in range(4)]
+    corrected = [job["file"] for job in done]
+    snap = _snap(done + waiting, corrected_documents=corrected, corrected_stored=6,
+                 corrected_delivered=6)
+    assert snap["throughput"]["documents_per_minute"] == 1.2
+    assert snap["throughput"]["sample_documents"] == 6
+    assert snap["estimate"]["available"] is True
+    assert snap["estimate"]["label"].startswith("about ")
+
+
 # ── source identity ──────────────────────────────────────────────────────────
 
 def test_a_sharepoint_run_is_never_labelled_onedrive():
