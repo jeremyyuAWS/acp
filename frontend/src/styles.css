@@ -2966,7 +2966,34 @@ html[data-wcag="on"] .wcag-toggle--on {
 .people-select.is-unassigned { color: var(--muted); }
 
 .people-role-cell { display: grid; gap: 4px; }
-.people-role-impact { font-size: 11.5px; line-height: 1.45; }
+
+/* ── The role-change toast ─────────────────────────────────────────────────────
+   Assigning a role used to open a modal confirmation. It now applies immediately and reports
+   here, top-right, carrying the same server-computed impact the dialog carried plus an Undo.
+
+   GEOMETRY AND TOKENS COPIED FROM LiveOperationsToast ON PURPOSE. That component is already the
+   application's top-right toast (right/top 18px, min(360px, 100vw - 36px), --surface, a 5px
+   --success-fg-strong left rule). A second toast at different coordinates on a different surface
+   does not read as the same product, and there is no reason for these two to differ.
+
+   ONE PROPERTY DELIBERATELY DIFFERS. That file sets `color: var(--text)`. `--text` is used twice
+   in this codebase and DEFINED NOWHERE, so it resolves to nothing and the colour is inherited —
+   which happens to look right and is why it has survived. `--ink` is the token that exists. This
+   rule uses it rather than propagating an undefined custom property to a third site.
+
+   The positioning is only half the job: the element must also be PORTALLED out of Settings'
+   `.setoverlay`, whose backdrop-filter would otherwise make it the containing block and pin this
+   to the corner of a scrolling panel instead of the window. See the Overlay note in
+   PeopleAccess.jsx — that is the bug this screen was just fixed for. */
+.people-toast { position: fixed; right: 18px; top: 18px; z-index: 10000;
+  width: min(360px, calc(100vw - 36px)); text-align: left;
+  padding: 14px; border-radius: 10px;
+  border: 1px solid var(--success-fg); border-left: 5px solid var(--success-fg-strong);
+  background: var(--surface, #fff); color: var(--ink);
+  isolation: isolate; box-shadow: 0 12px 32px rgba(20, 16, 24, .28); }
+.people-toast-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.people-toast-line { margin: 6px 0 0; font-size: 12.5px; line-height: 1.5; }
+.people-toast-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
 
 /* ── The People row ────────────────────────────────────────────────────────────
    A CLASS RATHER THAN AN INLINE TEMPLATE, and the column count is the reason.

@@ -708,6 +708,110 @@ def _propose_media_captions(scan_id: str, filename: str, drive_file_id: str,
 REMEDIATION_SOURCES = ("drive", "local", "sharepoint")
 
 
+def _release_failure(release_id: str, owner: str, filename: str, record: dict,
+                     category: str, explanation: str) -> None:
+    """Persist one safe Release failure; provider exception text never crosses the API."""
+    core.store.record_release_document(release_id, owner, {
+        "file": filename,
+        "source_document_id": record.get("drive_file_id") or filename,
+        "original_relative_path": (record.get("source_relative_path")
+                                   or record.get("parent_folder") or filename),
+        "released_relative_path": None,
+        "status": "failed",
+        "failure_category": category,
+        "explanation": explanation,
+        "created": False,
+    })
+
+
+@handler("publish_file")
+def _publish_file(payload: dict, job: dict) -> None:
+    """Durably publish one approved corrected copy to its source SharePoint library.
+
+    Tokens are resolved from the short-lived Redis token store at execution time and are never
+    placed in the durable job payload. One file per job makes a deployment/restart resumable and
+    bounds each Graph operation independently.
+    """
+    scan_id = payload.get("scan_id") or job.get("scan_id")
+    filename = payload.get("file")
+    owner = payload.get("owner")
+    release_id = payload.get("release_id")
+    if not all((scan_id, filename, owner, release_id)):
+        raise FatalJobError("publish_file job missing release identity")
+    scan = core.store.get_scan(scan_id, owner=owner)
+    if not scan or (scan.get("run") or {}).get("source") != "sharepoint":
+        raise FatalJobError("publish_file job is not an owned SharePoint scan")
+    record = core.store.get_file_record(scan_id, filename)
+    if not record or not record.get("compliant") or not record.get("remediated_at"):
+        _release_failure(release_id, owner, filename, record or {}, "not_approved",
+                         "Only approved corrected copies can be released.")
+        return
+    saved = core.store.get_release_document(release_id, filename, owner)
+    if saved and saved.get("status") == "published":
+        return
+    token = core.get_scan_tokens(scan_id).get("sp")
+    if not token:
+        _release_failure(release_id, owner, filename, record,
+                         "provider_session_expired",
+                         "Reconnect SharePoint and retry this document.")
+        # Dead, not done: enqueue_stage_batch deliberately revives failed terminal rows when the
+        # user retries with a fresh token. Marking this successful would make Retry a no-op.
+        raise FatalJobError("SharePoint session expired — reconnect and retry")
+    import publish as _publish
+    source_path = record.get("source_relative_path") or record.get("parent_folder") or filename
+    source_id = record.get("drive_file_id") or filename
+    drive_id = record.get("drive_id")
+    location = f"graph:{drive_id or 'me'}"
+    try:
+        release = core.store.release_status(release_id, owner)
+        if not release:
+            raise FatalJobError("release execution not found")
+        root = core.store.get_release_root(release_id, location, owner)
+        if not root:
+            detail = _publish.ensure_sharepoint_release_folder(
+                token, drive_id, release_id, release["folder_name"])
+            root = core.store.record_release_root(
+                release_id, owner, "sharepoint", location, detail["id"],
+                detail["name"], detail.get("url"))
+        publication = _publish.archive_copy_publish_sharepoint(
+            token, drive_id, root["folder_id"], owner, release_id, scan_id,
+            filename, source_path, source_id)
+        if publication is None:
+            raise IOError("corrected content was unavailable")
+        folders, _ = _publish.sharepoint_relative_path(source_path, filename)
+        released_name = publication.get("filename") or filename
+        published_at = core.store.record_publish(
+            scan_id, filename, published_url=publication.get("url"))
+        core.store.record_release_document(release_id, owner, {
+            "file": filename, "source_document_id": source_id,
+            "original_relative_path": source_path,
+            "released_relative_path": "/".join([*folders, released_name]),
+            "status": "published", "published_at": published_at,
+            "published_url": publication.get("url"),
+            "verification": "content verified",
+            "released_document_id": publication.get("id"),
+            "corrected_checksum": publication.get("checksum"),
+            "created": publication.get("created", False),
+        })
+    except PermissionError:
+        _release_failure(release_id, owner, filename, record,
+                         "provider_permission_denied",
+                         "SharePoint refused the write. Reconnect after an administrator grants Files.ReadWrite.All and Sites.ReadWrite.All.")
+        raise FatalJobError("SharePoint write permission denied — administrator consent required")
+    except FatalJobError:
+        raise
+    except Exception:
+        # Let transient Graph/Redis failures use the queue's normal retry/backoff. On the final
+        # attempt, settle the document into an actionable durable state instead of leaving it
+        # looking queued forever after the job dead-letters.
+        if int((job or {}).get("attempts") or 1) < int((job or {}).get("max_attempts") or 5):
+            raise
+        _release_failure(release_id, owner, filename, record,
+                         "provider_write_failed",
+                         "The corrected copy could not be verified at the SharePoint release destination. Retry this document.")
+        raise
+
+
 def _remediation_source_bytes(scan_id: str, filename: str, payload: dict,
                               drive_file_id: str | None = None):
     """Original bytes for one remediation job, chosen by the job's OWN source. Returns

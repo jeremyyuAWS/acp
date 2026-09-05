@@ -11195,9 +11195,9 @@ class Store:
         "scan_finalize": "discover",
         "scan_assess": "assess", "assess_trace": "assess",
         "remediate_file": "remediate", "rescore_file": "remediate",
-        "apply_approved_values": "remediate",
+        "apply_approved_values": "remediate", "publish_file": "release",
     }
-    _KIND_TYPES = {"discover": (), "assess": (), "remediate": ()}
+    _KIND_TYPES = {"discover": (), "assess": (), "remediate": (), "release": ()}
     for _jt, _k in _JOB_KIND.items():
         _KIND_TYPES[_k] = _KIND_TYPES[_k] + (_jt,)
     del _jt, _k

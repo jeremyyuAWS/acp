@@ -2,12 +2,38 @@ import { useEffect, useRef, useState } from 'react'
 import LiveCounter from './LiveCounter.jsx'
 import { counterRows, secondaryRows, freshness, headline, partitionSums } from './remediationSnapshot.js'
 import { activityBuckets, attemptStage, milestoneCrossings, retrySeconds } from './remediationLivePanel.js'
-import RemediationExceptions, { useRemediationExceptions } from './RemediationExceptions.jsx'
+import RemediationExceptions, { useRemediationExceptions, exceptionCount } from './RemediationExceptions.jsx'
 import './remediation-ops-panel.css'
 import './remediation-live-detail.css'
 
 const PHASE_TEXT = { pending: 'Pending', active: 'In progress', completed: 'Completed', completed_with_exceptions: 'Completed with exceptions', failed: 'Failed', skipped: 'Skipped' }
 const POSITIVE = new Set(['fixesApplied', 'fixesVerified', 'documentsVerified', 'delivered'])
+const COMPACT_QUERY = '(max-width: 760px)'
+
+function useCompactLayout() {
+  const query = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia(COMPACT_QUERY) : null
+  const [compact, setCompact] = useState(() => query()?.matches || false)
+  useEffect(() => {
+    const media = query()
+    if (!media) return undefined
+    const change = (event) => setCompact(event.matches)
+    setCompact(media.matches)
+    media.addEventListener?.('change', change)
+    return () => media.removeEventListener?.('change', change)
+  }, [])
+  return compact
+}
+
+function Disclosure({ title, compact, children, defaultExpanded = false }) {
+  const [expanded, setExpanded] = useState(defaultExpanded)
+  return <details className={`remops-disclosure${compact ? ' remops-disclosure-compact' : ''}`}
+    open={!compact || expanded}
+    onToggle={(event) => { if (compact) setExpanded(event.currentTarget.open) }}>
+    <summary>{title}</summary>
+    <div className="remops-disclosure-body">{children}</div>
+  </details>
+}
 function ago(seconds) {
   if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) return null
   if (seconds < 60) return `${Math.round(seconds)}s`
@@ -43,11 +69,12 @@ function Pipeline({ phases = [], attempts = [], moving = false }) {
   return <section className={`remops-pipeline${moving ? ' remops-pipeline-moving' : ''}`}><h3>Active document pipeline</h3><ol aria-label="Remediation phases">{phases.map((phase, index) => { const documents = attempts.filter((attempt) => attemptStage(attempt.phase) === phase.key).slice(0, 2); return <li key={phase.key} className={`remops-phase remops-phase-${phase.status}`}><span className="remops-phase-mark" aria-hidden="true">{phase.status === 'active' ? '●' : phase.status === 'failed' ? '×' : phase.status.startsWith('completed') ? '✓' : '○'}</span><span className="remops-phase-name">{phase.label}</span><span className="remops-phase-state">{PHASE_TEXT[phase.status] || phase.status}{phase.detail ? ` · ${phase.detail}` : ''}</span>{documents.length > 0 && <span className="remops-phase-docs">{documents.map((document) => <span key={`${document.file}-${phase.key}`} title={document.file}>{document.file}</span>)}</span>}{index < phases.length - 1 && <span className="remops-flow" aria-hidden="true">···►</span>}</li> })}</ol></section>
 }
 
-function Workstream({ attempts = [], generatedAt }) {
+function Workstream({ attempts = [], generatedAt, compact = false }) {
   if (!attempts.length) return null
   const now = generatedAt ? Date.parse(generatedAt) : null
-  const shown = attempts.slice(0, 3)
-  return <section className="remops-work"><h3>In flight now <span>· {attempts.length} document{attempts.length === 1 ? '' : 's'}</span></h3><ul>{shown.map((a) => { const signal = now && a.progress_at ? (now - Date.parse(a.progress_at)) / 1000 : null; const trail = Array.isArray(a.trail) ? a.trail : []; return <li key={`${a.file}-${a.started_at || ''}`}><div className="remops-doc-head"><strong><span aria-hidden="true">●</span> <span className="fname">{a.file}</span></strong><span>{ago(a.elapsed_s) ? `in flight ${ago(a.elapsed_s)}` : ''}</span></div><div className="remops-trail"><span className="remops-done">✓ Opened</span>{trail.map((step, index) => <span className="remops-trail-step" key={`${step.label || step}-${index}`}><span aria-hidden="true">→</span><span className="remops-done">✓ {step.label || step}</span></span>)}<span aria-hidden="true">→</span><span className="remops-active">● {a.phase || 'Processing'}</span>{a.attempt > 1 && <span>attempt {a.attempt}</span>}{ago(signal) && <span>last signal {ago(signal)} ago</span>}</div></li> })}</ul>{attempts.length > 3 && <p className="muted">and {attempts.length - 3} more document{attempts.length - 3 === 1 ? '' : 's'} in flight</p>}</section>
+  const shown = attempts.slice(0, compact ? 2 : 3)
+  const hiddenCount = attempts.length - shown.length
+  return <section className="remops-work"><h3>In flight now <span>· {attempts.length} document{attempts.length === 1 ? '' : 's'}</span></h3><ul>{shown.map((a) => { const signal = now && a.progress_at ? (now - Date.parse(a.progress_at)) / 1000 : null; const trail = Array.isArray(a.trail) ? a.trail : []; return <li key={`${a.file}-${a.started_at || ''}`}><div className="remops-doc-head"><strong><span aria-hidden="true">●</span> <span className="fname">{a.file}</span></strong><span>{ago(a.elapsed_s) ? `in flight ${ago(a.elapsed_s)}` : ''}</span></div><div className="remops-trail"><span className="remops-done">✓ Opened</span>{trail.map((step, index) => <span className="remops-trail-step" key={`${step.label || step}-${index}`}><span aria-hidden="true">→</span><span className="remops-done">✓ {step.label || step}</span></span>)}<span aria-hidden="true">→</span><span className="remops-active">● {a.phase || 'Processing'}</span>{a.attempt > 1 && <span>attempt {a.attempt}</span>}{ago(signal) && <span>last signal {ago(signal)} ago</span>}</div></li> })}</ul>{hiddenCount > 0 && <p className="muted">and {hiddenCount} more document{hiddenCount === 1 ? '' : 's'} in flight</p>}</section>
 }
 
 function RetryNotice({ retryAt, now }) {
@@ -98,12 +125,14 @@ function Activity({ events = [] }) {
 // by its own endpoint, which groups the exceptions BY RESPONSE and decides on the server which of
 // them ACP may act on. See RemediationExceptions.jsx.
 
-export default function RemediationOpsPanel({ snapshot = null, connected = false, receivedAt = null, events = [], updateMode = 'idle', onViewMonitor = null, exceptions = null }) {
+export default function RemediationOpsPanel({ snapshot = null, connected = false, receivedAt = null, events = [], updateMode = 'idle', onViewMonitor = null, compactLayout = null, exceptions = null }) {
   const [paused, setPaused] = useState(false)
   const [hidden, setHidden] = useState(() => typeof document !== 'undefined' && document.hidden)
   const [clock, setClock] = useState(() => Date.now())
   const [milestones, setMilestones] = useState([])
   const previousSnapshot = useRef(null)
+  const detectedCompact = useCompactLayout()
+  const compact = compactLayout == null ? detectedCompact : compactLayout
   useEffect(() => { if (typeof document === 'undefined') return undefined; const change = () => setHidden(document.hidden); document.addEventListener('visibilitychange', change); return () => document.removeEventListener('visibilitychange', change) }, [])
   useEffect(() => { if (paused || hidden || !snapshot?.retry_at) return undefined; const timer = setInterval(() => setClock(Date.now()), 1_000); return () => clearInterval(timer) }, [paused, hidden, snapshot?.retry_at])
   useEffect(() => { const previous = previousSnapshot.current; previousSnapshot.current = snapshot; const crossed = milestoneCrossings(previous, snapshot); if (crossed.length) setMilestones((current) => [...current, ...crossed.filter((next) => !current.some((item) => item.key === next.key))]) }, [snapshot])
@@ -127,15 +156,26 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
   if (!snapshot || snapshot.state === 'draft') return null
   const fresh = freshness({ snapshot, connected, receivedAt })
   const suspect = snapshot.integrity?.ok === false
+  // The count comes from the exception ENDPOINT, which groups by response and knows which rows
+  // are actionable. The predicate this replaces read `snapshot.delivery.failures` — a field the
+  // snapshot has never carried — so its delivery term was always false.
+  const exceptionTotal = exceptionCount(exceptionState.view)
   return <section className={`panel remops${paused || hidden ? ' remops-motion-paused' : ''}`} aria-label="Remediation run status">
     <header className="remops-header"><div><span className="remops-eyebrow">Remediation {snapshot.terminal ? 'complete' : 'in progress'}</span><h2>{line}</h2>{snapshot.source?.breadcrumb && <p>{snapshot.source.breadcrumb}</p>}<p className="muted">{snapshot.source?.locked_at ? `Snapshot locked ${new Date(snapshot.source.locked_at).toLocaleString()} · ` : ''}{snapshot.run_id}</p></div><div className="remops-actions"><FreshnessBadge state={fresh} updateMode={updateMode} /><button type="button" className="ghost" aria-pressed={paused} onClick={() => setPaused((value) => !value)}>{paused ? 'Resume visual updates' : 'Pause visual updates'}</button>{onViewMonitor && <button type="button" className="linklike" onClick={onViewMonitor}>View in Monitor →</button>}</div></header>
     {suspect && <div className="remops-integrity" role="status"><b>Status temporarily inconsistent.</b> ACP cannot currently reconcile {(snapshot.integrity.affected || []).join(', ') || 'one or more values'}. The values below are the last ACP confirmed.</div>}
     <ActivityPulse events={events} generatedAt={snapshot.generated_at} />
     <Milestones notices={milestones} onDismiss={(key) => setMilestones((current) => current.filter((notice) => notice.key !== key))} />
     <RetryNotice retryAt={snapshot.retry_at} now={clock} />
-    <Progress snapshot={snapshot} suspect={suspect} /><Pipeline phases={snapshot.phases} attempts={snapshot.active_attempts || []} moving={connected && snapshot.state !== 'stalled' && (snapshot.active_attempts || []).length > 0} />
-    <div className="remops-two"><Workstream attempts={snapshot.active_attempts || []} generatedAt={snapshot.generated_at} /><Throughput snapshot={snapshot} frozen={paused || hidden} /></div>
-    <Secondary snapshot={snapshot} /><div className="remops-bottom"><Activity events={events} /><RemediationExceptions view={exceptionState.view} error={exceptionState.error} onReload={exceptionState.reload} runId={snapshot.run_id} onAnnounce={setAnnouncement} /></div>
+    <Progress snapshot={snapshot} suspect={suspect} />
+    {snapshot.phases?.length > 0 && <Disclosure title="Phases" compact={compact}><Pipeline phases={snapshot.phases} attempts={snapshot.active_attempts || []} moving={connected && snapshot.state !== 'stalled' && (snapshot.active_attempts || []).length > 0} /></Disclosure>}
+    <div className="remops-two"><Workstream attempts={snapshot.active_attempts || []} generatedAt={snapshot.generated_at} compact={compact} /><Throughput snapshot={snapshot} frozen={paused || hidden} /></div>
+    <Disclosure title="Fix and delivery totals" compact={compact}><Secondary snapshot={snapshot} /></Disclosure>
+    {/* The exception region is ALWAYS offered, unlike the stub it replaces: it names its own
+        empty state ("nothing needs a decision or a retry"), which is an answer worth giving on a
+        run that is going well, and a heading that only appears once something is wrong is one
+        nobody has learned where to look for. The Disclosure's summary is this region's name, so
+        the region itself renders no second heading under it. */}
+    <div className="remops-bottom"><Disclosure title="Live activity" compact={compact}><Activity events={events} /></Disclosure><Disclosure title={`Needs attention${exceptionTotal ? ` · ${exceptionTotal}` : ''}`} compact={compact}><RemediationExceptions view={exceptionState.view} error={exceptionState.error} onReload={exceptionState.reload} runId={snapshot.run_id} onAnnounce={setAnnouncement} heading={null} /></Disclosure></div>
     <p aria-live="polite" className="sr-only" data-testid="rem-ops-announce">{announcement || line}</p>
   </section>
 }

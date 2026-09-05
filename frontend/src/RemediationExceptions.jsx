@@ -136,8 +136,16 @@ function Group({ group, selection, onToggle, onRun, busy, result }) {
   </section>
 }
 
+// `heading` is the section's own <h3>, and `null` means the caller already named this region —
+// the panel wraps it in a Disclosure whose <summary> is that name, and two identical headings one
+// above the other is a worse outcome than either. The section keeps an accessible name either way.
+export function exceptionCount(view) {
+  return (view?.groups || []).reduce((sum, group) => sum + (group.documents || 0), 0)
+}
+
 export default function RemediationExceptions({ view, error = false, onReload = null,
-                                                runId = null, onAnnounce = null }) {
+                                                runId = null, onAnnounce = null,
+                                                heading = 'Needs attention' }) {
   const [selection, setSelection] = useState(() => new Set())
   const [busy, setBusy] = useState(false)
   const [results, setResults] = useState({})
@@ -205,9 +213,11 @@ export default function RemediationExceptions({ view, error = false, onReload = 
   // layout — and a heading that appears the moment something goes wrong is a heading nobody has
   // learned where to look for. "Nothing needs a decision or a retry" is also an answer worth
   // giving on a run that is going well.
-  return <section className="remops-exceptions" aria-labelledby="remops-x-title">
-    <h3 id="remops-x-title">Needs attention{groups.length
-      ? ` · ${groups.reduce((sum, group) => sum + group.documents, 0)}` : ''}</h3>
+  return <section className="remops-exceptions"
+                  {...(heading ? { 'aria-labelledby': 'remops-x-title' }
+                               : { 'aria-label': 'Needs attention' })}>
+    {heading && <h3 id="remops-x-title">{heading}{groups.length
+      ? ` · ${exceptionCount(view)}` : ''}</h3>}
     {error && <p className="remops-x-stale" role="status">
       ACP could not refresh this list just now. What is shown is the last it confirmed.
     </p>}
