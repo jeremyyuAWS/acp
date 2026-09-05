@@ -56,6 +56,19 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).toMatch(/Results appear when the run finishes/)
   })
 
+  it('shows truthful cloud second-opinion use and remaining budgets', () => {
+    const html = render({ ...SNAP, second_opinion: {
+      status: 'used', reason: '2 of 2 provider attempts succeeded',
+      scan: { used: 2, limit: 5, remaining: 3 }, day: { used: 7, limit: 20, remaining: 13 },
+      cost: { estimated_remaining_usd: 8.4, measured_scan_usd: 0.024 },
+    } })
+    expect(html).toContain('Cloud second opinions · used')
+    expect(html).toContain('2 of 5 requests this scan')
+    expect(html).toContain('13 daily requests remaining')
+    expect(html).toContain('$8.40 estimated budget remaining')
+    expect(html).toContain('$0.0240 measured for this scan')
+  })
+
   it('labels dedicated worker heartbeat capacity as per-replica, never unavailable or aggregate', () => {
     const split = { ...SNAP, queue: { ...SNAP.queue,
       workers: { busy: 1, max: 2, idle: 1, capacity_scope: 'per_replica' } } }

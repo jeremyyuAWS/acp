@@ -5,6 +5,7 @@ import { getAdminActivity, getWorkerCapacity, openAdminActivityStream } from './
 import { ensureResizeObserver } from './resizeObserverFallback.js'
 import LiveOpsDrawer from './LiveOpsDrawer.jsx'
 import LiveOpsCostSummary from './LiveOpsCostSummary.jsx'
+import LiveOpsAiSummary from './LiveOpsAiSummary.jsx'
 import { appendSample, deriveEvents, formatDuration, mergeEvents, queueCapacityGauge,
   durableRunEvents, sampleForNode, secondsSince } from './liveOpsDrawer.js'
 
@@ -871,6 +872,7 @@ export default function AdminLiveTraffic() {
     </div>
     <AzureCapacity capacity={capacity} state={capacityState} />
     <LiveOpsCostSummary />
+    <LiveOpsAiSummary />
     {!!stageRows.length && <div aria-label="Load by processing stage" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
       {stageRows.map(([stage, row]) => <span className="chip" key={stage} style={{ borderColor: STAGE[stage]?.color }}>
         <b>{STAGE[stage]?.label || stage}</b>&nbsp; {row.running} active · {row.queued} waiting

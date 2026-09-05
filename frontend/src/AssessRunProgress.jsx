@@ -202,6 +202,7 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
 
   const cur = m.queue ? m.queue.current : null
   const eta = throughput && (throughput.etaText || (throughput.calibrating ? 'estimating…' : null))
+  const opinion = m.secondOpinion
 
   return (
     <section className="assess-run-progress" role="region"
@@ -226,6 +227,21 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
                 {isFinished ? 'Updates complete' : 'Live'}
               </span>
             </div>
+
+            {opinion && (
+              <div role="status" aria-label="Cloud second-opinion status"
+                   style={{ border: '1px solid var(--line,#e4e8ec)', borderRadius: 8, padding: '9px 11px', fontSize: 12.5 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                  <strong>Cloud second opinions · {opinion.status}</strong>
+                  <span className="muted">{opinion.scan.used} of {opinion.scan.limit} requests this scan</span>
+                </div>
+                <div className="muted" style={{ marginTop: 3 }}>{opinion.reason}</div>
+                <div className="muted" style={{ marginTop: 3 }}>
+                  {opinion.day.remaining} daily requests remaining · ${Number(opinion.cost.estimated_remaining_usd).toFixed(2)} estimated budget remaining
+                  {' · '}${Number(opinion.cost.measured_scan_usd).toFixed(4)} measured for this scan
+                </div>
+              </div>
+            )}
 
             <progress value={completed} max={Math.max(1, total)}
                       aria-label={`Assessment: ${completed.toLocaleString()} of ${total.toLocaleString()} documents complete`}
