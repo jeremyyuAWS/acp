@@ -3309,12 +3309,18 @@ def _escalate_low_confidence_findings(fdict: dict, filepath, *,
         import core as _core
         if not _core.store.get_ai_enabled():
             return
+        from second_opinion_policy import eligible as _second_opinion_eligible
+        snapshot = _core.store.get_scan_inputs(scan_id) if scan_id else None
+        policy = ((snapshot or {}).get("feature_flags") or {}).get("second_opinion_policy")
+        # Missing/malformed snapshots fail closed. The general AI switch is not consent for
+        # assessment-time off-box processing.
+        if not policy or policy.get("enabled") is not True:
+            return
         import providers as _prov
         cloud = _prov.cloud_vision_provider()
         if cloud is None:
             return
         import rule_registry as _reg
-        from assessment import Confidence as _Conf
         import render as _render
 
         _reg.load()                             # idempotent — format packages register on import
@@ -3332,7 +3338,8 @@ def _escalate_low_confidence_findings(fdict: dict, filepath, *,
             wcag_str = issue.get("wcag") or ""
             rule = wcag_str.split()[0] if wcag_str else ""
             reg = _reg.get(rule, fmt) if rule else None
-            if reg is not None and reg.confidence == _Conf.LOW:
+            if (reg is not None
+                    and _second_opinion_eligible(policy, rule, reg.confidence.value)):
                 low_conf.append(issue)
         if not low_conf:
             return

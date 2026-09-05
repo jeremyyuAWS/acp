@@ -260,6 +260,7 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
         _defer_flag = os.environ.get("ACP_DEFER_ANALYSIS_TO_ASSESS", "1").strip().lower() in (
             "1", "true", "yes", "on")
         _connection_ref = f"{source}:{user}" if source != "local" else "local"
+        from second_opinion_policy import load_policy as _load_second_opinion_policy
         _scan_inputs = {
             "source": source,
             "folder_ids": list(folders or ([folder] if folder else [])),
@@ -274,6 +275,9 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
             "feature_flags": {
                 "ai_platform_enabled": core.store.get_ai_enabled(),
                 "defer_analysis_to_assess": _defer_flag,
+                # Immutable consent boundary: workers read this snapshot, never the mutable
+                # current setting, so a run cannot change eligibility halfway through.
+                "second_opinion_policy": _load_second_opinion_policy(core.store),
             },
             "provider_config": _provider_cfg,
             "lifecycle_rules": _lifecycle,
