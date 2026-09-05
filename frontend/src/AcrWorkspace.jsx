@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import AcrCriterionDetail from './AcrCriterionDetail'
 import AcrMetadataForm from './AcrMetadataForm'
 import AcrPublish from './AcrPublish.jsx'
+import AcrExportAssurance from './AcrExportAssurance.jsx'
 import { listAcrReports, createAcrReport, getAcrReport, listAcrCriteria, getAcrValidation,
          getAcrPreview, getAcrGaps, downloadAcrPdf } from './acrApi'
 
@@ -99,7 +100,13 @@ export default function AcrWorkspace() {
     finally { setBusy(false) }
   }
 
-  if (error && !report) return <p role="alert" className="lockwarn">{error}</p>
+  if (error && !report) return (
+    <section className="acr-load-error" aria-labelledby="acr-load-error-heading">
+      <h2 id="acr-load-error-heading">Conformance reports are unavailable</h2>
+      <p role="alert">ACP could not load the ACR / VPAT workspace: {error}</p>
+      <p className="muted">No report data was changed. Reload this page to try again.</p>
+    </section>
+  )
   if (reports === null) return <p className="muted">Loading conformance reports…</p>
 
   if (!reports.length) {
@@ -114,6 +121,7 @@ export default function AcrWorkspace() {
           Automated results alone never establish conformance — every criterion needs a human
           evaluation and an authorised approver before a report can be published.
         </p>
+        <AcrExportAssurance />
         <button type="button" onClick={create} disabled={busy}>
           Create Accessibility Conformance Report
         </button>
@@ -185,16 +193,19 @@ export default function AcrWorkspace() {
       {error && <p role="alert" className="lockwarn">{error}</p>}
 
       {tab === 'overview' && report && (
-        <AcrMetadataForm
-          report={report.report}
-          blockingFields={metadataBlockers.blocking}
-          advisoryFields={metadataBlockers.advisory}
-          readOnly={!canEdit || report.report.status === 'published'}
-          onSaved={() => {
-            refresh()
-            getAcrValidation(reportId).then(setValidation).catch(() => {})
-          }}
-        />
+        <>
+          <AcrExportAssurance />
+          <AcrMetadataForm
+            report={report.report}
+            blockingFields={metadataBlockers.blocking}
+            advisoryFields={metadataBlockers.advisory}
+            readOnly={!canEdit || report.report.status === 'published'}
+            onSaved={() => {
+              refresh()
+              getAcrValidation(reportId).then(setValidation).catch(() => {})
+            }}
+          />
+        </>
       )}
 
       {tab === 'gaps' && (
@@ -353,6 +364,7 @@ export default function AcrWorkspace() {
               <p className="notice">
                 <strong>Draft structural preview.</strong> {preview.template.note}
               </p>
+              <AcrExportAssurance />
               <p className="muted">
                 {Object.entries(preview.totals).map(([k, v]) => `${k}: ${v}`).join(' · ')}
               </p>

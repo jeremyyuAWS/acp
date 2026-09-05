@@ -150,6 +150,33 @@ describe('the empty state explains the feature honestly', () => {
     expect(text()).toMatch(/Automated results alone never establish conformance/)
     expect(button(/Create Accessibility Conformance Report/)).toBeTruthy()
   })
+
+  it('shows the exported PDF validation limits before a report exists', async () => {
+    await mount({ reports: [] })
+    expect(text()).toMatch(/Machine-checked, with validation still outstanding/)
+    expect(text()).toMatch(/PAC 2024Independent PDF accessibility validationNot run/)
+    expect(text()).toMatch(/Screen-reader reviewNVDA or VoiceOver reading passNot run/)
+    expect(text()).toMatch(/machine-validated draft/i)
+  })
+})
+
+describe('export assurance', () => {
+  it('makes the PDF gates visible in the workspace overview', async () => {
+    await mount()
+    expect(text()).toMatch(/PDF\/UA-1 and structure-tree checksChecked/)
+    expect(text()).toMatch(/do not prove that a person using a screen reader/i)
+  })
+
+  it('turns an API failure into an explicit unavailable state instead of an empty tab', async () => {
+    api.listAcrReports.mockReset().mockRejectedValue(new Error('403 Forbidden'))
+    const created = createTestRoot()
+    container = created.container
+    await act(async () => { created.root.render(createElement(AcrWorkspace)) })
+    await act(async () => { await Promise.resolve() })
+    expect(text()).toMatch(/Conformance reports are unavailable/)
+    expect(text()).toMatch(/403 Forbidden/)
+    expect(container.querySelector('[role="alert"]')).toBeTruthy()
+  })
 })
 
 describe('validation', () => {

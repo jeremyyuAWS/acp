@@ -1177,6 +1177,32 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 
 /* --- password-protected / could-not-open --- */
 .lockwarn { color: var(--warn-fg); font-weight: 600; }
+
+/* ACR export assurance — the report's validation limits must be visible before download. */
+.acr-assurance { margin: 16px 0; border: 1px solid var(--line); border-radius: 14px;
+  background: var(--card); overflow: hidden; }
+.acr-assurance__intro { padding: 16px 18px 10px; }
+.acr-assurance__intro .eyebrow { margin: 0 0 4px; color: var(--muted); font-size: 11px;
+  font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.acr-assurance__intro h3 { margin: 0 0 6px; font-size: 17px; }
+.acr-assurance__intro p:last-child { margin: 0; color: var(--muted); max-width: 78ch; }
+.acr-assurance__checks { list-style: none; margin: 4px 18px 12px; padding: 0;
+  border: 1px solid var(--line); border-radius: 10px; }
+.acr-assurance__checks li { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 8px; align-items: center; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.acr-assurance__checks li:last-child { border-bottom: 0; }
+.acr-assurance__checks small { display: block; margin-top: 2px; color: var(--muted); }
+.acr-assurance__mark { font-size: 18px; color: var(--muted); }
+.acr-assurance__mark--done, .acr-assurance__state--done { color: var(--success-fg); }
+.acr-assurance__state { color: var(--warn-fg); white-space: nowrap; }
+.acr-assurance__limit { margin: 0; padding: 11px 18px; border-top: 1px solid var(--line);
+  background: var(--bg); }
+.acr-load-error { padding: 18px; border: 1px solid var(--danger, #b42318); border-radius: 14px;
+  background: var(--card); }
+@media (max-width: 600px) {
+  .acr-assurance__checks li { grid-template-columns: 24px minmax(0, 1fr); }
+  .acr-assurance__state { grid-column: 2; }
+}
 /* --- scan scope: what the document count is a count OF (scanScope.js) --- */
 /* var(--warn-fg) on the page background measures 5.8:1 — this carries the "you are not seeing your
    whole estate" caveat, so it has to clear AA as body text, not just look like a warning. */
