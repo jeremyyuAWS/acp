@@ -334,10 +334,8 @@ function taskLineOf(f, lane) {
 }
 
 function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFindings = [], onApplyToMatching, cluster = null, draft = null, onDraftChange, saving = false, error = null, headingRef = null, detailExtra = null, emptyState = null }) {
-  const [applyMatching, setApplyMatching] = useState(false)
   const [matchingPreviewOpen, setMatchingPreviewOpen] = useState(false)
   const [copiedValue, setCopiedValue] = useState('')
-  useEffect(() => { setApplyMatching(false) }, [f?.id])
   useEffect(() => { setMatchingPreviewOpen(false) }, [f?.id])
   useEffect(() => { setCopiedValue('') }, [f?.id])
   if (!f) {
@@ -378,12 +376,12 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
     setCopiedValue(kind)
   }
   const why = whyOf(f)
-  const decide = (decision) => {
-    if (applyMatching && matchingCount > LARGE_BATCH_THRESHOLD) {
+  const decideForGroup = (decision) => {
+    if (matchingCount > LARGE_BATCH_THRESHOLD) {
       const ok = window.confirm(`Apply this decision to ${matchingCount + 1} findings across ${new Set([f.file, ...matchingFindings.map((x) => x.file)]).size} documents?`)
       if (!ok) return
     }
-    return applyMatching && matchingCount > 0 ? onApplyToMatching?.(f, decision) : onDecide?.(f, decision)
+    return onApplyToMatching?.(f, decision)
   }
   return (
     <div className="remediation-detail" style={{ display: 'flex', flexDirection: 'column' }}>
@@ -509,12 +507,22 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
               {matchingCount > 5 && <p className="muted" style={{ margin: '4px 0 0' }}>And {matchingCount - 5} more matching findings.</p>}
               </>}
             </div>
-            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: matchingPreviewOpen ? 'pointer' : 'not-allowed', color: 'var(--ink)' }}>
-              <input type="checkbox" checked={applyMatching} disabled={!matchingPreviewOpen} onChange={(e) => setApplyMatching(e.target.checked)} />
-              <span>Apply this decision to {matchingCount} matching {scKeyOf(f) ? `WCAG ${scKeyOf(f)} ` : ''}finding{matchingCount === 1 ? '' : 's'}</span>
-            </label>
-            {!matchingPreviewOpen && <span className="muted">Review the matching items before applying one decision to the group.</span>}
-            {applyMatching && <span>This affects {matchingCount} additional finding{matchingCount === 1 ? '' : 's'} across {new Set(matchingFindings.map((x) => x.file)).size} additional document{new Set(matchingFindings.map((x) => x.file)).size === 1 ? '' : 's'}.</span>}
+            <div style={{ flexBasis: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+                          padding: '10px 12px', border: '1px solid var(--line,#e2dce4)', borderRadius: 9,
+                          background: 'var(--bg,#fff)' }}>
+              <span style={{ lineHeight: 1.4 }}>
+                <b style={{ display: 'block', color: 'var(--ink)', fontSize: 13 }}>Confident this pattern is right?</b>
+                Apply the same decision to this item and {matchingCount} similar finding{matchingCount === 1 ? '' : 's'}
+                {' '}across {new Set([f.file, ...matchingFindings.map((x) => x.file)]).size} files.
+              </span>
+              <button type="button" className="primary" disabled={saving}
+                      onClick={() => decideForGroup({ state: 'accepted', value: canEdit ? draftValue : undefined })}
+                      style={{ flex: '0 0 auto', fontWeight: 750, padding: '9px 14px' }}>
+                {saving ? 'Applying…' : isAutoFix
+                  ? `Approve all ${matchingCount + 1} similar fixes`
+                  : `Approve & apply to all ${matchingCount + 1}`}
+              </button>
+            </div>
           </div>
         )}
         <div style={{ padding: '12px 22px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -540,7 +548,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
                back for a person; it does NOT auto-revert the applied change (no backend undo exists —
                see PR body), so it is labelled as a flag, not a "reject & revert". */
             <>
-              <button className="primary" disabled={saving} onClick={() => decide({ state: 'accepted' })}>
+              <button className="primary" disabled={saving} onClick={() => onDecide?.(f, { state: 'accepted' })}>
                 {saving ? 'Saving…' : 'Approve & next →'}
               </button>
               <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>This looks wrong</button>
@@ -550,7 +558,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
           ) : (
             <>
               <button className="primary" disabled={saving}
-                      onClick={() => decide({ state: 'accepted', value: canEdit ? draftValue : undefined })}>
+                      onClick={() => onDecide?.(f, { state: 'accepted', value: canEdit ? draftValue : undefined })}>
                 {saving ? 'Saving…' : edited ? 'Save edited fix & next →' : 'Approve & next →'}
               </button>
               {/* A specific action, not a bare "Reject": declining an AI fix hands the finding to a
