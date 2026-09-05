@@ -142,7 +142,7 @@ function DiscoverStep({ label, kpi, status, sublines = [] }) {
   )
 }
 
-export default function DiscoverRunProgress({ progress, busy, onStop, sources, source = null, scope = null, inv = null, onReview, onContinue, preflightDegraded = null, freshness = null, runStartedAt = null }) {
+export default function DiscoverRunProgress({ progress, busy, onStop, sources, source = null, scope = null, inv = null, onReview, onContinue, assessmentComplete = false, preflightDegraded = null, freshness = null, runStartedAt = null }) {
   // MOUNT time, and named for it. This clock answers "how long has this VIEW been watching",
   // which is the right input for the stall and slow-lifecycle hints below — they are questions
   // about the watching, and server-anchoring them would fire them instantly on any reload of an
@@ -626,8 +626,10 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, s
           </div>
           {onContinue && (
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 14 }}>
-              <button type="button" className="primary small" onClick={onContinue}>
-                Continue to Assessment
+              <button type="button" className="primary small" onClick={onContinue}
+                      disabled={assessmentComplete}
+                      title={assessmentComplete ? 'This discovery snapshot has already been assessed' : undefined}>
+                {assessmentComplete ? 'Assessment complete' : 'Continue to Assessment'}
               </button>
             </div>
           )}
