@@ -116,6 +116,9 @@ describe('Discover mounts it', () => {
     // second thing to keep true, and the one that drifted would be the one nobody was watching.
     const d = readFileSync(join(HERE, 'Discover.jsx'), 'utf8')
     expect(d).toContain("import SiteActivity from './SiteActivity.jsx'")
-    expect(d).toMatch(/<SiteActivity sites=\{progress\?\.sites \|\| scope\?\.sites\} \/>/)
+    // Live site rows only belong to the active displayed job. While Scan History shows an older
+    // run, Discover nulls displayProgress and falls back to that run's recorded scope instead of
+    // painting a newer job's SharePoint sites over it.
+    expect(d).toMatch(/<SiteActivity sites=\{displayProgress\?\.sites \|\| scope\?\.sites\} \/>/)
   })
 })
