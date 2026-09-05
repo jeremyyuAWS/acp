@@ -78,13 +78,13 @@ def test_coverage_is_complete_for_docx_and_partial_for_the_other_three():
     assert cov["docx"]["has_generator"] is True
 
     assert cov["xlsx"]["has_generator"] is True
-    assert len(cov["xlsx"]["covered"]) == 13, (
+    assert len(cov["xlsx"]["covered"]) == 15, (
         f"the xlsx corpus now declares {len(cov['xlsx']['covered'])} pairs — raise "
         f"BASELINE['xlsx'] and this count together, in the commit that adds the fixtures")
     # Two of those ten (2.4.2, 3.1.1) are confirmed only where the .NET analyser is built. Pinned
     # here so the split cannot quietly widen: every pair that joins it weakens what the headline
     # number promises, and that should be a decision in a diff rather than a drift.
-    assert cov["xlsx"]["engine_only"] == ["2.4.2", "3.1.1"], (
+    assert cov["xlsx"]["engine_only"] == ["1.3.1", "1.3.2", "2.4.2", "3.1.1"], (
         f"the engine-only set is now {cov['xlsx']['engine_only']} — if that is deliberate, say "
         f"so here; the headline coverage number implies a guarantee these pairs do not have")
 
@@ -187,3 +187,54 @@ def test_json_mode_emits_the_whole_map(capsys):
     data = json.loads(capsys.readouterr().out)
     assert set(data) == set(gfc.FORMATS)
     assert "missing" in data["pptx"] and "applicable" in data["pptx"]
+
+
+def test_every_certifying_pair_has_ground_truth():
+    """THE GUARANTEE THE WHOLE CORPUS PROGRAMME WAS FOR, and the reason it is worth a ratchet.
+
+    Of the applicable (criterion, format) pairs, only some can return a PASS. On those, a clean
+    scan CERTIFIES the file — so a certifying pair with no labelled fixture means the product can
+    certify a document against a criterion nothing in the suite has ever checked. On the rest the
+    same absence costs a missing advisory, which is a real gap and a materially smaller one.
+
+    Every certifying pair now has ground truth. This pins it: a preset change that adds a
+    certifying pair without a fixture fails here rather than silently widening the set of things a
+    clean scan is willing to certify.
+
+    DERIVED FROM `can_ever_pass`, NOT LISTED. A hand-written list would have to be updated by the
+    same person who would need to notice the problem, which is the failure mode this file already
+    carries scars from.
+    """
+    import corpus_expectations as ce
+
+    cov = gfc.coverage()
+    covered = {(fmt, sc) for fmt, row in cov.items() for sc in row["covered"]}
+    certifying = {(fmt, sc) for fmt, criteria in gfc.applicable_pairs().items()
+                  for sc in criteria if ce.can_ever_pass(sc, fmt)}
+
+    assert certifying, "no pair can certify a pass — can_ever_pass or the preset changed shape"
+    missing = sorted(certifying - covered)
+    assert not missing, (
+        f"{len(missing)} certifying pair(s) have no labelled fixture: {missing}. A clean scan "
+        f"CERTIFIES a file against each of these, so the corpus must cover them before the "
+        f"product may claim them.")
+
+
+def test_the_pairs_still_uncovered_are_advisory_only():
+    """The other half of that claim, so "60 of 62" cannot be read as two of the same debt.
+
+    pdf 1.3.2 and pptx 2.1.1 are the remainder. Neither can return a PASS — pdf reading order is
+    the known gap, and pptx 2.1.1 is human-only by registration — so their absence costs a missing
+    advisory, never a false certification. If either ever becomes certifying, the test above
+    starts failing and this one records why somebody should care.
+    """
+    import corpus_expectations as ce
+
+    cov = gfc.coverage()
+    covered = {(fmt, sc) for fmt, row in cov.items() for sc in row["covered"]}
+    uncovered = sorted({(fmt, sc) for fmt, criteria in gfc.applicable_pairs().items()
+                        for sc in criteria} - covered)
+    for fmt, sc in uncovered:
+        assert not ce.can_ever_pass(sc, fmt), (
+            f"({fmt}, {sc}) is uncovered AND can certify a pass — it belongs in the corpus, not "
+            f"in this list")

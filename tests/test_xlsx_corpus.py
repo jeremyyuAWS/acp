@@ -335,7 +335,16 @@ def test_the_engine_confirms_the_declared_pairs(corpus, name, sc, fires):
     out, rows = corpus
     path = out / rows[name]["file"]
     fd, _ = analyse_and_assess(path.parent, path.name, detect_pii=False)
-    found = {sc for i in (fd or {}).get("issues", []) if (sc := _extract_sc(i.get("wcag", "")))}
+    # NOT a walrus in a comprehension. PEP 572 binds an assignment expression in the CONTAINING
+    # scope, so `{sc for i in ... if (sc := ...)}` rebinds the parametrised `sc` to whichever
+    # criterion the last issue happened to carry — and every assertion below then judged that
+    # leaked value. In the `fires=True` direction it asserted a value just taken out of `found`
+    # was in `found`, which is true by construction, so those rows passed VACUOUSLY.
+    #
+    # Found on the pptx copy of this test (#1390), where a `fires=False` row happened to leak a
+    # criterion that WAS present and failed with the give-away message "table-header-ok is the
+    # clean control for 1.1.1" — on a test parametrised with 1.3.1.
+    found = {s for i in (fd or {}).get("issues", []) if (s := _extract_sc(i.get("wcag", "")))}
     if fires:
         assert sc in found, (
             f"{name} declares {sc} but the analyser reported {sorted(found) or 'nothing'}")
@@ -370,3 +379,222 @@ def test_ocr_is_present_in_ci():
     assert _ocr.is_available(), (
         "tesseract is unavailable in CI, so 1.4.5 was NOT exercised — the corpus would report "
         "the pair as covered while proving nothing about it")
+
+
+# ── 1.3.1 and 1.3.2: the structural half, and the sweep that found two mislabels ─────────────
+# 1.3.2 is raised by THREE rules, so the sweep checks all three. A fixture only has to trip one of
+# them to carry an undeclared finding, and two already did before this pair was declared.
+
+MERGED_CELL_THRESHOLD = 20   # Xlsx/Rules/MergedCellsRule.cs, `MergedCellThreshold`
+
+
+def _table_without_header(path: Path) -> str | None:
+    """TableHeaderRule: a table PART whose headerRowCount is an explicit 0 (absent means 1)."""
+    import re
+    import zipfile
+    with zipfile.ZipFile(str(path)) as z:
+        for name in z.namelist():
+            if not re.match(r"xl/tables/table\d+\.xml$", name):
+                continue
+            match = re.search(r'headerRowCount="(\d+)"', z.read(name).decode("utf-8", "replace"))
+            if match and int(match.group(1)) == 0:
+                return f"{name}: headerRowCount=0"
+    return None
+
+
+def _hidden_row_with_data(path: Path) -> str | None:
+    """HiddenContentRule: a hidden row or column that still holds non-blank data."""
+    from openpyxl import load_workbook
+    for ws in load_workbook(str(path)).worksheets:
+        for dim in ws.row_dimensions.values():
+            if dim.hidden and any(c.value not in (None, "") for c in ws[dim.index]):
+                return f"{ws.title}: row {dim.index} hidden with data"
+        for key, dim in ws.column_dimensions.items():
+            if not dim.hidden:
+                continue
+            for row in ws.iter_rows(min_col=dim.min or 1, max_col=dim.max or 1):
+                if any(c.value not in (None, "") for c in row):
+                    return f"{ws.title}: column {key} hidden with data"
+    return None
+
+
+def _too_many_merges(path: Path) -> str | None:
+    """MergedCellsRule: STRICTLY more than the threshold, which is why this reads `>`."""
+    import re
+    import zipfile
+    with zipfile.ZipFile(str(path)) as z:
+        for name in z.namelist():
+            if not re.match(r"xl/worksheets/sheet\d+\.xml$", name):
+                continue
+            match = re.search(r'<mergeCells count="(\d+)"',
+                              z.read(name).decode("utf-8", "replace"))
+            if match and int(match.group(1)) > MERGED_CELL_THRESHOLD:
+                return f"{name}: {match.group(1)} merged ranges"
+    return None
+
+
+def _blank_visible_sheet(path: Path) -> str | None:
+    """BlankWorksheetRule: a VISIBLE sheet with no cell content and no anchored drawing.
+
+    Hidden sheets are exempt by the rule's own comment — there is no navigation experience to
+    flag them for.
+    """
+    from openpyxl import load_workbook
+    for ws in load_workbook(str(path)).worksheets:
+        if ws.sheet_state != "visible":
+            continue
+        if any(c.value not in (None, "") for row in ws.iter_rows() for c in row):
+            continue
+        if getattr(ws, "_images", None) or getattr(ws, "_charts", None):
+            continue
+        return f"{ws.title}: visible, no cells and no drawing"
+    return None
+
+
+def _first(*predicates):
+    def check(path):
+        for predicate in predicates:
+            reason = predicate(path)
+            if reason:
+                return f"{predicate.__name__}: {reason}"
+        return None
+    return check
+
+
+# Every engine predicate, keyed by the criterion it raises. Walked by the sweep below rather than
+# hand-listed, so a fifth engine pair extends the sweep by construction.
+ENGINE_PREDICATES = {
+    "1.3.1": _table_without_header,
+    "1.3.2": _first(_hidden_row_with_data, _too_many_merges, _blank_visible_sheet),
+    "2.4.2": lambda p: None if _prop(_core_xml(p), "dc:title") else "no dc:title",
+    "3.1.1": lambda p: None if _prop(_core_xml(p), "dc:language") else "no dc:language",
+}
+
+
+def test_the_sweep_covers_every_engine_declared_pair():
+    """ANTI-VACUOUS ON THE SWEEP ITSELF. A predicate map that fell behind DECLARED_ENGINE would
+    let the next engine pair be added with no undeclared-finding check, and the sweep below would
+    still pass — silently checking three criteria out of four."""
+    assert set(ENGINE_PREDICATES) == set(gen.DECLARED_ENGINE)
+
+
+def test_no_fixture_carries_an_undeclared_engine_finding(corpus):
+    """THE SWEEP THAT FOUND TWO MISLABELS, and one of them was a CONTROL.
+
+    `sheet-tabs-default` and `sheet-tabs-named-ok` each created bare extra sheets, and
+    BlankWorksheetRule raises 1.3.2 on any visible empty sheet — so under the analyser both
+    carried an undeclared 1.3.2 alongside the 2.4.6 they declare. The adversarial one is the
+    worse half: a control that fires is not a control, and it would have been a false positive
+    on the day 1.3.2 was declared.
+
+    Nothing caught it before, because 1.3.2 was undeclared and no first-party detector reports
+    it. Running the sweep BEFORE declaring the pair is what made it a fixture fix rather than a
+    CI failure blamed on the detector.
+    """
+    out, rows = corpus
+    for name, row in rows.items():
+        path = out / row["file"]
+        for sc, predicate in ENGINE_PREDICATES.items():
+            reason = predicate(path)
+            if reason:
+                assert sc in row["expect"], (
+                    f"{name} would raise {sc} under the analyser ({reason}) and does not declare "
+                    f"it — its label is wrong in CI")
+
+
+@pytest.mark.parametrize("name,fires", [
+    ("table-no-header", True),
+    ("table-header-ok", False),
+])
+def test_the_table_fixtures_carry_or_withhold_what_the_rule_reads(corpus, name, fires):
+    out, rows = corpus
+    reason = _table_without_header(out / rows[name]["file"])
+    if fires:
+        assert reason, f"{name} is the 1.3.1 fixture and its table part now declares a header row"
+    else:
+        assert reason is None, f"{name} should declare a header row and does not"
+
+
+def test_the_table_fixtures_write_a_real_table_part(corpus):
+    """A BLOCK OF CELLS THAT LOOKS LIKE A TABLE IS NOT ONE. TableHeaderRule walks
+    `TableDefinitionParts`; a fixture that formatted a range instead would declare the pair and
+    detect nothing, which is the failure this corpus exists to prevent."""
+    import re
+    import zipfile
+    out, rows = corpus
+    for name in ("table-no-header", "table-header-ok"):
+        with zipfile.ZipFile(str(out / rows[name]["file"])) as z:
+            assert [n for n in z.namelist() if re.match(r"xl/tables/table\d+\.xml$", n)], (
+                f"{name} has no table part — the rule has nothing to read")
+
+
+@pytest.mark.parametrize("name,fires", [
+    ("hidden-row", True),
+    ("hidden-row-ok", False),
+])
+def test_the_hidden_row_fixtures_carry_or_withhold_what_the_rule_reads(corpus, name, fires):
+    out, rows = corpus
+    reason = _hidden_row_with_data(out / rows[name]["file"])
+    if fires:
+        assert reason, f"{name} is the 1.3.2 fixture and its row is no longer hidden-with-data"
+    else:
+        assert reason is None, f"{name} should have no hidden row and does: {reason}"
+
+
+def test_the_hidden_row_pair_differs_only_in_the_hidden_flag(corpus):
+    """Same cells, same values; one row hidden. If 1.3.2 ever reported on the PRESENCE of rows
+    rather than on their visibility, the control would fire too."""
+    from openpyxl import load_workbook
+    out, rows = corpus
+
+    def cells(name):
+        ws = load_workbook(str(out / rows[name]["file"])).worksheets[0]
+        return [(c.coordinate, c.value) for row in ws.iter_rows() for c in row
+                if c.value not in (None, "")]
+
+    assert cells("hidden-row") == cells("hidden-row-ok")
+
+
+def test_a_hidden_row_with_no_data_is_not_the_trigger(corpus):
+    """The rule needs hidden AND non-blank. Built here rather than asserted, because "hidden rows
+    are flagged" is the plausible misreading that would make the fixture's label wrong."""
+    from openpyxl import load_workbook
+    out, _rows = corpus
+    path = out / "docs" / "_hidden-but-empty.xlsx"
+    wb = load_workbook(str(out / "docs" / "hidden-row-ok.xlsx"))
+    ws = wb.worksheets[0]
+    ws.row_dimensions[9].hidden = True          # hidden, and holds nothing
+    wb.save(path)
+    assert _hidden_row_with_data(path) is None
+    path.unlink()
+
+
+@pytest.mark.skipif(not OFFICE_OK, reason=NO_OFFICE)
+@pytest.mark.parametrize("name,sc,fires", [
+    ("table-no-header", "1.3.1", True),
+    ("table-header-ok", "1.3.1", False),
+    ("hidden-row", "1.3.2", True),
+    ("hidden-row-ok", "1.3.2", False),
+])
+def test_the_engine_confirms_the_structure_pairs(corpus, name, sc, fires):
+    """The detection half, gated on the analyser being built. Same `_extract_sc` normalisation as
+    the title/language pair: the .NET analyser reports `wcag` in enum form ("SC_1_3_1") where the
+    first-party checks report "1.3.1 Info and Relationships"."""
+    from assessment_policy import _extract_sc
+    from scanner import analyse_and_assess
+    out, rows = corpus
+    path = out / rows[name]["file"]
+    fd, _ = analyse_and_assess(path.parent, path.name, detect_pii=False)
+    found = {s for i in (fd or {}).get("issues", []) if (s := _extract_sc(i.get("wcag", "")))}
+    if fires:
+        assert sc in found, (
+            f"{name} declares {sc} but the analyser reported {sorted(found) or 'nothing'}")
+    else:
+        assert sc not in found, f"{name} is the clean control for {sc} but the analyser flagged it"
+
+    for other in set(gen.DECLARED_ENGINE) - {sc}:
+        if other in rows[name]["expect"]:
+            continue
+        assert other not in found, (
+            f"{name} also raised {other}, which it does not declare — the base workbook has "
+            f"stopped supplying something every fixture relied on")
