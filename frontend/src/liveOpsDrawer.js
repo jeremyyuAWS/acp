@@ -1706,3 +1706,62 @@ export function notAzureBackedReason(node = null) {
   }
   return 'Azure does not describe this node, so it reports no alerts, health or deployments for it.'
 }
+
+/* ─────────────────────── Tier 6: cost and capacity ─────────────────────── */
+
+/**
+ * What the cost panel may say, and the two labels it must never swap.
+ *
+ * The owner's constraint, stated as a hard rule: Azure billing data is not real-time. Cost
+ * Management refreshes roughly every four hours and Microsoft advises against querying it more
+ * than daily. So a figure here is either "Estimated from configured capacity" — derived, never
+ * measured — or "billing data, last updated <t>". Nothing is ever a live cost.
+ *
+ * And no price is assumed. The QUANTITIES (vCPU-hours, GiB-hours) follow exactly from the
+ * configured replica count and per-replica resources; money appears only when the operator has
+ * supplied their own rate. Without one the panel shows resource-hours and says a rate is needed,
+ * which is a useful answer — a made-up currency figure is not.
+ */
+export function costModel(capacity = null) {
+  const block = capacity?.cost || null
+  if (!block) {
+    return { available: false, apps: [], rateConfigured: false,
+      reason: 'This deployment does not report capacity cost.',
+      basis: null, actuals: null, notInstrumented: [] }
+  }
+  const apps = Array.isArray(block.apps) ? block.apps : []
+  return {
+    available: true,
+    // Never "live". The provenance kind is `estimate` precisely so it cannot borrow the Azure
+    // Monitor label used by the measured panels above it.
+    basis: block.basis || 'Estimated from configured capacity',
+    rateConfigured: block.rate_configured === true,
+    rateNote: block.rate_note || null,
+    currency: block.currency || null,
+    apps,
+    totalVcpuHours: num(block.total_vcpu_hours),
+    totalGibHours: num(block.total_gib_hours),
+    floorVcpuHours: num(block.total_floor_vcpu_hours),
+    estimatedHourly: num(block.estimated_hourly),
+    estimatedDaily: num(block.estimated_daily),
+    actuals: block.actuals || null,
+    notInstrumented: Array.isArray(block.not_instrumented) ? block.not_instrumented : [],
+    reason: null,
+  }
+}
+
+/** Money as text, or the honest absence of it. Never formats a null as 0 — a deployment with no
+ *  rate configured costs an unknown amount, not nothing. */
+export function costText(value, currency) {
+  if (value == null) return NOT_REPORTED
+  return currency ? `${currency} ${value.toFixed(2)}` : value.toFixed(2)
+}
+
+/** How much of the configured floor is running idle: the one cost figure derivable with no
+ *  billing access at all. Null rather than 0 when either half is unknown. */
+export function idleShare(app = {}) {
+  const running = num(app?.running?.vcpu_hours)
+  const floor = num(app?.floor?.vcpu_hours)
+  if (running == null || floor == null || running <= 0) return null
+  return Math.round(Math.min(1, floor / running) * 100)
+}

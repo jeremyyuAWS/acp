@@ -508,6 +508,9 @@ def get_capacity():
     if not _AZ_CONFIGURED:
         unconfigured = _empty_capacity(False)
         unconfigured["service_health"] = _empty_service_health()
+        # Carried even here: the named gaps (no rate configured, no Cost Management) are gaps on
+        # a deployment with no Azure too, and the rate note is how an operator learns the knob.
+        unconfigured["cost"] = _cost_block({})
         return unconfigured
     # Every configured worker app, keyed by name. The top-level fields stay the FIRST app's, so
     # every existing caller of this endpoint is unaffected; `apps` is what lets each worker
@@ -526,6 +529,9 @@ def get_capacity():
     # Azure incident is not a fault in any one worker service, and nesting it under one would read
     # as though it were. One call for the whole response, not one per app.
     result["service_health"] = _service_health(datetime.now(timezone.utc))
+    # Subscription-wide too, and derived rather than measured: see the Tier 6 section. Computed
+    # from the blocks already read, so it costs no extra Azure call.
+    result["cost"] = _cost_block(blocks)
     return result
 
 
@@ -734,6 +740,9 @@ def _capacity_for_app(app_name: str) -> dict:
     # operations with the revision milestones already read, so a failed activity-log call still
     # leaves a partial timeline rather than none.
     result["deployments"] = _deployments_for_app(getattr(app, "id", None), result["revisions"], now)
+    # The system-log half, opt-in and off without a workspace. Scoped to the ACTIVE revision so a
+    # rollout's failures are not mixed with the previous revision's.
+    result["deployments"]["system_logs"] = _system_logs(app_name, result.get("active_revision_name"))
     result["revision_comparison"] = _revision_comparison(result["revisions"])
 
     return result
@@ -993,6 +1002,364 @@ def _impacted_services(raw) -> list:
     return out
 
 
+# ── Tier 4: Container Apps system logs (Log Analytics) ──────────────────────────────────────────
+#
+# The half of deployment transparency Azure Monitor's metrics cannot answer: WHY a revision failed
+# to come up. Image-pull errors, failed volume mounts, container crash output and revision
+# provisioning failures are written to a Log Analytics workspace as ContainerAppSystemLogs_CL, not
+# to the activity log and not to any metric.
+#
+# THIS IS OPT-IN AND OFF BY DEFAULT, like tracing. No LOG_ANALYTICS_WORKSPACE_ID, no query, no
+# egress, no bill. The Deployments panel already names the gap; this is what closes it when an
+# operator provisions a workspace and sets the id.
+#
+# IT IS NOT LIVE, AND SAYS SO. Log Analytics ingestion for Container Apps runs roughly two to
+# three minutes behind. Every row is stamped with that delay in the payload, so the panel cannot
+# render a three-minute-old log line beside a two-second event stream as though they were the same
+# freshness — which is exactly the confusion the provenance labels exist to prevent.
+#
+# THE QUERY IS PARAMETERISED, NOT INTERPOLATED. A revision name reaches this code from Azure, and
+# a KQL query built by string-formatting an external value is an injection waiting for the day
+# Azure returns something unexpected. `azure-monitor-query` has no bind-parameter API, so the one
+# value that varies is validated against a strict pattern before it is used and the query is
+# refused otherwise — refusing is the safe direction, since the panel already degrades honestly.
+_LOG_WORKSPACE_ENV = "LOG_ANALYTICS_WORKSPACE_ID"
+_LOG_WINDOW_HOURS = 6
+_LOG_INGESTION_DELAY_S = 180
+
+# What ACP asks the workspace for. Narrow on purpose: a system-log table carries every container's
+# stdout, and this panel is about deployment failures, not application output.
+_LOG_LEVELS_OF_INTEREST = ("error", "warning", "critical")
+
+# A Container Apps revision name: the app name, two dashes, a suffix. Anchored and bounded so a
+# value that is not one cannot reach the query text at all.
+import re as _re  # noqa: E402,PLC0415 — module-scope by design; this pattern is compiled once
+_REVISION_NAME_RE = _re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+def _log_workspace() -> str | None:
+    value = (os.environ.get(_LOG_WORKSPACE_ENV) or "").strip()
+    return value or None
+
+
+def _empty_system_logs(reason: str | None = None) -> dict:
+    return {
+        "available": False,
+        "configured": _log_workspace() is not None,
+        "rows": [],
+        "window_hours": _LOG_WINDOW_HOURS,
+        # Carried so the UI cannot present a delayed row as a live one.
+        "ingestion_delay_s": _LOG_INGESTION_DELAY_S,
+        "reason": reason or (
+            "Container Apps system logs (image-pull failures, volume mounts, crash output) need a "
+            f"Log Analytics workspace. Set {_LOG_WORKSPACE_ENV} to enable them. Log Analytics also "
+            "lags by about three minutes, so these are labelled delayed, never live."),
+    }
+
+
+def _safe_revision(name) -> str | None:
+    """A revision name that is safe to place in a KQL query, or None.
+
+    Validated rather than escaped: the set of legal Container Apps revision names is small and
+    well defined, so anything outside it is far more likely to be a shape change or an injection
+    attempt than a name worth querying for. Refusing costs one panel; interpolating an unchecked
+    external string into a query language costs rather more.
+    """
+    if not name:
+        return None
+    text = str(name).strip().lower()
+    return text if _REVISION_NAME_RE.match(text) else None
+
+
+def _system_logs(app_name: str | None, revision_name: str | None = None) -> dict:
+    """Recent system-log rows for one container app, or an honest account of why there are none.
+
+    Never raises into the capacity payload: a workspace that is misconfigured, unreachable or
+    missing the Log Analytics Reader grant degrades to `available: false` with the reason, exactly
+    like every other Azure read in this module.
+    """
+    workspace = _log_workspace()
+    if not workspace:
+        return _empty_system_logs()
+    if not app_name:
+        return _empty_system_logs("No container app is configured, so there is nothing to query.")
+
+    revision = _safe_revision(revision_name) if revision_name else None
+    if revision_name and revision is None:
+        # The revision came back in a shape this code will not put in a query. Say so rather than
+        # querying the whole app and labelling the result as one revision's.
+        return _empty_system_logs("The active revision name was not in the expected format, so "
+                                  "the log query was not run.")
+
+    try:
+        from azure.identity import DefaultAzureCredential  # noqa: PLC0415
+        from azure.monitor.query import LogsQueryClient, LogsQueryStatus  # noqa: PLC0415
+    except Exception:  # noqa: BLE001 — the optional dependency is simply not installed
+        swallowed("routes.control._system_logs: importing azure-monitor-query failed")
+        return _empty_system_logs(
+            "System logs need the azure-monitor-query package, which is not installed in this "
+            "deployment.")
+
+    levels = ", ".join(f'"{level}"' for level in _LOG_LEVELS_OF_INTEREST)
+    where_revision = f'| where RevisionName_s == "{revision}"' if revision else ""
+    query = (
+        "ContainerAppSystemLogs_CL "
+        f'| where TimeGenerated > ago({_LOG_WINDOW_HOURS}h) '
+        f'| where ContainerAppName_s == "{app_name}" '
+        f"{where_revision} "
+        f"| where tolower(Log_s) has_any ({levels}) or tolower(Reason_s) has_any ({levels}) "
+        "| project TimeGenerated, Reason_s, Type_s, Log_s, RevisionName_s, ReplicaName_s "
+        "| order by TimeGenerated desc | take 50")
+
+    try:
+        client = LogsQueryClient(DefaultAzureCredential())
+        response = client.query_workspace(
+            workspace_id=workspace, query=query,
+            timespan=timedelta(hours=_LOG_WINDOW_HOURS))
+    except Exception as e:  # noqa: BLE001
+        status = getattr(e, "status_code", None)
+        swallowed("routes.control._system_logs: querying Log Analytics failed")
+        return _empty_system_logs(
+            "Azure refused the Log Analytics query — the identity is missing the Log Analytics "
+            "Reader role." if status in (401, 403) else
+            "The Log Analytics query failed, so system logs are not available.")
+
+    # A PARTIAL result is a real Log Analytics outcome (the query timed out or hit a row cap) and
+    # must not be presented as the whole picture.
+    partial = getattr(response, "status", None) == getattr(LogsQueryStatus, "PARTIAL", "PARTIAL")
+    tables = getattr(response, "tables", None) or getattr(response, "partial_data", None) or []
+    rows = []
+    for table in tables:
+        columns = [str(c) for c in (getattr(table, "columns", None) or [])]
+        for raw in (getattr(table, "rows", None) or []):
+            record = dict(zip(columns, raw))
+            rows.append({
+                "at": _iso(record.get("TimeGenerated")),
+                "reason": record.get("Reason_s") or None,
+                "type": record.get("Type_s") or None,
+                # Container stdout. Truncated, and never widened: this table carries whatever the
+                # application logged, and the panel is about deployment failures.
+                "message": _truncate(record.get("Log_s")),
+                "revision": record.get("RevisionName_s") or None,
+                "replica": record.get("ReplicaName_s") or None,
+            })
+            if len(rows) >= 50:
+                break
+
+    block = _empty_system_logs()
+    block.update({
+        "available": True,
+        "configured": True,
+        "rows": rows,
+        "partial": partial,
+        "reason": ("Log Analytics returned a partial result, so this is not the whole picture."
+                   if partial else
+                   f"Delayed by roughly {_LOG_INGESTION_DELAY_S // 60} minutes — Log Analytics "
+                   f"ingestion lags. Never read these as live." if rows else
+                   f"No errors or warnings in the last {_LOG_WINDOW_HOURS} hours."),
+    })
+    return block
+
+
+_LOG_MESSAGE_MAX = 400
+
+
+def _truncate(value) -> str | None:
+    """One log line, bounded. A container can log a megabyte in a line, and this response is
+    polled by the live map."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return text if len(text) <= _LOG_MESSAGE_MAX else text[:_LOG_MESSAGE_MAX] + "…"
+
+
+# ── Tier 6: cost and capacity ───────────────────────────────────────────────────────────────────
+#
+# THE RULE THIS SECTION IS BUILT AROUND, and it is the owner's, not an inference: Azure billing
+# data is NOT real-time. Cost Management refreshes roughly every four hours and Microsoft advises
+# against querying it more than daily. So nothing here is ever labelled "live cost". A figure is
+# either "estimated from configured capacity" — derived, never measured — or "billing data, last
+# updated <t>". Those are different claims and they never share a label.
+#
+# NO PRICE IS HARDCODED, and this is the deliberate part. Container Apps rates vary by region, by
+# plan and over time; a rate baked into this file would be wrong somewhere on the day it was
+# written and wrong everywhere within a year, while still rendering as a confident currency
+# figure. So the QUANTITIES are computed exactly — vCPU-hours and GiB-hours follow from the
+# configured replica count and per-replica resources with nothing invented — and money appears
+# only when an operator supplies their own rate through the environment. Without one, the panel
+# shows the resource quantities and says a rate is needed, which is a useful answer; a made-up
+# currency figure is not.
+#
+# WHAT NEEDS COST MANAGEMENT AND IS NOT ATTEMPTED: month-to-date actuals, forecast, and budget
+# consumption. Those are measurements of real spend and cannot be derived from capacity at all.
+# They are named as unavailable, with the four-hour refresh caveat attached, so that when access
+# does exist nobody expects the number to be current.
+_COST_VCPU_HOUR_ENV = "ACP_COST_VCPU_HOUR"
+_COST_GIB_HOUR_ENV = "ACP_COST_GIB_HOUR"
+_COST_CURRENCY_ENV = "ACP_COST_CURRENCY"
+
+# Microsoft's published guidance, carried in the payload so the UI cannot forget it.
+_BILLING_REFRESH_NOTE = ("Azure Cost Management refreshes roughly every four hours, and Microsoft "
+                         "advises against querying it more than daily. Actuals are never live.")
+
+
+def _cost_rates() -> dict:
+    """The operator's own rates, or None for each. Never a default: a default price is a wrong
+    price rendered with the same confidence as a right one."""
+    def _rate(name):
+        raw = os.environ.get(name)
+        if raw is None or not str(raw).strip():
+            return None
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        # A negative or zero rate is a misconfiguration, not a free deployment.
+        return value if value > 0 else None
+
+    return {
+        "vcpu_hour": _rate(_COST_VCPU_HOUR_ENV),
+        "gib_hour": _rate(_COST_GIB_HOUR_ENV),
+        "currency": (os.environ.get(_COST_CURRENCY_ENV) or "").strip() or None,
+    }
+
+
+def _memory_gib(value) -> float | None:
+    """Container Apps reports memory as a string like "2Gi" or "512Mi". Parsed rather than
+    assumed: reading "512Mi" as 512 would overstate a replica's memory by a thousand times, and
+    the resulting cost estimate would be confidently absurd."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        for suffix, factor in (("Gi", 1.0), ("Mi", 1 / 1024), ("G", 1.0), ("M", 1 / 1024)):
+            if text.endswith(suffix):
+                return float(text[: -len(suffix)]) * factor
+        return float(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _cost_for_app(block: dict) -> dict:
+    """One app's capacity expressed as resource-hours, and as money only if a rate exists.
+
+    EVERY QUANTITY HERE IS DERIVED FROM CONFIGURATION, not measured. `current_replicas` is what
+    Azure reports running now, so the "running" figures follow the real replica count; the "floor"
+    figures follow `min_replicas`, which is what the deployment pays for even when nothing is
+    happening. The gap between them is the idle capacity question, and it is the one cost figure
+    an operator can act on without any billing access at all.
+    """
+    rates = _cost_rates()
+    cpu = _num_or_none(block.get("cpu_cores_per_replica"))
+    gib = _memory_gib(block.get("memory_per_replica"))
+    running = _num_or_none(block.get("current_replicas"))
+    floor = _num_or_none(block.get("min_replicas"))
+    ceiling = _num_or_none(block.get("max_replicas"))
+
+    def _hours(replicas):
+        if replicas is None:
+            return {"vcpu_hours": None, "gib_hours": None}
+        return {"vcpu_hours": None if cpu is None else round(replicas * cpu, 4),
+                "gib_hours": None if gib is None else round(replicas * gib, 4)}
+
+    def _money(hours):
+        """Only with a rate for BOTH halves. A vCPU-only figure labelled as an hourly cost would
+        silently omit memory, which is a large share of a Container Apps bill."""
+        if rates["vcpu_hour"] is None or rates["gib_hour"] is None:
+            return None
+        if hours["vcpu_hours"] is None or hours["gib_hours"] is None:
+            return None
+        return round(hours["vcpu_hours"] * rates["vcpu_hour"]
+                     + hours["gib_hours"] * rates["gib_hour"], 4)
+
+    now_hours, floor_hours, ceiling_hours = _hours(running), _hours(floor), _hours(ceiling)
+    hourly, floor_cost = _money(now_hours), _money(floor_hours)
+    return {
+        "app": block.get("worker_app_name"),
+        "cpu_cores_per_replica": cpu,
+        "memory_gib_per_replica": gib,
+        "replicas_running": running,
+        "replicas_floor": floor,
+        "replicas_ceiling": ceiling,
+        "running": now_hours,
+        "floor": floor_hours,
+        "ceiling": ceiling_hours,
+        # Money, only with the operator's own rates. None is the honest answer otherwise.
+        "estimated_hourly": hourly,
+        "estimated_daily": None if hourly is None else round(hourly * 24, 4),
+        "estimated_floor_hourly": floor_cost,
+        # What is being paid for while nothing is happening. Derivable with no billing access.
+        "idle_vcpu_hours": None if (floor_hours["vcpu_hours"] is None) else floor_hours["vcpu_hours"],
+        "currency": rates["currency"],
+        "rate_configured": rates["vcpu_hour"] is not None and rates["gib_hour"] is not None,
+    }
+
+
+def _num_or_none(value):
+    try:
+        return None if value is None else float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _cost_block(blocks: dict) -> dict:
+    """The whole subscription's estimate, per app and totalled, plus the actuals it cannot supply.
+
+    `basis` and `billing_note` travel in the payload rather than living in the UI, so the caveat
+    cannot be dropped by a frontend change and the label cannot drift from what it describes.
+    """
+    rates = _cost_rates()
+    apps = [_cost_for_app(block) for block in (blocks or {}).values()]
+
+    def _total(field, sub=None):
+        values = [(a[field][sub] if sub else a[field]) for a in apps]
+        present = [v for v in values if v is not None]
+        # A total over a partial set would understate the bill while looking complete. All or
+        # nothing, and the caller can see which apps are missing.
+        return round(sum(present), 4) if present and len(present) == len(values) else None
+
+    return {
+        "apps": apps,
+        "basis": "Estimated from configured capacity",
+        "rate_configured": rates["vcpu_hour"] is not None and rates["gib_hour"] is not None,
+        "rate_source": "environment" if (rates["vcpu_hour"] is not None) else None,
+        "currency": rates["currency"],
+        "rate_note": (None if (rates["vcpu_hour"] is not None and rates["gib_hour"] is not None)
+                      else f"No rate is configured, so capacity is shown as resource-hours rather "
+                           f"than money. Set {_COST_VCPU_HOUR_ENV} and {_COST_GIB_HOUR_ENV} (and "
+                           f"optionally {_COST_CURRENCY_ENV}) to your own Container Apps rates — "
+                           f"none is assumed, because a rate baked in here would be wrong for "
+                           f"some region on the day it was written."),
+        "total_vcpu_hours": _total("running", "vcpu_hours"),
+        "total_gib_hours": _total("running", "gib_hours"),
+        "total_floor_vcpu_hours": _total("floor", "vcpu_hours"),
+        "estimated_hourly": _total("estimated_hourly"),
+        "estimated_daily": _total("estimated_daily"),
+        # NOT DERIVABLE. Real spend is a measurement, and capacity cannot stand in for it.
+        "actuals": {
+            "available": False,
+            "reason": "Month-to-date spend, forecast and budget consumption come from Azure Cost "
+                      "Management, which is not configured for this deployment.",
+            "billing_note": _BILLING_REFRESH_NOTE,
+            "month_to_date": None, "forecast": None, "budget_percent": None,
+            "last_updated": None,
+        },
+        # ACP-side spend nobody instruments yet. Named so it is a known gap, not an oversight.
+        "not_instrumented": [
+            {"item": "AI cost per assessment or remediation",
+             "reason": "Model spend is not metered per job in ACP, so a per-document AI figure "
+                       "would be a guess divided by a count."},
+            {"item": "Storage and network contribution",
+             "reason": "Blob and egress charges are billed per subscription, not per worker app, "
+                       "and are not attributable to a service from capacity alone."},
+        ],
+    }
+
+
 # ── Tier 4: deployment transparency ─────────────────────────────────────────────────────────────
 #
 # WHAT THIS CAN AND CANNOT SEE, stated up front because the gaps are the honest part.
@@ -1045,11 +1412,10 @@ _DEPLOY_STEPS_NOT_REPORTED = (
 def _empty_deployments() -> dict:
     return {"queried": False, "events": [], "window_hours": _DEPLOY_WINDOW_HOURS,
             "not_reported": list(_DEPLOY_STEPS_NOT_REPORTED),
-            "system_logs": {"available": False,
-                            "reason": "Container Apps system logs (image-pull failures, volume "
-                                      "mounts, crash output) need a Log Analytics workspace, which "
-                                      "is not configured. Log Analytics also lags by about three "
-                                      "minutes, so it would be labelled as delayed, not live."},
+            # ONE source for this block. It used to be written out here as well, and the two
+            # copies had already drifted: this one had no `configured` flag, so an operator who
+            # set the workspace would still be told it was not configured.
+            "system_logs": _empty_system_logs(),
             "unavailable_reason": None}
 
 

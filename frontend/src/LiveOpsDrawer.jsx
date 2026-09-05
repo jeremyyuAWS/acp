@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { prefersReducedMotion, useDialog } from './a11y.js'
 import {
   EVENT_FILTERS, EVENT_ICONS, NOT_REPORTED, TONE, alertRuleState, alertRuleTone, alertsModel,
-  DEPLOY_ICONS, configurationModel, deploymentModel, incidentRegions, isAzureBacked,
+  DEPLOY_ICONS, configurationModel, costModel, costText, deploymentModel, incidentRegions,
+  isAzureBacked,
   notAzureBackedReason, resourceHealthModel, serviceHealthModel,
   revisionComparisonModel,
   arcPath, capacityMatchesService, chartModel,
@@ -521,6 +522,80 @@ function Configuration({ config }) {
         {row.detail && <div className="muted" style={{ fontSize: 10.5, marginTop: 2 }}>{row.detail}</div>}
       </div>)}
     </div>}
+  </div>
+}
+
+/**
+ * Cost, in section 6 beside the limits it is derived from.
+ *
+ * Two labels that never swap. Everything computed here is "Estimated from configured capacity" —
+ * derived, never measured — and actual spend is "billing data", which Azure refreshes roughly
+ * every four hours. Neither is ever called live, because Cost Management is not, and a dashboard
+ * that says otherwise is wrong in the direction that costs money to discover.
+ *
+ * With no rate configured the panel shows RESOURCE-HOURS rather than a currency figure. That is
+ * the honest form of the answer: ACP knows exactly how much capacity is provisioned and cannot
+ * know what the operator pays for it, and a made-up price rendered in dollars would be the most
+ * confidently wrong number on the screen.
+ */
+function CostPanel({ cost, nowMs }) {
+  if (!cost.available) return null
+  return <div style={{ ...PANEL, padding: 14 }}>
+    <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+      <b style={{ fontSize: 12 }}>Capacity cost</b>
+      <span className="muted" style={{ fontSize: 11 }}>{cost.basis}</span>
+    </div>
+
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))',
+      gap: 8, marginTop: 10 }}>
+      <div style={{ ...PANEL, padding: 11 }}>
+        <span style={LABEL}>PROVISIONED NOW</span>
+        <div style={{ fontSize: 13, fontWeight: 700, marginTop: 3 }}>
+          {cost.totalVcpuHours == null ? NOT_REPORTED : `${cost.totalVcpuHours} vCPU-h/h`}
+        </div>
+        <div className="muted" style={{ fontSize: 10.5, marginTop: 2 }}>
+          {cost.totalGibHours == null ? NOT_REPORTED : `${cost.totalGibHours} GiB-h/h`}
+        </div>
+      </div>
+      <div style={{ ...PANEL, padding: 11 }}>
+        <span style={LABEL}>ALWAYS-ON FLOOR</span>
+        <div style={{ fontSize: 13, fontWeight: 700, marginTop: 3 }}>
+          {cost.floorVcpuHours == null ? NOT_REPORTED : `${cost.floorVcpuHours} vCPU-h/h`}
+        </div>
+        <div className="muted" style={{ fontSize: 10.5, marginTop: 2 }}>
+          Paid for whether or not work arrives.
+        </div>
+      </div>
+      {cost.rateConfigured && <div style={{ ...PANEL, padding: 11 }}>
+        <span style={LABEL}>ESTIMATED PER DAY</span>
+        <div style={{ fontSize: 13, fontWeight: 700, marginTop: 3 }}>
+          {costText(cost.estimatedDaily, cost.currency)}
+        </div>
+        <div className="muted" style={{ fontSize: 10.5, marginTop: 2 }}>
+          At your configured rate · {costText(cost.estimatedHourly, cost.currency)}/h
+        </div>
+      </div>}
+    </div>
+
+    {cost.rateNote && <p className="muted" style={{ fontSize: 11, margin: '8px 0 0' }}>
+      {cost.rateNote}
+    </p>}
+
+    {/* Actual spend, and why it is not here. The four-hour caveat rides with it so that when
+        access does exist nobody reads the figure as current. */}
+    {cost.actuals && !cost.actuals.available && <p className="muted"
+      style={{ fontSize: 11, margin: '8px 0 0' }}>
+      <b>Actual spend:</b> {NOT_REPORTED} — {cost.actuals.reason} {cost.actuals.billing_note}
+    </p>}
+
+    {!!cost.notInstrumented.length && <ul style={{ listStyle: 'none', margin: '8px 0 0',
+      padding: 0, display: 'grid', gap: 3 }}>
+      {cost.notInstrumented.map((row) => <li key={row.item} style={{ fontSize: 11 }}>
+        <b>{row.item}</b>{' — '}<span className="muted">{row.reason}</span>
+      </li>)}
+    </ul>}
+
+    <Source kind="estimate" nowMs={nowMs} />
   </div>
 }
 
@@ -1195,6 +1270,10 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
 
       <Section n={6} title="Configuration and limits">
         <Configuration config={configurationModel(node, serviceCapacity, snapshot)} />
+        {/* Subscription-wide and derived, so it is read from the top of the payload and
+            shown on every node — capacity cost is a property of the deployment, not of
+            whichever node happens to be open. */}
+        <CostPanel cost={costModel(capacity)} nowMs={nowMs} />
       </Section>
 
       <Section n={7} title="Revision, deployments and traces">

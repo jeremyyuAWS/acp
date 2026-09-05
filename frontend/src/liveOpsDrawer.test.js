@@ -1391,3 +1391,91 @@ describe('isAzureBacked / notAzureBackedReason', () => {
     expect(notAzureBackedReason({ kind: 'run' })).toMatch(/worker service running it has all three/)
   })
 })
+
+/* ─────────────────────── Tier 6: cost ─────────────────────── */
+
+import { costModel, costText, idleShare } from './liveOpsDrawer.js'
+
+const costApp = (over = {}) => ({ app: 'acp-assess', cpu_cores_per_replica: 2,
+  memory_gib_per_replica: 4, replicas_running: 3, replicas_floor: 1,
+  running: { vcpu_hours: 6, gib_hours: 12 }, floor: { vcpu_hours: 2, gib_hours: 4 },
+  estimated_hourly: null, estimated_daily: null, currency: null, rate_configured: false, ...over })
+const costBlock = (over = {}) => ({ cost: {
+  apps: [costApp()], basis: 'Estimated from configured capacity', rate_configured: false,
+  currency: null, rate_note: 'No rate is configured, so capacity is shown as resource-hours.',
+  total_vcpu_hours: 6, total_gib_hours: 12, total_floor_vcpu_hours: 2,
+  estimated_hourly: null, estimated_daily: null,
+  actuals: { available: false, reason: 'Cost Management is not configured.',
+    billing_note: 'Azure Cost Management refreshes roughly every four hours. Actuals are never live.',
+    month_to_date: null, forecast: null, budget_percent: null, last_updated: null },
+  not_instrumented: [{ item: 'AI cost per assessment or remediation', reason: 'Not metered per job.' }],
+  ...over } })
+
+describe('costModel', () => {
+  it('never labels anything a live cost', () => {
+    // The owner's hard constraint. Cost Management refreshes every four hours; a dashboard that
+    // says "live" is wrong in the direction that costs money to discover.
+    const m = costModel(costBlock())
+    expect(JSON.stringify(m).toLowerCase()).not.toContain('live cost')
+    expect(m.basis).toBe('Estimated from configured capacity')
+  })
+
+  it('shows resource-hours and no money when no rate is configured', () => {
+    const m = costModel(costBlock())
+    expect(m.rateConfigured).toBe(false)
+    expect(m.estimatedHourly).toBeNull()
+    expect(m.estimatedDaily).toBeNull()
+    expect(m.totalVcpuHours).toBe(6)
+    expect(m.rateNote).toMatch(/resource-hours/)
+  })
+
+  it('carries money once the operator supplies a rate', () => {
+    const m = costModel(costBlock({ rate_configured: true, currency: 'USD',
+      estimated_hourly: 0.288, estimated_daily: 6.912 }))
+    expect(m.rateConfigured).toBe(true)
+    expect(m.estimatedDaily).toBeCloseTo(6.912)
+  })
+
+  it('keeps the four-hour billing caveat attached to the actuals', () => {
+    const m = costModel(costBlock())
+    expect(m.actuals.available).toBe(false)
+    expect(m.actuals.billing_note).toMatch(/four hours/)
+    expect(m.actuals.billing_note).toMatch(/never live/i)
+  })
+
+  it('is unavailable rather than free when there is no cost block', () => {
+    const m = costModel(null)
+    expect(m.available).toBe(false)
+    expect(m.estimatedHourly).toBeUndefined()
+  })
+})
+
+describe('costText', () => {
+  it('never renders an unknown cost as zero', () => {
+    // A deployment with no rate costs an unknown amount, not nothing.
+    expect(costText(null, 'USD')).toBe('Not reported')
+    expect(costText(undefined, null)).toBe('Not reported')
+    expect(costText(0, 'USD')).toBe('USD 0.00')
+  })
+
+  it('shows the currency the operator named, and no currency when they named none', () => {
+    expect(costText(1.5, 'GBP')).toBe('GBP 1.50')
+    expect(costText(1.5, null)).toBe('1.50')
+  })
+})
+
+describe('idleShare', () => {
+  it('reports how much of what is running is the always-on floor', () => {
+    expect(idleShare(costApp())).toBe(33)
+  })
+
+  it('is null, not zero, when either half is unknown', () => {
+    expect(idleShare({ running: { vcpu_hours: null }, floor: { vcpu_hours: 2 } })).toBeNull()
+    expect(idleShare({ running: { vcpu_hours: 6 }, floor: { vcpu_hours: null } })).toBeNull()
+    expect(idleShare({})).toBeNull()
+  })
+
+  it('does not divide by a zero replica count', () => {
+    expect(idleShare({ running: { vcpu_hours: 0 }, floor: { vcpu_hours: 2 } })).toBeNull()
+  })
+})
