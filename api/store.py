@@ -8598,10 +8598,8 @@ class Store:
     # including events with NO scan_id at all. Coexisting, additive infrastructure; scan_events,
     # append_scan_event and its emit sites are untouched.
     #
-    # NO CALLER YET, deliberately, exactly like scan_events' own PR 1: this lands the tables and
-    # their store methods with ZERO behaviour change so the emit sites (a later PR, touching
-    # worker.py's claim/reclaim/zombie-write-suppression paths) can be reviewed on their own, with
-    # explicit human review — that PR is materially riskier than this one and is not started here.
+    # worker_main now writes the current-state registry. The append-only job transition emitters
+    # remain separate because claim/reclaim/zombie-write-suppression paths need their own review.
 
     # Closed set of operational transitions. Closed for the same reason SCAN_EVENT_KINDS is: a
     # future reader renders per-kind, so a typo'd or ad-hoc kind is a row nothing knows how to
@@ -9907,6 +9905,13 @@ class Store:
             self._db.execute(cur, "SELECT status, COUNT(*) AS n FROM jobs" + scope + " GROUP BY status",
                              (owner,) if owner else ())
             return {r["status"]: r["n"] for r in self._db.fetchall(cur)}
+
+    def running_jobs_by_type(self) -> dict[str, int]:
+        """Global durable running rows grouped by bounded job type; never reads payloads."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT type, COUNT(*) AS n FROM jobs WHERE status='running' GROUP BY type")
+            return {str(row["type"]): int(row["n"]) for row in self._db.fetchall(cur)}
 
     def oldest_queued_job(self, owner: str | None = None) -> dict | None:
         """The single longest-waiting eligible job (status='queued', run_after already due), or

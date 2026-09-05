@@ -111,15 +111,23 @@ def test_the_snapshot_states_that_per_replica_attribution_is_not_available(monke
     monkeypatch.setattr(system.core, "store", ActivityStore())
     attribution = system._admin_activity_snapshot()["summary"]["worker_instance_attribution"]
     assert attribution["available"] is False
-    assert "has no writer yet" in attribution["reason"]
-    assert "attributed to a service, not to one of its replicas" in attribution["reason"]
+    assert "not yet reporting" in attribution["reason"]
+    assert "cannot be calculated honestly" in attribution["reason"]
 
 
-def test_the_registry_really_does_have_no_writer(isolated_store):
-    """The claim above is checked against the store rather than trusted: if a writer is added
-    later, this fails and the snapshot's stated reason must be revisited rather than left to go
-    quietly stale."""
+def test_claiming_a_job_does_not_fabricate_process_telemetry(isolated_store):
+    """Only a process heartbeat may register capacity; a durable claim is not one."""
     isolated_store.save_scan(_scan())
     isolated_store.enqueue_job("scan_file", {"file": "Report.docx"}, scan_id="scan-health-1")
     isolated_store.claim_job("worker-1")
     assert isolated_store.list_worker_instances() == []
+
+
+def test_running_jobs_by_type_counts_durable_rows_without_payloads(isolated_store):
+    isolated_store.enqueue_job("scan_assess", {"file": "Private.docx"})
+    isolated_store.enqueue_job("scan_assess", {"file": "Other.docx"})
+    isolated_store.enqueue_job("remediate_file", {"file": "Third.docx"})
+    isolated_store.claim_job("w1", job_types=("scan_assess",))
+    isolated_store.claim_job("w2", job_types=("scan_assess",))
+    isolated_store.claim_job("w3", job_types=("remediate_file",))
+    assert isolated_store.running_jobs_by_type() == {"scan_assess": 2, "remediate_file": 1}
