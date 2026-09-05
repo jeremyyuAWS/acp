@@ -4415,6 +4415,57 @@ class Store:
                 return None
         return row
 
+    def active_workflows(self, owner: str) -> list[dict]:
+        """Payload-free active pipeline stages owned by ``owner``.
+
+        This is the durable answer used after sign-in. Browser storage is deliberately
+        cleared at sign-out, so continuity must come from queued/running server work rather
+        than a client-side job id. One row is returned per scan/stage; document names and job
+        payloads never cross this boundary.
+        """
+        kinds = {
+            "scan_discover": "discover", "scan_folder": "discover", "scan_batch": "discover",
+            "scan_file": "assess", "scan_assess": "assess", "assess_trace": "assess",
+            "remediate_file": "remediate", "rescore_file": "remediate",
+            "apply_approved_values": "remediate",
+        }
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT j.id,j.scan_id,j.type,j.status,j.created_at,j.updated_at,"
+                "sr.source,sr.files,sr.files_done "
+                "FROM jobs j JOIN scan_runs sr ON sr.id=j.scan_id "
+                "WHERE sr.owner_email=%s AND j.status IN ('queued','running') "
+                "ORDER BY j.updated_at DESC LIMIT 5000", (owner,))
+            rows = self._db.fetchall(cur)
+
+        grouped: dict[tuple[str, str], dict] = {}
+        for row in rows:
+            stage = kinds.get(row.get("type"))
+            if not stage:
+                continue
+            key = (row["scan_id"], stage)
+            item = grouped.setdefault(key, {
+                "scan_id": row["scan_id"], "stage": stage,
+                "source": row.get("source") or "unknown",
+                "queued": 0, "running": 0, "total": 0,
+                "files": int(row.get("files") or 0),
+                "files_done": int(row.get("files_done") or 0),
+                "started_at": row.get("created_at"),
+                "updated_at": row.get("updated_at"), "job_id": None,
+            })
+            item["total"] += 1
+            item[row["status"]] += 1
+            if row["status"] == "running" and item["job_id"] is None:
+                item["job_id"] = row.get("id")
+            if str(row.get("created_at") or "") < str(item.get("started_at") or ""):
+                item["started_at"] = row.get("created_at")
+            if str(row.get("updated_at") or "") > str(item.get("updated_at") or ""):
+                item["updated_at"] = row.get("updated_at")
+        priority = {"remediate": 3, "assess": 2, "discover": 1}
+        return sorted(grouped.values(),
+                      key=lambda item: (str(item.get("updated_at") or ""),
+                                        priority.get(item["stage"], 0)), reverse=True)
+
     def set_total_folders(self, scan_id: str, count: int) -> None:
         """Record how many scan_folder jobs were emitted for this scan (ADR 0004 item 6).
 
