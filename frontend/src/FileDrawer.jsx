@@ -18,6 +18,7 @@ import ResizeHeadroomCheck from './ResizeHeadroomCheck.jsx'
 import PdfImageContrastCheck from './PdfImageContrastCheck.jsx'
 import AccessibilityStatus from './AccessibilityStatus.jsx'
 import EvidenceHeader, { fmtEvidence } from './EvidenceHeader.jsx'
+import SecondOpinionChip from './SecondOpinionChip.jsx'
 import { confirmCriterion, getFileStatus, getExamined, disposeCriterion, listDispositions } from './api.js'
 import { listScanDecisions } from './api.js'
 import { errorReasonFor, noFindingsLine, looksLikeFetchFailure, friendlyFileError } from './fileErrorReason.js'
@@ -1079,6 +1080,9 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
                     {/* ADR 0026 Epic 2 — compact evidence header: method + measured value + threshold
                         at a glance, only when the detector attached structured evidence. */}
                     {i.evidence && <EvidenceHeader evidence={i.evidence} severity={i.severity} />}
+                    {/* ADR 0019 — a LOW-confidence flag that was escalated to a cloud vision
+                        provider says so here. Renders nothing for the un-escalated majority. */}
+                    <SecondOpinionChip provenance={i.hf_provenance} />
                     {i.detail && <div className="findingdetail">{i.detail}</div>}
                     {/* ADR 0024 Tier B.1 — the 1.4.3-hybrid flag can be render-verified into a
                         MEASURED contrast on demand (text over a picture/gradient fill). */}

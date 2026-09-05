@@ -116,6 +116,60 @@ def _issue_location(i: dict) -> str | None:
     """
     return i.get("location") or i.get("locator")
 
+
+# The four bounded fields of an escalation's provenance, and the reason there are only four.
+# _escalate_low_confidence_findings (handlers.py) sends a page render to a cloud vision provider
+# for a LOW-confidence finding and gets a free-text answer back. NONE of that answer is stored.
+# What is stored is the fact of the call: which provider, which zone, that it happened, what it
+# cost. That is what a reviewer and an auditor need — "this flag was double-checked, by this
+# model, off-box" — and it is the whole of what can be written down without putting a model
+# response, and through it the document's own content, into a database column.
+_HF_PROVENANCE_KEYS = ("provider", "zone", "escalated", "cost_usd")
+
+
+def _issue_provenance(i: dict) -> str | None:
+    """Serialise a finding's escalation provenance for issue_records.hf_provenance.
+
+    A WHITELIST, not a dump. The dict handed over is built in handlers.py today and could grow a
+    key tomorrow — from a provider response, which is to say from outside this repo. Encoding
+    only the four names above means a new key cannot reach the column by being added upstream,
+    which is the difference between a bounded operational record and an open channel out of a
+    model response. Returns None when nothing escalated, so the column stays NULL for the
+    overwhelming majority of findings.
+
+    One accessor, used by both INSERT sites — same reason as _issue_location above.
+    """
+    prov = i.get("hf_provenance")
+    if not isinstance(prov, dict):
+        return None
+    bounded = {k: prov[k] for k in _HF_PROVENANCE_KEYS if k in prov}
+    if not bounded:
+        return None
+    import json as _json
+    try:
+        return _json.dumps(bounded)
+    except Exception:
+        return None
+
+
+def _decode_provenance(raw) -> dict | None:
+    """issue_records.hf_provenance -> the dict the finding carried, or None.
+
+    Tolerant on purpose: the column is NULL for every un-escalated finding (the common case) and
+    could hold a row written by an older or newer build. A value that will not decode to a dict
+    reads as "no escalation recorded" rather than failing the read of an entire scan.
+    """
+    if isinstance(raw, dict):
+        return raw or None
+    if not raw:
+        return None
+    import json as _json
+    try:
+        v = _json.loads(raw)
+    except Exception:
+        return None
+    return v if isinstance(v, dict) and v else None
+
 # Schema is identical between SQLite and Postgres (UPSERT syntax is the same).
 _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS scan_runs (
@@ -220,6 +274,11 @@ _SCHEMA = [
     # Nullable: NULL means the analyser could not attribute a location — never a page-1 default.
     "ALTER TABLE issue_records ADD COLUMN IF NOT EXISTS page INT",
     "ALTER TABLE issue_records ADD COLUMN IF NOT EXISTS location TEXT",
+    # Escalation provenance (ADR 0019): the JSON record of a cloud vision second opinion on a
+    # LOW-confidence finding — provider, zone, escalated, cost_usd, and nothing else. NULL for
+    # every finding that was never escalated, which is almost all of them. The model's answer is
+    # deliberately NOT stored; see _issue_provenance for why the encoder is a whitelist.
+    "ALTER TABLE issue_records ADD COLUMN IF NOT EXISTS hf_provenance TEXT",
     """CREATE TABLE IF NOT EXISTS inventory (
       file TEXT PRIMARY KEY, first_seen TEXT, last_seen TEXT,
       last_status TEXT, last_score INT
@@ -1814,10 +1873,16 @@ class _PgAdapter:
     # locked_at on every heartbeat and two shipped consumers were reading it as a start time.
     # Additive on the usual terms: nullable, defaulted NULL, written only by claim_job. An older
     # replica never writes it and every reader treats NULL as unknown rather than as a time.
-    # v17 adds structured-release execution, root and per-document records. All are additive;
-    # older replicas ignore them and keep serving during a rolling deployment.
-    _SCHEMA_VERSION = 17
-    _SCHEMA_CHECKSUM_AT_VERSION = "706808de16caa3f1391eda5aba972a73"
+    # v18 adds issue_records.hf_provenance — the JSON record of a cloud vision second opinion on
+    # a LOW-confidence finding. Additive on the usual terms, and additive in BEHAVIOUR: nullable,
+    # defaulted NULL, written only by the two issue_records INSERTs and read only where the
+    # finding is assembled. A replica without this code writes no value and reads no key, so it
+    # keeps saving and serving findings exactly as it does today — it simply records no
+    # escalation. Nothing decides anything from the column; it is evidence for a reviewer.
+    # This follows v17's structured-release tables from main; both changes remain additive and
+    # safe during a rolling deployment.
+    _SCHEMA_VERSION = 18
+    _SCHEMA_CHECKSUM_AT_VERSION = "be7facc00fb550c158ae0ff8c1870753"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -2265,10 +2330,10 @@ class Store:
                      f.get("checksum"), f.get("size_kb"), f.get("pages"), f.get("sheets"), f.get("source_modified")))
                 if f["issues"]:
                     self._db.executemany(cur,
-                        "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail,page,location) "
-                        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                        "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail,page,location,hf_provenance) "
+                        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                         [(sid, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail"),
-                          i.get("page"), _issue_location(i)) for i in f["issues"]])
+                          i.get("page"), _issue_location(i), _issue_provenance(i)) for i in f["issues"]])
                 # Per-rule trace: one row per catalog rule per file — PASS/FAIL/REVIEW/NOT_EVALUATED.
                 # Counts feed the per-rule trace, so they must reflect the conformance target:
                 # an AAA finding picked up as a by-product of an AA check is not this scan's
@@ -3539,10 +3604,10 @@ class Store:
             issues = f.get("issues", [])
             if issues:
                 self._db.executemany(cur,
-                    "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail,page,location) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                    "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail,page,location,hf_provenance) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                     [(scan_id, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail"),
-                      i.get("page"), _issue_location(i)) for i in issues])
+                      i.get("page"), _issue_location(i), _issue_provenance(i)) for i in issues])
             fail_counts, review_counts = _split_sc_counts(
                 filter_issues_to_target(f.get("issues", []), target))
             fmt = _file_format(f["file"])
@@ -3594,10 +3659,15 @@ class Store:
             if not row:
                 return None
             self._db.execute(cur,
-                "SELECT rule_id,wcag,severity,detail,page,location FROM issue_records WHERE scan_id=%s AND file=%s",
+                "SELECT rule_id,wcag,severity,detail,page,location,hf_provenance "
+                "FROM issue_records WHERE scan_id=%s AND file=%s",
                 (scan_id, row["file"]))
             issues = [{"ruleId": r["rule_id"], "wcag": r["wcag"], "severity": r["severity"],
-                       "detail": r["detail"], "page": r["page"], "location": r["location"]}
+                       "detail": r["detail"], "page": r["page"], "location": r["location"],
+                       # Carried forward so a reused analysis keeps saying it was escalated. Both
+                       # readers feed save_file_result, which re-INSERTs through _issue_provenance
+                       # — dropping it here would silently un-escalate every deduplicated copy.
+                       **({"hf_provenance": _p} if (_p := _decode_provenance(r.get("hf_provenance"))) else {})}
                       for r in self._db.fetchall(cur)]
             self._db.execute(cur,
                 "SELECT pii_type,label,count,severity,samples FROM pii_findings "
@@ -3648,10 +3718,15 @@ class Store:
                 return None
             prior_scan_id = row["scan_id"]
             self._db.execute(cur,
-                "SELECT rule_id,wcag,severity,detail,page,location FROM issue_records WHERE scan_id=%s AND file=%s",
+                "SELECT rule_id,wcag,severity,detail,page,location,hf_provenance "
+                "FROM issue_records WHERE scan_id=%s AND file=%s",
                 (prior_scan_id, row["file"]))
             issues = [{"ruleId": r["rule_id"], "wcag": r["wcag"], "severity": r["severity"],
-                       "detail": r["detail"], "page": r["page"], "location": r["location"]}
+                       "detail": r["detail"], "page": r["page"], "location": r["location"],
+                       # Carried forward so a reused analysis keeps saying it was escalated. Both
+                       # readers feed save_file_result, which re-INSERTs through _issue_provenance
+                       # — dropping it here would silently un-escalate every deduplicated copy.
+                       **({"hf_provenance": _p} if (_p := _decode_provenance(r.get("hf_provenance"))) else {})}
                       for r in self._db.fetchall(cur)]
             self._db.execute(cur,
                 "SELECT pii_type,label,count,severity,samples FROM pii_findings "
@@ -5069,13 +5144,19 @@ class Store:
             # timeout, so a slow response here just hangs the tab forever rather than erroring).
             # Grouped in Python instead, from one round trip.
             self._db.execute(cur,
-                "SELECT file,rule_id,wcag,severity,detail,page,location FROM issue_records WHERE scan_id=%s",
+                "SELECT file,rule_id,wcag,severity,detail,page,location,hf_provenance "
+                "FROM issue_records WHERE scan_id=%s",
                 (sid,))
             issues_by_file: dict[str, list] = {}
             for row in self._db.fetchall(cur):
                 issues_by_file.setdefault(row["file"], []).append(
                     {"rule_id": row["rule_id"], "wcag": row["wcag"], "severity": row["severity"],
-                     "detail": row["detail"], "page": row["page"], "location": row["location"]})
+                     "detail": row["detail"], "page": row["page"], "location": row["location"],
+                     # Present only when the finding really was escalated — an always-present
+                     # null would add a key to every issue of a several-thousand-file scan's
+                     # payload to say nothing, on the read path that already had to be made one
+                     # query to stop the Discover tab hanging.
+                     **({"hf_provenance": _p} if (_p := _decode_provenance(row.get("hf_provenance"))) else {})})
             for f in files:
                 f["sourceName"] = src_label
                 f["issues"] = issues_by_file.get(f["file"], [])

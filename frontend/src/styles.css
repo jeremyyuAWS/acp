@@ -2643,6 +2643,11 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .evh-status { margin-left: auto; font-weight: 700; font-size: 11px; color: #8a5a00;
   background: #fdf3e0; padding: 2px 8px; border-radius: 999px; }
 
+/* ADR 0019 — the escalation chip on a finding: a LOW-confidence flag got a cloud second opinion. */
+.secondopinion { display: inline-block; margin: 5px 0 1px; padding: 2px 9px; border-radius: 999px;
+  font-size: 11.5px; color: #4A4A8A; background: #ECECF6; cursor: help; }
+.secondopinion b { font-weight: 700; }
+
 /* Coverage Manifest (ADR 0026 Epic 1) — per-criterion evidence counts + inline measured value. */
 .covev { font-size: 11px; color: var(--muted, #697892); margin-top: 3px; font-variant-numeric: tabular-nums; }
 .covev-val { display: inline-block; margin-right: 6px; padding: 0 6px; border-radius: 6px;

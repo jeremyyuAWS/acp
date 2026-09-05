@@ -3293,6 +3293,85 @@ def _analyse_and_persist_one(scan_id, item, source, pii, svc, toks, now, _lf, us
         raise outcome["error"]   # preserve the impl's original error propagation
 
 
+def _escalate_low_confidence_findings(fdict: dict, filepath, *,
+                                      scan_id: str | None = None,
+                                      file: str | None = None) -> None:
+    """Second-opinion HuggingFace vision pass for LOW-confidence WCAG findings.
+
+    Looks up each finding's (rule, fmt) registration; when confidence is LOW the document's
+    first-page render is sent to the cloud vision provider. Each matching finding is annotated
+    in-place with an `hf_provenance` dict and one structured log line is emitted.
+
+    Best-effort: never raises, never blocks the scan. AI-off mode is respected.
+    Token/image bytes never touch a log line.
+    """
+    try:
+        import core as _core
+        if not _core.store.get_ai_enabled():
+            return
+        import providers as _prov
+        cloud = _prov.cloud_vision_provider()
+        if cloud is None:
+            return
+        import rule_registry as _reg
+        from assessment import Confidence as _Conf
+        import render as _render
+
+        _reg.load()                             # idempotent — format packages register on import
+
+        ext = _Path(file or "").suffix.lower()  # e.g. ".pdf", ".docx"
+        _EXT_FMT = {".pdf": "pdf", ".docx": "docx", ".pptx": "pptx",
+                    ".xlsx": "xlsx", ".html": "html", ".htm": "html"}
+        fmt = _EXT_FMT.get(ext)
+        if fmt is None:
+            return
+
+        issues = fdict.get("issues") or []
+        low_conf = []
+        for issue in issues:
+            wcag_str = issue.get("wcag") or ""
+            rule = wcag_str.split()[0] if wcag_str else ""
+            reg = _reg.get(rule, fmt) if rule else None
+            if reg is not None and reg.confidence == _Conf.LOW:
+                low_conf.append(issue)
+        if not low_conf:
+            return
+
+        try:
+            raw_bytes = _Path(filepath).read_bytes()
+        except Exception:
+            return
+        img_bytes = _render.render_page1_png(raw_bytes, ext)
+        if not img_bytes:
+            return
+
+        wcag_ids = ", ".join(sorted({i.get("wcag", "?") for i in low_conf}))
+        prompt = (
+            f"You are an accessibility reviewer. A WCAG heuristic detector flagged this "
+            f"document page for potential issues with: {wcag_ids}. "
+            f"Please confirm whether any of these violations are present."
+        )
+        res = cloud.generate(prompt, img_bytes, timeout=120.0)
+
+        provenance = {
+            "provider": res.get("provider") or cloud.name,
+            "zone": res.get("zone"),
+            "escalated": True,
+            "cost_usd": res.get("cost_usd", 0.0),
+        }
+        for issue in low_conf:
+            issue["hf_provenance"] = provenance
+
+        print(
+            f"[hf-escalation] scan={scan_id} file={file} "
+            f"findings={len(low_conf)} provider={provenance['provider']} "
+            f"ok={res.get('ok')} cost_usd={provenance['cost_usd']:.6f}",
+            flush=True,
+        )
+    except Exception:
+        swallowed("_escalate_low_confidence_findings failed", scan_id)
+
+
 def _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _lf, user=None,
                                   rubric_hash=None, incremental=True, job=None) -> None:
     """Download + analyse + assess + persist ONE file and emit its Discover span on that
@@ -3482,6 +3561,10 @@ def _analyse_and_persist_one_impl(scan_id, item, source, pii, svc, toks, now, _l
         fdict["source_modified"] = item.get("source_modified")
         if pinfo:
             fdict["pii"] = pinfo
+        # HuggingFace second-opinion for LOW-confidence WCAG findings (item 1). Fresh analyses
+        # only — dedup'd results inherit from the original run. Best-effort; never blocks save.
+        if not dedup and fdict.get("status") not in ("error", "skipped", "unanalysable"):
+            _escalate_low_confidence_findings(fdict, tmp / name, scan_id=scan_id, file=name)
         core.store.save_file_result(scan_id, fdict, now, job=job)
         # ADR 0037 Step 0 — record this file's stage timing (side-channel, best-effort: a timing write
         # must never fail the scan). Skipped when nothing was measured — the reuse/dedup path downloads
