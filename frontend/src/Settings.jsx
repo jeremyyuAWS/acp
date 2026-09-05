@@ -745,9 +745,11 @@ export function AIProvidersPanel({ onAccess }) {
       <h3 style={{ marginTop: 0 }}>AI providers <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>· governance &amp; bring-your-own-key</span></h3>
       <p className="muted" style={{ fontSize: 13 }}>
         The platform runs <b>local-first</b>: your on-box Ollama handles everything by default, at
-        $0, with no document leaving your network. You may enable a governed cloud provider as a
-        fallback for cases the local model can’t ground (e.g. dense charts) — escalation is
-        transparent and only fires when local falls short.
+        $0, with no document leaving your network. Enabling a governed cloud provider permits ACP
+        to send a document image off-box when the local model cannot ground it, including dense
+        charts and LOW-confidence assessment findings. Assessment second opinions send the first
+        rendered page only; ACP records the provider, processing zone and estimated call cost on
+        the finding. Disable every provider to keep all inference local.
       </p>
       <p className="muted" style={{ fontSize: 13, background: 'var(--card, #f7f4fb)', border: '1px solid var(--line)', borderRadius: 8, padding: '8px 12px' }}>
         🔐 <b>The key value never reaches the database.</b> Your ops team provisions it as a container / Key
@@ -950,11 +952,8 @@ export default function Settings({ onClose, files = [], onDelegationChange, me =
         {/* Above the subtabs on purpose — the SIM badge is true of every write path in this panel
             (the Users allowlist included), not only the panels reachable from a tab. */}
         {SIM && <SimNotice />}
-        {/* Scoped to access management (Owners + Users) plus the one self-service action every
-            signed-in user needs (My Data). The remaining admin-only panels (Scoring rules, Estate,
-            File types, Remediated storage, Disposition, the global admin Data reset,
-            AI-provider governance) are still exported from this module and covered by tests —
-            add a button + body to resurface one. */}
+        {/* Access, worker and AI governance live together here. Operational telemetry remains in
+            Live Operations; this surface controls whether off-box AI calls may happen at all. */}
         <div className="subtabs" role="tablist" aria-label="Settings sections">
           <button role="tab" aria-selected={tab === 'owners'} className={tab === 'owners' ? 'fchip on' : 'fchip'} onClick={() => setTab('owners')}>Owners</button>
           <button role="tab" aria-selected={tab === 'users'} className={tab === 'users' ? 'fchip on' : 'fchip'} onClick={() => setTab('users')}>Users</button>
@@ -965,6 +964,7 @@ export default function Settings({ onClose, files = [], onDelegationChange, me =
           <button role="tab" aria-selected={tab === 'mydata'} className={tab === 'mydata' ? 'fchip on' : 'fchip'} onClick={() => setTab('mydata')}>My Data</button>
           <button role="tab" aria-selected={tab === 'myscope'} className={tab === 'myscope' ? 'fchip on' : 'fchip'} onClick={() => setTab('myscope')}>My Scope</button>
           <button role="tab" aria-selected={tab === 'workers'} className={tab === 'workers' ? 'fchip on' : 'fchip'} onClick={() => setTab('workers')}>Worker Configuration</button>
+          <button role="tab" aria-selected={tab === 'ai'} className={tab === 'ai' ? 'fchip on' : 'fchip'} onClick={() => setTab('ai')}>AI Governance</button>
           {/* ADR 0021's "Settings → Review Memory". The tab renders for everyone because GET
               /org-memory has no admin gate — seeing which house style shaped a draft is not an
               admin privilege — and ReviewMemory itself withholds every write control unless
@@ -978,6 +978,7 @@ export default function Settings({ onClose, files = [], onDelegationChange, me =
           {tab === 'mydata' && <><ResetMyData /><CopyToken /></>}
           {tab === 'myscope' && <MyScanScope />}
           {tab === 'workers' && <WorkerConfiguration me={me} />}
+          {tab === 'ai' && <AIProvidersPanel />}
           {tab === 'memory' && <ReviewMemory me={me} />}
         </div>
       </div>

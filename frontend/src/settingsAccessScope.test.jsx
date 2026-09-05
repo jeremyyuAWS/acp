@@ -22,10 +22,9 @@
  * make the surfaces the same decision, and this one was asked for explicitly.
  *
  * The six OTHER admin panels (Scoring rules, Estate, File types, Remediated storage, Disposition,
- * the global admin Data reset, AI-provider governance) were removed from the tab bar on request.
- * They were NOT deleted — their components are still exported from Settings.jsx and still covered
- * by their own tests (see simAdminWriteHonesty / aiProviders / aiEndpointSettings). This test pins
- * both halves: those six are gone, and the code that could bring one back is still here. Worker
+ * and the global admin Data reset) remain removed. AI-provider governance was deliberately restored
+ * when assessment-time cloud second opinions shipped: without this tab, administrators had no UI
+ * control over the off-box document path. Worker
  * Configuration is not one of the six — it was added, not restored, and is covered separately
  * below.
  *
@@ -57,14 +56,14 @@ const setValue = (el, v) => {
   set.call(el, v); el.dispatchEvent(new Event('input', { bubbles: true }))
 }
 
-describe('the settings panel is access-only, plus self-service My Data and My Scope', () => {
-  it('shows exactly the Owners, Users, Roles, My Data, My Scope, Worker Configuration and Review Memory tabs, in that order', async () => {
+describe('the settings panel includes access, worker and AI governance', () => {
+  it('shows the approved settings tabs in their exact order', async () => {
     // `Roles` was added here by workspace RBAC slice 3 (PRD §8: "a dedicated Roles tab beside
     // People"). This assertion is deliberately exact, which is why adding a tab has to be a
     // decision recorded in a diff rather than something that quietly appears — the tab list is
     // the whole navigation of the admin panel.
     expect(tabTexts(await render())).toEqual(
-      ['Owners', 'Users', 'Roles', 'My Data', 'My Scope', 'Worker Configuration', 'Review Memory'])
+      ['Owners', 'Users', 'Roles', 'My Data', 'My Scope', 'Worker Configuration', 'AI Governance', 'Review Memory'])
   })
 
   it('no longer offers any of the removed ADMIN-ONLY tabs', async () => {
@@ -77,6 +76,20 @@ describe('the settings panel is access-only, plus self-service My Data and My Sc
   it('opens on the Users tab', async () => {
     const c = await render()
     expect(c.querySelector('button[role="tab"][aria-selected="true"]').textContent.trim()).toBe('Users')
+  })
+})
+
+describe('the AI Governance tab', () => {
+  it('mounts the provider controls and explains assessment-time off-box processing', async () => {
+    const c = await render()
+    const aiTab = [...c.querySelectorAll('button[role="tab"]')]
+      .find((b) => b.textContent.trim() === 'AI Governance')
+    expect(aiTab, 'no AI Governance tab').toBeTruthy()
+    await act(async () => { aiTab.click() })
+    await settle()
+    expect(c.textContent).toMatch(/AI providers/)
+    expect(c.textContent).toMatch(/LOW-confidence assessment findings/)
+    expect(c.textContent).toMatch(/first rendered page only/)
   })
 })
 
@@ -120,7 +133,7 @@ describe('the Review Memory tab', () => {
   })
 })
 
-describe('the removed panels are hidden, not deleted', () => {
+describe('the retained admin panels are not deleted', () => {
   it('still exports the three local admin panels so their features and guards survive', () => {
     expect(typeof ResetData).toBe('function')
     expect(typeof DriveMirror).toBe('function')
