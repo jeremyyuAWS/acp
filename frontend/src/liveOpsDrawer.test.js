@@ -1052,3 +1052,126 @@ describe('alertRuleTone / alertRuleState', () => {
     expect(alertRuleTone(rule({ state: 'suppressed' }))).toBe('warn')
   })
 })
+
+/* ─────────────────────── Platform health (Tier 5) ─────────────────────── */
+
+import { resourceHealthModel, serviceHealthModel, incidentRegions, HEALTH_STATES } from './liveOpsDrawer.js'
+
+const transition = (over = {}) => ({
+  at: '2026-09-05T11:00:00Z', status: 'Available', previous: 'Unavailable',
+  cause: 'PlatformInitiated', summary: null, ...over,
+})
+const rh = (over = {}) => ({ resource_health: {
+  queried: true, status: 'Available', tone: 'ok', previous: 'Unavailable',
+  cause: 'PlatformInitiated', reported_at: '2026-09-05T11:00:00Z', summary: null,
+  transitions: [transition()], window_hours: 24, unavailable_reason: null, ...over } })
+
+describe('resourceHealthModel', () => {
+  it('reports a quiet window as "no health events", never as Available', () => {
+    // The single reason this model exists. A quiet 24 hours is the healthy case AND exactly what
+    // an outage looks like before Azure ingests it. Claiming Available is the one answer the
+    // activity log cannot support.
+    const m = resourceHealthModel(rh({ transitions: [], status: null }))
+    expect(m.state).toBe('quiet')
+    expect(m.text).not.toBe('Available')
+    expect(m.tone).not.toBe('ok')
+  })
+
+  it('tells the reader to look at the live metrics for right now', () => {
+    // Because the quiet state genuinely cannot answer "is it up", it has to say where that answer
+    // actually lives rather than leaving a reassuring blank.
+    const m = resourceHealthModel(rh({ transitions: [], status: null }))
+    expect(m.reason).toMatch(/live metrics/)
+    expect(m.reason).toMatch(/24 hours/)
+  })
+
+  it('always carries the time the reading was reported, so it cannot read as live', () => {
+    const m = resourceHealthModel(rh())
+    expect(m.reportedAt).toBe('2026-09-05T11:00:00Z')
+    expect(m.reason).toMatch(/Last reported/)
+    expect(m.reason).not.toMatch(/\bis (available|healthy)\b/i)
+  })
+
+  it('names a platform-initiated cause differently from one we caused', () => {
+    expect(resourceHealthModel(rh({ cause: 'PlatformInitiated' })).reason).toMatch(/platform-initiated/)
+    expect(resourceHealthModel(rh({ cause: 'UserInitiated' })).reason).toMatch(/a change we made/)
+  })
+
+  it('keeps Unknown out of both the healthy and the broken bucket', () => {
+    const m = resourceHealthModel(rh({ status: 'Unknown', transitions: [transition({ status: 'Unknown' })] }))
+    expect(m.state).toBe('unknown')
+    expect(m.tone).toBe('warn')
+    expect(HEALTH_STATES.available.tone).toBe('ok')
+    expect(HEALTH_STATES.unavailable.tone).toBe('bad')
+  })
+
+  it('falls back to unknown for a status Azure invents later, not to available', () => {
+    const m = resourceHealthModel(rh({ status: 'Deprovisioning', transitions: [transition({ status: 'Deprovisioning' })] }))
+    expect(m.state).toBe('unknown')
+    expect(m.tone).not.toBe('ok')
+  })
+
+  it('never claims health when the query failed or was not made', () => {
+    for (const capacity of [null, {}, { resource_health: {} },
+      { resource_health: { queried: false, unavailable_reason: 'permission' } }]) {
+      const m = resourceHealthModel(capacity)
+      expect(m.state).toBe('unavailable_reading')
+      expect(m.tone).not.toBe('ok')
+    }
+    expect(resourceHealthModel({ resource_health: { queried: false, unavailable_reason: 'permission' } }).reason)
+      .toMatch(/Monitoring Reader/)
+  })
+
+  it('every state is distinguishable without colour', () => {
+    const icons = Object.values(HEALTH_STATES).map(s => s.icon)
+    const texts = Object.values(HEALTH_STATES).map(s => s.text)
+    expect(new Set(icons).size).toBe(icons.length)
+    expect(new Set(texts).size).toBe(texts.length)
+  })
+})
+
+describe('serviceHealthModel', () => {
+  const incident = (over = {}) => ({ tracking_id: 'ABC', kind: 'Incident', stage: 'Active',
+    resolved: false, title: 'Networking degradation', summary: 'We are investigating.',
+    at: '2026-09-05T11:00:00Z', services: [{ service: 'Container Apps', regions: ['East US'] }], ...over })
+
+  it('splits active from resolved rather than dropping the resolved ones', () => {
+    // An incident that cleared twenty minutes ago is the explanation for the restarts still on
+    // the timeline; dropping it leaves an operator hunting a cause Azure already published.
+    const m = serviceHealthModel({ service_health: { queried: true, window_hours: 24,
+      active: [incident(), incident({ tracking_id: 'XYZ', stage: 'Resolved', resolved: true })] } })
+    expect(m.active).toHaveLength(1)
+    expect(m.resolved).toHaveLength(1)
+  })
+
+  it('says nothing happened only when it actually asked', () => {
+    const asked = serviceHealthModel({ service_health: { queried: true, window_hours: 24, active: [] } })
+    expect(asked.available).toBe(true)
+    expect(asked.reason).toMatch(/No Azure incidents/)
+
+    const failed = serviceHealthModel({ service_health: { queried: false, unavailable_reason: 'error', active: [] } })
+    expect(failed.available).toBe(false)
+    expect(failed.reason).not.toMatch(/No Azure incidents/)
+  })
+
+  it('is unavailable, not quiet, with no block at all', () => {
+    expect(serviceHealthModel(null).available).toBe(false)
+    expect(serviceHealthModel({}).available).toBe(false)
+  })
+})
+
+describe('incidentRegions', () => {
+  it('flattens and de-duplicates the regions Azure named', () => {
+    expect(incidentRegions({ services: [
+      { service: 'A', regions: ['East US', 'West US'] },
+      { service: 'B', regions: ['East US'] }] })).toEqual(['East US', 'West US'])
+  })
+
+  it('returns nothing when Azure named no region, rather than guessing one', () => {
+    // Guessing from the subscription's own region would attribute an incident to a place it may
+    // never have touched.
+    expect(incidentRegions({ services: [{ service: 'A' }] })).toEqual([])
+    expect(incidentRegions({})).toEqual([])
+    expect(incidentRegions({ services: 'not a list' })).toEqual([])
+  })
+})

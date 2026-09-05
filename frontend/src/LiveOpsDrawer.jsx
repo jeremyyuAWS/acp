@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { prefersReducedMotion, useDialog } from './a11y.js'
 import {
   EVENT_FILTERS, EVENT_ICONS, NOT_REPORTED, TONE, alertRuleState, alertRuleTone, alertsModel,
+  incidentRegions, resourceHealthModel, serviceHealthModel,
   arcPath, capacityMatchesService, chartModel,
   capacityForService, componentState, defaultMetricFor, eventClock, eventsForNode, filterEvents,
   formatDuration,
@@ -299,6 +300,84 @@ function ActiveAlerts({ alerts, measuredAt, nowMs }) {
         measurement that was never taken. */}
     <Source kind={alerts.state === 'unavailable' ? 'unavailable' : 'azure'}
       at={alerts.state === 'unavailable' ? null : measuredAt} nowMs={nowMs} />
+  </section>
+}
+
+/**
+ * Azure's view of this container app — section 5, beside the alerts.
+ *
+ * Every claim here is past tense with a time attached, because the activity log reports health
+ * TRANSITIONS and Azure's current-status API is a provider this repo does not install. The state
+ * that carries the design: a quiet window says "no health events", not "Available", and points at
+ * the live metrics above for right now. A quiet 24 hours is the healthy case and is also what an
+ * outage looks like ninety seconds in, before Azure has ingested it.
+ */
+function ResourceHealth({ health, nowMs }) {
+  return <section aria-label="Azure resource health" style={{ ...PANEL, padding: 14 }}>
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <b>Azure health</b>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12,
+        fontWeight: 700, color: TONE[health.tone] || 'var(--muted)' }}>
+        <span aria-hidden="true">{health.icon}</span>{health.text}
+      </span>
+    </div>
+    <p className="muted" style={{ fontSize: 11, margin: '6px 0 0' }}>{health.reason}</p>
+    {health.summary && <p className="muted" style={{ fontSize: 11, margin: '4px 0 0' }}>{health.summary}</p>}
+    {health.transitions.length > 1 && <ul style={{ listStyle: 'none', margin: '8px 0 0', padding: 0,
+      display: 'grid', gap: 3 }}>
+      {health.transitions.slice(0, 5).map((t, i) => <li key={`${t.at}-${i}`}
+        className="muted" style={{ fontSize: 11 }}>
+        <span style={{ fontVariantNumeric: 'tabular-nums' }}>{eventClock(t.at)}</span>
+        {' — '}{t.previous ? `${t.previous} → ` : ''}{t.status || NOT_REPORTED}
+      </li>)}
+    </ul>}
+    {/* Dated, never live: the reading is an event Azure recorded, not a status taken just now. */}
+    <Source kind={health.reportedAt ? 'azure' : 'unavailable'} at={health.reportedAt} nowMs={nowMs}
+      detail={health.reportedAt ? 'last reported health transition' : undefined} />
+  </section>
+}
+
+/**
+ * Azure's own incidents, subscription-wide.
+ *
+ * Rendered once for the whole drawer rather than per service: a regional Azure incident is not a
+ * fault in any one worker, and putting it inside a service's panel would read as though it were.
+ * The heading says "Azure platform" for the same reason.
+ */
+function ServiceHealth({ platform }) {
+  const rows = [...platform.active, ...platform.resolved]
+  if (!platform.available && !platform.failed && !rows.length) return null
+  return <section aria-label="Azure platform incidents" style={{ ...PANEL, padding: 14 }}>
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <b>Azure platform</b>
+      {!!platform.active.length && <span style={{ display: 'inline-flex', alignItems: 'center',
+        gap: 6, fontSize: 12, fontWeight: 700, color: TONE.bad }}>
+        <span aria-hidden="true">■</span>
+        {platform.active.length} active {platform.active.length === 1 ? 'incident' : 'incidents'}
+      </span>}
+    </div>
+    {platform.reason && <p className="muted" style={{ fontSize: 11, margin: '6px 0 0' }}>{platform.reason}</p>}
+    {!!rows.length && <ul style={{ listStyle: 'none', margin: '10px 0 0', padding: 0, display: 'grid', gap: 6 }}>
+      {rows.map((incident, i) => {
+        const regions = incidentRegions(incident)
+        return <li key={incident.tracking_id || i}
+          style={{ display: 'grid', gap: 2, borderTop: '1px solid var(--line,#eee)', paddingTop: 6 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, fontWeight: 700 }}>{incident.title || NOT_REPORTED}</span>
+            <span style={{ fontSize: 11, fontWeight: 700,
+              color: incident.resolved ? TONE.ok : TONE.bad }}>
+              {incident.resolved ? 'Resolved' : incident.stage || 'Active'}
+            </span>
+            {incident.kind && <span className="muted" style={{ fontSize: 11 }}>{incident.kind}</span>}
+          </div>
+          {incident.summary && <span className="muted" style={{ fontSize: 11 }}>{incident.summary}</span>}
+          {!!regions.length && <span className="muted" style={{ fontSize: 11 }}>{regions.join(', ')}</span>}
+          {incident.tracking_id && <span className="muted" style={{ fontSize: 10.5 }}>
+            Tracking {incident.tracking_id}
+          </span>}
+        </li>
+      })}
+    </ul>}
   </section>
 }
 
@@ -937,6 +1016,10 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
         nowMs={nowMs} />
       {node?.kind === 'worker' && <ActiveAlerts alerts={alertsModel(serviceCapacity)}
         measuredAt={serviceCapacity?.measured_at} nowMs={nowMs} />}
+      {node?.kind === 'worker' && <ResourceHealth health={resourceHealthModel(serviceCapacity)} nowMs={nowMs} />}
+      {/* Subscription-wide, so it is read from the TOP of the capacity payload and shown on every
+          node — an Azure incident is context for the whole map, not one service's fault. */}
+      <ServiceHealth platform={serviceHealthModel(capacity)} />
       <Tracing tracing={tracingModel(snapshot)} />
       <EventTimeline events={nodeEvents} filter={filter} onFilter={setFilter} paused={paused}
         onPause={() => setFrozen((held) => (held ? null : { samples, events }))}
