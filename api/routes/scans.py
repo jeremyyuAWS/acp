@@ -1568,6 +1568,39 @@ def remediation_snapshot(sid: str, request: Request, response: Response):
     response.headers["Cache-Control"] = "no-store"
     return _remediation_snapshot(sid)
 
+def _resume_plan(sid: str, raw_cursor: str | None) -> tuple[int | None, str | None]:
+    """Decide what a reconnecting client gets: (after_seq to replay from, reconcile reason).
+
+    Exactly one of the two is ever set. ADR 0051's three reconcile conditions live here, in a pure
+    function, so they can be tested without a stream.
+
+    No cursor at all is NOT a reconcile — it is a first connection, and it gets the live loop with
+    no replay, exactly as every client gets today.
+    """
+    if raw_cursor is None or raw_cursor.strip() == "":
+        return (None, None)
+    try:
+        cursor = int(raw_cursor.strip())
+    except (TypeError, ValueError):
+        # A malformed cursor is a client bug. Reconciling is the safe answer; guessing at the
+        # intended number is not.
+        return (None, "malformed_cursor")
+    if cursor < 0:
+        return (None, "malformed_cursor")
+    oldest, newest = core.store.scan_event_bounds(sid)
+    if newest is None:
+        # The scan has no events at all. A cursor against an empty log cannot be honoured, and
+        # replaying nothing would read to the client as "caught up".
+        return (None, "no_events")
+    if cursor > newest:
+        return (None, "cursor_ahead_of_log")
+    if oldest is not None and oldest > cursor + 1:
+        # Pruned past. Unreachable today (nothing prunes scan_events) and deliberately written
+        # anyway — see ADR 0051 and store.scan_event_bounds.
+        return (None, "events_pruned")
+    return (cursor, None)
+
+
 @router.get("/scans/{sid}/remediation/stream")
 async def stream_remediation_status(sid: str, request: Request):
     """Push the owner-scoped remediation status whenever it changes.
@@ -1576,6 +1609,16 @@ async def stream_remediation_status(sid: str, request: Request):
     store method as ``remediation_status`` so the pushed and fallback-poll views cannot disagree.
     The browser consumes it with authenticated fetch (not EventSource, which cannot carry ACP's
     bearer header).  A final ``done`` event closes the connection once the batch drains.
+
+    RESUME (ADR 0051). A client that sends ``Last-Event-ID`` gets the ``scan_events`` it missed,
+    oldest first, each carrying its own SSE ``id:``, BEFORE any live frame — then the ordinary
+    loop. A client that sends nothing gets exactly the stream it gets today; the snapshot frame is
+    unchanged and untyped, so nothing that consumes it needs to know this exists.
+
+    The header is read explicitly rather than inherited from the browser: ``Last-Event-ID`` is
+    automatic only for ``EventSource``, which ACP cannot use (it cannot carry the bearer token,
+    and putting the token in the URL would leak it into proxy logs and history). The name is kept
+    because the concept is the same one.
     """
     import asyncio
     import json as _json
@@ -1585,12 +1628,51 @@ async def stream_remediation_status(sid: str, request: Request):
     if core.store.get_scan(sid, owner=owner) is None:
         raise HTTPException(404, "scan not found")
 
+    after_seq, reconcile = _resume_plan(sid, request.headers.get("Last-Event-ID"))
+
     async def _gen():
         last = None
         idle = 0
+        # Replay first, so a resumed client sees the history it missed in order and only then the
+        # present. A reconcile reason skips replay entirely: the client must re-fetch a snapshot
+        # before it applies anything later (PRD §17.6).
+        if reconcile:
+            yield ("event: reconciliation-required\n"
+                   f"data: {_json.dumps({'reason': reconcile})}\n\n")
+            cursor = (await asyncio.to_thread(core.store.scan_event_bounds, sid))[1]
+        elif after_seq is not None:
+            missed = await asyncio.to_thread(core.store.list_scan_events, sid,
+                                             after_seq=after_seq)
+            for event in missed:
+                # `id:` is what makes this resumable at all — the client stores the last one it
+                # rendered and sends it back on the next connect.
+                yield (f"id: {event['seq']}\n"
+                       "event: remediation-event\n"
+                       f"data: {_json.dumps(event, default=str)}\n\n")
+            cursor = missed[-1]["seq"] if missed else after_seq
+        else:
+            # FIRST CONNECT, no cursor. Start from the newest event rather than 0: this client has
+            # not missed anything, and replaying a finished run's whole history to a browser that
+            # just opened the tab is not a resume, it is a backfill nobody asked for. It still
+            # gets live frames from here, which is how it earns a cursor for its NEXT reconnect.
+            cursor = (await asyncio.to_thread(core.store.scan_event_bounds, sid))[1]
+
         for _ in range(_MAX_STREAM_ITERS):
             if await request.is_disconnected():
                 return
+            # New events since the last tick, each with its id, so a CONNECTED client's cursor
+            # advances too — otherwise it could only ever resume from where it first connected.
+            # One indexed read (scan_id, seq) beside two much heavier ones already in this loop.
+            if cursor is not None:
+                fresh = await asyncio.to_thread(core.store.list_scan_events, sid,
+                                                after_seq=cursor)
+                for event in fresh:
+                    yield (f"id: {event['seq']}\n"
+                           "event: remediation-event\n"
+                           f"data: {_json.dumps(event, default=str)}\n\n")
+                if fresh:
+                    cursor = fresh[-1]["seq"]
+
             out = await asyncio.to_thread(core.store.remediation_status, sid)
             out["activity"] = activity.current(sid)
             out["workers"] = {"active": int(out.get("running") or 0),

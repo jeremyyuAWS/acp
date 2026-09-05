@@ -233,11 +233,17 @@ export function parseSSEFrames(buffer) {
     rest = rest.slice(idx + 2)
     let event = 'message'
     let data = null
+    // `id:` was discarded here until ADR 0051. It is the resume cursor: the server stamps each
+    // event frame with its scan_events.seq, the client remembers the last one it rendered, and
+    // sends it back as Last-Event-ID on the next connect. Dropping the line meant no client could
+    // resume even once the server offered to.
+    let id = null
     for (const line of raw.split('\n')) {
       if (line.startsWith('event:')) event = line.slice(6).trim()
       else if (line.startsWith('data:')) data = line.slice(5).trim()
+      else if (line.startsWith('id:')) id = line.slice(3).trim()
     }
-    if (data !== null) frames.push({ event, data })
+    if (data !== null) frames.push({ event, data, id })
   }
   return { frames, rest }
 }
@@ -1020,13 +1026,29 @@ export const getRemediationSnapshot = (scanId) => (SIM
           { headers: headers(), cache: 'no-store' }).then(j))
 // Authenticated Remediate progress stream.  Native EventSource cannot send ACP's bearer header,
 // so this shares Discover's fetch + ReadableStream SSE parser and exposes the same close contract.
-export function openRemediationStream(scanId, { onMessage, onDone, onError } = {}) {
+// `lastEventId` resumes the durable lifecycle log (ADR 0051): pass the last id this client
+// rendered and the server replays the scan_events it missed, oldest first, before any live frame.
+// Sent as a REQUEST HEADER, not a query param, for the reason the bearer token is — request URLs
+// reach proxy access logs and browser history.
+//
+// It is sent explicitly because nothing sends it for us: `Last-Event-ID` is automatic only for
+// native EventSource, which this function deliberately does not use (see the Discover stream's
+// note above — EventSource cannot carry the Authorization header at all).
+//
+// `onEvent` receives one lifecycle event per call, with its `id`. `onReconcile` fires when the
+// server declines to replay — a cursor ahead of the log, a pruned log, a malformed cursor — and
+// means: fetch a fresh snapshot before applying anything later (PRD §17.6). A caller that passes
+// neither behaves exactly as this function did before resume existed.
+export function openRemediationStream(scanId, { onMessage, onDone, onError,
+                                                onEvent, onReconcile, lastEventId = null } = {}) {
   if (SIM) return { close: () => {} }
   const controller = new AbortController()
   ;(async () => {
     try {
+      const h = headers()
+      if (lastEventId !== null && lastEventId !== undefined) h['Last-Event-ID'] = String(lastEventId)
       const res = await fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/stream`,
-        { headers: headers(), signal: controller.signal, cache: 'no-store' })
+        { headers: h, signal: controller.signal, cache: 'no-store' })
       if (!res.ok || !res.body) { onError?.(); return }
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
@@ -1040,6 +1062,16 @@ export function openRemediationStream(scanId, { onMessage, onDone, onError } = {
         for (const frame of frames) {
           if (frame.event === 'done') { onDone?.(); return }
           if (frame.event === 'error') { onError?.(); return }
+          if (frame.event === 'reconciliation-required') {
+            try { onReconcile?.(JSON.parse(frame.data)) } catch { onReconcile?.({}) }
+            continue
+          }
+          if (frame.event === 'remediation-event') {
+            // The id rides alongside the parsed event so a caller can persist the cursor without
+            // reaching into the payload — the frame's id is the authority, not a field inside it.
+            try { onEvent?.(JSON.parse(frame.data), frame.id) } catch { /* keep listening */ }
+            continue
+          }
           try { onMessage?.(JSON.parse(frame.data)) } catch { /* malformed frame: keep listening */ }
         }
       }
