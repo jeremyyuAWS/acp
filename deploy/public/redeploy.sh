@@ -47,6 +47,7 @@ BUILD_TZ="${BUILD_TZ:-America/Los_Angeles}"
 MIN_MODULES=41                  # engine/pdf-analyser is tracked; this guards against truncation
 DRY="${ACP_DRY_RUN:-0}"
 BG="${ACP_BLUE_GREEN:-0}"       # 1 => green provisions at 0% traffic, is tested, then promoted
+ALLOW_ACTIVE_JOBS="${ACP_DEPLOY_WITH_ACTIVE_JOBS:-0}"
 # Worker jobs are document-sized and production PDFs commonly take 5–7 minutes. ACA's 30-second
 # default killed them during ordinary releases; the durable queue then kept their claims until
 # lease recovery, making active Remediation appear hung. Worker code drains for 540s, leaving a
@@ -292,6 +293,25 @@ if [ "$DRY" = 1 ]; then
   fi
   say "DRY RUN — stopping before anything is changed"
   exit 0
+fi
+
+# Worker revisions pull from one shared durable queue. Replacing all lanes while work is active
+# is therefore not blue-green: it interrupts handlers and leaves lease recovery to repair the
+# run later. Refuse routine releases before any Container App mutation. The explicit override is
+# for an emergency security/correctness release whose operator accepts that interruption risk.
+READY_BEFORE="$(curl -s --max-time 20 "https://$FQDN/readyz" || echo '{}')"
+read -r QUEUE_AVAILABLE ACTIVE_JOBS <<EOF
+$(python3 -c 'import json,sys
+try:
+ q=json.load(sys.stdin).get("queue", {}); print(str(bool(q.get("available"))).lower(), q.get("active", ""))
+except Exception:
+ print("false", "")' <<<"$READY_BEFORE")
+EOF
+if [ "$ALLOW_ACTIVE_JOBS" != 1 ]; then
+  [ "$QUEUE_AVAILABLE" = true ] || die "cannot establish durable queue activity from /readyz; refusing worker cutover (set ACP_DEPLOY_WITH_ACTIVE_JOBS=1 only for an emergency)"
+  [ "${ACTIVE_JOBS:-0}" = 0 ] || die "$ACTIVE_JOBS queued/running job(s) are active; wait for queues to drain or explicitly set ACP_DEPLOY_WITH_ACTIVE_JOBS=1"
+else
+  say "WARNING: ACP_DEPLOY_WITH_ACTIVE_JOBS=1 — worker cutover may interrupt ${ACTIVE_JOBS:-unknown} active job(s)"
 fi
 
 # ── 8-BG. blue-green (ACP_BLUE_GREEN=1) ────────────────────────────────────────────────────

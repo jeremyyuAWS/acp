@@ -45,6 +45,11 @@ on:
         required: false
         default: false
         type: boolean
+      deploy_with_active_jobs:
+        description: "Emergency only: replace workers even when queued/running jobs exist"
+        required: false
+        default: false
+        type: boolean
       skip_ci_gate:
         description: "Bypass redeploy.sh's CI-conclusion gate (ACP_SKIP_CI_GATE=1) — for a manual dispatch when CI is red on a known-unrelated flake, not routine use"
         required: false
@@ -162,6 +167,7 @@ jobs:
           # redeploy.sh resolves again and that is fine — resolving a full sha is a no-op.
           ACP_PIN: ${{ steps.pin.outputs.sha }}
           ACP_BLUE_GREEN: ${{ inputs.blue_green && '1' || '0' }}
+          ACP_DEPLOY_WITH_ACTIVE_JOBS: ${{ inputs.deploy_with_active_jobs && '1' || '0' }}
           # Only reachable via an explicit manual dispatch with the checkbox set — `inputs` is
           # empty on the auto (workflow_run) trigger, so this is unset there and the gate behaves
           # exactly as before. See the input's own description for when this is legitimate.
