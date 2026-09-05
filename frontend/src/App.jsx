@@ -781,6 +781,15 @@ export default function App() {
   // for a REAL backend scan the files arrive without it, so compute it here — otherwise
   // `remediable` is empty and server-side remediation finds nothing to do.
   const allFiles = useMemo(() => annotate(scan?.files ?? [], ontology).map((f) => (f.rec ? f : { ...f, rec: recommendFor(f) })), [scan, ontology])
+  // Run health, derived ONCE and read by both places that report it: the exception chip in the
+  // header actions, and the "✓ Verified" affordance in the context bar below it. They are two ends
+  // of one ordering (worker error > unreadable > healthy), so deriving them separately is how the
+  // header came to show "3 unreadable" and "✓ Verified" side by side.
+  // Off `scan?.run`, not the `run` const — that one is bound much further down, and reading it
+  // here is a temporal-dead-zone crash rather than a stale value. Same object either way.
+  const unreadableFiles = useMemo(
+    () => allFiles.filter((f) => f.status === 'error').length, [allFiles])
+  const workerError = scan?.run?.status === 'failed'
 
   // The file-type filter applies to EVERY tab, not just Discover.
   //
@@ -1626,8 +1635,7 @@ export default function App() {
               Uses allFiles (not files) so the type-filter never hides error-status rows from
               the count, and the indicator describes the full run rather than the current view. */}
           {run?.completed_at && (() => {
-            const unreadable = allFiles.filter(f => f.status === 'error').length
-            const workerError = run?.status === 'failed'
+            const unreadable = unreadableFiles
             if (!workerError && unreadable === 0) return null
             const [chipColor, chipBg, chipLabel, chipTip] = workerError
               ? ['#7A271A', '#FEF3F2', 'Worker error', 'Assessment stopped due to a processing failure. Some files were not scored.']
@@ -1793,7 +1801,16 @@ export default function App() {
         {me.scope && <span><i className="scopedot" /><b>{me.scope}</b></span>}
         {rubric && <span><b>{rubric.target}</b></span>}
         {allFiles.length > 0 && <span><b>{allFiles.length.toLocaleString()}</b> documents</span>}
-        {run?.completed_at && run?.status !== 'failed' && <span className="context-verified">✓ Verified</span>}
+        {/* ✓ Verified is the healthy state, which this header now reports by SILENCE in the chip
+            row above — so it has to mean the same thing the chip's absence means, or the header
+            contradicts itself. Gated on `run.status !== 'failed'` alone it did not: a run with
+            unreadable files showed the amber "N unreadable" chip AND "✓ Verified" at the same
+            time, one saying documents were skipped and the other that everything checked out.
+            The chip was always a single highest-severity signal (worker error > unreadable >
+            healthy); moving the healthy end of it down here has to preserve that ordering. */}
+        {run?.completed_at && !workerError && unreadableFiles === 0 && (
+          <span className="context-verified">✓ Verified</span>
+        )}
       </div>
 
       <nav aria-label="Compliance workflow">
