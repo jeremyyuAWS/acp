@@ -521,6 +521,20 @@ export default function App() {
   // a queued scan that is cancelled simply stops existing, and absence is what it looked like all
   // along.
   const scanCancelledRef = useRef(false)
+  // Set once, on unmount, and read by the job poll loop below.
+  //
+  // WHY THIS IS NEEDED AND WHAT IT IS NOT. `_pollScanJobPolling` is a `do…while (!job.done)` over
+  // `getJob` with a 350ms sleep and NO other stop condition — not even scanCancelledRef, which
+  // only the queued-scan loop consults. So an App that unmounts while a job is still running kept
+  // issuing a request every 350ms until that job finished on the server, for a component that no
+  // longer exists.
+  //
+  // This is about the REQUESTS, not about setState. React 18 removed the "state update on an
+  // unmounted component" warning because such an update is a documented no-op; guarding the
+  // setters would buy nothing. The network traffic and the timer are the real cost, and they are
+  // what this stops.
+  const unmountedRef = useRef(false)
+  useEffect(() => () => { unmountedRef.current = true }, [])
   // Live job state pushed by the Discover SSE stream (openDiscoverStream), read by the queued-
   // scan poll loop instead of it separately fetching getJob() every tick — a ref, not state,
   // because it updates far more often (~every backend seq bump) than the loop itself renders
@@ -1078,9 +1092,13 @@ export default function App() {
     let job
     do {
       job = await getJob(job_id)
+      // Checked straight after the await, before the sleep: an unmounted App must not schedule
+      // another tick, and must not spend a further getScan below either.
+      if (unmountedRef.current) return null
       setProgress(job)
       if (!job.done) await new Promise((r) => setTimeout(r, 350))
-    } while (!job.done)
+    } while (!job.done && !unmountedRef.current)
+    if (unmountedRef.current) return null
     if (job.error) throw new Error(job.error)
     return getScan(job.scan_id)
   }
@@ -1103,6 +1121,9 @@ export default function App() {
             }
             stream = getJob.openStream(job_id, {
               onMessage: (job) => {
+                // Same rule as the polling fallback: once the App is gone, close the stream
+                // rather than holding a server-side generator open for nobody.
+                if (unmountedRef.current) { settled = true; stream?.close(); resolve(null); return }
                 lastJob = job
                 setProgress(job)
                 if (job.done) finish(job)
@@ -1118,6 +1139,11 @@ export default function App() {
           })
         : _pollScanJobPolling(job_id)
     return run.finally(() => {
+      // ONLY when the job actually reached a terminal state. Abandoning the poll because the App
+      // unmounted is not the same as the job finishing: these two keys are what a fresh load
+      // reconnects THROUGH, so clearing them on unmount would mean a reload during a running job
+      // silently forgot it — defeating the reconnect this function exists to serve.
+      if (unmountedRef.current) return
       sessionStorage.removeItem(ACTIVE_JOB_KEY)
       sessionStorage.removeItem(ACTIVE_JOB_AT_KEY)
     })
