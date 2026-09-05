@@ -1590,7 +1590,9 @@ ASSESS_LANE_JOB_TYPES = (
     "scan", "scan_assess", "scan_batch", "scan_file", "workspace_scan_file",
     "workspace_scan_discover", "scan_finalize", "assess_trace",
 )
-REMEDIATE_LANE_JOB_TYPES = ("remediate_file", "rescore_file", "apply_approved_values")
+REMEDIATE_LANE_JOB_TYPES = (
+    "remediate_file", "rescore_file", "apply_approved_values", "publish_file",
+)
 
 
 def _replica_id() -> str:
