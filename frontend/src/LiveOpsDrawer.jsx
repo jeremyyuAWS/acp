@@ -6,7 +6,7 @@ import {
   formatDuration,
   REPLICA_STATES, gaugeModel, metricGroups, nodeTypeLabel, outputModel, provenance, queueModel,
   THROUGHPUT_SERIES, replicaLifecycle, reported, requestHealth, saturationModel, scaleEvents,
-  scaleExplanation, throughputModel, workerJobHealth,
+  scaleExplanation, throughputModel, tracingModel, workerJobHealth,
   revisionLabel, runModel, seriesForMetric, sourceModel, tenantConcentration, trendMarkers,
   updatedAgo,
 } from './liveOpsDrawer.js'
@@ -220,6 +220,30 @@ function ReplicaLifecycle({ lifecycle, nowMs, measuredAt }) {
       </li>)}
     </ul>}
     <Source kind="azure" at={measuredAt} nowMs={nowMs} detail="Container Apps control plane" />
+  </section>
+}
+
+/**
+ * Whether a trace drill-down exists — and, when it does not, why, so an operator is not sent to an
+ * empty query during an incident.
+ */
+function Tracing({ tracing }) {
+  return <section aria-label="Distributed tracing" style={{ ...PANEL, padding: 14 }}>
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <b>Traces</b>
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700,
+        color: tracing.enabled ? TONE.ok : 'var(--muted)' }}>
+        <span aria-hidden="true">{tracing.enabled ? '●' : '○'}</span>
+        {tracing.enabled ? 'Collecting' : 'Off'}
+      </span>
+      {tracing.samplingRatio != null && <span className="muted" style={{ fontSize: 11 }}>
+        sampling {Math.round(tracing.samplingRatio * 100)}%
+      </span>}
+    </div>
+    {!!tracing.correlate.length && <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+      Correlates by {tracing.correlate.join(', ')}
+    </div>}
+    {tracing.note && <p className="muted" style={{ fontSize: 11, margin: '6px 0 0' }}>{tracing.note}</p>}
   </section>
 }
 
@@ -856,6 +880,7 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
       <TrendStrip groups={groups} metricKey={metricKey} onMetric={setMetricKey} chart={chart}
         markers={markers} paused={paused} source={picked.source} measuredAt={picked.measuredAt}
         nowMs={nowMs} />
+      <Tracing tracing={tracingModel(snapshot)} />
       <EventTimeline events={nodeEvents} filter={filter} onFilter={setFilter} paused={paused}
         onPause={() => setFrozen((held) => (held ? null : { samples, events }))}
         showAll={showAll} onShowAll={() => setShowAll(true)}

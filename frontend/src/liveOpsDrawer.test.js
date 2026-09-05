@@ -11,7 +11,7 @@ import {
   PROVENANCE, capacityForService, fairnessModel, metricGroups, niceCeiling, num, outputModel,
   provenance, queueModel, rateSeries,
   LATENCY_PERCENTILES_NOTE, replicaLifecycle, reported, requestHealth, revisionLabel, runModel,
-  sampleForNode, saturationModel, scaleEvents,
+  sampleForNode, saturationModel, scaleEvents, tracingModel,
   scaleExplanation, secondsSince, seriesForMetric, sourceModel, tenantConcentration, throughputModel,
   trendMarkers, updatedAgo, workerJobHealth,
 } from './liveOpsDrawer.js'
@@ -905,5 +905,35 @@ describe('Request health, and the percentile it refuses to fake', () => {
     expect(health.averageResponseMs).toBe(null)
     expect(health.classified).toBe(null)
     expect(health.classes.every((row) => row.count === null)).toBe(true)
+  })
+})
+
+
+describe('Tracing tells you whether a drill-down exists', () => {
+  it('offers the full pivot set only when correlation is actually available', () => {
+    const full = tracingModel({ summary: { tracing: { enabled: true, correlation: 'full', sampling_ratio: 1 } } })
+    expect(full.enabled).toBe(true)
+    expect(full.correlate).toEqual(['run', 'batch', 'job', 'tenant', 'document'])
+    expect(full.note).toBe(null)
+  })
+
+  it('separates tracing off from tracing on without a salt', () => {
+    // Both look like "no per-customer drill-down", and they are different problems: one collects
+    // nothing, the other collects spans that join by run but carry no tenant or document id.
+    const idsOnly = tracingModel({ summary: { tracing: { enabled: true, correlation: 'ids_only' } } })
+    expect(idsOnly.enabled).toBe(true)
+    expect(idsOnly.correlate).toEqual(['run', 'batch', 'job'])
+    expect(idsOnly.note).toMatch(/ACP_TELEMETRY_SALT is unset/)
+
+    const off = tracingModel({ summary: { tracing: { enabled: false, reason: 'not configured' } } })
+    expect(off.correlate).toEqual([])
+    expect(off.note).toMatch(/Tracing is off — not configured/)
+  })
+
+  it('never offers a link to traces that do not exist', () => {
+    // A drill-down into an empty query during an incident is worse than no drill-down.
+    expect(tracingModel({ summary: { tracing: { enabled: false, reason: 'exporter failed to start: ValueError' } } }))
+      .toMatchObject({ available: false, correlate: [] })
+    expect(tracingModel({}).note).toMatch(/does not report whether tracing is configured/)
   })
 })

@@ -64,6 +64,31 @@ segno>=1.6  # pure-Python QR code generation (R15 verify-this-report)
 # --- observability (per-rule Langfuse spans; no-ops when env vars absent) ---
 langfuse>=2.0,<3.0
 
+# --- Application Insights (distributed traces) — api/telemetry.py ---
+# DELIBERATELY NOT PINNED HERE, and this is a decision rather than an omission.
+#
+#   pip install azure-monitor-opentelemetry
+#
+# api/telemetry.py is written to work with it and to degrade to `reason: "not installed"` without
+# it, so the code ships either way and turning tracing on is an install plus
+# APPLICATIONINSIGHTS_CONNECTION_STRING.
+#
+# WHY IT IS NOT A LINE IN THIS FILE. Measured 2026-09-05: every published version of the distro,
+# up to and including 1.8.9, pins `opentelemetry-sdk~=1.43.0`, which holds `opentelemetry-api` at
+# 1.43. `google-api-core` 2.36.0 — a hard, non-extra dependency of the Google Drive client this
+# product needs — declares `opentelemetry-api<2.0.0,>=1.44.0`. Adding the distro therefore makes
+# `pip install -r` report a dependency conflict on every build.
+#
+# It is a METADATA conflict, not a functional one today: with api 1.43.0 installed, both the
+# Google Drive clients and the Azure distro import and work (checked directly, not assumed). But
+# shipping a requirements file that pip reports as broken invites a stricter resolver to start
+# failing the build outright, and hides any real conflict that appears later behind an error
+# everybody has learned to scroll past.
+#
+# Two ways out, both someone's call rather than this file's: pin google-api-core to a release that
+# accepts opentelemetry-api 1.43, or wait for the distro to move to 1.44+. Until one is taken,
+# tracing is an explicit install on the deployments that want it.
+
 # --- AI compliance-digest narrative + per-finding explanations: 100% local via the
 #     Ollama backend (OLLAMA_BASE_URL / OLLAMA_MODEL), with a deterministic-prose
 #     fallback. No commercial-LLM SDK or key — Anthropic/OpenAI are not used at all. ---

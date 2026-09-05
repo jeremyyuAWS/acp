@@ -159,6 +159,11 @@ def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(mo
             "remediate": {"runs": 1, "running": 1, "queued": 2, "completed": 4, "total": 7,
                           "findings": None},
         },
+        # Off unless a connection string is set — see api/telemetry.py. Reported rather than
+        # omitted so the drawer can say why a trace drill-down is unavailable instead of offering
+        # a link to traces that do not exist.
+        "tracing": {"enabled": False, "reason": "not configured", "sampling_ratio": None,
+                    "correlation": "off", "configured_at": None},
         # Stated, not omitted: ACP records which SERVICE ran a job, never which replica, because
         # the worker_instances registry that would carry that has no writer yet. Reading the empty
         # table instead would render as "no workers running".

@@ -1408,6 +1408,10 @@ def _admin_activity_snapshot() -> dict:
             # return [] and render as "no workers running", which is the opposite of the truth.
             # So per-replica ACP health is reported as unavailable, with the reason, and what IS
             # known is reported per SERVICE from the role heartbeats.
+            # Whether distributed tracing is on, and why not when it is off. Live Operations
+            # offers a trace drill-down from a workflow tile; a link to traces that do not exist
+            # is worse than no link, so the UI is given the reason rather than a bare boolean.
+            "tracing": _tracing_status(),
             "worker_instance_attribution": {
                 "available": False,
                 "reason": "ACP does not record which replica ran a job. The worker_instances "
@@ -1418,6 +1422,17 @@ def _admin_activity_snapshot() -> dict:
             **({"queue": composition} if composition else {}),
         },
     }
+
+
+def _tracing_status() -> dict:
+    """Application Insights status for the live map. Guarded like every other optional block: a
+    branch without the telemetry module reports it as unavailable rather than failing the
+    snapshot."""
+    try:
+        import telemetry  # noqa: PLC0415
+        return telemetry.status()
+    except Exception:
+        return {"enabled": False, "reason": "telemetry module unavailable", "correlation": "off"}
 
 
 def _azure_block():

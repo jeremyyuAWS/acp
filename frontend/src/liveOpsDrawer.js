@@ -239,6 +239,43 @@ export function capacityForService(capacity, service = {}) {
   return capacityMatchesService(capacity, service) ? capacity : null
 }
 
+/* ─────────────────────── Tracing ─────────────────────── */
+
+/**
+ * Whether a trace drill-down exists, and what to say when it does not.
+ *
+ * A link to traces that were never collected is worse than no link — it sends an operator to an
+ * empty query during an incident. So the reason travels with the boolean, and the two degraded
+ * states are told apart: tracing OFF (no traces at all) and tracing ON WITHOUT A SALT, where
+ * spans do export and join by scan, but carry no tenant or document id, so a per-customer or
+ * per-document drill-down is not available even though a per-run one is.
+ */
+export function tracingModel(snapshot = {}) {
+  const tracing = snapshot?.summary?.tracing || null
+  if (!tracing) {
+    return { enabled: false, available: false, correlate: [],
+      note: 'This deployment does not report whether tracing is configured.' }
+  }
+  const correlation = tracing.correlation || 'off'
+  return {
+    enabled: Boolean(tracing.enabled),
+    available: Boolean(tracing.enabled),
+    samplingRatio: num(tracing.sampling_ratio),
+    correlation,
+    // What a reader can actually pivot on today, rather than the full wish list.
+    correlate: !tracing.enabled ? []
+      : correlation === 'full' ? ['run', 'batch', 'job', 'tenant', 'document']
+        : ['run', 'batch', 'job'],
+    note: tracing.enabled
+      ? (correlation === 'full'
+        ? null
+        : 'Traces are being collected, but tenant and document correlation is off: ACP_TELEMETRY_SALT '
+          + 'is unset, and an unsalted id would differ per replica rather than joining anything.')
+      : `Tracing is off — ${tracing.reason || 'no reason reported'}. No trace drill-down is `
+        + 'available, so none is offered.',
+  }
+}
+
 /* ─────────────────────── Request health ─────────────────────── */
 
 /**

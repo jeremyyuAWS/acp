@@ -324,6 +324,18 @@ def _start_job_workers():
     it; the scheduler thread then starts with its jobs already pending."""
     core.get_store()
     _announce_isolation_mode()
+    # Tracing first, so the scheduler and worker spans below are captured from the first tick
+    # rather than from whenever the first HTTP request happened to arrive. A no-op without
+    # APPLICATIONINSIGHTS_CONNECTION_STRING — see api/telemetry.py.
+    try:
+        import telemetry as _telemetry  # noqa: PLC0415
+        from datetime import datetime as _now_dt, timezone as _now_tz  # noqa: PLC0415
+        _state = _telemetry.configure(now_iso=_now_dt.now(_now_tz.utc).isoformat())
+        if _state.get("enabled"):
+            print(f"[telemetry] Application Insights on · sampling {_state['sampling_ratio']} "
+                  f"· correlation {_state['correlation']}", flush=True)
+    except Exception:  # noqa: BLE001 — never take startup down for telemetry.
+        pass
     core.reload_scheduler()
     core.start_scheduler()
     n = core.start_workers()

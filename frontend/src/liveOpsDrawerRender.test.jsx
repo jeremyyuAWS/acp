@@ -582,6 +582,37 @@ describe('Trend strip', () => {
   })
 })
 
+describe('Tracing panel', () => {
+  const workerNode = { kind: 'worker', label: 'Assess workers', service }
+  const withTracing = (tracing) => ({ ...snapshot, summary: { ...snapshot.summary, tracing } })
+
+  it('says tracing is off and why, rather than offering a dead drill-down', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode,
+      snapshot: withTracing({ enabled: false, reason: 'not configured' }) })
+    expect(container.textContent).toContain('Traces')
+    expect(container.textContent).toContain('Off')
+    expect(container.textContent).toContain('Tracing is off — not configured')
+    expect(container.textContent).not.toContain('Correlates by')
+  })
+
+  it('names what a reader can pivot on when tracing is collecting', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode,
+      snapshot: withTracing({ enabled: true, correlation: 'full', sampling_ratio: 1 }) })
+    expect(container.textContent).toContain('Collecting')
+    expect(container.textContent).toContain('sampling 100%')
+    expect(container.textContent).toContain('Correlates by run, batch, job, tenant, document')
+  })
+
+  it('says when spans export but tenant and document correlation is not available', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode,
+      snapshot: withTracing({ enabled: true, correlation: 'ids_only', sampling_ratio: 0.25 }) })
+    expect(container.textContent).toContain('Correlates by run, batch, job')
+    expect(container.textContent).not.toContain('tenant, document')
+    expect(container.textContent).toContain('ACP_TELEMETRY_SALT is unset')
+    expect(container.textContent).toContain('sampling 25%')
+  })
+})
+
 describe('Event timeline', () => {
   const workerNode = { kind: 'worker', label: 'Assess workers', service }
 
