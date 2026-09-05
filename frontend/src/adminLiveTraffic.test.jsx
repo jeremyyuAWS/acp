@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { TILE_KINDS, azureBytes, azureLatest, buildTrafficGraph, capacityValue, flowEdge, infrastructureDetail, nodeGauge, queueConcentration, sizeScopeNote, tileKind, tileStyle, trafficEdgeStyle, trendToggleLabel, workerServiceRows } from './AdminLiveTraffic.jsx'
+import { TILE_KINDS, azureBytes, azureLatest, buildTrafficGraph, capacityValue, flowEdge, infrastructureDetail, nodeGauge, queueConcentration, sizeScopeNote, tileKind, tileStyle, trafficEdgeStyle, trafficGraphForTab, trendToggleLabel, workerServiceRows } from './AdminLiveTraffic.jsx'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(join(here, 'AdminLiveTraffic.jsx'), 'utf8')
@@ -34,6 +34,27 @@ describe('Admin live traffic graph', () => {
     expect(graph.nodes.find((node) => node.id === 's1:assess').data.run.current_file).toBe('Report.docx')
   })
 
+  it('separates the stable infrastructure map from the running-job board', () => {
+    const recent = { ...run, scan_id: 'done', status: 'recent', completed: 20, running: 0, queued: 0 }
+    const graph = buildTrafficGraph({ runs: [run, recent], summary: { active_runs: 1 } })
+    const infrastructure = trafficGraphForTab(graph, 'infrastructure')
+    const jobs = trafficGraphForTab(graph, 'jobs')
+
+    expect(infrastructure.nodes.every((node) => node.type === 'infra')).toBe(true)
+    expect(infrastructure.edges.every((edge) =>
+      infrastructure.nodes.some((node) => node.id === edge.source)
+      && infrastructure.nodes.some((node) => node.id === edge.target))).toBe(true)
+    expect(jobs.nodes.map((node) => node.id)).toEqual(['s1:assess'])
+    expect(jobs.edges).toEqual([])
+    expect(jobs.nodes[0].position).toEqual({ x: 35, y: 55 })
+  })
+
+  it('exposes named tabs for infrastructure and running jobs', () => {
+    expect(source).toContain('aria-label="Live Operations flow views"')
+    expect(source).toContain("['infrastructure', 'Infrastructure map']")
+    expect(source).toContain("['jobs', `Running jobs (${summary.active_runs || 0})`]")
+  })
+
   it('visually and verbally separates active jobs from worker services', () => {
     // Same subject as when this landed; asserted through tileStyle rather than through the literal
     // strings it used to inline, so the separation can be strengthened without the test reading as
@@ -46,7 +67,7 @@ describe('Admin live traffic graph', () => {
     expect(TILE_KINDS.job.radius).toBe(6)
     expect(TILE_KINDS.service.radius).toBeGreaterThan(TILE_KINDS.job.radius)
     expect(source).toContain('SERVICE</b> · capacity')
-    expect(source).toContain('ACTIVE JOB</b> · document progress')
+    expect(source).toContain('Running jobs (${summary.active_runs || 0})')
     expect(source).toContain('DATA</b> · sources and outputs')
     expect(source).toContain('aria-label="Map key"')
   })
@@ -260,8 +281,8 @@ describe('The lines carry direction, activity and a way in', () => {
     expect(graph.edges.filter((edge) => !ids.has(edge.data.detail))).toEqual([])
   })
 
-  it('tells the reader the moving lines are selectable', () => {
-    expect(source).toContain('Moving lines carry work in flight · select a line, or either tile it joins, for details')
+  it('tells the reader the running job cards are selectable', () => {
+    expect(source).toContain('Select a job to inspect its live progress, queue, throughput, and events')
   })
 })
 
