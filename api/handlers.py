@@ -269,6 +269,19 @@ def _remediation_scope(filename: str, scan_id: str):
         return None
 
 
+def _remediation_fix_scope(filename: str, scan_id: str, failing_auto_rules):
+    """Gate mutations by both frozen policy scope and Assessment evidence.
+
+    Scan scope says what ACP may inspect; it does not say every criterion failed. Previously a
+    PDF with one auto-fixable failure still traversed every document-wide fixer allowed by that
+    broad scope. Only criteria that Assessment observed failing in deterministic ``auto`` mode
+    are eligible to mutate here. An empty/unavailable evidence list permits no mutation.
+    """
+    configured = _remediation_scope(filename, scan_id)
+    eligible = frozenset(str(rule) for rule in (failing_auto_rules or ()) if rule)
+    return lambda sc: sc in eligible and (configured is None or bool(configured(sc)))
+
+
 def _verify_residual(fixed_bytes: bytes, filename: str):
     """Re-scan the remediated bytes and return a `proposals.Verification` — verified-cleared,
     verified-still-failing, or COULD-NOT-VERIFY. Delegates to the single shared implementation
@@ -786,16 +799,6 @@ def _remediate_file(payload: dict, job: dict) -> None:
         raise FatalJobError(f"unsupported remediation source {source!r} — expected one of "
                             f"{', '.join(REMEDIATION_SOURCES)}")
 
-    import activity as _activity
-    try:
-        _eligible_rules = core.store.list_auto_fail_rules(scan_id, filename)
-    except Exception:
-        _eligible_rules = []
-    _rule_detail = ("WCAG " + ", ".join(sorted(_eligible_rules))
-                    if _eligible_rules else "checking eligible WCAG criteria")
-    _activity.record(scan_id, file=filename, action="starting automated remediation",
-                     detail=_rule_detail, phase="remediating", force=True)
-
     # Never remediate ACP's own remediated copy. POST /scans/{sid}/remediate already can't
     # enqueue one — it iterates get_scan's filtered file list — but jobs are DURABLE: a job
     # queued before that filter existed, or retried from the dead-letter, still arrives here.
@@ -829,6 +832,17 @@ def _remediate_file(payload: dict, job: dict) -> None:
     if f".{ext}" in _AV_REMEDIABLE:
         _propose_media_captions(scan_id, filename, drive_file_id, payload)
         return
+
+    import activity as _activity
+    # This evidence controls which mutations may run, so failure to read it must retry the job;
+    # treating a database error as an empty list would complete successfully after doing no work.
+    # Media returns above: caption proposals are not automatic document mutations and must not
+    # depend on this format-fixer query (or on test doubles implementing it).
+    _eligible_rules = core.store.list_auto_fail_rules(scan_id, filename)
+    _rule_detail = ("WCAG " + ", ".join(sorted(_eligible_rules))
+                    if _eligible_rules else "checking eligible WCAG criteria")
+    _activity.record(scan_id, file=filename, action="starting automated remediation",
+                     detail=_rule_detail, phase="remediating", force=True)
 
     _phase(job, f"downloading {filename}")
     _activity.record(scan_id, file=filename, action="opening source document",
@@ -868,7 +882,10 @@ def _remediate_file(payload: dict, job: dict) -> None:
     _phase(job, f"applying fixes to {filename}")
     _activity.record(scan_id, file=filename, action="applying eligible WCAG fixes",
                      detail=_rule_detail, phase="remediating", force=True)
-    _scope_allows = _remediation_scope(filename, scan_id)
+    # Scope alone is deliberately too broad: it describes what may be assessed, not what this
+    # document failed. Restrict expensive format-wide mutations to the auto-fixable FAIL rows
+    # already produced by Assessment.
+    _scope_allows = _remediation_fix_scope(filename, scan_id, _eligible_rules)
     # The gap #137 recorded here as `remediate.scope_partial` is CLOSED. The office/pdf
     # deterministic fixers now take the same `in_scope` predicate the HTML fixer does, gated at
     # each individual fix by the SC it actually writes (remediate_office._sc_ok /
@@ -882,10 +899,13 @@ def _remediate_file(payload: dict, job: dict) -> None:
     # pins the closure per format, including an empty-scope case that catches an ungated fix
     # generically rather than relying on this list staying complete.
     if ext in ("html", "htm"):
-        fixed_html, applied, _deferred = remediate_html(
-            data.decode("utf-8", errors="replace"),
-            ai_enabled=core.store.get_ai_enabled(), diffs=rem_diffs,
-            proposals=inline_proposals, in_scope=_scope_allows)
+        import joblog as _joblog
+        with _joblog.stage("remediate.html", doc=_joblog.doc_id(filename),
+                           scan_id=scan_id, eligible_rules=len(_eligible_rules)):
+            fixed_html, applied, _deferred = remediate_html(
+                data.decode("utf-8", errors="replace"),
+                ai_enabled=core.store.get_ai_enabled(), diffs=rem_diffs,
+                proposals=inline_proposals, in_scope=_scope_allows)
         rem_skipped = _deferred
         fixed_bytes = fixed_html.encode("utf-8")
         mimetype = "text/html"
@@ -899,10 +919,13 @@ def _remediate_file(payload: dict, job: dict) -> None:
                 from remediate_pdf import remediate_pdf
                 _pdf_proposals: list = []
                 _applied_fixes: list = []
-                out_path, applied, _skipped = remediate_pdf(
-                    src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id,
-                    diffs=rem_diffs, proposals=_pdf_proposals, applied_fixes=_applied_fixes,
-                    in_scope=_scope_allows)
+                import joblog as _joblog
+                with _joblog.stage("remediate.pdf", doc=_joblog.doc_id(filename),
+                                   scan_id=scan_id, eligible_rules=len(_eligible_rules)):
+                    out_path, applied, _skipped = remediate_pdf(
+                        src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id,
+                        diffs=rem_diffs, proposals=_pdf_proposals,
+                        applied_fixes=_applied_fixes, in_scope=_scope_allows)
                 rem_skipped = _skipped
                 mimetype = "application/pdf"
                 # A PDF's AI-written alt text is evidence exactly like an Office document's.
@@ -940,10 +963,13 @@ def _remediate_file(payload: dict, job: dict) -> None:
                 _applied_fixes: list = []
                 _proposals: list = []
                 _evidence: list = []
-                out_path, applied, _skipped = remediate_office(
-                    src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id,
-                    applied_fixes=_applied_fixes, proposals=_proposals,
-                    evidence=_evidence, diffs=rem_diffs, in_scope=_scope_allows)
+                import joblog as _joblog
+                with _joblog.stage("remediate.office", doc=_joblog.doc_id(filename),
+                                   scan_id=scan_id, eligible_rules=len(_eligible_rules), ext=ext):
+                    out_path, applied, _skipped = remediate_office(
+                        src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id,
+                        applied_fixes=_applied_fixes, proposals=_proposals,
+                        evidence=_evidence, diffs=rem_diffs, in_scope=_scope_allows)
                 rem_skipped = _skipped
                 mimetype = _OFFICE_MIME[ext]
                 _record_applied_fixes(scan_id, filename, _applied_fixes)
@@ -1112,7 +1138,10 @@ def _remediate_file(payload: dict, job: dict) -> None:
     _phase(job, "re-verifying the corrected copy")
     _activity.record(scan_id, file=filename, action="re-checking corrected document",
                      detail=_rule_detail, phase="verifying", force=True)
-    verification = _verify_residual(fixed_bytes, filename)
+    import joblog as _joblog
+    with _joblog.stage("remediate.verify", doc=_joblog.doc_id(filename),
+                       scan_id=scan_id, ext=ext):
+        verification = _verify_residual(fixed_bytes, filename)
     # Enqueue the inline AI proposals (2.4.4 link text …) now that the re-scan has run, so a
     # deterministic fix that verifiably cleared carries validated=True (confidence.js reads
     # it as a High, one-click confirm) while a fix still failing / a model draft stays
