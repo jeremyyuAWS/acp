@@ -483,3 +483,268 @@ def test_no_rendered_object_carries_a_literal_credential():
             "External Secrets Operator or an existing Secret the operator manages")
     text = yaml.safe_dump_all(manifests)
     assert "stringData" not in text
+
+
+# ── does the chart render what the plan promises? (PRD S21 phase 3, feature parity) ──────────
+#
+# `acpctl plan` prints the service inventory; `helm install` creates the workloads. Nothing
+# compared the two, and they disagree: four services the inventory declares `provisioning:
+# in-cluster` have no template in this chart at all.
+#
+# THE DISAGREEMENT IS NOT VISIBLE FROM EITHER SIDE ALONE. The inventory is a pure function of the
+# document and is right about what the document asks for. The chart renders what it has templates
+# for and is right about that. Only the comparison says that a document declaring
+# `ai.ollama.enabled: true` — which packaging/docs/azure-current.acp-deployment.yaml does, because
+# production runs Ollama — plans a service that installing would not create.
+#
+# TWO NAIVE COMPARISONS OVER-REPORT AND ARE NOT USED. The chart names workloads `acp-api` and
+# `acp-worker-assess` where the inventory says `acp-web-api` and `acp-assess` (the tier/role split
+# inventory.TIER_ROLE warns about), so a name comparison invents six gaps. And the chart ships two
+# images where the inventory lists seven artifacts, because PRD S5.1 wants separately-signed
+# images for what is one image today — so an image comparison invents five. The map below is
+# explicit for that reason.
+
+# Inventory service name -> the suffix the chart appends to the release name.
+RENDERS_AS = {
+    "acp-web-api": "api",
+    "acp-discovery": "worker-discover",
+    "acp-assess": "worker-assess",
+    "acp-remediate": "worker-remediate",
+    "acp-migrations": "migrate",
+    "acp-preflight": "preflight",
+}
+
+# Declared in-cluster by the inventory, rendered by nothing. Each entry says what is KNOWN; none
+# claims a rationale, because the repository does not record one — the chart simply has no
+# template, and unlike the data services (which _dataservices.tpl refuses loudly and explains)
+# these fail silently.
+NOT_RENDERED = {
+    "acp-ollama-gateway": (
+        "A RELEASE IMAGE with no template. inventory.IMAGES lists `acp-ollama-gateway`, the "
+        "service wants a persistent model volume so a restart does not re-pull multi-GB models, "
+        "and production runs it (deploy/public/ creates acp-ollama). The chart declares "
+        "`ai.ollama.enabled` in values.yaml and no template reads it. Whether the ACP chart "
+        "should own the model runtime is a design decision nobody has recorded."),
+    "acp-otel-collector": (
+        "The only one with a seam. `_helpers.tpl` DOES read "
+        "`observability.openTelemetry.enabled` and sets OTEL_SDK_DISABLED plus an endpoint — so "
+        "the workloads are instrumented and the collector is expected from outside. That is "
+        "coherent, and it contradicts the inventory, which calls this service `in-cluster`. One "
+        "of the two is wrong; see test_the_otel_endpoint_is_never_actually_set for the sharper "
+        "half of the same seam."),
+    "acp-grafana": (
+        "Upstream image, referenced not rebuilt (the inventory says so). "
+        "`observability.grafana.enabled` is a values knob no template reads, and unlike langfuse "
+        "and the OTel collector NOTHING else in the render refers to it either — no endpoint, no "
+        "credential, no env var. So this and ollama are the two that are simply absent rather "
+        "than expected from outside. Plausibly a platform concern the adapter supplies, but "
+        "presets.PLATFORM_ADAPTER lists Postgres, Redis, Blob and Key Vault and does not claim "
+        "observability, so nothing in the repository says who provides it."),
+    "acp-langfuse": (
+        "Self-hosted LLM tracing, and the same shape as the OTel collector rather than the same "
+        "shape as grafana — which is a distinction the first draft of these tests got wrong. No "
+        "template reads `observability.langfuse.mode`, but the chart DOES project the "
+        "`langfuse-secret-key` secret into the API container, so the application is configured "
+        "to talk to a Langfuse the release does not deploy. Expected from outside, then, and the "
+        "inventory calling it `in-cluster` is the half that looks wrong."),
+}
+
+
+def _in_cluster(doc):
+    from acpctl.inventory import build_inventory
+    return {s.name for s in build_inventory(doc)
+            if s.kind in ("service", "job") and s.provisioning == "in-cluster"}
+
+
+def test_every_in_cluster_service_is_classified():
+    """ANTI-VACUOUS, AND THE POINT OF THE MAPS. A service added to the inventory tomorrow must be
+    put in one of the two maps — rendered, or explicitly not — instead of joining a gap nobody
+    notices. Without this the maps go stale in the direction that hides the problem."""
+    from acpctl.spec import load_document
+    classified = set(RENDERS_AS) | set(NOT_RENDERED)
+    for name in RENDERABLE:
+        doc = load_example(name)
+        unclassified = _in_cluster(doc) - classified
+        assert not unclassified, (
+            f"{name} plans in-cluster service(s) {sorted(unclassified)} that this file does not "
+            f"classify — add them to RENDERS_AS or to NOT_RENDERED with what is known")
+
+
+@needs_helm
+def test_everything_in_the_renders_as_map_actually_renders():
+    doc = load_example("standard-production")
+    workloads = {m["metadata"]["name"] for m in render(doc)
+                 if m.get("kind") in ("Deployment", "StatefulSet", "Job", "CronJob")}
+    for service, suffix in RENDERS_AS.items():
+        assert any(w.endswith(suffix) for w in workloads), (
+            f"{service} is mapped to a workload ending `{suffix}` and the chart rendered "
+            f"{sorted(workloads)}")
+
+
+@needs_helm
+def test_everything_in_the_not_rendered_map_really_is_absent():
+    """A STALENESS GUARD, and the same one azure_parity puts on its acknowledged differences: an
+    entry that outlives the gap it documents still reads as a considered decision. If somebody
+    adds an Ollama template, this fails and the entry has to go."""
+    from acpctl.spec import load_document
+    doc = load_document(PACKAGING / "docs" / "azure-current.acp-deployment.yaml")
+    doc["api"]["replicas"]["min"] = 2                    # the two findings azure-rebuild.md names
+    doc["data"]["postgres"]["backupRetentionDays"] = 35
+    doc["observability"]["langfuse"] = {"mode": "self-hosted"}
+    doc["secrets"]["refs"]["langfuse-secret-key"] = {"name": "langfuse", "key": "secret"}
+
+    planned = _in_cluster(doc)
+    for service in NOT_RENDERED:
+        assert service in planned, (
+            f"{service} is listed as planned-but-unrendered and the inventory no longer plans it "
+            f"for this document — the entry is stale")
+
+    # WORKLOADS, not every string in the render — and the first draft of this checked the whole
+    # document text and failed, correctly. Turning Langfuse on makes the chart project the
+    # `langfuse-secret-key` secret into the API container, which is right: the application talks
+    # to Langfuse. Wiring a credential for a service is not deploying it, and conflating the two
+    # would have made this test assert the chart must not even know the name.
+    workloads = [m for m in render(doc)
+                 if m.get("kind") in ("Deployment", "StatefulSet", "Job", "CronJob")]
+    identities = set()
+    for manifest in workloads:
+        identities.add(manifest["metadata"]["name"].lower())
+        spec = manifest["spec"]["template"]["spec"]
+        for container in spec.get("containers", []) + spec.get("initContainers", []):
+            identities.add(container["image"].lower())
+    for token in ("ollama", "grafana", "langfuse", "otel"):
+        assert not [i for i in identities if token in i], (
+            f"the chart now renders a workload for {token} — NOT_RENDERED is stale, which is "
+            f"better news than it sounds and still has to be recorded")
+
+
+@needs_helm
+def test_the_derived_production_document_plans_three_services_it_would_not_install():
+    """THE HEADLINE, on the document that describes production rather than on an example.
+
+    azure-current.acp-deployment.yaml declares `ai.ollama.enabled: true` and
+    `observability.grafana: true` because deploy/public/ creates both. `acpctl plan` lists them;
+    `helm install` creates neither. Adopting the chart as the Azure rebuild would silently drop
+    the local model runtime that ADR 0010's remediation lane depends on.
+
+    Named as an exact set so that closing one of them fails here and the count in
+    packaging/docs/ has to move with it.
+    """
+    from acpctl.spec import load_document
+    doc = load_document(PACKAGING / "docs" / "azure-current.acp-deployment.yaml")
+    doc["api"]["replicas"]["min"] = 2
+    doc["data"]["postgres"]["backupRetentionDays"] = 35
+
+    planned = _in_cluster(doc)
+    assert planned & set(NOT_RENDERED) == {
+        "acp-ollama-gateway", "acp-otel-collector", "acp-grafana"}, sorted(planned)
+
+
+# ── values knobs the chart declares and no template reads ────────────────────────────────────
+
+# A knob that exists and is silently ignored is worse than an absent one: `acpctl values` renders
+# it faithfully, `helm install` accepts it without complaint, and an operator reading either sees
+# a configured feature. Listed with what is known, same as NOT_RENDERED.
+INERT_VALUES = {
+    "ai.ollama": "no template reads it; see NOT_RENDERED['acp-ollama-gateway']",
+    "observability.grafana": "no template reads it; see NOT_RENDERED['acp-grafana']",
+    "observability.langfuse": "no template reads it; see NOT_RENDERED['acp-langfuse']",
+    "ai.externalProviders": (
+        "FOUND BY FIXING THE GUARD ABOVE, not by looking. `acpctl values` emits the provider "
+        "list and no template reads it. The credential does arrive — `ai.mode != local-only` "
+        "makes `ai-provider-key` a required secret and secrets are projected — so an external-AI "
+        "installation gets a key and no statement of which providers it is for. Whether the "
+        "application needs the list at all is unrecorded; `ai.mode` is read and is what gates "
+        "ACP_AI_LOCAL_ONLY."),
+}
+
+
+def _template_text() -> str:
+    return "\n".join(p.read_text() for p in sorted((CHART / "templates").iterdir())
+                      if p.is_file())
+
+
+@pytest.mark.parametrize("path", sorted(INERT_VALUES))
+def test_each_inert_values_key_really_is_unread(path):
+    """The staleness half. If a template starts reading one of these, the knob has become live and
+    the entry — and probably NOT_RENDERED beside it — is wrong."""
+    leaf = path.rsplit(".", 1)[-1]
+    assert leaf not in _template_text(), (
+        f"values key `{path}` is now read by a template, so it is no longer inert — remove it "
+        f"from INERT_VALUES and check whether NOT_RENDERED still holds")
+
+
+def test_no_other_values_knob_is_silently_ignored():
+    """THE GUARD THAT WOULD HAVE CAUGHT ALL OF THIS AT CHART-AUTHORING TIME.
+
+    Every key values.yaml declares must be read by a template, or be listed above as knowingly
+    inert. A knob that exists and does nothing is worse than an absent one: `acpctl values`
+    renders it, `helm install` accepts it, and both surfaces show a configured feature.
+
+    THE FIRST VERSION OF THIS GUARD DID NOT BITE, and that is why the rule below is shaped the
+    way it is. It fell back to `section not in templates`, which exempts every key under any
+    section a template mentions anywhere — so `.Values.ai.mode` being read made the whole `ai`
+    section live, `ai.ollama` included. A bite check (adding an invented knob under `ai`) passed,
+    which was a finding about the guard rather than a guard that held.
+
+    The honest rule needs one exception and exactly one: a section rendered wholesale with
+    `toYaml .Values.<section>` legitimately never names its leaves, which is how
+    `podSecurityContext` and `securityContext` reach the pod. Everything else must be named.
+    """
+    values = yaml.safe_load((CHART / "values.yaml").read_text())
+    templates = _template_text()
+    wholesale = {section for section in values
+                 if f"toYaml .Values.{section}" in templates
+                 or f"toYaml $.Values.{section}" in templates}
+
+    ignored = []
+    for section, body in values.items():
+        if section in wholesale:
+            continue
+        if not isinstance(body, dict):
+            if section not in templates and section not in INERT_VALUES:
+                ignored.append(section)
+            continue
+        for key in body:
+            if f"{section}.{key}" in INERT_VALUES:
+                continue
+            if key not in templates:
+                ignored.append(f"{section}.{key}")
+    assert not ignored, (
+        f"values.yaml declares {sorted(ignored)} and no template reads them — either wire them "
+        f"up or add them to INERT_VALUES with what is known, so an operator setting one is not "
+        f"silently told nothing")
+
+
+@needs_helm
+def test_the_otel_endpoint_is_never_actually_set():
+    """THE SEAM THAT DOES NOT MEET, pinned because it is a live misconfiguration rather than a gap.
+
+    `acpctl values` emits `observability.openTelemetry.{enabled, exporter}`. `_helpers.tpl` reads
+    `{enabled, endpoint}`. So `exporter: azure-monitor` is rendered and ignored, `endpoint` is
+    never written, and the workloads come up with OTEL_SDK_DISABLED=false and no destination —
+    instrumentation switched on, pointing nowhere.
+
+    Asserted rather than fixed: what endpoint an `azure-monitor` exporter implies is an adapter
+    decision, and inventing one here would be the guess this programme keeps refusing to make.
+    """
+    from acpctl.spec import load_document
+    from acpctl.values import build_values
+
+    doc = load_example("standard-production")
+    values = build_values(doc)
+    otel = values["observability"]["openTelemetry"]
+    assert otel["enabled"] is True and otel.get("exporter")
+    assert "endpoint" not in otel, (
+        "acpctl values now emits an OTel endpoint — the seam has been closed and this test should "
+        "assert the endpoint reaches the workload instead")
+
+    for manifest in render(doc):
+        if manifest.get("kind") != "Deployment":
+            continue
+        env = {e["name"]: e.get("value")
+               for e in manifest["spec"]["template"]["spec"]["containers"][0]["env"]}
+        assert env.get("OTEL_SDK_DISABLED") == "false", "instrumentation is meant to be on here"
+        assert "OTEL_EXPORTER_OTLP_ENDPOINT" not in env, (
+            "an OTLP endpoint now reaches the workload — good, and this test needs rewriting to "
+            "assert it matches the document's exporter")
