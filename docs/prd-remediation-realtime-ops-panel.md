@@ -661,7 +661,7 @@ Within ten seconds, the card must answer:
 │ PHASES                                                                     │
 │ ✓ Prepared 100  ● Applying 10  ● Re-checking 6  ● Saving 3  ○ Finalizing │
 ├────────────────────────────────────────────────────────────────────────────┤
-│ LIVE ACTIVITY                                                Pause motion  │
+│ LIVE ACTIVITY                                        Pause visual updates  │
 │ 17:32:08  ✓ Patient Guide.docx — 4 fixes verified                         │
 │ 17:32:06  ↑ Intake Form.pdf — corrected copy saved to SharePoint          │
 │ 17:32:03  ↻ Benefits.xlsx — Graph throttled; retry scheduled              │
@@ -830,13 +830,18 @@ hostnames, credentials, exception stacks and fabricated utilization remain in Mo
 
 Motion communicates durable change and never substitutes for status text.
 
+- Show the active document pipeline as `Waiting → Applying → Verifying → Saving → Delivered`,
+  with current counts at every stage. Documents use a subtle slide/fade only when their durable
+  state changes; the pipeline remains still when a refresh repeats the same state.
 - Animate a document only when its durable stage changes. A refresh or repeated event does not
   replay motion.
 - Positive deltas may briefly highlight increases in completed, applied, verified or delivered
   counts. Never celebrate waiting, failure or retry increases, and never animate an unknown value
   from zero.
-- Progress is one reconciled, segmented partition. Labels and/or patterns supplement color;
-  hover and keyboard focus reveal exact counts.
+- Progress is one reconciled, segmented partition: `Completed | Processing | Waiting | Review |
+  Failed`. When `skipped > 0`, add a labelled `Skipped` segment so the visible partition still
+  reconciles to the batch total. Labels and/or patterns supplement color; hover and keyboard focus
+  reveal exact counts.
 - Throughput bars use a five-minute window and update on a 10–15 second visual cadence rather than
   every SSE event.
 - Multiple phases may pulse softly while work is active. Queue-flow dashes move only while
@@ -846,13 +851,16 @@ Motion communicates durable change and never substitutes for status text.
 - Show detailed progress trails for at most the three visible active documents.
 - Milestone notices are subtle and dismissible and appear only for meaningful thresholds, never
   for every document.
+- An optional compact strip may visualize event density over the last 60 seconds. Label it
+  **Activity**, not progress or completion, keep it subordinate to the headline, and allow it to be
+  hidden without losing any operational information.
 - Connection text always says `Live`, `Reconnecting · last update … ago`,
   `Updating by polling`, or `Stalled · no material progress for …`; animation is supplementary.
 - Respect `prefers-reduced-motion`; never flash faster than three times per second; never move
   focus, reading order or scroll position because data arrived.
 - When the tab is hidden, continue ingesting SSE but pause visual motion. On return, render the
   latest reconciled state once without replaying accumulated transitions.
-- **Pause motion** freezes animation, not backend work, event ingestion or reconciliation.
+- **Pause visual updates** freezes animation, not backend work, event ingestion or reconciliation.
 
 ## 35. Version 2 delivery and acceptance
 
