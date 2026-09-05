@@ -596,6 +596,21 @@ async def remediate_scan(sid: str, request: Request):
     execution = core.store.enqueue_stage_batch(
         sid, "remediate", "remediate_file", payloads, snapshot_id=snapshot_id,
         request_fingerprint=request_fingerprint)
+    # AFTER the jobs exist, never before: the run is "accepted" precisely when durable work has
+    # been enqueued for it, and an acceptance event that led the enqueue would let the panel show
+    # a run that nothing will ever claim. Emitted once per batch — the run-level transition PRD §7
+    # calls Accepted.
+    #
+    # NOT on a reused execution. enqueue_stage_batch is idempotent on the request fingerprint, so
+    # re-submitting the same file set returns the EXISTING batch rather than making one. That is
+    # the same run, already accepted; announcing it again would put a second acceptance in the
+    # log for work that was never re-enqueued, and a client replaying the log would see one run
+    # start twice.
+    if execution["job_ids"] and not execution.get("reused"):
+        import handlers
+        handlers.scan_event(sid, "remediate.accepted", job_id=execution["job_ids"][0],
+                            detail={"documents": len(execution["job_ids"]),
+                                    "batch_id": execution["batch_id"]})
     return {"scan_id": sid, "enqueued": len(execution["job_ids"]),
             "job_ids": execution["job_ids"], "batch_id": execution["batch_id"],
             "snapshot_id": snapshot_id, "reused": execution["reused"],

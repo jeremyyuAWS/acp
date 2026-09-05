@@ -778,6 +778,27 @@ def _remediation_source_bytes(scan_id: str, filename: str, payload: dict,
                         f"{', '.join(REMEDIATION_SOURCES)}")
 
 
+def _rem_event(scan_id: str, kind: str, job: dict | None, file: str | None, **detail) -> None:
+    """One remediation lifecycle event, carrying the job identity the panel correlates on.
+
+    A thin wrapper over `scan_event` rather than a second mechanism: it exists only so every
+    remediation emit site carries the same identity fields (job id, attempt, filename) without
+    thirteen call sites each remembering to. `scan_event` itself never raises — a narration line
+    must never be able to fail the work it narrates — so this cannot either.
+
+    `file` goes in the DETAIL payload, not a column: `scan_events` has no file column, and adding
+    one for this would migrate a table five other event kinds share. The detail is JSON and the
+    readers already decode it.
+
+    FILENAMES ARE IN HERE. That is deliberate and it is why the read path is owner-scoped —
+    `list_scan_events(owner=...)` plus the route's own `get_scan(owner=...)` gate, exactly as PRD
+    §13 requires. Nothing here carries extracted document CONTENT, only its name and the counts.
+    """
+    scan_event(scan_id, kind, job_id=(job or {}).get("id"),
+               attempt=(job or {}).get("attempts"),
+               detail={"file": file, **detail} if file else (detail or None))
+
+
 @handler("remediate_file")
 def _remediate_file(payload: dict, job: dict) -> None:
     """Apply server-side remediation to one file and write the fixed copy to Drive.
@@ -932,6 +953,8 @@ def _remediate_file(payload: dict, job: dict) -> None:
                 # It used to be dropped: remediate_pdf returned only prose, so no row reached
                 # applied_fixes and the certification record showed the fix had never happened.
                 _record_applied_fixes(scan_id, filename, _applied_fixes)
+                _rem_event(scan_id, "remediate.fix_applied", job, filename,
+                           fixes=len(_applied_fixes))
                 # Untagged-PDF proposals, split by kind — 1.3.2 reading order (vision) and
                 # 1.3.1 structure map (deterministic font rank). Surfaced for one-click
                 # confirm, never auto-applied. Before the no-fixes early return.
@@ -973,6 +996,8 @@ def _remediate_file(payload: dict, job: dict) -> None:
                 rem_skipped = _skipped
                 mimetype = _OFFICE_MIME[ext]
                 _record_applied_fixes(scan_id, filename, _applied_fixes)
+                _rem_event(scan_id, "remediate.fix_applied", job, filename,
+                           fixes=len(_applied_fixes))
                 # AI-proposed (but not auto-applied) alt: an ungrounded vision guess is
                 # surfaced for one-click approval rather than silently written (WCAG 1.1.1
                 # intent stays human). Attach the prefilled drafts to the file's 1.1.1 HITL
@@ -1010,8 +1035,15 @@ def _remediate_file(payload: dict, job: dict) -> None:
                             # Merges into this file's 1.1.1 row when one already exists (the
                             # proposals row queued just above). rule_name so a row created here
                             # is headed "Non-text Content", not the raw deferral note.
-                            core.store.queue_hitl_deferral(scan_id, filename, _msg, _n,
-                                                           rule_name="Non-text Content")
+                            _queued_item = core.store.queue_hitl_deferral(
+                                scan_id, filename, _msg, _n, rule_name="Non-text Content")
+                            # None means it MERGED into an existing 1.1.1 row rather than creating
+                            # one (queue_hitl_deferral is idempotent per scan/file/criterion). Only
+                            # a genuinely new item is a new thing for a person to do; emitting on
+                            # the merge would narrate the same review request once per retry.
+                            if _queued_item:
+                                _rem_event(scan_id, "remediate.review_requested", job, filename,
+                                           criterion="1.1.1", findings=_n)
                         except Exception:
                             swallowed("_remediate_file: queueing the 1.1.1 HITL deferral failed", scan_id)
                 # Attach the deferred images to whichever 1.1.1 row now exists — the
@@ -1122,6 +1154,12 @@ def _remediate_file(payload: dict, job: dict) -> None:
               "stored in ACP", flush=True)
 
     core.store.record_remediation(scan_id, filename, drive_write_url=web_url, blob_url=blob_url)
+    # `delivered` names the DESTINATION write, not the correction. A corrected copy that
+    # reached blob but not the provider is stored-not-delivered — PRD §11's delivery-failure
+    # class — and the snapshot counts it as pending. Saying `delivered` for it would make a
+    # lost corrected copy invisible, which is the whole reason the two are counted apart.
+    _rem_event(scan_id, "remediate.delivered" if web_url else "remediate.delivery_failed",
+               job, filename, destination="provider" if web_url else "acp_only")
     # G4: the Remediate span now carries what the fix pass DID — how many fixes applied vs
     # skipped/deferred — not just where the copy was written. `applied` and `rem_skipped` are
     # lists of prose messages; only their counts reach the trace (lf.remediate_span is PHI-safe).
@@ -1168,6 +1206,16 @@ def _remediate_file(payload: dict, job: dict) -> None:
         verified_diffs = [d for d in rem_diffs
                           if verification.cleared({d.get("rule_id")})]
         core.store.record_remediation_diffs(scan_id, filename, verified_diffs)
+        # rem_diffs is what the fixer produced; verified_diffs is what the re-scan confirmed
+        # cleared. The difference is a verification FAILURE, and it is the number PRD §17.8
+        # requires never to reach the delivery counter.
+        _unverified = len(rem_diffs) - len(verified_diffs)
+        if verified_diffs:
+            _rem_event(scan_id, "remediate.verified", job, filename,
+                       fixes=len(verified_diffs))
+        if _unverified > 0:
+            _rem_event(scan_id, "remediate.verification_failed", job, filename,
+                       fixes=_unverified)
     except Exception:
         swallowed("_remediate_file: recording the verified remediation diffs failed", scan_id)
     try:

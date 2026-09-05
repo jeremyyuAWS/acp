@@ -8395,6 +8395,26 @@ class Store:
         "scan.inventory_saved", "scan.lifecycle_applied", "scan.discovered",
         "scan.assess_started", "scan.retrying", "scan.paused", "scan.resumed",
         "scan.cancelled", "scan.completed", "scan.failed", "scan.interrupted",
+        # ── remediation (PRD "Remediation Real-Time Operations Panel" §8) ──────────
+        #
+        # ONE LOG, NOT A SECOND ONE. The panel needs a resumable, durable narrative of a
+        # remediation run, and that is precisely what this table already is — a monotonic per-scan
+        # `seq` behind a UNIQUE index, with `list_scan_events(after_seq=...)` as the resume read.
+        # Adding a remediation_events table beside it would fork the ordering guarantee: two logs
+        # anchored on the same scan, with no defined interleaving, is worse than either alone.
+        #
+        # THESE ARE PER-DOCUMENT, which the scan.* kinds above are not, and the docstring on
+        # append_scan_event says this path is "barely contended (run-level transitions come one at
+        # a time per job)". Remediation fans out, so that assumption does not carry — but the
+        # design does: test_scan_events_store.py MEASURED a 12-thread race landing 12/12 with a
+        # gap-free sequence (the naive SELECT-MAX-then-INSERT landed 2/12). Production runs two
+        # remediate slots, well inside what was proven.
+        #
+        # Every one of these is emitted AFTER the durable write it describes — the ordering rule
+        # test_scan_events_emitted.py pins — so an event can lag reality but never lead it.
+        "remediate.accepted", "remediate.fix_applied", "remediate.verified",
+        "remediate.verification_failed", "remediate.delivered", "remediate.delivery_failed",
+        "remediate.review_requested", "remediate.document_completed",
     })
 
     _SCAN_EVENT_SEQ_ATTEMPTS = 4
