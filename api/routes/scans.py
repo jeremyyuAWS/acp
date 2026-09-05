@@ -2620,73 +2620,160 @@ def publish_files(sid: str, request: Request, body: dict):
     files = body.get("files") or ([body["file"]] if body.get("file") else [])
     if not files:
         raise HTTPException(422, "provide 'file' or 'files' in body")
-    # Best-effort Drive service + release folder, resolved once for the batch.
-    token = request.headers.get("x-drive-token")
-    owner_email = scan.get("run", {}).get("owner_email")
+    owner = _owner(request)
+    owner_email = scan.get("run", {}).get("owner_email") or owner
     import publish as _publish
-    svc = folder_id = release_folder = None
-    if token:
+    source = scan.get("run", {}).get("source") or "local"
+    eligible = [row for row in scan.get("files", [])
+                if row.get("compliant") and row.get("remediated_at")]
+    release = core.store.ensure_release_execution(sid, owner, source, len(eligible))
+    release_id = release["id"]
+    created_at = release["created_at"]
+    folder_name = release["folder_name"]
+    drive_token = request.headers.get("x-drive-token")
+    sp_token = request.headers.get("x-sp-token")
+    drive_svc = None
+    if source == "drive" and drive_token:
         try:
-            from datetime import datetime
             import handlers
-            svc = handlers._drive_client(token)
-            started = scan.get("run", {}).get("started_at")
-            released_at = datetime.fromisoformat(started.replace("Z", "+00:00")) if started else None
-            release_folder = _publish.ensure_published_folder(
-                svc, sid, released_at=released_at, return_details=True)
-            folder_id = release_folder["id"]
+            drive_svc = handlers._drive_client(drive_token)
         except Exception:
-            svc = folder_id = release_folder = None
+            drive_svc = None
     results = []
     folder_cache = {}
     for f in files:
         record = core.store.get_file_record(sid, f)
         if not record or not record.get("compliant") or not record.get("remediated_at"):
-            results.append({"file": f, "original_relative_path": None,
+            result = {"file": f, "original_relative_path": None,
                             "released_relative_path": None, "status": "failed",
                             "failure_category": "not_approved",
                             "explanation": "Only approved corrected copies can be released.",
-                            "created": False})
+                            "created": False}
+            core.store.record_release_document(release_id, owner, result)
+            results.append(result)
             continue
         source_path = record.get("source_relative_path") or record.get("parent_folder") or f
+        saved = core.store.get_release_document(release_id, f, owner)
+        if saved and saved.get("status") == "published":
+            results.append({"file": f, "source_document_id": saved.get("source_document_id"),
+                            "original_relative_path": saved.get("source_relative_path"),
+                            "released_relative_path": saved.get("destination_relative_path"),
+                            "status": "published", "published_at": saved.get("published_at"),
+                            "published_url": saved.get("released_document_url"),
+                            "verification": saved.get("verification"),
+                            "released_document_id": saved.get("released_document_id"),
+                            "corrected_checksum": saved.get("corrected_checksum"),
+                            "created": False})
+            continue
         try:
-            publication = _publish.archive_copy_publish(
-                svc, folder_id, owner_email, sid, f, relative_path=source_path,
-                source_id=record.get("drive_file_id") or f, folder_cache=folder_cache,
-                return_details=True)
-            # Providers without write support retain Blob as the durable corrected copy.
-            if svc is not None and publication is None:
+            source_id = record.get("drive_file_id") or f
+            root = None
+            if source == "drive":
+                if drive_svc is None:
+                    raise PermissionError("Google Drive publishing requires a current write grant.")
+                location = "google:me"
+                root = core.store.get_release_root(release_id, location, owner)
+                if not root:
+                    from datetime import datetime
+                    detail = _publish.ensure_published_folder(
+                        drive_svc, release_id,
+                        released_at=datetime.fromisoformat(created_at.replace("Z", "+00:00")),
+                        return_details=True)
+                    root = core.store.record_release_root(
+                        release_id, owner, "drive", location, detail["id"],
+                        detail["name"], detail.get("url"))
+                publication = _publish.archive_copy_publish(
+                    drive_svc, root["folder_id"], owner_email, sid, f,
+                    relative_path=source_path, source_id=source_id,
+                    folder_cache=folder_cache, return_details=True)
+                folders, released_name = _publish.normalize_relative_path(source_path, f)
+            elif source == "sharepoint":
+                if not sp_token:
+                    raise PermissionError("SharePoint publishing requires a current write grant.")
+                drive_id = record.get("drive_id")
+                location = f"graph:{drive_id or 'me'}"
+                root = core.store.get_release_root(release_id, location, owner)
+                if not root:
+                    detail = _publish.ensure_sharepoint_release_folder(
+                        sp_token, drive_id, release_id, folder_name)
+                    root = core.store.record_release_root(
+                        release_id, owner, "sharepoint", location, detail["id"],
+                        detail["name"], detail.get("url"))
+                publication = _publish.archive_copy_publish_sharepoint(
+                    sp_token, drive_id, root["folder_id"], owner_email, release_id,
+                    sid, f, source_path, source_id, folder_cache)
+                folders, _ = _publish.sharepoint_relative_path(source_path, f)
+                released_name = publication.get("filename") if publication else f
+            else:
+                publication = None
+                folders, released_name = _publish.normalize_relative_path(source_path, f)
+            if source in ("drive", "sharepoint") and publication is None:
                 raise IOError("corrected content was unavailable")
             url = publication.get("url") if publication else record.get("published_url")
             ts = core.store.record_publish(sid, f, published_url=url)
-            folders, safe_name = _publish.normalize_relative_path(source_path, f)
-            results.append({"file": f, "original_relative_path": source_path,
-                            "released_relative_path": "/".join([*folders, safe_name]),
+            result = {"file": f, "source_document_id": source_id,
+                            "original_relative_path": source_path,
+                            "released_relative_path": "/".join([*folders, released_name]),
                             "status": "published", "published_at": ts,
                             "published_url": url,
-                            "verification": "checksum verified" if publication else "durable Blob copy",
+                            "verification": "content verified" if publication else "durable Blob copy",
                             "released_document_id": publication.get("id") if publication else None,
-                            "created": publication.get("created", False) if publication else False})
+                            "corrected_checksum": publication.get("checksum") if publication else None,
+                            "created": publication.get("created", False) if publication else False}
+            core.store.record_release_document(release_id, owner, result)
+            results.append(result)
         except _publish.UnsafeReleasePath as exc:
-            results.append({"file": f, "original_relative_path": source_path,
+            result = {"file": f, "source_document_id": record.get("drive_file_id") or f,
+                            "original_relative_path": source_path,
                             "released_relative_path": None, "status": "failed",
                             "failure_category": "invalid_source_path",
-                            "explanation": str(exc), "created": False})
+                            "explanation": str(exc), "created": False}
+            core.store.record_release_document(release_id, owner, result)
+            results.append(result)
+        except PermissionError as exc:
+            result = {"file": f, "source_document_id": record.get("drive_file_id") or f,
+                            "original_relative_path": source_path,
+                            "released_relative_path": None, "status": "failed",
+                            "failure_category": "provider_permission_denied",
+                            "explanation": str(exc), "created": False}
+            core.store.record_release_document(release_id, owner, result)
+            results.append(result)
         except Exception:
-            results.append({"file": f, "original_relative_path": source_path,
+            result = {"file": f, "source_document_id": record.get("drive_file_id") or f,
+                            "original_relative_path": source_path,
                             "released_relative_path": None, "status": "failed",
                             "failure_category": "provider_write_failed",
                             "explanation": "The corrected copy could not be verified at the release destination. Retry this document.",
-                            "created": False})
-    published = sum(r["status"] == "published" for r in results)
-    failed = len(results) - published
-    total = len(files)
-    return {"release_id": sid, "release_folder_id": folder_id,
-            "release_folder_name": release_folder.get("name") if release_folder else None,
-            "release_folder_url": release_folder.get("url") if release_folder else None,
-            "documents_total": total, "published_count": published,
-            "failed": failed, "remaining": max(0, total - published - failed),
-            "published": results}
+                            "created": False}
+            core.store.record_release_document(release_id, owner, result)
+            results.append(result)
+    status = core.store.release_status(release_id, owner)
+    roots = status.get("roots", []) if status else []
+    first_root = roots[0] if roots else None
+    return {"release_id": release_id,
+            "release_folder_id": first_root.get("folder_id") if first_root else None,
+            "release_folder_name": status.get("folder_name") if status else folder_name,
+            "release_folder_url": first_root.get("folder_url") if first_root else None,
+            "release_folders": roots, "documents_total": status.get("documents_total", 0),
+            "published_count": status.get("published", 0), "failed": status.get("failed", 0),
+            "remaining": status.get("remaining", 0), "published": results}
+
+
+@router.get("/scans/{sid}/release")
+def get_release_status(sid: str, request: Request):
+    """Return the durable structured-release state for this owner and scan."""
+    owner = _owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    status = core.store.release_for_scan(sid, owner)
+    if status is None:
+        return {"release_id": None, "documents_total": 0, "published": 0,
+                "failed": 0, "remaining": 0, "roots": [], "documents": []}
+    return {"release_id": status["id"], "release_folder_name": status["folder_name"],
+            "created_at": status["created_at"], "status": status["status"],
+            "documents_total": status["documents_total"], "published": status["published"],
+            "failed": status["failed"], "remaining": status["remaining"],
+            "roots": status["roots"], "documents": status["documents"]}
 
 
 @router.get("/scans/{scan_id}/files/{filename:path}/remediated")

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import ScopeBanner from './ScopeBanner.jsx'
 import { documentSelection, documentScopeSentence } from './remediableScope.js'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
-import { openReport, publishFile, publishAllFiles, listHitlQueue, getSettings, getSourceStatus, rescoreFile } from './api.js'
+import { openReport, publishFile, publishAllFiles, getReleaseStatus, listHitlQueue, getSettings, getSourceStatus, rescoreFile } from './api.js'
 import { releaseDestination, releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
 import { SET_STATUS, certificationUniverse, releaseSetStatus } from './graduation.js'
 import { mirrorState, MIRROR } from './deliveryPolicy.js'
@@ -26,6 +26,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [done, setDone] = useState({})
   const [pubUrls, setPubUrls] = useState({})   // file -> published Drive URL, from POST /publish
   const [releaseFolder, setReleaseFolder] = useState(null)
+  const [releaseFolders, setReleaseFolders] = useState([])
   const [releaseResults, setReleaseResults] = useState({})
   const [releaseAnnouncement, setReleaseAnnouncement] = useState('')
   const [publishing, setPublishing] = useState(false)
@@ -55,7 +56,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const ms = mirrorState(settings)
   const driveMirrorEnabled = ms === MIRROR.ON
   const driveMirrorFolder = settings?.drive_mirror_folder?.trim() || 'Remediated'
-  const anyDrive = ready.some((f) => f.drive_file_id)
+  const releaseProvider = run?.source
+  const anyDrive = releaseProvider === 'drive' && ready.some((f) => f.drive_file_id)
   // A release is confirmed before it runs: { kind: 'all' } or { kind: 'file', file }. The buttons
   // set this; the modal's confirm calls the real publish path below.
   const [confirm, setConfirm] = useState(null)
@@ -100,9 +102,17 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     ? me.email.split('@')[1]?.replace(/\.[^.]+$/, '') || me.name || 'your organisation'
     : me?.name || 'your organisation'
   const rememberRelease = (res, expectedFiles = []) => {
-    if (res?.release_folder_name) setReleaseFolder({
-      id: res.release_folder_id, name: res.release_folder_name,
-      url: res.release_folder_url, createdAt: run?.started_at || new Date().toISOString(),
+    const roots = res?.release_folders || res?.roots || []
+    const mappedRoots = roots.map((root) => ({
+      id: root.folder_id || root.id, name: root.folder_name || root.name,
+      url: root.folder_url || root.url, location: root.provider_location,
+    })).filter((root) => root.id)
+    if (mappedRoots.length) setReleaseFolders(mappedRoots)
+    if (res?.release_folder_name || mappedRoots[0]) setReleaseFolder({
+      id: res.release_folder_id || mappedRoots[0]?.id,
+      name: res.release_folder_name || mappedRoots[0]?.name,
+      url: res.release_folder_url || mappedRoots[0]?.url,
+      createdAt: res.created_at || new Date().toISOString(),
     })
     const reported = res?.published || []
     // Pre-structured-release servers returned no per-document status. Preserve the existing
@@ -127,6 +137,28 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     setReleaseAnnouncement(`${successful.length} corrected ${successful.length === 1 ? 'copy' : 'copies'} released${rows.length - successful.length ? `; ${rows.length - successful.length} need attention` : ''}.`)
     return successful
   }
+  useEffect(() => {
+    let live = true
+    if (!run?.id) return undefined
+    getReleaseStatus(run.id).then((status) => {
+      if (!live || !status?.release_id) return
+      rememberRelease({ ...status, release_folders: status.roots,
+        published: (status.documents || []).map((row) => ({
+          file: row.file, status: row.status,
+          original_relative_path: row.source_relative_path,
+          released_relative_path: row.destination_relative_path,
+          released_document_id: row.released_document_id,
+          published_url: row.released_document_url,
+          corrected_checksum: row.corrected_checksum,
+          verification: row.verification, published_at: row.published_at,
+          created: !!row.created_result,
+          failure_category: row.failure_category, explanation: row.explanation,
+        })) })
+    }).catch(() => {})
+    return () => { live = false }
+    // Release state is durable; reload it when the selected scan changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run?.id])
   const publish = async (file) => {
     if (done[file]) return
     try {
@@ -243,7 +275,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           <span className="muted">{run?.sourceName || run?.source || 'Connected source'} · {releaseFolder?.createdAt ? new Date(releaseFolder.createdAt).toLocaleString() : 'Not created yet'}</span>
           <span><b>{publishedCount}</b> published · <b>{Math.max(0, ready.length - Object.keys(done).length)}</b> remaining · <b>{failedCount}</b> failed</span>
           <span>Original files are unchanged.</span>
-          {releaseFolder?.url && <a href={releaseFolder.url} target="_blank" rel="noopener noreferrer" aria-label={`Open release folder ${releaseFolder.name}`}>Open release folder ↗</a>}
+          {releaseFolders.length <= 1 && releaseFolder?.url && <a href={releaseFolder.url} target="_blank" rel="noopener noreferrer" aria-label={`Open release folder ${releaseFolder.name}`}>Open release folder ↗</a>}
+          {releaseFolders.length > 1 && <div style={{ display: 'grid', gap: 4 }}>
+            {releaseFolders.filter((folder) => folder.url).map((folder) => <a key={folder.location || folder.id} href={folder.url} target="_blank" rel="noopener noreferrer" aria-label={`Open release folder ${folder.name} in ${folder.location || 'connected source'}`}>Open {folder.location?.replace(/^graph:/, 'library ') || folder.name} ↗</a>)}
+          </div>}
         </div>
         <div className="sr-only" aria-live="polite">{releaseAnnouncement}</div>
       </section>
@@ -298,7 +333,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
           <b style={{ fontSize: 13.5 }}>Release policy</b>
           <span style={{ fontSize: 13 }}>
-            <span aria-hidden="true" style={{ color: 'var(--info-fg)' }}>●</span> Remediated copy → {releaseDestinationPhrase({ anyDrive, driveMirrorEnabled, driveMirrorFolder })}
+            <span aria-hidden="true" style={{ color: 'var(--info-fg)' }}>●</span> Remediated copy → {releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}
           </span>
         </div>
         <div className="muted" style={{ fontSize: 12.5, marginTop: 6, lineHeight: 1.6 }}>
@@ -307,7 +342,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         <details style={{ marginTop: 8 }}>
           <summary className="linklike" style={{ cursor: 'pointer', fontSize: 12.5 }}>Why can’t I replace the original?</summary>
           <div className="muted" style={{ fontSize: 12.5, marginTop: 6, lineHeight: 1.6, maxWidth: 640 }}>
-            Replacing the source file in place is on the roadmap, not built — so ACP doesn’t offer it rather than pretend to. Every release writes a corrected copy to a separate location, which is why your originals are never modified. SharePoint sources are connected read-only, so ACP cannot write back to them at all; those releases are delivered as a Blob download.
+            Replacing the source file in place is not part of Release. ACP writes corrected copies to a separate timestamped location in Google Drive or each source SharePoint library, which is why your originals are never modified.
           </div>
         </details>
       </section>
@@ -356,7 +391,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                 {folderFiles.map((f) => <div className={`pubrow${done[f.file] ? ' pubdone' : ''}`} key={f.file}>
                 <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName} · {f.department}</span></button>
                 <span className="badge" style={{ background: 'var(--success-bg)', color: 'var(--success-fg)' }}>{f.score} / 100</span>
-                <span className="muted" title="Where this document’s corrected copy will be written" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>→ {releaseDestination({ driveFileId: f.drive_file_id, driveMirrorEnabled, driveMirrorFolder }).label}</span>
+                <span className="muted" title="Where this document’s corrected copy will be written" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>→ {releaseDestination({ provider: releaseProvider, driveFileId: f.drive_file_id, driveMirrorEnabled, driveMirrorFolder }).label}</span>
                 {srcOf(f) === 'stale' && <span title="The source file in Drive changed after this scan — re-scan before releasing" style={{ fontSize: 11.5, whiteSpace: 'nowrap', color: '#8A1F1F', fontWeight: 600 }}>⚠ source changed</span>}
                 {srcOf(f) === 'unavailable' && <span className="muted" title="ACP could not read the source now (moved, deleted, or access lost)" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>source unreachable</span>}
                 {done[f.file]
@@ -407,7 +442,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         const targets = isAll ? ready.filter((f) => !done[f.file]) : ready.filter((f) => f.file === confirm.file)
         const cnt = isAll ? targets.length : 1
         const batchAnyDrive = targets.some((f) => f.drive_file_id)
-        const lines = releaseConfirmLines({ count: cnt, anyDrive: batchAnyDrive, driveMirrorEnabled, driveMirrorFolder })
+        const lines = releaseConfirmLines({ count: cnt, provider: releaseProvider, anyDrive: batchAnyDrive, driveMirrorEnabled, driveMirrorFolder })
         const onGo = () => { setConfirm(null); if (isAll) publishAll(); else publish(confirm.file) }
         return (
           <div role="dialog" aria-modal="true" aria-label="Confirm release" onClick={() => setConfirm(null)}

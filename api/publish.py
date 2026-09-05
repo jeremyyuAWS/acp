@@ -5,6 +5,7 @@ import hashlib
 import io
 import re
 from datetime import datetime, timezone
+from urllib.parse import quote
 
 import blob as _blob
 import provenance
@@ -58,6 +59,15 @@ def normalize_relative_path(path: str | None, filename: str) -> tuple[list[str],
             raise UnsafeReleasePath("filename is invalid for the provider")
         safe.append(leaf)
     return safe[:-1], safe[-1]
+
+
+def sharepoint_relative_path(path: str | None, filename: str) -> tuple[list[str], str]:
+    """Normalize Graph's ``/drives/.../root:/Folder`` parentReference into a relative path."""
+    raw = (path or "").replace("\\", "/")
+    if ":" in raw:
+        raw = raw.split(":", 1)[1]
+    raw = raw.strip("/")
+    return normalize_relative_path(f"{raw}/{filename}" if raw else filename, filename)
 
 
 def _find_folder(svc, parent_id: str | None, *, name: str | None = None,
@@ -131,6 +141,95 @@ def ensure_relative_folders(svc, release_folder_id: str, relative_path: str | No
 
 def publication_key(release_id: str, source_id: str, corrected_checksum: str) -> str:
     return hashlib.sha256(f"{release_id}\0{source_id}\0{corrected_checksum}".encode()).hexdigest()
+
+
+def ensure_sharepoint_release_folder(token: str, drive_id: str | None, release_id: str,
+                                     folder_name: str) -> dict:
+    """Create a distinct ``Remediated/<timestamp>`` root in one Graph drive/library."""
+    import scanner
+    root_id = scanner._sp_folder_id(token, drive_id, RELEASE_ROOT)
+    base = scanner._sp_base(drive_id)
+    listing = scanner._sp_get(
+        token, f"{base}/items/{root_id}/children?$select=id,name,folder,webUrl&$top=200")
+    names = {item.get("name") for item in listing.get("value", []) if item.get("folder") is not None}
+    # Graph enforces sibling-name uniqueness. Preserve the clean timestamp normally and add a
+    # stable release suffix only when another execution began in the same minute.
+    actual_name = folder_name if folder_name not in names else f"{folder_name} · {release_id[:8]}"
+    folder_id = scanner._sp_folder_id(token, drive_id, actual_name, parent_id=root_id)
+    item = scanner._sp_get(token, f"{base}/items/{folder_id}?$select=id,name,webUrl")
+    return {"id": folder_id, "name": item.get("name") or actual_name,
+            "url": item.get("webUrl")}
+
+
+def _sp_child(token: str, drive_id: str | None, folder_id: str, name: str) -> dict | None:
+    import scanner
+    listing = scanner._sp_get(
+        token, f"{scanner._sp_base(drive_id)}/items/{folder_id}/children?"
+               "$select=id,name,file,size,webUrl&$top=200")
+    return next((item for item in listing.get("value", []) if item.get("name") == name), None)
+
+
+def _sp_content_matches(token: str, drive_id: str | None, item_id: str,
+                        expected_sha256: str) -> bool:
+    """Verify an existing/uploaded Graph item by reading its bytes; never trust size alone."""
+    import httpx
+    import scanner
+    response = httpx.get(f"{scanner._sp_base(drive_id)}/items/{item_id}/content",
+                         headers={"Authorization": f"Bearer {token}"}, timeout=120,
+                         follow_redirects=True)
+    response.raise_for_status()
+    return hashlib.sha256(response.content).hexdigest() == expected_sha256
+
+
+def archive_copy_publish_sharepoint(token: str, drive_id: str | None, folder_id: str,
+                                    owner: str, release_id: str, scan_id: str,
+                                    filename: str, relative_path: str | None,
+                                    source_id: str, folder_cache: dict | None = None) -> dict | None:
+    """Publish one Blob-backed corrected copy into a Graph drive without overwriting a source."""
+    import scanner
+    data = _blob.download_remediated(owner, scan_id, filename)
+    if not data:
+        return None
+    folders, safe_name = sharepoint_relative_path(relative_path, filename)
+    cache = folder_cache if folder_cache is not None else {}
+    parent = folder_id
+    for segment in folders:
+        key = (drive_id or "me", parent, segment.casefold())
+        if key not in cache:
+            cache[key] = scanner._sp_folder_id(token, drive_id, segment, parent_id=parent)
+        parent = cache[key]
+    sha256 = hashlib.sha256(data).hexdigest()
+    key = publication_key(release_id, source_id, sha256)
+    target_name = safe_name
+    existing = _sp_child(token, drive_id, parent, target_name)
+    if existing:
+        if _sp_content_matches(token, drive_id, existing["id"], sha256):
+            return {"id": existing["id"], "url": existing.get("webUrl"),
+                    "checksum": sha256, "verified": True, "created": False,
+                    "filename": target_name}
+        stem, dot, ext = safe_name.rpartition(".")
+        stem, dot, ext = (stem, dot, ext) if dot else (safe_name, "", "")
+        target_name = f"{stem} ({key[:8]}){dot}{ext}"
+        existing = _sp_child(token, drive_id, parent, target_name)
+        if existing and _sp_content_matches(token, drive_id, existing["id"], sha256):
+            return {"id": existing["id"], "url": existing.get("webUrl"),
+                    "checksum": sha256, "verified": True, "created": False,
+                    "filename": target_name}
+    # Graph's path-addressing form requires the leaf to be URL encoded.  Keep slash encoded
+    # too: this segment is a filename, never another hierarchy level.
+    encoded_name = quote(target_name, safe="")
+    base = f"{scanner._sp_base(drive_id)}/items/{parent}:/{encoded_name}:"
+    result = scanner._sp_write(token, put_url=f"{base}/content",
+                               session_url=f"{base}/createUploadSession",
+                               content=data, content_type=_mime_for(target_name))
+    item_id = result.get("id")
+    if not item_id:
+        result = _sp_child(token, drive_id, parent, target_name) or {}
+        item_id = result.get("id")
+    if not item_id or not _sp_content_matches(token, drive_id, item_id, sha256):
+        raise IOError("SharePoint content verification failed")
+    return {"id": item_id, "url": result.get("webUrl"), "checksum": sha256,
+            "verified": True, "created": True, "filename": target_name}
 
 
 def upload_published(svc, folder_id: str, filename: str, data: bytes, *,

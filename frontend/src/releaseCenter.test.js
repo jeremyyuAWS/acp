@@ -21,7 +21,7 @@ describe('Release Center: honest policy panel', () => {
   it('shows a policy panel with the destination and the “why not in place” explainer', () => {
     const s = pub()
     expect(s).toMatch(/Release policy/)
-    expect(s).toMatch(/releaseDestinationPhrase\(\{ anyDrive, driveMirrorEnabled, driveMirrorFolder \}\)/)
+    expect(s).toMatch(/releaseDestinationPhrase\(\{ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder \}\)/)
     expect(s).toMatch(/Why can’t I replace the original\?/)
     expect(s).toMatch(/never overwritten/)
   })
@@ -51,7 +51,7 @@ describe('Release Center: confirmation before a release', () => {
   it('the modal states the checkable consequences and only then calls the real publish path', () => {
     const s = pub()
     expect(s).toMatch(/role="dialog" aria-modal="true"/)
-    expect(s).toMatch(/releaseConfirmLines\(\{ count: cnt, anyDrive: batchAnyDrive/)
+    expect(s).toMatch(/releaseConfirmLines\(\{ count: cnt, provider: releaseProvider, anyDrive: batchAnyDrive/)
     expect(s).toMatch(/setConfirm\(null\); if \(isAll\) publishAll\(\); else publish\(confirm\.file\)/)
     // Escape closes it.
     expect(s).toMatch(/if \(e\.key === 'Escape'\) setConfirm\(null\)/)
@@ -59,7 +59,7 @@ describe('Release Center: confirmation before a release', () => {
 
   it('labels each row with where its corrected copy will land', () => {
     const s = pub()
-    expect(s).toMatch(/releaseDestination\(\{ driveFileId: f\.drive_file_id, driveMirrorEnabled, driveMirrorFolder \}\)\.label/)
+    expect(s).toMatch(/releaseDestination\(\{ provider: releaseProvider, driveFileId: f\.drive_file_id, driveMirrorEnabled, driveMirrorFolder \}\)\.label/)
   })
 
   it('shows one release destination and an accessible two-column document view', () => {

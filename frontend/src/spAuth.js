@@ -8,7 +8,7 @@
 // the MSAL script loads — every caller treats it as best-effort.
 const CLIENT_ID = import.meta.env.VITE_AZURE_CLIENT_ID || ''
 const TENANT    = import.meta.env.VITE_AZURE_TENANT_ID  || 'common'
-const SCOPES    = ['Files.Read', 'Files.ReadWrite', 'User.Read']
+const SCOPES    = ['Files.ReadWrite.All', 'Sites.ReadWrite.All', 'User.Read']
 
 let _instance = null
 let _initPromise = null

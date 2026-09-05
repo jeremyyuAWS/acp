@@ -2,7 +2,8 @@
 
 **Audience:** the customer's Microsoft Entra ID (Azure AD) / Microsoft 365 administrator.
 **Purpose:** register an application so a signed-in user can let ACP (mova.io) **list and scan**
-their SharePoint and OneDrive documents for accessibility. **Read-only, single-tenant.**
+their SharePoint and OneDrive documents for accessibility and publish approved corrected copies
+into separate structured release folders. **Delegated, single-tenant; originals are unchanged.**
 
 This supersedes any template that points a redirect URI at `api.connector.ca.lyzr.app` — that is a
 different product's connector and **must not be used**. ACP signs in directly with Microsoft from
@@ -12,22 +13,21 @@ the browser (MSAL.js), so the redirect URI is ACP's own address.
 
 ## What you are granting (and what you are not)
 
-ACP asks for three **delegated, read-only** Microsoft Graph permissions:
+ACP asks for three **delegated** Microsoft Graph permissions:
 
 | Permission | What it allows | Admin consent? |
 |---|---|---|
 | `User.Read` | Sign the user in and read their basic profile | No |
-| `Files.Read.All` | **Read** every file the signed-in user can already open — their OneDrive, files shared with them, and team-site libraries | **Yes** |
-| `Sites.Read.All` | **List** the SharePoint sites the user can already see, so they can pick a scan target | **Yes** |
+| `Files.ReadWrite.All` | Read files the user can open and create corrected release copies | **Yes** |
+| `Sites.ReadWrite.All` | List accessible SharePoint sites and create release folders in their libraries | **Yes** |
 
 - **Delegated** means ACP acts *as the signed-in user* and can never see anything that user
   couldn't already open in SharePoint. It grants no standing/background access.
-- **Read-only:** there is no `*.ReadWrite` permission. ACP does not modify, move, or delete anything
-  in SharePoint. Remediated files are delivered to the user for download, not written back.
-- The two `.All` reads are **organization-scoped reads** and therefore require your one-time admin
-  consent (this is exactly what the "Admin Consent Required" note is about). `.All` here widens the
-  read from *the user's own OneDrive* to *everywhere the user is already authorized* — team sites,
-  shared files — and nothing beyond that.
+- **Non-destructive Release:** ACP writes only to a separate `Remediated/<timestamp>` tree. It does
+  not overwrite, move, or delete the source document.
+- The two `.All` delegated permissions require your one-time admin consent. They let ACP operate
+  anywhere the signed-in user is already authorized — team sites and shared files — but do not
+  create a standing background application identity.
 
 ---
 
@@ -47,13 +47,12 @@ ACP asks for three **delegated, read-only** Microsoft Graph permissions:
 4. Click **Register.**
 5. **API permissions → Add a permission → Microsoft Graph → Delegated permissions**, add:
    - `User.Read`
-   - `Files.Read.All`
-   - `Sites.Read.All`
+   - `Files.ReadWrite.All`
+   - `Sites.ReadWrite.All`
 
-   Remove any other permission that was added by default beyond these three. There should be **no
-   `*.ReadWrite` and no Application permissions.**
+   Remove other permissions added by default. There should be no **Application permissions**.
 6. **Grant admin consent** for the tenant (the button on the API permissions page). The two `.All`
-   reads stay "Not granted" until you do this, and users will hit an *"admin approval required"*
+   permissions stay "Not granted" until you do this, and users will hit an *"admin approval required"*
    wall on sign-in without it.
 7. **No client secret is needed.** This is a public SPA client (PKCE); do not create a secret.
 
@@ -76,25 +75,25 @@ single-tenant.
 
 ### 403 on a SharePoint **site** scan (OneDrive works, sites don't)
 
-> `Microsoft Graph refused this request (403). SharePoint SITES need the Sites.Read.All delegated
-> permission on the Azure app registration, granted with tenant admin consent; Files.Read.All alone
+> `Microsoft Graph refused this request (403). SharePoint sites need the Sites.ReadWrite.All delegated
+> permission on the Azure app registration, granted with tenant admin consent; a file scope alone
 > only reaches the signed-in user's OneDrive.`
 
-**Cause.** The signed-in token isn't carrying `Sites.Read.All`. ACP *requests* it at sign-in, but
-`Sites.Read.All` is an **admin-consent-required** scope — requesting is not the same as granting.
-Either the permission was never added to the app registration, or admin consent was never given.
-`Files.Read.All` alone only reaches the signed-in user's OneDrive, so a **site's** drives 403 while
+**Cause.** The signed-in token isn't carrying `Sites.ReadWrite.All`. ACP *requests* it at sign-in,
+but it is an **admin-consent-required** scope — requesting is not the same as granting. Either the
+permission was never added to the app registration, or admin consent was never given. A file scope
+alone can reach OneDrive while
 that user's OneDrive scans fine.
 
 **Fix (a tenant admin, ~2 min):**
 
 1. **Entra admin center → App registrations →** the ACP app → **API permissions**.
-2. Confirm **Microsoft Graph → Delegated → `Sites.Read.All`** is listed. If it's missing, add it (step
+2. Confirm **Microsoft Graph → Delegated → `Sites.ReadWrite.All`** is listed. If it's missing, add it (step
    5 above).
 3. **Grant admin consent** for the tenant (the button on the API permissions page). Both `.All` scopes
    must show the green **"Granted"** check — *"Not granted"* means the token still won't include it.
 4. Have the user **sign out of ACP and sign back in.** A token cached *before* consent will not gain
-   the scope on its own; a fresh sign-in issues one that carries `Sites.Read.All`. If MSAL keeps
+   the scope on its own; a fresh sign-in issues one that carries `Sites.ReadWrite.All`. If MSAL keeps
    returning the cached token, a one-time `prompt=consent` on sign-in clears it.
 
 **Verify.** After re-consent + a fresh sign-in, the site's drives list. If it still 403s, the token is
@@ -102,7 +101,8 @@ stale (step 4) — not the permission.
 
 ## Security summary (for your records)
 
-- **Read-only** — `Read.All`, never `ReadWrite`. ACP cannot change anything in SharePoint.
+- **Delegated write** — only while a signed-in user is active; Release creates corrected copies in
+  a separate tree and leaves originals unchanged.
 - **Delegated, per-user** — ACP only ever sees what the *signed-in* user can already access; each
   user signs in individually, and access disappears when they do.
 - **No client secret / no background daemon** — a browser SPA with short-lived tokens (PKCE),
