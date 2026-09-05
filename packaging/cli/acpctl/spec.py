@@ -430,12 +430,49 @@ def required_secret_names(doc: dict) -> list[str]:
 
 
 def _rule_required_secrets(doc: dict, out: Result) -> None:
+    """Every required reference must be satisfied — by a stored secret OR by workload identity.
+
+    WORKLOAD IDENTITY SATISFIES A REQUIREMENT, it does not waive one. The requirement is that the
+    installation can reach the service; a stored credential is one way and the platform's own
+    identity is another, and the second is the better one — nothing to rotate, mount or leak.
+
+    Before this accepted `workloadIdentity`, a document describing today's Azure had to declare an
+    `object-storage` secret that does not exist: production's worker reaches Blob Storage through
+    a managed identity granted Storage Blob Data Contributor (deploy/public/deploy.sh), holding no
+    storage credential at all. A rule that fails the most secure configuration teaches operators
+    to create a credential to satisfy it, which is the opposite of what it is for.
+    """
     refs = doc["secrets"]["refs"]
+    identity = set(doc["secrets"].get("workloadIdentity") or ())
     for name in required_secret_names(doc):
-        if name not in refs:
+        if name not in refs and name not in identity:
             out.errors.append(Finding(
                 f"secrets.refs.{name}",
-                "is required by this configuration and is not declared", "secrets.required"))
+                "is required by this configuration and is declared neither as a secret reference "
+                "nor under secrets.workloadIdentity", "secrets.required"))
+
+
+def _rule_workload_identity_is_live(doc: dict, out: Result) -> None:
+    """A workloadIdentity entry that satisfies nothing is dead configuration, and reads as care.
+
+    Same guard, same reason, as the acknowledged-difference check in azure_parity: an entry that
+    outlives the requirement it answered still looks deliberate to the next reader. A warning
+    rather than an error, because a name can legitimately arrive before the configuration that
+    requires it — but it should not sit there unnoticed.
+    """
+    identity = doc["secrets"].get("workloadIdentity") or []
+    required = set(required_secret_names(doc))
+    for name in identity:
+        if name not in required:
+            out.warnings.append(Finding(
+                f"secrets.workloadIdentity.{name}",
+                "satisfies no reference this configuration requires — either a typo or left over "
+                "from a configuration that has changed", "secrets.identity-unused"))
+        elif name in doc["secrets"]["refs"]:
+            out.warnings.append(Finding(
+                f"secrets.workloadIdentity.{name}",
+                "is also declared as a stored secret reference; the installation will have a "
+                "credential it does not need", "secrets.identity-redundant"))
 
 
 def _rule_no_literal_secrets(doc: dict, out: Result) -> None:
@@ -568,6 +605,7 @@ _SEMANTIC_RULES = (
     _rule_autoscale_signals,
     _rule_secret_provider_platform,
     _rule_required_secrets,
+    _rule_workload_identity_is_live,
     _rule_no_literal_secrets,
     _rule_connection_budget,
     _rule_version_consistency,

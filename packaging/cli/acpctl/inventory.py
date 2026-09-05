@@ -142,6 +142,38 @@ def worker_threads(preset: str) -> int:
     return int(float(presets.PRESETS[preset]["cpu"]) * WORKER_THREADS_PER_CPU)
 
 
+def pool_per_replica(tier: dict[str, Any], *, threads: int) -> int:
+    """One replica's Postgres pool — api/store.py's `db_max_conn`, arithmetic for arithmetic.
+
+    THE OVERRIDE REPLACES THE FORMULA, it does not cap it. `db_max_conn` reads ACP_DB_MAX_CONN
+    first and returns `max(2, explicit)` without consulting ACP_WORKERS at all; only when it is
+    unset does it fall through to `workers + _API_HEADROOM_CONN`. A model that took the smaller
+    of the two would agree with production by luck today and disagree the moment somebody pins a
+    pool LARGER than the formula — which is the direction an operator raising a limit would move.
+
+    Why this exists at all: production pins 2 on every worker tier (#1370), which is what keeps a
+    fleet whose formula-derived demand is 384 inside a 150-connection server. Without the
+    override in the model, `acpctl plan` reports today's Azure as unsafe when it demonstrably is
+    not, and the document has no way to say why it is safe.
+    """
+    explicit = tier.get("connectionPool")
+    if explicit:
+        return max(2, int(explicit))
+    return threads + API_HEADROOM_CONN
+
+
+def _with_pool(env: dict[str, str], tier: dict[str, Any]) -> dict[str, str]:
+    """Add ACP_DB_MAX_CONN to a tier's environment when the document pins one.
+
+    The variable is what the RUNNING container reads; putting it in the inventory rather than
+    only in the arithmetic is what lets the chart and every adapter reproduce the pool, instead
+    of each one re-deciding it from the replica count.
+    """
+    if tier.get("connectionPool"):
+        return {**env, "ACP_DB_MAX_CONN": str(int(tier["connectionPool"]))}
+    return env
+
+
 def _resources(tier: dict) -> dict[str, str]:
     return dict(presets.PRESETS[tier["resources"]["preset"]])
 
@@ -191,10 +223,12 @@ def build_inventory(doc: dict[str, Any]) -> list[Service]:
         resources=_resources(api_tier), ports=(8077,),
         # ACP_WORKERS=0 is the split topology, not a tuning choice: it is what stops an API
         # deploy from restarting a running scan (docs/worker-split.md, #113).
-        env={"ACP_WORKERS": "0", "PORT": "8077"},
+        env=_with_pool({"ACP_WORKERS": "0", "PORT": "8077"}, api_tier),
         secret_refs=tuple(_api_secrets(doc)),
         depends_on=("acp-migrations", "postgres", "redis", "object-storage"),
-        db_connections_max=api_max * API_HEADROOM_CONN,
+        # The API runs ACP_WORKERS=0, so its formula term is the headroom alone — but a pinned
+        # pool overrides that here exactly as it does on a worker.
+        db_connections_max=api_max * pool_per_replica(api_tier, threads=0),
         notes="Serves the SPA and the API. Claims no jobs."))
 
     # ── the three worker tiers ─────────────────────────────────────────────────
@@ -209,11 +243,12 @@ def build_inventory(doc: dict[str, Any]) -> list[Service]:
             name=f"acp-{TIER_ROLE[tier_name]}", kind="service", ingress="none",
             image=IMAGES[tier_name], image_version=version,
             role=TIER_ROLE[tier_name], replicas=(lo, hi), resources=_resources(tier),
-            env={"ACP_WORKERS": str(threads), "ACP_WORKER_ROLE": TIER_ROLE[tier_name]},
+            env=_with_pool(
+                {"ACP_WORKERS": str(threads), "ACP_WORKER_ROLE": TIER_ROLE[tier_name]}, tier),
             secret_refs=tuple(_worker_secrets(doc)),
             volumes=(f"scratch:{presets.PRESETS[tier['resources']['preset']]['ephemeralStorage']}",),
             depends_on=tuple(depends),
-            db_connections_max=hi * (threads + API_HEADROOM_CONN),
+            db_connections_max=hi * pool_per_replica(tier, threads=threads),
             notes="No ingress in any topology (PRD S13). Scratch volume is disposable — nothing "
                   "authoritative may exist only there."))
 

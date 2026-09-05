@@ -78,6 +78,11 @@ def _tier_values(tier: dict, *, role: str | None, threads: int) -> dict[str, Any
     }
     if role:
         values["env"]["ACP_WORKER_ROLE"] = role
+    # A pinned pool has to reach the CONTAINER, not just the plan's arithmetic. If it stopped at
+    # the budget calculation, the document would describe a fleet that fits its Postgres server
+    # and the chart would deploy one that does not.
+    if tier.get("connectionPool"):
+        values["env"]["ACP_DB_MAX_CONN"] = str(int(tier["connectionPool"]))
     auto = tier.get("autoscale")
     if auto:
         # KEDA where the signal is queue-based, HPA where it is not. PRD S11 makes queue depth
