@@ -380,7 +380,8 @@ def exception_row(record: dict, *, cancelled: bool = False) -> dict | None:
     row["capability"] = spec["capability"]
     row["reapplies_fixes"] = spec["reapplies_fixes"]
     if group == "delivery_failure":
-        decision = delivery_retry_decision(record, cancelled=cancelled)
+        decision = delivery_retry_decision(
+            record, cancelled=cancelled, in_flight=bool(record.get("delivery_in_flight")))
         row["action_enabled"] = decision["eligible"]
         row["action_reason"] = decision["message"]
         row["action_code"] = decision["code"]

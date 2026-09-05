@@ -1709,8 +1709,12 @@ async def retry_remediation_delivery(sid: str, request: Request):
     results = []
     for record in _selected(records, files):
         file = record.get("file")
-        decision = exceptions.delivery_retry_decision(
-            record, cancelled=cancelled, in_flight=bool(record.get("delivery_in_flight")))
+        # NO in_flight PRE-CHECK HERE. `store.claim_delivery` is the authority — the
+        # idempotency key is that table's primary key, so a duplicate is settled by the INSERT
+        # rather than by a read this request took first and hoped nobody raced. Refusing here on
+        # a row read moments ago would report `refused` for what is really the user's own second
+        # press, and would still lose the race it was trying to win.
+        decision = exceptions.delivery_retry_decision(record, cancelled=cancelled)
         if not decision["eligible"]:
             results.append({"file": file, "outcome": "refused", "code": decision["code"],
                             "message": decision["message"]})

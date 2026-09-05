@@ -1462,6 +1462,12 @@ _SCHEMA = [
     # zero-byte or truncated store visible without downloading it.
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS corrected_sha256 TEXT",
     "ALTER TABLE file_records ADD COLUMN IF NOT EXISTS corrected_bytes INT",
+    # What a paused job's `run_after` was before the hold deferred it. Without this, Resume has
+    # nothing to restore and clears the column to NULL — which drags a document genuinely waiting
+    # on a backoff retry forward, into the queue, ahead of its own schedule. Written only by
+    # pause and read only by resume; a replica that knows neither leaves it NULL and behaves
+    # exactly as it does today.
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS paused_run_after TEXT",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -1959,7 +1965,7 @@ class _PgAdapter:
     #     writes neither, and the gate reads a missing digest as "provenance unknown" and REFUSES
     #     delivery — the safe direction, and the one a re-run clears.
     _SCHEMA_VERSION = 20
-    _SCHEMA_CHECKSUM_AT_VERSION = "a4337211dd6dc5697358d91d96b3171e"
+    _SCHEMA_CHECKSUM_AT_VERSION = "325803fe827e80c338b989746b30f8c2"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -7048,8 +7054,13 @@ class Store:
                 "delivered_url": correction.get("drive_write_url") or None,
                 "source_modified": item.get("source_modified") or None,
                 "destination_drive_id": item.get("drive_id") or None,
+                # The id when the submission recorded one (Drive only — it creates the mirror
+                # folder once per batch and stamps every payload), the configured NAME always.
+                # Both are durable and the gate prefers the id; the name is what keeps a run
+                # submitted without a Drive token deliverable, since find-or-create by that name
+                # is what produced the id in the first place.
                 "destination_folder_id": folder_id if provider == "drive" else None,
-                "destination_folder": None if provider == "drive" else mirror_folder,
+                "destination_folder": mirror_folder,
                 "destination_label": item.get("library_name") or item.get("site_name") or None,
                 "review_items": int(seen.get("items") or 0),
                 "review_pending": bool(seen.get("items")),
@@ -7203,10 +7214,17 @@ class Store:
                 self._db.execute(cur,
                     "INSERT INTO remediation_run_hold(scan_id,paused_at,paused_by) "
                     "VALUES(%s,%s,%s)", (scan_id, now, actor))
+            # The prior `run_after` is SAVED, not overwritten. A document waiting on its own
+            # backoff retry has a schedule of its own, and a Resume that cleared the column to
+            # NULL would drag it into the queue ahead of that schedule — a pause that makes a
+            # retry happen SOONER, which is the opposite of what it was asked to do. The
+            # `run_after<>sentinel` predicate keeps a second pause from overwriting the saved
+            # value with the sentinel it wrote the first time.
             self._db.execute(cur,
-                "UPDATE jobs SET run_after=%s, updated_at=%s WHERE scan_id=%s "
-                "AND type='remediate_file' AND status='queued'",
-                (_PAUSE_RUN_AFTER, now, scan_id))
+                "UPDATE jobs SET paused_run_after=run_after, run_after=%s, updated_at=%s "
+                "WHERE scan_id=%s AND type='remediate_file' AND status='queued' "
+                "AND (run_after IS NULL OR run_after<>%s)",
+                (_PAUSE_RUN_AFTER, now, scan_id, _PAUSE_RUN_AFTER))
             held = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         return {"paused_at": now, "held": held}
 
@@ -7214,8 +7232,9 @@ class Store:
         """Release the hold: clear the durable row and return the deferred jobs to the queue.
 
         Only jobs deferred BY THE PAUSE are released — the `run_after=_PAUSE_RUN_AFTER` predicate
-        is exact, so a document genuinely waiting on a backoff retry keeps its own schedule
-        instead of being dragged forward by somebody pressing Resume.
+        is exact — and each gets back the schedule it had, from `paused_run_after`, rather than a
+        NULL. A document waiting on a backoff retry therefore keeps its own timing; clearing the
+        column instead would make a pause-then-resume run that retry EARLIER than it was due.
         """
         now = self._now()
         with self._db.cursor() as cur:
@@ -7223,8 +7242,9 @@ class Store:
                 "UPDATE remediation_run_hold SET paused_at=NULL, resumed_at=%s, resumed_by=%s "
                 "WHERE scan_id=%s", (now, actor, scan_id))
             self._db.execute(cur,
-                "UPDATE jobs SET run_after=NULL, updated_at=%s WHERE scan_id=%s "
-                "AND type='remediate_file' AND status='queued' AND run_after=%s",
+                "UPDATE jobs SET run_after=paused_run_after, paused_run_after=NULL, "
+                "updated_at=%s WHERE scan_id=%s AND type='remediate_file' "
+                "AND status='queued' AND run_after=%s",
                 (now, scan_id, _PAUSE_RUN_AFTER))
             released = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
         return {"resumed_at": now, "released": released}
