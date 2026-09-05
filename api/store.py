@@ -8708,6 +8708,51 @@ class Store:
                 r["detail"] = None
         return rows
 
+    def recent_remediation_event_summaries(self, scan_ids: list[str], *,
+                                           limit_per_scan: int = 12) -> dict[str, list[dict]]:
+        """Bounded, payload-safe remediation events for the cross-user operations view.
+
+        The customer-facing stream may carry a filename in ``detail``. Live Operations spans
+        workspace users, so this projection deliberately keeps only numeric counts, WCAG
+        criterion and destination. The window function prevents one noisy run from consuming the
+        whole result while still doing one database read for every visible run.
+        """
+        ids = sorted({str(scan_id) for scan_id in scan_ids if scan_id})
+        limit = max(1, min(int(limit_per_scan), 50))
+        if not ids:
+            return {}
+        placeholders = ",".join(["%s"] * len(ids))
+        sql = (
+            "SELECT scan_id,seq,occurred_at,kind,phase,attempt,detail FROM ("
+            "SELECT scan_id,seq,occurred_at,kind,phase,attempt,detail,"
+            "ROW_NUMBER() OVER (PARTITION BY scan_id ORDER BY seq DESC) AS event_rank "
+            f"FROM scan_events WHERE scan_id IN ({placeholders}) AND kind LIKE 'remediate.%'"
+            ") ranked WHERE event_rank<=%s ORDER BY scan_id,seq"
+        )
+        try:
+            with self._db.cursor() as cur:
+                self._db.execute(cur, sql, tuple(ids + [limit]))
+                rows = self._db.fetchall(cur)
+        except Exception:
+            return {}
+        import json as _json
+        result: dict[str, list[dict]] = {}
+        for row in rows:
+            raw = row.get("detail")
+            try:
+                detail = _json.loads(raw) if isinstance(raw, str) and raw else (raw or {})
+            except (TypeError, ValueError):
+                detail = {}
+            safe_detail = {key: detail[key] for key in
+                           ("documents", "fixes", "criterion", "destination")
+                           if key in detail and isinstance(detail[key], (str, int, float, bool))}
+            result.setdefault(str(row["scan_id"]), []).append({
+                "seq": int(row["seq"]), "occurred_at": row.get("occurred_at"),
+                "kind": row.get("kind"), "phase": row.get("phase"),
+                "attempt": row.get("attempt"), "detail": safe_detail,
+            })
+        return result
+
     # ── Operational event stream (orchestration_events / worker_instances) ────
     #
     # PR 1 of a 5-PR delivery plan modeled on ADR 0042's scan_events (the CUSTOMER-FACING
@@ -10286,6 +10331,16 @@ class Store:
         result = [grouped[key] for key in active | recent]
         for item in result:
             item["status"] = "active" if (item["queued"] or item["running"]) else "recent"
+        # The Remediation screen has a durable lifecycle stream. Carry a bounded, sanitized
+        # projection into Live Operations too, so arriving after a fix or reconnecting does not
+        # erase the activity timeline. The helper removes filenames and free text before these
+        # cross-user rows leave the store.
+        remediation_ids = [item["scan_id"] for item in result if item["stage"] == "remediate"]
+        remediation_events = self.recent_remediation_event_summaries(
+            remediation_ids, limit_per_scan=12)
+        for item in result:
+            if item["stage"] == "remediate":
+                item["recent_events"] = remediation_events.get(str(item["scan_id"]), [])
         # Confirmed findings so far, for the throughput panel's findings-per-minute. One aggregate
         # per ACTIVE assess run — bounded by concurrent runs, not by estate size — and deliberately
         # not taken for recent ones, which are finished and whose count no longer moves. It is the

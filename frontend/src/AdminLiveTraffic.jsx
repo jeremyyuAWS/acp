@@ -6,7 +6,7 @@ import { ensureResizeObserver } from './resizeObserverFallback.js'
 import LiveOpsDrawer from './LiveOpsDrawer.jsx'
 import LiveOpsCostSummary from './LiveOpsCostSummary.jsx'
 import { appendSample, deriveEvents, formatDuration, mergeEvents, queueCapacityGauge,
-  sampleForNode, secondsSince } from './liveOpsDrawer.js'
+  durableRunEvents, sampleForNode, secondsSince } from './liveOpsDrawer.js'
 
 ensureResizeObserver(typeof window === 'undefined' ? globalThis : window)
 
@@ -759,8 +759,10 @@ export default function AdminLiveTraffic() {
       trends.current.set(node.id, appendSample(trends.current.get(node.id) || [], sample, { nowMs: now }))
     }
     const context = { snapshot, capacity, connection }
-    eventLog.current = mergeEvents(eventLog.current,
-      deriveEvents(lastContext.current, context, { nowIso: observedAt || new Date(now).toISOString() }))
+    eventLog.current = mergeEvents(eventLog.current, [
+      ...durableRunEvents(snapshot),
+      ...deriveEvents(lastContext.current, context, { nowIso: observedAt || new Date(now).toISOString() }),
+    ])
     lastContext.current = context
     return null
   }, [graph, snapshot, capacity, connection, observedAt])

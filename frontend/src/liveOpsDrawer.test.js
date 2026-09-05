@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   CAPACITY_RULES, NOT_REPORTED, TREND_WINDOW_MS, appendSample, arcPath, capacityMatchesService,
-  chartModel, componentState, defaultMetricFor, deriveEvents, etaSeconds, eventClock,
+  chartModel, componentState, defaultMetricFor, deriveEvents, durableRunEvents, etaSeconds, eventClock,
   eventsForNode, filterEvents, formatDuration, gaugeModel, mergeEvents, metricsForKind,
   PROVENANCE, capacityForService, fairnessModel, metricGroups, niceCeiling, num, outputModel,
   provenance, queueModel, rateSeries,
@@ -64,6 +64,38 @@ describe('Missing measurements stay missing', () => {
     expect(model.rows.find((row) => row.key === 'waiting').count).toBe(10)
     expect(model.arrivalPerMin).toBe(null)
     expect(model.completionPerMin).toBe(null)
+  })
+})
+
+describe('Durable remediation events join the Live Operations timeline', () => {
+  it('projects the safe event vocabulary and keeps stable stream identities', () => {
+    const events = durableRunEvents({ runs: [{
+      scan_id: 'scan-1', stage: 'remediate', recent_events: [
+        { seq: 7, occurred_at: iso(-10), kind: 'remediate.fix_applied', detail: { fixes: 2 } },
+        { seq: 8, occurred_at: iso(-5), kind: 'remediate.verification_failed', detail: { fixes: 1 } },
+        { seq: 9, occurred_at: iso(-2), kind: 'remediate.review_requested', detail: { criterion: '1.1.1' } },
+      ],
+    }] })
+    expect(events.map((event) => event.id)).toEqual([
+      'scan:scan-1:7', 'scan:scan-1:8', 'scan:scan-1:9',
+    ])
+    expect(events.map((event) => event.kind)).toEqual(['activity', 'error', 'warning'])
+    expect(events[0].text).toBe('2 fixes applied')
+    expect(events[1].text).toBe('1 fix failed re-scan')
+    expect(events[2].text).toContain('WCAG 1.1.1')
+    expect(events.every((event) => event.durable)).toBe(true)
+  })
+
+  it('ignores unknown, incomplete, and non-remediation events', () => {
+    expect(durableRunEvents({ runs: [
+      { scan_id: 'scan-1', stage: 'assess', recent_events: [
+        { seq: 1, occurred_at: iso(-1), kind: 'remediate.verified' },
+      ] },
+      { scan_id: 'scan-2', stage: 'remediate', recent_events: [
+        { seq: 2, occurred_at: iso(-1), kind: 'remediate.unknown' },
+        { seq: 3, kind: 'remediate.verified' },
+      ] },
+    ] })).toEqual([])
   })
 })
 

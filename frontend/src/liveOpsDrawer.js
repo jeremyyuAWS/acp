@@ -1264,11 +1264,52 @@ export const EVENT_FILTERS = [
 
 export const EVENT_ICONS = { activity: '▸', capacity: '⇅', deployment: '⬆', warning: '▲', error: '■' }
 
+const REMEDIATION_EVENT_TEXT = {
+  'remediate.accepted': (d) => `Remediation accepted${d.documents == null ? '' : ` for ${d.documents} documents`}`,
+  'remediate.fix_applied': (d) => `${d.fixes ?? 'Approved'} fix${d.fixes === 1 ? '' : 'es'} applied`,
+  'remediate.verified': (d) => `${d.fixes ?? 'Applied'} fix${d.fixes === 1 ? '' : 'es'} verified by re-scan`,
+  'remediate.verification_failed': (d) => `${d.fixes ?? 'Applied'} fix${d.fixes === 1 ? '' : 'es'} failed re-scan`,
+  'remediate.delivered': () => 'Corrected copy delivered to the source provider',
+  'remediate.delivery_failed': () => 'Corrected copy retained in ACP; provider delivery failed',
+  'remediate.review_requested': (d) => `Manual review requested${d.criterion ? ` for WCAG ${d.criterion}` : ''}`,
+  'remediate.document_completed': () => 'Document remediation completed',
+}
+
+/** Durable lifecycle events already retained by the remediation run, projected into the same
+ * timeline shape as browser-observed infrastructure changes. No filename or free-text detail is
+ * accepted here: the admin endpoint sends only the safe detail allow-list. */
+export function durableRunEvents(snapshot = {}) {
+  const events = []
+  for (const run of snapshot?.runs || []) {
+    if (run.stage !== 'remediate') continue
+    const node = `${run.scan_id}:${run.stage}`
+    for (const event of run.recent_events || []) {
+      const line = REMEDIATION_EVENT_TEXT[event.kind]
+      if (!line || event.seq == null || !event.occurred_at) continue
+      const failure = event.kind === 'remediate.verification_failed'
+        || event.kind === 'remediate.delivery_failed'
+      const warning = event.kind === 'remediate.review_requested'
+      events.push({
+        id: `scan:${run.scan_id}:${event.seq}`,
+        at: event.occurred_at,
+        key: `${node}:${event.seq}`,
+        kind: failure ? 'error' : warning ? 'warning' : 'activity',
+        stage: 'remediate',
+        nodes: [node, 'stage:remediate', 'infra:output'],
+        text: line(event.detail || {}),
+        outcome: failure ? 'Attention required' : warning ? 'Review' : 'Recorded',
+        correlation: run.scan_id,
+        durable: true,
+      })
+    }
+  }
+  return events
+}
+
 /**
- * Every operational event the drawer shows is DERIVED FROM AN OBSERVED CHANGE between two live
- * snapshots — there is no event log endpoint, and inventing one would mean inventing its
- * contents. So an event here means "these two consecutive snapshots differed in this way", which
- * is a fact, and the timeline says so in the UI.
+ * Infrastructure events are derived from an observed change between two live snapshots. Durable
+ * Remediation events arrive through ``durableRunEvents`` above and keep their server identity, so
+ * they survive opening the tab late and reconnecting. Neither path invents an event.
  *
  * Document contents, tokens and credentials never appear: the only document-identifying value is
  * `current_file`, the filename the authorized activity endpoint already returns for the drawer.

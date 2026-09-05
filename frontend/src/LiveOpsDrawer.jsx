@@ -1680,7 +1680,8 @@ function EventTimeline({ events, filter, onFilter, paused, onPause, showAll, onS
     {events.length > visible.length && <button type="button" className="ghost small"
       style={{ marginTop: 9 }} onClick={onShowAll}>Show all events ({events.length})</button>}
     <p className="muted" style={{ fontSize: 11, margin: '9px 0 0' }}>
-      Events are derived from changes observed between live snapshots in this session. Document
+      Remediation lifecycle events come from the durable run log and survive reconnects. Other
+      events are derived from changes observed between live snapshots in this session. Document
       contents, tokens and credentials are never shown.
     </p>
   </section>
