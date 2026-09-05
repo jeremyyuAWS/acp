@@ -27,11 +27,13 @@ import FileDrawer, { SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_RANK } from './ontology.js'
-import { remediateScan, getRemediationStatus, openRemediationStream, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, assignHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl, getQueueEstimate } from './api.js'
+import { remediateScan, getRemediationStatus, getRemediationSnapshot, openRemediationStream, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, assignHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl, getQueueEstimate } from './api.js'
 import { SIM, simProposalsFor } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
 import QueuePanel from './QueuePanel.jsx'
 import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
+import RemediationOpsPanel from './RemediationOpsPanel.jsx'
+import { isNewer } from './remediationSnapshot.js'
 import { deriveRemediateProcessingState } from './remediateProcessingState.js'
 import { groupFixesByRule, summarizeImpact, totalFixes, scOf } from './fixSummary.js'
 import { remediationWork, batchScope } from './remediationWork.js'
@@ -403,6 +405,14 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [remMsg, setRemMsg] = useState('')
   const [remProg, setRemProg] = useState(null)   // authoritative SSE status + client-known batch total
   const [remUpdates, setRemUpdates] = useState('idle') // live | polling | idle
+  // The server-owned run snapshot (api/remediation_run.py). Held separately from `remProg`
+  // because the two answer different questions and must not be merged into one client-side
+  // object: remProg is the batch progress bar's denominator and its latest filename; this is the
+  // authoritative state, the reconciled partition, and the server's own integrity verdict.
+  // NOTHING here is derived — see RemediationOpsPanel for why the derivation moved to the server.
+  const [ops, setOps] = useState(null)
+  const [opsAt, setOpsAt] = useState(null)
+  const opsRef = useRef(null)
   const [serverFixed, setServerFixed] = useState(0)  // files fixed server-side this scan (persists after each batch)
   const [staleDismissed, setStaleDismissed] = useState(false)
   const [runDetailsOpen, setRunDetailsOpen] = useState(false)  // the Run details disclosure (PRD §11)
@@ -455,7 +465,40 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       .catch(() => {})
   }
 
+  // One place a snapshot is accepted, whichever transport carried it. A frame from a superseded
+  // read (a revision that went BACKWARDS) is dropped rather than rendered — applying it would
+  // walk the panel backwards, which looks exactly like the run regressing.
+  const acceptSnapshot = (next) => {
+    if (!next) return
+    setOps((previous) => {
+      const winner = isNewer(previous, next) ? next : previous
+      opsRef.current = winner
+      return winner
+    })
+    setOpsAt(Date.now())
+  }
+
+  // The snapshot's own poll. Slower than the batch poll on purpose: that one runs at 1.5s to keep
+  // a progress bar smooth, and rebuilding the reconciled snapshot at that cadence would multiply
+  // the run's database reads for a panel whose numbers change on durable events, not on ticks.
+  // Stops on a terminal run — the server says when that is, and this never decides it locally.
+  useEffect(() => {
+    if (!runId) { setOps(null); setOpsAt(null); return undefined }
+    let on = true
+    const load = () => getRemediationSnapshot(runId)
+      .then((snap) => { if (on) acceptSnapshot(snap) })
+      .catch(() => { /* transient: the last confirmed snapshot and its age stay on screen */ })
+    load()
+    // Read the run's terminality off a REF, not off `ops`. The interval closure captures state
+    // from the render that created it, so `ops` here would be null forever and the "stop when
+    // terminal" it was written to express would never once be true.
+    const id = setInterval(() => { if (!opsRef.current?.terminal) load() }, 5000)
+    return () => { on = false; clearInterval(id) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runId])
+
   const applyRemediationStatus = (total, s) => {
+    acceptSnapshot(s.snapshot)
     const done = Math.max(0, total - (s.in_flight || 0))
     setRemProg((previous) => {
       const activity = s.activity || null
@@ -1559,6 +1602,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         primary={primary}
         readOnly={readOnly}
         onOpenRunDetails={() => setRunDetailsOpen((v) => !v)} />
+      {/* Region A/B/C of the operations panel. It sits above the progress bar because it is the
+          authoritative account of the run and the bar is one number from it: when the two would
+          ever disagree, the one with the server's revision and integrity verdict is the one to
+          read first. `connected` is the transport's own answer, not an inference from data age. */}
+      <RemediationOpsPanel snapshot={ops} connected={remUpdates === 'live'} receivedAt={opsAt} />
       {/* The authenticated remediation SSE already supplies these values. Keep its progress in
           the main workflow, rather than hiding the only live signal inside Run details. */}
       {remProg && (

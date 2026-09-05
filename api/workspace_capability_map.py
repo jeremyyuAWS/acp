@@ -149,7 +149,13 @@ _map_many([
     ("POST", "/scans/{sid}/files/{filename:path}/undo-fix"),
 ], {"remediate.run"})
 _map_many([
-    ("GET", "/scans/{sid}/remediation-status"), ("GET", "/scans/{sid}/remediation-diffs"),
+    ("GET", "/scans/{sid}/remediation-status"),
+    # The reconciled run snapshot reads the same run as remediation-status and carries strictly
+    # more of it — filenames, SharePoint site and library names, the run's own state — so it takes
+    # the same capability. Anything narrower would let the summary be read where the detail it
+    # summarises cannot be.
+    ("GET", "/scans/{sid}/remediation/snapshot"),
+    ("GET", "/scans/{sid}/remediation-diffs"),
     ("GET", "/scans/{sid}/files/{filename:path}/remediation-diffs"),
     ("GET", "/scans/{sid}/files/{filename:path}/remediation-state"),
     ("GET", "/scans/{sid}/applied-fixes"), ("GET", "/scans/{sid}/diff"),

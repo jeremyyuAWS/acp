@@ -6398,6 +6398,127 @@ class Store:
                 "recent_files": [{"file": row["file"], "at": row["remediated_at"]}
                                  for row in recent]}
 
+    def remediation_run_facts(self, scan_id: str) -> dict:
+        """Every row remediation_run.build_snapshot needs, from ONE read of the run.
+
+        Deliberately separate from `remediation_status`, which stays exactly as it is: that
+        method feeds a shipped progress bar and a shipped SSE stream, and rewriting it under them
+        to serve a different contract is how a "counter fix" becomes a regression. This gathers
+        FACTS ONLY — no state, no partition, no labels — so the judgement all lives in the pure
+        module that can be tested against literals.
+
+        SCOPED TO THE LATEST BATCH, and to ONE ROW PER DOCUMENT. Both for the reason
+        remediation_status documents at length: an unscoped count answered `failed: 294` against
+        a 147-document batch on 2026-09-04, and the panel rendered "-147 documents remediated".
+        A partition that is asserted to sum to its scope cannot survive a document appearing in
+        it twice, so the newest job per file wins and the rest are history.
+        """
+        import json as _json
+        out: dict = {"scan_id": scan_id, "run_id": scan_id}
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id,started_at,assessed_at,source,status FROM scan_runs WHERE id=%s",
+                (scan_id,))
+            run = self._db.fetchone(cur) or {}
+            self._db.execute(cur,
+                "SELECT batch_id FROM jobs WHERE scan_id=%s AND type='remediate_file' "
+                "ORDER BY created_at DESC, id DESC LIMIT 1", (scan_id,))
+            batch_id = (self._db.fetchone(cur) or {}).get("batch_id")
+            _scope = " AND batch_id=%s" if batch_id else ""
+            _args = (scan_id, batch_id) if batch_id else (scan_id,)
+            self._db.execute(cur,
+                "SELECT id,payload,status,attempts,max_attempts,run_after,locked_at,"
+                "lease_expires_at,updated_at,created_at,phase,cancel_requested_at "
+                "FROM jobs WHERE scan_id=%s AND type='remediate_file'" + _scope +
+                " ORDER BY created_at, id", _args)
+            rows = self._db.fetchall(cur)
+            # One row per document. Later rows win: a document requeued inside the same batch is
+            # represented by its current attempt, not by the corpse of the previous one.
+            jobs: dict[str, dict] = {}
+            for row in rows:
+                payload = row.get("payload")
+                if isinstance(payload, str):
+                    try:
+                        payload = _json.loads(payload)
+                    except Exception:
+                        payload = {}
+                # A payload-less row still counts as one document — dropping it would understate
+                # the scope, and the partition is checked against that scope.
+                file = (payload or {}).get("file") or f"job:{row.get('id')}"
+                jobs[file] = {"file": file, "status": row.get("status"),
+                              "attempts": row.get("attempts"), "run_after": row.get("run_after"),
+                              "locked_at": row.get("locked_at"), "phase": row.get("phase"),
+                              "lease_expires_at": row.get("lease_expires_at"),
+                              "updated_at": row.get("updated_at"),
+                              "created_at": row.get("created_at"),
+                              "cancel_requested_at": row.get("cancel_requested_at")}
+            out["jobs"] = list(jobs.values())
+            out["batch_id"] = batch_id
+            out["cancel_requested"] = any(j.get("cancel_requested_at") for j in jobs.values())
+            out["cancelled"] = bool(jobs) and all(j.get("status") == "cancelled"
+                                                  for j in jobs.values())
+            out["latest_progress_at"] = max(
+                [j["updated_at"] for j in jobs.values() if j.get("updated_at")], default=None)
+            out["started_at"] = min(
+                [j["created_at"] for j in jobs.values() if j.get("created_at")],
+                default=run.get("started_at"))
+
+            # Human review: the documents whose automatic work stopped for a decision, and how
+            # many individual items are waiting. Two different units, named apart (PRD §6C).
+            self._db.execute(cur,
+                "SELECT file,COUNT(*) AS n FROM hitl_queue WHERE scan_id=%s AND status='pending' "
+                "GROUP BY file", (scan_id,))
+            review = self._db.fetchall(cur)
+            out["review_documents"] = [r["file"] for r in review if r.get("file")]
+            out["review_items"] = sum(int(r.get("n") or 0) for r in review)
+
+            # Corrected copies. `remediated_at` proves ACP stored one; `drive_write_url` proves it
+            # reached the source provider. A delivery failure leaves the first set and the second
+            # unset, which is the state PRD §11 needs to be able to retry on its own.
+            self._db.execute(cur,
+                "SELECT file,drive_write_url,remediated_at FROM file_records "
+                "WHERE scan_id=%s AND remediated_at IS NOT NULL", (scan_id,))
+            corrected = self._db.fetchall(cur)
+            out["corrected_documents"] = [r["file"] for r in corrected if r.get("file")]
+            out["corrected_stored"] = len(corrected)
+            out["corrected_delivered"] = sum(1 for r in corrected if r.get("drive_write_url"))
+            out["latest_delivery_at"] = max(
+                [r["remediated_at"] for r in corrected if r.get("remediated_at")], default=None)
+
+            # Fixes APPLIED vs fixes VERIFIED are two tables, and they have always been two
+            # facts: applied_fixes is written by the appliers, remediation_diff only by the
+            # truthfulness gate in handlers._remediate_file, which records a before→after pair
+            # ONLY when the re-scan observed that criterion clear. remediation_status served the
+            # second under the name `fixes_applied`, which is the mislabel PRD §17.4 is about.
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM applied_fixes WHERE scan_id=%s", (scan_id,))
+            out["fixes_applied"] = int((self._db.fetchone(cur) or {}).get("n") or 0)
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n,COUNT(DISTINCT file) AS docs FROM remediation_diff "
+                "WHERE scan_id=%s", (scan_id,))
+            diffs = self._db.fetchone(cur) or {}
+            out["fixes_verified"] = int(diffs.get("n") or 0)
+            self._db.execute(cur,
+                "SELECT DISTINCT file FROM remediation_diff WHERE scan_id=%s", (scan_id,))
+            out["verified_documents"] = [r["file"] for r in self._db.fetchall(cur) if r.get("file")]
+
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM issue_records WHERE scan_id=%s", (scan_id,))
+            out["total_findings"] = int((self._db.fetchone(cur) or {}).get("n") or 0)
+
+            # WHERE the documents came from, from the run's OWN inventory — never from the
+            # signed-in account or a default connector (PRD §6A). NULL for every non-SharePoint
+            # source, which produces a provider label and no breadcrumb rather than a wrong one.
+            self._db.execute(cur,
+                "SELECT DISTINCT site_name,library_name FROM scan_inventory WHERE scan_id=%s "
+                "AND (site_name IS NOT NULL OR library_name IS NOT NULL)", (scan_id,))
+            out["locations"] = [{"site_name": r.get("site_name"),
+                                 "library_name": r.get("library_name")}
+                                for r in self._db.fetchall(cur)]
+        out["source"] = run.get("source")
+        out["assessed_at"] = run.get("assessed_at")
+        out["scan_snapshot_id"] = run.get("id") or scan_id
+        return out
     def get_file_drive_id(self, scan_id: str, file: str) -> str | None:
         with self._db.cursor() as cur:
             self._db.execute(cur,
