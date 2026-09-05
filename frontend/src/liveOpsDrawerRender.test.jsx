@@ -99,7 +99,10 @@ describe('Live header', () => {
     expect(dialog.textContent).toContain('Worker service')
     expect(dialog.textContent).toContain('Online')
     expect(dialog.textContent).toContain('Updated 3s ago')
-    expect(dialog.textContent).toContain('Live stream connected')
+    // The header now names one of four explicit stream states — see streamState. "Live" plus
+    // the sentence under it replaces the old single "Live stream connected" string.
+    expect(dialog.textContent).toContain('Live')
+    expect(dialog.textContent).toContain('Receiving live updates.')
     expect(dialog.textContent).toContain('Deployment revision: acp-assess--v25')
     expect(buttonNamed(container, 'View full Live Operations')).toBeTruthy()
   })
@@ -110,7 +113,8 @@ describe('Live header', () => {
     const dropped = await mount({ nodeId: 'stage:assess', connection: 'reconnecting',
       node: { kind: 'worker', label: 'Assess workers', service } })
     expect(dropped.querySelector('.liveops-pulse')).toBe(null)
-    expect(dropped.textContent).toContain('Live stream reconnecting')
+    expect(dropped.textContent).toContain('Reconnecting')
+    expect(dropped.textContent).toMatch(/last frame received/)
   })
 
   it('states an offline service in text, not by colour alone', async () => {
@@ -138,7 +142,11 @@ describe('Primary visualization per node', () => {
       node: { kind: 'worker', label: 'Assess workers', service: { ...service, active: 51, slots: 2, available: 0 } } })
     expect(container.textContent).not.toContain('2550')
     expect(container.textContent).toContain('Over committed')
-    expect(container.textContent).toContain('51 jobs in flight against 2 reported worker slots')
+    // CHANGED DELIBERATELY, per the brief: the gauge is bounded at 100% and the excess is its
+    // own figure, so the reader gets both true facts instead of neither.
+    expect(container.textContent).toContain('2 of 2 slots busy (100%)')
+    expect(container.textContent).toContain('49 more jobs running than slots')
+    expect(container.textContent).not.toContain('51 of 2')
     expect(container.textContent).toContain('last-writer-wins across replicas')
   })
 
@@ -166,6 +174,55 @@ describe('Primary visualization per node', () => {
     expect(container.textContent).toContain('1m 30s')
     expect(container.textContent).toContain('95TH PERCENTILE WAIT')
     expect(container.textContent).toContain('Across 10 claimable jobs')
+  })
+
+  it('names the stage that can claim the waiting work, bounded at 100% with the excess as backlog', async () => {
+    const container = await mount({ nodeId: 'infra:queue', node: { kind: 'queue', label: 'Shared queue' } })
+    const panel = container.querySelector('[aria-label="Worker capacity able to claim this queue"]')
+    expect(panel).toBeTruthy()
+    expect(panel.textContent).toContain('assess')
+    expect(panel.textContent).toContain('10 waiting for 3 slots')
+    // 10 jobs against 3 slots is 100% busy with 7 behind it — NOT 333% utilized.
+    expect(panel.textContent).toContain('100% of this stage’s slots')
+    expect(panel.textContent).toContain('7 beyond capacity (backlog, not utilization)')
+    expect(panel.textContent).not.toContain('333')
+    expect(panel.querySelector('[aria-label="assess: 100% of 3 slots claimable now, 7 jobs beyond capacity"]')).toBeTruthy()
+  })
+
+  it('says a stage is not reporting slots rather than drawing it at zero', async () => {
+    const summary = { ...snapshot.summary, queued: 12,
+      by_stage: { ...snapshot.summary.by_stage, remediate: { completed: 12, running: 1, queued: 2 } } }
+    const container = await mount({ nodeId: 'infra:queue', node: { kind: 'queue', label: 'Shared queue' },
+      snapshot: { ...snapshot, summary } })
+    const panel = container.querySelector('[aria-label="Worker capacity able to claim this queue"]')
+    expect(panel.textContent).toContain('remediate')
+    expect(panel.textContent).toContain('slots Not reported')
+    expect(panel.textContent).toContain('unknown — not zero')
+    // One bar for assess (which reports a pool), none for remediate (which does not).
+    expect(panel.querySelectorAll('[role="img"]').length).toBe(1)
+  })
+
+  it('says a stage scaled to zero can claim nothing, rather than drawing a bar of null width', async () => {
+    // Reachable: a stage scaled to zero replicas still heartbeats, so its pool_size is a MEASURED
+    // 0, not an absent reading. Dividing by it produced `width: null%` and an aria-label reading
+    // "null% of 0 slots".
+    const summary = { ...snapshot.summary,
+      worker_roles: { assess: { alive: true, pool_size: 0, age_s: 4, version: 'v25' } } }
+    const container = await mount({ nodeId: 'infra:queue', node: { kind: 'queue', label: 'Shared queue' },
+      snapshot: { ...snapshot, summary } })
+    const panel = container.querySelector('[aria-label="Worker capacity able to claim this queue"]')
+    expect(panel.textContent).toContain('zero worker slots, so nothing can claim its 10 waiting jobs')
+    expect(panel.querySelectorAll('[role="img"]').length).toBe(0)
+    expect(panel.innerHTML).not.toContain('null%')
+  })
+
+  it('counts waiting work no stage claimed instead of adding it to a role', async () => {
+    const summary = { ...snapshot.summary, queued: 14 }   // 10 attributed to assess, 4 to nobody
+    const container = await mount({ nodeId: 'infra:queue', node: { kind: 'queue', label: 'Shared queue' },
+      snapshot: { ...snapshot, summary } })
+    const panel = container.querySelector('[aria-label="Worker capacity able to claim this queue"]')
+    expect(panel.textContent).toContain('4 waiting jobs the snapshot did not attribute to a stage')
+    expect(panel.textContent).toContain('10 waiting for 3 slots')   // assess is unchanged by it
   })
 
   it('draws the tenant split as a shape and never names a customer', async () => {
@@ -618,7 +675,7 @@ describe('Event timeline', () => {
 
   it('lists this component events newest first, with time, icon, outcome and correlation', async () => {
     const container = await mount({ nodeId: 'stage:assess', node: workerNode })
-    const items = [...container.querySelectorAll('ol li')]
+    const items = [...container.querySelectorAll('[aria-label="Live event timeline"] ol li')]
     expect(items).toHaveLength(2)
     expect(items[0].textContent).toContain('Worker claimed Mediation Record 11.13.2022.xlsx')
     expect(items[0].textContent).toContain('Claimed')
@@ -630,7 +687,7 @@ describe('Event timeline', () => {
   it('filters by category', async () => {
     const container = await mount({ nodeId: 'stage:assess', node: workerNode })
     await click(buttonNamed(container, 'Capacity'))
-    const items = [...container.querySelectorAll('ol li')]
+    const items = [...container.querySelectorAll('[aria-label="Live event timeline"] ol li')]
     expect(items).toHaveLength(1)
     expect(items[0].textContent).toContain('slots changed from 2 to 3')
   })
@@ -689,13 +746,48 @@ describe('Dialog behaviour', () => {
 })
 
 describe('Detailed facts are preserved, not discarded', () => {
-  it('keeps the operational fact tiles available for inspection', async () => {
+  // REWRITTEN, not merely re-pointed: this asserted `container.querySelector('details')`, and the
+  // fact wall is now grouped disclosures built from `<button aria-expanded>` — `details`/`summary`
+  // is reported inconsistently by screen readers, several announcing no expanded state at all.
+  // What the old test was protecting (the facts are still reachable, verbatim, with the
+  // never-estimated note) is asserted here; the element it happened to be inside is not.
+  const factsPanel = (container) => container.querySelector('[aria-label="Operational facts"]')
+  const factButton = (container, title) =>
+    [...factsPanel(container).querySelectorAll('button')].find((b) => b.textContent.startsWith(title))
+
+  it('keeps every operational fact reachable, grouped and collapsed', async () => {
     const container = await mount({ nodeId: 'stage:assess', node: { kind: 'worker', label: 'Assess workers', service },
       facts: [['Service health', 'Online'], ['Replica size', '2 vCPU · 4Gi RAM · 8Gi temporary disk']] })
-    const details = container.querySelector('details')
-    expect(details.textContent).toContain('Operational facts')
-    expect(details.textContent).toContain('2 vCPU · 4Gi RAM · 8Gi temporary disk')
-    expect(details.textContent).toContain('are never estimated')
+    const panel = factsPanel(container)
+    expect(panel.textContent).toContain('Operational facts')
+    expect(panel.textContent).toContain('are never estimated')
+    // Both groups are offered; neither is open, so the values are hidden rather than absent.
+    expect(factButton(container, 'Capacity').getAttribute('aria-expanded')).toBe('false')
+    expect(factButton(container, 'Deployment').getAttribute('aria-expanded')).toBe('false')
+    expect(panel.querySelector('#facts-capacity').hidden).toBe(true)
+    expect(panel.querySelector('#facts-capacity').textContent).toContain('2 vCPU · 4Gi RAM · 8Gi temporary disk')
+  })
+
+  it('opens one group at a time and says so in aria-expanded', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: { kind: 'worker', label: 'Assess workers', service },
+      facts: [['Service health', 'Online'], ['Replica size', '2 vCPU · 4Gi RAM · 8Gi temporary disk']] })
+    const button = factButton(container, 'Capacity')
+    expect(button.getAttribute('aria-controls')).toBe('facts-capacity')
+    await click(button)
+    expect(factButton(container, 'Capacity').getAttribute('aria-expanded')).toBe('true')
+    expect(factsPanel(container).querySelector('#facts-capacity').hidden).toBe(false)
+    // The other group is untouched by opening this one.
+    expect(factButton(container, 'Deployment').getAttribute('aria-expanded')).toBe('false')
+    await click(factButton(container, 'Capacity'))
+    expect(factButton(container, 'Capacity').getAttribute('aria-expanded')).toBe('false')
+  })
+
+  it('shows a fact whose label the group map does not know rather than dropping it', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: { kind: 'worker', label: 'Assess workers', service },
+      facts: [['Quantum flux', 'Nominal']] })
+    expect(factButton(container, 'Other')).toBeTruthy()
+    expect(factsPanel(container).querySelector('#facts-other').textContent).toContain('Quantum flux')
+    expect(factsPanel(container).querySelector('#facts-other').textContent).toContain('Nominal')
   })
 })
 
@@ -1214,5 +1306,107 @@ describe('Capacity cost panel', () => {
       const container = await mount({ nodeId: 'x', node, capacity: costFor() })
       expect(six(container).textContent, node.kind).toContain('Capacity cost')
     }
+  })
+})
+
+describe('Task 19 — worker and queue, as the brief specifies', () => {
+  const workerNode = { kind: 'worker', label: 'Assess workers', service }
+  const queueNode = { kind: 'queue', label: 'Shared queue' }
+  const sec = (c, label) => c.querySelector(`[aria-label="${label}"]`)
+
+  it('caps the gauge at 100% and shows the excess as its own figure', async () => {
+    // The brief: "Do not show impossible utilization such as 300% or 2550%. Capacity gauges must
+    // be bounded at 100%; show excess work separately as backlog or oversubscription."
+    const container = await mount({ nodeId: 'stage:assess',
+      node: { kind: 'worker', label: 'Assess workers',
+        service: { ...service, active: 51, slots: 2 } } })
+    const gauge = sec(container, 'Worker slot utilization')
+    expect(gauge.textContent).toContain('100%')
+    expect(gauge.textContent).toContain('2 of 2 slots busy')
+    expect(gauge.textContent).toContain('49 more jobs running than slots')
+    expect(gauge.textContent).not.toMatch(/2550|51 of 2/)
+  })
+
+  it('does not contradict itself between the gauge and the slot tile', async () => {
+    // Two surfaces, same numbers. The saturation tile used to read "51 of 2 busy" beside a gauge
+    // that had already refused to say that.
+    const container = await mount({ nodeId: 'stage:assess',
+      node: { kind: 'worker', label: 'Assess workers',
+        service: { ...service, active: 51, slots: 2 } } })
+    expect(container.textContent).not.toMatch(/51 of 2/)
+    expect(container.textContent).toMatch(/49 more running than slots/)
+  })
+
+  it('calls a connected but silent stream Stale, with the age of what is on screen', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode,
+      connection: 'live',
+      snapshot: { ...snapshot, generated_at: iso(-240) } })
+    const dialog = container.querySelector('[role="dialog"]')
+    expect(dialog.textContent).toContain('Stale')
+    expect(dialog.textContent).toMatch(/connected but has not delivered a frame/)
+  })
+
+  it('keeps the last measurement visible when the stream is unavailable', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode,
+      connection: 'unavailable', snapshot: { ...snapshot, generated_at: iso(-600) } })
+    const dialog = container.querySelector('[role="dialog"]')
+    expect(dialog.textContent).toContain('Unavailable')
+    expect(dialog.textContent).toMatch(/last frame that arrived/)
+  })
+
+  it('walks the provisioning stages in order for a worker', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode,
+      capacity: { ...capacity, replicas: [
+        { name: 'r1', state: 'ready' }, { name: 'r2', state: 'starting' }] } })
+    const text = container.querySelector('[aria-label="2. Right now"]').textContent
+    expect(text).toContain('Requested')
+    expect(text).toContain('Allocating')
+    expect(text).toContain('Starting')
+    expect(text).toContain('Healthy')
+    expect(text).toMatch(/not report when a replica was requested/)
+  })
+
+  it('shows the queue arrival, completion and drain estimate', async () => {
+    const container = await mount({ nodeId: 'infra:queue', node: queueNode })
+    const q = sec(container, 'Shared queue composition')
+    expect(q.textContent).toContain('ARRIVING')
+    expect(q.textContent).toContain('COMPLETING')
+    expect(q.textContent).toContain('ESTIMATED DRAIN')
+  })
+
+  it('says a growing queue is not draining rather than inventing a finishing time', async () => {
+    const container = await mount({ nodeId: 'infra:queue', node: queueNode,
+      snapshot: { ...snapshot, summary: { ...snapshot.summary,
+        queue: { ...snapshot.summary.queue, arrived: 600, completed: 60, window_s: 900 } } } })
+    const q = sec(container, 'Shared queue composition')
+    expect(q.textContent).toContain('Not draining')
+    expect(q.textContent).toMatch(/arriving faster than it completes/)
+  })
+
+  it('labels the drain estimate as an estimate, never as a measurement', async () => {
+    const container = await mount({ nodeId: 'infra:queue', node: queueNode })
+    expect(sec(container, 'Shared queue composition').textContent)
+      .toMatch(/Estimated from configured capacity/)
+  })
+
+  it('renders missing queue rates as Not reported, not as zero', async () => {
+    const container = await mount({ nodeId: 'infra:queue', node: queueNode,
+      snapshot: { ...snapshot, summary: { ...snapshot.summary,
+        queue: { running: 2, waiting: 8, window_s: 900 } } } })
+    const q = sec(container, 'Shared queue composition')
+    expect(q.textContent).toContain('Not reported')
+    expect(q.textContent).not.toMatch(/\b0\/min\b/)
+  })
+
+  it('keeps every stream state distinguishable without colour', async () => {
+    const seen = []
+    for (const [connection, generated_at] of [
+      ['live', iso(-3)], ['live', iso(-240)], ['reconnecting', iso(-10)], ['unavailable', iso(-60)],
+    ]) {
+      const container = await mount({ nodeId: 'stage:assess', node: workerNode, connection,
+        snapshot: { ...snapshot, generated_at } })
+      seen.push(container.querySelector('[role="dialog"]').textContent.slice(0, 120))
+    }
+    expect(new Set(seen).size).toBe(4)
   })
 })
