@@ -1589,6 +1589,9 @@ def _exception_view(sid: str) -> dict:
     Composed from the SAME facts the snapshot is built from, so the exception counts and the
     counters cannot disagree: `remediation_run.classify_document` decides each document's outcome
     once, and both the partition and this grouping are derived from that one answer.
+
+    Returns `(cancelled, view, records)` — the flag first because every mutating caller needs it
+    before it needs either of the other two.
     """
     import remediation_run
     import remediation_exceptions as exceptions
@@ -1611,8 +1614,10 @@ def _exception_view(sid: str) -> dict:
 
     records = exceptions.compose_records(outcomes=outcomes, documents=facts.get("documents"),
                                          run_id=sid)
+    # Cancel REQUESTED counts, not only cancelled: a run that is stopping must not accept a new
+    # write to the customer's estate while it drains.
     cancelled = bool(run_facts.get("cancelled") or run_facts.get("cancel_requested"))
-    return {
+    return cancelled, {
         "run_id": sid,
         "generated_at": now.isoformat(),
         "revision": snapshot.get("revision"),
@@ -1626,7 +1631,7 @@ def _exception_view(sid: str) -> dict:
             cancelled=bool(run_facts.get("cancelled")),
             terminal=bool(snapshot.get("terminal"))),
         "paused_at": facts.get("paused_at"),
-    }, records, facts
+    }, records
 
 
 @router.get("/scans/{sid}/remediation/exceptions")
@@ -1640,7 +1645,7 @@ def remediation_exceptions_view(sid: str, request: Request, response: Response):
     if core.store.get_scan(sid, owner=_owner(request)) is None:
         raise HTTPException(404, "scan not found")
     response.headers["Cache-Control"] = "no-store"
-    view, _records, _facts = _exception_view(sid)
+    _cancelled, view, _records = _exception_view(sid)
     return view
 
 
@@ -1698,9 +1703,11 @@ async def retry_remediation_delivery(sid: str, request: Request):
     import remediation_exceptions as exceptions
 
     files = await _requested_files(request)
-    _view, records, facts = _exception_view(sid)
+    # ONE read of the run, shared by the gate and the grouping. Two reads would let the cancel flag
+    # and the eligible set come from different instants — the class of split-read defect
+    # store.remediation_run_facts exists to close.
+    cancelled, _view, records = _exception_view(sid)
     owner = _owner(request)
-    cancelled = bool(core.store.remediation_run_facts(sid).get("cancelled"))
     # Tokens travel with the job exactly as they do for a remediation batch: the worker tier has
     # no session, and a delivery to a customer's tenant needs the caller's grant, not ACP's.
     drive_token = request.headers.get("x-drive-token")
@@ -1772,7 +1779,7 @@ async def retry_remediation_documents(sid: str, request: Request):
     import remediation_exceptions as exceptions
 
     files = await _requested_files(request)
-    _view, records, _facts = _exception_view(sid)
+    _cancelled, _view, records = _exception_view(sid)
     owner = _owner(request)
     retryable = {"document_failure", "verification_failure"}
     results = []
