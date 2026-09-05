@@ -278,6 +278,24 @@ def test_the_google_and_azure_pins_are_kept_as_a_pair():
     assert "opentelemetry-sdk~=1.43.0" in requirements
 
 
+def test_the_sdk_this_module_imports_is_declared_not_merely_transitive():
+    """`_install_scrubber` subclasses `opentelemetry.sdk.trace.SpanProcessor`, so the SDK is a
+    dependency of OUR code, not just something azure-monitor-opentelemetry happens to bring.
+
+    Relying on the transitive install worked and was still wrong twice over. It made three tests
+    — the only ones that exercise the scrubber against a real provider rather than against
+    dictionaries — skip silently in CI, which tests/test_undeclared_importorskip.py exists to
+    catch. And a distro that stopped depending on the SDK would break `_install_scrubber` at
+    import, with nothing in the requirements file to say the SDK had ever been needed.
+    """
+    source = (ACP / "api" / "telemetry.py").read_text()
+    assert "from opentelemetry.sdk.trace import SpanProcessor" in source, \
+        "this test is about that import; if it moved, move the assertion with it"
+    requirements = (ACP / "api" / "requirements.txt").read_text()
+    assert "\nopentelemetry-sdk==" in requirements, \
+        "the SDK is imported by api/telemetry.py and must be declared, not inherited"
+
+
 def test_the_scrubber_attaches_to_a_real_sdk_provider(monkeypatch):
     """The `no scrubber, no export` guard is feature-detected, so this pins that the detection
     actually succeeds against the real SDK — not only against a fake with the right method name.

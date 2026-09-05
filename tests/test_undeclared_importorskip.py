@@ -53,6 +53,12 @@ IMPORT_TO_DISTRIBUTION = {
     "PIL": "pillow",
     "cv2": "opencv-python",
     "sklearn": "scikit-learn",
+    # `opentelemetry` is a NAMESPACE package: opentelemetry-api provides `opentelemetry.trace`
+    # and opentelemetry-sdk provides `opentelemetry.sdk.*`, both under the same top-level name,
+    # so the top-level split above cannot tell which distribution a site needs. Mapped to the
+    # SDK because that is the half this repo imports (api/telemetry.py's SpanProcessor) and
+    # because the SDK depends on the API — declaring the SDK therefore covers either import.
+    "opentelemetry": "opentelemetry-sdk",
 }
 
 

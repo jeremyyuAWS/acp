@@ -83,3 +83,15 @@ langfuse>=2.0,<3.0
 # Its `opentelemetry-sdk~=1.43.0` pin is why google-api-core is held at 2.34.0 above. The two
 # constraints are a pair; changing either without the other reintroduces the conflict.
 azure-monitor-opentelemetry==1.8.9
+# The SDK, named explicitly even though the distro above already brings it. api/telemetry.py
+# imports `opentelemetry.sdk.trace.SpanProcessor` directly — the scrubber IS a SpanProcessor — so
+# this is a first-party dependency of ours, not a transitive one, and a package our own code
+# imports has to be declared. Leaving it implicit also made three tests skip silently in CI
+# (tests/test_undeclared_importorskip.py caught that): the ones that exercise the scrubber against
+# a real provider, which are the only place the "nothing that names a document leaves" rule is
+# tested end to end rather than against dictionaries.
+#
+# 1.43.0 is what azure-monitor-opentelemetry 1.8.9's own `~=1.43.0` already resolves to, so this
+# pin constrains nothing new today; it exists so a distro bump that moves the SDK fails here,
+# where the google-api-core note above explains why that matters, rather than silently.
+opentelemetry-sdk==1.43.0
