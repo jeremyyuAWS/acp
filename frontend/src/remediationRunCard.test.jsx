@@ -158,6 +158,17 @@ describe('the card outlives a tab change', () => {
     expect(card).toBeLessThan(panel)
   })
 
+  it('shows globally except on Remediation, where the detailed operations card is authoritative', () => {
+    const app = readFileSync(join(here, 'App.jsx'), 'utf8')
+    const gate = app.slice(app.indexOf("{view !== 'remediate'"), app.indexOf('<main id="main-content"'))
+    expect(gate).toContain('<RemediationRunCard')
+    expect(gate).toContain('onOpen={() => { setView(\'remediate\')')
+    expect(gate).not.toContain("view === 'remediate' ? null")
+
+    const remediate = readFileSync(join(here, 'Remediate.jsx'), 'utf8')
+    expect(remediate).toContain('<RemediationOpsPanel')
+  })
+
   it('calls the hook unconditionally, above the sign-in early return', () => {
     // BOTH HALVES OF THIS BROKE THE WHOLE APP once, and neither was visible to any test of the
     // card itself — the full suite caught them:

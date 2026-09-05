@@ -2137,10 +2137,11 @@ export default function App() {
           state feeding it — is torn down the instant the user opens any other tab. A run that is
           still applying fixes must stay visible from wherever they are. `useRemediationRun` owns
           the snapshot for the same reason. */}
-      <RemediationRunCard snapshot={remRun.snapshot} receivedAt={remRun.receivedAt}
-                          connected={remRun.connected}
-                          onOpen={view === 'remediate' ? null
-                                  : () => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
+      {view !== 'remediate' && (
+        <RemediationRunCard snapshot={remRun.snapshot} receivedAt={remRun.receivedAt}
+                            connected={remRun.connected}
+                            onOpen={() => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
+      )}
 
       <main id="main-content" tabIndex={-1}>
       <div id="workflow-panel" role="tabpanel" aria-labelledby={`workflow-tab-${view}`}>
