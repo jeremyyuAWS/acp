@@ -61,9 +61,7 @@ def _my_capabilities(request: Request) -> frozenset[str]:
 
 
 def _suspended(email: str) -> bool:
-    target = (email or "").strip().lower()
-    person = next((p for p in core.store.get_people() if p.get("email") == target), None)
-    return (person or {}).get("status") == "suspended"
+    return core.suspended_in_store(email)
 
 
 def _require_roles_manage(request: Request) -> None:

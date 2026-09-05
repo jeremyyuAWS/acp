@@ -245,9 +245,7 @@ def _capability_gate_suspended(email: str) -> bool:
     """PRD §14 — a suspended user has no effective permissions. Read from the managed-person
     record, the same source routes/system.py uses, so the two cannot disagree about who is
     suspended."""
-    target = (email or "").strip().lower()
-    person = next((p for p in core.store.get_people() if p.get("email") == target), None)
-    return (person or {}).get("status") == "suspended"
+    return core.suspended_in_store(email)
 
 
 @app.middleware("http")
@@ -294,8 +292,20 @@ async def _access_gate(request, call_next):
             return Response(status_code=401, media_type="application/json", headers=_GATE_401,
                             content='{"detail":"Session expired — sign in again"}')
         if not core.email_allowed(email):
+            # TWO DIFFERENT REFUSALS, and telling them apart costs nothing and saves a support
+            # ticket. "Access restricted to authorized accounts" is true of somebody who was never
+            # admitted; said to a colleague an administrator suspended this morning it is simply
+            # wrong, and it reads as a bug in the product rather than as the deliberate act it is.
+            #
+            # No enumeration risk in the difference: this branch is reached only AFTER the bearer
+            # verified, so the caller has already proved they own the address. The most anyone can
+            # learn here is the state of their own account, which is the thing we want them to
+            # learn. The second store read is on the refusal path only.
+            detail = ("Your access has been suspended — contact your administrator."
+                      if core.is_suspended(email) else
+                      "Access restricted to authorized accounts")
             return Response(status_code=403, media_type="application/json",
-                            content='{"detail":"Access restricted to authorized accounts"}')
+                            content=json.dumps({"detail": detail}))
         request.state.user_email = email   # so routes can attribute the scan (Langfuse user)
         # JUST-IN-TIME ROSTER (owner decision, 2026-09-05). This is the only point in the codebase
         # where "somebody authenticated successfully" is known, so it is where a person first

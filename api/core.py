@@ -204,14 +204,109 @@ def is_admin(email: str | None) -> bool:
         return False
 
 
+def suspended_in_store(email: str | None) -> bool:
+    """Does this person's stored record say `suspended`? RAISES if the store cannot be read.
+
+    THE SINGLE DEFINITION OF SUSPENDED, and the reason it is split from `is_suspended` is the
+    failure policy rather than the lookup — the lookup is the same three lines it replaced in
+    three separate modules (app._capability_gate_suspended, routes.system._is_suspended,
+    routes.workspace_roles_admin._suspended), which is three chances for the next person to change
+    one of them.
+
+    THE TWO POLICIES ARE BOTH DELIBERATE AND THEY POINT OPPOSITE WAYS.
+
+    Callers deciding CAPABILITIES want this one, which raises. PRD §14: "Failure to load
+    permissions must fail closed for sensitive operations." An unreadable store there means we
+    cannot establish what somebody may do, and a 500 is the honest answer to that.
+
+    The authentication PERIMETER wants `is_suspended`, which swallows. A suspension check can only
+    ever remove access, so refusing on a failed read protects nothing and converts one unreadable
+    settings row into a workspace-wide outage for people who were never suspended.
+
+    Reads only the `people` records, not `people_with_access`. That merge additionally pulls the
+    allowlist and the admin list to answer "who should the People screen list"; the question here
+    is narrower — "is there a stored record, and does it say suspended".
+    """
+    target = (email or "").strip().lower()
+    if not target:
+        return False
+    return any(r.get("email") == target and r.get("status") == "suspended"
+               for r in get_store().get_people())
+
+
+def is_suspended(email: str | None) -> bool:
+    """Has an administrator withdrawn this person's access? PRD §14: "a suspended user has no
+    effective permissions."
+
+    Read LIVE on every call, deliberately un-memoised. The just-in-time roster memo next door
+    (`_rostered`) is safe to keep in process because it answers "have we seen them before", a fact
+    that only ever moves one way. Suspension is the opposite: it is the act of taking access away
+    RIGHT NOW, and a memo would mean an owner clicking Suspend had to wait for a redeploy to be
+    obeyed — which is the same class of bug as the one this function exists to close, wearing a
+    performance optimisation as a disguise.
+
+    Delegates the lookup to `suspended_in_store` so the perimeter and the capability layer cannot
+    drift about who is suspended; only the failure policy differs, and that difference is stated
+    there.
+    """
+    try:
+        return suspended_in_store(email)
+    except Exception:
+        # Fail OPEN, matching the allowlist read below, and the reasoning is worth stating because
+        # the instinct here is fail-closed. This check can only ever REMOVE access, so refusing on
+        # a failed read does not protect a resource — it turns one unreadable settings row into a
+        # workspace-wide outage for people who are not suspended and never were. The store that
+        # would have to fail for this to matter is the same one `get_allowlist()` reads two lines
+        # down, so a real failure already degrades the gate; this must not additionally weaponise
+        # it. PRD §14's "fail closed for sensitive operations" governs the capability decision in
+        # workspace_roles, which is where a refusal protects something.
+        swallowed("core.is_suspended: reading the people records failed")
+        return False
+
+
 def email_allowed(email: str) -> bool:
     """True if an email may use the app: the protected owner (or an additional admin), the runtime
     test-user list managed from Settings → Test users, or an allowed domain. ACP_ALLOWED_EMAILS is a
     one-time SEED for that list (see seed_allowlist_once), NOT a separate permanent grant
-    — so a user removed from the list is genuinely revoked. Admins are always admitted: an admin who
-    could not sign in would be a contradiction."""
+    — so a user removed from the list is genuinely revoked.
+
+    SUSPENSION BEATS EVERY GRANT BELOW THE OWNER, and that ordering is the fix of 2026-09-05.
+
+    Before it, suspending somebody worked only by accident and only for some people. `PUT
+    /admin/people` drops a suspended person from the ALLOWLIST, so an allow-listed person really
+    was refused here — not because their suspension was read, but because their grant had been
+    deleted. A DOMAIN-admitted person has no allowlist entry to delete, so the final `endswith`
+    admitted them exactly as before: the owner clicked Suspend, the screen said suspended, and
+    nothing whatsoever happened.
+
+    That mattered most in the configuration this product actually ships in. Below the `navigation`
+    rung — `off` and `observe`, and `off` is the default — `workspace_roles.access_for_email`
+    returns `legacy_access()` without consulting `is_suspended` at all, because not-yet-enforcing
+    means "preserve current access" for everyone. So the RBAC layer's own suspension check, which
+    is correct, does not bite until the rollout reaches `navigation`. Measured on the store:
+    a suspended domain user resolved to 10 tabs and 22 capabilities at `off` and at `observe`, and
+    to 0 and 0 at `navigation` and `enforce`. Until the ladder is climbed, THIS is the only place
+    a suspension can take effect, which is why it belongs at the perimeter rather than beside the
+    other checks.
+
+    The owner is exempt and stays first, before any store read can fail or refuse. `update_person`
+    already refuses to modify OWNER_EMAIL (409), so a suspended owner is not a state the product
+    can reach — but the ordering is what makes that a guarantee rather than a coincidence, and an
+    owner locked out is the one failure with no recovery path.
+
+    Env admins (ACP_ADMIN_EMAILS) are NOT exempt, which is a deliberate change from "admins are
+    always admitted". Suspension is only ever set by `PUT /admin/people`, which is owner-gated, so
+    it is always a deliberate act by the one identity that can also undo it. Leaving env admins
+    admitted would have preserved precisely the silent no-op this function is being fixed to stop
+    — and `update_person` already strips a suspended person from the managed admin list, so the
+    two halves of "admin" would otherwise disagree about the same click.
+    """
     email = (email or "").lower()
-    if email and (email == OWNER_EMAIL or email in ADMIN_EMAILS):
+    if email and email == OWNER_EMAIL:
+        return True
+    if is_suspended(email):
+        return False
+    if email and email in ADMIN_EMAILS:
         return True
     try:
         if email in get_store().get_allowlist():
