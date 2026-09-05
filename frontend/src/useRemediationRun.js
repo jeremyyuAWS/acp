@@ -70,6 +70,16 @@ export function useRemediationRun(runId) {
 
     let live = true
     const stopPoll = () => { clearInterval(pollRef.current); pollRef.current = null }
+    const stopForExpiredSession = () => {
+      // App keeps this hook mounted while it swaps the signed-in shell for SignIn. Without this,
+      // the fallback interval sends the rejected request every five seconds until reload/login.
+      live = false
+      stopPoll()
+      streamRef.current?.close?.()
+      streamRef.current = null
+      setConnected(false)
+    }
+    window.addEventListener('acp:session-expired', stopForExpiredSession)
 
     const loadSnapshot = () => getRemediationSnapshot(runId)
       .then((next) => { if (live) accept(next) })
@@ -132,6 +142,7 @@ export function useRemediationRun(runId) {
     connect()
     return () => {
       live = false
+      window.removeEventListener('acp:session-expired', stopForExpiredSession)
       stopPoll()
       streamRef.current?.close?.()
       streamRef.current = null

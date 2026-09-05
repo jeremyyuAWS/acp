@@ -29,7 +29,7 @@ from routes import ROUTERS
 
 app = FastAPI(title="acp — accessibility compliance API", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
-                   allow_methods=["*"], allow_headers=["*"])
+                   allow_methods=["*"], allow_headers=["*"], expose_headers=["X-Acp-Auth"])
 
 # Not every environment has the Postgres driver installed (store.py's SQLite path doesn't need
 # it, and some dev boxes never install it) — guard the import so this module still loads there.
@@ -275,7 +275,11 @@ async def _access_gate(request, call_next):
         # this; a route that returns 401 for its own reason (an integration not connected) must
         # NOT eject an authenticated user. Found 2026-08-11: /sources 401'ing a Microsoft user who
         # has no Google Drive bounced the whole session and cleared the bearer.
-        _GATE_401 = {"X-Acp-Auth": "session"}
+        # This middleware is outside Starlette's CORS wrapper and can return before that wrapper
+        # adds headers. Include the configured wildcard response headers here so a frontend on a
+        # separate origin can both receive the 401 and read its session-expiry marker.
+        _GATE_401 = {"X-Acp-Auth": "session", "Access-Control-Allow-Origin": "*",
+                     "Access-Control-Expose-Headers": "X-Acp-Auth"}
         hdr = request.headers.get("authorization", "")
         if not hdr.startswith("Bearer "):
             return Response(status_code=401, media_type="application/json", headers=_GATE_401,
