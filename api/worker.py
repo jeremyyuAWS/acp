@@ -266,6 +266,7 @@ class JobWorker:
         self.poll_interval = poll_interval
         self._running = False
         self.active_job_id = None
+        self.unhealthy = False
         # Optional (job_id: str, patch: dict) -> None hook, called after a transient failure
         # is requeued (never on dead-letter). Dependency-injected rather than imported here:
         # this module is intentionally infrastructure-only (see its docstring) and does not
@@ -459,6 +460,7 @@ class JobWorker:
             try:
                 did = self.run_once()
                 consecutive_errors = 0
+                self.unhealthy = False
             except Exception as e:  # never let the loop die on an unexpected error
                 # A failure here happens BEFORE run_once's own try block (e.g. claim_job
                 # couldn't get a DB connection at all) — every other worker thread in this
@@ -467,6 +469,10 @@ class JobWorker:
                 # second, prolonging the very outage this is reacting to. Back off like a
                 # real retry policy instead of hammering at the normal poll cadence.
                 consecutive_errors += 1
+                # Three consecutive claim-loop failures mean this slot cannot safely claim work.
+                # The loop keeps retrying; the process reporter exposes the bounded state until a
+                # successful poll proves recovery.
+                self.unhealthy = consecutive_errors >= 3
                 backoff = _backoff_seconds(consecutive_errors, base=2.0, cap=30.0)
                 print(f"[worker {self.worker_id}] loop error ({consecutive_errors} in a "
                       f"row): {e} — backing off {backoff:.1f}s", flush=True)

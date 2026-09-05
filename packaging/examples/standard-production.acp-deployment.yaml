@@ -86,6 +86,14 @@ secrets:
     redis-url: { name: acp-kv, key: redis-url }
     object-storage: { name: acp-kv, key: blob-account }
     langfuse-secret-key: { name: acp-kv, key: langfuse-secret-key }
+    # What actually turns telemetry on. api/telemetry.py configures the Azure Monitor
+    # OpenTelemetry distribution and starts nothing without it, so a document declaring
+    # `openTelemetry: true` without this is asking for telemetry it will not get.
+    applicationinsights-connection-string: { name: acp-kv, key: appinsights-connection-string }
+    # Optional, and its absence is not silent: without a stable salt telemetry.py OMITS the
+    # tenant and document HMACs rather than computing them from a per-process one, which
+    # would give every replica a different id for the same tenant. status() reports it.
+    acp-telemetry-salt: { name: acp-kv, key: telemetry-salt }
     google-oauth-client-secret: { name: acp-kv, key: google-oauth-client-secret }
     microsoft-oauth-client-secret: { name: acp-kv, key: microsoft-oauth-client-secret }
 sources:

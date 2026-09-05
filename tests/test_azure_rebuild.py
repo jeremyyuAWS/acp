@@ -27,10 +27,18 @@ DOCUMENT = ROOT / "packaging" / "docs" / "azure-current.acp-deployment.yaml"
 REPORT = ROOT / "packaging" / "docs" / "azure-rebuild.md"
 GENERATOR = ROOT / "scripts" / "gen_azure_rebuild.py"
 
-# The two errors the derived document is EXPECTED to carry, by rule id. Both are findings about
-# the deployment rather than about the derivation, and both are named in azure-rebuild.md. Pinned
-# as a set so a third error appearing — or one of these being silently resolved — fails here.
-EXPECTED_ERROR_RULES = {"profile.replica-floor", "production.retention"}
+# The errors the derived document is EXPECTED to carry, by rule id. Each is a finding about the
+# DEPLOYMENT rather than about the derivation, and each is named in azure-rebuild.md. Pinned as a
+# set so a new one appearing — or one being silently resolved — fails here.
+#
+# `secrets.required` joined them on 2026-09-05 and is the most consequential of the three.
+# deploy/public/ sets `observability.openTelemetry: true` and `exporter: azure-monitor`, and sets
+# APPLICATIONINSIGHTS_CONNECTION_STRING nowhere — so `api/telemetry.py::configure()` returns
+# `{"enabled": false, "reason": "not configured"}` in production and has always done. The
+# deployment declares telemetry and collects none. That was invisible until the contract started
+# requiring the credential the application actually reads; before it, the document validated on
+# this point while describing a system with no telemetry at all.
+EXPECTED_ERROR_RULES = {"profile.replica-floor", "production.retention", "secrets.required"}
 
 
 @pytest.fixture
@@ -201,10 +209,16 @@ def test_the_scripts_really_do_hold_no_storage_secret():
 
 
 def test_workload_identity_satisfies_the_object_storage_requirement(document):
+    """Narrowed to the PATH, not to the rule. It used to assert that no `secrets.required` error
+    existed anywhere in the document, which was true only while object-storage was the sole
+    requirement anything could fail. When telemetry gained a required credential on 2026-09-05 —
+    one production genuinely does not declare — this test failed for a reason that had nothing to
+    do with workload identity, and would have been "fixed" by weakening the new requirement."""
     from acpctl.spec import required_secret_names, validate
     assert "object-storage" in required_secret_names(document)
     assert document["secrets"]["workloadIdentity"] == ["object-storage"]
-    assert not [f for f in validate(document).errors if f.rule == "secrets.required"]
+    offending = [f.path for f in validate(document).errors if f.rule == "secrets.required"]
+    assert "secrets.refs.object-storage" not in offending, offending
 
 
 def test_removing_the_identity_declaration_brings_the_error_back(document):
@@ -245,11 +259,11 @@ def test_the_secret_references_are_read_from_the_scripts_not_asserted(document, 
 
 # ── what the contract still cannot say ───────────────────────────────────────────────────────
 
-def test_the_document_carries_exactly_the_two_known_errors(document):
-    """Both are facts about the deployment, and both are explained in azure-rebuild.md. A third
-    error appearing means either the scripts changed or the derivation started guessing; one of
-    these disappearing means production or the contract moved and the document's argument is
-    stale. Either way somebody should look."""
+def test_the_document_carries_exactly_the_known_errors(document):
+    """Each is a fact about the deployment, and each is explained in azure-rebuild.md. A new error
+    appearing means either the scripts changed or the derivation started guessing; one of these
+    disappearing means production or the contract moved and the document's argument is stale.
+    Either way somebody should look."""
     from acpctl.spec import validate
     assert {f.rule for f in validate(document).errors} == EXPECTED_ERROR_RULES
 
@@ -303,13 +317,18 @@ def test_a_missing_tier_refuses_rather_than_emitting_a_partial_document(monkeypa
 
 # ── the rebuild path itself ──────────────────────────────────────────────────────────────────
 
-def test_the_chart_renders_todays_azure_once_the_two_findings_are_cleared(document):
+def test_the_chart_renders_todays_azure_once_the_known_findings_are_cleared(document):
     """THE REBUILD, END TO END — the thing PRD S21 phase 3 actually asks for.
 
-    Clearing the two errors is not papering over them: they are a missing API replica and an
-    unprovisioned backup policy, neither of which is a property of the WORKLOAD. What this proves
-    is that the workload — pinned pools, the queue-depth scaler on remediate, private workers,
-    every replica range — survives the trip through values and into real manifests.
+    Clearing the errors is not papering over them: a missing API replica, an unprovisioned backup
+    policy, and a telemetry connection string production has never set. None is a property of the
+    WORKLOAD. What this proves is that the workload — pinned pools, the queue-depth scaler on
+    remediate, private workers, every replica range — survives the trip through values and into
+    real manifests.
+
+    The third is cleared by DECLARING the reference rather than by relaxing the requirement, which
+    is the distinction worth keeping: the document then describes an installation that would have
+    telemetry, and the assertion below is about what the chart builds from it.
     """
     import shutil
 
@@ -323,6 +342,8 @@ def test_the_chart_renders_todays_azure_once_the_two_findings_are_cleared(docume
     doc = copy.deepcopy(document)
     doc["api"]["replicas"]["min"] = 2
     doc["data"]["postgres"]["backupRetentionDays"] = 35
+    doc["secrets"]["refs"]["applicationinsights-connection-string"] = {
+        "name": "acp-kv", "key": "appinsights-connection-string"}
 
     from acpctl.spec import validate
     assert not validate(doc).errors, [f.render() for f in validate(doc).errors]

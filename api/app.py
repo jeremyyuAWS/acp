@@ -297,6 +297,20 @@ async def _access_gate(request, call_next):
             return Response(status_code=403, media_type="application/json",
                             content='{"detail":"Access restricted to authorized accounts"}')
         request.state.user_email = email   # so routes can attribute the scan (Langfuse user)
+        # JUST-IN-TIME ROSTER (owner decision, 2026-09-05). This is the only point in the codebase
+        # where "somebody authenticated successfully" is known, so it is where a person first
+        # becomes visible to an administrator. Everything expensive is behind a process-local memo
+        # in core; the steady-state cost here is one set lookup.
+        #
+        # SWALLOWED ON PURPOSE, and this is the one judgement in the whole feature worth arguing
+        # about. Roster bookkeeping must never be able to 500 a request that authentication has
+        # already approved — an unwritable store would otherwise take the whole product down for
+        # everyone at the domain, to enforce a record nobody is reading yet. The next request
+        # tries again.
+        try:
+            core.note_signed_in(email, provider=provider or "google")
+        except Exception:
+            core.swallowed("app: just-in-time roster creation failed")
     return await call_next(request)
 
 
@@ -311,6 +325,8 @@ for _router in ROUTERS:
 # register_protected_routes/is_public docstrings for why this replaced a manually-maintained
 # prefix allowlist that silently missed five route groups over five weeks.
 core.register_protected_routes(core.enumerate_api_routes(app))
+
+_embedded_worker_reporter = None
 
 
 @app.on_event("startup")
@@ -340,6 +356,10 @@ def _start_job_workers():
     core.start_scheduler()
     n = core.start_workers()
     if n:
+        global _embedded_worker_reporter
+        from worker_telemetry import WorkerInstanceReporter
+        _embedded_worker_reporter = WorkerInstanceReporter(core)
+        _embedded_worker_reporter.start()
         print(f"[acp] started {n} async job worker(s)", flush=True)
 
 
@@ -383,7 +403,11 @@ def _drain_job_workers():
     # in-flight jobs aren't stranded ~31min waiting for the lease sweeper on the new
     # container (audit P1).
     try:
+        if _embedded_worker_reporter is not None:
+            _embedded_worker_reporter.stop()
         core.stop_workers()
+        if _embedded_worker_reporter is not None:
+            _embedded_worker_reporter.offline()
         print("[acp] drained job workers for shutdown", flush=True)
     except Exception as e:
         print(f"[acp] shutdown drain error: {e}", flush=True)

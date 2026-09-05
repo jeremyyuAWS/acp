@@ -36,7 +36,11 @@ describe('the remediation card rejoins a batch the browser has forgotten', () =>
   })
 
   it('starts the same live updates a fresh run does, not a second mechanism', () => {
-    expect(remediate).toMatch(/startLiveUpdates\(resume\.total\)/)
+    // `startLiveUpdates` became `startWatching` when stream ownership moved to
+    // useRemediationRun: the stream is already open at App level, so what a resume starts is the
+    // batch DENOMINATOR, not a connection. The property this test exists for is unchanged —
+    // resuming after sign-out uses the same entry point a fresh run does, not a second mechanism.
+    expect(remediate).toMatch(/startWatching\(resume\.total\)/)
   })
 
   it('re-seeds the denominator so a later remount in this tab costs nothing', () => {

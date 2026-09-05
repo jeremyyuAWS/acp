@@ -34,7 +34,10 @@ export function LiveOperationsToast({ run, onOpen, onDismiss }) {
   return <div role="status" aria-live="polite" aria-atomic="true"
     style={{ position: 'fixed', right: 18, top: 18, zIndex: 10000, width: 'min(360px,calc(100vw - 36px))',
       textAlign: 'left', padding: 14, borderRadius: 10, border: '1px solid var(--success-fg)', borderLeft: '5px solid var(--success-fg-strong)',
-      background: 'var(--panel)', color: 'var(--text)', boxShadow: '0 10px 30px rgba(20,16,24,.22)' }}>
+      // --panel is not a defined application token and therefore resolved to transparent.
+      // --surface is the shared, explicitly opaque card token (with a defensive white fallback).
+      background: 'var(--surface, #fff)', opacity: 1, isolation: 'isolate',
+      color: 'var(--text)', boxShadow: '0 12px 32px rgba(20,16,24,.28)' }}>
     <span style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}><b>{label} started</b>
       <button type="button" className="ghost small" aria-label="Dismiss notification" onClick={() => onDismiss?.()}>×</button></span>
     <button type="button" className="ghost" onClick={() => onOpen?.(run)}

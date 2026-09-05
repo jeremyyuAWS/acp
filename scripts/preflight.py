@@ -217,8 +217,12 @@ def check_sharepoint() -> None:
         return
     record(g, "delegated scopes", PASS, " · ".join(scopes) + " — grant admin consent for these")
     writes = [s for s in scopes if ".readwrite" in s.lower()]
-    record(g, "read-only posture", PASS if not writes else WARN,
-           "no write scopes requested" if not writes else f"write scopes present: {writes}")
+    policy_source = src.read_text()
+    source_replace_disabled = "export const CAN_WRITE_BACK = false" in policy_source
+    record(g, "release write posture", PASS if writes and source_replace_disabled else FAIL,
+           "delegated write scopes create separate Release copies; source replacement disabled"
+           if writes and source_replace_disabled else
+           "Release needs delegated write scopes with CAN_WRITE_BACK=false")
 
     # Token acquisition is delegated (MSAL popup, a human signs in), so a headless preflight
     # CANNOT verify it. Saying so is the point — reporting PASS on the config alone would be the

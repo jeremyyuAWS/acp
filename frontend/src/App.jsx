@@ -8,11 +8,13 @@ import { preflightVerdict } from './discoveryPreflightGate.js'
 import { scanPollDecision } from './scanPollDecision.js'
 import { scanFailureDetail, hasFallbackInventory } from './scanFailureMessage.js'
 import LiveAssessmentLive from './LiveAssessmentLive.jsx'
+import RemediationRunCard from './RemediationRunCard.jsx'
+import { useRemediationRun } from './useRemediationRun.js'
 import { armNotifyOnComplete, notifyScanComplete, notifyScanFailed, notificationsSupported, notifyPermission } from './scanNotify.js'
 import { refreshDriveToken } from './driveAuth.js'
 import { refreshSPToken } from './spAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, getMe, getMyAccess, getCapability, listScans, getScan, NOT_MODIFIED, getActiveScan, getWorkspaceBootstrap, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, SCAN_UNAVAILABLE, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
+import { getSources, getRubric, getConfig, getMe, getMyAccess, getCapability, listScans, getScan, NOT_MODIFIED, getActiveScan, getWorkspaceBootstrap, getActiveWorkflows, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, SCAN_UNAVAILABLE, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
 import { beginOrResumeIntent, completeIntent, abandonIntent, outcomeIsUncertain } from './submitIntent'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
@@ -24,6 +26,7 @@ import { RuleBreakdown } from './Transparency.jsx'
 import Logo from './Logo.jsx'
 import ChatWidget from './ChatWidget.jsx'
 import VersionToast from './VersionToast.jsx'
+import WorkflowContinuityBanner, { primaryActiveWorkflow } from './WorkflowContinuityBanner.jsx'
 // Lazy: KnowledgeGraph statically imports all of d3 (~250 kB min) — the only heavy
 // dep not already behind a dynamic import. Loading it on tab entry keeps d3 out of
 // the main chunk entirely.
@@ -341,6 +344,8 @@ export default function App() {
   // that matters is the server's; see the header of access.js for why this direction is right
   // here and the opposite direction is right there.
   const [access, setAccess] = useState(null)
+  const [activeWorkflows, setActiveWorkflows] = useState([])
+  const primaryWorkflow = useMemo(() => primaryActiveWorkflow(activeWorkflows), [activeWorkflows])
 
   // PRD §10 — the app's own default view is 'overview'. A role that hides it must move the user
   // on rather than greeting them with Access restricted for a tab they never chose. Only the
@@ -474,6 +479,17 @@ export default function App() {
     document.documentElement.dataset.wcag = wcagMode ? 'on' : ''
   }, [wcagMode])
   const [hitlCount, setHitlCount] = useState(0)  // pending HITL items, reported up from Remediate for the nav badge
+
+  // The remediation run's live state, held at App level so the persistent card survives a tab
+  // change — `<Remediate/>` is mounted only on its own tab, so anything it owns dies on a switch.
+  //
+  // POSITION IS LOAD-BEARING, TWICE. It reads `scan?.run?.id` rather than the `run` const derived
+  // further down, because that const is in the temporal dead zone up here. And it must sit ABOVE
+  // the `if (!me) return <SignIn/>` early return below: a hook after a conditional return is
+  // called on some renders and not others, which is "Rendered more hooks than during the previous
+  // render" and takes the whole app down. Both were caught by the full suite rather than by any
+  // test of this card.
+  const remRun = useRemediationRun(scan?.run?.id || null)
   // Durable (background queue) is the default (2026-08-21). The session-scoped path runs as a
   // bare in-process thread with no queue behind it — the code's own comment on it has always said
   // "lost if that replica restarts", and this app auto-deploys on every merge to main, so that was
@@ -676,6 +692,23 @@ export default function App() {
     return () => clearInterval(id)
   }, [me, busy])
 
+  // Session storage is intentionally cleared on sign-out. Rejoin comes from owner-scoped
+  // server state instead, refreshed through a small endpoint so completion removes the banner
+  // without repeatedly downloading the whole workspace bootstrap.
+  useEffect(() => {
+    if (!me) return
+    let alive = true
+    const refresh = () => {
+      if (document.hidden) return
+      getActiveWorkflows().then((r) => {
+        if (alive) setActiveWorkflows(r?.active_workflows || [])
+      }).catch(() => {})
+    }
+    const id = setInterval(refresh, 15_000)
+    document.addEventListener('visibilitychange', refresh)
+    return () => { alive = false; clearInterval(id); document.removeEventListener('visibilitychange', refresh) }
+  }, [me])
+
   // Publish writes back per file; refetching once per click would fire dozens of
   // times on "Publish all", so debounce — one getScan after the burst settles
   // makes published_at the durable source of the checkmarks (they survive tab
@@ -716,9 +749,17 @@ export default function App() {
         // would render every tab and then remove some — a visible flicker that also briefly
         // advertises surfaces the user may not have.
         setAccess(b.me?.access || null)
+        setActiveWorkflows(b.active_workflows || [])
+        const active = primaryActiveWorkflow(b.active_workflows || [])
+        if (active && !viewWasChosen.current && isVisible(b.me?.access || null, active.stage)) {
+          setView(active.stage)
+        }
         setOverviewPreview(b.overview || null)
         hadPreviewForPerf = !!b.overview
-        const scanId = b.scan_id || null
+        // The default historical scan and the active execution are allowed to differ. When work
+        // is running, load THAT scan before opening its stage; otherwise the restored Assess or
+        // Remediate screen would accurately rejoin the wrong scan.
+        const scanId = active?.scan_id || b.scan_id || null
         hadScanForPerf = !!scanId
         // If a scan is still running (e.g. user reloaded mid-scan), resume tracking it. The
         // default-path job is checked FIRST: it can be mid-crawl with no scan_runs row at all
@@ -2036,6 +2077,15 @@ export default function App() {
                   onClick={() => setStopped(null)}>Dismiss</button>
         </div>
       )}
+      {/* Assessment has a real live card immediately below this fallback. Do not stack a
+          generic “still running” banner above the richer card for the same work. */}
+      <WorkflowContinuityBanner
+        workflow={primaryWorkflow?.stage === 'assess' && assessPhase === 'running'
+          ? null : primaryWorkflow}
+        currentView={view}
+        onReturn={(stage) => { goToView(stage); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+        onLiveOps={() => { goToView('liveops'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+      />
       {busy && progress && view !== 'discover' && (
         <div style={{ margin: '0 16px 8px' }}>
           <DiscoverRunProgress
@@ -2069,28 +2119,23 @@ export default function App() {
           logic (and the OUTER scan-banner's Stop-suppression above, when view === 'assess' &&
           assessPhase === 'running') was written assuming this card would be live during assess.
           It never was, until this line. */}
-      {/* Suppress when the Assess tab is open and an assess is running — AssessRunner.jsx owns
-          that view and shows an authoritative progress panel from the same data. Showing both
-          caused contradictory "Document 0 of 148" vs "10 of 148 · 7%" readings simultaneously.
-
-          DISCOVER is suppressed for the same reason, a step earlier in the funnel. That tab is
-          the inventory: it already carries its own scan progress and its own "148 documents
-          discovered across 1 source" panel. Adding an ASSESS card on top put two progress
-          readings of two different phases on one screen — "Assessing 148 documents · Document 0
-          of 148 · Idle" sitting directly above the discovery count it has nothing to do with.
-          Discover answers "what do we have"; how far the assessment has got belongs to Assess,
-          which owns a better view of it.
-
-          REMEDIATE is suppressed too. Once that stage starts, Remediate.jsx owns the live
-          RemediationRunProgress card. Keeping the completed Assessment card above it produced two
-          stage-status panels and made the finished stage look like the active one. Assessment
-          remains available on its own tab and the remediation card replaces it on Remediate.
-
-          `busy` means a DISCOVER run is live; the assess panel must not activate during
-          discovery. Only assessPhase==='running' should trigger it. */}
+      {/* AssessRunner owns the full card while the Assess tab is open. Everywhere else, show this
+          same live Assessment card directly below the tabs so navigation never replaces real
+          progress with a generic warning. `busy` is a DISCOVER-only flag; assessPhase is the
+          authority for whether this card is active. */}
       <LiveAssessmentLive scanId={liveScanId || run?.id}
-                          active={assessPhase === 'running' && view !== 'discover' && view !== 'remediate'}
+                          active={assessPhase === 'running' && view !== 'assess'}
                           onStop={() => stopScan(liveScanId || run?.id)} />
+
+      {/* THE PERSISTENT REMEDIATION CARD. Outside the tabpanel on purpose: `<Remediate/>` below
+          is mounted only while `view === 'remediate'`, so a card rendered inside it — and the
+          state feeding it — is torn down the instant the user opens any other tab. A run that is
+          still applying fixes must stay visible from wherever they are. `useRemediationRun` owns
+          the snapshot for the same reason. */}
+      <RemediationRunCard snapshot={remRun.snapshot} receivedAt={remRun.receivedAt}
+                          connected={remRun.connected}
+                          onOpen={view === 'remediate' ? null
+                                  : () => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
 
       <main id="main-content" tabIndex={-1}>
       <div id="workflow-panel" role="tabpanel" aria-labelledby={`workflow-tab-${view}`}>
@@ -2255,7 +2300,7 @@ export default function App() {
           </>
         ) : (overviewPreview ? <AssessPreviewCard preview={overviewPreview} /> : placeholder))}
 
-        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} assignees={assignees} setAssignees={setAssignees} myEmail={me?.email} aiEnabled={aiEnabled} readOnly={isTimeTravel} onRefresh={() => getScan(run.id, run?.revision).then((r) => { if (r !== NOT_MODIFIED) setScan(r) }).catch(() => {})} onHitlCount={setHitlCount} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} onNavigate={(v) => { setView(v); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /> : placeholder)}
+        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} assignees={assignees} setAssignees={setAssignees} myEmail={me?.email} aiEnabled={aiEnabled} readOnly={isTimeTravel} onRefresh={() => getScan(run.id, run?.revision).then((r) => { if (r !== NOT_MODIFIED) setScan(r) }).catch(() => {})} onHitlCount={setHitlCount} runStream={remRun} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} onNavigate={(v) => { setView(v); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /> : placeholder)}
 
         {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} readOnly={isTimeTravel} triage={triage} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} /> : placeholder)}
 

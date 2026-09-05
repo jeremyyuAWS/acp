@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import AcrCriterionDetail from './AcrCriterionDetail'
 import AcrMetadataForm from './AcrMetadataForm'
 import AcrPublish from './AcrPublish.jsx'
+import AcrExportAssurance from './AcrExportAssurance.jsx'
+import './AcrWorkspace.css'
 import { listAcrReports, createAcrReport, getAcrReport, listAcrCriteria, getAcrValidation,
          getAcrPreview, getAcrGaps, downloadAcrPdf } from './acrApi'
 
@@ -31,6 +33,98 @@ const FILTERS = [
   ['decided', 'Decided'],
   ['unapproved', 'Awaiting approval'],
 ]
+
+function ReadinessStep({ state, title, detail, action, onAction }) {
+  const label = state === 'done' ? 'Complete'
+    : state === 'ready' ? 'Ready'
+      : state === 'pending' ? 'Checking'
+        : 'Needs attention'
+  return (
+    <li className={`acr-readiness-step acr-readiness-step--${state}`}>
+      <span className="acr-readiness-step__mark" aria-hidden="true">
+        {state === 'done' ? '✓' : state === 'ready' ? '→' : state === 'pending' ? '·' : '○'}
+      </span>
+      <span className="acr-readiness-step__copy">
+        <b>{title}</b>
+        <small>{detail}</small>
+      </span>
+      <span className="acr-readiness-step__state">{label}</span>
+      {action && (
+        <button type="button" className="ghost small" onClick={onAction}>{action}</button>
+      )}
+    </li>
+  )
+}
+
+function ReportReadiness({ progress, validation, gaps, onOpen }) {
+  const total = Number(progress?.total || 0)
+  const decided = Number(progress?.decided || 0)
+  const approved = Number(progress?.approved || 0)
+  const validationLoaded = validation !== null
+  const gapsLoaded = gaps !== null
+  const metadata = validation?.by_category?.incomplete_metadata || []
+  const evidenceMissing = Number(gaps?.counts?.no_evidence || 0)
+    + Number(gaps?.counts?.automated_only || 0)
+    + Number(gaps?.counts?.stale_only || 0)
+  const blockers = Number(validation?.summary?.blocking_count || 0)
+  const ready = validationLoaded && validation?.summary?.may_publish === true
+
+  return (
+    <section className="acr-readiness" aria-labelledby="acr-readiness-heading">
+      <div className="acr-readiness__heading">
+        <div>
+          <p className="eyebrow">Report readiness</p>
+          <h3 id="acr-readiness-heading">
+            {!validationLoaded ? 'Checking publication readiness'
+              : ready ? 'Ready for authorised publication'
+                : 'Complete the evidence before publishing'}
+          </h3>
+          <p>
+            {!validationLoaded
+              ? 'Reading the report’s current evidence, decisions, approvals, and publication gates.'
+              : ready
+              ? 'All publication gates currently pass. An authorised approver still controls publication.'
+              : `${blockers} publication blocker${blockers === 1 ? '' : 's'} remain. ACP will not turn incomplete evidence into a conformance claim.`}
+          </p>
+        </div>
+        <span className={`acr-readiness__badge ${ready ? 'is-ready' : ''}`}>
+          {!validationLoaded ? 'Checking' : ready ? 'Ready' : `${blockers} blocking`}
+        </span>
+      </div>
+
+      <ol className="acr-readiness__steps">
+        <ReadinessStep
+          state={!validationLoaded ? 'pending' : metadata.length ? 'attention' : 'done'}
+          title="Describe the product"
+          detail={!validationLoaded ? 'Checking required report fields…' : metadata.length ? `${metadata.length} required field${metadata.length === 1 ? '' : 's'} missing` : 'Required report metadata is present'}
+          action={metadata.length ? 'Complete details' : null}
+          onAction={() => onOpen('overview')}
+        />
+        <ReadinessStep
+          state={!gapsLoaded ? 'pending' : evidenceMissing ? 'attention' : 'done'}
+          title="Collect human evidence"
+          detail={gapsLoaded ? (evidenceMissing ? `${evidenceMissing} criteria still need live human evidence` : 'Every criterion has live human evidence') : 'Checking evidence coverage…'}
+          action={evidenceMissing ? 'Review gaps' : null}
+          onAction={() => onOpen('gaps')}
+        />
+        <ReadinessStep
+          state={decided < total || approved < total ? 'attention' : 'done'}
+          title="Decide and approve criteria"
+          detail={`${decided} of ${total} decided · ${approved} approved`}
+          action={decided < total || approved < total ? 'Review criteria' : null}
+          onAction={() => onOpen('criteria')}
+        />
+        <ReadinessStep
+          state={!validationLoaded ? 'pending' : ready ? 'ready' : 'attention'}
+          title="Validate and publish"
+          detail={!validationLoaded ? 'Checking publication gates…' : ready ? 'Publication gates pass; approval remains an explicit action' : 'Publication stays locked until every blocking gate passes'}
+          action={!validationLoaded ? null : ready ? 'Open publication' : 'View blockers'}
+          onAction={() => onOpen(ready ? 'publication' : 'validation')}
+        />
+      </ol>
+    </section>
+  )
+}
 
 export default function AcrWorkspace() {
   const [reports, setReports] = useState(null)
@@ -74,7 +168,9 @@ export default function AcrWorkspace() {
       getAcrValidation(reportId).then(setValidation).catch((e) => setError(String(e.message || e)))
     }
     if (tab === 'export') getAcrPreview(reportId).then(setPreview).catch((e) => setError(String(e.message || e)))
-    if (tab === 'gaps') getAcrGaps(reportId).then(setGapData).catch((e) => setError(String(e.message || e)))
+    if (tab === 'gaps' || tab === 'overview') {
+      getAcrGaps(reportId).then(setGapData).catch((e) => setError(String(e.message || e)))
+    }
   }, [tab, reportId])
 
   // Which metadata fields the publish gate is currently blocking on, derived from the validation
@@ -99,24 +195,39 @@ export default function AcrWorkspace() {
     finally { setBusy(false) }
   }
 
-  if (error && !report) return <p role="alert" className="lockwarn">{error}</p>
+  if (error && !report) return (
+    <section className="acr-load-error" aria-labelledby="acr-load-error-heading">
+      <h2 id="acr-load-error-heading">Conformance reports are unavailable</h2>
+      <p role="alert">ACP could not load the ACR / VPAT workspace: {error}</p>
+      <p className="muted">No report data was changed. Reload this page to try again.</p>
+    </section>
+  )
   if (reports === null) return <p className="muted">Loading conformance reports…</p>
 
   if (!reports.length) {
     return (
-      <section aria-labelledby="acr-empty-heading">
-        <h2 id="acr-empty-heading">Accessibility Conformance Report</h2>
-        <p>
-          An Accessibility Conformance Report (ACR) records how ACP itself measures against
-          WCAG 2.2 Level A and AA, using the VPAT structure procurement teams expect.
-        </p>
-        <p className="muted">
-          Automated results alone never establish conformance — every criterion needs a human
-          evaluation and an authorised approver before a report can be published.
-        </p>
-        <button type="button" onClick={create} disabled={busy}>
-          Create Accessibility Conformance Report
-        </button>
+      <section className="acr-empty" aria-labelledby="acr-empty-heading">
+        <div className="acr-empty__intro">
+          <p className="eyebrow">Conformance workspace</p>
+          <h2 id="acr-empty-heading">Build an evidence-backed Accessibility Conformance Report</h2>
+          <p>
+            Create a guided ACR workspace for WCAG 2.2 Level A and AA. ACP organises the
+            evidence; people make and approve the conformance decisions.
+          </p>
+          <p>Automated results alone never establish conformance.</p>
+          <button type="button" onClick={create} disabled={busy}>
+            {busy ? 'Creating report…' : 'Create Accessibility Conformance Report'}
+          </button>
+        </div>
+        <ol className="acr-empty__journey" aria-label="Conformance report workflow">
+          <li><b>1. Describe</b><span>Record the product, version, scope, and report owner.</span></li>
+          <li><b>2. Evaluate</b><span>Review automated evidence and complete human testing.</span></li>
+          <li><b>3. Approve</b><span>Authorised reviewers decide every applicable criterion.</span></li>
+          <li><b>4. Publish</b><span>Validate all gates, then create an immutable revision.</span></li>
+        </ol>
+        <div className="acr-empty__assurance">
+          <AcrExportAssurance />
+        </div>
         {error && <p role="alert" className="lockwarn">{error}</p>}
       </section>
     )
@@ -185,16 +296,25 @@ export default function AcrWorkspace() {
       {error && <p role="alert" className="lockwarn">{error}</p>}
 
       {tab === 'overview' && report && (
-        <AcrMetadataForm
-          report={report.report}
-          blockingFields={metadataBlockers.blocking}
-          advisoryFields={metadataBlockers.advisory}
-          readOnly={!canEdit || report.report.status === 'published'}
-          onSaved={() => {
-            refresh()
-            getAcrValidation(reportId).then(setValidation).catch(() => {})
-          }}
-        />
+        <>
+          <ReportReadiness
+            progress={p}
+            validation={validation}
+            gaps={gapData}
+            onOpen={setTab}
+          />
+          <AcrExportAssurance />
+          <AcrMetadataForm
+            report={report.report}
+            blockingFields={metadataBlockers.blocking}
+            advisoryFields={metadataBlockers.advisory}
+            readOnly={!canEdit || report.report.status === 'published'}
+            onSaved={() => {
+              refresh()
+              getAcrValidation(reportId).then(setValidation).catch(() => {})
+            }}
+          />
+        </>
       )}
 
       {tab === 'gaps' && (
@@ -353,6 +473,7 @@ export default function AcrWorkspace() {
               <p className="notice">
                 <strong>Draft structural preview.</strong> {preview.template.note}
               </p>
+              <AcrExportAssurance />
               <p className="muted">
                 {Object.entries(preview.totals).map(([k, v]) => `${k}: ${v}`).join(' · ')}
               </p>

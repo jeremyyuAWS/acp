@@ -35,6 +35,8 @@ error that names the dependency. The route turns this into a 503 that says what 
 """
 from __future__ import annotations
 
+from html import escape
+
 import acr_export_preview
 
 # Pagination only. Deliberately no colour, no font stack, no spacing that changes what a cell
@@ -96,12 +98,76 @@ def render_html(html: str) -> bytes:
         stylesheets=[weasyprint.CSS(string=PRINT_CSS)], pdf_variant=PDF_VARIANT)
 
 
+# The accessibility checks ADR 0034 requires before this renderer replaces the previous one, and
+# which have NOT been run against it. Stated INSIDE the document rather than only in an ADR or a
+# PR body, because a PDF travels: it is mailed, filed and read by people who will never see this
+# repository, and a caveat that stays on the server is one the holder of the artifact never gets.
+#
+# Why this is not merely cautious. #1159 measured two defects that shipped through 0 veraPDF
+# failures AND a fully green structural suite — the whole report silently set in serif, and row
+# headers restyled into a redesign — both found only by rendering the page and looking at it. So
+# "veraPDF: 0 failures" is a real result about machine conformance and says nothing about whether
+# a screen-reader user can read the document. Claiming an accessible export while withholding
+# that distinction is the shape PRD §4.4 forbids: optimising for a compliance signal instead of
+# making the limitation visible.
+UNRUN_GATES = (
+    "Accessibility validation of this document is automated only. It is checked as PDF/UA-1 by "
+    "veraPDF and its structure tree is asserted by automated tests. Two checks that ADR 0034 "
+    "requires of this renderer have NOT been run against it: a PAC 2024 pass and a screen-reader "
+    "pass (NVDA or VoiceOver). Automated validation is necessary and not sufficient — it cannot "
+    "establish that a screen-reader user read this document successfully."
+)
+
+
+def with_limitations(html: str, notice: str = UNRUN_GATES) -> str:
+    """Insert the limitations notice immediately after the document's <h1>.
+
+    After the h1 rather than at the end, so it is on page one above the conformance table: a
+    reader who stops after the first page has still seen it.
+
+    Takes HTML and returns HTML rather than editing the preview template, so the SCREEN preview is
+    untouched — the caveat is about the exported artifact travelling away from this application,
+    and the screen already sits next to the workspace that explains itself.
+
+    RAISES if there is no <h1> to anchor to. A silently-unmodified return would ship exactly the
+    document this exists to prevent, and a conformant PDF missing its own disclaimer is the
+    failure that is invisible in review.
+    """
+    marker = "</h1>"
+    idx = html.find(marker)
+    if idx == -1:
+        raise ValueError(
+            "no <h1> in the export HTML to anchor the limitations notice to — refusing to build "
+            "a PDF that omits it (see UNRUN_GATES)")
+    at = idx + len(marker)
+    para = f'\n<p class="notice"><strong>Limitations of this document.</strong> {escape(notice)}</p>'
+    return html[:at] + para + html[at:]
+
+
+def render_projection(projection: dict) -> bytes:
+    """One projection to one PDF — THE only way production code turns a projection into bytes.
+
+    Why this exists rather than callers composing the three steps themselves. #1416 added
+    `with_limitations` and wired it into `render()` below, and the disclosure reached nobody: the
+    route that actually serves the download had built its projection already and called
+    `render_html(to_html(projection))` directly, so the notice was in a function no production
+    code path called. A conformant PDF, a green suite, a merged PR, and an export still making the
+    claim the notice exists to qualify.
+
+    Composing it here makes that class of miss structural instead of remembered. A caller who has
+    a projection cannot reach the renderer without the notice, because this is the function that
+    takes a projection — and `test_acr_export_pdf_notice.py` asserts no module under `api/` calls
+    `render_html` directly, which is the check that would have caught the original seam.
+    """
+    return render_html(with_limitations(acr_export_preview.to_html(projection)))
+
+
 def render(report: dict, criteria: list[dict], *, evidence_by_criterion=None,
            stale_ids=None) -> bytes:
     """The report's accessible PDF, built from the same projection the preview screens use."""
     projection = acr_export_preview.project(
         report, criteria, evidence_by_criterion=evidence_by_criterion, stale_ids=stale_ids)
-    return render_html(acr_export_preview.to_html(projection))
+    return render_projection(projection)
 
 
 def filename_for(report: dict) -> str:

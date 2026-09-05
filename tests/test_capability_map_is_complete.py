@@ -172,7 +172,8 @@ def test_the_acr_routes_really_exist_so_the_exemption_is_about_something(routes)
 # ── the identity endpoints must stay reachable, or the SPA cannot recover ─────
 
 @pytest.mark.parametrize("key", [
-    ("GET", "/me"), ("GET", "/me/access"), ("GET", "/workspace/bootstrap"), ("GET", "/config"),
+    ("GET", "/me"), ("GET", "/me/access"), ("GET", "/workspace/bootstrap"),
+    ("GET", "/workspace/active-workflows"), ("GET", "/config"),
 ])
 def test_identity_is_never_gated_on_a_capability(key):
     """Circularity: the SPA cannot learn that it has no access without being allowed to ask. Gate

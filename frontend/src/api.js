@@ -754,8 +754,12 @@ export const getWorkspaceBootstrap = () => {
     overview: cur ? { estate: { discovered: cur.files ?? 0 }, documents: { certifiable: cur.certifiable ?? 0 } } : null,
     scans,
     active_job: {},
+    active_workflows: [],
   })
 }
+export const getActiveWorkflows = () => (SIM
+  ? sim({ active_workflows: [] })
+  : fetch(`${BASE}/workspace/active-workflows`, { headers: headers() }).then(j))
 // ADR 0014: push a freshly-minted GIS token to a running scan so long scans keep Drive auth.
 export const refreshScanDriveToken = (scanId) => (SIM
   ? sim({ refreshed: true })
@@ -1394,6 +1398,9 @@ export const publishAllFiles = (scanId, files) => (SIM
       headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ files }),
     }).then(j))
+export const getReleaseStatus = (scanId) => (SIM
+  ? sim({ release_id: null, roots: [], documents: [], documents_total: 0, published: 0, failed: 0, remaining: 0 }, 50)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release`, { headers: headers() }).then(j))
 
 // Queue state: depth by status + recent jobs (drives the in-app queue panel).
 export const getJobs = (status = null) => (SIM

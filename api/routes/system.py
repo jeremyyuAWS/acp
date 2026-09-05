@@ -294,6 +294,13 @@ def delete_person(email: str, request: Request):
     core.store.set_allowlist([e for e in core.store.get_allowlist() if e != target])
     core.store.set_admins([e for e in core.store.get_admins() if e != target])
     core.store.remove_person(target)
+    # Otherwise this process remembers them as rostered and never rebuilds the record, so a
+    # domain-admitted user removed here would sign in again and be invisible — the exact state
+    # just-in-time roster creation exists to end. Note that removal does NOT revoke a domain
+    # admission: they will be re-created with the configured default role on their next sign-in,
+    # which is why suspending is the action that withholds access and removing is the one that
+    # forgets. `forget_rostered` is what makes the re-creation actually happen.
+    core.forget_rostered(target)
     actor = getattr(request.state, "user_email", None) or "admin"
     core.store.log_decision(actor, "settings.person.remove", detail=target)
     return _people_payload()
@@ -1335,6 +1342,72 @@ def jobs(request: Request, status: str | None = None, limit: int = 100):
             "jobs": core.store.list_jobs(status=status, limit=limit, owner=owner)}
 
 
+def _replica_capacity(instances: list[dict], *, now: datetime,
+                      freshness_seconds: int | None = None) -> dict[str, dict]:
+    """Aggregate process heartbeats into physical replicas, then into service roles.
+
+    ``worker_id`` identifies a process (role:replica:process), so counting rows as replicas
+    inflates the fleet whenever a container runs more than one worker process. Capacity remains
+    the sum of fresh process pools, while replica health/counts and drawer rows use the stable
+    ``replica_id``. Rows without a replica id retain the legacy one-row-per-worker behavior.
+    """
+    freshness_seconds = (freshness_seconds if freshness_seconds is not None
+                         else core.WORKER_INSTANCE_FRESHNESS_SECONDS)
+    replicas: dict[tuple[str, str], dict] = {}
+    for instance in instances:
+        worker_id = str(instance.get("worker_id") or "")
+        role = worker_id.split(":", 1)[0] if ":" in worker_id else "mixed"
+        replica_id = str(instance.get("replica_id") or worker_id or "unknown")
+        key = (role, replica_id)
+        try:
+            beat = datetime.fromisoformat(str(instance.get("last_heartbeat_at")).replace("Z", "+00:00"))
+            age_s = max(0, (now - beat).total_seconds())
+        except (TypeError, ValueError):
+            beat, age_s = None, float("inf")
+        fresh = age_s <= freshness_seconds
+        healthy_process = fresh and instance.get("state") in {"ready", "busy"}
+        replica = replicas.setdefault(key, {
+            **instance, "worker_id": worker_id, "replica_id": replica_id,
+            "process_count": 0, "concurrency_limit": 0, "active_job_count": 0,
+            "fresh": False, "healthy": False, "age_s": None,
+        })
+        replica["process_count"] += 1
+        replica["fresh"] = replica["fresh"] or fresh
+        replica["healthy"] = replica["healthy"] or healthy_process
+        if healthy_process:
+            replica["concurrency_limit"] += max(0, int(instance.get("concurrency_limit") or 0))
+            replica["active_job_count"] += max(0, int(instance.get("active_job_count") or 0))
+        if age_s != float("inf") and (replica["age_s"] is None or age_s < replica["age_s"]):
+            replica["age_s"] = round(age_s, 1)
+            replica["last_heartbeat_at"] = beat.isoformat() if beat else None
+            replica["revision_name"] = instance.get("revision_name")
+            replica["software_version"] = instance.get("software_version")
+        if healthy_process and instance.get("state") == "busy":
+            replica["state"] = "busy"
+        elif healthy_process and replica.get("state") != "busy":
+            replica["state"] = "ready"
+
+    per_role: dict[str, dict] = {}
+    for (role, _replica_id), replica in replicas.items():
+        row = per_role.setdefault(role, {"role": role, "capacity_source": "worker_instances",
+            "freshness_threshold_seconds": freshness_seconds, "healthy_replicas": 0,
+            "stale_replicas": 0, "worker_slots": 0, "busy_slots": 0, "instances": []})
+        if replica["healthy"]:
+            row["healthy_replicas"] += 1
+            row["worker_slots"] += replica["concurrency_limit"]
+            row["busy_slots"] += replica["active_job_count"]
+        elif not replica["fresh"]:
+            row["stale_replicas"] += 1
+            replica["state"] = "stale"
+        row["instances"].append(replica)
+        measured = replica.get("last_heartbeat_at")
+        if measured and (not row.get("measured_at") or measured > row["measured_at"]):
+            row["measured_at"] = measured
+    for row in per_role.values():
+        row["instances"].sort(key=lambda item: str(item.get("replica_id") or ""))
+    return per_role
+
+
 def _admin_activity_snapshot() -> dict:
     wt = core.store.worker_tier_status()
     worker_roles = core.store.worker_roles_status()
@@ -1342,33 +1415,9 @@ def _admin_activity_snapshot() -> dict:
     runs = core.store.admin_live_activity()
     _list_instances = getattr(core.store, "list_worker_instances", None)
     instances = _list_instances() if callable(_list_instances) else []
-    freshness_seconds = 30
+    freshness_seconds = core.WORKER_INSTANCE_FRESHNESS_SECONDS
     now = datetime.now(timezone.utc)
-    per_role: dict[str, dict] = {}
-    for instance in instances:
-        worker_id = str(instance.get("worker_id") or "")
-        role = worker_id.split(":", 1)[0] if ":" in worker_id else "mixed"
-        row = per_role.setdefault(role, {"role": role, "capacity_source": "worker_instances",
-            "freshness_threshold_seconds": freshness_seconds, "healthy_replicas": 0,
-            "stale_replicas": 0, "worker_slots": 0, "busy_slots": 0, "instances": []})
-        try:
-            beat = datetime.fromisoformat(str(instance.get("last_heartbeat_at")).replace("Z", "+00:00"))
-            age_s = max(0, (now - beat).total_seconds())
-        except (TypeError, ValueError):
-            beat, age_s = None, float("inf")
-        fresh = age_s <= freshness_seconds
-        state = instance.get("state")
-        healthy = fresh and state in {"ready", "busy"}
-        if healthy:
-            row["healthy_replicas"] += 1
-            row["worker_slots"] += max(0, int(instance.get("concurrency_limit") or 0))
-            row["busy_slots"] += max(0, int(instance.get("active_job_count") or 0))
-        elif not fresh:
-            row["stale_replicas"] += 1
-        row["instances"].append({**instance, "fresh": fresh, "age_s": None if age_s == float("inf") else round(age_s, 1)})
-        measured = beat.isoformat() if beat else None
-        if measured and (not row.get("measured_at") or measured > row["measured_at"]):
-            row["measured_at"] = measured
+    per_role = _replica_capacity(instances, now=now, freshness_seconds=freshness_seconds)
 
     # The shared heartbeat is last-writer-wins. In production each dedicated service writes its
     # own role heartbeat, so summing the live role pools is the only honest total capacity.
@@ -1381,6 +1430,8 @@ def _admin_activity_snapshot() -> dict:
     queued = sum(int(r.get("queued") or 0) for r in runs)
     _running_by_type = getattr(core.store, "running_jobs_by_type", None)
     running_by_type = _running_by_type() if callable(_running_by_type) else None
+    _list_events = getattr(core.store, "list_orchestration_events", None)
+    lifecycle_events = _list_events(limit=200) if callable(_list_events) else []
     for role, row in per_role.items():
         stage = "discover" if role == "discovery" else role
         if running_by_type is None:
@@ -1394,13 +1445,43 @@ def _admin_activity_snapshot() -> dict:
         else:
             jobs = sum(running_by_type.values())
         row["jobs_in_flight"] = jobs
-        row["busy_slots"] = min(row["worker_slots"], row["busy_slots"])
+        reported_busy = row["busy_slots"]
+        row["reported_busy_slots"] = reported_busy
+        row["busy_slots"] = min(row["worker_slots"], reported_busy)
         row["available_slots"] = max(0, row["worker_slots"] - row["busy_slots"])
         row["unattributed_running"] = max(0, jobs - row["busy_slots"])
         row["utilization_pct"] = min(100, round(row["busy_slots"] / row["worker_slots"] * 100)) if row["worker_slots"] else None
         row["status"] = ("stale" if not row["healthy_replicas"] and row["stale_replicas"] else
                          "saturated" if row["worker_slots"] and row["busy_slots"] >= row["worker_slots"] else
                          "degraded" if row["stale_replicas"] or row["unattributed_running"] else "online")
+        alerts = []
+        if row["stale_replicas"]:
+            alerts.append({"code": "stale_replicas", "severity": "warning",
+                           "message": f"{row['stale_replicas']} registered replica(s) have stale heartbeats."})
+        if row["unattributed_running"]:
+            alerts.append({"code": "unattributed_running", "severity": "warning",
+                           "message": f"{row['unattributed_running']} running job record(s) are not attributed to live worker slots."})
+        if reported_busy > row["worker_slots"]:
+            alerts.append({"code": "active_exceeds_concurrency", "severity": "critical",
+                           "message": "Reported active slots exceed configured concurrency; utilization remains capped."})
+        revisions = sorted({str(item.get("revision_name")) for item in row["instances"]
+                            if item.get("fresh") and item.get("revision_name")})
+        row["revision_distribution"] = {
+            revision: sum(1 for item in row["instances"]
+                          if item.get("fresh") and str(item.get("revision_name")) == revision)
+            for revision in revisions}
+        if len(revisions) > 1:
+            alerts.append({"code": "mixed_revisions", "severity": "warning",
+                           "message": f"Fresh replicas report {len(revisions)} active revisions."})
+        queued_for_role = sum(int(run.get("queued") or 0) for run in runs
+                              if (run.get("stage") or "unknown") == stage)
+        if queued_for_role and not row["worker_slots"]:
+            alerts.append({"code": "no_capacity_with_queue", "severity": "critical",
+                           "message": f"{queued_for_role} job(s) are queued with no fresh reported capacity."})
+        row["alerts"] = alerts
+        row["recent_lifecycle_events"] = [event for event in lifecycle_events
+            if str(event.get("worker_id") or "").startswith(f"{role}:")
+            and str(event.get("kind") or "").startswith("worker.")][-20:]
     instance_slots = sum(row["worker_slots"] for row in per_role.values())
     instance_busy = sum(row["busy_slots"] for row in per_role.values())
     if instances:
@@ -1649,3 +1730,22 @@ def test_ai_provider(body: AIProviderTest, request: Request):
                f"latency_ms={result.get('latency_ms') or '—'} (synthetic probe image; "
                f"no customer document sent)")
     return result
+
+
+@router.get("/ai/providers/{provider}/health")
+def get_ai_provider_health(provider: str, request: Request,
+                           window_hours: int = Query(24, ge=1, le=168)):
+    """Admin: endpoint health snapshot for one cloud vision provider, derived from the
+    ai_calls table (ADR 0019). All numbers are real aggregates — nothing fabricated (ADR 0016).
+
+    Useful for HuggingFace Dedicated Endpoints specifically: surfaces latency percentiles,
+    throttle events (http_429), and cold-start signals (successful calls > 30 s) so Live
+    Operations can detect a scale-to-zero wake without polling the HF API directly.
+
+    window_hours: how far back to look (default 24 h, max 168 h / 1 week).
+    """
+    _require_admin(request)
+    import providers as _providers
+    if provider not in _providers.CLOUD_PROVIDERS:
+        raise HTTPException(422, f"unknown provider '{provider}' — one of {list(_providers.CLOUD_PROVIDERS)}")
+    return core.store.ai_provider_health_stats(provider, window_hours=window_hours)

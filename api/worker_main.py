@@ -89,31 +89,9 @@ def run(poll_seconds: float = 2.0, _install_signals: bool = True) -> None:
     # predates this field, which is a different fact and reads as null on the API side.
     _build_version = (os.environ.get("ACP_BUILD_VERSION") or "").strip() or "dev"
     _worker_role = (os.environ.get("ACP_WORKER_ROLE") or "mixed").strip().lower()
-    _process_id = core.worker_process_instance_id(_worker_role)
-    _replica_id = core._replica_id()
-    _revision = (os.environ.get("CONTAINER_APP_REVISION") or "unknown").strip()
-    _started_at = datetime.now(timezone.utc).isoformat()
-
-    def _record_instance(state: str) -> None:
-        handles = list(core._worker_handles)
-        active = sum(1 for worker, _thread in handles if worker.active_job_id is not None)
-        last_job = next((worker.active_job_id for worker, _thread in handles
-                         if worker.active_job_id is not None), None)
-        supported = sorted({job_type for worker, _thread in handles
-                            for job_type in (worker.job_types or ())})
-        core.get_store().upsert_worker_instance(
-            _process_id, replica_id=_replica_id, revision_name=_revision,
-            started_at=_started_at, last_heartbeat_at=datetime.now(timezone.utc).isoformat(),
-            supported_job_types=supported,
-            concurrency_limit=core.WORKERS, active_job_count=active,
-            available_slots=max(0, core.WORKERS - active), state=state,
-            last_claimed_job_id=last_job, software_version=_build_version)
-
-    try:
-        _record_instance("starting")
-        _record_instance("ready")
-    except Exception:
-        swallowed("worker_main.run: registering the worker instance failed")
+    from worker_telemetry import WorkerInstanceReporter
+    reporter = WorkerInstanceReporter(core)
+    reporter.start()
     last_beat = 0.0
     while not _stop.is_set():
         now = time.monotonic()
@@ -128,24 +106,15 @@ def run(poll_seconds: float = 2.0, _install_signals: bool = True) -> None:
                     })
                 core.get_store().set_setting("worker_tier_heartbeat", heartbeat)
                 core.get_store().set_setting(f"worker_tier_heartbeat:{_worker_role}", heartbeat)
-                active = any(worker.active_job_id is not None
-                             for worker, _thread in core._worker_handles)
-                _record_instance("busy" if active else "ready")
             except Exception:
                 swallowed("worker_main.run: recording the worker-tier heartbeat setting failed")
         time.sleep(poll_seconds)
 
     try:
-        try:
-            _record_instance("draining")
-        except Exception:
-            swallowed("worker_main.run: recording worker drain failed")
+        reporter.stop()
         core.stop_workers()
         core.stop_scheduler()
-        try:
-            _record_instance("offline")
-        except Exception:
-            swallowed("worker_main.run: recording worker offline failed")
+        reporter.offline()
         print("[worker_main] drained; exiting", flush=True)
     except Exception as e:  # a failed drain must still let the process exit
         print(f"[worker_main] drain error: {e}", flush=True)

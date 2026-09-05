@@ -16,6 +16,11 @@ describe('releaseDestination (per file)', () => {
   it('defaults the folder name rather than printing "undefined"', () => {
     expect(releaseDestination({ driveFileId: 'x', driveMirrorEnabled: true }).folder).toBe('Remediated')
   })
+  it('names a SharePoint timestamp root without enabling source replacement', () => {
+    const d = releaseDestination({ provider: 'sharepoint' })
+    expect(d.toSharePoint).toBe(true)
+    expect(d.label).toMatch(/SharePoint.*release timestamp.*Blob/)
+  })
 })
 
 describe('releaseDestinationPhrase (batch)', () => {
@@ -26,6 +31,9 @@ describe('releaseDestinationPhrase (batch)', () => {
       .toBe('a durable Azure Blob copy (a download link)')
     expect(releaseDestinationPhrase({ anyDrive: false, driveMirrorEnabled: true }))
       .toBe('a durable Azure Blob copy (a download link)')
+  })
+  it('names one structured root per SharePoint source library', () => {
+    expect(releaseDestinationPhrase({ provider: 'sharepoint' })).toMatch(/each source library/)
   })
 })
 

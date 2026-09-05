@@ -99,6 +99,25 @@ def test_admin_live_activity_exposes_only_safe_running_context(isolated_store):
     assert "secret" not in str(row)
 
 
+def test_admin_live_activity_carries_bounded_sanitized_remediation_events(isolated_store):
+    isolated_store.save_scan(_scan())
+    isolated_store.enqueue_job(
+        "remediate_file", {"file": "Private Report.docx"}, scan_id="scan-live-1")
+    for i in range(15):
+        isolated_store.append_scan_event(
+            "scan-live-1", "remediate.fix_applied", owner_email="admin@example.org",
+            detail={"file": f"private-{i}.docx", "fixes": i, "secret": "never-return"},
+        )
+
+    row = isolated_store.admin_live_activity()[0]
+    events = row["recent_events"]
+    assert len(events) == 12
+    assert [event["seq"] for event in events] == list(range(4, 16))
+    assert events[-1]["detail"] == {"fixes": 14}
+    assert "private" not in str(events)
+    assert "secret" not in str(events)
+
+
 def test_admin_live_activity_omits_inactive_runs(isolated_store):
     isolated_store.save_scan(_scan())
     job_id = isolated_store.enqueue_job("scan_file", {"file": "done.docx"}, scan_id="scan-live-1")
@@ -198,7 +217,55 @@ def test_instance_capacity_uses_busy_slots_not_running_rows(monkeypatch):
     assert assess["jobs_in_flight"] == 40
     assert assess["unattributed_running"] == 20
     assert assess["utilization_pct"] == 100
+    assert [alert["code"] for alert in assess["alerts"]] == ["unattributed_running"]
     assert summary["utilization_pct"] == 100
+
+
+def test_multiple_processes_on_one_replica_count_as_one_replica(monkeypatch):
+    class ActivityStore:
+        def worker_tier_status(self): return {"alive": True, "pool_size": 2}
+        def worker_roles_status(self): return {"assess": {"alive": True, "pool_size": 2}}
+        def job_stats(self, owner=None): return {"done": 0}
+        def admin_live_activity(self):
+            return [{"stage": "assess", "status": "active", "running": 3, "queued": 0,
+                     "completed": 0, "total": 3}]
+        def list_worker_instances(self):
+            now = system.datetime.now(system.timezone.utc).isoformat()
+            return [
+                {"worker_id": "assess:replica-a:p1", "replica_id": "replica-a",
+                 "last_heartbeat_at": now, "state": "busy", "concurrency_limit": 2,
+                 "active_job_count": 2, "revision_name": "v1"},
+                {"worker_id": "assess:replica-a:p2", "replica_id": "replica-a",
+                 "last_heartbeat_at": now, "state": "busy", "concurrency_limit": 2,
+                 "active_job_count": 1, "revision_name": "v1"},
+            ]
+
+    monkeypatch.setattr(system.core, "store", ActivityStore())
+    assess = system._admin_activity_snapshot()["summary"]["worker_capacity_by_role"]["assess"]
+    assert assess["healthy_replicas"] == 1
+    assert assess["worker_slots"] == 4
+    assert assess["busy_slots"] == 3
+    assert assess["utilization_pct"] == 75
+    assert len(assess["instances"]) == 1
+    assert assess["instances"][0]["replica_id"] == "replica-a"
+    assert assess["instances"][0]["process_count"] == 2
+
+
+def test_one_stale_process_does_not_make_its_live_replica_stale():
+    now = system.datetime.now(system.timezone.utc)
+    rows = system._replica_capacity([
+        {"worker_id": "assess:r1:old", "replica_id": "r1", "state": "busy",
+         "last_heartbeat_at": "2020-01-01T00:00:00+00:00", "concurrency_limit": 9,
+         "active_job_count": 9},
+        {"worker_id": "assess:r1:live", "replica_id": "r1", "state": "ready",
+         "last_heartbeat_at": now.isoformat(), "concurrency_limit": 2,
+         "active_job_count": 0},
+    ], now=now)
+    assess = rows["assess"]
+    assert assess["healthy_replicas"] == 1
+    assert assess["stale_replicas"] == 0
+    assert assess["worker_slots"] == 2
+    assert assess["instances"][0]["process_count"] == 2
 
 
 def test_stale_instances_remain_visible_but_add_no_capacity(monkeypatch):
@@ -220,3 +287,16 @@ def test_stale_instances_remain_visible_but_add_no_capacity(monkeypatch):
     assert assess["busy_slots"] == 0
     assert assess["status"] == "stale"
     assert assess["instances"][0]["fresh"] is False
+    assert assess["alerts"][0]["code"] == "stale_replicas"
+
+
+def test_capacity_uses_the_central_freshness_threshold(monkeypatch):
+    from datetime import timedelta
+    monkeypatch.setattr(system.core, "WORKER_INSTANCE_FRESHNESS_SECONDS", 90)
+    now = system.datetime.now(system.timezone.utc)
+    heartbeat = (now - timedelta(seconds=45)).isoformat()
+    rows = system._replica_capacity([{"worker_id": "assess:r:p", "replica_id": "r",
+        "state": "ready", "last_heartbeat_at": heartbeat, "concurrency_limit": 2,
+        "active_job_count": 0}], now=now)
+    assert rows["assess"]["healthy_replicas"] == 1
+    assert rows["assess"]["freshness_threshold_seconds"] == 90

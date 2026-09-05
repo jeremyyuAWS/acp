@@ -1,0 +1,15 @@
+.rem-prior-results {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 12px;
+}
+
+.rem-prior-results strong { color: var(--ink); }
+.rem-prior-results span { color: var(--muted); }

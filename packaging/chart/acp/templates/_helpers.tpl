@@ -57,7 +57,15 @@ Call as: include "acp.image" (dict "root" $ "component" "api")
 {{- $root := .root -}}
 {{- $component := .component -}}
 {{- $img := $root.Values.image -}}
-{{- $repo := ternary $img.workerRepository $img.repository (eq $component "worker") -}}
+{{- /*
+  THREE repositories now, not two, and spelled as a lookup rather than a nested ternary. The
+  worker and the API share one image and differ by command; ollama is a genuinely different
+  artifact (deploy/ollama/Dockerfile, models baked in) and cannot be a tag on either.
+*/ -}}
+{{- $repo := $img.repository -}}
+{{- if eq $component "worker" -}}{{- $repo = $img.workerRepository -}}{{- end -}}
+{{- if eq $component "ollama" -}}{{- $repo = $img.ollamaRepository -}}{{- end -}}
+{{- if eq $component "grafana" -}}{{- $repo = $img.grafanaRepository -}}{{- end -}}
 {{- $registry := $img.registry -}}
 {{- $digest := get ($img.digests | default dict) $component -}}
 {{- $base := $repo -}}
@@ -106,14 +114,54 @@ ACP_WORKER_ROLE) are added by the caller; everything below is identical by const
 - name: ACP_PLATFORM
   value: {{ .Values.acpDeployment.platform | quote }}
 {{- if .Values.observability.openTelemetry.enabled }}
-- name: OTEL_SDK_DISABLED
-  value: "false"
-{{- if .Values.observability.openTelemetry.endpoint }}
-- name: OTEL_EXPORTER_OTLP_ENDPOINT
-  value: {{ .Values.observability.openTelemetry.endpoint | quote }}
-{{- end }}
+{{- /*
+  THE SEAM NOW MEETS, and what was here before did not.
+
+  It set three generic OpenTelemetry SDK variables: OTEL_SDK_DISABLED=false, OTEL_SERVICE_NAME,
+  and OTEL_EXPORTER_OTLP_ENDPOINT — the last one never actually written, because `acpctl values`
+  emits `observability.openTelemetry.{enabled, exporter}` and this template read `{enabled,
+  endpoint}`. So the render said "instrumentation on" and gave it nowhere to go.
+
+  The deeper half is that OTLP was never the mechanism. `api/telemetry.py` configures the AZURE
+  MONITOR OpenTelemetry distribution and needs exactly one thing to start:
+  APPLICATIONINSIGHTS_CONNECTION_STRING. Without it `configure()` returns
+  `{"enabled": false, "reason": "not configured"}` and no exporter, no SDK and no egress exist —
+  so OTEL_SDK_DISABLED=false was describing an SDK that was never constructed. The chart set
+  three variables the application does not act on and omitted the one it reads.
+
+  So what does the wiring now, and this is why this block shrank to one line: the SECRET REFS
+  do. The loop below projects every entry of `secrets.refs` as its own uppercase env var, so
+  `applicationinsights-connection-string` arrives as APPLICATIONINSIGHTS_CONNECTION_STRING and
+  `acp-telemetry-salt` as ACP_TELEMETRY_SALT — exactly the two names api/telemetry.py reads,
+  with no special case anywhere. Declaring the reference IS the wiring.
+
+  The first draft of this block set the connection string explicitly and got it twice: once here
+  and once from that loop, which Kubernetes resolves by taking the last and a reader resolves by
+  wondering which one is live. It also mapped the salt by hand as `telemetry-salt`, which the
+  same loop then ALSO emitted as TELEMETRY_SALT — a variable nothing reads, sitting next to the
+  one that works. Renaming the reference to `acp-telemetry-salt` deleted both problems and the
+  code that caused them.
+
+  OTEL_SERVICE_NAME stays because it is the one thing no reference can supply: it names this
+  release in Application Insights, and the distro honours it once there is an SDK to name.
+*/}}
 - name: OTEL_SERVICE_NAME
   value: {{ include "acp.fullname" . | quote }}
+{{- end }}
+{{- if .Values.ai.ollama.enabled }}
+{{- /*
+  THE CLIENT HALF, and the reason rendering the Deployment alone would not have been a fix.
+  `api/ai.py` reaches Ollama through OLLAMA_BASE_URL; without it the workload runs against no
+  model runtime while a perfectly healthy one sits in the same namespace. Compose has always set
+  this (`OLLAMA_BASE_URL=http://ollama:11434`); the chart set nothing, so the seam existed on
+  both sides at once and each half looked like the other one's problem.
+*/}}
+- name: OLLAMA_BASE_URL
+  value: {{ printf "http://%s-ollama:%v" (include "acp.fullname" .) .Values.ai.ollama.port | quote }}
+{{- range $k, $v := .Values.ai.ollama.clientEnv }}
+- name: {{ $k }}
+  value: {{ $v | quote }}
+{{- end }}
 {{- end }}
 {{- if eq .Values.ai.mode "local-only" }}
 {{- /*

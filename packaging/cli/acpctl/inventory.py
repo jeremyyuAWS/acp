@@ -33,6 +33,16 @@ from . import presets
 # the two are equal, so a change to store.py fails this file rather than silently outdating it.
 API_HEADROOM_CONN = 16
 
+# Ollama's listen port. One constant because three things have to agree about it: the Service, the
+# OLLAMA_BASE_URL handed to every workload that calls it, and this inventory's own record of the
+# service. Two of those disagreeing is a model runtime nothing can reach, which fails as "the AI
+# features do nothing" rather than as an error.
+OLLAMA_PORT = 11434
+
+# Grafana's listen port, for the same reason: the Service, the inventory and the chart's probe
+# all have to agree, and a mismatch is a dashboard nobody can reach.
+GRAFANA_PORT = 3000
+
 # In-process worker THREADS per replica, per CPU. Taken from the one place in this repo that
 # states the ratio and its reasoning: deploy/compose/docker-compose.yml sets ACP_WORKERS=8 and
 # explains it as "enough to assess 8 documents in parallel on a 4-core host (each worker is
@@ -54,6 +64,12 @@ IMAGES = {
     "assess": "acp-assess-worker",
     "remediate": "acp-remediate-worker",
     "ollama": "acp-ollama-gateway",
+    # BUILT HERE, not referenced. deploy/grafana/Dockerfile takes grafana/grafana:11.6.0 and bakes
+    # ACP's dashboards, alert rules and datasource provisioning into it, so the deployable
+    # artifact is ours and the inventory has to name it. It was previously listed with no image
+    # at all, on a note calling it an "upstream image, referenced not rebuilt" — which would have
+    # left an adapter deploying stock Grafana with none of the dashboards that are the point.
+    "grafana": "acp-grafana",
     "migrations": "acp-migrations",
     "preflight": "acp-preflight",
 }
@@ -269,27 +285,57 @@ def build_inventory(doc: dict[str, Any]) -> list[Service]:
         services.append(Service(
             name="acp-ollama-gateway", kind="service", ingress="internal",
             image=IMAGES["ollama"], image_version=version,
-            replicas=(1, 1), ports=(11434,),
+            replicas=(1, 1), ports=(OLLAMA_PORT,),
             resources=dict(presets.PRESETS["large"]),
             env={"OLLAMA_MAX_LOADED_MODELS": "2"},
-            volumes=(f"models:{ai['ollama'].get('modelVolume', '200Gi')}",),
-            notes="Local model serving. Internal ingress only; the model volume is persistent so "
-                  "a restart does not re-pull multi-GB models."))
+            # NO VOLUME, AND THE REMOVED ONE IS THE FINDING. This planned
+            # `models:{ai.ollama.modelVolume}` — 200Gi by default, 500Gi in two of the examples —
+            # and said it was "persistent so a restart does not re-pull multi-GB models".
+            # deploy/ollama/Dockerfile pulls llama3.1:8b and moondream AT BUILD TIME and sets
+            # OLLAMA_MODELS=/models, and its comment says exactly why:
+            #
+            #     The base image declares `VOLUME /root/.ollama`, so under a runtime that mounts
+            #     an empty volume there (Azure Container Apps / K8s emptyDir) the models baked
+            #     into the image layer are SHADOWED — the container starts with an empty model
+            #     list and vision silently falls back / templates.
+            #
+            # So there is nothing to re-pull, and a plan that provisioned this volume would have
+            # been read by an adapter and mounted — producing an Ollama with no models, no error,
+            # and alt-text quietly falling back to templates. The claim was not merely redundant;
+            # acting on it breaks the service. Found while writing the chart template that would
+            # have been the first thing to act on it.
+            #
+            # `ai.ollama.modelVolume` stays in the schema for a deployment that supplies its own
+            # model runtime rather than this image; nothing in this repository consumes it.
+            notes="Local model serving. Internal ingress only. No model volume: the release image "
+                  "bakes its models into the layer, and mounting one over the model root would "
+                  "hide them (deploy/ollama/Dockerfile)."))
 
     # ── observability ──────────────────────────────────────────────────────────
-    if obs.get("openTelemetry"):
-        exporter = obs.get("exporter", "local")
-        services.append(Service(
-            name="acp-otel-collector", kind="service", ingress="internal", ports=(4317, 4318),
-            image=None, provisioning="in-cluster",
-            notes=f"Portable instrumentation layer (PRD S14). Exporter: {exporter}."
-                  + (" Collection stays entirely inside the installation."
-                     if exporter == "local" else "")))
+    #
+    # NO COLLECTOR IS PLANNED, AND THAT IS A CORRECTION RATHER THAN AN OMISSION.
+    #
+    # This used to append an `acp-otel-collector` service, in-cluster, listening on the OTLP ports
+    # 4317/4318, for every document with `openTelemetry: true` — which is all of them. Nothing has
+    # ever deployed one: not deploy/public/, not deploy/compose/, not the Helm chart. It was a
+    # plan item no adapter could act on.
+    #
+    # It was also describing the wrong mechanism. ACP's telemetry is `api/telemetry.py`, which
+    # configures the AZURE MONITOR OpenTelemetry distribution and exports to Application Insights
+    # directly, keyed by `APPLICATIONINSIGHTS_CONNECTION_STRING`. There is no OTLP hop in the
+    # product at all, so a collector on 4317 would have had nothing to receive: the thing that
+    # turns telemetry on here is a CREDENTIAL, not a workload, and it belongs in `secrets.refs`
+    # where spec.required_secret_names now puts it.
+    #
+    # `exporter` still selects the destination, and `_warn_exporter_unimplemented` says so when a
+    # document names one the application has no code for.
     if obs.get("grafana"):
         services.append(Service(
-            name="acp-grafana", kind="service", ingress="internal", ports=(3000,),
+            name="acp-grafana", kind="service", ingress="internal",
+            image=IMAGES["grafana"], image_version=version, ports=(GRAFANA_PORT,),
             depends_on=("postgres",),
-            notes="Dashboards. Upstream image, referenced not rebuilt."))
+            notes="Dashboards. First-party image: ACP's dashboards, alert rules and datasource "
+                  "provisioning are baked in (deploy/grafana/Dockerfile)."))
     langfuse_mode = obs.get("langfuse", {}).get("mode", "disabled")
     if langfuse_mode == "self-hosted":
         services.append(Service(

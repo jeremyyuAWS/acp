@@ -105,6 +105,7 @@ def test_bootstrap_with_no_scans_yet(app_client):
     assert body["overview"] is None
     assert body["scans"] == []
     assert body["active_job"] == {}
+    assert body["active_workflows"] == []
     assert body["me"]["email"] == "demo"
 
 
@@ -141,6 +142,27 @@ def test_bootstrap_reflects_active_job(app_client, isolated_store):
     assert resp.status_code == 200
     body = resp.json()
     assert body["active_job"].get("id") == "s-running"
+    assert body["active_workflows"][0]["stage"] == "assess"
+
+
+def test_active_workflows_are_owner_scoped_and_payload_free(app_client, isolated_store):
+    for scan_id, owner, kind in (("mine", "demo", "remediate_file"),
+                                  ("theirs", "other@example.com", "scan_file")):
+        with isolated_store._db.cursor() as cur:
+            isolated_store._db.execute(cur,
+                "INSERT INTO scan_runs (id, owner_email, source, status, started_at) "
+                "VALUES (%s,%s,%s,%s,%s)",
+                (scan_id, owner, "sharepoint", "running", "2026-09-05T10:00:00Z"))
+            isolated_store._db.execute(cur,
+                "INSERT INTO jobs (id, scan_id, type, status, payload, created_at, updated_at) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                (f"j-{scan_id}", scan_id, kind, "running", '{"file":"secret.docx"}',
+                 "2026-09-05T10:00:00Z", "2026-09-05T10:01:00Z"))
+    body = app_client.get("/workspace/active-workflows").json()
+    assert [w["scan_id"] for w in body["active_workflows"]] == ["mine"]
+    assert body["active_workflows"][0]["stage"] == "remediate"
+    assert "payload" not in body["active_workflows"][0]
+    assert "file" not in body["active_workflows"][0]
 
 
 def test_bootstrap_is_tenant_isolated(app_client, isolated_store):

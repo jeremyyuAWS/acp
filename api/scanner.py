@@ -1865,7 +1865,8 @@ def _sp_enrich_content_types(token: str, files: list[dict]) -> dict:
 def _sp_walk_folder(token: str, drive_id: str, item_id: str, max_files: int,
                     exts: set[str], inventory_out: list | None = None,
                     exclude_ids: set | None = None, base: str | None = None,
-                    skip_names: set | None = None) -> tuple[list[dict], bool]:
+                    skip_names: set | None = None, progress_cb=None,
+                    root_label: str | None = None) -> tuple[list[dict], bool]:
     """BFS one Graph folder subtree. Returns (raw driveItems, truncated).
 
     Recursion is server-side here for the same reason _search_folder does it for Drive: the
@@ -1886,7 +1887,10 @@ def _sp_walk_folder(token: str, drive_id: str, item_id: str, max_files: int,
     excluded = set(exclude_ids or ())
     skip = set(skip_names or ())
     root = base or f"{GRAPH}/drives/{drive_id}"
-    queue = [item_id]
+    # Queue the human-readable path beside the Graph id. Graph's child response already includes
+    # every folder name, so this adds no request; it merely retains information the walk used to
+    # discard before the existing Discovery SSE channel could report it.
+    queue = [(item_id, root_label or "SharePoint library")]
     seen: set[str] = set()
     raw: list[dict] = []
     truncated = False
@@ -1896,46 +1900,52 @@ def _sp_walk_folder(token: str, drive_id: str, item_id: str, max_files: int,
     # to learn the same thing. Tier 3 is the operator's own opt-out and is never retried upward.
     tier = 0 if sp_metadata.expand_enabled() else 3
     while queue:
-        cur = queue.pop(0)
+        cur, cur_path = queue.pop(0)
         if cur in seen:
             continue                          # a shortcut/cycle must not walk forever
         seen.add(cur)
+        started_at = datetime.now(timezone.utc).isoformat()
+        if progress_cb:
+            progress_cb({"key": f"{drive_id or 'me'}/{cur or 'root'}", "name": cur_path.rsplit('/', 1)[-1],
+                         "path": cur_path, "state": "scanning", "started_at": started_at})
+        folder_files_from = len(raw)
         seg = "root" if cur in (None, "", "root") else f"items/{cur}"
         url = _sp_children_url(root, seg, tier)
-        while url:
-            if len(raw) >= max_files:
-                truncated = True
-                break
-            # ONE STEP DOWN PER FAILURE, and the listing is never the thing that is lost. A
-            # PermissionError is re-raised rather than demoted: that is a missing scope on the
-            # drive itself, which the caller must see (site-level isolation reads it, Phase 1),
-            # and stepping down would turn a 403 into a silently metadata-less success.
-            while True:
-                try:
-                    data = _sp_get(token, url)
+        try:
+            while url:
+                if len(raw) >= max_files:
+                    truncated = True
                     break
-                except PermissionError:
-                    raise
-                except Exception:             # noqa: BLE001 — a refused ASK, not a refused drive
-                    if tier >= 2:
-                        raise                 # the base request failed: that is a real failure
-                    tier += 1
-                    print(f"[scan] SharePoint drive {drive_id or 'me'}: {_SP_TIER_REASON[tier]}",
-                          flush=True)
-                    url = _sp_children_url(root, seg, tier)
-            for it in data.get("value", []):
-                if it.get("folder") is not None:
-                    # Excluded subtree — pruned at enqueue, same rule as the Drive walker.
-                    # Both `<driveId>/<itemId>` and a bare item id are accepted so a caller
-                    # need not know which form reached it.
-                    if (it.get("id") in excluded
-                            or f"{drive_id}/{it.get('id')}" in excluded):
+                # ONE STEP DOWN PER FAILURE, and the listing is never the thing that is lost. A
+                # PermissionError is re-raised rather than demoted: that is a missing scope on the
+                # drive itself, which the caller must see (site-level isolation reads it, Phase 1),
+                # and stepping down would turn a 403 into a silently metadata-less success.
+                while True:
+                    try:
+                        data = _sp_get(token, url)
+                        break
+                    except PermissionError:
+                        raise
+                    except Exception:             # noqa: BLE001 — a refused ASK, not a refused drive
+                        if tier >= 2:
+                            raise                 # the base request failed: that is a real failure
+                        tier += 1
+                        print(f"[scan] SharePoint drive {drive_id or 'me'}: {_SP_TIER_REASON[tier]}",
+                              flush=True)
+                        url = _sp_children_url(root, seg, tier)
+                for it in data.get("value", []):
+                    if it.get("folder") is not None:
+                        # Excluded subtree — pruned at enqueue, same rule as the Drive walker.
+                        # Both `<driveId>/<itemId>` and a bare item id are accepted so a caller
+                        # need not know which form reached it.
+                        if (it.get("id") in excluded
+                                or f"{drive_id}/{it.get('id')}" in excluded):
+                            continue
+                        if it.get("name") in skip:
+                            continue
+                        queue.append((it.get("id"), f"{cur_path}/{it.get('name') or 'unnamed folder'}"))
                         continue
-                    if it.get("name") in skip:
-                        continue
-                    queue.append(it.get("id"))
-                    continue
-                it["_acp_drive_id"] = drive_id
+                    it["_acp_drive_id"] = drive_id
                 # The listItem CONTAINER's read outcome, stamped per item rather than inferred
                 # later from whether a lookup came back empty — that inference is precisely the
                 # bug sp_metadata exists to prevent, because it cannot tell a column the tenant
@@ -1944,18 +1954,30 @@ def _sp_walk_folder(token: str, drive_id: str, item_id: str, max_files: int,
                 # Note the three-way split: expansion refused for the drive (tier), expansion
                 # granted but THIS item has no backing list item (a personal OneDrive file — the
                 # key is absent from the payload), and a real list item.
-                if tier >= 2:
-                    it["_acp_list_item_error"] = _SP_TIER_REASON[tier]
-                elif "listItem" in it:
-                    it["_acp_list_item"] = it.get("listItem") or {}
-                else:
-                    it["_acp_list_item_error"] = (
-                        "this drive has no backing SharePoint list, so it carries no content "
-                        "type, managed columns or version (a personal OneDrive)")
-                if tier >= 1:
-                    it["_acp_rich_error"] = _SP_TIER_REASON[1]
-                raw.append(it)
-            url = data.get("@odata.nextLink")
+                    if tier >= 2:
+                        it["_acp_list_item_error"] = _SP_TIER_REASON[tier]
+                    elif "listItem" in it:
+                        it["_acp_list_item"] = it.get("listItem") or {}
+                    else:
+                        it["_acp_list_item_error"] = (
+                            "this drive has no backing SharePoint list, so it carries no content "
+                            "type, managed columns or version (a personal OneDrive)")
+                    if tier >= 1:
+                        it["_acp_rich_error"] = _SP_TIER_REASON[1]
+                    raw.append(it)
+                url = data.get("@odata.nextLink")
+        except Exception as e:
+            if progress_cb:
+                progress_cb({"key": f"{drive_id or 'me'}/{cur or 'root'}",
+                             "name": cur_path.rsplit('/', 1)[-1], "path": cur_path,
+                             "state": "failed", "started_at": started_at,
+                             "files_found": len(raw) - folder_files_from, "error": str(e)})
+            raise
+        if progress_cb:
+            progress_cb({"key": f"{drive_id or 'me'}/{cur or 'root'}",
+                         "name": cur_path.rsplit('/', 1)[-1], "path": cur_path,
+                         "state": "partial" if truncated else "completed", "started_at": started_at,
+                         "files_found": len(raw) - folder_files_from})
         if truncated:
             break
     return raw, truncated
@@ -2363,7 +2385,7 @@ class _SpWalkPipeline:
 
 
 def _sp_walk_pipeline(token, site_ids, resolved, site_report, delta_plan, use_search,
-                      max_files, exts, exclude_ids, skip_folders):
+                      max_files, exts, exclude_ids, skip_folders, folder_progress_cb=None):
     """The pipeline over every library this scan will actually WALK, in the operator's own order.
 
     Only walk-eligible libraries: one the delta plan can reconstruct costs no Graph call at all,
@@ -2390,15 +2412,22 @@ def _sp_walk_pipeline(token, site_ids, resolved, site_report, delta_plan, use_se
             units.append((s_id, d["id"]))
 
     throttled: dict = {}
+    library_names = {(s_id, d["id"]): (d.get("name") or d["id"])
+                     for s_id in site_ids for d in (resolved.get(s_id) or [])}
 
     def run(unit):
         # Armed per walk, so the retries THIS library spent are attributable to it however many
         # other libraries are in flight beside it.
         _SP_RETRY_LOCAL.n = 0
         try:
+            def _folder_progress(event):
+                if folder_progress_cb:
+                    folder_progress_cb({**event, "site_id": unit[0], "drive_id": unit[1],
+                                        "library_name": library_names.get(unit)})
             return _sp_walk_folder(token, unit[1], "root", max_files, exts,
                                    inventory_out=None, exclude_ids=exclude_ids,
-                                   skip_names=skip_folders)
+                                   skip_names=skip_folders, progress_cb=_folder_progress,
+                                   root_label=library_names.get(unit))
         finally:
             throttled[unit] = getattr(_SP_RETRY_LOCAL, "n", 0)
             _SP_RETRY_LOCAL.n = None
@@ -2564,6 +2593,14 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
     site_report: dict[str, dict] = {s_id: {"id": s_id, "libraries": [], "listed": 0, "estate": 0,
                                            "status": "queued", "error": None}
                                     for s_id in site_ids}
+    # Bounded folder telemetry shared by concurrent library walkers. It records only active
+    # folders and the four most recent outcomes; scan scope remains the durable site/library
+    # audit record rather than growing one row per folder in a large estate.
+    _sp_folder_lock = threading.Lock()
+    _sp_active_folders: dict[str, dict] = {}
+    _sp_recent_folders: list[dict] = []
+    _sp_folders_seen: set[str] = set()
+    _sp_last_folder_emit = [0.0]
     # Sites a previous ATTEMPT of this scan already listed. On the report, complete, with the
     # counts the caller supplied — see `skip_sites` above for why the counts and not just the ids.
     for s_id in _resumed:
@@ -2587,12 +2624,41 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
         per file: a thirty-site walk is otherwise a single silent bar, and "which site is it on"
         is the question an operator watching a long estate scan actually has."""
         if progress_cb:
+            with _sp_folder_lock:
+                _active = [dict(v) for v in _sp_active_folders.values()]
+                _recent = [dict(v) for v in _sp_recent_folders]
+                _folder_count = len(_sp_folders_seen) or None
             try:
-                progress_cb(len(files), sites=[dict(v) for v in site_report.values()])
+                progress_cb(len(files), folders=_folder_count, active=_active or None,
+                            recent=_recent or None,
+                            sites=[dict(v) for v in site_report.values()])
             except TypeError:
-                # An older callback that does not accept `sites` still gets the count. A progress
-                # diagnostic must never be the thing that fails a scan.
-                progress_cb(len(files))
+                try:
+                    progress_cb(len(files), sites=[dict(v) for v in site_report.values()])
+                except TypeError:
+                    # An older callback that accepts only the count still works. A progress
+                    # diagnostic must never be the thing that fails a scan.
+                    progress_cb(len(files))
+
+    def _folder_tick(event):
+        key = event.get("key") or event.get("path")
+        now = time.monotonic()
+        with _sp_folder_lock:
+            if key:
+                _sp_folders_seen.add(key)
+            if event.get("state") == "scanning":
+                _sp_active_folders[key] = dict(event)
+            else:
+                _sp_active_folders.pop(key, None)
+                _sp_recent_folders.insert(0, dict(event))
+                del _sp_recent_folders[4:]
+            # Match the existing Drive walker: update state for every folder, but bound database
+            # and SSE writes during a wide concurrent traversal. Failures bypass the throttle.
+            emit = (now - _sp_last_folder_emit[0] >= 2.0 or event.get("state") == "failed")
+            if emit:
+                _sp_last_folder_emit[0] = now
+        if emit:
+            _tick()
 
     if locations:
         # Chosen folders. Each location is (drive_id, item_id) — never a bare item id, because a
@@ -2613,7 +2679,10 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
         for drive_id, item_id in locations:
             walked, cut = _sp_walk_folder(token, drive_id, item_id, max_files, exts,
                                           inventory_out=None, exclude_ids=exclude_ids,
-                                          skip_names=skip_folders)
+                                          skip_names=skip_folders,
+                                          progress_cb=lambda event, d=drive_id:
+                                              _folder_tick({**event, "drive_id": d}),
+                                          root_label="Selected SharePoint folder")
             hit_cap = hit_cap or cut
             targets.append((drive_id, iter([walked]), None, None, None))
     elif site_ids or _resumed:
@@ -2681,7 +2750,7 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
 
         _walks = _sp_walk_pipeline(
             token, site_ids, resolved, site_report, delta_plan, use_search,
-            max_files, exts, exclude_ids, skip_folders)
+            max_files, exts, exclude_ids, skip_folders, folder_progress_cb=_folder_tick)
 
         # ── PASS 2: consume, in the operator's own order ─────────────────────────────────────
         budget = max_files
@@ -2708,8 +2777,13 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
             # be one Graph call per file. Best-effort, like _sp_site_name always was: a tenant
             # can let a token read a site's drives while refusing its metadata.
             rep["name"] = _sp_site_name(token, s_id)
-            rep["libraries"] = [{"id": d["id"], "name": d.get("name")} for d in drives]
+            rep["libraries"] = [{"id": d["id"], "name": d.get("name"), "status": "queued",
+                                  "listed": 0, "estate": 0} for d in drives]
             lib_by_id = {lib["id"]: lib for lib in rep["libraries"]}
+            # Announce the site before waiting on its first library.  Previously the first live
+            # row for a healthy site was often its terminal "complete" row, which made a long
+            # Graph walk look queued until it suddenly finished.
+            _tick()
             for d in drives:
                 # RECONSTRUCTED, not walked. The merged prior+delta set becomes this library's
                 # one batch and feeds the identical per-item loop below — same dedupe, same
@@ -2723,10 +2797,18 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                     lib_by_id[d["id"]]["mode"] = "delta"
                     lib_by_id[d["id"]]["changed"] = len(plan["changed"])
                     lib_by_id[d["id"]]["removed"] = len(plan["removed_ids"])
+                    lib_by_id[d["id"]]["status"] = "scanning"
+                    rep["active_library"] = {"id": d["id"], "name": d.get("name"),
+                                             "mode": "delta"}
+                    _tick()
                     budget -= len(merged)
                     targets.append((d["id"], iter([merged]), s_id, rep["name"], d.get("name")))
                     continue
                 lib_by_id[d["id"]]["mode"] = "full"
+                lib_by_id[d["id"]]["status"] = "scanning"
+                rep["active_library"] = {"id": d["id"], "name": d.get("name"),
+                                         "mode": "search" if use_search else "full"}
+                _tick()
                 why = (delta_plan or {}).get("full", {}).get(d["id"])
                 if why:
                     lib_by_id[d["id"]]["full_reason"] = why
@@ -2737,12 +2819,15 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                     continue
                 if budget <= 0:
                     rep["status"] = "partial"   # libraries left unlisted → the estate is a floor
+                    lib_by_id[d["id"]]["status"] = "skipped"
+                    lib_by_id[d["id"]]["error"] = "file budget exhausted before this library"
                     hit_cap = True
                     break
                 try:
                     walked, cut = _walks.result((s_id, d["id"]))
                 except Exception as e:  # noqa: BLE001 — same isolation, one library down
                     rep.update(status="partial", error=f"library {d.get('name') or d['id']}: {e}")
+                    lib_by_id[d["id"]].update(status="blocked", error=str(e))
                     print(f"[scan] SharePoint library {d.get('name') or d['id']} on site {s_id} "
                           f"failed: {e} — continuing", flush=True)
                     hit_cap = True
@@ -2750,6 +2835,7 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                 hit_cap = hit_cap or cut
                 if cut:
                     rep["status"] = "partial"
+                    lib_by_id[d["id"]]["status"] = "partial"
                 # NOT truncated here, and that is deliberate. `budget` counts raw items as a
                 # cheap proxy for deciding whether to walk the NEXT library; the real cap is
                 # enforced on the SCANNABLE set by the consumption loop below (`len(files) >=
@@ -2759,8 +2845,6 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                 # saw, which is the one number this connector must never understate.
                 budget -= len(walked)
                 targets.append((d["id"], iter([walked]), s_id, rep["name"], d.get("name")))
-            if rep["status"] == "scanning":
-                rep["status"] = "complete"
             # WHY this site was slow, not just that it was. "This took an hour" and "this took an
             # hour because Graph throttled us 240 times" are the same wall-clock and completely
             # different problems, and only the second is one an operator can act on — fewer sites
@@ -2772,8 +2856,14 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
             # library to the wrong site.
             _throttled = sum(n for (site_of, _drive), n in _walks.throttled.items()
                              if site_of == s_id)
+            for (site_of, drive_of), count in _walks.throttled.items():
+                if site_of == s_id and drive_of in lib_by_id and count:
+                    lib_by_id[drive_of]["throttled"] = count
             if _throttled:
                 rep["throttled"] = _throttled
+            # The walk may be complete, but its batches have not been classified and counted yet.
+            # Keep the site live until the consumption boundary below proves all of its targets
+            # were consumed.  "Complete" is an outcome, not shorthand for "Graph returned".
             _tick()
         _walks.close()
     elif use_search:
@@ -2795,7 +2885,8 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
         # is the shape every item listed before site support already has.
         walked, cut = _sp_walk_folder(token, None, "root", max_files, exts,
                                       inventory_out=None, exclude_ids=exclude_ids,
-                                      base=f"{GRAPH}/me/drive", skip_names=skip_folders)
+                                      base=f"{GRAPH}/me/drive", skip_names=skip_folders,
+                                      progress_cb=_folder_tick, root_label="OneDrive")
         hit_cap = hit_cap or cut
         targets = [(None, iter([walked]), None, None, None)]
 
@@ -2826,13 +2917,44 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
             print(f"[scan] SharePoint site {s_id} checkpoint failed: {e} — the scan continues "
                   f"and this site will be re-listed if it is retried", flush=True)
 
-    cur_site, cur_files, cur_inv = None, 0, 0
+    cur_site, cur_drive, cur_files, cur_inv = None, None, 0, 0
+
+    def _finish_consumed_library(s_id, drive_id):
+        if not s_id or not drive_id:
+            return
+        rep = site_report.get(s_id) or {}
+        lib = next((row for row in (rep.get("libraries") or []) if row.get("id") == drive_id), None)
+        if lib and lib.get("status") == "scanning":
+            lib["status"] = "complete"
+
+    def _finish_consumed_site(s_id):
+        if not s_id:
+            return
+        rep = site_report.get(s_id) or {}
+        rep.pop("active_library", None)
+        if rep.get("status") == "scanning":
+            rep["status"] = "complete"
+        _tick()
+
     for i, (drive_id, pages, target_site, target_site_name, library_name) in enumerate(targets):
+        if drive_id != cur_drive or target_site != cur_site:
+            _finish_consumed_library(cur_site, cur_drive)
         if target_site != cur_site:
+            _finish_consumed_site(cur_site)
             _emit_site(cur_site, cur_files, cur_inv)
             cur_site = target_site
             cur_files = len(files)
             cur_inv = len(inventory_out) if inventory_out is not None else 0
+        cur_drive = drive_id
+        if target_site and target_site in site_report:
+            rep = site_report[target_site]
+            lib = next((row for row in (rep.get("libraries") or [])
+                        if row.get("id") == drive_id), {})
+            if lib.get("status") not in {"partial", "blocked", "skipped"}:
+                lib["status"] = "scanning"
+            rep["active_library"] = {"id": drive_id, "name": library_name,
+                                     "mode": lib.get("mode")}
+            _tick()
         for batch in pages:
             if len(files) >= max_files:
                 break
@@ -2856,13 +2978,19 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                 est_files.append(classified["est_row"])
                 if target_site and target_site in site_report:
                     site_report[target_site]["estate"] += 1
+                    lib["estate"] = int(lib.get("estate") or 0) + 1
                 if classified["scannable"] is not None:
                     files.append(classified["scannable"])
                     if target_site and target_site in site_report:
                         site_report[target_site]["listed"] += 1
+                        lib["listed"] = int(lib.get("listed") or 0) + 1
                 elif inventory_out is not None and classified["inventory_row"] is not None:
                     # Non-scannable item — inventoried with metadata, never analysed.
                     inventory_out.append(classified["inventory_row"])
+            # A Graph page is the natural bounded progress unit: frequent enough to show movement
+            # on a large library, without turning every document into a database/SSE write.
+            if target_site:
+                _tick()
         if len(files) >= max_files:
             # Truncated only if the cap left something unlisted: this library still has a batch
             # pending, or a later library was never reached. A page fully read is not truncation —
@@ -2880,6 +3008,8 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                         rep["status"] = "partial" if j == i else "skipped"
             break
 
+    _finish_consumed_library(cur_site, cur_drive)
+    _finish_consumed_site(cur_site)
     _emit_site(cur_site, cur_files, cur_inv)
     # A site with no libraries visible to the token completes without ever producing a target, so
     # the boundary above never reaches it. It is still a site the caller has finished with, and a

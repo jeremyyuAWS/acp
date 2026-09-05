@@ -5,7 +5,6 @@ import ReviewDrawer from './ReviewDrawer.jsx'
 import RemediationInbox from './RemediationInbox.jsx'
 import RemediationRunHeader from './RemediationRunHeader.jsx'
 import RemediationRunDetails from './RemediationRunDetails.jsx'
-import RemediationRunProgress from './RemediationRunProgress.jsx'
 // The approved-board core (R2/R3, R5, R6, R9, R11, R12). Every one of these shipped to main
 // unmounted; this is the pass that puts them on the screen they were written for.
 import RemediationWork from './RemediationWork.jsx'
@@ -27,13 +26,13 @@ import FileDrawer, { SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_RANK } from './ontology.js'
-import { remediateScan, getRemediationStatus, getRemediationSnapshot, openRemediationStream, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, assignHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl, getQueueEstimate } from './api.js'
+import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, assignHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl, getQueueEstimate } from './api.js'
 import { SIM, simProposalsFor } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
 import QueuePanel from './QueuePanel.jsx'
 import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
 import RemediationOpsPanel from './RemediationOpsPanel.jsx'
-import { isNewer } from './remediationSnapshot.js'
+import './remediation-prior-results.css'
 import { deriveRemediateProcessingState } from './remediateProcessingState.js'
 import { groupFixesByRule, summarizeImpact, totalFixes, scOf } from './fixSummary.js'
 import { remediationWork, batchScope } from './remediationWork.js'
@@ -311,7 +310,11 @@ function VerifyState({ state, pct, remaining, ready, latest }) {
 // readOnly: time-travel replay — historical scans are for looking, not enqueuing
 // real remediation jobs against (decisions stay editable: per-scan decision saves
 // are the time-travel feature itself).
-export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, assignees = {}, setAssignees, myEmail = null, aiEnabled = true, readOnly = false, onRefresh, onHitlCount, onNavigate, cap = null, assessment = null, assessedAt = null }) {
+export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, assignees = {}, setAssignees, myEmail = null, aiEnabled = true, readOnly = false, onRefresh, onHitlCount, onNavigate, cap = null, assessment = null, assessedAt = null,
+                                   // The run's live state and its ONE stream, owned by
+                                   // useRemediationRun at App level so both survive this
+                                   // component being unmounted on every tab change.
+                                   runStream = null }) {
   const [queue, setQueue] = useState([])
   // The master/detail RemediationInbox owns its own view state (search, tabs, sort, selection),
   // so the old accordion/prefs plumbing (single-open openId, the search/severity/criterion/group
@@ -411,20 +414,13 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // object: remProg is the batch progress bar's denominator and its latest filename; this is the
   // authoritative state, the reconciled partition, and the server's own integrity verdict.
   // NOTHING here is derived — see RemediationOpsPanel for why the derivation moved to the server.
-  const [ops, setOps] = useState(null)
-  const [opsAt, setOpsAt] = useState(null)
-  const opsRef = useRef(null)
   // The resume cursor: the last scan_events.seq this browser actually rendered. Null means "no
   // cursor" — a first connection, which the server answers with live frames and no backfill.
-  const eventCursorRef = useRef(null)
   const [serverFixed, setServerFixed] = useState(0)  // files fixed server-side this scan (persists after each batch)
-  const [staleDismissed, setStaleDismissed] = useState(false)
   const [runDetailsOpen, setRunDetailsOpen] = useState(false)  // the Run details disclosure (PRD §11)
   const pollRef = useRef(null)
-  const streamRef = useRef(null)
   const remStartRef = useRef(false)   // synchronous guard — remBusy is state, two clicks in one frame both read false
-  useEffect(() => () => { clearInterval(pollRef.current); streamRef.current?.close?.() }, [])
-  useEffect(() => { setStaleDismissed(false) }, [runId])
+  useEffect(() => () => clearInterval(pollRef.current), [])
   // The "Estimated pickup" range (GET /scans/{id}/queue-estimate?kind=remediate) for the window
   // between clicking Remediate and the first document actually finishing — same 10s cadence as
   // Discover's and Assess's own pickup polls. Stops the instant a document completes (remProg.done
@@ -453,7 +449,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     Math.min(Math.max(0, Number(total || 0)), Math.max(0, Number(failed || 0)))
 
   const finishRemediation = (total, status = {}) => {
-    clearInterval(pollRef.current); streamRef.current?.close?.(); streamRef.current = null
+    clearInterval(pollRef.current)
+    watchTotalRef.current = null   // stop reacting to frames for a batch that is finished
     const failed = clampFailed(total, status.failed)
     setRemProg((previous) => ({ ...previous, total, done: total,
                  latest: status.latest_file || previous?.latest || null,
@@ -469,41 +466,23 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       .catch(() => {})
   }
 
-  // One place a snapshot is accepted, whichever transport carried it. A frame from a superseded
-  // read (a revision that went BACKWARDS) is dropped rather than rendered — applying it would
-  // walk the panel backwards, which looks exactly like the run regressing.
-  const acceptSnapshot = (next) => {
-    if (!next) return
-    setOps((previous) => {
-      const winner = isNewer(previous, next) ? next : previous
-      opsRef.current = winner
-      return winner
-    })
-    setOpsAt(Date.now())
-  }
-
-  // The snapshot's own poll. Slower than the batch poll on purpose: that one runs at 1.5s to keep
-  // a progress bar smooth, and rebuilding the reconciled snapshot at that cadence would multiply
-  // the run's database reads for a panel whose numbers change on durable events, not on ticks.
-  // Stops on a terminal run — the server says when that is, and this never decides it locally.
-  useEffect(() => {
-    eventCursorRef.current = null   // a different run is a different log; never inherit a cursor
-    if (!runId) { setOps(null); setOpsAt(null); return undefined }
-    let on = true
-    const load = () => getRemediationSnapshot(runId)
-      .then((snap) => { if (on) acceptSnapshot(snap) })
-      .catch(() => { /* transient: the last confirmed snapshot and its age stay on screen */ })
-    load()
-    // Read the run's terminality off a REF, not off `ops`. The interval closure captures state
-    // from the render that created it, so `ops` here would be null forever and the "stop when
-    // terminal" it was written to express would never once be true.
-    const id = setInterval(() => { if (!opsRef.current?.terminal) load() }, 5000)
-    return () => { on = false; clearInterval(id) }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runId])
+  // THE SNAPSHOT AND THE STREAM ARE NO LONGER OWNED HERE. `useRemediationRun` holds both, at App
+  // level, and passes them down as `runStream` — because this component is unmounted on every tab
+  // change, and a connection that dies with it cannot keep a run watched, cannot keep ADR 0051's
+  // resume cursor, and cannot honestly let the persistent card say "Live". What used to be an
+  // `ops` state, an `acceptSnapshot`, a 5s snapshot poll and an `openRemediationStream` call is
+  // now four reads of one prop.
+  //
+  // The batch DENOMINATOR still belongs here: it comes from the enqueue response or
+  // sessionStorage, and the hook has no idea how many documents this run submitted. So the hook
+  // owns the transport and this owns the arithmetic.
+  const watchTotalRef = useRef(null)
+  const lastStatusRef = useRef(null)
+  const endedSeenRef = useRef(0)
 
   const applyRemediationStatus = (total, s) => {
-    acceptSnapshot(s.snapshot)
+    // The snapshot riding this frame is accepted by the hook, not here — one acceptor, one
+    // revision guard, one place a superseded read can be dropped.
     const done = Math.max(0, total - (s.in_flight || 0))
     setRemProg((previous) => {
       const activity = s.activity || null
@@ -553,33 +532,48 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     }, 1500)
   }
 
-  const startLiveUpdates = (total) => {
-    streamRef.current?.close?.()
-    setRemUpdates('live')
-    let latest = { failed: 0 }
-    streamRef.current = openRemediationStream(runId, {
-      // The cursor survives this call, so a reconnect replays what the gap contained rather than
-      // starting blank (ADR 0051). Held in a ref, not state: it must be readable by the NEXT
-      // connect attempt without waiting for a render, and nothing on screen renders from it.
-      lastEventId: eventCursorRef.current,
-      onMessage: (s) => { latest = s; applyRemediationStatus(total, s) },
-      onEvent: (event, id) => {
-        // The frame's own id is the authority — a payload field could be absent or stale, and the
-        // cursor must only ever advance to something this client actually rendered.
-        if (id != null) eventCursorRef.current = id
-      },
-      onReconcile: () => {
-        // The server declined to replay: the cursor is ahead of the log, the log was pruned, or
-        // the cursor was malformed. Drop it and re-fetch a snapshot BEFORE applying anything
-        // later (PRD §17.6) — keeping a cursor the server has rejected would fail the same way on
-        // every subsequent reconnect.
-        eventCursorRef.current = null
-        getRemediationSnapshot(runId).then(acceptSnapshot).catch(() => {})
-      },
-      onDone: () => finishRemediation(total, latest),
-      onError: () => { streamRef.current = null; startPoll(total) },
-    })
+  // Start watching a batch of `total` documents. It no longer opens anything: the stream is
+  // already running in `useRemediationRun`, whether or not this tab is showing. All this records
+  // is the DENOMINATOR, which the hook cannot know — it is the count this component just enqueued
+  // or restored from sessionStorage, not something the server's snapshot reports.
+  const startWatching = (total) => {
+    watchTotalRef.current = total
+    endedSeenRef.current = runStream?.endedAt || 0   // don't finalize on a PREVIOUS run's close
+    setRemUpdates(runStream?.connected ? 'live' : 'polling')
   }
+
+  // Every stream frame the hook receives, turned into this component's progress arithmetic.
+  // Effect rather than callback because the frames arrive as a prop now.
+  useEffect(() => {
+    const total = watchTotalRef.current
+    if (!total || !runStream?.status) return
+    lastStatusRef.current = runStream.status
+    applyRemediationStatus(total, runStream.status)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runStream?.status])
+
+  // The server closed the stream: the batch drained. `endedAt` is a timestamp rather than a flag
+  // precisely so a second run's close is distinguishable from the first's still being set —
+  // comparing against what we last SAW is what stops a stale close finalizing a fresh batch.
+  useEffect(() => {
+    const ended = runStream?.endedAt || 0
+    const total = watchTotalRef.current
+    if (!ended || ended === endedSeenRef.current || !total) return
+    endedSeenRef.current = ended
+    finishRemediation(total, lastStatusRef.current || { failed: 0 })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runStream?.endedAt])
+
+  // The legacy progress bar needs the legacy status shape, which the hook's own fallback does not
+  // fetch (it polls the reconciled snapshot). So when the stream is down while we are watching a
+  // batch, this polls that shape — HTTP, not a second stream.
+  useEffect(() => {
+    if (!watchTotalRef.current) return undefined
+    if (runStream?.connected) { clearInterval(pollRef.current); setRemUpdates('live'); return undefined }
+    startPoll(watchTotalRef.current)
+    return () => clearInterval(pollRef.current)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runStream?.connected])
 
   // Resume the live view across tab switches / reloads: the poll lives in this component, so
   // without this, navigating away mid-run and back would freeze the cards. The denominator is
@@ -588,7 +582,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     if (!runId) return
     let saved = null
     try { saved = JSON.parse(sessionStorage.getItem(REMKEY(runId)) || 'null') } catch { /* ignore */ }
-    if (saved?.total) { setRemBusy(true); setRemProg({ total: saved.total, done: 0, latest: null, failed: 0, history: [] }); startLiveUpdates(saved.total) }
+    if (saved?.total) { setRemBusy(true); setRemProg({ total: saved.total, done: 0, latest: null, failed: 0, history: [] }); startWatching(saved.total) }
     // NO LOCAL MEMORY IS NOT NO RUN. Sign out wipes every `acp-` key and reloads (App.jsx), so a
     // batch still running server-side comes back to a browser that has never heard of it — and
     // before this, to no card at all. Ask the server instead of assuming: it is the same snapshot
@@ -604,7 +598,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         try { sessionStorage.setItem(REMKEY(runId), JSON.stringify({ total: resume.total })) } catch { /* ignore */ }
         setRemBusy(true)
         setRemProg({ ...resume, activity: null, history: [] })
-        startLiveUpdates(resume.total)
+        startWatching(resume.total)
       }).catch(() => { /* no reconnect available — the card stays idle, as before */ })
       return () => { cancelled = true }
     }
@@ -649,7 +643,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       const total = r.enqueued
       setRemProg({ total, done: 0, latest: null, failed: 0, history: [] })
       try { sessionStorage.setItem(REMKEY(runId), JSON.stringify({ total })) } catch { /* ignore */ }
-      startLiveUpdates(total)
+      startWatching(total)
     } catch (e) {
       setRemMsg(`Could not enqueue: ${e.message || e}`); setRemBusy(false)
     } finally {
@@ -997,7 +991,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
   const _DONE_STATES = new Set(['done', 'complete', 'completed', 'finalized', 'cancelled', 'interrupted', 'superseded'])
   const assessRunning = run?.status && !_DONE_STATES.has(run.status)
-  const showStaleBanner = assessRunning && files.length > 0 && !staleDismissed
+  const showPriorResultsNotice = assessRunning && files.length > 0
 
   // ── The page, composed in the order a reviewer needs it ──────────────────────────────────────
   // The compact run header states what ACP already did. The review workspace is the next thing on
@@ -1595,40 +1589,12 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
   return (
     <>
-      {/* Snapshot separation: when a new assessment is running, the remediation results below are
-          from the prior assessment phase. Show a persistent warning so users know the numbers belong
-          to two different snapshots. Dismissible so they can keep working from the old results. */}
-      {showStaleBanner && (
-        <div role="status" style={{
-          display: 'flex', alignItems: 'flex-start', gap: 16, justifyContent: 'space-between',
-          background: 'color-mix(in srgb, #d97706 12%, var(--surface))',
-          border: '1px solid color-mix(in srgb, #d97706 30%, transparent)',
-          borderRadius: 8, padding: '10px 14px', marginBottom: 12, flexWrap: 'wrap',
-        }}>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', minWidth: 0 }}>
-            <span aria-hidden="true" style={{ fontSize: 16, lineHeight: '20px', flexShrink: 0 }}>⚠</span>
-            <div>
-              <strong style={{ fontSize: 13.5 }}>A new assessment is running</strong>
-              <div style={{ fontSize: 12.5, color: 'var(--ink)', marginTop: 2 }}>
-                The remediation results below are from{assessedAt ? ` ${assessedAt}` : ' a previous assessment'}.
-                They will not update until the new assessment completes.
-              </div>
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
-            <button
-              onClick={() => onNavigate?.('assess')}
-              style={{ fontSize: 12.5, padding: '4px 10px', borderRadius: 6, border: '1px solid var(--line)',
-                       background: 'var(--surface)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-              View assessment progress
-            </button>
-            <button
-              onClick={() => setStaleDismissed(true)}
-              style={{ fontSize: 12.5, padding: '4px 10px', borderRadius: 6, border: 'none',
-                       background: 'transparent', cursor: 'pointer', color: 'var(--muted)', whiteSpace: 'nowrap' }}>
-              Continue from previous results
-            </button>
-          </div>
+      {/* App owns the live Assessment card above the workflow tabs. This compact label only
+          qualifies the older Remediation snapshot below; it does not compete with that card. */}
+      {showPriorResultsNotice && (
+        <div className="rem-prior-results" role="status">
+          <strong>Previous remediation results · read only</strong>
+          <span>The results below are from{assessedAt ? ` ${assessedAt}` : ' the previous assessment'} and will refresh after the active assessment completes.</span>
         </div>
       )}
 
@@ -1648,13 +1614,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           authoritative account of the run and the bar is one number from it: when the two would
           ever disagree, the one with the server's revision and integrity verdict is the one to
           read first. `connected` is the transport's own answer, not an inference from data age. */}
-      <RemediationOpsPanel snapshot={ops} connected={remUpdates === 'live'} receivedAt={opsAt} />
-      {/* The authenticated remediation SSE already supplies these values. Keep its progress in
-          the main workflow, rather than hiding the only live signal inside Run details. */}
-      {remProg && (
-        <RemediationRunProgress progress={remProg} updateMode={remUpdates} runId={runId}
-                                source={run?.source} scope={run?.scope} />
-      )}
+      <RemediationOpsPanel snapshot={runStream?.snapshot || null}
+                           connected={!!runStream?.connected}
+                           receivedAt={runStream?.receivedAt || null}
+                           events={runStream?.events || []}
+                           updateMode={remUpdates} />
       {/* THE WORK. Second on the page, not eleventh — the review workspace is the only part of this
           screen that needs a person, so nothing but the run header and a blocking warning precedes
           it. It is also the ONLY finding-level approval surface: the standalone approvals panel that

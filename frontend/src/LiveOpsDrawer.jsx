@@ -4,6 +4,8 @@ import {
   EVENT_FILTERS, EVENT_ICONS, NOT_REPORTED, TONE, alertRuleState, alertRuleTone, alertsModel,
   PROVISIONING_STAGES, factGroups, provisioningTimeline, queueDrain, queueRoleLoad, streamState,
   runCoverage, runFlow, runStagePipeline, runTiming, runTrouble,
+  sourceCoverage, sourceFailures, sourceRuns, sourceVolume,
+  outputPipeline,
   DEPLOY_ICONS, configurationModel, costModel, costText, deploymentModel, incidentRegions,
   isAzureBacked,
   notAzureBackedReason, resourceHealthModel, serviceHealthModel,
@@ -113,6 +115,7 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queu
     return <div style={{ ...PANEL, padding: 14 }} role="status">
       <b>Worker utilization unavailable</b>
       <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{gauge.reason}</div>
+      <WorkerTelemetrySignals service={service} />
     </div>
   }
   const color = TONE[gauge.tone]
@@ -162,6 +165,8 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queu
         </div>
       </div>
     </div>
+    <WorkerReplicaTable replicas={service?.instances} nowMs={nowMs} />
+    <WorkerTelemetrySignals service={service} />
     <Saturation saturation={saturation} nowMs={nowMs} measuredAt={capacity?.measured_at} />
     <ScalingActivity capacity={capacity} saturation={saturation} queueDepth={queueDepth}
       lifecycle={replicaLifecycle(capacity, service)} nowMs={nowMs} />
@@ -170,6 +175,72 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queu
     <ReplicaLifecycle lifecycle={replicaLifecycle(capacity, service)} nowMs={nowMs}
       measuredAt={capacity?.measured_at} />
     <AzureMetrics capacity={capacity} service={service} nowMs={nowMs} />
+  </section>
+}
+
+function WorkerReplicaTable({ replicas, nowMs }) {
+  if (!Array.isArray(replicas) || !replicas.length) return null
+  return <section aria-label="ACP worker replicas" style={{ marginTop: 12 }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+      <b style={{ fontSize: 13 }}>ACP worker replicas</b>
+      <span className="muted" style={{ fontSize: 11 }}>{replicas.length} unique reported</span>
+    </div>
+    <ul style={{ listStyle: 'none', margin: '8px 0 0', padding: 0, display: 'grid', gap: 6 }}>
+      {replicas.map((replica) => {
+        const slots = Number(replica.concurrency_limit || 0)
+        const active = Math.min(slots, Number(replica.active_job_count || 0))
+        const processes = Number(replica.process_count || 1)
+        return <li key={replica.replica_id || replica.worker_id} style={{ ...PANEL, padding: 9 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+            <b style={{ overflowWrap: 'anywhere' }}>{replica.replica_id || 'Replica identity unavailable'}</b>
+            <span style={{ fontSize: 11, fontWeight: 700, color: replica.healthy ? TONE.ok : TONE.warn }}>
+              {replica.healthy ? 'Healthy' : replica.fresh ? 'Not ready' : 'Stale'}
+            </span>
+            <span className="muted" style={{ marginLeft: 'auto', fontSize: 11 }}>
+              {replica.last_heartbeat_at ? updatedAgo(replica.last_heartbeat_at, nowMs) : 'Heartbeat not reported'}
+            </span>
+          </div>
+          <div className="muted" style={{ marginTop: 4, fontSize: 11 }}>
+            {processes} worker {processes === 1 ? 'process' : 'processes'} · {active} of {slots} slots busy
+            {replica.revision_name ? ` · ${replica.revision_name}` : ''}
+            {replica.software_version ? ` · version ${replica.software_version}` : ''}
+          </div>
+        </li>
+      })}
+    </ul>
+    <p className="muted" style={{ margin: '6px 0 0', fontSize: 10.5 }}>
+      Replica totals use unique replica identities; worker processes are shown within their container.
+    </p>
+  </section>
+}
+
+function WorkerTelemetrySignals({ service }) {
+  const alerts = Array.isArray(service?.alerts) ? service.alerts : []
+  const events = Array.isArray(service?.recent_lifecycle_events)
+    ? service.recent_lifecycle_events.slice(-8).reverse() : []
+  const revisions = Object.entries(service?.revision_distribution || {})
+  if (!alerts.length && !events.length && !revisions.length
+      && service?.freshness_threshold_seconds == null) return null
+  return <section aria-label="Worker telemetry signals" style={{ ...PANEL, padding: 14, marginTop: 12 }}>
+    <b>Worker telemetry signals</b>
+    {service?.freshness_threshold_seconds != null && <div className="muted"
+      style={{ marginTop: 6, fontSize: 12 }}>
+      Freshness threshold: {service.freshness_threshold_seconds} seconds
+    </div>}
+    {!!alerts.length && <ul style={{ margin: '8px 0 0', paddingLeft: 20 }}>
+      {alerts.map((alert) => <li key={alert.code} style={{ marginTop: 4,
+        color: alert.severity === 'critical' ? TONE.bad : TONE.warn }}>{alert.message}</li>)}
+    </ul>}
+    {!!revisions.length && <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+      Revision distribution: {revisions.map(([revision, count]) => `${revision} (${count})`).join(' · ')}
+    </div>}
+    {!!events.length && <div style={{ marginTop: 10 }}>
+      <b style={{ fontSize: 12 }}>Recent lifecycle events</b>
+      <ul style={{ margin: '5px 0 0', paddingLeft: 20 }}>
+        {events.map((event) => <li key={event.event_id}
+          style={{ marginTop: 3, fontSize: 12 }}>{event.kind} · {event.occurred_at}</li>)}
+      </ul>
+    </div>}
   </section>
 }
 
@@ -1279,7 +1350,103 @@ function RunRadial({ model, run, accent, pipeline, flow, timing, trouble, covera
   </section>
 }
 
-function SourceHealth({ model, state, nowMs }) {
+/**
+ * Classified failures on the runs reading from this connector.
+ *
+ * The caption is the point. `classify_job_error` matches phrases against an exception's text, so
+ * it knows WHAT KIND of failure happened and never WHO caused it — a rate limit on an assess job
+ * is more likely the AI provider than SharePoint. Labelling this "connector health" would be a
+ * claim the data cannot support, so it names the classes, names the stages they happened in, and
+ * says outright that attribution is unavailable.
+ */
+function SourceFailures({ failures }) {
+  if (!failures.total) {
+    return <p className="muted" style={{ fontSize: 12, margin: '10px 0 0' }}>
+      No classified failure has been recorded on this connector’s live or recent runs.
+    </p>
+  }
+  return <div style={{ marginTop: 12 }}>
+    <span style={LABEL}>CLASSIFIED FAILURES</span>
+    <ul style={{ listStyle: 'none', margin: '6px 0 0', padding: 0, display: 'grid', gap: 6, fontSize: 12 }}>
+      {failures.classes.map((row) => <li key={row.kind}
+        style={{ display: 'flex', gap: 7, alignItems: 'baseline', flexWrap: 'wrap' }}>
+        <span aria-hidden="true" style={{ color: TONE.warn }}>▲</span>
+        <b>{row.label}</b>
+        <span className="muted" style={{ flex: 1 }}>
+          {row.stages.length ? `while ${row.stages.join(', ')}` : 'stage not reported'}
+          {row.maxAttempts == null ? '' : ` · up to ${row.maxAttempts} attempt${row.maxAttempts === 1 ? '' : 's'}`}
+        </span>
+        <b>{row.runs} run{row.runs === 1 ? '' : 's'}</b>
+      </li>)}
+    </ul>
+    <p className="muted" style={{ fontSize: 11, margin: '7px 0 0' }}>{failures.attributionNote}</p>
+  </div>
+}
+
+/** Site coverage summed across this connector's runs. Absent for connectors that checkpoint no
+ *  sites — a Drive connector has none, and "0 of 0" would be a fact about this panel. */
+function SourceCoverage({ coverage }) {
+  if (!coverage.available) return null
+  return <div style={{ marginTop: 12 }}>
+    <span style={LABEL}>SITE COVERAGE</span>
+    <div role="img" aria-label={`${coverage.done} of ${coverage.total} sites read across ${coverage.runs} runs`}
+      style={{ height: 8, borderRadius: 4, background: 'var(--bg)', border: '1px solid var(--line)',
+        overflow: 'hidden', marginTop: 5 }}>
+      <div style={{ width: `${coverage.pct ?? 0}%`, height: '100%', background: TONE.ok }} />
+    </div>
+    <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+      {coverage.done} of {coverage.total} sites read across {coverage.runs} run
+      {coverage.runs === 1 ? '' : 's'}
+      {coverage.libraries == null ? '' : ` · ${coverage.libraries} libraries`}
+    </div>
+    {coverage.unread > 0 && <p style={{ fontSize: 11, margin: '4px 0 0', color: TONE.warn }}>
+      <span aria-hidden="true">▲ </span>
+      {coverage.unread} site{coverage.unread === 1 ? '' : 's'} not read (blocked or skipped).
+      The exception report says which.
+    </p>}
+  </div>
+}
+
+/** Every run on this connector, worst first. The source node showed counts only; which run is
+ *  failing, and at what stage, is the question a connector panel is opened to answer. */
+function SourceRunList({ rows }) {
+  if (!rows.length) {
+    return <p className="muted" style={{ fontSize: 12, margin: '10px 0 0' }}>
+      No live or recent run is reading from this connector.
+    </p>
+  }
+  return <div style={{ marginTop: 12 }}>
+    <span style={LABEL} id="source-run-list">RUNS ON THIS CONNECTOR</span>
+    {/* Labelled so the list is addressable: the stage names are capitalised by CSS only, so
+        `textContent` (and a screen reader) sees the raw lowercase stage. */}
+    <ul aria-labelledby="source-run-list"
+      style={{ listStyle: 'none', margin: '6px 0 0', padding: 0, display: 'grid', gap: 7, fontSize: 12 }}>
+      {rows.map((row) => <li key={`${row.scanId}:${row.stage}`}
+        style={{ display: 'flex', gap: 7, alignItems: 'baseline', flexWrap: 'wrap' }}>
+        {/* Shape, not colour: failing, running, finished. */}
+        <span aria-hidden="true" style={{ color: row.failing ? TONE.warn : row.status === 'recent' ? TONE.ok : TONE.info }}>
+          {row.failing ? '▲' : row.status === 'recent' ? '●' : '◐'}
+        </span>
+        <b style={{ textTransform: 'capitalize' }}>{row.stage || 'Unknown stage'}</b>
+        <span className="muted" style={{ flex: 1, overflowWrap: 'anywhere' }}>
+          {row.completed}{row.total == null ? '' : ` of ${row.total}`} documents
+          {row.running || row.queued ? ` · ${row.running} running, ${row.queued} waiting` : ''}
+          {row.errorLabel ? ` · ${row.errorLabel}` : ''}
+        </span>
+        <span className="muted">
+          {row.updatedAgoS == null ? NOT_REPORTED : `${formatDuration(row.updatedAgoS)} ago`}
+        </span>
+      </li>)}
+    </ul>
+    {/* The scan id is deliberately not shown: this screen spans tenants, and the run list is
+        about connector behaviour, not about whose scan it is. */}
+    <p className="muted" style={{ fontSize: 11, margin: '7px 0 0' }}>
+      Runs are identified by stage only — this view spans tenants and never names a scan or its owner.
+    </p>
+  </div>
+}
+
+function SourceHealth({ model, state, nowMs, failures, coverage, volume, runs }) {
   return <section aria-label="Source connector health" style={{ ...PANEL, padding: 14 }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
       <b>Connection health</b><StateChip state={state} />
@@ -1288,14 +1455,70 @@ function SourceHealth({ model, state, nowMs }) {
       <Tile label="ACTIVE RUNS" value={model.activeRuns} detail={`${model.recentRuns} finished in the last 15 min`} />
       <Tile label="LATEST SUCCESSFUL READ"
         value={model.latestRead ? `${formatDuration(Math.max(0, Math.round((nowMs - new Date(model.latestRead).getTime()) / 1000)))} ago` : NOT_REPORTED} />
+      {/* Documents, which the snapshot DOES publish per run — the panel previously reported only
+          how many runs there were, not how much work they represent. */}
+      <Tile label="DOCUMENTS" source="live" nowMs={nowMs}
+        value={volume.total == null ? `${volume.completed}` : `${volume.completed} of ${volume.total}`}
+        detail={volume.total == null
+          ? 'No run on this connector has published a document count yet'
+          : volume.unsized
+            ? `${volume.unsized} run${volume.unsized === 1 ? '' : 's'} has not published a size, and is not in the total`
+            : `${volume.pct}% complete across ${volume.runs} run${volume.runs === 1 ? '' : 's'}`} />
       {model.unavailable.map((label) => <Tile key={label} label={label.toUpperCase()} value={NOT_REPORTED}
         detail="The connector layer does not publish this to the activity snapshot"
         source="unavailable" />)}
     </div>
+    <SourceFailures failures={failures} />
+    <SourceCoverage coverage={coverage} />
+    <SourceRunList rows={runs} />
   </section>
 }
 
-function OutputSummary({ model }) {
+/**
+ * Remediate then Release, as the two stages that actually produce durable output.
+ *
+ * Bars are bounded and only drawn where the snapshot published a total: a stage with a completed
+ * count and no denominator gets the count and no percentage, rather than a bar computed against
+ * itself and permanently at 100%.
+ */
+function OutputPipeline({ pipeline }) {
+  return <div style={{ marginTop: 12 }}>
+    <span style={LABEL}>OUTPUT STAGES</span>
+    <ul style={{ listStyle: 'none', margin: '6px 0 0', padding: 0, display: 'grid', gap: 10 }}>
+      {pipeline.present.map((row) => <li key={row.key}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 12 }}>
+          <span style={{ display: 'flex', gap: 6, alignItems: 'baseline' }}>
+            {/* Shape, not colour: working, or done for now. */}
+            <span aria-hidden="true" style={{ color: row.active ? TONE.info : TONE.ok }}>
+              {row.active ? '◐' : '●'}
+            </span>
+            <b>{row.label}</b>
+          </span>
+          <span>
+            {row.completed}{row.total == null ? '' : ` of ${row.total}`}
+            {row.active ? ` · ${row.running} running, ${row.queued} waiting` : ''}
+          </span>
+        </div>
+        {row.pct == null
+          ? <p className="muted" style={{ fontSize: 11, margin: '3px 0 0' }}>
+              This stage has not published a document total, so its share of the estate is
+              {' '}{NOT_REPORTED} — the completed count is not divided by itself to make one.
+            </p>
+          : <><div role="img" aria-label={`${row.label}: ${row.pct}% of ${row.total} documents`}
+              style={{ height: 8, borderRadius: 4, background: 'var(--bg)',
+                border: '1px solid var(--line)', overflow: 'hidden', marginTop: 5 }}>
+              <div style={{ width: `${row.pct}%`, height: '100%', background: TONE.ok }} />
+            </div>
+            <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{row.pct}% of this stage’s documents</div></>}
+      </li>)}
+    </ul>
+    {!!pipeline.missing.length && <p className="muted" style={{ fontSize: 11, margin: '8px 0 0' }}>
+      {pipeline.missing.join(', ')}: {NOT_REPORTED}. {pipeline.missingReason}
+    </p>}
+  </div>
+}
+
+function OutputSummary({ model, pipeline, nowMs }) {
   return <section aria-label="Durable output" style={{ ...PANEL, padding: 14 }}>
     <b>Durable output</b>
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 8, marginTop: 10 }}>
@@ -1303,12 +1526,30 @@ function OutputSummary({ model }) {
         detail="Completed remediation work in view" />
       <Tile label="RESULTS VERIFIED" value={model.verified == null ? NOT_REPORTED : model.verified}
         detail="Completed release work in view" />
-      <Tile label="WRITES AWAITING COMPLETION" value={model.awaitingWrite} />
-      <Tile label="STORAGE FAILURES" value={model.storageFailures == null ? NOT_REPORTED : model.storageFailures}
-        detail={model.storageFailures == null ? undefined : 'Dead-lettered jobs in the reporting window'} />
+      {/* Null when NEITHER stage reported, rather than 0 + 0. And named for what it counts —
+          jobs in flight — not for a write the snapshot never mentions. */}
+      <Tile label="REMEDIATE AND RELEASE IN FLIGHT"
+        source={model.inFlight == null ? 'unavailable' : 'live'} nowMs={nowMs}
+        value={model.inFlight == null ? NOT_REPORTED : model.inFlight}
+        detail={model.inFlight == null
+          ? 'Neither stage is reported in this snapshot'
+          : model.inFlightPartial
+            ? 'Only one of the two stages is reported, so this is a partial count'
+            : 'Running remediate and release jobs'} />
+      {/* WAS "STORAGE FAILURES", which this number is not: queue_composition counts dead-lettered
+          jobs of every type in the window, deliberate stops excluded. */}
+      <Tile label="DEAD-LETTERED JOBS" source={model.deadLettered == null ? 'unavailable' : 'live'}
+        nowMs={nowMs}
+        value={model.deadLettered == null ? NOT_REPORTED : model.deadLettered}
+        detail={model.deadLettered == null ? undefined
+          : `Every job type, not only output writes${model.deadLetterWindowMinutes == null ? ''
+            : `, in the last ${model.deadLetterWindowMinutes} min`}. Deliberate stops excluded.`} />
+      <Tile label="STORAGE-SPECIFIC FAILURES" value={NOT_REPORTED} source="unavailable"
+        detail="ACP's failure classifier has no storage class — it emits rate limit, auth, corrupt or transient" />
       <Tile label="TOTAL OUTPUT SIZE" value={NOT_REPORTED} source="unavailable"
         detail="Azure does not report this to the activity snapshot" />
     </div>
+    <OutputPipeline pipeline={pipeline} />
     <p className="muted" style={{ fontSize: 11, margin: '9px 0 0' }}>
       Original source documents are never modified; corrected copies and their evidence are written alongside.
     </p>
@@ -1439,7 +1680,8 @@ function EventTimeline({ events, filter, onFilter, paused, onPause, showAll, onS
     {events.length > visible.length && <button type="button" className="ghost small"
       style={{ marginTop: 9 }} onClick={onShowAll}>Show all events ({events.length})</button>}
     <p className="muted" style={{ fontSize: 11, margin: '9px 0 0' }}>
-      Events are derived from changes observed between live snapshots in this session. Document
+      Remediation lifecycle events come from the durable run log and survive reconnects. Other
+      events are derived from changes observed between live snapshots in this session. Document
       contents, tokens and credentials are never shown.
     </p>
   </section>
@@ -1568,9 +1810,14 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
       <RequestHealth health={requestHealth(capacity, { windowMinutes: capacity?.metrics_window_minutes || 15 })}
         measuredAt={capacity?.measured_at} nowMs={nowMs} /></>
   } else if (node?.kind === 'source') {
-    primary = <SourceHealth model={sourceModel(node, snapshot)} state={state} nowMs={nowMs} />
+    primary = <SourceHealth model={sourceModel(node, snapshot)} state={state} nowMs={nowMs}
+      failures={sourceFailures(node.source, snapshot)}
+      coverage={sourceCoverage(node.source, snapshot)}
+      volume={sourceVolume(node.source, snapshot)}
+      runs={sourceRuns(node.source, snapshot, { nowMs })} />
   } else if (node?.kind === 'output') {
-    primary = <OutputSummary model={outputModel(snapshot)} />
+    primary = <OutputSummary model={outputModel(snapshot)} nowMs={nowMs}
+      pipeline={outputPipeline(snapshot)} />
   } else {
     primary = <IntakeSummary snapshot={snapshot} state={state} />
   }
