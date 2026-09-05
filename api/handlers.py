@@ -890,17 +890,38 @@ def _rem_event(scan_id: str, kind: str, job: dict | None, file: str | None, **de
     thirteen call sites each remembering to. `scan_event` itself never raises — a narration line
     must never be able to fail the work it narrates — so this cannot either.
 
-    `file` goes in the DETAIL payload, not a column: `scan_events` has no file column, and adding
-    one for this would migrate a table five other event kinds share. The detail is JSON and the
-    readers already decode it.
+    `file` goes in the `document` COLUMN — it used to ride inside the JSON detail, on the
+    reasoning that adding a column would migrate a table five other kinds share. Two requirements
+    overturned that, and both are reads the JSON could not serve:
+
+      * per-document replay (`list_scan_events(document=...)`) needs an index, and
+      * PRD §22's filename suppression needs the name reachable from exactly ONE place, so that
+        withholding it is a property of a projection rather than a search through a blob.
+
+    It is NOT written to `detail` as well. One fact, one home: two copies is two places for a
+    suppression rule to be applied to only one of them.
+
+    `correlation_id` is the batch this event belongs to, taken from the job row. It is what
+    separates two remediation runs over the same scan — `scan_id` alone cannot, and the panel is
+    scoped to the latest batch.
 
     FILENAMES ARE IN HERE. That is deliberate and it is why the read path is owner-scoped —
     `list_scan_events(owner=...)` plus the route's own `get_scan(owner=...)` gate, exactly as PRD
     §13 requires. Nothing here carries extracted document CONTENT, only its name and the counts.
     """
+    payload = (job or {}).get("payload")
+    if isinstance(payload, str):
+        try:
+            import json as _json
+            payload = _json.loads(payload)
+        except (TypeError, ValueError):
+            payload = None
+    correlation = ((job or {}).get("batch_id")
+                   or (payload or {}).get("stage_execution_id"))
     scan_event(scan_id, kind, job_id=(job or {}).get("id"),
                attempt=(job or {}).get("attempts"),
-               detail={"file": file, **detail} if file else (detail or None))
+               document=file or None, correlation_id=correlation or None,
+               detail=detail or None)
 
 
 @handler("remediate_file")

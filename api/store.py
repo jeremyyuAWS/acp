@@ -960,6 +960,28 @@ _SCHEMA = [
     # named a second, non-unique index on the same two columns in the same order; it would be
     # pure dead weight beside this one, so only this ships.
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_scan_events_seq ON scan_events(scan_id, seq)",
+    # ── structured remediation progress (PRD §8, ADR 0052) ───────────────────────────────
+    #
+    # `document` and `correlation_id` are COLUMNS, not `detail` keys, and the reason is not
+    # tidiness. Two things the panel must do are impossible over a JSON blob:
+    #
+    #   * PER-DOCUMENT ORDERING. "Multiple parallel documents keep independent ordered histories"
+    #     is a read — `WHERE scan_id=? AND document=? ORDER BY seq` — and it needs an index.
+    #   * SUPPRESSION. PRD §22 suppresses filenames under some privacy policies. A name reachable
+    #     from exactly one named column can be withheld in one place; a name that can appear
+    #     anywhere inside `detail` has to be hunted, and the hunt is what eventually misses one.
+    #
+    # `correlation_id` is the batch (stage execution) the event belongs to. `scan_id` alone
+    # cannot separate two remediation runs over the same scan, and the panel is emphatically
+    # scoped to the LATEST batch — see remediation_run_facts on what an unscoped count did.
+    "ALTER TABLE scan_events ADD COLUMN IF NOT EXISTS document TEXT",
+    "ALTER TABLE scan_events ADD COLUMN IF NOT EXISTS correlation_id TEXT",
+    # Serves the per-document replay above. Deliberately NOT unique: one document produces many
+    # events, and their order among themselves is `seq`, the same cursor the stream resumes on.
+    "CREATE INDEX IF NOT EXISTS idx_scan_events_document ON scan_events(scan_id, document, seq)",
+    # Retention (PRD §22) prunes by age across every scan at once; without this the sweep is a
+    # full table scan on a table whose whole purpose is to grow.
+    "CREATE INDEX IF NOT EXISTS idx_scan_events_occurred ON scan_events(occurred_at)",
     # Structured releases are owner-scoped independently of provider credentials. One release
     # may have several roots because a SharePoint scan can span multiple Graph drives.
     """CREATE TABLE IF NOT EXISTS release_executions (
@@ -1886,8 +1908,23 @@ class _PgAdapter:
     # escalation. Nothing decides anything from the column; it is evidence for a reviewer.
     # This follows v17's structured-release tables from main; both changes remain additive and
     # safe during a rolling deployment.
-    _SCHEMA_VERSION = 19
-    _SCHEMA_CHECKSUM_AT_VERSION = "a014bf53187661bc4edf3efced0948d7"
+    # v20 adds scan_events.document and .correlation_id — the structured remediation progress
+    # record (ADR 0052) — plus idx_scan_events_document (per-document replay) and
+    # idx_scan_events_occurred (the retention sweep's predicate). Additive on the usual terms and
+    # additive in BEHAVIOUR, which is the half worth checking here because a rolling deploy runs
+    # both generations against one log:
+    #   * an OLD replica writes NULL into both columns. New readers already treat both as
+    #     optional — `document_ref` is None for a NULL document, `latest_material_event_at`
+    #     matches `correlation_id IS NULL` explicitly so a run that began on the old replica is
+    #     not read as having made no progress — so its events stay legible, they simply carry no
+    #     document attribution.
+    #   * an OLD replica never selects either column, so a NEW replica's richer rows are read by
+    #     it exactly as they are today.
+    #   * `seq`, the resume cursor, is untouched. Neither generation can produce a cursor the
+    #     other cannot honour, which is the property a rolling deploy of a resumable stream
+    #     actually depends on.
+    _SCHEMA_VERSION = 20
+    _SCHEMA_CHECKSUM_AT_VERSION = "85349a35f5eae2bbe8a6f80ce5dfa8b7"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -6784,8 +6821,34 @@ class Store:
             out["cancel_requested"] = any(j.get("cancel_requested_at") for j in jobs.values())
             out["cancelled"] = bool(jobs) and all(j.get("status") == "cancelled"
                                                   for j in jobs.values())
-            out["latest_progress_at"] = max(
-                [j["updated_at"] for j in jobs.values() if j.get("updated_at")], default=None)
+            # MATERIAL PROGRESS ONLY (PRD §22, ADR 0052). `touch_job` writes `updated_at` on
+            # every lease heartbeat, so the old `max(updated_at)` here was a liveness clock
+            # wearing a progress clock's name: a worker wedged inside one document refreshed it
+            # every few seconds indefinitely, the stall predicate could never become claimable,
+            # and the panel reported progress on the strength of a thread still breathing.
+            #
+            # Two rules give an honest answer without inventing one:
+            #   * a job that is NOT running cannot be heartbeating, so its `updated_at` IS a
+            #     material transition (it moved to done/failed/dead/cancelled);
+            #   * a RUNNING job's material progress is whatever the durable event log says, and
+            #     nothing else. No event, no claim.
+            terminal_stamps = [j["updated_at"] for j in jobs.values()
+                               if j.get("updated_at") and j.get("status") != "running"]
+            material_event_at = self.latest_material_event_at(scan_id, correlation_id=batch_id)
+            if material_event_at:
+                terminal_stamps.append(material_event_at)
+            # None (no terminal row, no material event) is UNKNOWN and must stay None. Falling
+            # back to a heartbeat here would re-introduce the bug above with an extra step, and
+            # falling back to `started_at` would report a run as freshly progressing at the exact
+            # moment it has produced nothing at all.
+            out["latest_progress_at"] = max(terminal_stamps, default=None)
+            out["latest_material_event_at"] = material_event_at
+            # Lease activity, reported SEPARATELY and never mixed into progress. `locked_at` is
+            # what touch_job rewrites on each heartbeat (see its docstring), so among running
+            # jobs it is precisely "when a worker last said it was alive".
+            out["latest_heartbeat_at"] = max(
+                [j["locked_at"] for j in jobs.values()
+                 if j.get("locked_at") and j.get("status") == "running"], default=None)
             out["started_at"] = min(
                 [j["created_at"] for j in jobs.values() if j.get("created_at")],
                 default=run.get("started_at"))
@@ -8871,13 +8934,46 @@ class Store:
         "remediate.review_requested", "remediate.document_completed",
     })
 
+    #: The kinds that mean THE RUN MOVED. Every one is written after a durable change to a
+    #: document's state, so its timestamp is evidence that work happened — which is what a stall
+    #: threshold, a throughput window and a progress age are entitled to measure.
+    MATERIAL_SCAN_EVENT_KINDS = frozenset({
+        "remediate.accepted", "remediate.fix_applied", "remediate.verified",
+        "remediate.verification_failed", "remediate.delivered", "remediate.delivery_failed",
+        "remediate.review_requested", "remediate.document_completed",
+    })
+
+    #: The kinds that mean A WORKER IS ALIVE, or stopped being. These describe the LEASE, not the
+    #: document: a reclaim says the previous holder died, a retry says the queue will try again.
+    #: Both are worth showing and neither is progress.
+    #:
+    #: WHY THE DISTINCTION IS LOAD-BEARING. `touch_job` writes `updated_at` on every heartbeat,
+    #: and `remediation_run_facts` read the newest `updated_at` as the run's latest progress. A
+    #: worker wedged inside one document therefore refreshed the run's progress clock every few
+    #: seconds forever: the stall predicate could never fire, and the panel reported a run making
+    #: progress because a thread was still breathing. A heartbeat proves a process is running; it
+    #: says nothing whatever about the document that process is holding.
+    LEASE_SCAN_EVENT_KINDS = frozenset({"scan.retrying", "scan.interrupted"})
+
+    @classmethod
+    def is_material_event(cls, kind: str | None) -> bool:
+        """True when this kind is evidence the run moved; false for lease/heartbeat activity.
+
+        An UNKNOWN kind is not material. That direction is deliberate: treating an unrecognised
+        kind as progress would let any telemetry line added later silently reset a stall clock,
+        which is the failure this classification exists to prevent. Unknown reads as unknown.
+        """
+        return kind in cls.MATERIAL_SCAN_EVENT_KINDS
+
     _SCAN_EVENT_SEQ_ATTEMPTS = 4
 
     def append_scan_event(self, scan_id: str, kind: str, *, phase: str | None = None,
                           job_id: str | None = None, worker_id: str | None = None,
                           attempt: int | None = None, detail: dict | None = None,
                           owner_email: str | None = None,
-                          occurred_at: str | None = None) -> int | None:
+                          occurred_at: str | None = None,
+                          document: str | None = None,
+                          correlation_id: str | None = None) -> int | None:
         """Append one lifecycle event and return its per-scan `seq` (None if it was not written).
 
         RAISES on a bad `kind` or a missing `scan_id`, and only on those — they are programming
@@ -8904,6 +9000,12 @@ class Store:
         contended (run-level transitions come one at a time per job).
 
         `detail` is a dict, stored as JSON. Keep it small and narrative.
+
+        `document` and `correlation_id` are COLUMNS, not detail keys — see the schema comment for
+        why. The short version: per-document replay needs an index, and a filename that can only
+        ever live in one named column can be suppressed in one place (PRD §22). Do NOT also put
+        the filename in `detail`; two copies of one fact is two places for a suppression rule to
+        be applied to only one of them.
         """
         if not scan_id:
             raise ValueError("append_scan_event requires a scan_id")
@@ -8920,8 +9022,9 @@ class Store:
             except (TypeError, ValueError):
                 payload = None      # unserializable detail loses the detail, never the event
         sql = ("INSERT INTO scan_events"
-               "(event_id,scan_id,seq,occurred_at,kind,phase,job_id,worker_id,attempt,detail,owner_email) "
-               "SELECT %s,%s,COALESCE(MAX(seq),0)+1,%s,%s,%s,%s,%s,%s,%s,%s "
+               "(event_id,scan_id,seq,occurred_at,kind,phase,job_id,worker_id,attempt,detail,"
+               "owner_email,document,correlation_id) "
+               "SELECT %s,%s,COALESCE(MAX(seq),0)+1,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s "
                "FROM scan_events WHERE scan_id=%s")
         for _ in range(self._SCAN_EVENT_SEQ_ATTEMPTS):
             event_id = uuid.uuid4().hex
@@ -8929,7 +9032,7 @@ class Store:
                 with self._db.cursor() as cur:
                     self._db.execute(cur, sql, (
                         event_id, scan_id, now, kind, phase, job_id, worker_id, attempt,
-                        payload, owner_email, scan_id))
+                        payload, owner_email, document, correlation_id, scan_id))
                 # Read back rather than recomputing MAX: another writer may have appended in the
                 # gap, and reporting ITS seq as this event's would be a quietly wrong return value.
                 with self._db.cursor() as cur:
@@ -8974,7 +9077,9 @@ class Store:
         return (int(lo) if lo is not None else None, int(hi) if hi is not None else None)
 
     def list_scan_events(self, scan_id: str, *, after_seq: int | None = None,
-                         owner: str | None = None, limit: int = 500) -> list[dict]:
+                         owner: str | None = None, limit: int = 500,
+                         document: str | None = None,
+                         correlation_id: str | None = None) -> list[dict]:
         """This scan's lifecycle events in `seq` order, oldest first. Never raises — an unknown
         scan, a foreign one, or an unavailable store all read as [].
 
@@ -8987,6 +9092,13 @@ class Store:
         the access check.
 
         `detail` comes back as the dict it was written as (or None), never as a raw JSON string.
+
+        `document` narrows to ONE document's history, still in `seq` order. That read is the whole
+        reason `document` is a column: PRD §6D's live workstream shows several documents being
+        remediated at once, and each one's own account has to stay ordered and separable from the
+        others. One scan-wide log with a per-document filter, rather than a log per document,
+        keeps a single ordering guarantee — the same argument SCAN_EVENT_KINDS makes for not
+        forking a remediation_events table off this one.
         """
         import json as _json
         where, params = "scan_id=%s", [scan_id]
@@ -8994,6 +9106,10 @@ class Store:
             where += " AND seq>%s"; params.append(int(after_seq))
         if owner:
             where += " AND owner_email=%s"; params.append(owner)
+        if document is not None:
+            where += " AND document=%s"; params.append(document)
+        if correlation_id is not None:
+            where += " AND correlation_id=%s"; params.append(correlation_id)
         try:
             with self._db.cursor() as cur:
                 self._db.execute(cur,
@@ -9013,14 +9129,144 @@ class Store:
                 r["detail"] = None
         return rows
 
+    #: PRD §22's retention decision, as two numbers rather than a sentence. "24 hours or 10,000
+    #: events per run, WHICHEVER IS GREATER" — so a row survives if it is inside EITHER window,
+    #: and is only deleted when it is outside BOTH. Read the other way round (delete when outside
+    #: either) a busy run would lose its last hour the moment it passed ten thousand events, and a
+    #: quiet run would lose a 200-event history to nothing but the passage of a day.
+    SCAN_EVENT_RETENTION_HOURS = 24
+    SCAN_EVENT_RETENTION_COUNT = 10_000
+
+    def prune_scan_events(self, scan_id: str | None = None, *,
+                          max_age_hours: int | None = None,
+                          max_events: int | None = None,
+                          max_runs: int = 200) -> int:
+        """Apply the retention decision and return how many rows were removed. Never raises.
+
+        Pruning is what makes `scan_event_bounds`' `oldest` check load-bearing rather than
+        hypothetical: ADR 0051 wrote the "log pruned past your cursor" branch for a condition
+        nothing could produce, precisely so that resume would not begin losing events silently on
+        the day retention landed. This is that day, so the branch is now exercised by a fixture
+        that prunes for real rather than by a hand-built DELETE.
+
+        DELETION IS PER RUN, and it has to be: both halves of the policy are per-run quantities.
+        A global "newest 10,000 events" would let one busy scan evict another's entire history.
+
+        `scan_id=None` sweeps, bounded by `max_runs` so one tick cannot walk an unbounded table.
+        Scans are visited oldest-event-first, which is where the prunable rows are.
+        """
+        from datetime import datetime, timedelta, timezone
+        hours = self.SCAN_EVENT_RETENTION_HOURS if max_age_hours is None else int(max_age_hours)
+        keep = self.SCAN_EVENT_RETENTION_COUNT if max_events is None else int(max_events)
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        removed = 0
+        try:
+            if scan_id is not None:
+                targets = [scan_id]
+            else:
+                with self._db.cursor() as cur:
+                    self._db.execute(cur,
+                        "SELECT scan_id FROM scan_events GROUP BY scan_id "
+                        "HAVING MIN(occurred_at)<%s ORDER BY MIN(occurred_at) LIMIT %s",
+                        (cutoff, max(1, int(max_runs))))
+                    targets = [r["scan_id"] for r in (self._db.fetchall(cur) or [])
+                               if r.get("scan_id")]
+            for sid in targets:
+                _oldest, newest = self.scan_event_bounds(sid)
+                if newest is None:
+                    continue
+                # The count window as a seq boundary: everything at or below this is outside the
+                # "newest N events" half. When the run has fewer than N events the boundary is
+                # non-positive and no row can satisfy the seq predicate — the age half alone can
+                # never delete anything, which is exactly what "whichever is greater" means.
+                seq_floor = newest - keep
+                if seq_floor <= 0:
+                    continue
+                with self._db.cursor() as cur:
+                    self._db.execute(cur,
+                        "DELETE FROM scan_events WHERE scan_id=%s AND seq<=%s AND occurred_at<%s",
+                        (sid, seq_floor, cutoff))
+                    removed += getattr(cur, "rowcount", 0) or 0
+        except Exception:
+            # Retention is housekeeping. Failing it must never fail the sweep that runs it, and a
+            # row kept too long is a cost; a raised exception here would stop lease reclamation.
+            return removed
+        return removed
+
+    def latest_material_event_at(self, scan_id: str,
+                                 correlation_id: str | None = None) -> str | None:
+        """When this run last MOVED, from the durable log — or None when nothing is recorded.
+
+        None means UNKNOWN, and every caller is required to treat it that way. It is not "no
+        progress" and it is certainly not "now": a run whose events were pruned, or one that
+        predates the material/lease distinction, has an unknown progress age, and the honest
+        rendering of an unknown age is to make no claim about staleness at all (see
+        remediation_run._applicable_states, where a `None` age makes the stall predicate
+        unclaimable rather than true or false).
+        """
+        kinds = sorted(self.MATERIAL_SCAN_EVENT_KINDS)
+        if not kinds:
+            return None
+        where = "scan_id=%s AND kind IN (" + ",".join(["%s"] * len(kinds)) + ")"
+        params: list = [scan_id, *kinds]
+        if correlation_id is not None:
+            # Older events carry no correlation id at all. Including them keeps a run that began
+            # before this column existed from reading as though it had never made progress.
+            where += " AND (correlation_id=%s OR correlation_id IS NULL)"
+            params.append(correlation_id)
+        try:
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    f"SELECT MAX(occurred_at) AS newest FROM scan_events WHERE {where}",
+                    tuple(params))
+                row = self._db.fetchone(cur) or {}
+        except Exception:
+            return None
+        return row.get("newest") or None
+
+    #: The app setting that decides whether a run's own owner sees document names in its live
+    #: narrative. `visible` is the default because PRD §22's decision is "show names to users
+    #: already authorized for the scan"; a deployment whose document names are themselves
+    #: sensitive (a matter number, a patient identifier, a candidate's name in a filename) sets
+    #: `suppressed` and every surface below withholds them.
+    FILENAME_PRIVACY_SETTING = "remediation_filename_privacy"
+
+    def remediation_filename_privacy(self, scan_id: str | None = None) -> str:
+        """``"visible"`` or ``"suppressed"`` for this run. Never raises.
+
+        AN UNREADABLE POLICY SUPPRESSES. Every other unknown in this file resolves to "make no
+        claim", and this one cannot: the two candidate answers are not symmetric. Guessing
+        `visible` discloses a name the deployment may have configured away, and that is not
+        recoverable once a frame has been sent; guessing `suppressed` costs a label on a card the
+        owner can still identify by its `document_ref`. So the fail-safe direction is the closed
+        one, and it is the only place in this module where an unknown does not stay unknown.
+
+        `scan_id` is accepted and currently unused: the policy is deployment-wide today, and the
+        parameter is what a per-run or per-workspace override plugs into without changing a
+        single call site.
+        """
+        try:
+            value = (self.get_setting(self.FILENAME_PRIVACY_SETTING) or "").strip().lower()
+        except Exception:
+            return "suppressed"
+        if not value:
+            import os
+            value = (os.environ.get("ACP_REMEDIATION_FILENAME_PRIVACY") or "").strip().lower()
+        return "suppressed" if value == "suppressed" else "visible"
+
     def recent_remediation_event_summaries(self, scan_ids: list[str], *,
                                            limit_per_scan: int = 12) -> dict[str, list[dict]]:
         """Bounded, payload-safe remediation events for the cross-user operations view.
 
-        The customer-facing stream may carry a filename in ``detail``. Live Operations spans
-        workspace users, so this projection deliberately keeps only numeric counts, WCAG
-        criterion and destination. The window function prevents one noisy run from consuming the
-        whole result while still doing one database read for every visible run.
+        Live Operations spans workspace users, so this projection deliberately keeps only numeric
+        counts, WCAG criterion and destination. The window function prevents one noisy run from
+        consuming the whole result while still doing one database read for every visible run.
+
+        THE FILENAME IS NOT SELECTED, and that is the point of the column existing. PRD §22
+        suppresses names in shared operational views; with `document` as its own column the
+        suppression is the absence of one identifier from one SELECT list, checkable by reading
+        the query. While the name lived inside `detail` this method had to allow-list its way
+        around it, and an allow-list is a rule someone extends without noticing what it protects.
         """
         ids = sorted({str(scan_id) for scan_id in scan_ids if scan_id})
         limit = max(1, min(int(limit_per_scan), 50))

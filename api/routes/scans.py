@@ -613,6 +613,7 @@ async def remediate_scan(sid: str, request: Request):
     if execution["job_ids"] and not execution.get("reused"):
         import handlers
         handlers.scan_event(sid, "remediate.accepted", job_id=execution["job_ids"][0],
+                            correlation_id=execution["batch_id"],
                             detail={"documents": len(execution["job_ids"]),
                                     "batch_id": execution["batch_id"]})
     return {"scan_id": sid, "enqueued": len(execution["job_ids"]),
@@ -1605,6 +1606,83 @@ def _resume_plan(sid: str, raw_cursor: str | None) -> tuple[int | None, str | No
     return (cursor, None)
 
 
+def _project_event(event: dict, sid: str, privacy: str) -> dict:
+    """One durable event as it goes on the wire: structured, correlated, and privacy-checked.
+
+    THE PROJECTION IS THE ENFORCEMENT POINT, and there is exactly one of it. PRD §22 lets a
+    deployment suppress document names; a rule applied at each of several read paths is a rule
+    that eventually gets applied at all but one of them, so both the stream and
+    `GET /scans/{sid}/events` come through here.
+
+    Suppression removes the NAME and keeps the IDENTITY. `document_ref` is a per-run,
+    non-reversible handle (see remediation_run.document_ref), so a client can still keep three
+    parallel documents apart and each one's history in order — which is what PRD §6D actually
+    needs the name for — without ever being told what any of them is called.
+
+    `detail` is scrubbed of any `file`/`filename`/`path` key under suppression as well. Nothing
+    writes those today — `_rem_event` puts the name in the column and nowhere else — and the
+    scrub is here because "nothing writes it today" is a fact about today, and the cost of being
+    wrong about it is a disclosure that cannot be taken back.
+    """
+    import remediation_run
+    out = dict(event)
+    out["document_ref"] = remediation_run.document_ref(sid, event.get("document"))
+    out["material"] = core.store.is_material_event(event.get("kind"))
+    if privacy == "suppressed":
+        out["document"] = None
+        out["document_suppressed"] = True
+        detail = out.get("detail")
+        if isinstance(detail, dict):
+            out["detail"] = {k: v for k, v in detail.items()
+                             if k not in ("file", "filename", "path", "source_path")}
+    return out
+
+
+def _stream_is_finished(out: dict) -> bool:
+    """Whether the remediation stream may close (PRD §21, ADR 0052's second open question).
+
+    IT USED TO CLOSE ON `in_flight == 0`, which is a statement about JOBS, not about the run. A
+    run whose last document finished still owes corrected-copy delivery and final reconciliation,
+    and the snapshot has always said so — `completing` / "delivery_reconciliation_outstanding" is
+    a real state it can be in with zero jobs in flight. Closing there handed the client a `done`
+    for work that was not done, and left the remaining transitions to the fallback poll.
+
+    So the stream now closes on the SNAPSHOT'S OWN judgement: terminal, with no delivery pending.
+    Those are the same words `derive_run_state` uses, which is the point — one definition of
+    finished, not a second one implied by a queue depth.
+
+    IT STAYS OPEN FOR RECONCILIATION, NOT FOR A HUMAN. `completing` is a state the run leaves on
+    its own — the corrected copies are being written and the run is reconciling itself — so a
+    client watching it will see the transition. `needs_attention` is not: it waits on a review
+    decision that may be hours away, and holding a connection open for that would be a leak
+    dressed up as liveness. A run parked in review closes exactly as it does today and the
+    client's fallback poll takes it from there.
+
+    THIS CAN ONLY EVER EXTEND THE STREAM, never shorten it. The first clause is the condition
+    that shipped; everything after it can only answer "not yet".
+
+    NO SNAPSHOT MEANS FALL BACK TO `in_flight`, never to "finished". The snapshot build is
+    wrapped in a try/except above precisely so a stream failure cannot take the stream down; if
+    that swallowed, this must degrade to the behaviour that shipped rather than assert completion
+    it has no evidence for.
+    """
+    if out.get("in_flight"):
+        return False
+    snapshot = out.get("snapshot")
+    if not isinstance(snapshot, dict):
+        return True
+    # `completing` reads exactly "delivery_reconciliation_outstanding". Checked in `also` as well
+    # as in `state`, because precedence displays the more severe headline: a run that owes both a
+    # review decision and a delivery shows `needs_attention` and carries `completing` alongside.
+    if "completing" in {snapshot.get("state"), *(snapshot.get("also") or ())}:
+        return False
+    delivery = snapshot.get("delivery")
+    pending = delivery.get("pending") if isinstance(delivery, dict) else None
+    # An unknown pending count is not zero. Staying open costs a connection until the iteration
+    # cap; closing on an unknown would tell the client delivery finished when nothing said so.
+    return pending is not None and int(pending) <= 0
+
+
 @router.get("/scans/{sid}/remediation/stream")
 async def stream_remediation_status(sid: str, request: Request):
     """Push the owner-scoped remediation status whenever it changes.
@@ -1633,6 +1711,11 @@ async def stream_remediation_status(sid: str, request: Request):
         raise HTTPException(404, "scan not found")
 
     after_seq, reconcile = _resume_plan(sid, request.headers.get("Last-Event-ID"))
+    # Resolved ONCE, at connect, and applied to every frame this connection emits. Re-reading it
+    # per frame would let a policy change mid-stream produce a connection that disclosed names in
+    # its first half — the change takes effect on the next connect, which is a bounded window and
+    # a legible rule.
+    privacy = core.store.remediation_filename_privacy(sid)
 
     async def _gen():
         last = None
@@ -1652,7 +1735,7 @@ async def stream_remediation_status(sid: str, request: Request):
                 # rendered and sends it back on the next connect.
                 yield (f"id: {event['seq']}\n"
                        "event: remediation-event\n"
-                       f"data: {_json.dumps(event, default=str)}\n\n")
+                       f"data: {_json.dumps(_project_event(event, sid, privacy), default=str)}\n\n")
             cursor = missed[-1]["seq"] if missed else after_seq
         else:
             # FIRST CONNECT, no cursor. Start from the newest event rather than 0: this client has
@@ -1673,7 +1756,8 @@ async def stream_remediation_status(sid: str, request: Request):
                 for event in fresh:
                     yield (f"id: {event['seq']}\n"
                            "event: remediation-event\n"
-                           f"data: {_json.dumps(event, default=str)}\n\n")
+                           f"data: {_json.dumps(_project_event(event, sid, privacy), default=str)}"
+                           "\n\n")
                 if fresh:
                     cursor = fresh[-1]["seq"]
 
@@ -1708,7 +1792,11 @@ async def stream_remediation_status(sid: str, request: Request):
                 if idle >= _HEARTBEAT_EVERY:
                     idle = 0
                     yield ": keep-alive\n\n"
-            if not out.get("in_flight"):
+            # NOT `in_flight == 0` any more — see _stream_is_finished. Terminal document work is
+            # not the end of the run while corrected copies are still being delivered, and the
+            # client's `onDone` drives the batch's finalization, so ending early finalizes over
+            # unfinished delivery.
+            if _stream_is_finished(out):
                 yield "event: done\ndata: {\"done\": true}\n\n"
                 return
             await asyncio.sleep(_STREAM_INTERVAL_S)
@@ -2163,7 +2251,13 @@ def scan_history(sid: str, request: Request, after_seq: int | None = Query(None,
     """
     if core.store.get_scan(sid, owner=_owner(request)) is None:
         return {"available": False, "reason": "scan_not_found"}
-    events = core.store.list_scan_events(sid, after_seq=after_seq, limit=limit)
+    # THE POLLING FALLBACK READS THE SAME PROJECTION AS THE STREAM. Two paths to the same rows
+    # with one privacy rule between them is how a suppressed name gets served by the half nobody
+    # was looking at — and this is the half a client falls back to precisely when the stream is
+    # unavailable, so it is the less-watched one by construction.
+    privacy = core.store.remediation_filename_privacy(sid)
+    events = [_project_event(e, sid, privacy)
+              for e in core.store.list_scan_events(sid, after_seq=after_seq, limit=limit)]
     return {"available": True, "scan_id": sid, "events": events, "count": len(events),
             # The cursor for the next call. None on an empty page rather than 0 — 0 is a real
             # `after_seq` meaning "from the start", and returning it for "nothing here" would make
