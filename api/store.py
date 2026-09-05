@@ -4415,6 +4415,57 @@ class Store:
                 return None
         return row
 
+    def active_workflows(self, owner: str) -> list[dict]:
+        """Payload-free active pipeline stages owned by ``owner``.
+
+        This is the durable answer used after sign-in. Browser storage is deliberately
+        cleared at sign-out, so continuity must come from queued/running server work rather
+        than a client-side job id. One row is returned per scan/stage; document names and job
+        payloads never cross this boundary.
+        """
+        kinds = {
+            "scan_discover": "discover", "scan_folder": "discover", "scan_batch": "discover",
+            "scan_file": "assess", "scan_assess": "assess", "assess_trace": "assess",
+            "remediate_file": "remediate", "rescore_file": "remediate",
+            "apply_approved_values": "remediate",
+        }
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT j.id,j.scan_id,j.type,j.status,j.created_at,j.updated_at,"
+                "sr.source,sr.files,sr.files_done "
+                "FROM jobs j JOIN scan_runs sr ON sr.id=j.scan_id "
+                "WHERE sr.owner_email=%s AND j.status IN ('queued','running') "
+                "ORDER BY j.updated_at DESC LIMIT 5000", (owner,))
+            rows = self._db.fetchall(cur)
+
+        grouped: dict[tuple[str, str], dict] = {}
+        for row in rows:
+            stage = kinds.get(row.get("type"))
+            if not stage:
+                continue
+            key = (row["scan_id"], stage)
+            item = grouped.setdefault(key, {
+                "scan_id": row["scan_id"], "stage": stage,
+                "source": row.get("source") or "unknown",
+                "queued": 0, "running": 0, "total": 0,
+                "files": int(row.get("files") or 0),
+                "files_done": int(row.get("files_done") or 0),
+                "started_at": row.get("created_at"),
+                "updated_at": row.get("updated_at"), "job_id": None,
+            })
+            item["total"] += 1
+            item[row["status"]] += 1
+            if row["status"] == "running" and item["job_id"] is None:
+                item["job_id"] = row.get("id")
+            if str(row.get("created_at") or "") < str(item.get("started_at") or ""):
+                item["started_at"] = row.get("created_at")
+            if str(row.get("updated_at") or "") > str(item.get("updated_at") or ""):
+                item["updated_at"] = row.get("updated_at")
+        priority = {"remediate": 3, "assess": 2, "discover": 1}
+        return sorted(grouped.values(),
+                      key=lambda item: (str(item.get("updated_at") or ""),
+                                        priority.get(item["stage"], 0)), reverse=True)
+
     def set_total_folders(self, scan_id: str, count: int) -> None:
         """Record how many scan_folder jobs were emitted for this scan (ADR 0004 item 6).
 
@@ -5772,6 +5823,71 @@ class Store:
                 "by_surface": _group("surface"),
                 "failure_reasons": failure_reasons,
             }
+
+    def ai_provider_health_stats(self, provider: str, *, window_hours: int = 24) -> dict:
+        """Endpoint health snapshot for one cloud provider (ADR 0019/0016). All numbers come
+        directly from ai_calls rows — nothing is fabricated or estimated.
+
+        Returns:
+          calls          total calls in window
+          ok             successful calls (ok=1)
+          errors         failed calls
+          avg_latency_ms mean latency of successful calls (0 when no successful calls)
+          p95_latency_ms 95th-percentile latency of successful calls (None when < 2 data points)
+          throttle_count calls that ended with reason='http_429' — HF rate-limits the endpoint
+          cold_start_count successful calls with latency > 30 000 ms — dedicated-endpoint cold start
+          last_call_ts   ISO timestamp of the most recent call (None when no calls in window)
+        """
+        from datetime import datetime, timedelta, timezone
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=window_hours)).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS calls, COALESCE(SUM(ok),0) AS ok_count, "
+                "COALESCE(AVG(CASE WHEN ok=1 THEN latency_ms END),0) AS avg_ok_ms, "
+                "MAX(ts) AS last_call_ts "
+                "FROM ai_calls WHERE provider=%s AND ts>=%s",
+                (provider, cutoff))
+            row = self._db.fetchone(cur) or {}
+
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM ai_calls "
+                "WHERE provider=%s AND ts>=%s AND reason='http_429'",
+                (provider, cutoff))
+            throttle_row = self._db.fetchone(cur) or {}
+
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM ai_calls "
+                "WHERE provider=%s AND ts>=%s AND ok=1 AND latency_ms>30000",
+                (provider, cutoff))
+            cs_row = self._db.fetchone(cur) or {}
+
+            # p95 computed in Python — percentile_cont is Postgres-only; SQLite is used in dev
+            self._db.execute(cur,
+                "SELECT latency_ms FROM ai_calls "
+                "WHERE provider=%s AND ts>=%s AND ok=1 ORDER BY latency_ms",
+                (provider, cutoff))
+            latencies = [r["latency_ms"] for r in self._db.fetchall(cur)
+                         if r.get("latency_ms") is not None]
+
+        calls = int(row.get("calls") or 0)
+        ok_count = int(row.get("ok_count") or 0)
+        p95: int | None = None
+        if len(latencies) >= 2:
+            p95 = int(latencies[min(int(len(latencies) * 0.95), len(latencies) - 1)])
+        elif len(latencies) == 1:
+            p95 = int(latencies[0])
+        return {
+            "provider": provider,
+            "window_hours": window_hours,
+            "calls": calls,
+            "ok": ok_count,
+            "errors": calls - ok_count,
+            "avg_latency_ms": int(row.get("avg_ok_ms") or 0),
+            "p95_latency_ms": p95,
+            "throttle_count": int(throttle_row.get("n") or 0),
+            "cold_start_count": int(cs_row.get("n") or 0),
+            "last_call_ts": row.get("last_call_ts"),
+        }
 
     def list_applied_fixes(self, scan_id: str, limit: int = 200) -> list[dict]:
         """The AI fixes that wrote a concrete value in this scan, newest first — real

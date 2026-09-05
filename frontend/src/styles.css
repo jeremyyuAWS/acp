@@ -307,6 +307,13 @@ button.small { padding: 6px 12px; font-size: 13px; }
 .runinfo-abs { color: var(--muted); }
 .runinfo-source { padding: 1px 7px; border-radius: 20px; background: #e6f1fb; color: #185fa5; font-size: 11px; font-weight: 500; }
 .runinfo-build { margin-left: auto; font-size: 11px; color: var(--muted); font-family: var(--mono, monospace); }
+.workflow-continuity { margin: 12px 16px; padding: 12px 14px; border: 1px solid #c4b5fd; border-left: 4px solid #7c3aed; border-radius: 8px; background: #f5f3ff; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.workflow-continuity > div:first-child { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.workflow-continuity strong { color: #3b2352; font-size: 14px; }
+.workflow-continuity span { color: var(--muted); font-size: 12px; text-transform: capitalize; }
+.workflow-continuity-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+.workflow-continuity-actions button { white-space: nowrap; }
+@media (max-width: 640px) { .workflow-continuity { align-items: stretch; flex-direction: column; } .workflow-continuity-actions { flex-wrap: wrap; } }
 
 /* keyboard focus — this is an accessibility product; it should be accessible */
 button:focus-visible, a:focus-visible, .tab:focus-visible, .fchip:focus-visible,

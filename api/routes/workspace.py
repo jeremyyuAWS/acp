@@ -114,4 +114,11 @@ def bootstrap(request: Request):
         "overview": overview,
         "scans": scans,
         "active_job": core.store.active_scan(owner=owner) or {},
+        "active_workflows": core.store.active_workflows(owner),
     }
+
+
+@router.get("/workspace/active-workflows")
+def active_workflows(request: Request):
+    """Small, owner-scoped continuity read used while the workspace is open."""
+    return {"active_workflows": core.store.active_workflows(_owner(request))}

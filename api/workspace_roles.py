@@ -137,6 +137,31 @@ def assign_role(store, *, email: str, role_id: str, actor: str | None = None) ->
     return record
 
 
+def access_pending(store, email: str | None) -> bool:
+    """Is this person waiting for an administrator to give them a role?
+
+    A DISTINCT STATE FROM "UNASSIGNED", and the whole reason it is stored rather than inferred.
+    Both have no role id, and the resolver treats them as opposites:
+
+      unassigned  an allow-listed or invited person nobody has narrowed yet -> Platform User,
+                  because turning enforcement on must not lock out a workspace that was working
+                  five minutes earlier (PRD §15).
+      pending     someone who arrived through just-in-time roster creation on a deployment that
+                  configures NO default role (`ACP_DEFAULT_SIGNIN_ROLE` empty) -> nothing, and a
+                  screen that says so. The operator asked for new arrivals to be held.
+
+    Inferring the difference is not possible from the role id alone, and guessing it wrong is
+    consequential in both directions: read pending as unassigned and the deployment that asked to
+    hold people hands every new arrival every workflow tab; read unassigned as pending and turning
+    the flag on empties the product for everyone who was already using it.
+    """
+    target = (email or "").strip().lower()
+    if not target:
+        return False
+    person = next((p for p in store.get_people() if p.get("email") == target), None)
+    return (person or {}).get("status") == "pending"
+
+
 def role_id_for_email(store, email: str) -> str | None:
     """The role assigned to this person, or None if they have none.
 
@@ -364,6 +389,15 @@ def _enforced_decision(store, who: str, *, tenant: str, role_id: str | None, rol
     if not who:
         return {"role": None, "tabs": rbac.tabs_payload({}), "capabilities": [],
                 "version": 0, "enforced": True, "owner": False}
+
+    # HELD PENDING, checked before the default and after the suspension check. This is the
+    # deployment that set `ACP_DEFAULT_SIGNIN_ROLE` empty and asked for new arrivals to wait for a
+    # human; handing them the default here would answer a question the operator explicitly
+    # declined to answer that way. The flag rides along so the SPA can say "Access pending" rather
+    # than render a shell with every tab hidden, which is indistinguishable from a broken build.
+    if not role_id and access_pending(store, who):
+        return {"role": None, "tabs": rbac.tabs_payload({}), "capabilities": [],
+                "version": 0, "enforced": True, "owner": False, "pending": True}
 
     if not role_id:
         default = _stored_access(store, tenant_id=tenant, role_id=rbac.PLATFORM_USER)

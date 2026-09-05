@@ -12,7 +12,7 @@ import { armNotifyOnComplete, notifyScanComplete, notifyScanFailed, notification
 import { refreshDriveToken } from './driveAuth.js'
 import { refreshSPToken } from './spAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, getMe, getMyAccess, getCapability, listScans, getScan, NOT_MODIFIED, getActiveScan, getWorkspaceBootstrap, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, SCAN_UNAVAILABLE, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
+import { getSources, getRubric, getConfig, getMe, getMyAccess, getCapability, listScans, getScan, NOT_MODIFIED, getActiveScan, getWorkspaceBootstrap, getActiveWorkflows, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, SCAN_UNAVAILABLE, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
 import { beginOrResumeIntent, completeIntent, abandonIntent, outcomeIsUncertain } from './submitIntent'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
@@ -24,6 +24,7 @@ import { RuleBreakdown } from './Transparency.jsx'
 import Logo from './Logo.jsx'
 import ChatWidget from './ChatWidget.jsx'
 import VersionToast from './VersionToast.jsx'
+import WorkflowContinuityBanner, { primaryActiveWorkflow } from './WorkflowContinuityBanner.jsx'
 // Lazy: KnowledgeGraph statically imports all of d3 (~250 kB min) — the only heavy
 // dep not already behind a dynamic import. Loading it on tab entry keeps d3 out of
 // the main chunk entirely.
@@ -341,6 +342,8 @@ export default function App() {
   // that matters is the server's; see the header of access.js for why this direction is right
   // here and the opposite direction is right there.
   const [access, setAccess] = useState(null)
+  const [activeWorkflows, setActiveWorkflows] = useState([])
+  const primaryWorkflow = useMemo(() => primaryActiveWorkflow(activeWorkflows), [activeWorkflows])
 
   // PRD §10 — the app's own default view is 'overview'. A role that hides it must move the user
   // on rather than greeting them with Access restricted for a tab they never chose. Only the
@@ -676,6 +679,23 @@ export default function App() {
     return () => clearInterval(id)
   }, [me, busy])
 
+  // Session storage is intentionally cleared on sign-out. Rejoin comes from owner-scoped
+  // server state instead, refreshed through a small endpoint so completion removes the banner
+  // without repeatedly downloading the whole workspace bootstrap.
+  useEffect(() => {
+    if (!me) return
+    let alive = true
+    const refresh = () => {
+      if (document.hidden) return
+      getActiveWorkflows().then((r) => {
+        if (alive) setActiveWorkflows(r?.active_workflows || [])
+      }).catch(() => {})
+    }
+    const id = setInterval(refresh, 15_000)
+    document.addEventListener('visibilitychange', refresh)
+    return () => { alive = false; clearInterval(id); document.removeEventListener('visibilitychange', refresh) }
+  }, [me])
+
   // Publish writes back per file; refetching once per click would fire dozens of
   // times on "Publish all", so debounce — one getScan after the burst settles
   // makes published_at the durable source of the checkmarks (they survive tab
@@ -716,9 +736,17 @@ export default function App() {
         // would render every tab and then remove some — a visible flicker that also briefly
         // advertises surfaces the user may not have.
         setAccess(b.me?.access || null)
+        setActiveWorkflows(b.active_workflows || [])
+        const active = primaryActiveWorkflow(b.active_workflows || [])
+        if (active && !viewWasChosen.current && isVisible(b.me?.access || null, active.stage)) {
+          setView(active.stage)
+        }
         setOverviewPreview(b.overview || null)
         hadPreviewForPerf = !!b.overview
-        const scanId = b.scan_id || null
+        // The default historical scan and the active execution are allowed to differ. When work
+        // is running, load THAT scan before opening its stage; otherwise the restored Assess or
+        // Remediate screen would accurately rejoin the wrong scan.
+        const scanId = active?.scan_id || b.scan_id || null
         hadScanForPerf = !!scanId
         // If a scan is still running (e.g. user reloaded mid-scan), resume tracking it. The
         // default-path job is checked FIRST: it can be mid-crawl with no scan_runs row at all
@@ -2036,6 +2064,12 @@ export default function App() {
                   onClick={() => setStopped(null)}>Dismiss</button>
         </div>
       )}
+      <WorkflowContinuityBanner
+        workflow={primaryWorkflow}
+        currentView={view}
+        onReturn={(stage) => { goToView(stage); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+        onLiveOps={() => { goToView('liveops'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+      />
       {busy && progress && view !== 'discover' && (
         <div style={{ margin: '0 16px 8px' }}>
           <DiscoverRunProgress

@@ -294,6 +294,13 @@ def delete_person(email: str, request: Request):
     core.store.set_allowlist([e for e in core.store.get_allowlist() if e != target])
     core.store.set_admins([e for e in core.store.get_admins() if e != target])
     core.store.remove_person(target)
+    # Otherwise this process remembers them as rostered and never rebuilds the record, so a
+    # domain-admitted user removed here would sign in again and be invisible — the exact state
+    # just-in-time roster creation exists to end. Note that removal does NOT revoke a domain
+    # admission: they will be re-created with the configured default role on their next sign-in,
+    # which is why suspending is the action that withholds access and removing is the one that
+    # forgets. `forget_rostered` is what makes the re-creation actually happen.
+    core.forget_rostered(target)
     actor = getattr(request.state, "user_email", None) or "admin"
     core.store.log_decision(actor, "settings.person.remove", detail=target)
     return _people_payload()
@@ -1649,3 +1656,22 @@ def test_ai_provider(body: AIProviderTest, request: Request):
                f"latency_ms={result.get('latency_ms') or '—'} (synthetic probe image; "
                f"no customer document sent)")
     return result
+
+
+@router.get("/ai/providers/{provider}/health")
+def get_ai_provider_health(provider: str, request: Request,
+                           window_hours: int = Query(24, ge=1, le=168)):
+    """Admin: endpoint health snapshot for one cloud vision provider, derived from the
+    ai_calls table (ADR 0019). All numbers are real aggregates — nothing fabricated (ADR 0016).
+
+    Useful for HuggingFace Dedicated Endpoints specifically: surfaces latency percentiles,
+    throttle events (http_429), and cold-start signals (successful calls > 30 s) so Live
+    Operations can detect a scale-to-zero wake without polling the HF API directly.
+
+    window_hours: how far back to look (default 24 h, max 168 h / 1 week).
+    """
+    _require_admin(request)
+    import providers as _providers
+    if provider not in _providers.CLOUD_PROVIDERS:
+        raise HTTPException(422, f"unknown provider '{provider}' — one of {list(_providers.CLOUD_PROVIDERS)}")
+    return core.store.ai_provider_health_stats(provider, window_hours=window_hours)

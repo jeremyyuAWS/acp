@@ -107,6 +107,22 @@ export function ctaFor(access, key, { start, view } = {}) {
  * "3 documents await your review in Remediate" tells somebody without access to Remediate both
  * that it exists and how much is in it, which is the leak §10's notification rule is also about.
  */
+/**
+ * Is this person waiting for an administrator to give them a role?
+ *
+ * A DIFFERENT ANSWER FROM "RESTRICTED", which is why it is a separate question. Restricted means
+ * a role was chosen and this tab is not in it. Pending means nobody has chosen yet: the server
+ * created their record on first sign-in (just-in-time roster creation) on a deployment that
+ * configures no default role, so the honest thing to show is that they are in the queue — not
+ * that they lack a permission, which invites them to ask for the wrong thing.
+ *
+ * Read off an explicit server flag rather than inferred from "no role and no tabs". Those two are
+ * also true of a suspended user and of a role id whose row has gone missing, and telling someone
+ * whose access was deliberately withdrawn that they are awaiting approval would be worse than
+ * saying nothing.
+ */
+export const isAccessPending = (access) => Boolean(access?.pending)
+
 export function restrictionReason(access, key, label) {
   const name = label || key
   if (!access?.enforced) return `${name} is not available in this workspace.`

@@ -197,7 +197,8 @@ _map_many([("POST", "/admin/jobs/clear-dead"), ("PATCH", "/control/workers/repli
 _map_many([("GET", "/admin/analytics/overview"), ("GET", "/ai/costs")], {"analytics.view"})
 
 # ── Settings and platform administration ──────────────────────────────────────
-_map_many([("GET", "/settings"), ("GET", "/ai/providers"), ("GET", "/ai/status")],
+_map_many([("GET", "/settings"), ("GET", "/ai/providers"), ("GET", "/ai/status"),
+           ("GET", "/ai/providers/{provider}/health")],
           {"settings.view"})
 _map_many([("PUT", "/settings"), ("PUT", "/ai/providers"), ("POST", "/ai/providers/test"),
            ("POST", "/ai/providers/{provider}/secret")],
@@ -315,6 +316,7 @@ EXEMPT: dict[tuple[str, str], str] = {
     ("GET", "/me"): "identity — must answer before a role can be resolved",
     ("GET", "/me/access"): "the role answer itself; gating it on a capability is circular",
     ("GET", "/workspace/bootstrap"): "carries /me/access; same circularity",
+    ("GET", "/workspace/active-workflows"): "continuity status required before choosing a stage",
     ("POST", "/me/reset-data"): "self-service, scoped to the caller's OWN scans by construction",
     ("GET", "/settings/mine"): "the caller's own preferences",
     ("PUT", "/settings/mine"): "the caller's own preferences",

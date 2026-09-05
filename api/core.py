@@ -140,6 +140,32 @@ OPEN_ACCESS = os.environ.get("ACP_OPEN_ACCESS", "1").strip().lower() not in ("0"
 # to {PUBLIC_URL}/public/verify/{scan_id}. When unset the QR encodes a plain scan-id URI instead.
 PUBLIC_URL = os.environ.get("ACP_PUBLIC_URL", "").rstrip("/")
 
+# ── just-in-time roster (owner decision, 2026-09-05) ──────────────────────────
+# The workspace role a person is given the first time they successfully sign in without already
+# being on the roster. Owner's wording: "Domain-wide access permits authentication, not automatic
+# privileges... assign a configurable least-privilege default role, ideally Viewer."
+#
+# WHY LEAST PRIVILEGE IS THE DEFAULT AND NOT THE OTHER ONE. `ACP_ALLOWED_DOMAINS` is a statement
+# about who may AUTHENTICATE — anyone at the company — and it is set once, at deploy, by whoever
+# wired up the tenant. Reading it as a grant means one environment variable silently decides what
+# several thousand people may do inside the product. Viewer is the role that makes the domain
+# decide only the thing it was written to decide.
+#
+# SET IT EMPTY (or "none") TO HOLD NEW PEOPLE PENDING. That is not the same as giving them
+# nothing by accident: the record is still created, they still appear on the People screen, and
+# they see an "Access pending" screen that says an administrator has to act — rather than an
+# application with every tab hidden, which looks broken and gets reported as a bug.
+_DEFAULT_SIGNIN_ROLE_RAW = os.environ.get("ACP_DEFAULT_SIGNIN_ROLE", "viewer").strip().lower()
+DEFAULT_SIGNIN_ROLE = "" if _DEFAULT_SIGNIN_ROLE_RAW in ("", "none", "pending") else _DEFAULT_SIGNIN_ROLE_RAW
+
+# Emails this process has already reconciled against the roster. Purely a cost guard: the people
+# records live in ONE json blob (store.upsert_person rewrites the whole list), so touching it on
+# every authenticated request would be absurd. A miss costs one read; a hit costs nothing. The
+# set is per-process and per-restart, which is the right trade — the check it skips is idempotent,
+# so the worst case of losing it is one extra read per person per deploy.
+_rostered: set[str] = set()
+_roster_lock = threading.Lock()
+
 
 def is_owner(email: str | None) -> bool:
     """The single protected owner (ACP_OWNER_EMAIL) — the root of trust that manages who else is an
@@ -232,6 +258,96 @@ def people_with_access() -> list[dict]:
                                 "email": OWNER_EMAIL, "status": "active",
                                 "role": "owner", "protected": True}
     return sorted(records.values(), key=lambda r: r["email"])
+
+
+def note_signed_in(email: str | None, provider: str | None = None) -> dict | None:
+    """Put a person on the roster the first time they sign in. Returns the record, or None.
+
+    THE GAP THIS CLOSES. `email_allowed` admits three kinds of identity: the owner, an allow-listed
+    address, and anyone under `ACP_ALLOWED_DOMAINS`. Only the first two are ENUMERABLE — a domain
+    is a rule, not a list — so a domain-admitted user could sign in and use the product while
+    appearing nowhere an administrator could see them, let alone narrow them. There was no way to
+    give one of them a role, because the People screen had no row to put the dropdown on.
+
+    Worse than a dead end, and this is the part worth stating plainly: they were not blocked, they
+    were silently ELEVATED. `workspace_roles._enforced_decision` hands an unassigned signed-in user
+    the default Platform User role — every workflow tab at Operate — so setting one environment
+    variable was, in effect, granting the whole company operator access to the workspace. The owner
+    decision of 2026-09-05 reverses that for people who arrive this way: authentication is what the
+    domain buys; privileges are assigned.
+
+    WHAT IT DELIBERATELY DOES NOT DO:
+
+      * It does not touch the ALLOWLIST. A record is a record; the allowlist is a GRANT that
+        outlives the domain rule. Adding domain users to it would quietly convert "everyone at
+        acme.com may sign in, until we say otherwise" into a permanent per-person entitlement that
+        survives removing the domain — the opposite of the revocation an administrator expects.
+      * It does not enumerate the directory. Only people who actually sign in get a row, which is
+        also why this is cheap: the roster grows to the size of the team using ACP, not the size of
+        the company.
+      * It does not touch anybody already on the roster, so an administrator's decisions are never
+        re-defaulted by a later sign-in. Existing users are backfilled lazily and exactly once.
+    """
+    who = (email or "").strip().lower()
+    if not who or "@" not in who:
+        return None
+    if who in _rostered:
+        return None
+    if person_with_access(who) is not None:
+        _rostered.add(who)          # already known — nothing to create, and never ask again
+        return None
+
+    with _roster_lock:
+        if who in _rostered:
+            return None
+        # Re-read inside the lock. Two workers racing on one person's first request would
+        # otherwise both build a record, and upsert_person is a read-modify-write over the whole
+        # people blob — the second would be writing over a list it read before the first landed.
+        if person_with_access(who) is not None:
+            _rostered.add(who)
+            return None
+
+        from datetime import datetime, timezone
+
+        import workspace_roles as wr
+
+        st = get_store()
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        via = "allowlist" if who in set(st.get_allowlist()) | ALLOWED_EMAILS else "domain"
+        record = st.upsert_person({
+            "email": who,
+            "provider": (provider or "").strip().lower() or None,
+            "status": "access_ready" if DEFAULT_SIGNIN_ROLE else "pending",
+            "role": "user",
+            "admitted_via": via,
+            "first_signed_in_at": now,
+        })
+        # PRD §12 wants the ACTOR on every consequential change. Nobody clicked this one, and
+        # saying so is more useful than attributing it to the person themselves — which would read
+        # in the log as though they had granted it to themselves.
+        st.log_decision("system", "person.first_sign_in",
+                        detail=f"{who} · admitted via {via} · "
+                               f"{('default role ' + DEFAULT_SIGNIN_ROLE) if DEFAULT_SIGNIN_ROLE else 'access pending'}")
+        if DEFAULT_SIGNIN_ROLE:
+            # Through assign_role, so the role.assigned audit row and the assigned-by/assigned-at
+            # fields are written by the same code path an administrator's assignment uses. A
+            # second way to set a role is a second way for the audit trail to be incomplete.
+            record = wr.assign_role(st, email=who, role_id=DEFAULT_SIGNIN_ROLE,
+                                    actor="system:first-sign-in")
+        _rostered.add(who)
+        return record
+
+
+def forget_rostered(email: str | None = None) -> None:
+    """Drop the process-local memo, so the next sign-in reconciles against the store again.
+
+    Needed wherever a person is REMOVED — otherwise this process would remember them as rostered
+    and never rebuild the record, and they would be back to invisible after their next sign-in.
+    """
+    if email is None:
+        _rostered.clear()
+        return
+    _rostered.discard((email or "").strip().lower())
 
 
 def person_with_access(email: str | None) -> dict | None:
