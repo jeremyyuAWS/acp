@@ -1413,6 +1413,11 @@ def _admin_activity_snapshot() -> dict:
     worker_roles = core.store.worker_roles_status()
     stats = core.store.job_stats(owner=None)
     runs = core.store.admin_live_activity()
+    _unlinked = getattr(core.store, "unlinked_active_jobs_count", None)
+    try:
+        unlinked_active_jobs = int(_unlinked()) if callable(_unlinked) else None
+    except Exception:
+        unlinked_active_jobs = None
     _list_instances = getattr(core.store, "list_worker_instances", None)
     instances = _list_instances() if callable(_list_instances) else []
     freshness_seconds = core.WORKER_INSTANCE_FRESHNESS_SECONDS
@@ -1517,9 +1522,11 @@ def _admin_activity_snapshot() -> dict:
         pressure = "busy"
     else:
         pressure = "healthy"
+    workflows = _workflow_rows(runs)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "runs": runs,
+        "workflows": workflows,
         "summary": {
             "active_runs": sum(1 for r in runs if r.get("status") == "active"),
             "recent_runs": sum(1 for r in runs if r.get("status") == "recent"),
@@ -1538,6 +1545,13 @@ def _admin_activity_snapshot() -> dict:
             "worker_roles": worker_roles,
             "worker_capacity_by_role": per_role,
             "by_stage": by_stage,
+            "active_workflows": sum(1 for row in workflows if row["status"] != "completed"),
+            "recent_workflows": sum(1 for row in workflows if row["status"] == "completed"),
+            "workflow_correlation": {
+                "attributed_stage_runs": len(runs),
+                "unlinked_active_jobs": unlinked_active_jobs,
+                "complete": unlinked_active_jobs == 0 if unlinked_active_jobs is not None else None,
+            },
             # During mixed-version rollout an empty registry is unavailable, not zero capacity.
             # Once any process has reported, worker_capacity_by_role contains the fresh/stale
             # split and every raw instance needed by the authorized operations drawer.
@@ -1553,6 +1567,95 @@ def _admin_activity_snapshot() -> dict:
             **({"queue": composition} if composition else {}),
         },
     }
+
+
+def _workflow_rows(runs: list[dict]) -> list[dict]:
+    """Turn stage aggregates into the durable workflow contract used by Live Ops.
+
+    ``scan_id`` is already the parent identity stamped on every queue record in the pipeline.
+    Calling it ``workflow_id`` here makes that relationship explicit without creating a second
+    identity that could drift.  Stage ids are deterministic because the current queue model has
+    one aggregate stage per scan; individual attempts remain inspectable in the stage detail.
+    """
+    grouped: dict[str, dict] = {}
+    stage_order = {"discover": 0, "assess": 1, "remediate": 2, "release": 3}
+    for run in runs:
+        scan_id = str(run.get("scan_id") or "").strip()
+        stage = str(run.get("stage") or "").strip()
+        if not scan_id or not stage:
+            continue
+        workflow = grouped.setdefault(scan_id, {
+            "workflow_id": scan_id,
+            "scan_id": scan_id,
+            "owner_display_name": run.get("owner") or "unknown",
+            "source": run.get("source") or "unknown",
+            "created_at": run.get("started_at"),
+            "updated_at": run.get("updated_at"),
+            "status": "completed",
+            "current_stage": None,
+            "available_next_actions": [],
+            "stages": [],
+        })
+        if str(run.get("started_at") or "") < str(workflow.get("created_at") or run.get("started_at") or ""):
+            workflow["created_at"] = run.get("started_at")
+        if str(run.get("updated_at") or "") > str(workflow.get("updated_at") or ""):
+            workflow["updated_at"] = run.get("updated_at")
+        stage_status = ("running" if int(run.get("running") or 0) else
+                        "waiting" if int(run.get("queued") or 0) else
+                        "failed" if int(run.get("failed") or 0) else "completed")
+        workflow["stages"].append({
+            "stage": stage,
+            "stage_run_id": f"{scan_id}:{stage}",
+            "attempt": max(1, int(run.get("max_attempts_seen") or 0)),
+            "status": stage_status,
+            "total": int(run.get("total") or 0),
+            "completed": int(run.get("completed") or 0),
+            "active": int(run.get("running") or 0),
+            "waiting": int(run.get("queued") or 0),
+            "failed": int(run.get("failed") or 0),
+            "started_at": run.get("started_at"),
+            "completed_at": run.get("updated_at") if stage_status == "completed" else None,
+            "latest_progress_at": run.get("updated_at"),
+            "waiting_reason": None,
+            "next_retry_at": None,
+        })
+    for workflow in grouped.values():
+        workflow["stages"].sort(key=lambda row: (stage_order.get(row["stage"], 99), row["stage"]))
+        active = [row for row in workflow["stages"] if row["status"] != "completed"]
+        if active:
+            workflow["current_stage"] = active[-1]["stage"]
+            workflow["status"] = ("running" if any(row["status"] == "running" for row in active) else
+                                  "waiting" if any(row["status"] == "waiting" for row in active) else
+                                  "failed")
+        elif workflow["stages"]:
+            workflow["current_stage"] = workflow["stages"][-1]["stage"]
+    return sorted(grouped.values(), key=lambda row: str(row.get("updated_at") or ""), reverse=True)
+
+
+def _scope_activity_snapshot(snapshot: dict, viewer: str) -> dict:
+    """Admins see fleet workflows; other signed-in users receive only their own identities.
+
+    Aggregate capacity remains fleet-wide operational context.  Only the records that name or
+    identify another user are filtered here, in one place shared by the initial read and SSE.
+    """
+    if core.is_admin(viewer):
+        return snapshot
+    scoped = dict(snapshot)
+    scoped["runs"] = [row for row in snapshot.get("runs", [])
+                      if str(row.get("owner") or "").strip().lower() == viewer]
+    scoped["workflows"] = [row for row in snapshot.get("workflows", [])
+                           if str(row.get("owner_display_name") or "").strip().lower() == viewer]
+    summary = dict(snapshot.get("summary") or {})
+    summary.update({
+        "active_runs": sum(1 for row in scoped["runs"] if row.get("status") == "active"),
+        "recent_runs": sum(1 for row in scoped["runs"] if row.get("status") == "recent"),
+        "active_workflows": sum(1 for row in scoped["workflows"] if row.get("status") != "completed"),
+        "recent_workflows": sum(1 for row in scoped["workflows"] if row.get("status") == "completed"),
+        "active_users": 1 if scoped["runs"] else 0,
+        "waiting_users": 1 if any(row.get("queued") for row in scoped["runs"]) else 0,
+    })
+    scoped["summary"] = summary
+    return scoped
 
 
 def _tracing_status() -> dict:
@@ -1590,7 +1693,8 @@ def admin_activity(request: Request, response: Response):
     reading immediately rather than waiting for the stream's next Azure frame."""
     _require_user(request)
     response.headers["Cache-Control"] = "no-store"
-    snapshot = _admin_activity_snapshot()
+    viewer = str(getattr(request.state, "user_email", "") or "").strip().lower()
+    snapshot = _scope_activity_snapshot(_admin_activity_snapshot(), viewer)
     azure = _azure_block()
     if azure is not None:
         snapshot["azure"] = azure
@@ -1603,13 +1707,15 @@ async def admin_activity_stream(request: Request):
     import asyncio
 
     _require_user(request)
+    viewer = str(getattr(request.state, "user_email", "") or "").strip().lower()
 
     async def _gen():
         last = None
         last_measured = None
         idle = 0
         while not await request.is_disconnected():
-            snapshot = await asyncio.to_thread(_admin_activity_snapshot)
+            snapshot = _scope_activity_snapshot(
+                await asyncio.to_thread(_admin_activity_snapshot), viewer)
             signature = json.dumps({"runs": snapshot["runs"], "summary": snapshot["summary"]},
                                    sort_keys=True, default=str)
             if signature != last:
