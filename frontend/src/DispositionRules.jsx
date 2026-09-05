@@ -266,10 +266,14 @@ function RuleFields({ draft, setDraft, labelFor }) {
   const field = (c) => (
     <label key={c.key} style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
       <span style={fieldLabel}>{c.label}{c.unit ? ` (${c.unit})` : ''}</span>
-      <input style={inp} aria-label={labelFor(c.label)} placeholder={c.placeholder}
-             type={c.kind === 'date' ? 'date' : 'text'}
-             inputMode={c.kind === 'number' ? 'numeric' : undefined}
-             value={draft.values[c.key]} onChange={(e) => setValue(c.key, e.target.value)} />
+      {c.kind === 'list'
+        ? <textarea style={{ ...inp, minHeight: 92, resize: 'vertical' }}
+                    aria-label={labelFor(c.label)} placeholder={c.placeholder}
+                    value={draft.values[c.key]} onChange={(e) => setValue(c.key, e.target.value)} />
+        : <input style={inp} aria-label={labelFor(c.label)} placeholder={c.placeholder}
+                 type={c.kind === 'date' ? 'date' : 'text'}
+                 inputMode={c.kind === 'number' ? 'numeric' : undefined}
+                 value={draft.values[c.key]} onChange={(e) => setValue(c.key, e.target.value)} />}
     </label>
   )
   const advanced = CONDITIONS.filter((c) => !COMMON_CONDITION_KEYS.has(c.key))
