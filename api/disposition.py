@@ -53,7 +53,20 @@ FIELDS = {"department", "business_criticality", "regulatory_tags", "triage_score
          # (scan_inventory.sp_metadata) and surfaced in the export: the rule cannot tell the two
          # apart, so the human reading its output has to be able to.
          "content_type", "retention_label", "sensitivity_label", "sharing_scope",
-         "item_kind", "checked_out_by", "site_name", "library_name"}
+         "item_kind", "checked_out_by", "site_name", "library_name",
+         # SMART ARCHIVAL (the SOW's "check active collaborators before flagging"). A date rule
+         # alone eventually archives something a team is still using; this is the condition that
+         # stops it. `collaborator_basis` says how the count was arrived at — `authorship` is a
+         # floor off the listing page, `permissions` is everyone with access — and it is a
+         # matchable field so a rule can require the accurate basis before acting:
+         #
+         #     modified_age_days > 2555 AND collaborator_count <= 1
+         #     modified_age_days > 2555 AND collaborator_count <= 1
+         #                              AND collaborator_basis eq "permissions"
+         #
+         # The first is correct under either basis (a floor of 1 means one person made it and
+         # nobody else ever touched it). The second refuses to act on the floor at all.
+         "collaborator_count", "collaborator_basis"}
 
 #: A rule may also key on the tenant's OWN managed columns, written `managed:<Column Name>` —
 #: `{"field": "managed:Records Category", "op": "eq", "value": "Superseded"}`.

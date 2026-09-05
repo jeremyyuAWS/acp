@@ -209,7 +209,15 @@ def _inv_row(*, file: str, drive_file_id=None, mime=None, size=None, checksum=No
                   # read because the tenant refused the listItem expansion" is actionable in a
                   # way that a blank is not.
                   "reasons": {k: (f or {}).get("reason") for k, f in _f.items()
-                              if (f or {}).get("reason")}}
+                              if (f or {}).get("reason")},
+                  # SMART-ARCHIVAL inputs, in the blob rather than in columns of their own. They
+                  # are DERIVED from fields already stored (createdBy/lastModifiedBy, or the
+                  # permissions collection), so a pair of new columns would buy a schema version
+                  # (ADR 0045) for values the blob beside them can carry. The count never
+                  # travels without the basis: see sp_metadata's collaborator_count for why one
+                  # without the other is a number that means two different things.
+                  "collaborators": {"count": _v("collaborator_count"),
+                                    "basis": _v("collaborator_basis")}}
     return {"file": file, "drive_file_id": drive_file_id, "mime": mime or None,
             "size_kb": _inv_size_kb(size), "doc_class": _estate_doc_class(file, mime),
             "checksum": checksum, "path": path, "created_at": created_at,
@@ -1591,6 +1599,86 @@ def _sp_content_type(token: str, base: str, item_id: str) -> str | None:
         return None
 
 
+def _sp_permissions_budget() -> int:
+    """How many per-document permissions reads one listing may make. Same shape and the same
+    reason as _sp_content_type_budget: this is one Graph call per document, which is the cost
+    tests/test_sp_scale.py exists to keep out of the walk."""
+    try:
+        return max(0, int(os.environ.get("ACP_SP_PERMISSIONS_MAX", "1000")))
+    except (TypeError, ValueError):
+        return 1000
+
+
+def _sp_item_permissions(token: str, drive_id: str | None, item_id: str) -> list | None:
+    """One item's permissions collection, or None when it could not be read.
+
+    None and `[]` are different answers and the caller depends on it: `[]` is a successful read of
+    an item nobody has been granted anything on, None is a read that did not happen. Collapsing
+    them would report an unreadable item as having no collaborators — which archives it.
+    """
+    base = f"{GRAPH}/drives/{drive_id}" if drive_id else f"{GRAPH}/me/drive"
+    try:
+        data = _sp_get(token, f"{base}/items/{item_id}/permissions")
+        value = data.get("value")
+        return value if isinstance(value, list) else []
+    except Exception:  # noqa: BLE001 — an archival hint must never fail the scan
+        return None
+
+
+def _sp_enrich_permissions(token: str, files: list[dict]) -> dict:
+    """Upgrade `collaborator_count` from the authorship FLOOR to everyone with access.
+
+    WIRING A SWITCH THAT WAS LYING. `sp_metadata.permissions_enabled()` has existed since Phase 2
+    and had no caller: `ACP_SP_PERMISSIONS=1` did nothing, while the `permissions` field's own
+    reason string told the operator to set it. A documented switch that does nothing is worse
+    than an undocumented gap, because it ends the search for why the field is empty.
+
+    OFF BY DEFAULT AND BUDGETED WHEN ON, for the reason tests/test_sp_scale.py measured: one
+    Graph call per document is the difference between a scan and an outage on a 30-site estate.
+    The budget is `ACP_SP_PERMISSIONS_MAX`, and what it buys when it runs out is a document that
+    keeps the free authorship floor — a smaller number, honestly labelled — rather than nothing.
+
+    BOTH HALVES ARE PATCHED. The count on the record AND the count inside `sp_metadata` move
+    together, because the second is what the export and the rule evidence read. Updating only the
+    first is the inconsistency `_sp_enrich_content_types` already has (it sets `content_type` on
+    the record while the metadata blob still reports the field unavailable), and repeating it
+    here would put two different collaborator counts on one document.
+    """
+    if not sp_metadata.permissions_enabled():
+        return {"attempted": 0, "upgraded": 0, "capped": False, "disabled": True}
+    budget = _sp_permissions_budget()
+    attempted = upgraded = 0
+    capped = False
+    for rec in files:
+        meta = rec.get("sp_metadata")
+        if not isinstance(meta, dict):
+            continue
+        item_id = rec.get("id")
+        if not item_id:
+            continue
+        if attempted >= budget:
+            capped = True
+            break
+        attempted += 1
+        perms = _sp_item_permissions(token, rec.get("driveId"), item_id)
+        if perms is None:
+            continue
+        people = sp_metadata._permission_people(perms)
+        fields = meta.get("fields") or {}
+        fields["collaborator_count"] = {"value": len(people),
+                                        "state": sp_metadata.PRESENT, "reason": None}
+        fields["collaborator_basis"] = {"value": sp_metadata.BASIS_PERMISSIONS,
+                                        "state": sp_metadata.PRESENT, "reason": None}
+        fields["permissions"] = {"value": perms, "state": sp_metadata.PRESENT, "reason": None}
+        upgraded += 1
+    if capped:
+        print(f"[scan] SharePoint permissions read for the first {budget} document(s) "
+              f"(ACP_SP_PERMISSIONS_MAX); the rest keep the authorship floor for "
+              f"collaborator_count, which is a smaller number and is labelled as one "
+              f"(collaborator_basis=authorship).", flush=True)
+    return {"attempted": attempted, "upgraded": upgraded, "capped": capped}
+
+
 def _sp_content_type_budget() -> int:
     """How many per-document content-type calls one listing may make. Read at call time, never
     latched at import, for the same reason every other knob here is: a module-level read wins over
@@ -2758,6 +2846,11 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
     # Content-type enrichment LAST, over the FINAL scannable set only — after truncation, so a
     # capped listing never pays for classification on files it is about to drop.
     _ct = _sp_enrich_content_types(token, result)
+    # Permissions AFTER truncation too, and for the same reason: a capped listing must not pay a
+    # per-document call for files it is about to drop.
+    _perm = _sp_enrich_permissions(token, result)
+    if scope_out is not None and (_perm.get("attempted") or _perm.get("capped")):
+        scope_out["permissions_read"] = _perm
     if scope_out is not None and _ct and (_ct.get("attempted") or _ct.get("capped")):
         # Only when it actually ran. A tenant that answers the inline expansion pays nothing here
         # and gets no key, so the presence of this block on a scan is itself the signal that the

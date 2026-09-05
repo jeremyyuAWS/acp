@@ -145,6 +145,57 @@ def _person(node: dict | None) -> str | None:
     return user.get("displayName") or user.get("email") or None
 
 
+#: How a collaborator count was arrived at. The count means different things under each, and a
+#: rule that cannot tell them apart would read "1 collaborator" off a file nobody has looked at in
+#: five years the same way it reads it off a file shared with the whole organisation.
+BASIS_PERMISSIONS = "permissions"
+BASIS_AUTHORSHIP = "authorship"
+
+
+def _authorship_people(di: "Container") -> set[str]:
+    """Everyone the LISTING PAGE itself names on an item: its creator and its last editor.
+
+    Free — `createdBy` and `lastModifiedBy` are in the walk's base `$select`, so this costs
+    nothing on any tier, including the bare one a refusing tenant falls back to. It is also a
+    FLOOR and never a total: a document twelve people edited names exactly two of them here,
+    because Graph's driveItem records the first and the most recent and nothing between.
+
+    That is why `collaborator_basis` exists beside the count. "One person made this and nobody
+    else ever touched it" is a sound archival signal and is exactly what a floor of 1 says; "this
+    has two collaborators" is a claim this data cannot support, and a caller that reads the count
+    without the basis will make it.
+    """
+    return {p for p in (_person(di.get("createdBy")), _person(di.get("lastModifiedBy"))) if p}
+
+
+def _permission_people(perms: list | None) -> set[str]:
+    """Distinct identities with access, from an item's permissions collection.
+
+    A Graph permission grants to `grantedToV2` (one identity) or `grantedToIdentitiesV2` (several,
+    for a sharing link), and the older singular `grantedTo` is still what some tenants answer
+    with. All three are read: counting only the documented-current shape would report a widely
+    shared file as having nobody on it, which is the wrong answer in the direction that archives
+    a live document.
+
+    A LINK WITH NO IDENTITIES IS NOT A PERSON and is not counted here — an anonymous or
+    organisation-wide link grants access to people this collection cannot name. `sharing_scope`
+    is the field that says so, and it is already read for free; conflating the two would turn
+    "shared with everyone" into "nobody has access", which is precisely backwards.
+    """
+    out: set[str] = set()
+    for perm in perms or []:
+        if not isinstance(perm, dict):
+            continue
+        nodes = [perm.get("grantedToV2"), perm.get("grantedTo")]
+        nodes += list(perm.get("grantedToIdentitiesV2") or [])
+        nodes += list(perm.get("grantedToIdentities") or [])
+        for node in nodes:
+            who = _person(node)
+            if who:
+                out.add(who)
+    return out
+
+
 def _is_page(item: dict, content_type: str | None) -> bool:
     """A SharePoint PAGE, not a document. Both are list items in a library and both come back
     from the same walk, but a page is authored in SharePoint and has no downloadable source
@@ -247,6 +298,31 @@ def normalize(item: dict, *, list_item: Container, drive_item: Container | None 
         # own $select. The full permissions collection does not: it is one Graph call per item.
         "sharing_scope": resolve(di, ((di.get("shared") or {}) or {}).get("scope")),
         "permissions": resolve(perms, perms.get("value") if perms.ok else None),
+
+        # ── who is still working on this ─────────────────────────────────────────────────────
+        #
+        # SMART ARCHIVAL's input. "Archive anything older than seven years" is a rule that
+        # eventually archives something a team is still using, and the SOW asks for the check
+        # that stops it: before flagging, look at whether anybody is actually involved.
+        #
+        # ALWAYS ANSWERABLE, at two very different precisions, and the count alone cannot tell
+        # them apart — so it never travels without `collaborator_basis`:
+        #
+        #   permissions — everyone with access, from the item's permissions collection. Accurate,
+        #                 and one Graph call per document (ACP_SP_PERMISSIONS, budgeted).
+        #   authorship  — the creator and the last editor, off the listing page. Free, and a
+        #                 FLOOR: a document a dozen people edited names two of them.
+        #
+        # A floor of 1 is the useful signal and is sound: one person made it, nobody else ever
+        # touched it, nothing else is known. A floor of 2 says almost nothing. Reporting either
+        # as a total is the overstatement this pair of fields exists to prevent — and a rule
+        # written as "collaborators <= 1" is correct under both bases, which is why the floor is
+        # worth shipping rather than withholding until permissions are on.
+        "collaborator_count": resolve(
+            di, len(_permission_people(perms.get("value")) if perms.ok
+                    else _authorship_people(di))),
+        "collaborator_basis": resolve(
+            di, BASIS_PERMISSIONS if perms.ok else BASIS_AUTHORSHIP),
 
         # ── version and lock state ───────────────────────────────────────────────────────────
         "version": resolve(li, lf.get("_UIVersionString")),

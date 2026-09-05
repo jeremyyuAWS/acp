@@ -1811,6 +1811,12 @@ def _sp_export_cells(raw) -> dict:
         "sp_availability": "; ".join(f"{k}={v}" for k, v in availability.items()
                                      if v and v != "present") or None,
         "sp_unread_reason": "; ".join(f"{k}: {v}" for k, v in reasons.items()) or None,
+        # SMART ARCHIVAL, and the two cells travel together on purpose. A sheet showing
+        # "collaborators: 1" without saying how it was counted invites the reader to treat an
+        # authorship FLOOR (creator + last editor, all a listing page can name) as a total. The
+        # basis is what makes the number safe to act on — see sp_metadata.collaborator_count.
+        "collaborator_count": (blob.get("collaborators") or {}).get("count"),
+        "collaborator_basis": (blob.get("collaborators") or {}).get("basis"),
     }
 
 
@@ -1904,6 +1910,7 @@ def scan_inventory_csv(sid: str, request: Request):
             "site_name", "library_name", "content_type", "retention_label",
             "sensitivity_label", "sharing_scope", "item_kind", "checked_out_by",
             "sp_version", "modified_by", "managed_columns",
+            "collaborator_count", "collaborator_basis",
             "sp_availability", "sp_unread_reason",
             "path", "parent_folder", "created_at", "source_modified",
             "discovered_at", "drive_file_id"]
