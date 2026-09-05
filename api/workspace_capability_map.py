@@ -255,6 +255,37 @@ _map_many([
     ("POST", "/disposition/policies/{policy_id}/execute"),
 ], {"release.publish"})
 
+# ── Archive auto-fire (R9) ────────────────────────────────────────────────────
+# The unattended sibling of the block above, and mapped one tier stricter at every level for the
+# reason the whole feature turns on: nobody is watching when it acts.
+#
+# READING is release.view + monitor.view, matching the lifecycle reads above. Somebody has to be
+# able to see WHICH files a machine is about to move and on what evidence without also holding the
+# right to start it — a permission shape that only works if the two are separate capabilities.
+_map_many([
+    ("GET", "/lifecycle/archive/policy"),
+    ("GET", "/lifecycle/archive/candidates"),
+    ("GET", "/lifecycle/archive/executions"),
+    ("GET", "/lifecycle/archive/executions/{execution_id}"),
+], {"release.view", "monitor.view"})
+# CONFIGURING it is release.publish, NOT release.view — unlike authoring a disposition rule, which
+# sits at release.view above because a rule only ever writes a recommendation. This policy is the
+# authorization itself: saving it decides what may be moved with no human in the loop, so it is
+# the same class of act as publishing, one step removed. The kill switch is here too rather than
+# somewhere looser, and that is a deliberate trade — anyone who can turn the lane ON can turn it
+# off, and nobody else can, which is the right way round for a control whose failure mode is
+# unauthorised STOPPING of a governance process the customer configured. The route additionally
+# gates on _require_admin.
+_map_many([
+    ("PUT", "/lifecycle/archive/policy"),
+    ("POST", "/lifecycle/archive/kill-switch"),
+], {"release.publish"})
+# RUNNING it moves customer files unattended. release.publish here as well, and the route is
+# additionally _require_owner — the strictest gate this codebase has for an estate change, which
+# routes/disposition.py already applies to its own execute path for the attended version of the
+# same act.
+_map_many([("POST", "/lifecycle/archive/run")], {"release.publish"})
+
 # ── Campaigns, org memory, content workspaces ─────────────────────────────────
 _map_many([("GET", "/campaigns"), ("GET", "/campaigns/{campaign_id}")], _REMEDIATE_READ)
 _map_many([

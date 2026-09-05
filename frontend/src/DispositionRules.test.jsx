@@ -32,6 +32,20 @@ vi.mock('./api.js', () => ({
   deleteDispositionPolicy: (...a) => deleteDispositionPolicy(...a),
   reorderDispositionPolicies: (...a) => reorderDispositionPolicies(...a),
   listDispositionConflicts: (...a) => listDispositionConflicts(...a),
+  // R9 — the archive auto-fire option this screen now renders beneath the rule list. Stubbed to
+  // the SHIPPED DEFAULT (disabled, dry run, nothing configured), because that is what this
+  // screen's own assertions are about: every wording rule below has to hold for a tenant who has
+  // not turned automatic archiving on, which is every tenant until somebody does.
+  getArchivePolicy: () => Promise.resolve({
+    configured: false,
+    policy: { enabled: false, kill_switch: false, dry_run: true, source_connections: [],
+              rule_ids: [], required_evidence: ['metadata_link'], confirmed_families: [],
+              min_replacement_age_days: 30, archive_root: '', preserve_hierarchy: true,
+              max_actions_per_run: 25, max_actions_per_day: 100 },
+    evidence_types: [], auto_sources: ['sharepoint', 'onedrive'], problem: '', notice: '',
+  }),
+  updateArchivePolicy: () => Promise.reject(new Error('not exercised here')),
+  setArchiveKillSwitch: () => Promise.reject(new Error('not exercised here')),
 }))
 
 const confirmMock = vi.fn()
@@ -791,6 +805,35 @@ describe('the new-rule builder', () => {
 })
 
 describe('the safety copy the whole screen rests on', () => {
+  /**
+   * The screen's words MINUS the archive auto-fire block, which is the one thing here that really
+   * does move files and must be able to say so.
+   *
+   * SCOPED, NOT WEAKENED, and the distinction is the point. The sweep below exists because a
+   * lifecycle RULE only ever writes a recommendation, so any sentence on this screen claiming a
+   * file was archived would be false. R9 added a second, different claim to the same screen — a
+   * tenant policy that archives proven-superseded files unattended — and for that block the same
+   * sentence is true and necessary; suppressing it would be the dishonesty, not the fix. So the
+   * block is excluded by an explicit marker (`data-archive-autofire`), the rule copy keeps the
+   * guard at full strength, and the excluded block carries its own vocabulary tests
+   * (archiveAutofire.test.js, archiveAutofireUi.test.jsx) rather than none.
+   */
+  const ruleCopy = () => {
+    const clone = container.cloneNode(true)
+    clone.querySelectorAll('[data-archive-autofire]').forEach((el) => el.remove())
+    return clone.textContent
+  }
+
+  it('keeps the auto-fire block identifiable, so the sweep below excludes it by name', async () => {
+    // Fails if the marker is ever dropped, which would silently return the block to the sweep and
+    // make its (correct) wording read as a regression in the rule copy.
+    listDispositionPolicies.mockResolvedValue(RULES)
+    await render(); await expand(); await flush()
+    expect(container.querySelector('[data-archive-autofire]')).not.toBeNull()
+    expect(text()).toContain('Age never triggers a move')
+    expect(ruleCopy()).not.toContain('Age never triggers a move')
+  })
+
   // Product rule 1. Every word a person can read on this screen, swept at once — the builder in
   // its delete state, an enabled archive rule and a disabled delete rule all on screen together.
   it('never says a file was archived, deleted, moved or trashed', async () => {
@@ -798,7 +841,7 @@ describe('the safety copy the whole screen rests on', () => {
     await render(); await expand(); await flush()
     await click(btnByText('Create rule'))
     await setValue(byLabel('Action'), 'delete')
-    const t = text()
+    const t = ruleCopy()
     expect(t).not.toMatch(/\b(?:files?|documents?) (?:was|were|are|is) (?:archived|deleted|trashed|moved|removed)\b/i)
     // The one a rule sentence would trip: "Files under Finance/2019/ … will be deleted."
     expect(t).not.toMatch(/\bwill be (?:archived|deleted|trashed|moved|removed)\b/i)

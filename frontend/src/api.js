@@ -1865,6 +1865,55 @@ export const reorderDispositionPolicies = (policyIds) => (SIM
 export const listDispositionConflicts = () => (SIM
   ? sim({ conflicts: [] })
   : fetch(`${BASE}/disposition/policies/conflicts`, { headers: headers() }).then(j))
+
+// ── Safe lifecycle archive auto-fire (R9) ────────────────────────────────────────────────────
+//
+// SIM RETURNS THE DISABLED, UNCONFIGURED SHAPE AND NEVER AN ELIGIBLE ITEM, deliberately. The demo
+// runs against no tenant, so there is no source system in which a move could be proven to have
+// happened — and a demo that showed "Automatically archived" would be showing the one state this
+// whole feature exists to make honest. Recommendation-only is both the truthful demo answer and
+// the shipped default, so SIM and a fresh real tenant agree.
+const ARCHIVE_SIM_POLICY = {
+  configured: false,
+  policy: { enabled: false, kill_switch: false, dry_run: true, source_connections: [], rule_ids: [],
+            required_evidence: ['metadata_link'], confirmed_families: [], min_replacement_age_days: 30,
+            archive_root: '', preserve_hierarchy: true, max_actions_per_run: 25, max_actions_per_day: 100 },
+  snapshot_id: null, updated_at: null, updated_by: null,
+  evidence_types: [
+    { type: 'metadata_link', label: 'Replacement metadata names this document (retentionOf / supersedes)' },
+    { type: 'rule_family', label: 'A lifecycle rule identifies a document family and a strictly newer version' },
+    { type: 'sp_version', label: 'SharePoint version metadata names a newer approved replacement' },
+    { type: 'admin_mapping', label: 'An administrator confirmed this document-family mapping' },
+  ],
+  auto_sources: ['sharepoint', 'onedrive'],
+  problem: '',
+  notice: 'Age, filename similarity and inactivity never authorize an automatic move. A document is '
+        + 'archived automatically only when durable evidence shows a newer item supersedes it and '
+        + 'this policy permits it.',
+}
+export const getArchivePolicy = () => (SIM
+  ? sim(JSON.parse(JSON.stringify(ARCHIVE_SIM_POLICY)))
+  : fetch(`${BASE}/lifecycle/archive/policy`, { headers: headers() }).then(j))
+export const updateArchivePolicy = (patch) => (SIM
+  ? sim(JSON.parse(JSON.stringify(ARCHIVE_SIM_POLICY)))
+  : fetch(`${BASE}/lifecycle/archive/policy`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }),
+                                                body: JSON.stringify(patch) }).then(j))
+export const setArchiveKillSwitch = (on) => (SIM
+  ? sim(JSON.parse(JSON.stringify(ARCHIVE_SIM_POLICY)))
+  : fetch(`${BASE}/lifecycle/archive/kill-switch`, { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+                                                     body: JSON.stringify({ on: !!on }) }).then(j))
+export const getArchiveCandidates = (scanId) => (SIM
+  ? sim({ scan_id: scanId, snapshot_id: null, dry_run: true, counts: {}, progress: '', items: [] })
+  : fetch(`${BASE}/lifecycle/archive/candidates?scan_id=${encodeURIComponent(scanId)}`,
+          { headers: headers() }).then(j))
+export const runArchiveAutofire = (scanId) => (SIM
+  ? Promise.reject(new Error('Automatic archival is not available in the demo — it would move real files.'))
+  : fetch(`${BASE}/lifecycle/archive/run?scan_id=${encodeURIComponent(scanId)}`,
+          { method: 'POST', headers: headers() }).then(j))
+export const listArchiveExecutions = (scanId = null) => (SIM
+  ? sim({ executions: [] })
+  : fetch(`${BASE}/lifecycle/archive/executions${scanId ? `?scan_id=${encodeURIComponent(scanId)}` : ''}`,
+          { headers: headers() }).then(j))
 export const previewDispositionPolicy = (policyId) => (SIM
   ? sim({ policy_id: policyId, would_match: 3, documents: [
       { doc_id: 'drive:sim1', path: 'HR Handbook 2019.pdf', department: 'HR', age_days: 1460 },
