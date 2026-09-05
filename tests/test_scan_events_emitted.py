@@ -35,7 +35,12 @@ _DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document
 
 # Files that emit lifecycle events, and the call names they emit through.
 _EMIT_SITES = ["handlers.py", "worker.py", "routes/scans.py"]
-_EMIT_CALLS = {"scan_event", "append_scan_event"}
+# `_rem_event` is handlers' remediation wrapper. It MUST be here: it takes (scan_id, kind, ...)
+# like the other two, so args[1] finds its kind unchanged — but a wrapper this walk does not know
+# about is a set of emit sites the vocabulary guard silently skips. Adding the remediation kinds
+# without adding this name made the whole suite pass while checking none of them, which is the
+# failure mode this file exists to prevent, one level up.
+_EMIT_CALLS = {"scan_event", "append_scan_event", "_rem_event"}
 
 
 def _emitted_kind_literals() -> dict[str, list[str]]:
