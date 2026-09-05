@@ -1121,6 +1121,16 @@ export const getAiCosts = () => (SIM
 export const getAiProviders = () => (SIM
   ? sim({ providers: [] })
   : fetch(`${BASE}/ai/providers`, { headers: headers() }).then(j))
+export const getSecondOpinionPolicy = () => (SIM
+  ? sim({ enabled: false, criteria: ['1.3.5'], confidence_threshold: 'low' })
+  : fetch(`${BASE}/ai/second-opinion-policy`, { headers: headers() }).then(j))
+export const putSecondOpinionPolicy = (policy) => (SIM
+  ? sim({ ...policy, simulated: true })
+  : fetch(`${BASE}/ai/second-opinion-policy`, {
+      method: 'PUT',
+      headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(policy),
+    }).then(j))
 export const getAiProvidersHealth = (windowHours = 24) => (SIM
   ? sim({ window_hours: windowHours, providers: {} })
   : fetch(`${BASE}/ai/providers/health?window_hours=${windowHours}`, { headers: headers() }).then(j))

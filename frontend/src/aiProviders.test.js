@@ -17,6 +17,18 @@ describe('AI Providers settings — the key is never entered in the UI (ADR 0019
     expect(put).toMatch(/key_secret_ref|JSON\.stringify\(patch\)/)
   })
 
+  it('has a separate default-off assessment policy API and immutable-scan disclosure', () => {
+    const api = read('api.js')
+    const s = read('Settings.jsx')
+    expect(api).toMatch(/getSecondOpinionPolicy\s*=/)
+    expect(api).toMatch(/putSecondOpinionPolicy\s*=/)
+    expect(api).toMatch(/\/ai\/second-opinion-policy/)
+    expect(api).toMatch(/enabled: false/)
+    expect(s).toMatch(/copied into each new scan/i)
+    expect(s).toMatch(/already running/i)
+    expect(s).toMatch(/1\.3\.5 Identify Input Purpose/)
+  })
+
   it('the panel sends key_secret_ref, never a key value, and states the key is not entered here', () => {
     const s = read('Settings.jsx')
     expect(s).toMatch(/AIProvidersPanel/)
