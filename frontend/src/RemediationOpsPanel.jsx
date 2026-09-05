@@ -13,6 +13,7 @@
 // a screen reader get the same information. The live region is `polite` and announces the
 // HEADLINE only: announcing each counter increment turns a 147-document run into 147
 // interruptions. Nothing here moves focus.
+import LiveCounter from './LiveCounter.jsx'
 import { counterRows, secondaryRows, freshness, headline, partitionSums } from './remediationSnapshot.js'
 
 const FRESHNESS_STYLE = {
@@ -104,7 +105,13 @@ function Counters({ snapshot, suspect }) {
                 style={{ margin: 0, fontSize: 15, fontWeight: 650,
                          fontVariantNumeric: 'tabular-nums',
                          opacity: suspect ? 0.55 : 1 }}>
-              {row.value === null ? '—' : row.value.toLocaleString()}
+              {/* LiveCounter counts up and flashes "+N" — the same component Discovery's run
+                  progress uses, not a second implementation of the idea. It never animates on a
+                  DECREASE, which matters here: `waiting` and `processing` fall as work drains,
+                  and a green "+N" on a shrinking queue would read as progress in the wrong
+                  direction. An unknown counter keeps the em dash and never enters the animation
+                  at all — "—" must not count up from zero. */}
+              {row.value === null ? '—' : <LiveCounter value={row.value} />}
             </dd>
           </div>
         ))}
@@ -128,10 +135,77 @@ function Secondary({ snapshot }) {
           <dt className="muted" style={{ fontSize: 10.5, textTransform: 'uppercase',
                                          letterSpacing: '0.02em' }}>{row.label}</dt>
           <dd style={{ margin: 0, fontSize: 13.5, fontWeight: 600,
-                       fontVariantNumeric: 'tabular-nums' }}>{row.value.toLocaleString()}</dd>
+                       fontVariantNumeric: 'tabular-nums' }}><LiveCounter value={row.value} /></dd>
         </div>
       ))}
     </dl>
+  )
+}
+
+// What is being worked RIGHT NOW — the panel's only per-document surface.
+//
+// A LIST, NEVER A "CURRENT FILE". Remediation fans out across worker slots, so naming one
+// document implies a serial pipeline that does not exist; the snapshot models `active_attempts`
+// as a list for exactly that reason. Three rows plus a count is the cap: enough to see the work
+// moving, bounded so a 20-slot run does not push the counters off the screen.
+//
+// WHAT IT DELIBERATELY DOES NOT CLAIM. `elapsed_s` is measured from the CLAIM, not from the
+// current phase, and `progress_at` is bumped by the lease heartbeat as well as by real phase
+// changes (store.touch_job). So this says "in flight for" and "last signal", which is what those
+// numbers are. Calling the second one "last progress" would let a worker that is merely alive
+// read as one that is getting somewhere — the exact distinction a stalled run turns on.
+function ago(seconds) {
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) return null
+  if (seconds < 60) return `${Math.round(seconds)}s`
+  const m = Math.floor(seconds / 60)
+  return m < 60 ? `${m}m ${Math.round(seconds % 60)}s` : `${Math.floor(m / 60)}h ${m % 60}m`
+}
+
+function Workstream({ attempts, generatedAt }) {
+  const rows = Array.isArray(attempts) ? attempts : []
+  if (rows.length === 0) return null
+  const shown = rows.slice(0, 3)
+  const more = rows.length - shown.length
+  const now = generatedAt ? Date.parse(generatedAt) : null
+  return (
+    <div style={{ marginTop: 14 }}>
+      <h3 style={{ margin: '0 0 6px', fontSize: 12.5, fontWeight: 650 }}>
+        In flight now
+        <span className="muted" style={{ fontWeight: 400 }}> · {rows.length} document{rows.length === 1 ? '' : 's'}</span>
+      </h3>
+      <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 6 }}>
+        {shown.map((a) => {
+          const signal = now && a.progress_at ? (now - Date.parse(a.progress_at)) / 1000 : null
+          return (
+            <li key={`${a.file}-${a.started_at || ''}`}
+                style={{ display: 'grid', gridTemplateColumns: 'minmax(0,1fr) auto', gap: 10,
+                         alignItems: 'baseline', fontSize: 12.5, padding: '6px 10px',
+                         border: '1px solid var(--line)', borderRadius: 8 }}>
+              <span style={{ minWidth: 0 }}>
+                <span className="pulsedot" aria-hidden="true" />{' '}
+                <span className="fname" style={{ overflowWrap: 'anywhere' }}>{a.file}</span>
+                {/* The per-document phase string the worker itself wrote (handlers._phase), so
+                    this is what THAT document is doing, not a run-level headline reused. */}
+                {a.phase && <span className="muted"> — {a.phase}</span>}
+                {/* Attempt number only while retrying: "attempt 1" on every row is noise. */}
+                {typeof a.attempt === 'number' && a.attempt > 1 && (
+                  <span className="muted"> · attempt {a.attempt}</span>
+                )}
+              </span>
+              <span className="muted" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>
+                {ago(a.elapsed_s) && <>in flight {ago(a.elapsed_s)}</>}
+                {ago(signal) && <> · last signal {ago(signal)} ago</>}
+              </span>
+            </li>
+          )
+        })}
+      </ul>
+      {more > 0 && (
+        <p className="muted" style={{ margin: '6px 0 0', fontSize: 12 }}>
+          and {more} more document{more === 1 ? '' : 's'} in flight
+        </p>
+      )}
+    </div>
   )
 }
 
@@ -200,6 +274,7 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
       )}
 
       <PhaseRail phases={snapshot.phases} />
+      <Workstream attempts={snapshot.active_attempts} generatedAt={snapshot.generated_at} />
       <Counters snapshot={snapshot} suspect={suspect} />
       <Secondary snapshot={snapshot} />
 

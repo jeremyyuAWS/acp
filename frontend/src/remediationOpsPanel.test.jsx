@@ -105,8 +105,17 @@ describe('unknown and inconsistent are shown as themselves, never as zero or hea
     // Asserted on THAT counter's own cell, not on the page containing an em dash somewhere: the
     // phase rail renders one on every row, so `toContain('—')` passes whatever the counters say —
     // it was written as this check and did not fail when the null branch was deleted.
-    const cell = (html, key) =>
-      (html.match(new RegExp(`data-testid="rem-count-${key}"[^>]*>([^<]*)<`)) || [])[1]
+    // Reads the cell's TEXT, stripping the markup inside it. A known count is rendered through
+    // LiveCounter (which wraps the number in spans so it can count up and flash "+N"), while an
+    // unknown one is a bare em dash — so a matcher that only accepted a bare text node would
+    // report every known counter as empty and pass this test for the wrong reason.
+    const cell = (html, key) => {
+      const open = html.indexOf(`data-testid="rem-count-${key}"`)
+      if (open === -1) return undefined
+      const start = html.indexOf('>', open) + 1
+      const end = html.indexOf('</dd>', start)
+      return html.slice(start, end).replace(/<[^>]*>/g, '').trim()
+    }
     const partial = { ...SNAP, documents: { ...SNAP.documents, waiting: null } }
     const html = render({ snapshot: partial, connected: true, receivedAt: Date.now() })
     expect(cell(html, 'waiting')).toBe('—')
@@ -202,5 +211,94 @@ describe('the client normalizes and judges freshness; it never derives run state
       .toBe('Review required · 2 still processing · 3 waiting')
     expect(headline(SNAP)).toBe('Remediation in progress')
     expect(headline(null)).toBe(null)
+  })
+})
+
+describe('the panel shows what is being worked right now', () => {
+  const withAttempts = (attempts) => ({
+    ...SNAP, generated_at: '2026-09-05T12:00:00+00:00', active_attempts: attempts,
+  })
+
+  it('lists the in-flight documents rather than naming one current file', () => {
+    // Remediation fans out across worker slots. Naming a single "current file" implies a serial
+    // pipeline that does not exist — the defect PRD §17.7 is about.
+    const html = render({ snapshot: withAttempts([
+      { file: 'a.docx', phase: 'storing the corrected copy', attempt: 1,
+        started_at: '2026-09-05T11:59:00+00:00', progress_at: '2026-09-05T11:59:50+00:00', elapsed_s: 60 },
+      { file: 'b.pdf', phase: 're-verifying the corrected copy', attempt: 1,
+        started_at: '2026-09-05T11:59:30+00:00', progress_at: '2026-09-05T11:59:58+00:00', elapsed_s: 30 },
+    ]), connected: true, receivedAt: Date.now() })
+    expect(html).toContain('In flight now')
+    expect(html).toContain('2 documents')
+    expect(html).toContain('a.docx')
+    expect(html).toContain('b.pdf')
+    expect(html).toContain('storing the corrected copy')
+    expect(html).not.toContain('current file')
+  })
+
+  it('caps the list at three and counts the rest', () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({
+      file: `doc-${i}.docx`, phase: 'applying', attempt: 1, elapsed_s: 10,
+      started_at: '2026-09-05T11:59:00+00:00', progress_at: '2026-09-05T11:59:55+00:00' }))
+    const html = render({ snapshot: withAttempts(many), connected: true, receivedAt: Date.now() })
+    expect(html).toContain('doc-0.docx')
+    expect(html).toContain('doc-2.docx')
+    expect(html).not.toContain('doc-3.docx')
+    expect(html).toContain('and 17 more documents in flight')
+  })
+
+  it('shows an attempt number only while retrying', () => {
+    // Scoped to the in-flight LIST, not the whole page: the Processing counter's definition
+    // tooltip reads "A valid worker attempt is actively changing…", so a bare
+    // `not.toContain('attempt')` fails against unrelated copy and would have to be loosened
+    // into something that no longer checks anything.
+    const inFlight = (html) => {
+      const start = html.indexOf('In flight now')
+      return start === -1 ? '' : html.slice(start, html.indexOf('</ul>', start))
+    }
+    const first = render({ snapshot: withAttempts([{ file: 'a.docx', attempt: 1, elapsed_s: 5 }]),
+                           connected: true, receivedAt: Date.now() })
+    expect(inFlight(first)).toContain('a.docx')
+    expect(inFlight(first)).not.toContain('attempt')
+    const retry = render({ snapshot: withAttempts([{ file: 'a.docx', attempt: 3, elapsed_s: 5 }]),
+                           connected: true, receivedAt: Date.now() })
+    expect(inFlight(retry)).toContain('attempt 3')
+  })
+
+  it('calls the heartbeat a signal, not progress', () => {
+    // store.touch_job bumps updated_at on every lease heartbeat, so progress_at means "last
+    // touched". Labelling it "last progress" would let a worker that is merely alive read as one
+    // that is getting somewhere — the distinction a stalled run turns on.
+    const html = render({ snapshot: withAttempts([
+      { file: 'a.docx', phase: 'applying', attempt: 1, elapsed_s: 90,
+        progress_at: '2026-09-05T11:59:30+00:00' }]), connected: true, receivedAt: Date.now() })
+    expect(html).toContain('last signal')
+    expect(html).not.toContain('last progress')
+  })
+
+  it('renders nothing when no attempt is active', () => {
+    const html = render({ snapshot: withAttempts([]), connected: true, receivedAt: Date.now() })
+    expect(html).not.toContain('In flight now')
+  })
+})
+
+describe('counters flash their increase like Discovery does', () => {
+  it('routes known counts through the shared LiveCounter, not a second implementation', () => {
+    const html = render({ snapshot: SNAP, connected: true, receivedAt: Date.now() })
+    // LiveCounter's own markup. Asserting the class rather than the animation because the
+    // count-up is rAF-driven and the "+N" is a CSS animation — neither is observable in a static
+    // render, and liveCounter.test.jsx already covers the behaviour itself.
+    expect(html).toContain('class="livecounter"')
+  })
+
+  it('keeps an unknown counter out of the animation entirely', () => {
+    // "—" must not count up from zero, and a decrease must never flash green: LiveCounter
+    // already refuses the second, and the em-dash branch is what keeps it clear of the first.
+    const partial = { ...SNAP, documents: { ...SNAP.documents, waiting: null } }
+    const html = render({ snapshot: partial, connected: true, receivedAt: Date.now() })
+    const open = html.indexOf('data-testid="rem-count-waiting"')
+    const cell = html.slice(html.indexOf('>', open) + 1, html.indexOf('</dd>', open))
+    expect(cell).toBe('—')
+    expect(cell).not.toContain('livecounter')
   })
 })
