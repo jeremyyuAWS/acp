@@ -50,17 +50,21 @@ def build() -> str:
     lines.append("")
     lines.append("Parsed from the deployment scripts, not from a live subscription.")
     lines.append("")
-    lines.append("| Container app | Tier | CPU | Memory | Replicas | Scales? | Ingress | "
-                 "Scale rules | Read from |")
-    lines.append("|---|---|---:|---:|---|---|---|---|---|")
+    lines.append("| Container app | Tier | CPU | Memory | Replicas | DB pool | Scales? | "
+                 "Ingress | Scale rules | Read from |")
+    lines.append("|---|---|---:|---:|---|---:|---|---|---|---|")
     for name, app in report["apps"].items():
         tier = f"`{app.tier}`" if app.tier else "—"
         replicas = (f"{app.min_replicas}–{app.max_replicas}"
                     if app.min_replicas is not None else "—")
         rules = ", ".join(f"`{r}`" for r in app.scale_rules) or "none in this repo"
+        # ACP_DB_MAX_CONN, where one is pinned. Shown beside the replica range because the two
+        # are one fact: a 5-10 replica ceiling is a 20-connection budget once the pool is 2.
+        pool = app.db_pool if app.db_pool is not None else "—"
         lines.append(
             f"| `{name}` | {tier} | {app.cpu if app.cpu is not None else '—'} | "
-            f"{app.memory or '—'} | {replicas} | {'yes' if app.autoscaled else '**no**'} | "
+            f"{app.memory or '—'} | {replicas} | {pool} | "
+            f"{'yes' if app.autoscaled else '**no**'} | "
             f"{app.ingress or 'none'} | {rules} | {app.source} |")
     lines.append("")
 

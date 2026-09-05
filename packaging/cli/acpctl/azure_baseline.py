@@ -68,6 +68,10 @@ class AzureApp:
     memory: str | None = None
     min_replicas: int | None = None
     max_replicas: int | None = None
+    # ACP_DB_MAX_CONN, where the reviewed baseline pins one. Added by #1370 to keep the fleet
+    # under Postgres's measured 150-connection ceiling; carried here because a replica ceiling
+    # means something different once each replica's pool is capped.
+    db_pool: int | None = None
     ingress: str | None = None            # "external" | "internal" | None (no ingress)
     scale_rules: list[str] = field(default_factory=list)
     source: str = ""
@@ -89,10 +93,24 @@ class AzureApp:
         return self.max_replicas > self.min_replicas
 
 
-# `update_app acp-app 1.0 2Gi 1 3` — the reviewed baseline's one call shape.
+# `update_app acp-app 1.0 2Gi 1 3` and `update_app acp-assess 2.0 4Gi 5 5 2` — the reviewed
+# baseline's call shape, with the optional sixth argument (ACP_DB_MAX_CONN) that PR #1370 added.
+#
+# THE OPTIONAL ARGUMENT IS WHY THIS TOLERATES A TRAILING FIELD RATHER THAN ANCHORING AT `$`. The
+# first version anchored, so when #1370 landed a connection-pool size on three of the five calls,
+# the parse silently found only `acp-app` and `acp-ollama` — an empty-ish baseline that would
+# have rendered as a shorter table with fewer differences. That is the quiet failure this
+# module's tests are built around, and it happened for real within an hour of the parser being
+# written: tests/test_azure_parity.py::test_the_baseline_found_every_workload_tier caught it.
 _RIGHTSIZE_CALL = re.compile(
     r"^update_app\s+(?P<name>\S+)\s+(?P<cpu>[\d.]+)\s+(?P<memory>\S+)\s+"
-    r"(?P<min>\d+)\s+(?P<max>\d+)\s*$", re.MULTILINE)
+    r"(?P<min>\d+)\s+(?P<max>\d+)(?:\s+(?P<pool>\d+))?\s*(?:#.*)?$", re.MULTILINE)
+
+# A scale rule applied by a dedicated function rather than by `update_app` — #1370's
+# `apply_remediation_autoscale`. Matched on the `--name <app>` inside the function body so a
+# second such function for another tier is picked up without another pattern.
+_NAMED_SCALE_RULE = re.compile(
+    r"--name\s+(?P<app>acp-[\w-]+)\s+--scale-rule-name\s+(?P<rule>\S+)")
 
 _CREATE = re.compile(r"az containerapp create .*?-n \"?\$(?P<var>[A-Z_]+)\"?(?P<body>.*?)-o none",
                      re.DOTALL)
@@ -123,7 +141,12 @@ def parse_rightsize(text: str | None = None) -> dict[str, AzureApp]:
         apps[match["name"]] = AzureApp(
             name=match["name"], cpu=float(match["cpu"]), memory=match["memory"],
             min_replicas=int(match["min"]), max_replicas=int(match["max"]),
+            db_pool=int(match["pool"]) if match["pool"] else None,
             source="rightsize-production.sh")
+    for rule in _NAMED_SCALE_RULE.finditer(body):
+        app = apps.get(rule["app"])
+        if app and rule["rule"] not in app.scale_rules:
+            app.scale_rules.append(rule["rule"])
     return apps
 
 

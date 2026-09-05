@@ -129,26 +129,64 @@ def test_a_decimal_memory_quantity_is_not_reported_as_a_difference(monkeypatch):
     assert not memory_differences, [d.render() for d in memory_differences]
 
 
-def test_production_does_not_autoscale_the_two_batch_tiers(report):
-    """THE HEADLINE FINDING, pinned so it cannot quietly change.
+def test_the_assess_tier_is_still_pinned_warm_and_does_not_autoscale(report):
+    """THE HEADLINE FINDING, pinned so it cannot quietly change — and it already changed once.
 
-    `rightsize-production.sh` pins assess and remediate at five replicas — min == max — and says
-    why: they are throughput-sensitive batch stages kept warm on purpose. The contract describes
-    both as autoscaling 3–10 on queue depth, and the Helm chart renders KEDA ScaledObjects for
-    them. Adopting the chart unchanged would replace a deliberate warm pool with an autoscaler on
-    the two stages whose latency somebody traded capacity for.
+    When this was first written it covered BOTH batch tiers: assess and remediate were each pinned
+    at five replicas. PR #1370 ("Autoscale remediation within the database budget") landed while
+    this branch was being built and gave remediate a real queue-depth scale rule and a 5-10 range.
+    Assess is still pinned, and `rightsize-production.sh` still says why: throughput-sensitive
+    batch stages kept warm on purpose, so a large run holds its performance baseline.
 
-    If this test starts failing, one of the two sides moved and the parity document's central
-    argument needs rewriting — which is exactly when somebody should be made to look.
+    So the finding narrowed rather than disappeared — adopting the chart unchanged would still
+    replace a deliberate warm pool with an autoscaler, on one tier instead of two. This test is
+    what made that visible within the hour: it failed on the merge rather than letting the
+    document keep making a claim about remediate that had stopped being true.
+    """
+    from acpctl.azure_baseline import baseline
+    assess = baseline()["acp-assess"]
+    assert assess.min_replicas == assess.max_replicas == 5, (
+        "assess is no longer pinned at 5 in rightsize-production.sh — the parity document's "
+        "central argument needs rewriting")
+    assert not assess.autoscaled
+    assert report["contract"]["assess"]["autoscaled"] is True, (
+        "the contract no longer autoscales assess; the headline is stale from the other side")
+
+
+def test_remediation_now_autoscales_on_its_own_lane_job_types():
+    """#1370's scale rule, recorded — and a corroboration worth keeping.
+
+    Its query filters `type IN ('remediate_file','rescore_file','apply_approved_values')`: the
+    remediate lane's job types, arrived at independently of the Helm chart's KEDA query, which
+    takes the same list from `inventory.LANE_JOB_TYPES`. Two people reached the same shape from
+    opposite ends, which is the strongest evidence available here that the shape is right.
+
+    It also means the `jobs` table having a `type` column and no `role` column is now load-bearing
+    in production, not only in the chart — the bug that cost this programme a day once already.
+    """
+    text = (ROOT / "deploy" / "public" / "rightsize-production.sh").read_text(encoding="utf-8")
+    assert "remediation-queue" in text
+    for job_type in ("remediate_file", "rescore_file", "apply_approved_values"):
+        assert job_type in text, f"the production scale rule no longer names {job_type}"
+    assert "role =" not in text, "a scale rule now queries a column the jobs table does not have"
+
+    from acpctl.azure_baseline import baseline
+    assert "remediation-queue" in baseline()["acp-remediate"].scale_rules
+
+
+def test_the_connection_pool_ceiling_is_carried_into_the_baseline():
+    """#1370 also pinned ACP_DB_MAX_CONN per worker replica, to hold the fleet under Postgres's
+    measured 150-connection ceiling. A replica ceiling means something different once each replica
+    caps its own pool, so the baseline records the pool rather than reporting replicas alone.
+
+    This is also the field whose arrival broke the parser: `update_app` grew a sixth positional
+    argument, the anchored regex stopped matching three of the five calls, and the baseline went
+    quietly short. Reading it here keeps it parsed.
     """
     from acpctl.azure_baseline import baseline
     apps = baseline()
-    for tier, app in (("assess", apps["acp-assess"]), ("remediate", apps["acp-remediate"])):
-        assert app.min_replicas == app.max_replicas == 5, (
-            f"{tier} is no longer pinned at 5 in rightsize-production.sh")
-        assert not app.autoscaled
-        assert report["contract"][tier]["autoscaled"] is True, (
-            f"the contract no longer autoscales {tier}; the parity document's headline is stale")
+    for name in ("acp-discovery", "acp-assess", "acp-remediate"):
+        assert apps[name].db_pool == 2, f"{name} no longer pins a connection pool"
 
 
 def test_the_known_divergences_are_exactly_these(report):
@@ -164,7 +202,7 @@ def test_the_known_divergences_are_exactly_these(report):
         ("api", "replicas.max"),
         ("discover", "replicas.max"),
         ("assess", "replicas.min"), ("assess", "replicas.max"), ("assess", "autoscaled"),
-        ("remediate", "replicas.min"), ("remediate", "replicas.max"), ("remediate", "autoscaled"),
+        ("remediate", "replicas.min"),
     }, sorted(found)
 
 
@@ -193,7 +231,7 @@ def test_every_acknowledgement_carries_a_reason():
 
 def test_the_report_does_not_claim_parity_while_divergences_exist(report):
     assert report["parity"] is False
-    assert report["divergences"] == 8
+    assert report["divergences"] == 6
 
 
 # ── what the repository can and cannot confirm ────────────────────────────────
