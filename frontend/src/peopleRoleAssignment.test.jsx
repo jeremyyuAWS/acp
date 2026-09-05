@@ -1,28 +1,25 @@
 /**
- * Assigning a workspace role from the People screen, and the confirmation that precedes it (§9).
+ * Assigning a workspace role from the People screen, and the toast that reports it (§9).
  *
- * THE CONFIRMATION IS THE POINT, and specifically the half nobody can work out for themselves.
- * "Change Jane from Compliance Manager to Analyst?" is a question an administrator cannot answer
- * from the two names — what they need to know is which of Jane's current abilities disappear, and
- * that requires resolving both roles. So the preview is computed SERVER-SIDE by the same resolver
- * the gate uses, and this file checks the screen shows it rather than inventing its own diff.
+ * IT USED TO ASK FIRST. A modal confirmation opened on every change, named the server-computed
+ * impact, and saved only when accepted. That was removed on request: assigning roles across a
+ * roster is repetitive, and a dialog per row makes it a two-step act every time.
  *
- * A preview that disagrees with what actually happens is worse than no preview at all: it is read,
- * approved, and then something else occurs.
+ * WHAT THE DIALOG CARRIED HAD TO SURVIVE THE REMOVAL, and that is most of what this file is
+ * about. "Change Jane from Compliance Manager to Analyst?" is a question an administrator cannot
+ * answer from the two names — the consequential half is which of Jane's current abilities
+ * disappear, and that requires resolving both roles. So the preview is still computed SERVER-SIDE
+ * by the same resolver the gate uses; it now appears in the toast, after the fact, in the past
+ * tense, beside an Undo.
+ *
+ * A preview that disagrees with what actually happened is worse than no preview at all: it is
+ * read, believed, and something else is true.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
 
-const PEOPLE = {
-  people: [
-    { email: 'owner@hosp.org', provider: 'google', role: 'admin', status: 'access_ready', protected: true },
-    { email: 'jane@hosp.org', provider: 'microsoft', role: 'user', status: 'access_ready',
-      workspace_role_id: 'compliance-manager' },
-  ],
-  domains: [], invite_enabled: false, can_manage: true,
-}
 const ROLES = {
   roles: [
     { id: 'compliance-manager', name: 'Compliance Manager', users: 1 },
@@ -31,10 +28,25 @@ const ROLES = {
   enforced: true,
 }
 
-let IMPACT = { gains: ['discover.run'], loses: ['remediate.run', 'release.view'], enforced: true }
-const assignWorkspaceRole = vi.fn(async () => ({ person: {} }))
-const roleImpact = vi.fn(async () => IMPACT)
-const getPeople = vi.fn(async () => PEOPLE)
+// A ROSTER THAT ACTUALLY CHANGES, rather than a frozen fixture.
+//
+// The component re-reads people after every assignment, so a getPeople that always answers with
+// the ORIGINAL role would paint the change and then immediately revert it — the optimistic update
+// and the Undo would both look broken here while working in the product, and, worse, a genuinely
+// broken Undo would look fine. The mock below is a small fake server: assignWorkspaceRole writes,
+// getPeople reads back what was written.
+let ROSTER
+let IMPACT
+// Which endpoint was called in which order. The order is load-bearing — see the test that reads it.
+let CALLS
+
+const getPeople = vi.fn(async () => ({ people: ROSTER, domains: [], invite_enabled: false, can_manage: true }))
+const assignWorkspaceRole = vi.fn(async (email, roleId) => {
+  CALLS.push(`assign:${roleId}`)
+  ROSTER = ROSTER.map((p) => (p.email === email ? { ...p, workspace_role_id: roleId || null } : p))
+  return { person: {} }
+})
+const roleImpact = vi.fn(async () => { CALLS.push('impact'); return IMPACT })
 
 vi.mock('./api.js', async (importActual) => ({
   ...(await importActual()),
@@ -49,7 +61,13 @@ const { default: PeopleAccess } = await import('./PeopleAccess.jsx')
 
 afterEach(() => { unmountAll(); vi.clearAllMocks() })
 beforeEach(() => {
+  ROSTER = [
+    { email: 'owner@hosp.org', provider: 'google', role: 'admin', status: 'access_ready', protected: true },
+    { email: 'jane@hosp.org', provider: 'microsoft', role: 'user', status: 'access_ready',
+      workspace_role_id: 'compliance-manager' },
+  ]
   IMPACT = { gains: ['discover.run'], loses: ['remediate.run', 'release.view'], enforced: true }
+  CALLS = []
   // The mock returns ROLES by reference, so a test that changes the rung has to put it back or
   // the next one inherits it — the same trap the JIT-roster memo sprang on test_staged_rollout.
   ROLES.enforced = true
@@ -60,15 +78,12 @@ const flush = async () => { for (let i = 0; i < 4; i++) await act(async () => { 
 const click = async (el) => { await act(async () => { el.click() }); await flush() }
 const byText = (c, sel, re) => [...c.querySelectorAll(sel)].find((e) => re.test(e.textContent))
 
-// THE DIALOG IS NOT INSIDE THE COMPONENT ANY MORE, and that is the fix rather than an accident.
-// It renders through a portal at `document.body` so that `position: fixed` resolves against the
-// viewport instead of against Settings' `.setoverlay`, which carries a `backdrop-filter` and
-// therefore became the containing block for it — displacing the dialog by the panel's scroll
-// offset until it sat off the top of the screen. See peopleDialogPortal.test.jsx.
-//
-// So these lookups go through `document`, not the mounted container. The assertions themselves
-// are unchanged; only where the dialog lives has moved.
-const roleDialog = () => document.querySelector('[role="dialog"]')
+// THE TOAST IS NOT INSIDE THE COMPONENT, and that is deliberate rather than incidental. It is
+// `position: fixed`, and Settings' `.setoverlay` carries a `backdrop-filter`, which would make it
+// the containing block and pin the toast to the corner of a scrolling panel instead of the
+// window — the exact defect that made the old confirmation invisible. It is portalled to
+// document.body, so these lookups go through `document`. See peopleDialogPortal.test.jsx.
+const toast = () => document.querySelector('.people-toast')
 
 async function mount() {
   const { container, root } = createTestRoot()
@@ -109,26 +124,65 @@ describe('the role column', () => {
   })
 })
 
-// ── the confirmation (PRD §9) ─────────────────────────────────────────────────
+// ── it applies at once, and says so ──────────────────────────────────────────
 
-describe('changing a role asks first', () => {
-  it('does not assign anything until the change is confirmed', async () => {
+describe('changing a role applies immediately', () => {
+  it('assigns on selection, with nothing to confirm first', async () => {
     const c = await mount()
     await pick(c, 'analyst')
-    expect(assignWorkspaceRole).not.toHaveBeenCalled()
-    expect(roleDialog()).toBeTruthy()
+    expect(assignWorkspaceRole).toHaveBeenCalledWith('jane@hosp.org', 'analyst')
+    // The whole of the old flow, asserted absent: no dialog, no scrim, nothing to accept.
+    expect(document.querySelector('[role="dialog"]')).toBeNull()
   })
 
-  it('names what is LOST as well as what is gained', async () => {
+  it('leaves the new role showing on the row rather than snapping back', async () => {
+    const c = await mount()
+    await pick(c, 'analyst')
+    expect(roleSelect(c).value).toBe('analyst')
+  })
+
+  it('shows the new role BEFORE the server answers', async () => {
+    // The select is controlled by the person's stored role, so without an optimistic paint it
+    // reverts for the length of the round trip. On the screen whose reported bug was "the
+    // dropdown does not do anything", a control that visibly undoes the user is the one
+    // behaviour that must not ship. Held open deliberately: this asserts the state DURING the
+    // request, which is the only moment the defect would be visible.
+    let release
+    assignWorkspaceRole.mockImplementationOnce(() => new Promise((r) => { release = r }))
+    const c = await mount()
+    await pick(c, 'analyst')
+    expect(roleSelect(c).value).toBe('analyst')
+    await act(async () => { release({ person: {} }) })
+  })
+
+  it('does nothing at all when the selected role is the one already held', async () => {
+    const c = await mount()
+    await pick(c, 'compliance-manager')
+    expect(assignWorkspaceRole).not.toHaveBeenCalled()
+    expect(toast()).toBeNull()
+  })
+})
+
+describe('the toast reports what changed', () => {
+  it('names what was LOST as well as what was gained', async () => {
     // The lost half is the one an administrator cannot derive from two role names, and the one
     // that generates the support ticket when it is a surprise.
     const c = await mount()
     await pick(c, 'analyst')
-    const dialog = roleDialog()
-    expect(dialog.textContent).toContain('remediate.run')
-    expect(dialog.textContent).toContain('release.view')
-    expect(dialog.textContent).toContain('discover.run')
-    expect(dialog.textContent).toContain('Analyst')
+    expect(toast().textContent).toContain('remediate.run')
+    expect(toast().textContent).toContain('release.view')
+    expect(toast().textContent).toContain('discover.run')
+    expect(toast().textContent).toContain('Analyst')
+  })
+
+  it('speaks in the past tense, because the change has already happened', async () => {
+    // The dialog said "they will lose". Copy that still reads as a forecast invites the reader to
+    // look for something left to approve, and there no longer is one.
+    const c = await mount()
+    await pick(c, 'analyst')
+    const text = toast().textContent
+    expect(text).toContain('Lost:')
+    expect(text).not.toMatch(/will lose/i)
   })
 
   it('asks the server for the impact rather than diffing two role names in the browser', async () => {
@@ -137,19 +191,15 @@ describe('changing a role asks first', () => {
     expect(roleImpact).toHaveBeenCalledWith('jane@hosp.org', 'analyst')
   })
 
-  it('assigns once confirmed', async () => {
+  it('asks for the impact BEFORE the assignment lands, not after', async () => {
+    // The order is the whole correctness of the preview. The impact is the difference between the
+    // role held NOW and the one being moved to; asked after the write, the server compares the
+    // new role with itself and answers "nothing changes" every time. That failure is invisible —
+    // an always-empty preview reads as a fact about the two roles rather than about when it was
+    // requested — so it is pinned here rather than left to review.
     const c = await mount()
     await pick(c, 'analyst')
-    await click(byText(document, '[role="dialog"] button', /^Change role$/))
-    expect(assignWorkspaceRole).toHaveBeenCalledWith('jane@hosp.org', 'analyst')
-  })
-
-  it('assigns nothing when cancelled', async () => {
-    const c = await mount()
-    await pick(c, 'analyst')
-    await click(byText(document, '[role="dialog"] button', /^Cancel$/))
-    expect(assignWorkspaceRole).not.toHaveBeenCalled()
-    expect(roleDialog()).toBeNull()
+    expect(CALLS).toEqual(['impact', 'assign:analyst'])
   })
 
   it('says plainly when nothing actually changes', async () => {
@@ -158,14 +208,14 @@ describe('changing a role asks first', () => {
     IMPACT = { gains: [], loses: [], enforced: true }
     const c = await mount()
     await pick(c, 'analyst')
-    expect(roleDialog().textContent).toMatch(/Nothing they can do today changes/i)
+    expect(toast().textContent).toMatch(/Nothing they can do today changes/i)
   })
 
   it('warns that the change is inert while enforcement is off', async () => {
     IMPACT = { gains: [], loses: [], enforced: false, mode: 'observe' }
     const c = await mount()
     await pick(c, 'analyst')
-    expect(roleDialog().textContent).toContain('changes nothing for them')
+    expect(toast().textContent).toContain('changes nothing for them')
   })
 
   it('does NOT call the change inert at the navigation stage, because it is not', async () => {
@@ -175,23 +225,88 @@ describe('changing a role asks first', () => {
     IMPACT = { gains: [], loses: ['operations.view'], enforced: false, mode: 'navigation' }
     const c = await mount()
     await pick(c, 'analyst')
-    const text = roleDialog().textContent
-    expect(text).toContain('hide tabs for them')
+    const text = toast().textContent
+    expect(text).toContain('hides tabs for them')
     expect(text).not.toContain('changes nothing for them')
+  })
+
+  it('can be dismissed', async () => {
+    const c = await mount()
+    await pick(c, 'analyst')
+    await click(byText(document, '.people-toast button', /^×$/))
+    expect(toast()).toBeNull()
+  })
+})
+
+// ── undo, which is what Cancel became ────────────────────────────────────────
+
+describe('the toast can undo the change it reports', () => {
+  it('puts the previous role back, on the server', async () => {
+    // Without this the screen assigns on one stray change event with no way back except knowing
+    // what the previous role was — which, for a role the administrator did not set themselves,
+    // they do not.
+    const c = await mount()
+    await pick(c, 'analyst')
+    await click(byText(document, '.people-toast button', /^Undo$/))
+    expect(assignWorkspaceRole).toHaveBeenLastCalledWith('jane@hosp.org', 'compliance-manager')
+    expect(ROSTER.find((p) => p.email === 'jane@hosp.org').workspace_role_id).toBe('compliance-manager')
+  })
+
+  it('puts the previous role back on the row too', async () => {
+    const c = await mount()
+    await pick(c, 'analyst')
+    await click(byText(document, '.people-toast button', /^Undo$/))
+    expect(roleSelect(c).value).toBe('compliance-manager')
+  })
+
+  it('restores "no role" as a real previous value, not as an absent one', async () => {
+    // '' is a legitimate role to return someone to, and the falsy-value bug here would be silent:
+    // an Undo that quietly kept the new role while reporting success.
+    ROSTER = ROSTER.map((p) => (p.email === 'jane@hosp.org' ? { ...p, workspace_role_id: null } : p))
+    const c = await mount()
+    await pick(c, 'analyst')
+    await click(byText(document, '.people-toast button', /^Undo$/))
+    expect(assignWorkspaceRole).toHaveBeenLastCalledWith('jane@hosp.org', '')
+    expect(roleSelect(c).value).toBe('')
+  })
+
+  it('closes the toast, so one change cannot be undone twice', async () => {
+    const c = await mount()
+    await pick(c, 'analyst')
+    await click(byText(document, '.people-toast button', /^Undo$/))
+    expect(toast()).toBeNull()
   })
 })
 
 describe('when the preview cannot be fetched', () => {
-  it('still lets the change proceed, and says the preview is missing', async () => {
-    // The confirmation is a courtesy; the assignment is the operation. Blocking a legitimate
-    // change because a read failed would make a broken preview into an outage.
+  it('still makes the change, and says the preview is missing', async () => {
+    // The preview is a courtesy; the assignment is the operation. Losing the write because a read
+    // failed would make a broken preview into an outage — and now that nothing is confirmed
+    // first, silently dropping the change would be invisible.
     roleImpact.mockRejectedValueOnce(new Error('nope'))
     const c = await mount()
     await pick(c, 'analyst')
-    const dialog = roleDialog()
-    expect(dialog.textContent).toMatch(/could not be previewed/i)
-    await click(byText(document, '[role="dialog"] button', /^Change role$/))
     expect(assignWorkspaceRole).toHaveBeenCalledWith('jane@hosp.org', 'analyst')
+    expect(toast().textContent).toMatch(/could not be previewed/i)
+  })
+})
+
+describe('when the assignment itself fails', () => {
+  it('reports the error and does not claim success', async () => {
+    assignWorkspaceRole.mockRejectedValueOnce(new Error('403 Forbidden'))
+    const c = await mount()
+    await pick(c, 'analyst')
+    expect(toast(), 'a failed assignment must not produce a "Role updated" toast').toBeNull()
+    expect(c.querySelector('[role="status"]').textContent).toContain('403 Forbidden')
+  })
+
+  it('puts the row back to the role the server still holds', async () => {
+    // The optimistic paint has to be undone by the truth rather than by guessing. getPeople is
+    // the fake server above, and it never saw the write.
+    assignWorkspaceRole.mockRejectedValueOnce(new Error('403 Forbidden'))
+    const c = await mount()
+    await pick(c, 'analyst')
+    expect(roleSelect(c).value).toBe('compliance-manager')
   })
 })
 
@@ -206,7 +321,6 @@ describe('when the caller may not manage roles', () => {
     expect(c.querySelector('[role="status"]').textContent).toBe('')
   })
 })
-
 
 // ── the rung, on the screen where roles are actually given ───────────────────
 

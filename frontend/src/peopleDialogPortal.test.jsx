@@ -1,21 +1,28 @@
 /**
- * The confirmation dialog has to escape the Settings overlay, or selecting a role does nothing.
+ * Every fixed-position overlay on the People screen has to escape the Settings overlay.
  *
- * THE BUG, MEASURED IN CHROMIUM BEFORE IT WAS FIXED. Both PeopleAccess dialogs and the Roles
- * drawer are `position: fixed`, and all three render inside Settings, whose `.setoverlay` sets
+ * THE BUG, MEASURED IN CHROMIUM BEFORE IT WAS FIXED. The PeopleAccess dialogs and the Roles
+ * drawer are `position: fixed`, and all of them render inside Settings, whose `.setoverlay` sets
  * `backdrop-filter: blur(2px)`. An element with a backdrop-filter becomes the CONTAINING BLOCK
  * for its fixed-position descendants — so `fixed` stopped meaning "relative to the viewport" and
  * started meaning "relative to the settings overlay", which scrolls.
  *
- * With the panel scrolled, the dialog rendered at y=-21 and its scrim at y=-105: above the top of
- * the window, present in the DOM, focusable, and invisible. Since PeopleAccess only WRITES after
- * the confirmation is accepted, the whole feature looked inert — the reported symptom was "the
- * dropdown does not work", and nothing was wrong with the dropdown or with the server.
+ * With the panel scrolled, the role-change confirmation rendered at y=-21 and its scrim at
+ * y=-105: above the top of the window, present in the DOM, focusable, and invisible. Since
+ * PeopleAccess only WROTE after that confirmation was accepted, the whole feature looked inert —
+ * the reported symptom was "the dropdown does not work", and nothing was wrong with the dropdown
+ * or with the server.
+ *
+ * THAT CONFIRMATION HAS SINCE BEEN REMOVED. A role now applies on selection and is reported by a
+ * toast in the top-right corner. This file did not become obsolete when that landed: the toast is
+ * fixed-position too, so it inherits the identical trap, and a toast pinned to the corner of a
+ * scrolling panel drifts off-screen exactly as the dialog did. The tests moved from the dialog to
+ * its replacement rather than being deleted with it.
  *
  * WHY THE EXISTING TESTS ALL PASSED. Every one of them mounts PeopleAccess STANDALONE. The defect
  * only exists when it is a descendant of `.setoverlay`, which is how the app actually renders it
- * and how no test did. peopleRoleAssignment.test.jsx even drives this exact dialog and asserts on
- * its text — correctly, and from a tree the bug cannot occur in.
+ * and how no test did. peopleRoleAssignment.test.jsx drives this very flow and asserts on its
+ * text — correctly, and from a tree the bug cannot occur in.
  *
  * So these tests assert the structural property that survives the fix: the overlay is NOT a
  * descendant of the component's own container. jsdom computes no layout and cannot see the
@@ -75,36 +82,51 @@ async function pick(container, email, value) {
   return sel
 }
 
-describe('the role-change dialog escapes its container', () => {
+describe('the role-change toast escapes its container', () => {
+  // THE CONFIRMATION IS GONE — a role now applies on selection and is REPORTED here — but the
+  // trap did not go with it. The toast is `position: fixed` too, pinned to the top-right corner,
+  // and a fixed element inside `.setoverlay` is positioned against that overlay rather than the
+  // viewport. Left in place it would ride the panel's scroll offset and drift off the top of the
+  // window: the same defect, the same screen, a different element. So the portal is inherited
+  // along with the position, and these tests moved from the dialog to its replacement.
   it('renders outside the component subtree, at document.body', async () => {
     const container = await mount()
     await pick(container, 'jane@hosp.org', 'analyst')
 
-    const dialog = document.querySelector('[aria-labelledby="role-change-title"]')
-    expect(dialog, 'the dialog did not open at all').toBeTruthy()
-    expect(container.contains(dialog)).toBe(false)      // the whole point
-    expect(document.body.contains(dialog)).toBe(true)
+    const toast = document.querySelector('.people-toast')
+    expect(toast, 'no toast appeared at all').toBeTruthy()
+    expect(container.contains(toast)).toBe(false)      // the whole point
+    expect(document.body.contains(toast)).toBe(true)
   })
 
-  it('its fixed scrim is a direct child of body, so nothing can become its containing block',
-    async () => {
-      // A `position: fixed` element resolves against the viewport ONLY while no ancestor has a
-      // transform, filter, backdrop-filter, perspective, contain:paint or will-change. Being a
-      // direct child of body is the one arrangement where that cannot be violated by a component
-      // rendered somewhere above it.
-      const container = await mount()
-      await pick(container, 'jane@hosp.org', 'analyst')
-      const dialog = document.querySelector('[aria-labelledby="role-change-title"]')
-      expect(dialog.parentElement.parentElement).toBe(document.body)
-    })
+  it('is a direct child of body, so nothing can become its containing block', async () => {
+    // A `position: fixed` element resolves against the viewport ONLY while no ancestor has a
+    // transform, filter, backdrop-filter, perspective, contain:paint or will-change. Being a
+    // direct child of body is the one arrangement where that cannot be violated by a component
+    // rendered somewhere above it.
+    const container = await mount()
+    await pick(container, 'jane@hosp.org', 'analyst')
+    expect(document.querySelector('.people-toast').parentElement).toBe(document.body)
+  })
 
   it('still shows the impact the server computed', async () => {
     // The fix must not cost the content. Portalled children keep React context and props.
     const container = await mount()
     await pick(container, 'jane@hosp.org', 'analyst')
-    const dialog = document.querySelector('[aria-labelledby="role-change-title"]')
-    expect(dialog.textContent).toContain('remediate.run')
-    expect(dialog.textContent).toContain('Analyst')
+    const toast = document.querySelector('.people-toast')
+    expect(toast.textContent).toContain('remediate.run')
+    expect(toast.textContent).toContain('Analyst')
+  })
+
+  it('pins itself to the top-right corner rather than inheriting a position', async () => {
+    // jsdom computes no layout, so the coordinates are asserted from the stylesheet. Without
+    // this the portal above is satisfied by a toast rendered at document.body with no position
+    // at all, which would sit at the bottom of the page instead of the corner.
+    const rule = css.match(/\.people-toast\s*\{[^}]+\}/)
+    expect(rule).not.toBeNull()
+    expect(rule[0]).toMatch(/position:\s*fixed/)
+    expect(rule[0]).toMatch(/top:\s*18px/)
+    expect(rule[0]).toMatch(/right:\s*18px/)
   })
 })
 
