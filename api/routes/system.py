@@ -365,9 +365,7 @@ def _is_suspended(email: str) -> bool:
     rather than inferred from absence in the allowlist, which would also be true of somebody who
     was never added and of the demo path where no allowlist is configured at all.
     """
-    target = (email or "").strip().lower()
-    person = next((p for p in core.store.get_people() if p.get("email") == target), None)
-    return (person or {}).get("status") == "suspended"
+    return core.suspended_in_store(email)
 
 
 @router.post("/admin/workspace-roles/bootstrap")
