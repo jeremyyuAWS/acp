@@ -200,6 +200,21 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(labels.some((l) => /^(Approve|Accept) everything/i.test(l))).toBe(false)
   })
 
+  it('offers a scoped visible-view bulk action with an impact summary', async () => {
+    const q = [
+      { id: 30, file: 'a.docx', title: 'DOCX · Image needs alt text', rule_id: '1.1.1', hasProposal: true, after: 'A chart' },
+      { id: 31, file: 'b.docx', title: 'DOCX · Document has no title', rule_id: '2.4.2', hasProposal: true, after: 'Annual report' },
+      { id: 32, file: 'c.pdf', title: 'PDF · Scanned page, no text', rule_id: '1.1.1' },
+    ]
+    const calls = []
+    await render({ queue: q, decisions: {}, onDecide: (f, d) => calls.push([f.id, d.value]) })
+    await click(btnByText('Bulk actions · 2 visible fixes'))
+    expect(container.querySelector('[aria-label="Bulk approval summary"]').textContent).toContain('2 fixes · 2 files · 2 WCAG criteria')
+    expect(container.textContent).toContain('Manual, blocked, handed-off, and decided work is excluded')
+    await click(btnByText('Approve & apply all 2'))
+    expect(calls).toEqual([[30, 'A chart'], [31, 'Annual report']])
+  })
+
   it('reports a partial batch failure instead of claiming the whole cluster landed', async () => {
     const q = [
       { id: 20, file: 'a.docx', title: 'DOCX \u00b7 Image needs alt text', rule_id: '1.1.1', hasProposal: true, after: 'A chart' },
