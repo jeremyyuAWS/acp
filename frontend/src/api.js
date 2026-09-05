@@ -1006,6 +1006,18 @@ export const getRemediationStatus = (scanId) => {
                { headers: headers(), cache: 'no-store' }).then(j)
 }
 
+// The reconciled, revisioned run snapshot (PRD "Remediation Real-Time Operations Panel" §8) —
+// run state, the six-way document partition, phase rail, and the server's own invariant check.
+// Distinct from getRemediationStatus, which stays as-is and still feeds the progress bar.
+//
+// SIM RETURNS NOTHING, deliberately. Every other SIM answer is a plausible literal; a plausible
+// literal here would be a hand-written run state and a hand-balanced partition — i.e. a second,
+// fabricated implementation of the one contract this endpoint exists to make impossible to fake.
+// The panel renders nothing rather than a demo of a guarantee that was not checked.
+export const getRemediationSnapshot = (scanId) => (SIM
+  ? sim(null)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/snapshot`,
+          { headers: headers(), cache: 'no-store' }).then(j))
 // Authenticated Remediate progress stream.  Native EventSource cannot send ACP's bearer header,
 // so this shares Discover's fetch + ReadableStream SSE parser and exposes the same close contract.
 export function openRemediationStream(scanId, { onMessage, onDone, onError } = {}) {

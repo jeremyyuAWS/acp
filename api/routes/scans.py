@@ -1497,6 +1497,37 @@ def remediation_status(sid: str, request: Request, response: Response):
     return out
 
 
+def _remediation_snapshot(sid: str) -> dict:
+    """The revisioned run snapshot for one scan — facts from the store, judgement from the pure
+    module. One function so the poll route and the SSE stream cannot disagree about either.
+
+    `policy_version` and `execution_mode` are absent, not blank: ACP records no version for the
+    remediation lane table and has no per-run execution mode to read. build_snapshot carries them
+    through as None, and the panel renders nothing for a fact it has not been told — the same rule
+    RemediationRunHeader already applies to its counts.
+    """
+    import remediation_run
+    facts = core.store.remediation_run_facts(sid)
+    return remediation_run.build_snapshot(facts)
+
+
+@router.get("/scans/{sid}/remediation/snapshot")
+def remediation_snapshot(sid: str, request: Request, response: Response):
+    """One reconciled, revisioned account of this remediation run (PRD §8).
+
+    Owner-scoped for the same reason `remediation-status` is: filenames and SharePoint site paths
+    are in here, and a scan id must not work as a cross-account oracle.
+
+    This does NOT replace `remediation-status`, which still feeds the shipped progress bar. It
+    answers the different question that endpoint never could — what state is this run in, and do
+    its numbers reconcile — and it answers it on the server, because every attempt to assemble it
+    in the browser produced a screen whose parts contradicted each other.
+    """
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    response.headers["Cache-Control"] = "no-store"
+    return _remediation_snapshot(sid)
+
 @router.get("/scans/{sid}/remediation/stream")
 async def stream_remediation_status(sid: str, request: Request):
     """Push the owner-scoped remediation status whenever it changes.
@@ -1524,7 +1555,24 @@ async def stream_remediation_status(sid: str, request: Request):
             out["activity"] = activity.current(sid)
             out["workers"] = {"active": int(out.get("running") or 0),
                               "capacity": int(getattr(core, "WORKERS", 0) or 0)}
-            sig = _json.dumps(out, sort_keys=True, default=str)
+            # The reconciled run snapshot rides the SAME frame as the legacy counts, so a client
+            # can never render a state from one instant against counters from another. A stream
+            # failure here must not take the stream down with it: the legacy payload is what the
+            # shipped progress bar consumes, and it is still correct without this.
+            try:
+                out["snapshot"] = await asyncio.to_thread(_remediation_snapshot, sid)
+            except Exception:
+                swallowed("routes.scans.stream_remediation_status: building the run snapshot failed", sid)
+                out.pop("snapshot", None)
+            # generated_at moves every tick by construction, so comparing it would push a frame
+            # per interval and defeat the change detection this loop exists for. The snapshot's
+            # `revision` is the field that actually advances on a durable change — that is what
+            # it is for — so the signature is taken over everything except the generation time.
+            _sig_src = dict(out)
+            if isinstance(_sig_src.get("snapshot"), dict):
+                _sig_src["snapshot"] = {k: v for k, v in _sig_src["snapshot"].items()
+                                        if k != "generated_at"}
+            sig = _json.dumps(_sig_src, sort_keys=True, default=str)
             if sig != last:
                 last = sig
                 idle = 0

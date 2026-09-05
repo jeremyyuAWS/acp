@@ -60,6 +60,8 @@ endpoints below rather than exposed directly:
 - **Assessment**: `GET /scans/{sid}/status` (Accessibility Status roll-up), `GET /scans/{sid}/live`
   and `GET /scans/{sid}/events` (live KPIs + worker/queue block while a run is in progress).
 - **Remediation**: `GET /scans/{sid}/remediation-status` (in-flight jobs + current activity),
+  `GET /scans/{sid}/remediation/snapshot` (the reconciled run state, counter partition and
+  invariant verdict for one run — see docs/prd-remediation-realtime-ops-panel.md),
   `GET /scans/{sid}/source-status` (has the source file drifted since scan time).
 - **Platform**: `GET /healthz` (liveness + build provenance), `GET /readyz` (functional
   readiness — workers, PDF/vision engines, source-adapter config), `GET /probe/readyz`
