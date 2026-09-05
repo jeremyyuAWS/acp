@@ -73,7 +73,7 @@ describe('store.py — criterion_disposition table', () => {
   })
 
   it('schema version bumped to 14', () => {
-    expect(store).toContain('_SCHEMA_VERSION = 14')
+    expect(store).toContain('_SCHEMA_VERSION = 15')
   })
 })
 
