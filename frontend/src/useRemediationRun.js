@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { getRemediationSnapshot, openRemediationStream } from './api.js'
 import { isNewer } from './remediationSnapshot.js'
+import { addRemediationEvent } from './remediationEventFeed.js'
 
 // The run's live state, and THE ONE PLACE THAT HOLDS ITS STREAM.
 //
@@ -35,6 +36,10 @@ export function useRemediationRun(runId) {
   // a counter rather than a boolean so a second run's completion is distinguishable from the
   // first's still being set.
   const [endedAt, setEndedAt] = useState(0)
+  // A bounded projection of durable lifecycle events. State remains server-owned in `snapshot`;
+  // these rows answer the different question "what just happened?" and survive tab changes with
+  // the stream because this hook lives at App level.
+  const [events, setEvents] = useState([])
 
   const snapRef = useRef(null)
   const streamRef = useRef(null)
@@ -60,7 +65,7 @@ export function useRemediationRun(runId) {
     // the log — a reconcile on every first connect.
     snapRef.current = null
     cursorRef.current = null
-    setSnapshot(null); setReceivedAt(null); setStatus(null); setConnected(false)
+    setSnapshot(null); setReceivedAt(null); setStatus(null); setConnected(false); setEvents([])
     if (!runId) return undefined
 
     let live = true
@@ -92,10 +97,11 @@ export function useRemediationRun(runId) {
           setStatus(frame)
           accept(frame?.snapshot)
         },
-        onEvent: (_event, id) => {
+        onEvent: (event, id) => {
           // The FRAME's id is the authority, not a field inside the payload: the cursor must only
           // ever advance to something this client actually rendered.
           if (id != null) cursorRef.current = id
+          setEvents((previous) => addRemediationEvent(previous, event, id))
         },
         onReconcile: () => {
           // The server declined to replay — cursor ahead of the log, log pruned, cursor malformed.
@@ -132,5 +138,5 @@ export function useRemediationRun(runId) {
     }
   }, [runId, accept])
 
-  return { snapshot, receivedAt, connected, status, endedAt }
+  return { snapshot, receivedAt, connected, status, endedAt, events }
 }
