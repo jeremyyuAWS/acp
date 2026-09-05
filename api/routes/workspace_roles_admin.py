@@ -353,8 +353,12 @@ def assign_person_role(email: str, body: dict, request: Request):
     if not target or "@" not in target:
         raise HTTPException(400, "a valid email is required")
 
-    person = next((p for p in core.store.get_people() if p.get("email") == target), None)
-    if person is None:
+    # THE ROSTER THE SCREEN RENDERED, not the `people` table underneath it. Reading the table
+    # alone rejected everyone who has access by way of the ALLOWLIST without a stored record —
+    # the "Provider not recorded" rows — with `404 person not found`, on a row whose dropdown the
+    # administrator had just used. `wr.assign_role` upserts, so the write was always able to
+    # create the record; only this lookup stood in the way.
+    if core.person_with_access(target) is None:
         raise HTTPException(404, "person not found")
 
     # PRD §4: Owner is "assignable by the current Owner alone".
@@ -376,6 +380,8 @@ def assign_person_role(email: str, body: dict, request: Request):
 
     _guard_last_role_manager(tenant, target, role_id)
     wr.assign_role(core.store, email=target, role_id=role_id or None, actor=actor or "admin")
+    # After `wr.assign_role` the record exists whether or not it did before, so this reads the
+    # table directly — it is the row that was just written, not a membership question.
     return {"person": next(p for p in core.store.get_people() if p["email"] == target),
             "access": wr.access_for_email(core.store, target, owner_email=core.OWNER_EMAIL,
                                           is_suspended=_suspended)}
@@ -401,8 +407,13 @@ def _guard_last_role_manager(tenant: str, target: str, new_role_id: str) -> None
     """
     if core.OWNER_EMAIL:
         return                       # the owner always holds it; lockout is impossible
+    # Over the roster, so the person being GRANTED roles.manage is counted even when they have no
+    # stored record yet. Reading `store.get_people()` here skipped the target entirely in that
+    # case: promoting an allowlist-only user to role manager was refused as "this would leave
+    # nobody able to manage roles" while doing exactly the thing that fixes it — and this guard
+    # only runs where no owner is configured, which is the deployment with no other way back.
     keeps = 0
-    for person in core.store.get_people():
+    for person in core.people_with_access():
         email = person.get("email")
         if not email or person.get("status") == "suspended":
             continue
