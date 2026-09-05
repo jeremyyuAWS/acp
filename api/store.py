@@ -635,6 +635,55 @@ _SCHEMA = [
     )""",
     "CREATE INDEX IF NOT EXISTS idx_lifecycle_evaluation_scan ON lifecycle_evaluation(scan_id, owner_email)",
     "CREATE INDEX IF NOT EXISTS idx_lifecycle_evaluation_file ON lifecycle_evaluation(scan_id, document_id)",
+    # ── Safe lifecycle archive auto-fire (R9) ────────────────────────────────────────────────
+    # Three tables, added because the existing records genuinely cannot express what auto-fire
+    # has to be able to prove afterwards — the bar the PRD sets for new schema, checked one by
+    # one rather than assumed:
+    #
+    #   * SUPERSESSION EVIDENCE. disposition_audit records WHICH rule fired; nothing anywhere
+    #     records that a specific newer ITEM supersedes a specific older one, with the stable
+    #     source identifiers that make the claim checkable. lifecycle_evaluation's evidence_json
+    #     is condition-level ("modified_at before 2021-01-01"), which is exactly the age-shaped
+    #     evidence this feature exists to refuse as an authorization.
+    #   * IDEMPOTENT EXECUTION. disposition_audit's id is a uuid the caller invents, so a repeat
+    #     submission writes a second row and performs a second move. The unique key below is
+    #     derived from the decision, so the repeat finds the first execution instead.
+    #   * DESTINATION VERIFICATION. There is no column anywhere for the destination item id and
+    #     url a move produced, so "the file is where we said we put it" could not be re-checked.
+    #   * RECOVERY-REQUIRED. disposition_audit.result is pending_approval/applied/failed/rejected
+    #     — an outcome vocabulary with no room for "we do not know whether it moved", which is
+    #     precisely the state that must never be recorded as either of its neighbours.
+    #
+    # `archive_autofire_policy` is CONFIG and survives a reset, on this file's existing rule that
+    # rules survive and records do not (disposition_policy survives; disposition_audit is wiped).
+    # The other two are records and are in _ANALYTICS_TABLES.
+    """CREATE TABLE IF NOT EXISTS archive_autofire_policy (
+      owner_email TEXT PRIMARY KEY, policy_json TEXT, updated_at TEXT, updated_by TEXT
+    )""",
+    # The policy AS EVALUATED, content-addressed by archive_autofire.policy_snapshot. Kept beside
+    # the executions rather than inside them so a run of 500 items stores one copy of the policy
+    # and 500 references to it — and so "which policy authorised this?" is answerable years later
+    # from the row itself, after an administrator has changed the live one a dozen times.
+    """CREATE TABLE IF NOT EXISTS archive_policy_snapshot (
+      snapshot_id TEXT, owner_email TEXT, policy_json TEXT, created_at TEXT, scan_id TEXT,
+      PRIMARY KEY (snapshot_id, owner_email)
+    )""",
+    """CREATE TABLE IF NOT EXISTS archive_execution (
+      execution_id TEXT PRIMARY KEY, idempotency_key TEXT, owner_email TEXT, scan_id TEXT,
+      file TEXT, policy_id TEXT, snapshot_id TEXT, source_connection TEXT,
+      source_item_id TEXT, source_drive_id TEXT, source_etag TEXT, source_path TEXT,
+      replacement_item_id TEXT, replacement_path TEXT, evidence_json TEXT, preflight_json TEXT,
+      destination_path TEXT, destination_item_id TEXT, destination_url TEXT,
+      state TEXT, detail TEXT, actor TEXT, dry_run INT, attempts INT,
+      created_at TEXT, started_at TEXT, completed_at TEXT
+    )""",
+    # THE UNIQUE INDEX IS THE IDEMPOTENCY GUARANTEE, not the code that reads it. An application
+    # check-then-insert has a window, and two workers processing the same eligible queue is the
+    # ordinary case rather than the rare one — the second insert has to be refused by the
+    # database or "identical submissions create one execution" is a hope.
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_archive_execution_key ON archive_execution(idempotency_key)",
+    "CREATE INDEX IF NOT EXISTS idx_archive_execution_scan ON archive_execution(scan_id, owner_email)",
+    "CREATE INDEX IF NOT EXISTS idx_archive_execution_owner ON archive_execution(owner_email, created_at)",
     # Per-file WCAG scope rules (Discover/Assess Lifecycle PRD §4.4 / AC-09, "C4"). A rule
     # targets files by folder / owner / department / SharePoint Content Type and assigns a
     # Core-17 subset; the effective
@@ -1886,8 +1935,15 @@ class _PgAdapter:
     # escalation. Nothing decides anything from the column; it is evidence for a reviewer.
     # This follows v17's structured-release tables from main; both changes remain additive and
     # safe during a rolling deployment.
-    _SCHEMA_VERSION = 19
-    _SCHEMA_CHECKSUM_AT_VERSION = "a014bf53187661bc4edf3efced0948d7"
+    # v20 adds the three archive auto-fire tables (R9) — archive_autofire_policy,
+    # archive_policy_snapshot, archive_execution — plus the unique idempotency index and two
+    # lookups. Additive on the usual terms, and additive in BEHAVIOUR for the strongest reason
+    # available: the feature ships DISABLED (archive_autofire.POLICY_DEFAULTS), so a replica that
+    # carries the code and no stored policy performs no move at all, and a replica without the
+    # code never reads or writes these tables. Neither can lose a surface it has today; the
+    # existing recommendation path is untouched.
+    _SCHEMA_VERSION = 20
+    _SCHEMA_CHECKSUM_AT_VERSION = "dd5cf95c73508b574a4a1a0fe882102a"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -3956,7 +4012,14 @@ class Store:
                          # the same anti-lockout property core.is_owner exists to provide.
                          "acr_role",
                          # ADR 0027 Tier A — vision layout descriptions are per-scan customer data.
-                         "scanned_pdf_layouts"]
+                         "scanned_pdf_layouts",
+                         # R9 archive auto-fire. Both are RECORDS on this list's own rule —
+                         # archive_execution is what happened to a customer's files, and
+                         # archive_policy_snapshot is the policy AS EVALUATED at a moment, which
+                         # is a record about a run rather than the live configuration.
+                         # archive_autofire_policy is deliberately NOT here: it is the rule, and
+                         # rules survive a reset exactly as disposition_policy does.
+                         "archive_execution", "archive_policy_snapshot"]
 
     def reset_analytics(self) -> list[str]:
         """Clear all scan results / activity so the Grafana + in-app charts start
@@ -4055,6 +4118,13 @@ class Store:
                 self._db.execute(cur,
                     f"DELETE FROM {t} WHERE doc_id IN (SELECT doc_id FROM documents WHERE owner_email=%s)",
                     (owner_email,))
+                cleared.append(t)
+            # Archive executions carry owner_email directly and key on neither scan_id nor
+            # doc_id: an execution outlives the scan that proposed it (that is the point of a
+            # durable audit record), so the scan_id-IN-subquery pass above cannot reach one whose
+            # scan has already been deleted. Same shape as orchestration_events' second pass.
+            for t in ("archive_execution", "archive_policy_snapshot"):
+                self._db.execute(cur, f"DELETE FROM {t} WHERE owner_email=%s", (owner_email,))
                 cleared.append(t)
             self._db.execute(cur, "DELETE FROM scan_decisions WHERE owner_email=%s", (owner_email,))
             cleared.append("scan_decisions")
@@ -9058,6 +9128,15 @@ class Store:
         "capacity.worker_ready", "capacity.scale_in_observed",
         "dependency.throttled", "dependency.authentication_failed", "dependency.unavailable",
         "dependency.recovered",
+        # R9 archive auto-fire. Bounded lifecycle narration — paths, counts and a state, never
+        # document contents and never a credential (archive_autofire.event_payload is the
+        # allow-list that enforces it at the call site, since this method bounds size and not
+        # content). Emitted through this table rather than through the live-assessment snapshot
+        # because an archive run is not an assessment: it has its own queue, and an operator
+        # watching Live Operations needs to see a move fail as an operational event.
+        "lifecycle.archive_run_started", "lifecycle.archive_item_started",
+        "lifecycle.archive_item_completed", "lifecycle.archive_item_blocked",
+        "lifecycle.archive_recovery_required", "lifecycle.archive_run_finished",
     })
 
     # Closed set for the `error_class` field. Used by a later PR's classification logic; validated
@@ -11242,6 +11321,213 @@ class Store:
     def delete_scope_rule(self, rule_id: str) -> None:
         with self._db.cursor() as cur:
             self._db.execute(cur, "DELETE FROM scope_rule WHERE rule_id=%s", (rule_id,))
+
+    # ── Archive auto-fire (R9) ──────────────────────────────────────────────────
+    #
+    # Every method here is owner-scoped in its WHERE clause rather than by a caller's promise.
+    # disposition_policy shipped with no ownership column at all and every signed-in user could
+    # toggle every other tenant's rules (see the migration comment above); this feature MOVES
+    # FILES, so the same mistake would be a cross-tenant estate change rather than a leak.
+
+    def list_archive_scan_rows(self, scan_id: str, owner_email: str) -> list[dict]:
+        """Every inventory row in one scan, owner-scoped, with the scan's SOURCE on each row.
+
+        Owner-scoped through the same `EXISTS (SELECT 1 FROM scan_runs …)` guard
+        drive_ids_for_files uses, and for a stronger reason: a caller who could pass another
+        tenant's scan_id here would get back the item ids and paths this feature MOVES FILES by.
+        A scan that does not belong to `owner_email` returns [] — not an error, because the
+        caller is not entitled to know it exists.
+
+        The source is joined on rather than read per row because scan_inventory has no source
+        column: it is a property of the run, and every archive decision needs it (Drive and local
+        rows are recommendation-only — see archive_autofire.source_problem). Returning every row
+        rather than only the candidates is deliberate: supersession evidence is a claim a
+        NON-candidate makes about a candidate, so a query filtered to candidates could never find
+        the replacement.
+        """
+        # Qualified rather than reusing _INV_COLS bare: this is the only inventory read in the
+        # file with a JOIN, and an unqualified column list beside a second table is one added
+        # column away from an "ambiguous column name" error at runtime.
+        cols = ",".join(f"si.{c}" for c in self._INV_COLS.split(","))
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"SELECT {cols}, sr.source AS source FROM scan_inventory si "
+                "JOIN scan_runs sr ON sr.id=si.scan_id "
+                "WHERE si.scan_id=%s AND sr.owner_email=%s ORDER BY si.file",
+                (scan_id, owner_email))
+            return [dict(r) for r in self._db.fetchall(cur)]
+
+    def get_archive_policy(self, owner_email: str) -> dict | None:
+        """This tenant's stored auto-fire policy, or None if they never saved one.
+
+        None is not "disabled" — it is "never configured", and the caller normalizes it to the
+        shipped defaults, which are disabled. Kept distinct so the UI can say which is true.
+        """
+        import json
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT policy_json,updated_at,updated_by FROM archive_autofire_policy "
+                "WHERE owner_email=%s", (owner_email,))
+            row = self._db.fetchone(cur)
+        if not row:
+            return None
+        try:
+            policy = json.loads(row.get("policy_json") or "{}")
+        except (TypeError, ValueError):
+            policy = {}
+        return {"policy": policy, "updated_at": row.get("updated_at"),
+                "updated_by": row.get("updated_by")}
+
+    def set_archive_policy(self, owner_email: str, policy: dict, *, actor: str) -> None:
+        """Replace this tenant's policy. One row per tenant — the live policy has no history of
+        its own because the snapshots do: every evaluation pins the policy it ran under."""
+        import json
+        blob = json.dumps(policy, sort_keys=True, separators=(",", ":"))
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO archive_autofire_policy(owner_email,policy_json,updated_at,updated_by) "
+                "VALUES(%s,%s,%s,%s) ON CONFLICT(owner_email) DO UPDATE SET "
+                "policy_json=EXCLUDED.policy_json,updated_at=EXCLUDED.updated_at,"
+                "updated_by=EXCLUDED.updated_by",
+                (owner_email, blob, now, actor))
+
+    def save_archive_snapshot(self, snapshot_id: str, owner_email: str, policy: dict,
+                              scan_id: str | None = None) -> None:
+        """Record the policy as evaluated. Idempotent: the id IS the content hash, so re-saving
+        the same snapshot is a no-op rather than a second row that could differ."""
+        import json
+        blob = json.dumps(policy, sort_keys=True, separators=(",", ":"))
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO archive_policy_snapshot(snapshot_id,owner_email,policy_json,"
+                "created_at,scan_id) VALUES(%s,%s,%s,%s,%s) "
+                "ON CONFLICT(snapshot_id,owner_email) DO NOTHING",
+                (snapshot_id, owner_email, blob, self._now(), scan_id))
+
+    def get_archive_snapshot(self, snapshot_id: str, owner_email: str) -> dict | None:
+        import json
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT policy_json,created_at,scan_id FROM archive_policy_snapshot "
+                "WHERE snapshot_id=%s AND owner_email=%s", (snapshot_id, owner_email))
+            row = self._db.fetchone(cur)
+        if not row:
+            return None
+        try:
+            policy = json.loads(row.get("policy_json") or "{}")
+        except (TypeError, ValueError):
+            return None
+        return {"snapshot_id": snapshot_id, "policy": policy, "created_at": row.get("created_at"),
+                "scan_id": row.get("scan_id")}
+
+    #: Columns an execution's progress may move through after it is claimed. Deliberately not
+    #: every column: the identity fields (idempotency key, source item, snapshot) are what the
+    #: record MEANS, and a later write that could change them would make the audit trail describe
+    #: a different decision than the one that ran.
+    #: `source_etag` is mutable and the rest of the identity is not, which is worth the sentence:
+    #: the eTag is not known at claim time (it is read during preflight, against the live tenant),
+    #: and it is the value that proves the document was unchanged at the moment of the move. It
+    #: is written once, from the preflight read, and never revised.
+    _ARCHIVE_MUTABLE = ("preflight_json", "source_etag", "destination_item_id", "destination_url",
+                        "state", "detail", "attempts", "started_at", "completed_at")
+
+    def claim_archive_execution(self, *, idempotency_key: str, execution_id: str,
+                                owner_email: str, scan_id: str | None, file: str | None,
+                                policy_id: str | None, snapshot_id: str,
+                                source_connection: str, source_item_id: str,
+                                source_drive_id: str | None, source_etag: str | None,
+                                source_path: str, replacement_item_id: str,
+                                replacement_path: str | None, evidence_json: str,
+                                destination_path: str, actor: str, dry_run: bool,
+                                state: str = "claimed") -> tuple[dict, bool]:
+        """Claim the right to execute this decision exactly once. Returns `(row, created)`.
+
+        `created` False means an execution for this idempotency key ALREADY EXISTS, and the row
+        returned is that original one — which is the whole contract: a repeated submission
+        returns the first execution's record rather than performing a second move. The caller
+        must not act on a row it did not create.
+
+        The refusal is the database's, not this method's. `ON CONFLICT DO NOTHING` against the
+        unique index means two workers racing on the same eligible item cannot both win, which a
+        SELECT-then-INSERT could not promise however carefully it were written.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO archive_execution(execution_id,idempotency_key,owner_email,scan_id,"
+                "file,policy_id,snapshot_id,source_connection,source_item_id,source_drive_id,"
+                "source_etag,source_path,replacement_item_id,replacement_path,evidence_json,"
+                "destination_path,state,detail,actor,dry_run,attempts,created_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT(idempotency_key) DO NOTHING",
+                (execution_id, idempotency_key, owner_email, scan_id, file, policy_id, snapshot_id,
+                 source_connection, source_item_id, source_drive_id, source_etag, source_path,
+                 replacement_item_id, replacement_path, evidence_json, destination_path, state,
+                 "", actor, 1 if dry_run else 0, 0, self._now()))
+            created = cur.rowcount == 1
+        row = self.get_archive_execution(idempotency_key, owner_email)
+        # A claim that inserted but cannot be read back is a broken store, not a duplicate — say
+        # so rather than returning None and letting the caller treat it as "already executed".
+        if row is None:
+            raise RuntimeError(f"archive execution {execution_id} could not be read back after claim")
+        return row, created
+
+    def get_archive_execution(self, idempotency_key: str, owner_email: str) -> dict | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT * FROM archive_execution WHERE idempotency_key=%s "
+                                  "AND owner_email=%s", (idempotency_key, owner_email))
+            row = self._db.fetchone(cur)
+        return dict(row) if row else None
+
+    def get_archive_execution_by_id(self, execution_id: str, owner_email: str) -> dict | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT * FROM archive_execution WHERE execution_id=%s "
+                                  "AND owner_email=%s", (execution_id, owner_email))
+            row = self._db.fetchone(cur)
+        return dict(row) if row else None
+
+    def update_archive_execution(self, execution_id: str, owner_email: str, **fields) -> None:
+        """Move an execution forward. Only `_ARCHIVE_MUTABLE` columns may be written."""
+        allowed = {k: v for k, v in fields.items() if k in self._ARCHIVE_MUTABLE}
+        if not allowed:
+            return
+        sets = ",".join(f"{k}=%s" for k in allowed)
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"UPDATE archive_execution SET {sets} WHERE execution_id=%s AND owner_email=%s",
+                (*allowed.values(), execution_id, owner_email))
+
+    def list_archive_executions(self, owner_email: str, *, scan_id: str | None = None,
+                                limit: int = 200) -> list[dict]:
+        with self._db.cursor() as cur:
+            if scan_id:
+                self._db.execute(cur,
+                    "SELECT * FROM archive_execution WHERE owner_email=%s AND scan_id=%s "
+                    "ORDER BY created_at DESC LIMIT %s", (owner_email, scan_id, int(limit)))
+            else:
+                self._db.execute(cur,
+                    "SELECT * FROM archive_execution WHERE owner_email=%s "
+                    "ORDER BY created_at DESC LIMIT %s", (owner_email, int(limit)))
+            return [dict(r) for r in self._db.fetchall(cur)]
+
+    def archive_actions_today(self, owner_email: str, *, day: str | None = None) -> int:
+        """How many moves this tenant has ALREADY performed today, for the daily ceiling.
+
+        Counts what was actually done — completed moves and the two states a move can leave
+        behind — rather than every row claimed. A claim that never moved a file (blocked in
+        preflight, cancelled, or a dry run) has not spent the day's budget, and counting it would
+        let a misconfigured policy exhaust the ceiling without touching the estate, which reads
+        to an operator as the ceiling working.
+        """
+        from datetime import datetime, timezone
+        prefix = (day or datetime.now(timezone.utc).date().isoformat())
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM archive_execution WHERE owner_email=%s "
+                "AND dry_run=0 AND state IN ('archived','recovery_required') "
+                "AND created_at LIKE %s", (owner_email, f"{prefix}%"))
+            row = self._db.fetchone(cur) or {}
+        return int(row.get("n") or 0)
 
     # ── Disposition audit (ADR 0003 Phase 3 — execute path) ─────────────────────
     def create_disposition_audit(self, audit_id: str, *, doc_id: str, policy_id: str,
