@@ -105,9 +105,11 @@ the read-only posture.
    What UTSW still supplies is unchanged: the rule definitions and the departed-employee roster.
    What ACP still owes is the PROOF that each field arrives from their tenant — one run of
    `scripts/sp_metadata_probe.py`, which prints exactly that table.
-3. **Image alt-text depends on the vision model, not the downloaded Llama.** Llama is a *text* model; WCAG
-   1.1.1 needs a *vision* model, and the GPU path is currently down (backlog **R2/R12**), so image
-   remediation falls to CPU/manual today. Set that expectation for the "image" half of the ~15 codes.
+3. **Image alt-text depends on the vision model, not the downloaded Llama.** Llama is a *text* model;
+   WCAG 1.1.1 needs a *vision* model. The earlier GPU outage is closed: backlog **R2/R3/R12** records
+   production verification of the RunPod `llava:13b` cloud path on 2026-08-25, including visible
+   fallback reporting. Tenant acceptance should still exercise image content, but CPU/manual is a
+   fallback state now, not the expected production route.
 
 ---
 
@@ -117,7 +119,8 @@ the read-only posture.
   adds the SharePoint-specific 30-site traversal proof, including identical estates and identical
   per-site totals at `ACP_SP_CONCURRENCY` 1 and 6. Only real-tenant breadth remains unverified —
   real permissions, real throttling, real SSE completion, none of which a fixture can stand in for.
-- **R2 / R3 / R12** — RunPod vision not engaged (image alt-text degraded to CPU/manual).
+- **R2 / R3 / R12** — closed 2026-08-25: RunPod vision engaged in production; provider readiness
+  and fallback visibility are covered in `docs/BACKLOG.md`.
 - The **folder/native-metadata rule fields** and **multi-site scan** are new items this doc introduces;
   add them to `docs/BACKLOG.md` if the SOW is signed.
 
@@ -419,11 +422,12 @@ it — "12 of 30 sites, 41 libraries · 3 not read", summed across concurrent ru
 is cross-tenant. A source reporting no site data (Drive, OneDrive, a scan before its first site)
 shows nothing rather than "0 of 0 sites", which would be a fact about the screen.
 
-### Still open in Phase 4
+### Closed after Phase 4
 
-**Per-site checkpoints and resumable scans.** A 30-site scan that dies at site 28 currently
-re-lists all thirty: `handlers`' existing checkpoint resume is all-or-nothing (it skips listing
-only when the whole inventory was already persisted, and inventory is written *after* the listing
-completes). True per-site resume means persisting each site's rows as it finishes and skipping
-completed sites on retry — a streaming-inventory change to the discover path rather than a
-connector change, and worth its own PR rather than being smuggled into this one.
+**Per-site checkpoints and resumable scans shipped 2026-09-04.** Each completed site's inventory
+is persisted while the estate walk is still running. A retry skips only those completed sites and
+re-lists any site that was partial, capped, or failed, so an interruption at site 28 keeps the first
+twenty-seven sites without publishing a partial site as complete. `tests/test_sp_checkpoint.py` and
+`tests/test_sp_checkpoint_resume.py` pin the persistence and retry boundaries; the deployment
+setting is `ACP_SP_CHECKPOINT` above. Real-tenant interruption recovery remains an acceptance proof,
+not an unbuilt connector feature.
