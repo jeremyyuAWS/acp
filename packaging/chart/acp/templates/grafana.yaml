@@ -1,0 +1,123 @@
+{{- if .Values.observability.grafana.enabled }}
+{{- /*
+  Dashboards, which every profile in the contract declares and the chart did not render.
+
+  THE SECOND HALF OF THE CHART-VS-COMPOSE COMPARISON, and the same verdict as ollama for the same
+  reason: `deploy/compose/docker-compose.yml` builds and runs grafana ungated, and
+  `deploy/public/deploy.sh` creates `acp-grafana` in production with external ingress. Both real
+  paths ship it; the chart shipped nothing. See templates/ollama.yaml for the first half.
+
+  NOT AN UPSTREAM IMAGE. `inventory.py` used to call it "Upstream image, referenced not rebuilt"
+  and planned no image at all — and `deploy/grafana/Dockerfile` has been building one all along,
+  baking ACP's own dashboards, alert rules and datasource provisioning into it. A plan that named
+  no image would have left an adapter with nothing to deploy, or deploying stock Grafana with
+  none of the dashboards that are the entire point.
+
+  ITS OWN SECURITY CONTEXT, not the shared one. The grafana image runs as UID 472 and owns its
+  data directory as 472 (read from the registry config of grafana/grafana:11.6.0, not assumed).
+  The chart's podSecurityContext is 10001, which would leave Grafana unable to write its own
+  state — a container that starts, logs a permissions error, and serves an empty UI.
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "acp.fullname" . }}-grafana
+  labels:
+    {{- include "acp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grafana
+spec:
+  {{- /* One. Grafana keeps local state and nothing here shares it between replicas. */}}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "acp.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: grafana
+  template:
+    metadata:
+      labels:
+        {{- include "acp.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: grafana
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "acp.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: {{ .Values.observability.grafana.uid }}
+        fsGroup: {{ .Values.observability.grafana.uid }}
+      containers:
+        - name: grafana
+          image: {{ include "acp.image" (dict "root" $ "component" "grafana") | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.observability.grafana.port }}
+              protocol: TCP
+          env:
+            {{- /*
+              THE DSN, AND NOTHING DERIVED FROM IT. The image's own entrypoint
+              (deploy/grafana/acp-entrypoint.sh) splits this into the four ACP_GRAFANA_PG_*
+              variables its datasource provisioning needs, because Grafana's provisioning can
+              substitute a variable but cannot split one.
+
+              Doing it in the image rather than here is deliberate. The chart holds ONE
+              `database-url` secret; Kubernetes can interpolate whole env vars into each other
+              but not substrings, so a chart-side split would mean four separate secret refs —
+              putting the shape of a Grafana datasource file into ACP's deployment contract,
+              which is exactly the leak the contract exists to prevent.
+            */}}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "acp.secretName" . }}
+                  key: database-url
+            - name: GF_SERVER_ROOT_URL
+              value: {{ .Values.observability.grafana.rootUrl | quote }}
+            {{- range $k, $v := .Values.observability.grafana.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 10
+          {{- with .Values.observability.grafana.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "acp.fullname" . }}-grafana
+  labels:
+    {{- include "acp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: grafana
+spec:
+  {{- /*
+    ClusterIP. Production reaches its Grafana through external ingress on Container Apps, and the
+    equivalent here is an Ingress rule the operator adds deliberately — not a LoadBalancer this
+    chart creates by default. The image ships with anonymous access enabled
+    (GF_AUTH_ANONYMOUS_ENABLED=true, baked in deploy/grafana/Dockerfile), so a Service that
+    exposed itself would publish every ACP dashboard to whoever found the address.
+    `test_grafana_is_not_exposed_by_default` pins it.
+  */}}
+  type: ClusterIP
+  ports:
+    - port: {{ .Values.observability.grafana.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "acp.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: grafana
+{{- end }}

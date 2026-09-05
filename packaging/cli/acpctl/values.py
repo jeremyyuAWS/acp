@@ -31,6 +31,7 @@ from typing import Any
 from . import presets
 from .inventory import (
     API_HEADROOM_CONN,
+    GRAFANA_PORT,
     IMAGES,
     OLLAMA_PORT,
     LANE_JOB_TYPES,
@@ -128,6 +129,7 @@ def build_values(doc: dict[str, Any]) -> dict[str, Any]:
             # list of release images; taking it from there means adding an image to that table is
             # the whole change.
             "ollamaRepository": IMAGES["ollama"],
+            "grafanaRepository": IMAGES["grafana"],
             # PRD S5.1: templates reference digests, not mutable tags. `acpctl install` resolves
             # and verifies signatures; an empty map here is an honest "not yet resolved", not a
             # default that would deploy a tag.
@@ -185,7 +187,7 @@ def build_values(doc: dict[str, Any]) -> dict[str, Any]:
         "observability": {
             "openTelemetry": {"enabled": obs.get("openTelemetry", False),
                               "exporter": obs.get("exporter", "local")},
-            "grafana": {"enabled": obs.get("grafana", False)},
+            "grafana": {"enabled": obs.get("grafana", False), "port": GRAFANA_PORT},
             "langfuse": {"mode": obs.get("langfuse", {}).get("mode", "disabled")},
         },
         "migrations": {

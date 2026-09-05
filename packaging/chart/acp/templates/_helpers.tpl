@@ -65,6 +65,7 @@ Call as: include "acp.image" (dict "root" $ "component" "api")
 {{- $repo := $img.repository -}}
 {{- if eq $component "worker" -}}{{- $repo = $img.workerRepository -}}{{- end -}}
 {{- if eq $component "ollama" -}}{{- $repo = $img.ollamaRepository -}}{{- end -}}
+{{- if eq $component "grafana" -}}{{- $repo = $img.grafanaRepository -}}{{- end -}}
 {{- $registry := $img.registry -}}
 {{- $digest := get ($img.digests | default dict) $component -}}
 {{- $base := $repo -}}

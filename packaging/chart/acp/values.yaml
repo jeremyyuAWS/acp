@@ -26,6 +26,9 @@ image:
   # A separate artifact, not a tag on the application image: deploy/ollama/Dockerfile bakes the
   # models into the layer, so this image is multi-GB and rebuilt on a different cadence.
   ollamaRepository: acp-ollama-gateway
+  # Also a first-party artifact, not stock Grafana: deploy/grafana/Dockerfile bakes ACP's
+  # dashboards, alert rules and datasource provisioning into it.
+  grafanaRepository: acp-grafana
   tag: ""
   # Digests, when `acpctl install` has resolved them. A digest wins over the tag, because a tag
   # is a moving reference and an install that cannot say exactly what it ran is not auditable.
@@ -134,6 +137,15 @@ observability:
     endpoint: ""
   grafana:
     enabled: false
+    port: 3000
+    # The image runs as UID 472 and owns its data directory as 472. Named rather than inherited
+    # from podSecurityContext (10001), which would leave Grafana unable to write its own state.
+    uid: 472
+    # Grafana builds absolute links from this; left empty the stock image derives them from the
+    # request, which is right behind an ordinary Ingress and wrong behind a path-rewriting one.
+    rootUrl: ""
+    resources: {}
+    env: {}
   langfuse:
     mode: disabled
 

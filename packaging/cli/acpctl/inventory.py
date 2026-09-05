@@ -39,6 +39,10 @@ API_HEADROOM_CONN = 16
 # features do nothing" rather than as an error.
 OLLAMA_PORT = 11434
 
+# Grafana's listen port, for the same reason: the Service, the inventory and the chart's probe
+# all have to agree, and a mismatch is a dashboard nobody can reach.
+GRAFANA_PORT = 3000
+
 # In-process worker THREADS per replica, per CPU. Taken from the one place in this repo that
 # states the ratio and its reasoning: deploy/compose/docker-compose.yml sets ACP_WORKERS=8 and
 # explains it as "enough to assess 8 documents in parallel on a 4-core host (each worker is
@@ -60,6 +64,12 @@ IMAGES = {
     "assess": "acp-assess-worker",
     "remediate": "acp-remediate-worker",
     "ollama": "acp-ollama-gateway",
+    # BUILT HERE, not referenced. deploy/grafana/Dockerfile takes grafana/grafana:11.6.0 and bakes
+    # ACP's dashboards, alert rules and datasource provisioning into it, so the deployable
+    # artifact is ours and the inventory has to name it. It was previously listed with no image
+    # at all, on a note calling it an "upstream image, referenced not rebuilt" — which would have
+    # left an adapter deploying stock Grafana with none of the dashboards that are the point.
+    "grafana": "acp-grafana",
     "migrations": "acp-migrations",
     "preflight": "acp-preflight",
 }
@@ -312,9 +322,11 @@ def build_inventory(doc: dict[str, Any]) -> list[Service]:
                      if exporter == "local" else "")))
     if obs.get("grafana"):
         services.append(Service(
-            name="acp-grafana", kind="service", ingress="internal", ports=(3000,),
+            name="acp-grafana", kind="service", ingress="internal",
+            image=IMAGES["grafana"], image_version=version, ports=(GRAFANA_PORT,),
             depends_on=("postgres",),
-            notes="Dashboards. Upstream image, referenced not rebuilt."))
+            notes="Dashboards. First-party image: ACP's dashboards, alert rules and datasource "
+                  "provisioning are baked in (deploy/grafana/Dockerfile)."))
     langfuse_mode = obs.get("langfuse", {}).get("mode", "disabled")
     if langfuse_mode == "self-hosted":
         services.append(Service(
