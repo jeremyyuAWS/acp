@@ -99,6 +99,25 @@ def test_admin_live_activity_exposes_only_safe_running_context(isolated_store):
     assert "secret" not in str(row)
 
 
+def test_admin_live_activity_carries_bounded_sanitized_remediation_events(isolated_store):
+    isolated_store.save_scan(_scan())
+    isolated_store.enqueue_job(
+        "remediate_file", {"file": "Private Report.docx"}, scan_id="scan-live-1")
+    for i in range(15):
+        isolated_store.append_scan_event(
+            "scan-live-1", "remediate.fix_applied", owner_email="admin@example.org",
+            detail={"file": f"private-{i}.docx", "fixes": i, "secret": "never-return"},
+        )
+
+    row = isolated_store.admin_live_activity()[0]
+    events = row["recent_events"]
+    assert len(events) == 12
+    assert [event["seq"] for event in events] == list(range(4, 16))
+    assert events[-1]["detail"] == {"fixes": 14}
+    assert "private" not in str(events)
+    assert "secret" not in str(events)
+
+
 def test_admin_live_activity_omits_inactive_runs(isolated_store):
     isolated_store.save_scan(_scan())
     job_id = isolated_store.enqueue_job("scan_file", {"file": "done.docx"}, scan_id="scan-live-1")
