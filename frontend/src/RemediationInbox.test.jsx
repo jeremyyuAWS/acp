@@ -181,13 +181,13 @@ describe('RemediationInbox — workflow-status queue', () => {
       { id: 12, file: 'c.pdf', title: 'PDF \u00b7 Scanned page, no text', rule_id: '1.1.1' },   // manual — excluded
     ]
     await render({ queue: q, decisions: {} })
-    const batch = container.querySelector('input[type=checkbox]')
+    const batch = btnByText('Approve & apply to all 2')
     expect(batch).toBeTruthy()
-    expect(batch.disabled).toBe(true)
-    // ONE other actionable finding, not two — the manual one is not batchable.
-    expect(batch.parentElement.textContent).toContain('Apply this decision to 1 matching WCAG 1.1.1 finding')
-    await click(btnByText('Review matching items'))
     expect(batch.disabled).toBe(false)
+    // ONE other actionable finding, not two — the manual one is not batchable.
+    expect(batch.parentElement.textContent).toContain('this item and 1 similar finding')
+    expect(batch.parentElement.textContent).toContain('across 2 files')
+    await click(btnByText('Review matching items'))
     expect(container.textContent).toContain('manual, blocked and already-decided findings are excluded')
   })
 
@@ -208,9 +208,7 @@ describe('RemediationInbox — workflow-status queue', () => {
     // The second write is refused; the first succeeds.
     await render({ queue: q, decisions: {},
       onDecide: (f) => (f.id === 21 ? Promise.reject(new Error('conflict')) : Promise.resolve()) })
-    await click(btnByText('Review matching items'))
-    await click(container.querySelector('input[type=checkbox]'))
-    await click(btnByText('Approve & next'))
+    await click(btnByText('Approve & apply to all 2'))
     const alert = container.querySelector('[role=alert]')
     expect(alert).toBeTruthy()
     expect(alert.textContent).toContain('1 of 2 saved')
