@@ -312,14 +312,23 @@ def build_inventory(doc: dict[str, Any]) -> list[Service]:
                   "hide them (deploy/ollama/Dockerfile)."))
 
     # ── observability ──────────────────────────────────────────────────────────
-    if obs.get("openTelemetry"):
-        exporter = obs.get("exporter", "local")
-        services.append(Service(
-            name="acp-otel-collector", kind="service", ingress="internal", ports=(4317, 4318),
-            image=None, provisioning="in-cluster",
-            notes=f"Portable instrumentation layer (PRD S14). Exporter: {exporter}."
-                  + (" Collection stays entirely inside the installation."
-                     if exporter == "local" else "")))
+    #
+    # NO COLLECTOR IS PLANNED, AND THAT IS A CORRECTION RATHER THAN AN OMISSION.
+    #
+    # This used to append an `acp-otel-collector` service, in-cluster, listening on the OTLP ports
+    # 4317/4318, for every document with `openTelemetry: true` — which is all of them. Nothing has
+    # ever deployed one: not deploy/public/, not deploy/compose/, not the Helm chart. It was a
+    # plan item no adapter could act on.
+    #
+    # It was also describing the wrong mechanism. ACP's telemetry is `api/telemetry.py`, which
+    # configures the AZURE MONITOR OpenTelemetry distribution and exports to Application Insights
+    # directly, keyed by `APPLICATIONINSIGHTS_CONNECTION_STRING`. There is no OTLP hop in the
+    # product at all, so a collector on 4317 would have had nothing to receive: the thing that
+    # turns telemetry on here is a CREDENTIAL, not a workload, and it belongs in `secrets.refs`
+    # where spec.required_secret_names now puts it.
+    #
+    # `exporter` still selects the destination, and `_warn_exporter_unimplemented` says so when a
+    # document names one the application has no code for.
     if obs.get("grafana"):
         services.append(Service(
             name="acp-grafana", kind="service", ingress="internal",
