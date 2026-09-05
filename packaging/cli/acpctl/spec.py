@@ -514,16 +514,43 @@ def _rule_connection_budget(doc: dict, out: Result) -> None:
     An autoscaling range the database cannot support is a misconfiguration whether or not the
     fleet ever reaches it, so this is an error rather than a warning.
     """
-    from .inventory import connection_budget
+    from .inventory import SERVER_RESERVED_CONNECTIONS, connection_budget
     budget = connection_budget(doc)
+    demand, ceiling = budget["worstCaseConnections"], budget["serverMaxConnections"]
+
+    # THE LEVERS, NAMED FROM THE DOCUMENT RATHER THAN FROM THE FORMULA. This message used to say
+    # "each replica's pool is ACP_WORKERS + 16" and stop there, which stopped being the whole truth
+    # when `tier.connectionPool` arrived: a document that pins pools is not using that formula at
+    # all, and an operator sent to change ACP_WORKERS would be adjusting a lever with no effect.
+    pinned = sorted(
+        name for name, tier in [("api", doc["api"])] + sorted(doc["workers"].items())
+        if tier.get("connectionPool"))
+    # The lever DIRECTION matters as much as its name: demand is what has to come down here, so a
+    # pinned pool must be LOWERED. Naming the right knob and the wrong direction is worse than
+    # naming neither.
+    lever = (f"lower `connectionPool` on {', '.join(pinned)} or the replica ceilings" if pinned
+             else "lower the replica ceilings")
+
     if not budget["withinBudget"]:
         out.errors.append(Finding(
             "data.postgres.maxConnections",
-            f"the fleet needs {budget['worstCaseConnections']} Postgres connections at maximum "
-            f"replicas (each replica's pool is ACP_WORKERS + {16}, per api/store.py db_max_conn), "
-            f"but the server is declared at {budget['serverMaxConnections']}. Raise the server, "
-            f"lower the replica ceilings, or put a pooler in front of it",
+            f"the fleet needs {demand} Postgres connections at maximum replicas "
+            f"(acpctl.inventory.pool_per_replica, which mirrors api/store.py's db_max_conn), but "
+            f"the server is declared at {ceiling}. Raise the server, {lever}, or put a pooler in "
+            f"front of it",
             "data.connection-budget"))
+    elif ceiling - demand < SERVER_RESERVED_CONNECTIONS:
+        # The band where the document validates and a real server still runs out. Not an error:
+        # what a server keeps for itself is a property of the server, and an operator who knows
+        # theirs differs should not be blocked by this repository's estimate of it.
+        out.warnings.append(Finding(
+            "data.postgres.maxConnections",
+            f"the fleet's {demand} connections fit under {ceiling}, but leave {ceiling - demand} "
+            f"for the server itself — fewer than the {SERVER_RESERVED_CONNECTIONS} a Postgres "
+            f"server typically spends on its own reservation, a migration job and an operator's "
+            f"session. The first thing refused is usually the psql session opened to investigate "
+            f"why things are being refused",
+            "data.connection-reserve"))
 
 
 def _rule_version_consistency(doc: dict, out: Result) -> None:

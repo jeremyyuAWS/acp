@@ -460,6 +460,14 @@
         "publicIngress": {
           "type": "boolean"
         },
+        "privateDataServices": {
+          "description": "The managed data services are reached over a private endpoint and refuse public network access. PRD S21 phase 3's private-network option, declared once rather than per service because an installation that reaches Postgres privately and Blob Storage over the internet has the posture of the weaker one. Absent means public endpoints, which is what today's Azure runs.",
+          "type": "boolean"
+        },
+        "privateControlPlane": {
+          "description": "The Kubernetes API server has no public endpoint. Separate from privateDataServices because they fail differently: a public API server is an administrative exposure, a public data endpoint is a data one, and a regulated installation is usually required to close both.",
+          "type": "boolean"
+        },
         "allowedEgress": {
           "description": "Hostnames this installation is permitted to reach. Empty means deny-all egress, which is a valid regulated posture and is checked against sources and ai.mode.",
           "type": "array",
