@@ -1121,6 +1121,62 @@ def revision_detail(report_id: str, revision: int, request: Request):
     }
 
 
+@router.get("/acr/{report_id}/revisions/{revision}/export")
+def revision_export(report_id: str, revision: int, request: Request, format: str = "pdf"):
+    """A published revision as a document a customer can be sent — the frozen record, not today's.
+
+    WHY THIS IS NOT `/preview`. `/preview` renders the live criteria rows, which keep moving after
+    publication: a revision is opened, decisions are carried, evidence goes stale. Sending someone
+    "the published ACR" by exporting the draft is how a customer receives a document that does not
+    match the revision it claims to be. Everything below is built from the immutable snapshot.
+
+    THE DIGEST IS A GATE HERE, NOT A FIELD. `/revisions` and `/revisions/{n}` report
+    `digest_verified` alongside the content and let the reader judge. This endpoint refuses: it
+    produces a self-contained artifact that leaves the application, and a PDF is exactly the form
+    in which a tampered snapshot would travel furthest before anyone noticed. A JSON caller can
+    see a false flag next to the data; the holder of a PDF has only the PDF. So a snapshot whose
+    contents do not match its recorded digest answers 409 and no document is built.
+    """
+    owner = _tenant()
+    report = _report_or_404(report_id, owner)
+    chain = _lineage(report, owner)
+    snaps = core.store.list_acr_snapshots_for_lineage([r["id"] for r in chain], owner_email=owner)
+    snap = next((s for s in snaps if int(s["revision"]) == int(revision)), None)
+    if snap is None:
+        raise HTTPException(404, f"no published revision {revision} for this report")
+
+    ok, why = acr_publish.verify(snap)
+    if not ok:
+        raise HTTPException(409, f"refusing to export revision {revision}: {why}")
+
+    content = json.loads(snap["content_json"])
+    snap_report, criteria, ev_by = acr_publish.projection_inputs(content)
+    try:
+        # stale_ids is empty by construction: a snapshot records the evidence that stood behind
+        # each claim at publication, not a staleness split, and re-deriving freshness against
+        # today would mark a frozen record stale for a product version it never described.
+        projection = acr_export_preview.project(snap_report, criteria,
+                                                evidence_by_criterion=ev_by, stale_ids=set())
+    except ValueError as exc:
+        raise HTTPException(500, str(exc)) from exc
+
+    if format == "html":
+        return HTMLResponse(acr_export_pdf.published_html(
+            projection, revision=snap["revision"], digest=snap["content_digest"],
+            published_at=snap["published_at"], published_by=snap["published_by"], verified=ok))
+
+    try:
+        pdf = acr_export_pdf.render_published(
+            projection, revision=snap["revision"], digest=snap["content_digest"],
+            published_at=snap["published_at"], published_by=snap["published_by"], verified=ok)
+    except acr_export_pdf.RendererUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+    name = acr_export_pdf.filename_for({"id": snap["report_id"], "revision": snap["revision"]})
+    return Response(pdf, media_type="application/pdf",
+                    headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+
 @router.post("/acr/{report_id}/revise")
 def revise(report_id: str, request: Request):
     """Open a NEW draft revision that supersedes a published report (PRD §17).
