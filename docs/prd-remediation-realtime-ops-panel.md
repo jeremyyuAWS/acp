@@ -406,6 +406,11 @@ Metrics and logs use run, document, attempt, phase, and correlation IDs. Dashboa
 
 ## 18. Open decisions
 
+**Answered in §22.** Each of these was genuinely open when this PRD was written; §22 now records a
+buildable default for every one, taken from PR #1379's own recommendations. They remain reversible
+configuration choices, not settled truths — the list is kept here so the questions stay legible
+next to the answers.
+
 - Should users be able to pause new claims, or should pause remain an operator-only action?
 - What phase-specific thresholds define delayed versus stalled for each document format?
 - How long should resumable remediation events be retained?
@@ -453,3 +458,151 @@ missing feature:
   snapshot already carries `active_attempts` for D.
 - **Resumable event IDs (§8)** are not implemented; the stream re-pushes a whole snapshot on
   change and the client drops any frame whose `revision` went backwards.
+
+---
+
+## 21. Implementation seams, and what each still owes this PRD
+
+PR #1379 mapped this design onto ACP's existing surfaces. That map is absorbed here, CORRECTED for
+what Phase 1 actually shipped — #1379 was written against `main` as it stood before #1376 merged,
+so it listed as outstanding several gaps that are now closed. The correction matters more than the
+table: a gap map that overstates what is missing sends the next change to rebuild something that
+already exists.
+
+| Surface | Where | What it still owes |
+|---|---|---|
+| Run state, counters, phases, invariants | `api/remediation_run.py` | Nothing for Phase 1. Phase 2 adds phase events as an input rather than deriving the rail from counts alone. |
+| Snapshot facts | `store.remediation_run_facts` | Batch-scoped and one-row-per-document already. Owes per-attempt delivery state (§11's delivery-failure class is inferred from `drive_write_url`, not recorded as an outcome). |
+| Snapshot endpoint | `GET /scans/{sid}/remediation/snapshot` | Carries revision, state, reason, freshness thresholds and the reconciled partition. Owes `links` (currently always `{}`) and `policy_version` / `execution_mode`, which nothing records. |
+| Live updates | `GET /scans/{sid}/remediation/stream` | Owes resumable event IDs. It still closes when `in_flight` reaches zero, even though review, delivery and reconciliation may remain — the snapshot's own `completing` state exposes that gap but the stream does not stay open for it. |
+| Legacy status | `GET /scans/{sid}/remediation-status` | Unchanged and still feeding the progress bar. Its `fixes_applied` / `verified_documents` mislabelling is corrected in the snapshot, not in this endpoint; the two must not be mixed in one view. |
+| Activity | `activity.current(sid)` | One current line cannot represent parallel documents. Region D reads `snapshot.active_attempts` instead, which is already a list. |
+| Client | `remediationSnapshot.js`, `RemediationOpsPanel.jsx` | Regions D and E. `RemediationRunProgress` still renders a serial "last fixed ‹file›" beside the panel — two accounts of one run, and the older one implies serial work. |
+
+### On naming
+
+#1379 proposed `GET /scans/{scan_id}/remediation-runs/{run_id}` and a nine-component frontend
+decomposition. Both are reasonable designs; neither is adopted, because the shipped endpoint and
+component already satisfy the *semantic* boundaries that proposal exists to protect — one
+revisioned projection, batch-scoped, never mixing scan-wide totals with latest-batch job totals —
+and renaming working, tested code to match a document costs a migration and buys a URL. The
+boundaries are the requirement. The names are not.
+
+Decompose `RemediationOpsPanel` when a region earns its own file by growing, not on a schedule.
+
+## 22. Product decisions
+
+These answer §18. Absorbed from PR #1379 §23, which turned a discovery list into buildable
+defaults. Each is reversible configuration, and each is recorded here so an implementation can
+cite a decision rather than invent a number.
+
+- **Pause.** Ordinary users may request a safe pause of new claims; only operators can force-stop
+  active attempts. The panel explains that documents already in flight will drain. Until a pause
+  control exists, `paused` stays declared-and-never-derived (§20).
+- **Delay and stall thresholds.** Configure by phase and format from observed P95 duration. Warn at
+  `max(2 × P95, 60 seconds)` without progress; declare stalled after two further missed heartbeats
+  AND an expired or unhealthy attempt lease. Until per-phase P95 evidence exists, the single
+  `STALL_AFTER_S` stands — one honest threshold beats five invented ones.
+- **Event retention.** Retain resumable events for 24 hours or 10,000 events per run, whichever is
+  greater. Terminal audit evidence follows the product retention policy and is not bounded by this.
+- **Delivery retry.** Enable for SharePoint/OneDrive and Google Drive only, where destination
+  identity and idempotency are durable. Blob and download-only outputs require explicit proof
+  before activation.
+- **Filename privacy.** Show names to users already authorized for the scan; suppress them in
+  shared operational views and telemetry exports.
+- **Small-run estimates.** Hide estimates until at least five comparable documents complete. Runs
+  smaller than five show phase progress only.
+- **Review prioritization.** Group first whenever a valid policy cluster exists; surface individual
+  review when expected effort exceeds 20 decisions or 15 minutes.
+
+## 23. Test and verification plan
+
+### Contract and state-machine tests
+
+- Every legal state transition, plus rejection of illegal terminal-to-running transitions.
+- Counter partition and secondary-outcome invariants.
+- Latest-run isolation when a scan has multiple remediation batches.
+- Duplicate jobs, retried jobs, and stale worker publication attempts.
+- Scan/source identity agreement across SharePoint, OneDrive, Drive, Blob, and upload.
+- Terminal reconciliation with review, failure, skip, and delivery-only exceptions.
+
+### Stream and reconnect tests
+
+- Duplicate, delayed, missing, and out-of-order events.
+- Reconnect with a valid last event ID.
+- Event-retention expiry requiring a snapshot.
+- Authentication expiry and permission revocation mid-stream.
+- Server restart, deployment overlap, proxy buffering, and polling fallback.
+- Browser backgrounding and return without affecting the backend run.
+
+### UI state fixtures
+
+Ship deterministic fixtures for: accepted with no worker; multiple documents active across apply,
+verify and deliver; retry scheduled with an exact retry time; verification failure while other work
+continues; delivery-only failure; disconnected with last known values; inconsistent telemetry;
+stalled lease; completed cleanly; completed with review and failed exceptions; cancelled while
+workers drain; and large counts, long filenames, localization expansion, 200% zoom, and 320
+CSS-pixel reflow.
+
+### Accessibility verification
+
+Automated semantic, contrast, focus and reflow checks; keyboard-only completion of review and retry
+flows; screen-reader testing for initial load, material live changes, reconnect, failure and
+completion; reduced-motion validation; and confirmation that updates neither steal focus nor
+repeatedly announce unchanged content.
+
+### Production canary
+
+Run the projection in shadow mode against existing status values. Block activation if any document
+partition fails reconciliation, source identity disagrees, terminal status differs, a stale update
+would move the run backward, or scan-wide totals leak into the latest batch.
+
+## 24. Rollout and rollback
+
+1. **Observe** — generate the projection and invariant telemetry without changing the UI.
+2. **Internal** — enable for internal workspaces, retaining the old card behind a support-only switch.
+3. **Canary** — enable for selected customer workspaces and document formats.
+4. **Default** — make the panel primary after reliability and accessibility gates pass.
+5. **Retire compatibility** — remove the old client derivations only once every supported deployment
+   produces the versioned projection.
+
+Rollback disables the presentation, not the remediation jobs. The legacy status endpoint remains
+available throughout. **A UI rollback must never cancel, duplicate, or restart server work.**
+
+## 25. Risks and mitigations
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| More detailed progress increases database load | Remediation slows under observation | Maintain a projection, batch writes, bound active-attempt detail, load-test realistic concurrency |
+| Event stream looks live while data is stale | False trust | Separate transport heartbeat from business-progress freshness |
+| Scan-wide legacy facts contaminate run totals | Contradictory counts | Key every projected fact by run/batch; enforce invariants server-side |
+| Estimates become promises | User frustration | Ranges, disclosed evidence, hidden weak estimates, measured calibration |
+| Activity exposes sensitive filenames | Privacy leak | Same owner/workspace authorization as the run; suppress names in shared views |
+| Frequent announcements overwhelm assistive technology | Inaccessible workflow | Announce only material transitions; coalesce routine progress |
+| Retried workers publish duplicate effects | Duplicate corrected copies or counters | Lease fencing and phase-specific idempotency keys |
+| New panel masks existing worker defects | Polished but incorrect state | Shadow comparison, Monitor correlation, truth-contract release gates |
+
+## 26. Definition of done
+
+The feature is done only when: the versioned run projection is authoritative and batch-scoped; all
+snapshot invariants and state transitions are covered by tests; streaming, reconnect, polling
+fallback and stale-response handling pass deterministic tests; the panel covers every state fixture
+in §23; keyboard, screen-reader, contrast, focus and reflow verification passes; production shadow
+telemetry shows no unexplained source, state or count disagreement for the agreed canary period;
+Monitor can open directly to the same run and correlation IDs; retry and cancellation cannot
+duplicate successful work; user documentation defines every counter and status; and rollback has
+been exercised without interrupting an active remediation run.
+
+## 27. Provenance
+
+Sections 21-26 are absorbed from PR #1379 ("Define the real-time remediation operations panel"),
+which added a second copy of this PRD under a near-identical filename —
+`docs/prd-remediation-real-time-panel.md`. That PR MERGED before this absorption landed, so both
+files were briefly on `main`; this change deletes the duplicate, which is why the diff removes 676
+lines it never wrote.
+
+Two documents describing one feature is how a spec stops being one, and the near-identical names
+(`real-time-panel` vs `realtime-ops-panel`) make it the expensive kind: a reader who finds one has
+no signal that the other exists, and an edit to either leaves the pair disagreeing silently. Its
+§21 API contract and §22 component plan are deliberately NOT adopted verbatim — see §21's "On
+naming" for why the shipped names stand.
