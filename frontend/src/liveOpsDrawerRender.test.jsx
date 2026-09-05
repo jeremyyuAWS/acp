@@ -1027,3 +1027,107 @@ describe('Deployments panel', () => {
     expect(dPanel(container)).toBeNull()
   })
 })
+
+describe('The seven-section drawer', () => {
+  const NODES = [
+    ['worker', { kind: 'worker', label: 'Assess workers', service }],
+    ['queue', { kind: 'queue', label: 'Shared queue' }],
+    ['run', { kind: 'run', label: 'Run s1', run: snapshot.runs[0] }],
+    ['source', { kind: 'source', label: 'Google Drive', source: 'drive' }],
+    ['output', { kind: 'output', label: 'Corrected copies' }],
+    ['intake', { kind: 'intake', label: 'Intake' }],
+  ]
+  const sections = (container) =>
+    [...container.querySelectorAll('h3')].map(h => h.textContent.replace(/^\d+\.\s*/, ''))
+
+  it('opens the SAME seven sections, in the same order, for every node kind', async () => {
+    // The PRD's actual requirement. A reader who has learned one node's drawer has learned all of
+    // them — which only holds if the shape does not vary by kind.
+    const expected = ['Current state', 'Right now', 'Last 15 minutes', 'Live events',
+      'Alerts and platform health', 'Configuration and limits',
+      'Revision, deployments and traces']
+    for (const [name, node] of NODES) {
+      const container = await mount({ nodeId: 'x', node })
+      expect(sections(container), name).toEqual(expected)
+    }
+  })
+
+  it('numbers every section 1-7 in DOM order, with no drift between number and position', async () => {
+    // Checking only the first and last let a renumbered middle section through: a heading reading
+    // "99." in the fourth slot passed, because the ORDER of the headings had not changed. The
+    // number is a navigation aid, so a number that disagrees with its position is the bug.
+    for (const [name, node] of NODES) {
+      const container = await mount({ nodeId: 'x', node })
+      const numbers = [...container.querySelectorAll('h3')]
+        .map(h => Number(h.textContent.trim().match(/^(\d+)\./)?.[1]))
+      expect(numbers, name).toEqual([1, 2, 3, 4, 5, 6, 7])
+    }
+  })
+
+  it('labels each section for assistive tech with the same number its heading shows', async () => {
+    // The visible heading and the aria-label are two renderings of one fact and must not drift.
+    const container = await mount({ nodeId: 'stage:assess', node: NODES[0][1] })
+    for (const h of container.querySelectorAll('h3')) {
+      const text = h.textContent.trim().replace(/\s+/g, ' ')
+      expect(container.querySelector(`[aria-label="${text}"]`), text).not.toBeNull()
+    }
+  })
+
+  it('exposes each section to assistive tech by its number and name', async () => {
+    // The headings are visual; the aria-labels are what a screen-reader user navigates by, and
+    // "5" alone is not a landmark anybody can find.
+    const container = await mount({ nodeId: 'stage:assess', node: NODES[0][1] })
+    expect(container.querySelector('[aria-label="5. Alerts and platform health"]')).not.toBeNull()
+    expect(container.querySelector('[aria-label="6. Configuration and limits"]')).not.toBeNull()
+  })
+
+  it('says why a section is thin rather than dropping it', async () => {
+    // An omitted section reads as "nothing to report here", which is a claim — and for a run it
+    // would be the wrong one: Azure has plenty to say about the worker the run is executing on.
+    for (const kind of ['run', 'queue', 'source', 'output']) {
+      const node = NODES.find(([k]) => k === kind)[1]
+      const container = await mount({ nodeId: 'x', node })
+      const five = container.querySelector('[aria-label="5. Alerts and platform health"]')
+      expect(five.textContent, kind).toMatch(/Azure reports no alerts, health or deployments/)
+    }
+  })
+
+  it('points a run at the worker service that does have the answers', async () => {
+    const container = await mount({ nodeId: 'x', node: NODES[2][1] })
+    const five = container.querySelector('[aria-label="5. Alerts and platform health"]')
+    expect(five.textContent).toMatch(/worker service running it has all three/)
+    const six = container.querySelector('[aria-label="6. Configuration and limits"]')
+    expect(six.textContent).toMatch(/open one of those/)
+  })
+
+  it('shows a worker its real limits, labelled as requested rather than used', async () => {
+    // 90% CPU against one core and 90% against four are different situations, and the limit is
+    // the half a live metric never shows.
+    const container = await mount({ nodeId: 'stage:assess', node: NODES[0][1],
+      capacity: { ...capacity, min_replicas: 1, max_replicas: 6,
+        cpu_cores_per_replica: 2, memory_per_replica: '4Gi', workload_profile_name: 'D4' } })
+    const six = container.querySelector('[aria-label="6. Configuration and limits"]')
+    expect(six.textContent).toContain('1 to 6')
+    expect(six.textContent).toContain('2 cores')
+    expect(six.textContent).toContain('4Gi')
+    expect(six.textContent).toContain('D4')
+    expect(six.textContent).toMatch(/Requested, not used/)
+  })
+
+  it('does not invent a limit the deployment did not report', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: NODES[0][1],
+      capacity: { ...capacity, min_replicas: null, max_replicas: null,
+        cpu_cores_per_replica: null, memory_per_replica: null, workload_profile_name: null } })
+    const six = container.querySelector('[aria-label="6. Configuration and limits"]')
+    expect(six.textContent).toContain('Not reported')
+    expect(six.textContent).not.toMatch(/\b0 cores\b/)
+  })
+
+  it('keeps the live event timeline ahead of the alerts, not buried under them', async () => {
+    // Section 4 before 5: what just happened is how an operator orients before reading what is
+    // shouting. The old layout put the timeline last, under three Azure panels.
+    const container = await mount({ nodeId: 'stage:assess', node: NODES[0][1] })
+    const order = sections(container)
+    expect(order.indexOf('Live events')).toBeLessThan(order.indexOf('Alerts and platform health'))
+  })
+})

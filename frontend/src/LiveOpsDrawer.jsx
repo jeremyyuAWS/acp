@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { prefersReducedMotion, useDialog } from './a11y.js'
 import {
   EVENT_FILTERS, EVENT_ICONS, NOT_REPORTED, TONE, alertRuleState, alertRuleTone, alertsModel,
-  DEPLOY_ICONS, deploymentModel, incidentRegions, resourceHealthModel, serviceHealthModel,
+  DEPLOY_ICONS, configurationModel, deploymentModel, incidentRegions, isAzureBacked,
+  notAzureBackedReason, resourceHealthModel, serviceHealthModel,
   revisionComparisonModel,
   arcPath, capacityMatchesService, chartModel,
   capacityForService, componentState, defaultMetricFor, eventClock, eventsForNode, filterEvents,
@@ -471,6 +472,56 @@ function Deployments({ deploy, comparison }) {
       </ul>
     </details>}
   </section>
+}
+
+/**
+ * One of the drawer's seven sections (PRD "Best drawer experience").
+ *
+ * The heading is the point: every node opens the SAME seven, in the same order, so a reader who
+ * has learned one node's drawer has learned all of them and can go straight to the section that
+ * answers their question. A section that has little to say for this node still appears and says
+ * why — an omitted section reads as "nothing to report here", which is a claim, and usually the
+ * wrong one.
+ */
+function Section({ n, title, children }) {
+  return <section aria-label={`${n}. ${title}`} style={{ display: 'grid', gap: 10 }}>
+    <h3 style={{ margin: 0, fontSize: 11, fontWeight: 800, letterSpacing: '.08em',
+      textTransform: 'uppercase', color: 'var(--muted)' }}>
+      <span aria-hidden="true" style={{ opacity: .6 }}>{n}. </span>{title}
+    </h3>
+    {children}
+  </section>
+}
+
+/** The sentence sections 5 and 7 show for a node Azure does not describe. One component so all of
+ *  them say the same thing, and so the reason is never mistaken for an all-clear. */
+function NotAzureBacked({ node }) {
+  return <p className="muted" style={{ ...PANEL, padding: 12, fontSize: 11, margin: 0 }}>
+    {notAzureBackedReason(node)}
+  </p>
+}
+
+/**
+ * Section 6 — what is CONFIGURED, as opposed to what is happening.
+ *
+ * It exists because "is capacity sufficient" cannot be answered from live figures alone: 90% CPU
+ * against a one-core limit and 90% against four are different situations, and the limit is the
+ * half a live metric never shows. Every number here is an allocation; the live counterparts are
+ * in sections 2 and 3.
+ */
+function Configuration({ config }) {
+  return <div style={{ ...PANEL, padding: 14 }}>
+    {config.reason && <p className="muted" style={{ fontSize: 11, margin: 0 }}>{config.reason}</p>}
+    {!!config.rows.length && <div style={{ display: 'grid',
+      gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 8 }}>
+      {config.rows.map((row) => <div key={row.label} style={{ ...PANEL, padding: 11,
+        overflowWrap: 'anywhere' }}>
+        <span style={LABEL}>{row.label.toUpperCase()}</span>
+        <div style={{ fontSize: 13, fontWeight: 700, marginTop: 3 }}>{row.value}</div>
+        {row.detail && <div className="muted" style={{ fontSize: 10.5, marginTop: 2 }}>{row.detail}</div>}
+      </div>)}
+    </div>}
+  </div>
 }
 
 /**
@@ -1101,36 +1152,70 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
       <LiveHeader name={name} kind={node?.kind} state={state} connection={connection}
         generatedAt={snapshot?.generated_at} revision={revisionLabel(node, serviceCapacity)} nowMs={nowMs}
         onClose={onClose} onViewAll={onClose} />
-      {state.detail && <p className="muted" style={{ fontSize: 12, margin: 0 }}>{state.detail}</p>}
-      {primary}
-      <TrendStrip groups={groups} metricKey={metricKey} onMetric={setMetricKey} chart={chart}
-        markers={markers} paused={paused} source={picked.source} measuredAt={picked.measuredAt}
-        nowMs={nowMs} />
-      {node?.kind === 'worker' && <ActiveAlerts alerts={alertsModel(serviceCapacity)}
-        measuredAt={serviceCapacity?.measured_at} nowMs={nowMs} />}
-      {node?.kind === 'worker' && <ResourceHealth health={resourceHealthModel(serviceCapacity)} nowMs={nowMs} />}
-      {/* Subscription-wide, so it is read from the TOP of the capacity payload and shown on every
-          node — an Azure incident is context for the whole map, not one service's fault. */}
-      <ServiceHealth platform={serviceHealthModel(capacity)} />
-      {node?.kind === 'worker' && <Deployments deploy={deploymentModel(serviceCapacity)}
-        comparison={revisionComparisonModel(serviceCapacity)} />}
-      <Tracing tracing={tracingModel(snapshot)} />
-      <EventTimeline events={nodeEvents} filter={filter} onFilter={setFilter} paused={paused}
-        onPause={() => setFrozen((held) => (held ? null : { samples, events }))}
-        showAll={showAll} onShowAll={() => setShowAll(true)}
-        copied={copied} onCopy={copy} />
-      {!!facts.length && <details style={{ ...PANEL, padding: 12 }}>
-        <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Operational facts</summary>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(175px,1fr))', gap: 8, marginTop: 10 }}>
-          {facts.map(([label, value]) => <div key={label} style={{ ...PANEL, padding: 11, overflowWrap: 'anywhere' }}>
-            <b style={{ display: 'block', fontSize: 11, marginBottom: 4 }}>{label}</b>{value}
-          </div>)}
-        </div>
-        <p className="muted" style={{ fontSize: 11, margin: '9px 0 0' }}>
-          This view keeps updating from ACP and Azure while the drawer is open. Values marked
-          “{NOT_REPORTED}” are never estimated.
-        </p>
-      </details>}
+
+      {/* THE SEVEN SECTIONS, in this order for EVERY node kind. The order is the reading order of
+          an incident: what is it doing, is that healthy, how did it get here, what changed, what
+          is shouting, what are its limits, and what is it running. A section thin for this node
+          says why rather than disappearing — an absent section is a claim that there is nothing
+          to report, and usually the wrong one. */}
+
+      <Section n={1} title="Current state">
+        {state.detail
+          ? <p className="muted" style={{ fontSize: 12, margin: 0 }}>{state.detail}</p>
+          : <p className="muted" style={{ fontSize: 12, margin: 0 }}>
+              {nodeTypeLabel(node?.kind)} · state and freshness are in the header above.
+            </p>}
+      </Section>
+
+      <Section n={2} title="Right now">{primary}</Section>
+
+      <Section n={3} title="Last 15 minutes">
+        <TrendStrip groups={groups} metricKey={metricKey} onMetric={setMetricKey} chart={chart}
+          markers={markers} paused={paused} source={picked.source} measuredAt={picked.measuredAt}
+          nowMs={nowMs} />
+      </Section>
+
+      <Section n={4} title="Live events">
+        <EventTimeline events={nodeEvents} filter={filter} onFilter={setFilter} paused={paused}
+          onPause={() => setFrozen((held) => (held ? null : { samples, events }))}
+          showAll={showAll} onShowAll={() => setShowAll(true)}
+          copied={copied} onCopy={copy} />
+      </Section>
+
+      <Section n={5} title="Alerts and platform health">
+        {isAzureBacked(node)
+          ? <><ActiveAlerts alerts={alertsModel(serviceCapacity)}
+              measuredAt={serviceCapacity?.measured_at} nowMs={nowMs} />
+            <ResourceHealth health={resourceHealthModel(serviceCapacity)} nowMs={nowMs} /></>
+          : <NotAzureBacked node={node} />}
+        {/* Subscription-wide, so it is read from the TOP of the capacity payload and shown on
+            every node — an Azure incident is context for the whole map, not one service's fault. */}
+        <ServiceHealth platform={serviceHealthModel(capacity)} />
+      </Section>
+
+      <Section n={6} title="Configuration and limits">
+        <Configuration config={configurationModel(node, serviceCapacity, snapshot)} />
+      </Section>
+
+      <Section n={7} title="Revision, deployments and traces">
+        {isAzureBacked(node)
+          ? <Deployments deploy={deploymentModel(serviceCapacity)}
+              comparison={revisionComparisonModel(serviceCapacity)} />
+          : <NotAzureBacked node={node} />}
+        <Tracing tracing={tracingModel(snapshot)} />
+        {!!facts.length && <details style={{ ...PANEL, padding: 12 }}>
+          <summary style={{ cursor: 'pointer', fontWeight: 700 }}>Operational facts</summary>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(175px,1fr))', gap: 8, marginTop: 10 }}>
+            {facts.map(([label, value]) => <div key={label} style={{ ...PANEL, padding: 11, overflowWrap: 'anywhere' }}>
+              <b style={{ display: 'block', fontSize: 11, marginBottom: 4 }}>{label}</b>{value}
+            </div>)}
+          </div>
+          <p className="muted" style={{ fontSize: 11, margin: '9px 0 0' }}>
+            This view keeps updating from ACP and Azure while the drawer is open. Values marked
+            “{NOT_REPORTED}” are never estimated.
+          </p>
+        </details>}
+      </Section>
     </aside>
   </>
 }

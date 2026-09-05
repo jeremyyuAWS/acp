@@ -1586,3 +1586,123 @@ export function revisionComparisonModel(capacity = null) {
         : 'The image and the requested CPU and memory are unchanged from the previous revision.',
   }
 }
+
+/* ─────────────────────── Section 6: configuration and limits ─────────────────────── */
+
+/** The seven sections every node's drawer carries, in order. Exported so the drawer and its
+ *  tests agree on one list rather than two that drift — the PRD's requirement is that EVERY node
+ *  opens the same shape, and a shape defined in two places is two shapes. */
+export const DRAWER_SECTIONS = [
+  { n: 1, key: 'state', title: 'Current state' },
+  { n: 2, key: 'kpis', title: 'Right now' },
+  { n: 3, key: 'trends', title: 'Last 15 minutes' },
+  { n: 4, key: 'timeline', title: 'Live events' },
+  { n: 5, key: 'alerts', title: 'Alerts and platform health' },
+  { n: 6, key: 'config', title: 'Configuration and limits' },
+  { n: 7, key: 'deploy', title: 'Revision, deployments and traces' },
+]
+
+const _row = (label, value, detail = null) => ({ label, value, detail })
+
+/**
+ * What is CONFIGURED for this node — the fixed knobs, as opposed to what is happening.
+ *
+ * Section 6 exists because "is capacity sufficient" cannot be answered from live figures alone:
+ * 90% CPU against a 1-core limit and 90% against 4 cores are different situations, and the limit
+ * is the half a live metric never shows. So the ceiling sits in its own section rather than being
+ * inferred from the gauge above it.
+ *
+ * ALLOCATION, NEVER USE. Every number here is what the deployment asks for. The live counterparts
+ * are in sections 2 and 3, and conflating the two is how a resize reads as a regression.
+ *
+ * A node with no container app behind it — a run, a source, an output — gets the section too,
+ * saying what it is and why there are no platform limits to show. That is the PRD's uniform
+ * shape: the same seven sections everywhere, each honest about what it can say for this node.
+ */
+export function configurationModel(node = null, capacity = null, snapshot = null) {
+  const kind = node?.kind
+  const rows = []
+
+  if (kind === 'worker') {
+    const min = num(capacity?.min_replicas)
+    const max = num(capacity?.max_replicas)
+    rows.push(_row('Replica range',
+      min == null && max == null ? NOT_REPORTED : `${min ?? '?'} to ${max ?? '?'}`,
+      'The bounds Azure may scale between.'))
+    // `reported` is numeric-only — it runs the value through `num` and answers NOT_REPORTED for
+    // anything that is not a finite number. Memory ("4Gi") and the workload profile ("D4") are
+    // STRINGS, so they take a plain fallback; passing them to `reported` silently blanked both.
+    rows.push(_row('CPU per replica', reported(capacity?.cpu_cores_per_replica, ' cores'),
+      'Requested, not used.'))
+    rows.push(_row('Memory per replica', capacity?.memory_per_replica || NOT_REPORTED,
+      'Requested, not used.'))
+    if (capacity?.ephemeral_storage_per_replica) {
+      rows.push(_row('Ephemeral storage', capacity.ephemeral_storage_per_replica))
+    }
+    rows.push(_row('Workload profile', capacity?.workload_profile_name || NOT_REPORTED))
+
+    const scaleRules = capacity?.scale?.rules || []
+    for (const rule of scaleRules) {
+      rows.push(_row(`Scale rule · ${rule.name || rule.type || 'rule'}`,
+        rule.threshold != null ? String(rule.threshold) : NOT_REPORTED,
+        rule.type ? `Triggered by ${rule.type}.` : null))
+    }
+    if (capacity?.scale?.polling_interval != null) {
+      rows.push(_row('Scale polling', `${capacity.scale.polling_interval}s`,
+        'How often the rule above is evaluated.'))
+    }
+    if (capacity?.scale?.cooldown != null) {
+      rows.push(_row('Scale cooldown', `${capacity.scale.cooldown}s`,
+        'Quiet period before scaling down again.'))
+    }
+  } else if (kind === 'queue') {
+    const summary = snapshot?.summary || {}
+    // Same rule: the policy name is a string, the two counts are numbers.
+    rows.push(_row('Scheduling policy', summary.scheduling_policy || NOT_REPORTED))
+    rows.push(_row('Worker slots', reported(summary.worker_slots),
+      'Total across every worker service reporting a pool.'))
+    rows.push(_row('Queue window', reported(summary.queue?.window_s, 's'),
+      'The span the wait percentiles are measured over.'))
+  }
+
+  return {
+    kind,
+    rows,
+    // The uniform-shape rule: the section is present for every node, and says why it is thin
+    // rather than being dropped. An absent section reads as "nothing to configure"; this reads
+    // as "this node is not a container app", which is the true and more useful statement.
+    reason: rows.length ? null
+      : kind === 'run'
+        ? 'A run is work moving through the pipeline, not a deployed service. Its limits are the '
+          + 'worker services it runs on — open one of those for replica bounds and scale rules.'
+        : kind === 'source' || kind === 'output'
+          ? 'This is a data endpoint, not a container app. ACP does not configure replica bounds '
+            + 'or scale rules for it.'
+          : 'No configured limits are reported for this node.',
+  }
+}
+
+/** Whether a node is backed by a container app, and so whether Azure has anything to say about
+ *  it at all. Used by sections 5 and 7 to explain a thin section rather than omit it. */
+export function isAzureBacked(node = null) {
+  return node?.kind === 'worker'
+}
+
+/** The one sentence sections 5 and 7 show for a node Azure does not describe. Kept here rather
+ *  than in the panels so all of them say the same thing, and so a test can pin it. */
+export function notAzureBackedReason(node = null) {
+  const kind = node?.kind
+  if (kind === 'run') {
+    return 'A run is work in the pipeline, not a deployed service, so Azure reports no alerts, '
+      + 'health or deployments for it. The worker service running it has all three.'
+  }
+  if (kind === 'queue') {
+    return 'The shared queue is ACP’s own, not an Azure resource, so Azure reports no alerts, '
+      + 'health or deployments for it.'
+  }
+  if (kind === 'source' || kind === 'output') {
+    return 'This is a data endpoint rather than a container app, so Azure reports no alerts, '
+      + 'health or deployments for it.'
+  }
+  return 'Azure does not describe this node, so it reports no alerts, health or deployments for it.'
+}
