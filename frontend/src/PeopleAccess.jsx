@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { addPerson, getPeople, removePerson, updatePerson, getWorkspaceRoles, assignWorkspaceRole, roleImpact } from './api.js'
 
 // LABELS ONLY. The colours moved to `.people-badge.is-<status>` in styles.css so they can be the
@@ -25,6 +26,32 @@ function Badge({ status }) {
     </span>
   </div>
 }
+
+/**
+ * Render an overlay at document.body instead of where it sits in the tree.
+ *
+ * WHY THIS IS NOT COSMETIC. Both dialogs below are `position: fixed; inset: 0`, and both are
+ * rendered inside Settings, whose `.setoverlay` sets `backdrop-filter: blur(2px)`. An element
+ * with a backdrop-filter becomes the CONTAINING BLOCK for its fixed-position descendants, so
+ * "fixed" stopped meaning "relative to the viewport" and started meaning "relative to the
+ * settings overlay" — which scrolls.
+ *
+ * The consequence, measured in Chromium on the People screen: with the panel scrolled, the
+ * confirmation dialog rendered at y=-21 with its scrim at y=-105, i.e. above the top of the
+ * window. Selecting a role therefore did nothing an administrator could see — the dialog was
+ * there, focusable, and off-screen. That is the whole reported bug: "the dropdown does not
+ * work". It saves only after the confirmation, and the confirmation was never visible.
+ *
+ * A portal moves the DOM node out of that ancestor, so `fixed` resolves against the viewport
+ * again. React events still propagate along the REACT tree, so `.setpanel`'s stopPropagation
+ * still keeps a click inside the dialog from closing Settings — the behaviour is unchanged, only
+ * the position is fixed.
+ *
+ * Guarded on `document` so a non-DOM render (SSR, a bare unit test) falls back to rendering in
+ * place rather than throwing.
+ */
+const Overlay = ({ children }) =>
+  (typeof document === 'undefined' ? children : createPortal(children, document.body))
 
 export default function PeopleAccess() {
   const [data, setData] = useState({ people: [], domains: [], invite_enabled: false, can_manage: false })
@@ -161,9 +188,9 @@ export default function PeopleAccess() {
     <div role="status" aria-live="polite" style={{ minHeight: 22, marginTop: 10, color: error ? 'var(--error-fg-strong)' : '#287D3C', fontSize: 13 }}>{error || message}</div>
     <div style={{ border: '1px solid var(--line)', borderRadius: 10, overflow: 'hidden' }}>
       {data.people.length === 0 ? <p className="muted" style={{ padding: 18, margin: 0 }}>No people have been added yet.</p> : data.people.map((person) => <div key={person.email} className={roles.length > 0 ? 'people-row has-role-column' : 'people-row'}>
-        <div><b style={{ fontSize: 13 }}>{person.email}</b><div className="muted" style={{ fontSize: 12, marginTop: 3 }}>{person.provider === 'microsoft' ? 'Microsoft · SharePoint / OneDrive' : person.provider === 'google' ? 'Google · Drive' : person.role === 'owner' ? 'Workspace owner' : 'Provider not recorded'}</div></div>
+        <div><b className="people-email">{person.email}</b><div className="muted" style={{ fontSize: 12, marginTop: 3 }}>{person.provider === 'microsoft' ? 'Microsoft · SharePoint / OneDrive' : person.provider === 'google' ? 'Google · Drive' : person.role === 'owner' ? 'Workspace owner' : 'Provider not recorded'}</div></div>
         <Badge status={person.status} />
-        {person.protected ? <b style={{ fontSize: 12 }}>Owner</b> : data.can_manage ? <select aria-label={`Access level for ${person.email}`} value={person.role || 'user'} onChange={(e) => change(person, { role: e.target.value })}><option value="user">User</option><option value="admin">Platform Admin</option></select> : <span style={{ fontSize: 12 }}>{person.role === 'admin' ? 'Platform Admin' : 'User'}</span>}
+        {person.protected ? <b style={{ fontSize: 12 }}>Owner</b> : data.can_manage ? <select className="people-select" aria-label={`Access level for ${person.email}`} value={person.role || 'user'} onChange={(e) => change(person, { role: e.target.value })}><option value="user">User</option><option value="admin">Platform Admin</option></select> : <span style={{ fontSize: 12 }}>{person.role === 'admin' ? 'Platform Admin' : 'User'}</span>}
         {/* The WORKSPACE role (PRD §9), a different thing from the platform access level beside
             it: that one decides whether they can touch platform settings, this one decides which
             tabs they see. Shown only when roles exist — on a deployment that has not been
@@ -174,7 +201,8 @@ export default function PeopleAccess() {
             {person.protected ? (
               <span style={{ fontSize: 12 }}>Owner — full access</span>
             ) : (
-              <select aria-label={`Workspace role for ${person.email}`}
+              <select className={`people-select${person.workspace_role_id ? '' : ' is-unassigned'}`}
+                      aria-label={`Workspace role for ${person.email}`}
                       value={person.workspace_role_id || ''}
                       onChange={(e) => askToChangeRole(person, e.target.value)}>
                 <option value="">No role</option>
@@ -196,7 +224,7 @@ export default function PeopleAccess() {
         Jane's role?" is a question nobody can answer — the consequential half is which of today's
         abilities disappear, and that is the half an administrator cannot work out from two role
         names. */}
-    {roleChange && <div role="presentation" onMouseDown={(e) => e.target === e.currentTarget && setRoleChange(null)} style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(24,18,25,.42)', display: 'grid', placeItems: 'center', padding: 20 }}>
+    {roleChange && <Overlay><div role="presentation" onMouseDown={(e) => e.target === e.currentTarget && setRoleChange(null)} style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(24,18,25,.42)', display: 'grid', placeItems: 'center', padding: 20 }}>
       <div role="dialog" aria-modal="true" aria-labelledby="role-change-title" style={{ width: 'min(480px, 100%)', padding: 22, borderRadius: 12, background: 'var(--surface)', boxShadow: '0 20px 60px rgba(0,0,0,.25)' }}>
         <h3 id="role-change-title" style={{ marginTop: 0 }}>Change this role?</h3>
         <p style={{ fontSize: 13, lineHeight: 1.5 }}>
@@ -238,9 +266,9 @@ export default function PeopleAccess() {
           <button type="button" onClick={confirmRoleChange}>Change role</button>
         </div>
       </div>
-    </div>}
+    </div></Overlay>}
 
-    {open && <div role="presentation" onMouseDown={(e) => e.target === e.currentTarget && close()} style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(24,18,25,.42)', display: 'grid', placeItems: 'center', padding: 20 }}>
+    {open && <Overlay><div role="presentation" onMouseDown={(e) => e.target === e.currentTarget && close()} style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(24,18,25,.42)', display: 'grid', placeItems: 'center', padding: 20 }}>
       <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="add-person-title" style={{ width: 'min(500px, 100%)', padding: 22, borderRadius: 12, background: 'var(--surface)', boxShadow: '0 20px 60px rgba(0,0,0,.25)' }}>
       <form onSubmit={submit}>
         <h3 id="add-person-title" style={{ marginTop: 0 }}>Add a person</h3>
@@ -255,6 +283,6 @@ export default function PeopleAccess() {
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}><button type="button" className="ghost" onClick={close}>Cancel</button><button type="submit" disabled={busy}>{busy ? 'Adding…' : 'Add person'}</button></div>
       </form>
       </div>
-    </div>}
+    </div></Overlay>}
   </section>
 }

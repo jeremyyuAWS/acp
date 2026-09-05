@@ -2940,6 +2940,31 @@ html[data-wcag="on"] .wcag-toggle--on {
 .roles-grant { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 13px; }
 .roles-warn { margin: 10px 0 0; padding: 9px 11px; border-radius: 7px; background: #FFF8E7;
   border: 1px solid #E5C875; font-size: 12px; line-height: 1.5; }
+/* ── The two selects in a People row ───────────────────────────────────────────
+   They were bare `<select>`s taking the browser's default chrome, which on this screen sat
+   next to buttons, chips and inputs that all follow the app's own form styling — so the one
+   control an administrator actually uses to change access looked like the least considered
+   thing on the row. This matches the pattern the rest of the app already uses (`.kgcontrols
+   select`, `.ontcond select`): app font, --line border, 8px radius, surface background.
+
+   `appearance: none` plus a drawn chevron, because the native arrow is the part that differs
+   most between platforms and is what made two adjacent selects look like two different widgets.
+   The chevron is a background SVG rather than a pseudo-element: `<select>` cannot host generated
+   content reliably across engines. It is drawn in --muted so it recedes, and `padding-right`
+   reserves room so a long role name never runs underneath it. */
+.people-select { font: inherit; font-size: 12.5px; line-height: 1.2; color: var(--ink);
+  padding: 6px 26px 6px 9px; border: 1px solid var(--line); border-radius: 8px;
+  background-color: var(--surface); cursor: pointer; width: 100%; max-width: 100%;
+  appearance: none; -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236c6470' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 9px center; }
+.people-select:hover { border-color: var(--muted); }
+.people-select:disabled { color: var(--muted); background-color: var(--bg); cursor: default; }
+/* "No role" is a real state, not a placeholder, but it should not read as loudly as a role that
+   somebody chose — an unassigned person is the default, and the eye should go to the assigned
+   ones. Set on the element rather than the option, since option styling is not portable. */
+.people-select.is-unassigned { color: var(--muted); }
+
 .people-role-cell { display: grid; gap: 4px; }
 .people-role-impact { font-size: 11.5px; line-height: 1.45; }
 
@@ -2968,6 +2993,18 @@ html[data-wcag="on"] .wcag-toggle--on {
 .people-row + .people-row { border-top: 1px solid var(--line); }
 .people-row-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px;
               flex-wrap: wrap; }
+
+/* A GRID ITEM WILL NOT SHRINK BELOW ITS CONTENT unless told to: `min-width` is `auto` for grid
+   items, so a long address kept its cell at full text width and simply painted over the status
+   badge beside it. Real tenants have addresses like
+   `jeremy.yu@movateazurelabsv2.onmicrosoft.com`, which is what made this visible — the short
+   fixtures in the tests never could. `min-width: 0` lets the track do its job. */
+.people-row > * { min-width: 0; }
+/* Wrapped rather than truncated, deliberately: an administrator deciding who gets which role has
+   to be able to read the whole address, and an ellipsis in the middle of a domain is exactly
+   where two tenants stop being distinguishable. `anywhere` because an email has no spaces to
+   break at. */
+.people-email { display: block; font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
 
 /* ── The status badge ──────────────────────────────────────────────────────────
    WRAPPED, BECAUSE A GRID ITEM IS BLOCKIFIED. The badge sets `display: inline-block` so the

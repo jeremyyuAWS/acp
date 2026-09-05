@@ -60,6 +60,16 @@ const flush = async () => { for (let i = 0; i < 4; i++) await act(async () => { 
 const click = async (el) => { await act(async () => { el.click() }); await flush() }
 const byText = (c, sel, re) => [...c.querySelectorAll(sel)].find((e) => re.test(e.textContent))
 
+// THE DIALOG IS NOT INSIDE THE COMPONENT ANY MORE, and that is the fix rather than an accident.
+// It renders through a portal at `document.body` so that `position: fixed` resolves against the
+// viewport instead of against Settings' `.setoverlay`, which carries a `backdrop-filter` and
+// therefore became the containing block for it — displacing the dialog by the panel's scroll
+// offset until it sat off the top of the screen. See peopleDialogPortal.test.jsx.
+//
+// So these lookups go through `document`, not the mounted container. The assertions themselves
+// are unchanged; only where the dialog lives has moved.
+const roleDialog = () => document.querySelector('[role="dialog"]')
+
 async function mount() {
   const { container, root } = createTestRoot()
   await act(async () => { root.render(createElement(PeopleAccess)) })
@@ -106,7 +116,7 @@ describe('changing a role asks first', () => {
     const c = await mount()
     await pick(c, 'analyst')
     expect(assignWorkspaceRole).not.toHaveBeenCalled()
-    expect(c.querySelector('[role="dialog"]')).toBeTruthy()
+    expect(roleDialog()).toBeTruthy()
   })
 
   it('names what is LOST as well as what is gained', async () => {
@@ -114,7 +124,7 @@ describe('changing a role asks first', () => {
     // that generates the support ticket when it is a surprise.
     const c = await mount()
     await pick(c, 'analyst')
-    const dialog = c.querySelector('[role="dialog"]')
+    const dialog = roleDialog()
     expect(dialog.textContent).toContain('remediate.run')
     expect(dialog.textContent).toContain('release.view')
     expect(dialog.textContent).toContain('discover.run')
@@ -130,16 +140,16 @@ describe('changing a role asks first', () => {
   it('assigns once confirmed', async () => {
     const c = await mount()
     await pick(c, 'analyst')
-    await click(byText(c, '[role="dialog"] button', /^Change role$/))
+    await click(byText(document, '[role="dialog"] button', /^Change role$/))
     expect(assignWorkspaceRole).toHaveBeenCalledWith('jane@hosp.org', 'analyst')
   })
 
   it('assigns nothing when cancelled', async () => {
     const c = await mount()
     await pick(c, 'analyst')
-    await click(byText(c, '[role="dialog"] button', /^Cancel$/))
+    await click(byText(document, '[role="dialog"] button', /^Cancel$/))
     expect(assignWorkspaceRole).not.toHaveBeenCalled()
-    expect(c.querySelector('[role="dialog"]')).toBeNull()
+    expect(roleDialog()).toBeNull()
   })
 
   it('says plainly when nothing actually changes', async () => {
@@ -148,14 +158,14 @@ describe('changing a role asks first', () => {
     IMPACT = { gains: [], loses: [], enforced: true }
     const c = await mount()
     await pick(c, 'analyst')
-    expect(c.querySelector('[role="dialog"]').textContent).toMatch(/Nothing they can do today changes/i)
+    expect(roleDialog().textContent).toMatch(/Nothing they can do today changes/i)
   })
 
   it('warns that the change is inert while enforcement is off', async () => {
     IMPACT = { gains: [], loses: [], enforced: false, mode: 'observe' }
     const c = await mount()
     await pick(c, 'analyst')
-    expect(c.querySelector('[role="dialog"]').textContent).toContain('changes nothing for them')
+    expect(roleDialog().textContent).toContain('changes nothing for them')
   })
 
   it('does NOT call the change inert at the navigation stage, because it is not', async () => {
@@ -165,7 +175,7 @@ describe('changing a role asks first', () => {
     IMPACT = { gains: [], loses: ['operations.view'], enforced: false, mode: 'navigation' }
     const c = await mount()
     await pick(c, 'analyst')
-    const text = c.querySelector('[role="dialog"]').textContent
+    const text = roleDialog().textContent
     expect(text).toContain('hide tabs for them')
     expect(text).not.toContain('changes nothing for them')
   })
@@ -178,9 +188,9 @@ describe('when the preview cannot be fetched', () => {
     roleImpact.mockRejectedValueOnce(new Error('nope'))
     const c = await mount()
     await pick(c, 'analyst')
-    const dialog = c.querySelector('[role="dialog"]')
+    const dialog = roleDialog()
     expect(dialog.textContent).toMatch(/could not be previewed/i)
-    await click(byText(c, '[role="dialog"] button', /^Change role$/))
+    await click(byText(document, '[role="dialog"] button', /^Change role$/))
     expect(assignWorkspaceRole).toHaveBeenCalledWith('jane@hosp.org', 'analyst')
   })
 })
