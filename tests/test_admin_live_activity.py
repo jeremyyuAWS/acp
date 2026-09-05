@@ -28,11 +28,40 @@ class _Response:
 
 def test_live_activity_read_is_available_to_any_signed_in_user(monkeypatch):
     monkeypatch.setattr(system, "_admin_activity_snapshot", lambda: {"runs": [], "summary": {}})
+    monkeypatch.setattr(system.core, "is_admin", lambda email: False)
     monkeypatch.setattr(system, "_azure_block", lambda: None)
     response = _Response()
     assert system.admin_activity(_Request("viewer@example.org"), response) == {
-        "runs": [], "summary": {}}
+        "runs": [], "workflows": [], "summary": {
+            "active_runs": 0, "recent_runs": 0, "active_workflows": 0,
+            "recent_workflows": 0, "active_users": 0, "waiting_users": 0}}
     assert response.headers["Cache-Control"] == "no-store"
+
+
+def test_non_admin_live_activity_is_scoped_to_the_viewer(monkeypatch):
+    monkeypatch.setattr(system.core, "is_admin", lambda email: False)
+    monkeypatch.setattr(system, "_admin_activity_snapshot", lambda: {
+        "runs": [
+            {"scan_id": "mine", "owner": "viewer@example.org"},
+            {"scan_id": "other", "owner": "other@example.org"},
+        ],
+        "workflows": [
+            {"workflow_id": "mine", "owner_display_name": "viewer@example.org"},
+            {"workflow_id": "other", "owner_display_name": "other@example.org"},
+        ],
+        "summary": {"worker_slots": 12},
+    })
+    body = system.admin_activity(_Request("viewer@example.org"), _Response())
+    assert [row["scan_id"] for row in body["runs"]] == ["mine"]
+    assert [row["workflow_id"] for row in body["workflows"]] == ["mine"]
+    assert body["summary"]["worker_slots"] == 12
+
+
+def test_admin_live_activity_keeps_authorized_cross_user_workflows(monkeypatch):
+    monkeypatch.setattr(system.core, "is_admin", lambda email: True)
+    snapshot = {"runs": [{"owner": "other@example.org"}],
+                "workflows": [{"owner_display_name": "other@example.org"}], "summary": {}}
+    assert system._scope_activity_snapshot(snapshot, "admin@example.org") is snapshot
 
 
 def test_the_first_read_carries_the_azure_block_so_the_page_is_not_blank(monkeypatch):
@@ -131,6 +160,43 @@ def test_admin_live_activity_omits_inactive_runs(isolated_store):
     assert isolated_store.admin_live_activity(recent_seconds=0) == []
 
 
+def test_recent_failed_stage_is_visible_to_the_workflow_contract(isolated_store):
+    isolated_store.save_scan(_scan())
+    isolated_store.enqueue_job("scan_file", {"file": "broken.docx"}, scan_id="scan-live-1")
+    claimed = isolated_store.claim_job("test-worker")
+    assert claimed
+    isolated_store.fail_job(claimed["id"], "broken", worker_id="test-worker",
+                            attempt=claimed["attempts"], force_dead=True)
+    run = isolated_store.admin_live_activity()[0]
+    assert run["failed"] == 1
+    workflow = system._workflow_rows([run])[0]
+    assert workflow["status"] == "failed"
+    assert workflow["stages"][0]["failed"] == 1
+
+
+def test_workflow_contract_groups_stages_under_the_scan_identity():
+    rows = system._workflow_rows([
+        {"scan_id": "scan-1", "owner": "owner@example.org", "source": "sharepoint",
+         "stage": "assess", "status": "active", "running": 2, "queued": 1,
+         "completed": 3, "total": 6, "started_at": "2026-09-05T10:05:00+00:00",
+         "updated_at": "2026-09-05T10:08:00+00:00", "max_attempts_seen": 2},
+        {"scan_id": "scan-1", "owner": "owner@example.org", "source": "sharepoint",
+         "stage": "discover", "status": "recent", "running": 0, "queued": 0,
+         "completed": 1, "total": 1, "started_at": "2026-09-05T10:00:00+00:00",
+         "updated_at": "2026-09-05T10:04:00+00:00", "max_attempts_seen": 1},
+    ])
+    assert len(rows) == 1
+    workflow = rows[0]
+    assert workflow["workflow_id"] == workflow["scan_id"] == "scan-1"
+    assert workflow["status"] == "running"
+    assert workflow["current_stage"] == "assess"
+    assert workflow["created_at"] == "2026-09-05T10:00:00+00:00"
+    assert [stage["stage"] for stage in workflow["stages"]] == ["discover", "assess"]
+    assert workflow["stages"][0]["status"] == "completed"
+    assert workflow["stages"][1]["stage_run_id"] == "scan-1:assess"
+    assert workflow["stages"][1]["attempt"] == 2
+
+
 def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(monkeypatch):
     class ActivityStore:
         def worker_tier_status(self):
@@ -171,6 +237,10 @@ def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(mo
             "processing": {"alive": False, "pool_size": 4, "age_s": 999, "version": "v9"},
         },
         "worker_capacity_by_role": {},
+        "active_workflows": 0,
+        "recent_workflows": 0,
+        "workflow_correlation": {"attributed_stage_runs": 2,
+                                 "unlinked_active_jobs": None, "complete": None},
         "by_stage": {
             # `findings` is None, not 0: this stub reports no findings count, and "no findings yet"
             # is a different fact from "findings were not counted for this stage".

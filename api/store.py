@@ -10427,7 +10427,7 @@ class Store:
                 "FROM jobs j JOIN scan_runs sr ON sr.id=j.scan_id "
                 "WHERE j.scan_id IN (SELECT DISTINCT scan_id FROM jobs "
                 "WHERE status IN ('queued','running')) OR "
-                "(j.status='done' AND j.updated_at>=%s) "
+                "(j.status IN ('done','dead') AND j.updated_at>=%s) "
                 "ORDER BY j.updated_at DESC LIMIT %s", (recent_cutoff, 5000))
             rows = self._db.fetchall(cur)
 
@@ -10442,7 +10442,7 @@ class Store:
             item = grouped.setdefault(key, {
                 "scan_id": row["scan_id"], "owner": row.get("owner_email") or "unknown",
                 "source": row.get("source") or "unknown", "stage": stage,
-                "queued": 0, "running": 0, "completed": 0, "total": 0,
+                "queued": 0, "running": 0, "completed": 0, "failed": 0, "total": 0,
                 "started_at": row.get("created_at"), "updated_at": row.get("updated_at"),
                 "oldest_queued_at": None, "current_file": None,
                 "current_job_type": None, "current_rule_id": None,
@@ -10465,6 +10465,10 @@ class Store:
             elif status == "running": item["running"] += 1
             elif status == "done":
                 item["completed"] += 1
+                if str(row.get("updated_at") or "") >= recent_cutoff:
+                    recent.add(key)
+            elif status == "dead":
+                item["failed"] += 1
                 if str(row.get("updated_at") or "") >= recent_cutoff:
                     recent.add(key)
             if status in ("queued", "running"):
@@ -10534,6 +10538,19 @@ class Store:
         for position, item in enumerate(waiting, 1):
             item["queue_position"] = position
         return result
+
+    def unlinked_active_jobs_count(self) -> int:
+        """Active queue rows that cannot be attached to a durable scan workflow.
+
+        This is deliberately a count, not a record list: it gives operators a repair signal
+        without leaking payloads from malformed or legacy jobs across user boundaries.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs j LEFT JOIN scan_runs sr ON sr.id=j.scan_id "
+                "WHERE j.status IN ('queued','running') AND sr.id IS NULL")
+            row = self._db.fetchone(cur) or {}
+        return int(row.get("n") or 0)
 
     def list_scan_jobs_of_type(self, scan_id: str, job_type: str) -> list[dict]:
         """Every job of one type already enqueued for one scan, whatever its status.
