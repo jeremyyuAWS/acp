@@ -97,15 +97,14 @@ scheduled here — each is bookmarked so the next sprint can pick up the thread.
   accept/reject UI, the "house style applied" chip on proposal cards (ADR 0021 §E). Ship both
   behind the flag; flip the flag only after end-to-end test with real `hitl_events` rows.
 
-- [ ] **GPU scanned-PDF assessment — Tier A entry slice (ADR 0027).** Scanned / untagged PDFs
-  return `not_evaluated` on nearly every criterion — the single largest honest coverage gap.
-  ADR 0027 (Status: Proposed) defines a three-tier build; Tier A is the entry slice: (1) detect
-  untagged / scanned PDFs at assess time (`/Tags` absent, text extraction yield < threshold);
-  (2) route them to a vision layout call (`describe_image_structured`) that returns a layout
-  model (heading regions, text blocks, image regions, tables); (3) surface the layout model in
-  the file drawer as "extracted structure" without yet mapping it to per-criterion findings
-  (that is Tier B). Tier A proves the detection gate and the layout call before any finding
-  mapping is attempted. Ship Tier A behind a `ACP_SCANNED_PDF_TIER_A` flag.
+- [x] **GPU scanned-PDF assessment — Tier A entry slice (ADR 0027).** ✅ `api/pdf_vision_assess.py`
+  implements the detection gate (`is_scanned_pdf`: no `/MarkInfo`/`/StructTreeRoot`, or text yield
+  < 30 chars/page) and layout extraction (`extract_layout`: render each page to PNG via
+  `render.render_page_png`, describe via `ai.describe_image`, store one row per page).
+  New `scanned_pdf_layouts` table in `store.py` + `save_scanned_pdf_layout` / `get_scanned_pdf_layouts`
+  methods. Wired into `analyse_and_assess()` after veraPDF corroboration. New route
+  `GET /scans/{sid}/files/{f}/scanned-layout` returns `{detected, pages}`. Feature flag
+  `ACP_SCANNED_PDF_TIER_A` (default OFF). 35 tests in `tests/test_scanned_pdf_tier_a.py`.
 
 - [ ] **Tagged accessible conformance report — WeasyPrint migration (ADR 0034, spike validation).**
   The conformance report handed to audit teams **fails its own tagged-PDF check** (a test in the

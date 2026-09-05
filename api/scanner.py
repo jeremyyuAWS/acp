@@ -4910,6 +4910,26 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
                 _vcr.annotate_issues(raw["issues"], _vcr_result)
         except Exception:
             swallowed("scanner.analyse_and_assess: veraPDF corroboration failed", scan_id)
+    # ADR 0027 Tier A — scanned-PDF vision layout extraction. Feature-flagged via
+    # ACP_SCANNED_PDF_TIER_A env var; a no-op when the flag is off or the file is not a
+    # scanned/untagged PDF. Stores per-page layout descriptions; never raises.
+    if ext == ".pdf" and scan_id:
+        try:
+            import pdf_vision_assess as _pva
+            if _pva.enabled():
+                _pdf_path = tmp / name
+                if _pdf_path.exists() and _pva.is_scanned_pdf(_pdf_path):
+                    _pdf_bytes2 = _pdf_path.read_bytes()
+                    _layouts = _pva.extract_layout(_pdf_bytes2, scan_id=scan_id, file=name)
+                    if _layouts:
+                        import core as _core
+                        _core.store.save_scanned_pdf_layout(scan_id, name, _layouts)
+                        print(
+                            f"[scan] scanned-PDF Tier A: {name} → {len(_layouts)} page(s) assessed",
+                            flush=True,
+                        )
+        except Exception:
+            swallowed("scanner.analyse_and_assess: scanned-PDF Tier A failed", scan_id)
     # Score over the IN-SCOPE findings, but keep every finding on the record. `Rubric.assess`
     # computes `100 - sum(penalty(severity))` over whatever it is handed and knows nothing about
     # scope, so scoring the full list gave a scoped scan unscoped scores — a document with no

@@ -1287,6 +1287,19 @@ _SCHEMA = [
     "ON criterion_disposition(scan_id, file)",
     "CREATE INDEX IF NOT EXISTS idx_criterion_disposition_sc "
     "ON criterion_disposition(scan_id, file, sc)",
+    # ADR 0027 Tier A — scanned-PDF vision layout results. One row per (scan_id, file, page);
+    # upsert on re-scan. description and evidence are model-generated text: they MUST NEVER
+    # contain tokens, image bytes, prompts, or PHI — only the structured layout description.
+    """CREATE TABLE IF NOT EXISTS scanned_pdf_layouts (
+      scan_id TEXT NOT NULL,
+      file TEXT NOT NULL,
+      page INT NOT NULL,
+      description TEXT,
+      evidence TEXT,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (scan_id, file, page)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_scanned_pdf_layouts_scan ON scanned_pdf_layouts(scan_id, file)",
 ]
 
 # One-time backfill: assign pre-isolation (NULL-owner) scans to a configured owner so
@@ -1756,8 +1769,8 @@ class _PgAdapter:
     # indexes. Additive on the usual terms: an older replica never reads or writes this table, and
     # every route behind it is guarded by the new capability-map entries, so a replica without
     # this code keeps serving all existing surfaces unchanged.
-    _SCHEMA_VERSION = 14
-    _SCHEMA_CHECKSUM_AT_VERSION = "063d03f78cc45848512a665cc7d773ac"
+    _SCHEMA_VERSION = 15
+    _SCHEMA_CHECKSUM_AT_VERSION = "78973be69cc99a58230bde5306c6423e"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -3805,7 +3818,9 @@ class Store:
                          # anyone out: acr_authz gives the protected ACP_OWNER_EMAIL every role
                          # unconditionally, so the owner can always grant the first role again —
                          # the same anti-lockout property core.is_owner exists to provide.
-                         "acr_role"]
+                         "acr_role",
+                         # ADR 0027 Tier A — vision layout descriptions are per-scan customer data.
+                         "scanned_pdf_layouts"]
 
     def reset_analytics(self) -> list[str]:
         """Clear all scan results / activity so the Grafana + in-app charts start
@@ -8215,6 +8230,33 @@ class Store:
                     "SELECT id,sc,kind,reason,actor,ts FROM criterion_disposition "
                     "WHERE scan_id=%s AND file=%s ORDER BY ts DESC",
                     (scan_id, file))
+            return self._db.fetchall(cur)
+
+    # ── ADR 0027 Tier A — scanned-PDF layout store ──────────────────────────────
+
+    def save_scanned_pdf_layout(self, scan_id: str, file: str, pages: list[dict]) -> None:
+        """Upsert vision-layout rows for a scanned PDF. One row per page; idempotent on re-scan."""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        with self._db.cursor() as cur:
+            for p in pages:
+                self._db.execute(cur,
+                    "INSERT INTO scanned_pdf_layouts"
+                    "(scan_id,file,page,description,evidence,created_at)"
+                    " VALUES(%s,%s,%s,%s,%s,%s)"
+                    " ON CONFLICT(scan_id,file,page) DO UPDATE SET"
+                    " description=EXCLUDED.description,"
+                    " evidence=EXCLUDED.evidence,"
+                    " created_at=EXCLUDED.created_at",
+                    (scan_id, file, p.get("page"), p.get("description"), p.get("evidence"), now))
+
+    def get_scanned_pdf_layouts(self, scan_id: str, file: str) -> list[dict]:
+        """Return per-page vision layout rows for a file, ordered by page number."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT page,description,evidence,created_at FROM scanned_pdf_layouts"
+                " WHERE scan_id=%s AND file=%s ORDER BY page",
+                (scan_id, file))
             return self._db.fetchall(cur)
 
     # ── Durable scan-lifecycle event log (ADR 0042) ───────────────────────────
