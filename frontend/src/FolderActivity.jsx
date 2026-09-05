@@ -4,8 +4,9 @@
 // already flowing through the same job-state channel `files_found`/`phase` use — no new fetch.
 //
 // Deliberately NOT the full tree view from the design review (checked/scanning/waiting per
-// folder, "N of M folders scanned"): the backend does not track a total folder count or a
-// per-folder waiting state yet, only what is actively in flight and a bounded recent-completions
+// folder, "N of M folders scanned"): the backend tracks folders seen so far but cannot know the
+// final total before recursively discovering the tree, and has no per-folder waiting state; it
+// carries only what is actively in flight and a bounded recent-completions
 // list (see api/scanner.py's _search_folder — active/recent are capped, not a durable history).
 // Showing a tree implies knowledge of the whole shape of the estate that does not exist yet;
 // this shows only what is real. The full tree is later, backend-dependent work.
@@ -15,6 +16,7 @@
 // have nothing to show, which is different from "loading" and should not look like it.
 const STATE_LABEL = {
   completed: { text: 'Scanned', ink: 'var(--success-fg)', icon: '✓' },
+  partial: { text: 'Partially scanned', ink: '#7A5800', icon: '⚠' },
   failed: { text: 'Failed', ink: '#8A2A20', icon: '✗' },
   rate_limited: { text: 'Rate-limited', ink: '#7A5800', icon: '⚠' },
 }
@@ -69,9 +71,12 @@ export default function FolderActivity({ active, recent }) {
                   </span>
                   <span style={{ fontSize: 10.5, flexShrink: 0, color: s.ink, fontWeight: 600 }}>
                     {s.text}
-                    {f.state === 'completed' && f.files_found != null
+                    {(f.state === 'completed' || f.state === 'partial') && f.files_found != null
                       ? ` · ${f.files_found} file${f.files_found === 1 ? '' : 's'}` : ''}
                   </span>
+                  {f.library_name && <span className="muted" style={{ fontSize: 10.5 }}>
+                    · {f.library_name}
+                  </span>}
                 </li>
               )
             })}

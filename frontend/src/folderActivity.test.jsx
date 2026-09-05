@@ -85,6 +85,15 @@ describe('FolderActivity', () => {
     expect(c.textContent).not.toMatch(/0 files/)
   })
 
+  it('distinguishes a capped SharePoint folder and names its library', async () => {
+    const c = await mount({
+      recent: [{ name: 'Policies', path: 'Documents/Clinical/Policies', state: 'partial',
+        files_found: 200, library_name: 'Documents' }],
+    })
+    expect(c.textContent).toMatch(/Partially scanned · 200 files/)
+    expect(c.textContent).toMatch(/Documents/)
+  })
+
   it('shows both sections together when both are present', async () => {
     const c = await mount({
       active: [{ name: 'Legal', path: 'My Drive/Legal', started_at: 't0' }],

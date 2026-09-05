@@ -37,6 +37,13 @@ rules), and `docs/pilot-scope.md`.
   when Graph merely finishes returning them. The persisted final scope uses the same shape, so a
   partial site names the specific library that failed instead of collapsing the evidence into one
   site-level total.
+- **Live folder traversal evidence (2026-09-05)** — SharePoint's `/children` walk now retains the
+  folder path already present in each listing response and publishes a bounded active/recent view
+  over Discovery's existing SSE channel. It names nested paths, their library, files found, partial
+  folders and the exact folder that failed. Updates are capped to one write every two seconds and
+  only the four latest outcomes are retained, so a deep estate gains transparency without another
+  Graph request or an unbounded progress payload. OneDrive and selected-folder walks use the same
+  signal.
 - **A refusal that names whose problem it is (2026-09-04)** — a Graph 401/403 used to produce one
   sentence for every case: grant `Sites.Read.All` with tenant admin consent. It is now three
   answers, because they have three different owners. A **401** is the token (expired, wrong
