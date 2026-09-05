@@ -180,6 +180,54 @@ def test_a_broken_redis_degrades_to_memory_instead_of_failing_the_scan(monkeypat
     assert core.get_job_state("j5")["files_found"] == 3
 
 
+def test_a_redis_blip_repairs_the_complete_shared_record_on_the_next_update(monkeypatch):
+    """One failed patch must not leave every other replica with permanently stale fields."""
+    import core
+
+    fake = FakeRedis()
+    calls = 0
+
+    class _FailsOnce(_FakePipeline):
+        def execute(self):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise RuntimeError("connection reset")
+            return super().execute()
+
+    fake.pipeline = lambda: _FailsOnce(fake)
+    monkeypatch.setattr(core, "_get_redis", lambda: fake)
+    monkeypatch.setattr(core, "JOBS", {})
+    monkeypatch.setattr(core, "_JOB_REDIS_DIRTY", set())
+
+    core.set_job("j-repair", {"phase": "queued", "files_found": 0, "source": "drive"})
+    core.update_job("j-repair", {"files_found": 9})       # Redis write fails
+    core.update_job("j-repair", {"phase": "scanning"})   # full repair succeeds
+
+    core.JOBS.clear()                                      # poll on another replica
+    repaired = core.get_job_state("j-repair")
+    assert repaired["phase"] == "scanning"
+    assert repaired["files_found"] == 9
+    assert repaired["source"] == "drive"
+
+
+def test_a_coalesced_field_is_included_in_the_next_immediate_flush(two_replicas, monkeypatch):
+    """Coalescing delays a patch; it must not silently discard fields absent from the next one."""
+    import time as _t
+
+    core, _ = two_replicas
+    core.set_job("j-coalesced", {"phase": "queued", "files_found": 0, "done": False})
+    monkeypatch.setattr(core, "_JOB_COALESCE_SECONDS", 9999.0)
+    core._JOB_LAST_REDIS_WRITE["j-coalesced"] = _t.monotonic()
+    core.update_job("j-coalesced", {"files_found": 17})          # local mirror only
+    core.update_job("j-coalesced", {"phase": "scanning"})       # forces full repair
+
+    core.JOBS.clear()
+    shared = core.get_job_state("j-coalesced")
+    assert shared["phase"] == "scanning"
+    assert shared["files_found"] == 17
+
+
 def test_the_route_reads_through_the_helper_not_the_dict(two_replicas):
     """Guards the actual regression: reverting the route to core.JOBS.get would pass every test
     above while quietly reinstating the affinity requirement."""

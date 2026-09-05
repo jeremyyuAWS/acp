@@ -1850,6 +1850,9 @@ _JOB_TTL = 3600                            # a scan poll outlives the scan; noth
 # carries a phase change, done, or error flag — those always flush immediately.
 _JOB_COALESCE_SECONDS = float(os.environ.get("ACP_JOB_COALESCE_SECONDS", "0.5") or "0.5")
 _JOB_LAST_REDIS_WRITE: dict[str, float] = {}   # monotonic timestamps, never persisted
+# A failed Redis write leaves this replica's in-memory mirror newer than the shared hash. The
+# next successful update must repair the whole record rather than only its newest patch.
+_JOB_REDIS_DIRTY: set[str] = set()
 
 # scan_id → job_id mapping so scan-based SSE streams can locate the current job without
 # the caller having to thread job_id through every API surface.  Written on set_job (when
@@ -1984,6 +1987,9 @@ def set_job(job_id: str, state: dict) -> None:
     cheap change signal without a full diff."""
     state = {**state, "updated_at": _job_now_iso(), "seq": 0}
     _maybe_checkpoint(job_id, state)   # independent of Redis/in-memory below — see its own comment
+    # A successful Redis write used to return before populating JOBS. If Redis then failed during
+    # update_job, the newer update had no local record to merge into and vanished from both stores.
+    JOBS[job_id] = dict(state)
     r = _get_redis()
     if r is not None:
         try:
@@ -1995,17 +2001,20 @@ def set_job(job_id: str, state: dict) -> None:
             pipe.expire(f"job:{job_id}", _JOB_TTL)
             pipe.execute()
             _JOB_LAST_REDIS_WRITE[job_id] = 0.0   # reset coalesce clock
+            _JOB_REDIS_DIRTY.discard(job_id)
             if state.get("scan_id"):
                 _write_scan_job_mapping(state["scan_id"], job_id)
+            if state.get("done"):
+                JOBS.pop(job_id, None)
             return
         except Exception:
             # fall through to in-memory
+            _JOB_REDIS_DIRTY.add(job_id)
             swallowed("core.set_job: writing the job state to Redis failed")
     if not REDIS_URL:
         import logging as _log
         _log.warning("REDIS_URL not set — job %s state stored in-memory only; "
                      "progress will NOT be visible across replicas", job_id)
-    JOBS[job_id] = state
     if state.get("scan_id"):
         _write_scan_job_mapping(state["scan_id"], job_id)
 
@@ -2024,6 +2033,8 @@ def update_job(job_id: str, patch: dict) -> None:
     import time as _t
     patch = {**patch, "updated_at": _job_now_iso()}
     _maybe_checkpoint(job_id, patch)   # independent of Redis/in-memory below — see its own comment
+    local = JOBS.setdefault(job_id, {})
+    local.update(patch)
     r = _get_redis()
     if r is not None:
         now = _t.monotonic()
@@ -2032,25 +2043,35 @@ def update_job(job_id: str, patch: dict) -> None:
         if is_immediate or now - last >= _JOB_COALESCE_SECONDS:
             try:
                 import json as _j
-                mapping = {k: _j.dumps(v) for k, v in patch.items()}
+                # After an outage, repair from the complete local mirror. Redis owns `seq`, so
+                # never overwrite that cursor with the mirror's older value before HINCRBY.
+                outgoing = dict(local) if job_id in _JOB_REDIS_DIRTY else patch
+                mapping = {k: _j.dumps(v) for k, v in outgoing.items() if k != "seq"}
                 pipe = r.pipeline()
                 pipe.hset(f"job:{job_id}", mapping=mapping)
                 pipe.hincrby(f"job:{job_id}", "seq", 1)
                 pipe.expire(f"job:{job_id}", _JOB_TTL)
                 pipe.execute()
                 _JOB_LAST_REDIS_WRITE[job_id] = now
+                _JOB_REDIS_DIRTY.discard(job_id)
                 if patch.get("scan_id"):
                     _write_scan_job_mapping(patch["scan_id"], job_id)
+                if local.get("done"):
+                    JOBS.pop(job_id, None)
                 return
             except Exception:
+                _JOB_REDIS_DIRTY.add(job_id)
                 swallowed("core.update_job: patching the job state in Redis failed")
+        else:
+            # Coalescing is also an intentionally deferred write. Mark the mirror newer so the
+            # next flush carries every suppressed field, not only that later call's patch.
+            _JOB_REDIS_DIRTY.add(job_id)
     # scan_id mapping must be written even when the coalesce window suppressed the main write.
     if patch.get("scan_id"):
         _write_scan_job_mapping(patch["scan_id"], job_id)
     # In-memory fallback — either Redis unavailable or coalesce window suppressed the write.
     # Also updates JOBS in the coalesce case so same-replica reads stay current.
-    if job_id in JOBS:
-        JOBS[job_id].update(patch)
+    # `local` was updated before the Redis attempt, including when it failed or was coalesced.
 
 
 def get_job_state(job_id: str) -> dict | None:

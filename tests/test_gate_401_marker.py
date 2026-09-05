@@ -44,6 +44,14 @@ def test_invalid_token_401_is_marked_session(gated, monkeypatch):
     assert r.headers.get("X-Acp-Auth") == "session"
 
 
+def test_browser_can_read_the_session_marker_cross_origin(gated):
+    """A marker hidden by CORS is indistinguishable from an ordinary route-level 401."""
+    r = gated.get("/scans", headers={"Origin": "https://frontend.example"})
+    assert r.status_code == 401
+    exposed = r.headers.get("Access-Control-Expose-Headers", "").lower()
+    assert "x-acp-auth" in exposed
+
+
 def test_forbidden_is_NOT_marked_session(gated):
     # A valid session for a non-allow-listed identity is 403 — not a session expiry, and must not
     # carry the marker (the SPA should show "access restricted", not sign the user out).
