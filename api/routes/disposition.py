@@ -14,6 +14,14 @@ actually AUTHORISE or PERFORM a move-or-trash — execute and approve — are OW
 (_require_owner), so no single non-owner can act on the estate. delete is always Drive trash
 (never permanent — see disposition.execute_action), and
 a doc/policy pair with a live outcome (pending or applied) is never re-queued.
+
+DISCOVER-LIFECYCLE CANDIDATES execute through the same path, per row. They are keyed
+`scan:{scan_id}:{file}` rather than `drive:{id}`, so they are absent from the documents table
+this module otherwise reads; the drive_file_id on their inventory row is what bridges the two,
+and _lifecycle_drive_doc resolves it — owner-scoped — so that everything downstream treats them
+as the Drive documents they are. A candidate WITHOUT one stays record-only: nothing ACP holds
+could act on it. Executing also stamps the inventory's lifecycle status, because a file that has
+actually been archived must stop reading "Active" in the view a reviewer checks.
 """
 from __future__ import annotations
 import hashlib
@@ -800,6 +808,17 @@ def approve_disposition(audit_id: str, request: Request,
     'approved' counts as a LIVE outcome in doc_has_disposition, so an approved-but-unexecuted
     decision is not re-proposed on the next execute run — asking a reviewer the same question
     twice is how an approval queue stops being trusted.
+
+    A DISCOVER-LIFECYCLE CANDIDATE (`scan:{scan_id}:{file}`) executes here too, once its
+    drive_file_id is resolved. Two things happen on this path and nowhere else, both because it
+    is the only route that can now mutate a file the Discover queue proposed:
+
+      • the exemption is RE-READ immediately before the action, not merely when the candidate was
+        queued. A legal hold added while the reviewer was reading refuses with 409 and leaves the
+        row pending — stopping the action and destroying the decision are different outcomes.
+      • the inventory's lifecycle status is stamped Archived/Deleted, but only for the actions
+        whose outcome those words state truthfully and only once the action APPLIED. The prior
+        status goes into the before-state, so an undo restores the estate as well as the file.
     """
     _require_owner(request)   # authorises a move/trash of the file — owner-only
     owner = _owner(request)
@@ -824,32 +843,45 @@ def approve_disposition(audit_id: str, request: Request,
         # subsystems key documents differently: the lifecycle evaluator stamps
         # `scan:{scan_id}:{file}` (handlers.py), while this governance layer keys on
         # `drive:{id}` / `{source}:{hash}` (documents.resolve_doc_id). list_all_documents holds
-        # none of the former, so every lifecycle approval fell into the clause below and was
-        # recorded FAILED with the reason "document no longer exists".
+        # none of the former, so every lifecycle approval once fell into the clause below and was
+        # recorded FAILED with the reason "document no longer exists" — false, and it destroyed
+        # the reviewer's decision. #1182 made it record-only; this executes it.
         #
-        # Three things were wrong with that, and only the first is cosmetic: the reason is false,
-        # the reviewer's decision is destroyed (the pending row is consumed, so the approval has
-        # to be given again), and the append-only audit — the record a compliance officer relies
-        # on — now asserts that a document which exists did not.
-        #
-        # Recorded, not executed, which is what execute=false already does and what this route's
-        # own docstring calls "the honest half of the operation". Execution is a separate,
-        # larger change: it needs the two identifier spaces reconciled, and that is also where
-        # capturing the before-state for an undo belongs (PRD §8).
-        detail = ("approved — recorded, not executed: this is a Discover-lifecycle candidate and "
-                  "is not represented in the disposition governance layer, so no source action "
-                  "can be performed for it")
-        core.store.set_disposition_audit_result(audit_id, "approved", detail)
-        core.store.log_decision(owner, "disposition.approved",
-                                detail=f"{row['action']} {row['doc_id']}: recorded, not executed")
-        _trace_decision(row["doc_id"], None, action=row["action"], status="approved",
-                        policy_id=row["policy_id"], reason=detail)
-        return {**(core.store.get_disposition_audit(audit_id, owner=owner) or {}),
-                # Explicit, because the caller asked for execute=true and did not get it. A
-                # response that looked identical to a real execution would be the same lie in a
-                # politer form.
-                "executed": False,
-                "why_not_executed": "lifecycle candidates have no governance-layer document"}
+        # THE EXEMPTION IS RE-READ HERE, immediately before the mutation. The batch route has
+        # always done this (PRD §11) and this per-row route did not need to while it could not
+        # act on a lifecycle candidate at all. It can now, which opens exactly the window the
+        # rule exists for: the minutes a reviewer spends reading a queue are when a legal hold
+        # gets added, and an approval given at 10:00 must not archive a file put on hold at
+        # 10:02. Refused with the row left PENDING — a hold must stop the action without also
+        # consuming the decision, or the reviewer is made to give it a second time.
+        held = _exempt_now(row["doc_id"], owner)
+        if held:
+            raise HTTPException(409, f"this candidate cannot be actioned right now: {held}")
+        doc = _lifecycle_drive_doc(row["doc_id"], owner)
+        if doc is None:
+            # No drive_file_id on the inventory row, so there is still nothing to execute — the
+            # honest half of the operation, unchanged, with the reason narrowed to what is
+            # actually true now. The blocker is no longer "not represented in the governance
+            # layer" (that is resolvable, and resolved above); it is that this particular row is
+            # not Drive-backed and no connector here can act on it.
+            detail = ("approved — recorded, not executed: this lifecycle candidate has no Drive "
+                      "file id on its inventory row, so no source action can be performed for it")
+            core.store.set_disposition_audit_result(audit_id, "approved", detail)
+            core.store.log_decision(owner, "disposition.approved",
+                                    detail=f"{row['action']} {row['doc_id']}: recorded, not executed")
+            _trace_decision(row["doc_id"], None, action=row["action"], status="approved",
+                            policy_id=row["policy_id"], reason=detail)
+            return {**(core.store.get_disposition_audit(audit_id, owner=owner) or {}),
+                    # Explicit, because the caller asked for execute=true and did not get it. A
+                    # response that looked identical to a real execution would be the same lie in
+                    # a politer form.
+                    "executed": False,
+                    "why_not_executed": "this candidate has no Drive file id, so it is not "
+                                        "actionable by any connector ACP holds"}
+        # Resolved: fall through and execute it exactly as any Drive-backed document, through the
+        # same execute_action, the same before-state capture and the same undo. Nothing below
+        # this line knows a lifecycle candidate from a governance-layer one, which is the point —
+        # a second execution path is a second set of safety rules to keep in step.
     if doc is None:
         core.store.set_disposition_audit_result(audit_id, "failed", "document no longer exists")
         _trace_decision(row["doc_id"], None, action=row["action"], status="failed",
@@ -859,6 +891,15 @@ def approve_disposition(audit_id: str, request: Request,
                                                         _drive_svc(request))
     if result == "applied" and row["action"] == "tag":
         _persist_tags(doc, cfg, row["policy_id"])
+    # The ROUTE owns persistence, so the route records what IT is about to change: the inventory
+    # row's lifecycle status. execute_action stays a pure Drive operation and knows nothing about
+    # scan_inventory — and an undo that put the file back in Drive while the estate still read
+    # "Archived" would be a restoration in one system only, with Discover showing it archived and
+    # Assess still excluding it. Read BEFORE the stamp below overwrites it.
+    ref = _lifecycle_ref(row["doc_id"])
+    if ref and before:
+        before = {**before, "lifecycle_status":
+                  (core.store.get_lifecycle_status(*ref) or {}).get("lifecycle_status")}
     # Recorded BEFORE the result is written, deliberately. A crash between the two then leaves a
     # before-state on a row that still reads pending_approval — harmless, and re-approving
     # overwrites nothing (set_disposition_before_state only fills a NULL). The other order loses
@@ -866,6 +907,14 @@ def approve_disposition(audit_id: str, request: Request,
     # cannot recover from.
     core.store.set_disposition_before_state(audit_id, before)
     core.store.set_disposition_audit_result(audit_id, result, detail)
+    if ref and result == "applied" and row["action"] in _TERMINAL_STATUS:
+        # Only after the action actually applied. A candidate whose archive FAILED is still
+        # Active, and stamping it anyway would hide the failure in the one view a reviewer checks
+        # to see whether the estate really changed — the failure is already in the audit, but
+        # nobody reads the audit to find out what is in a folder.
+        core.store.set_lifecycle_status(ref[0], ref[1], _TERMINAL_STATUS[row["action"]],
+                                        rule_id=row["policy_id"],
+                                        reason=f"{row['action']} executed after review approval")
     core.store.log_decision(owner, f"disposition.{result}",
                             detail=f"{row['action']} {row['doc_id']}: {detail}"[:200])
     _trace_decision(row["doc_id"], doc.get("path"), action=row["action"], status=result,
@@ -903,13 +952,32 @@ def undo_disposition(audit_id: str, request: Request):
                                  "undone — it was applied before ACP recorded where files came "
                                  "from")
     docs = {d["doc_id"]: d for d in core.store.list_all_documents(owner=owner)}
-    doc = docs.get(row["doc_id"]) or {"doc_id": row["doc_id"], "source": "drive"}
+    # A lifecycle candidate is resolved here the same way the approval that executed it resolved
+    # it. Without this the fallback below hands undo_action a `scan:` id labelled source="drive",
+    # which _drive_file_id rejects — so the one class of row this route now most needs to reverse
+    # would refuse with "unsupported source 'drive'": wrong, and impossible for the reader to act
+    # on. The fallback is kept for governance-layer rows whose document has since been removed.
+    doc = (docs.get(row["doc_id"]) or _lifecycle_drive_doc(row["doc_id"], owner)
+           or {"doc_id": row["doc_id"], "source": "drive"})
 
     result, detail = disposition.undo_action(doc, before, _drive_svc(request))
     undo_id = hashlib.sha256(f"undo:{audit_id}".encode()).hexdigest()[:24]
     core.store.create_disposition_audit(
         undo_id, doc_id=row["doc_id"], policy_id=row["policy_id"],
         action=f"undo_{row['action']}", result=result, detail=detail, owner_email=owner)
+    # The estate goes back too, to the status the approval recorded before it stamped a terminal
+    # one. Restoring the file in Drive while Discover still reads "Archived" and Assess still
+    # excludes it is an undo of the visible half only.
+    #
+    # The membership test is not defensive noise: set_lifecycle_status RAISES on a status outside
+    # its closed set, and a 500 here would abort a request whose file has already been moved back
+    # — reporting a failure for an undo that succeeded. A status it cannot restore is left alone
+    # and the Drive restoration still stands.
+    ref = _lifecycle_ref(row["doc_id"])
+    prior = (before or {}).get("lifecycle_status")
+    if ref and result == "applied" and prior in core.store.LIFECYCLE_STATUSES:
+        core.store.set_lifecycle_status(ref[0], ref[1], prior, rule_id=row["policy_id"],
+                                        reason=f"restored by undo of {row['action']}")
     core.store.log_decision(owner, f"disposition.undo_{result}",
                             detail=f"{row['action']} {row['doc_id']}: {detail}"[:200])
     _trace_decision(row["doc_id"], doc.get("path"), action=f"undo_{row['action']}",
@@ -989,7 +1057,11 @@ def plan_disposition_batch(body: BatchApprovalIn, request: Request):
         # A resolved lifecycle candidate is planned AS the Drive document it would become, so
         # the preview is of the real action rather than of the record-only refusal it gets today.
         fid = targets.get(doc_id)
-        doc = ({"doc_id": f"drive:{fid}", "source": "drive"} if fid
+        # Built by the SAME helper the approval builds its document with, so a plan cannot
+        # preview a differently shaped document from the one execution will act on. The
+        # resolution itself stays batched above — one query per scan, not one per row.
+        ref = _lifecycle_ref(doc_id)
+        doc = (_drive_doc(fid, ref[1] if ref else None) if fid
                else {"doc_id": doc_id, "source": row.get("source") or "unknown"})
         step = disposition.plan_action(doc, row["action"], cfg)
         if step.get("blocked"):
@@ -1160,6 +1232,63 @@ def _is_lifecycle_doc_id(doc_id: str | None) -> bool:
     useful, and a broader rule would swallow it.
     """
     return str(doc_id or "").startswith("scan:")
+
+
+def _lifecycle_ref(doc_id: str | None) -> tuple[str, str] | None:
+    """(scan_id, file) for a lifecycle candidate, or None if the id is not that shape.
+
+    `_is_lifecycle_doc_id` tests the PREFIX only, and deliberately so — it answers "did the
+    lifecycle evaluator stamp this", which a malformed two-part id is still evidence of. This
+    answers the different question of whether the id can be taken apart, so callers that need
+    the pieces do not inherit a ValueError from the callers that only needed the verdict.
+    """
+    if not _is_lifecycle_doc_id(doc_id):
+        return None
+    parts = str(doc_id).split(":", 2)
+    return (parts[1], parts[2]) if len(parts) == 3 else None
+
+
+def _drive_doc(fid: str, file: str | None = None) -> dict:
+    """The document shape `disposition.plan_action` and `disposition.execute_action` both take.
+
+    ONE builder, used by the dry run and by the approval it previews. Two would drift, and the
+    drift is the invisible kind: a plan that resolved a candidate differently from the execution
+    it claims to preview is a plan of a different action, and nothing would say so.
+    """
+    return {"doc_id": f"drive:{fid}", "source": "drive", "path": file}
+
+
+def _lifecycle_drive_doc(doc_id: str | None, owner: str) -> dict | None:
+    """The Drive document a `scan:{scan_id}:{file}` candidate refers to, or None.
+
+    The bridge between the two identifier spaces. The lifecycle evaluator keys on the scan grain
+    and the governance layer keys on `drive:{id}`; the value that connects them has been on the
+    inventory row since Discover wrote it, and resolving it is the whole of what stood between a
+    reviewer's approval and the action they approved.
+
+    None has exactly one meaning: this candidate has no drive_file_id, so nothing could act on
+    it. That is a record-only outcome and not a failure — it is what EVERY lifecycle approval
+    got before execution existed, and it stays the answer for a row that is not Drive-backed.
+
+    Owner-scoped by drive_targets_for_files, which joins scan_runs.owner_email: a caller cannot
+    resolve a file id out of somebody else's scan and act on it.
+    """
+    ref = _lifecycle_ref(doc_id)
+    if ref is None:
+        return None
+    scan_id, file = ref
+    fid = core.store.drive_targets_for_files(scan_id, [file], owner).get(file)
+    return _drive_doc(fid, file) if fid else None
+
+
+#: The lifecycle status an applied action leaves the inventory row in.
+#
+# Only the two actions whose outcome the status vocabulary can state TRUTHFULLY are here. A
+# rename leaves the file exactly where it was, and a bare `move` is not necessarily an archival —
+# its target folder is whatever the policy configured. Stamping either "Archived" would put a
+# claim in the estate view the action does not support, and that view is what the next reviewer
+# reads as fact, and what Assess's default exclusion acts on.
+_TERMINAL_STATUS = {"archive": "Archived", "delete": "Deleted"}
 
 
 def _exempt_now(doc_id: str | None, owner: str) -> str | None:
