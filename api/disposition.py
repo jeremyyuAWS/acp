@@ -93,6 +93,42 @@ def _iso_before(a, b) -> bool:
     return da is not None and db is not None and da < db
 
 
+def _fold(value):
+    """One comparable form of a value. Strings casefold; everything else is compared as-is, so
+    `size_kb in [10, 20]` still compares numbers as numbers."""
+    return value.casefold() if isinstance(value, str) else value
+
+
+def _in(observed, allowed) -> bool:
+    """Set membership: is the document's value one of these?
+
+    THE ROSTER OPERATOR. Conditions in a match are ANDed and there is no OR, so before this the
+    only way to express "owned by anyone on this list of 200 departed staff" was 200 separate
+    policies — each with its own approval and its own audit trail. `docs/sharepoint-gaps.md`
+    recorded that gap as an input UTSW owed ("needs the roster"), which reads as though there
+    were somewhere to put one.
+
+    CASE-INSENSITIVE for strings, deliberately, and this diverges from `eq`. The engine is
+    already mixed — `contains` and `prefix` fold, `eq` and `ne` do not — and every value this
+    operator is written against is an identity supplied from somewhere else: a roster export, an
+    HR extract, a column copied out of SharePoint. "Alice@utsw.edu" not matching "alice@utsw.edu"
+    would be a silent miss on exactly the documents the rule exists to catch, and two identities
+    differing only in case is not a thing that happens. A folded `in` beside an exact `eq` is a
+    real trap, so it is stated here and in the operator's own row in the gap doc rather than left
+    for somebody to discover.
+
+    A MULTI-VALUE OBSERVED VALUE INTERSECTS rather than failing. A SharePoint multi-choice
+    managed column arrives as a list, and asking "is this list one of the allowed values" would
+    answer False for every one of them — the same silent miss, one field over. Any overlap
+    matches.
+    """
+    if not isinstance(allowed, (list, tuple, set)) or observed is None:
+        return False
+    want = {_fold(a) for a in allowed}
+    have = observed if isinstance(observed, (list, tuple, set)) else [observed]
+    return any(_fold(h) in want for h in have)
+
+
 _OPS = {
     "eq": lambda a, b: a == b,
     "ne": lambda a, b: a != b,
@@ -103,6 +139,10 @@ _OPS = {
     "contains": lambda a, b: b is not None and str(b).lower() in str(a or "").lower(),
     # Case-insensitive "starts with" — e.g. target everything under "/Finance/".
     "prefix": lambda a, b: b is not None and str(a or "").lower().startswith(str(b).lower()),
+    # Set membership against a supplied list — see _in for the case-folding and the roster it
+    # exists for. `value` must be a list; validate_match refuses anything else, because a string
+    # here would silently match nothing.
+    "in": _in,
     # ISO-date comparisons for "modified before <date>" style lifecycle rules.
     "before": _iso_before,
     "after": lambda a, b: _iso_before(b, a),
@@ -123,6 +163,17 @@ def validate_match(match: list[dict]) -> None:
                 f"{MANAGED_PREFIX}<SharePoint column name>)")
         if cond["op"] not in _OPS:
             raise ValueError(f"unknown op: {cond['op']!r} (allowed: {sorted(_OPS)})")
+        # The one op with a required VALUE shape, checked here rather than at match time for the
+        # same reason validate_action_config refuses an empty tag list: a rule that can never
+        # fire must not be saveable. A string value would match nothing (it is not a list), and
+        # an empty list matches nothing by definition — both would validate, save, and sit in the
+        # policy list looking like a working roster rule forever.
+        if cond["op"] == "in":
+            value = cond.get("value")
+            if not isinstance(value, (list, tuple)) or not value:
+                raise ValueError(
+                    f"op 'in' needs a non-empty list of values, got {value!r} — a single value "
+                    f"is 'eq', and an empty list is a rule that can never match")
 
 
 def tag_list(action_config: dict | None) -> list[str]:
@@ -312,6 +363,10 @@ def _condition_reason(op: str, field: str, observed, expected, passed: bool,
     if not passed:
         if absent and op in ("gt", "gte", "lt", "lte", "before", "after", "eq"):
             return absent_label
+        if absent and op == "in":
+            return f"{absent_label}; a value that is not recorded is not one of {expected!r}"
+        if op == "in":
+            return f"'{observed}' is not one of {expected!r}"
         if absent and op in ("contains", "prefix"):
             return f"{absent_label}; treated as empty string, which does not satisfy {op!r} {expected!r}"
         if op == "before":
@@ -332,6 +387,8 @@ def _condition_reason(op: str, field: str, observed, expected, passed: bool,
     # passed
     if absent and op == "ne":
         return f"field not recorded; any absent value is not equal to '{expected}'"
+    if op == "in":
+        return f"'{observed}' is one of {expected!r}"
     if op == "before":
         return f"'{observed}' is before '{expected}'"
     if op == "after":
