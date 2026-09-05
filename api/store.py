@@ -8866,6 +8866,62 @@ class Store:
                  run_after or now, campaign_id, batch_id, scan_id, now, now))
         return job_id
 
+    def stage_snapshot_id(self, scan_id: str) -> str:
+        """Stable identity of the immutable Discover/Assess input consumed downstream."""
+        import hashlib as _hashlib
+        import json as _json
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id,source,rubric_hash,scope,discovered_at "
+                "FROM scan_runs WHERE id=%s", (scan_id,))
+            run = self._db.fetchone(cur)
+            if not run:
+                raise ValueError(f"scan not found: {scan_id}")
+            self._db.execute(cur,
+                "SELECT file,checksum,size_kb,source_modified FROM scan_inventory "
+                "WHERE scan_id=%s ORDER BY file", (scan_id,))
+            inventory = self._db.fetchall(cur)
+        encoded = _json.dumps({"run": run, "inventory": inventory}, sort_keys=True,
+                              separators=(",", ":"), default=str)
+        return _hashlib.sha256(encoded.encode()).hexdigest()
+
+    def enqueue_stage_batch(self, scan_id: str, stage: str, job_type: str,
+                            payloads: list[dict], *, snapshot_id: str,
+                            request_fingerprint: str) -> dict:
+        """Atomically enqueue or reuse equivalent queued, running, or completed stage work."""
+        import hashlib as _hashlib
+        import json as _json
+        key = _json.dumps([scan_id, stage, snapshot_id, request_fingerprint],
+                          separators=(",", ":"))
+        batch_id = _hashlib.sha256(key.encode()).hexdigest()[:24]
+        now = self._now()
+        with self._db.cursor() as cur:
+            if self._db.supports_skip_locked:
+                self._db.execute(cur,
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                    (f"stage:{scan_id}:{stage}",))
+            self._db.execute(cur,
+                "SELECT id,status FROM jobs WHERE scan_id=%s AND batch_id=%s "
+                "ORDER BY created_at,id", (scan_id, batch_id))
+            existing = self._db.fetchall(cur)
+            if existing:
+                return {"batch_id": batch_id, "job_ids": [r["id"] for r in existing],
+                        "reused": True, "statuses": [r["status"] for r in existing]}
+            priority = job_priority(job_type)
+            job_ids = []
+            for original in payloads:
+                job_id = uuid.uuid4().hex[:16]
+                payload = dict(original, snapshot_id=snapshot_id, stage_execution_id=batch_id)
+                self._db.execute(cur,
+                    "INSERT INTO jobs(id,type,payload,status,priority,attempts,max_attempts,"
+                    "run_after,batch_id,scan_id,created_at,updated_at) "
+                    "VALUES(%s,%s,%s,'queued',%s,0,5,%s,%s,%s,%s,%s)",
+                    (job_id, job_type, _json.dumps(payload), priority, now, batch_id,
+                     scan_id, now, now))
+                job_ids.append(job_id)
+        return {"batch_id": batch_id, "job_ids": job_ids, "reused": False,
+                "statuses": ["queued"] * len(job_ids)}
+
     def get_job(self, job_id: str) -> dict | None:
         with self._db.cursor() as cur:
             self._db.execute(cur, "SELECT * FROM jobs WHERE id=%s", (job_id,))
