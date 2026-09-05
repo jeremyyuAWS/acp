@@ -5,9 +5,10 @@ import { createRoot } from 'react-dom/client'
 
 const getRemediationSnapshot = vi.fn()
 const close = vi.fn()
+const openRemediationStream = vi.fn(() => ({ close }))
 vi.mock('./api.js', () => ({
   getRemediationSnapshot: (...args) => getRemediationSnapshot(...args),
-  openRemediationStream: vi.fn(() => ({ close })),
+  openRemediationStream: (...args) => openRemediationStream(...args),
 }))
 
 const { useRemediationRun } = await import('./useRemediationRun.js')
@@ -22,6 +23,7 @@ beforeEach(async () => {
   vi.useFakeTimers()
   getRemediationSnapshot.mockReset().mockResolvedValue({ terminal: false, revision: 1 })
   close.mockReset()
+  openRemediationStream.mockClear()
   host = document.createElement('div')
   root = createRoot(host)
   await act(async () => { root.render(<Harness />) })
@@ -44,5 +46,21 @@ describe('expired remediation sessions', () => {
 
     expect(close).toHaveBeenCalledTimes(1)
     expect(getRemediationSnapshot).toHaveBeenCalledTimes(1)
+  })
+
+  it('reconnects an interrupted stream from the last rendered durable event', async () => {
+    expect(openRemediationStream).toHaveBeenCalledTimes(1)
+    const firstHandlers = openRemediationStream.mock.calls[0][1]
+
+    await act(async () => {
+      firstHandlers.onEvent({ kind: 'remediate.verified' }, '17')
+      firstHandlers.onError()
+      await vi.advanceTimersByTimeAsync(2999)
+    })
+    expect(openRemediationStream).toHaveBeenCalledTimes(1)
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+    expect(openRemediationStream).toHaveBeenCalledTimes(2)
+    expect(openRemediationStream.mock.calls[1][1].lastEventId).toBe('17')
   })
 })

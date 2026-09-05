@@ -24,6 +24,7 @@ import { addRemediationEvent } from './remediationEventFeed.js'
 // (routes/scans.py ends it on `in_flight == 0`), and an idle or finished run has no stream at
 // all — so the snapshot is fetched once up front and then polled only while nothing is streaming.
 const IDLE_POLL_MS = 5000
+const RECONNECT_MS = 3000
 
 export function useRemediationRun(runId) {
   const [snapshot, setSnapshot] = useState(null)
@@ -44,6 +45,7 @@ export function useRemediationRun(runId) {
   const snapRef = useRef(null)
   const streamRef = useRef(null)
   const pollRef = useRef(null)
+  const reconnectRef = useRef(null)
   // The resume cursor: the last scan_events.seq this browser actually rendered (ADR 0051). A ref,
   // not state, because the NEXT connect attempt must read it without waiting for a render.
   const cursorRef = useRef(null)
@@ -70,11 +72,13 @@ export function useRemediationRun(runId) {
 
     let live = true
     const stopPoll = () => { clearInterval(pollRef.current); pollRef.current = null }
+    const stopReconnect = () => { clearTimeout(reconnectRef.current); reconnectRef.current = null }
     const stopForExpiredSession = () => {
       // App keeps this hook mounted while it swaps the signed-in shell for SignIn. Without this,
       // the fallback interval sends the rejected request every five seconds until reload/login.
       live = false
       stopPoll()
+      stopReconnect()
       streamRef.current?.close?.()
       streamRef.current = null
       setConnected(false)
@@ -97,6 +101,7 @@ export function useRemediationRun(runId) {
 
     const connect = () => {
       if (!live) return
+      stopReconnect()
       streamRef.current?.close?.()
       streamRef.current = openRemediationStream(runId, {
         lastEventId: cursorRef.current,
@@ -134,6 +139,12 @@ export function useRemediationRun(runId) {
           streamRef.current = null
           setConnected(false)
           startPoll()
+          // A stream error is a transport interruption, not a terminal run state. Keep the
+          // reconciled snapshot poll alive while retrying one connection at a time; the durable
+          // cursor makes a successful reconnect replay every lifecycle event missed meanwhile.
+          if (!snapRef.current?.terminal && !reconnectRef.current) {
+            reconnectRef.current = setTimeout(connect, RECONNECT_MS)
+          }
         },
       })
     }
@@ -144,6 +155,7 @@ export function useRemediationRun(runId) {
       live = false
       window.removeEventListener('acp:session-expired', stopForExpiredSession)
       stopPoll()
+      stopReconnect()
       streamRef.current?.close?.()
       streamRef.current = null
     }
