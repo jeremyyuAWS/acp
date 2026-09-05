@@ -925,3 +925,105 @@ describe('Azure health panels', () => {
     expect(rhPanel(container)).toBeNull()
   })
 })
+
+describe('Deployments panel', () => {
+  const workerNode = { kind: 'worker', label: 'Assess workers', service }
+  const dPanel = (c) => c.querySelector('[aria-label="Deployment activity"]')
+  const gaps = [
+    { step: 'Build started', reason: 'Runs in the CI workflow, not in Azure.' },
+    { step: 'Image published', reason: 'Happens in the container registry.' },
+    { step: 'Smoke test passed', reason: 'Runs in the CI workflow after the rollout.' },
+  ]
+  const withDeploy = (deployments, revision_comparison = null) =>
+    ({ ...capacity, deployments, revision_comparison })
+  const base = (over = {}) => ({ queried: true, events: [], window_hours: 24, not_reported: gaps,
+    system_logs: { available: false, reason: 'Needs a Log Analytics workspace; lags ~three minutes.' },
+    unavailable_reason: null, ...over })
+
+  it('names the steps Azure cannot see, even with an empty timeline', async () => {
+    // The point of the panel. An empty timeline that says nothing else claims the deployment
+    // started at "revision created" — and a build that never produced an image looks identical
+    // to no deployment at all.
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode,
+      capacity: withDeploy(base()) })
+    const text = dPanel(container).textContent
+    expect(text).toContain('Build started')
+    expect(text).toContain('Image published')
+    expect(text).toContain('Smoke test passed')
+    expect(text).toMatch(/CI workflow/)
+  })
+
+  it('says the system-log feed needs Log Analytics and lags', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode,
+      capacity: withDeploy(base()) })
+    const text = dPanel(container).textContent
+    expect(text).toContain('System logs')
+    expect(text).toMatch(/Log Analytics/)
+  })
+
+  it('shows a failed deployment as failed, not as one more line', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode,
+      capacity: withDeploy(base({ events: [
+        { at: iso(-600), kind: 'operation', label: 'Container app updated', status: 'Failed',
+          failed: true, detail: 'ImagePullBackOff: manifest unknown' },
+        { at: iso(-900), kind: 'revision', label: 'Revision v2 created', status: 'Provisioned',
+          failed: false, detail: 'acr.io/acp:v2' }] })) })
+    const text = dPanel(container).textContent
+    expect(text).toContain('1 failed')
+    expect(text).toContain('ImagePullBackOff')
+    expect(text).toContain('Revision v2 created')
+  })
+
+  it('marks a timeline partial when Azure’s own operations are missing from it', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode,
+      capacity: withDeploy(base({ queried: false, unavailable_reason: 'error', events: [
+        { at: iso(-900), kind: 'revision', label: 'Revision v2 created', status: 'Provisioned',
+          failed: false, detail: null }] })) })
+    const text = dPanel(container).textContent
+    expect(text).toContain('Partial')
+    expect(text).toMatch(/activity-log query failed/)
+  })
+
+  it('shows a revision change from and to, and the rollback target', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode,
+      capacity: withDeploy(base(), {
+        current: { name: 'v2', image: 'acr.io/acp:v2' },
+        previous: { name: 'v1', image: 'acr.io/acp:v1' },
+        changes: [{ field: 'image', label: 'Image', from: 'acr.io/acp:v1', to: 'acr.io/acp:v2' }],
+        rollback: { name: 'v1' }, rollback_reason: null,
+        not_compared: [{ field: 'cpu_used', label: 'CPU actually used',
+          reason: 'Per app, not per revision.' }] }) })
+    const text = dPanel(container).textContent
+    expect(text).toContain('acr.io/acp:v1 → acr.io/acp:v2')
+    expect(text).toContain('Rollback target: v1')
+  })
+
+  it('labels the compared CPU as requested and names actual use as not compared', async () => {
+    // Two different numbers with the same name. Conflating them makes a resize read as a
+    // regression, so the panel has to carry both the label and the caveat.
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode,
+      capacity: withDeploy(base(), {
+        current: { name: 'v2' }, previous: { name: 'v1' },
+        changes: [{ field: 'cpu', label: 'CPU requested', from: 1, to: 2 }],
+        rollback: null, rollback_reason: 'No earlier revision is still provisioned.',
+        not_compared: [{ field: 'cpu_used', label: 'CPU actually used',
+          reason: 'Per app, not per revision. The CPU compared above is what the revision requests.' }] }) })
+    const text = dPanel(container).textContent
+    expect(text).toContain('CPU requested')
+    expect(text).toContain('CPU actually used')
+    expect(text).toMatch(/not per revision/)
+  })
+
+  it('says why there is no rollback target rather than going quiet', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode,
+      capacity: withDeploy(base(), { current: { name: 'v1' }, previous: null, changes: [],
+        rollback: null, rollback_reason: 'No earlier revision is still provisioned.',
+        not_compared: [] }) })
+    expect(dPanel(container).textContent).toMatch(/No earlier revision is still provisioned/)
+  })
+
+  it('is not shown for a node with no container app behind it', async () => {
+    const container = await mount({ nodeId: 'x', node: { kind: 'queue', label: 'Shared queue' } })
+    expect(dPanel(container)).toBeNull()
+  })
+})

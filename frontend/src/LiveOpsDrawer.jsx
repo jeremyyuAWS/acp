@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { prefersReducedMotion, useDialog } from './a11y.js'
 import {
   EVENT_FILTERS, EVENT_ICONS, NOT_REPORTED, TONE, alertRuleState, alertRuleTone, alertsModel,
-  incidentRegions, resourceHealthModel, serviceHealthModel,
+  DEPLOY_ICONS, deploymentModel, incidentRegions, resourceHealthModel, serviceHealthModel,
+  revisionComparisonModel,
   arcPath, capacityMatchesService, chartModel,
   capacityForService, componentState, defaultMetricFor, eventClock, eventsForNode, filterEvents,
   formatDuration,
@@ -378,6 +379,97 @@ function ServiceHealth({ platform }) {
         </li>
       })}
     </ul>}
+  </section>
+}
+
+/**
+ * Deployment activity — section 7, with the steps Azure cannot see stated rather than skipped.
+ *
+ * The named gaps are the point of the panel, not a footnote. Build, image publish and smoke test
+ * happen in CI and the registry; a timeline that begins at "revision created" reads as though the
+ * deployment began there, and a build that never produced an image would show up as an empty
+ * timeline — indistinguishable from no deployment at all.
+ *
+ * The revision comparison shows what Azure attributes per revision (image, requested CPU and
+ * memory) and names what it does not (error rate, latency, actual use), because those are
+ * collected per container app and a per-revision figure would be app-wide data under one
+ * revision's name.
+ */
+function Deployments({ deploy, comparison }) {
+  return <section aria-label="Deployment activity" style={{ ...PANEL, padding: 14 }}>
+    <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <b>Deployments</b>
+      {deploy.failedCount > 0 && <span style={{ display: 'inline-flex', alignItems: 'center',
+        gap: 6, fontSize: 12, fontWeight: 700, color: TONE.bad }}>
+        <span aria-hidden="true">{DEPLOY_ICONS.failed}</span>
+        {deploy.failedCount} failed
+      </span>}
+      {deploy.partial && <span className="muted" style={{ fontSize: 11, fontWeight: 700 }}>
+        Partial
+      </span>}
+    </div>
+    {deploy.reason && <p className="muted" style={{ fontSize: 11, margin: '6px 0 0' }}>{deploy.reason}</p>}
+
+    {!!deploy.events.length && <ul style={{ listStyle: 'none', margin: '10px 0 0', padding: 0,
+      display: 'grid', gap: 5 }}>
+      {deploy.events.slice(0, 12).map((event, i) => <li key={`${event.at}-${i}`}
+        style={{ display: 'grid', gap: 1 }}>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+          <span aria-hidden="true" style={{ color: event.failed ? TONE.bad : 'var(--muted)' }}>
+            {event.failed ? DEPLOY_ICONS.failed : DEPLOY_ICONS[event.kind] || '·'}
+          </span>
+          <span className="muted" style={{ fontSize: 11, fontVariantNumeric: 'tabular-nums' }}>
+            {eventClock(event.at)}
+          </span>
+          <span style={{ fontSize: 12 }}>{event.label}</span>
+          {event.status && <span style={{ fontSize: 11, fontWeight: 700,
+            color: event.failed ? TONE.bad : 'var(--muted)' }}>{event.status}</span>}
+        </div>
+        {event.detail && <span className="muted" style={{ fontSize: 11, paddingLeft: 18,
+          overflowWrap: 'anywhere' }}>{event.detail}</span>}
+      </li>)}
+    </ul>}
+
+    {comparison.available && <div style={{ marginTop: 12, borderTop: '1px solid var(--line,#eee)',
+      paddingTop: 10 }}>
+      <span style={LABEL}>THIS REVISION VS THE LAST</span>
+      {comparison.reason && <p className="muted" style={{ fontSize: 11, margin: '4px 0 0' }}>
+        {comparison.reason}
+      </p>}
+      {!!comparison.changes.length && <ul style={{ listStyle: 'none', margin: '6px 0 0', padding: 0,
+        display: 'grid', gap: 3 }}>
+        {comparison.changes.map((change) => <li key={change.field} style={{ fontSize: 11 }}>
+          <b>{change.label}</b>{': '}
+          <span className="muted" style={{ overflowWrap: 'anywhere' }}>
+            {String(change.from ?? NOT_REPORTED)} → {String(change.to ?? NOT_REPORTED)}
+          </span>
+        </li>)}
+      </ul>}
+      <p className="muted" style={{ fontSize: 11, margin: '6px 0 0' }}>
+        {comparison.rollback
+          ? `Rollback target: ${comparison.rollback.name}.`
+          : comparison.rollbackReason}
+      </p>
+    </div>}
+
+    {/* The gaps, last and explicit. Each says where the step actually lives, so the absence is
+        a pointer rather than a blank. */}
+    {(!!deploy.notReported.length || deploy.systemLogs) && <details style={{ marginTop: 10 }}>
+      <summary style={{ cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>
+        What Azure cannot report here
+      </summary>
+      <ul style={{ listStyle: 'none', margin: '6px 0 0', padding: 0, display: 'grid', gap: 4 }}>
+        {deploy.notReported.map((gap) => <li key={gap.step} style={{ fontSize: 11 }}>
+          <b>{gap.step}</b>{' — '}<span className="muted">{gap.reason}</span>
+        </li>)}
+        {deploy.systemLogs && !deploy.systemLogs.available && <li style={{ fontSize: 11 }}>
+          <b>System logs</b>{' — '}<span className="muted">{deploy.systemLogs.reason}</span>
+        </li>}
+        {comparison.notCompared.map((row) => <li key={row.field} style={{ fontSize: 11 }}>
+          <b>{row.label}</b>{' — '}<span className="muted">{row.reason}</span>
+        </li>)}
+      </ul>
+    </details>}
   </section>
 }
 
@@ -1020,6 +1112,8 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
       {/* Subscription-wide, so it is read from the TOP of the capacity payload and shown on every
           node — an Azure incident is context for the whole map, not one service's fault. */}
       <ServiceHealth platform={serviceHealthModel(capacity)} />
+      {node?.kind === 'worker' && <Deployments deploy={deploymentModel(serviceCapacity)}
+        comparison={revisionComparisonModel(serviceCapacity)} />}
       <Tracing tracing={tracingModel(snapshot)} />
       <EventTimeline events={nodeEvents} filter={filter} onFilter={setFilter} paused={paused}
         onPause={() => setFrozen((held) => (held ? null : { samples, events }))}
