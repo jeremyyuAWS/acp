@@ -62,17 +62,21 @@ export function workerServiceRows(summary = {}) {
   const roles = summary.worker_roles || {}
   const capacity = summary.worker_capacity_by_role || {}
   const load = summary.by_stage || {}
+  const attribution = summary.worker_instance_attribution || {}
   return ['discovery', 'assess', 'remediate'].filter((role) => roles[role] || capacity[role]).map((role) => {
     const heartbeat = roles[role] || {}
     const measured = capacity[role]
     const stage = role === 'discovery' ? 'discover' : role
-    const active = measured ? Number(measured.busy_slots || 0) : Number(load[stage]?.running || 0)
-    const slots = measured ? Number(measured.worker_slots || 0) : Number(heartbeat.pool_size || 0)
+    // A role heartbeat is last-writer-wins across replicas. It can establish that an older worker
+    // service is alive, but its pool_size is not fleet capacity and durable running rows are not
+    // busy slots. Keep those facts visible without manufacturing a utilization ratio from them.
+    const active = measured ? Number(measured.busy_slots || 0) : null
+    const slots = measured ? Number(measured.worker_slots || 0) : null
     return {
-      role, stage, active, slots, available: Math.max(0, slots - active),
+      role, stage, active, slots, available: measured ? Math.max(0, slots - active) : null,
       alive: measured ? Number(measured.healthy_replicas || 0) > 0 : Boolean(heartbeat.alive),
       age_s: heartbeat.age_s, version: heartbeat.version,
-      status: measured?.status,
+      status: measured?.status || 'unavailable',
       ...(measured ? {
         jobs_in_flight: measured.jobs_in_flight,
         healthy_replicas: measured.healthy_replicas,
@@ -81,7 +85,14 @@ export function workerServiceRows(summary = {}) {
         utilization_pct: measured.utilization_pct,
         capacity_source: measured.capacity_source,
         measured_at: measured.measured_at,
-      } : {}),
+      } : {
+        jobs_in_flight: Number(load[stage]?.running || 0),
+        utilization_pct: null,
+        capacity_source: heartbeat.alive ? 'legacy_role_heartbeat' : 'unavailable',
+        measured_at: heartbeat.heartbeat_at || null,
+        capacity_unavailable_reason: attribution.reason
+          || 'Per-replica capacity is not yet reporting. Jobs in flight are available, but slot utilization cannot be calculated honestly.',
+      }),
     }
   })
 }
@@ -320,6 +331,9 @@ function NodeGauge({ fraction, label, color, over = false, tone }) {
 export function nodeGauge(data = {}, summary = {}) {
   if (data.kind === 'worker') {
     const service = data.service || {}
+    if (service.capacity_source !== 'worker_instances') {
+      return { fraction: null, label: 'Per-replica worker utilization unavailable', over: false }
+    }
     const active = Number(service.active || 0)
     const slots = Number(service.slots || 0)
     if (!slots) return { fraction: null, label: 'Worker slots not reported', over: false }
@@ -440,7 +454,8 @@ export function infrastructureDetail(data, snapshot = {}, capacity = null) {
       title: `${data.label} infrastructure`, subtitle: 'Live worker capacity and Azure configuration', color: data.color,
       facts: [
         ['Service health', service.status || (service.alive ? 'Online' : 'Offline')],
-        ['Worker slots', `${service.active || 0} busy · ${service.available || 0} available of ${service.slots || 0}`],
+        ['Worker slots', service.slots == null ? 'Not reported'
+          : `${service.active || 0} busy · ${service.available || 0} available of ${service.slots}`],
         ['Healthy replicas', service.healthy_replicas ?? 'Not reported'],
         ['Stale replicas', service.stale_replicas ?? 'Not reported'],
         ['Jobs recorded in flight', service.jobs_in_flight ?? 'Not reported'],
@@ -583,16 +598,20 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
     nodes.push({ id: `stage:${stage}`, type: 'infra',
       position: { x: 720, y: WORKER_LANE_TOP + index * WORKER_LANE_GAP },
       ariaLabel: `${STAGE[stage].label} workers, ${service.status || (service.alive ? 'online' : 'standby')}, `
-        + `${service.active} busy of ${service.slots} slots. `
+        + (service.capacity_source === 'worker_instances'
+          ? `${service.active} busy of ${service.slots} slots. `
+          : `slot utilization unavailable. ${service.jobs_in_flight || 0} jobs recorded in flight. `)
         + `${service.healthy_replicas != null ? `${service.healthy_replicas} healthy replicas. ` : ''}`
-        + `${service.jobs_in_flight != null ? `${service.jobs_in_flight} jobs recorded in flight. ` : ''}`
+        + `${service.capacity_source === 'worker_instances' && service.jobs_in_flight != null
+          ? `${service.jobs_in_flight} jobs recorded in flight. ` : ''}`
         + 'Select for details.',
       data: { kind: 'worker',
       label: `${STAGE[stage].label} workers`, status: service.status || (service.alive ? 'online' : 'standby'),
-      detail: `${service.active} / ${service.slots} slots busy`
+      detail: service.capacity_source === 'worker_instances' ? `${service.active} / ${service.slots} slots busy`
         + `${service.healthy_replicas != null ? ` · ${service.healthy_replicas} healthy replicas` : ''}`
         + `${service.jobs_in_flight != null ? ` · ${service.jobs_in_flight} jobs recorded in flight` : ''}`
-        + `${service.unattributed_running ? ` · ${service.unattributed_running} running job records are not attributed to live worker slots` : ''}`,
+        + `${service.unattributed_running ? ` · ${service.unattributed_running} running job records are not attributed to live worker slots` : ''}`
+        : `${service.jobs_in_flight || 0} jobs recorded in flight · ${service.capacity_unavailable_reason}`,
       // Named rather than "Tier:", which claimed a coverage one container app does not have.
       // The app name is what makes a figure repeated on all three stage nodes readable: it says
       // whose size this is, so a stage it does not describe is visibly not describing itself.
@@ -618,10 +637,12 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
     ...['discover', 'assess', 'remediate'].flatMap((stage) => [
       flowEdge({ id: `queue:${stage}`, source: 'infra:queue', sourceHandle: stage,
         target: `stage:${stage}`, color: STAGE[stage].color,
-        active: Boolean(serviceByStage.get(stage)?.active), detail: `stage:${stage}` }),
+        active: Boolean(serviceByStage.get(stage)?.active || serviceByStage.get(stage)?.jobs_in_flight),
+        detail: `stage:${stage}` }),
       flowEdge({ id: `${stage}:output`, source: `stage:${stage}`, target: 'infra:output',
         targetHandle: stage, color: STAGE[stage].color,
-        active: Boolean(serviceByStage.get(stage)?.active), detail: `stage:${stage}` }),
+        active: Boolean(serviceByStage.get(stage)?.active || serviceByStage.get(stage)?.jobs_in_flight),
+        detail: `stage:${stage}` }),
     ]),
   ]
   runs.forEach((run, i) => {
