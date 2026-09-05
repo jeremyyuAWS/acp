@@ -199,7 +199,7 @@ _map_many([("GET", "/admin/analytics/overview"), ("GET", "/ai/costs")], {"analyt
 
 # ── Settings and platform administration ──────────────────────────────────────
 _map_many([("GET", "/settings"), ("GET", "/ai/providers"), ("GET", "/ai/status"),
-           ("GET", "/ai/providers/{provider}/health")],
+           ("GET", "/ai/providers/health"), ("GET", "/ai/providers/{provider}/health")],
           {"settings.view"})
 _map_many([("PUT", "/settings"), ("PUT", "/ai/providers"), ("POST", "/ai/providers/test"),
            ("POST", "/ai/providers/{provider}/secret")],

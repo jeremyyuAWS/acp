@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { monitoringState, sourceWatch, IDENTITY, SIM } from './sim.js'
-import { getSchedule, putSchedule, listCampaigns, createCampaign, setCampaignStatus, getScanDiff, getSourceStatus } from './api.js'
+import { getSchedule, putSchedule, listCampaigns, createCampaign, setCampaignStatus, getScanDiff, getSourceStatus, getAiProvidersHealth } from './api.js'
 import { prefersReducedMotion } from './a11y.js'
 import RegressionRadar from './RegressionRadar.jsx'
 import ComplianceDigest from './ComplianceDigest.jsx'
@@ -152,6 +152,15 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
       .catch(() => { if (live) setDrift({ loaded: true, stale: 0, untracked: 0, files: [] }) })
     return () => { live = false }
   }, [run?.id])
+
+  const [providerHealth, setProviderHealth] = useState(null)
+  useEffect(() => {
+    if (!me?.is_admin) return
+    let live = true
+    getAiProvidersHealth(24).then((d) => { if (live) setProviderHealth(d) }).catch(() => {})
+    return () => { live = false }
+  }, [me?.is_admin])
+
   const BUCKET_ORDER = ['critical', 'serious', 'moderate', 'na']
   const prog = useMemo(() => {
     if (!campaign?.batches?.length) return derivedProg
@@ -574,6 +583,60 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
         <QueuePanel focusScanId={focusScanId} onClearFocus={onClearFocus} />
         <RevisionHistoryPanel />
       </section>
+
+      {me?.is_admin && providerHealth && (() => {
+        const entries = Object.entries(providerHealth.providers || {})
+        const active = entries.filter(([, s]) => s.calls > 0)
+        const inactive = entries.filter(([, s]) => s.calls === 0).map(([p]) => p)
+        if (!active.length && !inactive.length) return null
+        return (
+          <section className="panel" style={{ marginTop: 14 }}>
+            <h2 style={{ margin: '0 0 4px' }}>AI Provider Health <span className="muted">· last {providerHealth.window_hours}h</span></h2>
+            <p className="muted" style={{ fontSize: 13, marginTop: 0 }}>
+              Real call evidence from the <code>ai_calls</code> log — never fabricated (ADR 0016).
+            </p>
+            {active.length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+                {active.map(([provider, s]) => {
+                  const errRate = s.calls > 0 ? ((s.errors / s.calls) * 100).toFixed(1) : '0.0'
+                  const errColor = s.errors > 0 ? 'var(--warn-fg)' : 'var(--success-fg)'
+                  return (
+                    <div key={provider} style={{ flex: '1 1 220px', minWidth: 200, padding: '12px 14px',
+                        border: '1px solid var(--line)', borderRadius: 8, background: 'var(--card-bg, #fff)' }}>
+                      <div style={{ fontWeight: 600, fontSize: 13.5, marginBottom: 6 }}>{provider}</div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 14px', fontSize: 12.5 }}>
+                        <span><b>{s.calls}</b> <span className="muted">calls</span></span>
+                        <span style={{ color: errColor }}><b>{errRate}%</b> <span className="muted">errors</span></span>
+                        <span><b>{s.avg_latency_ms != null ? Math.round(s.avg_latency_ms) : '–'}</b> <span className="muted">ms avg</span></span>
+                        <span><b>{s.p95_latency_ms != null ? Math.round(s.p95_latency_ms) : '–'}</b> <span className="muted">ms p95</span></span>
+                      </div>
+                      <div style={{ marginTop: 5, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        {s.throttle_count > 0 && (
+                          <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 5,
+                              background: '#FFF3CD', border: '1px solid #FFD97D', color: '#7A5800' }}>
+                            {s.throttle_count} throttle{s.throttle_count !== 1 ? 's' : ''}
+                          </span>
+                        )}
+                        {s.cold_start_count > 0 && (
+                          <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 5,
+                              background: '#E7F0FB', border: '1px solid #A8CBEE', color: '#185FA5' }}>
+                            {s.cold_start_count} cold start{s.cold_start_count !== 1 ? 's' : ''}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+            {inactive.length > 0 && (
+              <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+                No calls in window: {inactive.join(', ')}.
+              </p>
+            )}
+          </section>
+        )
+      })()}
 
       <section className="panel" style={{ marginTop: 14 }} ref={evidenceRef}>
         <div className="monfeedhd">
