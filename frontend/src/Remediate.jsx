@@ -414,6 +414,9 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [ops, setOps] = useState(null)
   const [opsAt, setOpsAt] = useState(null)
   const opsRef = useRef(null)
+  // The resume cursor: the last scan_events.seq this browser actually rendered. Null means "no
+  // cursor" — a first connection, which the server answers with live frames and no backfill.
+  const eventCursorRef = useRef(null)
   const [serverFixed, setServerFixed] = useState(0)  // files fixed server-side this scan (persists after each batch)
   const [staleDismissed, setStaleDismissed] = useState(false)
   const [runDetailsOpen, setRunDetailsOpen] = useState(false)  // the Run details disclosure (PRD §11)
@@ -484,6 +487,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // the run's database reads for a panel whose numbers change on durable events, not on ticks.
   // Stops on a terminal run — the server says when that is, and this never decides it locally.
   useEffect(() => {
+    eventCursorRef.current = null   // a different run is a different log; never inherit a cursor
     if (!runId) { setOps(null); setOpsAt(null); return undefined }
     let on = true
     const load = () => getRemediationSnapshot(runId)
@@ -554,7 +558,24 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     setRemUpdates('live')
     let latest = { failed: 0 }
     streamRef.current = openRemediationStream(runId, {
+      // The cursor survives this call, so a reconnect replays what the gap contained rather than
+      // starting blank (ADR 0051). Held in a ref, not state: it must be readable by the NEXT
+      // connect attempt without waiting for a render, and nothing on screen renders from it.
+      lastEventId: eventCursorRef.current,
       onMessage: (s) => { latest = s; applyRemediationStatus(total, s) },
+      onEvent: (event, id) => {
+        // The frame's own id is the authority — a payload field could be absent or stale, and the
+        // cursor must only ever advance to something this client actually rendered.
+        if (id != null) eventCursorRef.current = id
+      },
+      onReconcile: () => {
+        // The server declined to replay: the cursor is ahead of the log, the log was pruned, or
+        // the cursor was malformed. Drop it and re-fetch a snapshot BEFORE applying anything
+        // later (PRD §17.6) — keeping a cursor the server has rejected would fail the same way on
+        // every subsequent reconnect.
+        eventCursorRef.current = null
+        getRemediationSnapshot(runId).then(acceptSnapshot).catch(() => {})
+      },
       onDone: () => finishRemediation(total, latest),
       onError: () => { streamRef.current = null; startPoll(total) },
     })
