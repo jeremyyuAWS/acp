@@ -89,10 +89,10 @@ def test_coverage_is_complete_for_docx_and_partial_for_the_other_three():
         f"so here; the headline coverage number implies a guarantee these pairs do not have")
 
     assert cov["pptx"]["has_generator"] is True
-    assert cov["pptx"]["engine_only"] == ["2.4.2", "3.1.1"], (
+    assert cov["pptx"]["engine_only"] == ["1.3.1", "1.3.2", "2.4.2", "3.1.1"], (
         f"the pptx engine-only set is now {cov['pptx']['engine_only']} — if that is deliberate, "
         f"say so here; the headline coverage number implies a guarantee these pairs do not have")
-    assert len(cov["pptx"]["covered"]) == 14, (
+    assert len(cov["pptx"]["covered"]) == 16, (
         f"the pptx corpus now declares {len(cov['pptx']['covered'])} pairs — raise "
         f"BASELINE['pptx'] and this count together, in the commit that adds the fixtures")
 

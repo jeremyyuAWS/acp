@@ -341,6 +341,137 @@ def _content_language(path: Path) -> str | None:
     return "no metadata language and no run-level lang anywhere"
 
 
+def _table_without_header(path: Path) -> str | None:
+    """TableHeaderRule's predicate: a table with more than one row whose `firstRow` is not set."""
+    from pptx import Presentation
+    for index, slide in enumerate(Presentation(str(path)).slides):
+        position = 0
+        for shape in slide.shapes:
+            if not shape.has_table:
+                continue
+            table = shape.table
+            if len(table.rows) > 1 and not table.first_row:
+                return f"slide {index} table {position}: firstRow not set, {len(table.rows)} rows"
+            position += 1
+    return None
+
+
+def _reading_order_mismatch(path: Path) -> str | None:
+    """ReadingOrderRule's predicate, and the two things about it that are easy to get wrong.
+
+    TAB ORDER IS ASSIGNED BEFORE THE POSITION FILTER. The C# does `.Select((shape, tabOrder) =>
+    ...)` and only then `.Where(s => s.HasPos)`, so an unpositioned shape consumes a tab index
+    without taking a visual rank. Filtering first would shift every index and change which
+    fixtures fire.
+
+    A PLACEHOLDER USUALLY HAS NO POSITION. python-pptx placeholders inherit their geometry from
+    the layout and write no `a:xfrm`, so the title and body of this corpus's focus-order decks are
+    invisible to this rule entirely — which is why 2.4.3 and 1.3.2 need different fixtures despite
+    describing the same-sounding problem.
+    """
+    from pptx import Presentation
+    from pptx.oxml.ns import qn
+    for index, slide in enumerate(Presentation(str(path)).slides):
+        positioned = []
+        for tab, sp in enumerate(slide.shapes._spTree.findall(qn("p:sp"))):
+            properties = sp.find(qn("p:spPr"))
+            transform = properties.find(qn("a:xfrm")) if properties is not None else None
+            offset = transform.find(qn("a:off")) if transform is not None else None
+            if offset is None:
+                continue
+            positioned.append((tab, int(offset.get("y")), int(offset.get("x"))))
+        if len(positioned) < 2:
+            continue
+        for rank, (tab, _y, _x) in enumerate(sorted(positioned, key=lambda r: (r[1], r[2]))):
+            if abs(rank - tab) > 1:
+                return f"slide {index}: shape at tab {tab} ranks {rank} visually"
+    return None
+
+
+# Every engine predicate, keyed by the criterion it raises. The undeclared-finding sweep walks
+# this map rather than a hand-written list, so adding a fifth engine pair extends the sweep by
+# construction instead of by remembering to.
+ENGINE_PREDICATES = {
+    "1.3.1": _table_without_header,
+    "1.3.2": _reading_order_mismatch,
+    "2.4.2": _title_with_text,
+    "3.1.1": _content_language,
+}
+
+
+def test_a_placeholder_carries_no_position_so_the_focus_order_decks_cannot_trip_1_3_2(corpus):
+    """WHY 2.4.3 AND 1.3.2 NEED DIFFERENT FIXTURES, measured rather than reasoned.
+
+    The focus-order pair moves the title placeholder to the end of document order, which sounds
+    like exactly what ReadingOrderRule looks for. It is invisible to it twice over: placeholders
+    write no `a:xfrm` so neither shape is positioned, and even two positioned shapes swapping
+    moves each by one rank while the rule needs more than one.
+
+    If python-pptx ever starts writing explicit geometry for placeholders, this fails and the
+    focus-order fixtures need re-labelling — which is the notice this test exists to give.
+    """
+    from pptx import Presentation
+    from pptx.oxml.ns import qn
+    out, rows = corpus
+    deck = Presentation(str(out / rows["focus-order"]["file"]))
+    positioned = [
+        sp for sp in deck.slides[0].shapes._spTree.findall(qn("p:sp"))
+        if (pr := sp.find(qn("p:spPr"))) is not None
+        and (xf := pr.find(qn("a:xfrm"))) is not None and xf.find(qn("a:off")) is not None
+    ]
+    assert len(positioned) < 2, (
+        "the focus-order deck now has two or more explicitly-positioned shapes, so "
+        "ReadingOrderRule can see it — check whether it raises an undeclared 1.3.2")
+    assert _reading_order_mismatch(out / rows["focus-order"]["file"]) is None
+
+
+@pytest.mark.parametrize("name,fires", [
+    ("table-no-header", True),
+    ("table-header-ok", False),
+])
+def test_the_table_fixtures_carry_or_withhold_what_the_rule_reads(corpus, name, fires):
+    out, rows = corpus
+    reason = _table_without_header(out / rows[name]["file"])
+    if fires:
+        assert reason, f"{name} is the 1.3.1 fixture and its table now has a header row"
+    else:
+        assert reason is None, f"{name} should designate a header row and does not"
+
+
+@pytest.mark.parametrize("name,fires", [
+    ("reading-order", True),
+    ("reading-order-ok", False),
+])
+def test_the_reading_order_fixtures_carry_or_withhold_what_the_rule_reads(corpus, name, fires):
+    out, rows = corpus
+    reason = _reading_order_mismatch(out / rows[name]["file"])
+    if fires:
+        assert reason, f"{name} is the 1.3.2 fixture and its shapes are now in visual order"
+    else:
+        assert reason is None, f"{name} should be in visual order and is not: {reason}"
+
+
+def test_the_reading_order_pair_differs_only_in_document_order(corpus):
+    """Same three boxes, same positions, opposite document order. If 1.3.2 ever reported on the
+    PRESENCE of several boxes rather than on their order, the control would fire too."""
+    from pptx import Presentation
+    from pptx.oxml.ns import qn
+    out, rows = corpus
+
+    def offsets(name):
+        deck = Presentation(str(out / rows[name]["file"]))
+        return sorted(
+            (int(off.get("y")), int(off.get("x")))
+            for sp in deck.slides[0].shapes._spTree.findall(qn("p:sp"))
+            if (pr := sp.find(qn("p:spPr"))) is not None
+            and (xf := pr.find(qn("a:xfrm"))) is not None
+            and (off := xf.find(qn("a:off"))) is not None)
+
+    assert offsets("reading-order") == offsets("reading-order-ok")
+    assert _reading_order_mismatch(out / rows["reading-order"]["file"])
+    assert _reading_order_mismatch(out / rows["reading-order-ok"]["file"]) is None
+
+
 @pytest.mark.parametrize("name,fires", [
     ("no-slide-title", True),
     ("title-empty", True),
@@ -419,13 +550,21 @@ def test_no_fixture_carries_an_undeclared_engine_finding(corpus):
     out, rows = corpus
     for name, row in rows.items():
         path = out / row["file"]
-        if _title_with_text(path):
-            assert "2.4.2" in row["expect"], (
-                f"{name} would raise 2.4.2 under the analyser ({_title_with_text(path)}) and does "
-                f"not declare it — its label is wrong in CI")
-        if _content_language(path):
-            assert "3.1.1" in row["expect"], (
-                f"{name} would raise 3.1.1 under the analyser and does not declare it")
+        for sc, predicate in ENGINE_PREDICATES.items():
+            reason = predicate(path)
+            if reason:
+                assert sc in row["expect"], (
+                    f"{name} would raise {sc} under the analyser ({reason}) and does not declare "
+                    f"it — its label is wrong in CI")
+
+
+def test_the_sweep_covers_every_engine_declared_pair():
+    """ANTI-VACUOUS ON THE SWEEP ITSELF. A predicate map that fell behind DECLARED_ENGINE would
+    let the next engine pair be added with no undeclared-finding check at all, and the sweep above
+    would still pass — silently checking three criteria out of four."""
+    assert set(ENGINE_PREDICATES) == set(gen.DECLARED_ENGINE), (
+        "ENGINE_PREDICATES and DECLARED_ENGINE disagree; every engine-verified criterion needs a "
+        "transcribed predicate or the sweep does not cover it")
 
 
 @pytest.mark.skipif(not OFFICE_OK, reason=NO_OFFICE)
@@ -434,6 +573,10 @@ def test_no_fixture_carries_an_undeclared_engine_finding(corpus):
     ("slide-title-ok", "2.4.2", False),
     ("no-language", "3.1.1", True),
     ("language-ok", "3.1.1", False),
+    ("table-no-header", "1.3.1", True),
+    ("table-header-ok", "1.3.1", False),
+    ("reading-order", "1.3.2", True),
+    ("reading-order-ok", "1.3.2", False),
 ])
 def test_the_engine_confirms_the_declared_pairs(corpus, name, sc, fires):
     """The detection half, and the reason these two sit in DECLARED_ENGINE rather than DECLARED.
@@ -449,7 +592,14 @@ def test_the_engine_confirms_the_declared_pairs(corpus, name, sc, fires):
     out, rows = corpus
     path = out / rows[name]["file"]
     fd, _ = analyse_and_assess(path.parent, path.name, detect_pii=False)
-    found = {sc for i in (fd or {}).get("issues", []) if (sc := _extract_sc(i.get("wcag", "")))}
+    # NOT a walrus in a comprehension. PEP 572 binds an assignment expression in the CONTAINING
+    # scope, so `{sc for i in ... if (sc := ...)}` rebinds the parametrised `sc` to whichever
+    # criterion the last issue happened to carry. Every assertion below then judged the wrong
+    # criterion — and in the `fires=True` direction it asserted that a value just extracted from
+    # `found` was in `found`, which is true by construction. Those rows passed vacuously in CI
+    # until a `fires=False` row happened to leak a criterion that WAS present and failed with the
+    # give-away message "table-header-ok is the clean control for 1.1.1".
+    found = {s for i in (fd or {}).get("issues", []) if (s := _extract_sc(i.get("wcag", "")))}
     if fires:
         assert sc in found, (
             f"{name} declares {sc} but the analyser reported {sorted(found) or 'nothing'}")
@@ -460,8 +610,90 @@ def test_the_engine_confirms_the_declared_pairs(corpus, name, sc, fires):
     # withholds a title but stamps a language; `no-language` keeps its title. Before the base deck
     # stamped a language explicitly, this held only because python-pptx's template happens to
     # carry run-level lang — which is an accident, not a guarantee.
-    other = "3.1.1" if sc == "2.4.2" else "2.4.2"
-    assert other not in found, (
-        f"{name} also raised {other} — the base deck has stopped stamping "
-        f"{'a language' if other == '3.1.1' else 'a title'}, so every fixture in this corpus is "
-        f"now carrying an undeclared finding")
+    for other in set(gen.DECLARED_ENGINE) - {sc}:
+        if other in rows[name]["expect"]:
+            continue
+        assert other not in found, (
+            f"{name} also raised {other}, which it does not declare — the base deck has stopped "
+            f"supplying something every fixture relied on, so the labels across this corpus are "
+            f"now wrong in CI")
+
+
+def _reading_order_gap(path: Path) -> int:
+    """The largest |visualRank - tabOrder| on the first slide — the quantity the rule thresholds.
+
+    Returned as a number rather than a boolean because the MARGIN is the thing worth pinning: a
+    fixture that fires at exactly the threshold, or a control that is quiet at exactly it, is one
+    unrelated edit away from flipping.
+    """
+    from pptx import Presentation
+    from pptx.oxml.ns import qn
+    slide = Presentation(str(path)).slides[0]
+    positioned = []
+    for tab, sp in enumerate(slide.shapes._spTree.findall(qn("p:sp"))):
+        properties = sp.find(qn("p:spPr"))
+        transform = properties.find(qn("a:xfrm")) if properties is not None else None
+        offset = transform.find(qn("a:off")) if transform is not None else None
+        if offset is not None:
+            positioned.append((tab, int(offset.get("y")), int(offset.get("x"))))
+    if len(positioned) < 2:
+        return 0
+    return max(abs(rank - tab) for rank, (tab, _y, _x)
+               in enumerate(sorted(positioned, key=lambda r: (r[1], r[2]))))
+
+
+def test_the_reading_order_control_has_margin_not_luck(corpus):
+    """THE FRAGILITY A BITE CHECK FOUND, pinned so it cannot come back.
+
+    ReadingOrderRule assigns tab order over every `p:sp` and only then discards the ones with no
+    `a:off`, so an unpositioned placeholder consumes an index without taking a rank. python-pptx
+    placeholders inherit their geometry and write no `a:xfrm` — so with the title unpositioned, a
+    PERFECTLY ORDERED deck already sat at a gap of 1, which is the rule's tolerance exactly. One
+    more unpositioned shape ahead of the boxes and the clean control would have fired, and the
+    false positive would have been read as a detector bug.
+
+    `_position_title` gives the title an explicit `a:xfrm`, which puts the control at 0. This
+    asserts the margin rather than the outcome: a control that is quiet AT the threshold passes an
+    "is it quiet?" test and is still one edit from flipping.
+    """
+    out, rows = corpus
+    assert _reading_order_gap(out / rows["reading-order-ok"]["file"]) == 0, (
+        "the ordered control no longer sits at a gap of zero — it is drifting back toward the "
+        "rule's threshold, where an unrelated edit flips it into a false positive")
+    assert _reading_order_gap(out / rows["reading-order"]["file"]) > 1, (
+        "the violation no longer exceeds the rule's threshold")
+
+
+def _graphic_frame_without_alt_text(path: Path) -> str | None:
+    """AltTextRule's graphic-frame branch — the one a table falls into.
+
+    The rule walks `Descendants<GraphicFrame>()` as well as `Descendants<Picture>()`, so a table
+    with no `descr` raises 1.1.1. The first-party `office_non_text_content_checks` reads pictures
+    only, which is why a bare checkout cannot see this and CI can.
+    """
+    from pptx import Presentation
+    from pptx.oxml.ns import qn
+    for index, slide in enumerate(Presentation(str(path)).slides):
+        for frame in slide.shapes._spTree.iter(qn("p:graphicFrame")):
+            properties = frame.find(qn("p:nvGraphicFramePr") + "/" + qn("p:cNvPr"))
+            if properties is None or not (properties.get("descr") or "").strip():
+                return f"slide {index}: graphic frame with no descr"
+    return None
+
+
+def test_no_fixture_carries_a_graphic_frame_without_alt_text(corpus):
+    """THE FAILURE CI FOUND AND A BARE CHECKOUT STRUCTURALLY CANNOT, swept across the corpus.
+
+    The 1.3.1 table fixtures raised an undeclared 1.1.1 because a table is a GraphicFrame and
+    AltTextRule reads those. Every fixture that declares 1.1.1 may carry the finding; nothing else
+    may. This is the picture-only sibling of the engine sweep above, kept separate because 1.1.1
+    is a first-party DECLARED pair whose first-party detector disagrees with the analyser about
+    what counts as non-text content.
+    """
+    out, rows = corpus
+    for name, row in rows.items():
+        reason = _graphic_frame_without_alt_text(out / row["file"])
+        if reason and "1.1.1" not in row["expect"]:
+            raise AssertionError(
+                f"{name} has a graphic frame with no alt text ({reason}), so the analyser raises "
+                f"1.1.1 — which it does not declare. Give the frame a descr, or declare 1.1.1.")

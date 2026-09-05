@@ -82,7 +82,7 @@ PRESET = "acp-core-17"
 
 # Coverage floor, by format. Update ONLY upward, and only alongside the fixtures that earned it.
 # Written down rather than computed so a drop is a diff someone has to justify in review.
-BASELINE = {"docx": 15, "xlsx": 13, "pptx": 14, "pdf": 14}
+BASELINE = {"docx": 15, "xlsx": 13, "pptx": 16, "pdf": 14}
 
 
 def applicable_pairs() -> dict[str, list[str]]:
