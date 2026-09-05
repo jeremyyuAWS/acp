@@ -23,6 +23,9 @@ image:
   repository: acp
   # Worker and API share one image; they differ by command and by ACP_WORKER_ROLE.
   workerRepository: acp-worker
+  # A separate artifact, not a tag on the application image: deploy/ollama/Dockerfile bakes the
+  # models into the layer, so this image is multi-GB and rebuilt on a different cadence.
+  ollamaRepository: acp-ollama-gateway
   tag: ""
   # Digests, when `acpctl install` has resolved them. A digest wins over the tag, because a tag
   # is a moving reference and an install that cannot say exactly what it ran is not auditable.
@@ -111,7 +114,17 @@ ai:
   ollama:
     enabled: false
     gpu: false
-    modelVolumeSize: 100Gi
+    port: 11434
+    # NO modelVolume. deploy/ollama/Dockerfile bakes llama3.1:8b and moondream into the image and
+    # serves them from /models specifically so a mounted volume cannot shadow them — see the
+    # comment at the top of templates/ollama.yaml. The document still accepts `ai.ollama.
+    # modelVolume` for a deployment that supplies its own runtime; this chart does not act on it.
+    resources: {}
+    nodeSelector: {}
+    tolerations: []
+    # Extra env for the ollama container, and for the workloads that CALL it.
+    env: {}
+    clientEnv: {}
   externalProviders: []
 
 observability:
