@@ -253,3 +253,63 @@ def test_the_scrubber_reports_whether_it_actually_attached(monkeypatch):
     monkeypatch.setattr(ot, "get_tracer_provider", lambda: provider)
     assert telemetry._install_scrubber() is True
     assert len(provider.added) == 1
+
+
+# ── The dependency pair ─────────────────────────────────────────────────────────────────────
+
+def test_the_google_and_azure_pins_are_kept_as_a_pair():
+    """google-api-core and the Azure Monitor distro constrain each other, and the constraint is
+    invisible from either line alone.
+
+    google-api-core 2.36.0 is the first release to make `opentelemetry-api>=1.44.0` a hard,
+    non-extra dependency; azure-monitor-opentelemetry pins `opentelemetry-sdk~=1.43.0`. The two
+    cannot both be satisfied, so google-api-core is held at 2.34.0 — which requires no
+    opentelemetry-api at all.
+
+    This fails if either pin is bumped without the other, because the next person to update
+    dependencies will see two unrelated-looking lines and a passing `pip install`, and the
+    reintroduced conflict shows up as one more warning in a log nobody reads.
+    """
+    requirements = (ACP / "api" / "requirements.txt").read_text()
+    assert "google-api-core==2.34.0" in requirements
+    assert "azure-monitor-opentelemetry==1.8.9" in requirements
+    # And the reason travels with them, in both places.
+    assert "opentelemetry-api>=1.44.0" in requirements
+    assert "opentelemetry-sdk~=1.43.0" in requirements
+
+
+def test_the_scrubber_attaches_to_a_real_sdk_provider(monkeypatch):
+    """The `no scrubber, no export` guard is feature-detected, so this pins that the detection
+    actually succeeds against the real SDK — not only against a fake with the right method name.
+    If it ever returned False in production, tracing would switch itself off and nobody would get
+    traces, which is safe but silent.
+
+    A LOCAL provider, injected, rather than the global one: OpenTelemetry allows the global
+    provider to be set once per process and warns rather than replacing it, so a test that sets it
+    would pass or fail on whether it happened to run first.
+    """
+    pytest.importorskip("opentelemetry.sdk.trace",
+                        reason="azure-monitor-opentelemetry pulls the SDK; pinned in api/requirements.txt")
+    import opentelemetry.trace as ot
+    from opentelemetry.sdk.trace import TracerProvider
+
+    provider = TracerProvider()
+    monkeypatch.setattr(ot, "get_tracer_provider", lambda: provider)
+    assert telemetry._install_scrubber() is True
+
+
+def test_a_live_span_loses_the_filename_and_the_query():
+    """End to end through a real span rather than a dict: the attributes an actual tracer records
+    are what the exporter would send."""
+    pytest.importorskip("opentelemetry.sdk.trace",
+                        reason="azure-monitor-opentelemetry pulls the SDK; pinned in api/requirements.txt")
+    from opentelemetry.sdk.trace import TracerProvider
+
+    tracer = TracerProvider().get_tracer("test")
+    with tracer.start_as_current_span("probe") as span:
+        span.set_attribute("acp.scan_id", "scan-1")
+        span.set_attribute("acp.current_file", "Q3 Board Pack.docx")
+        span.set_attribute("http.url", "https://graph.microsoft.com/items?name=Q3%20Board%20Pack.docx")
+        cleaned = telemetry.scrub(dict(span.attributes))
+    assert cleaned == {"acp.scan_id": "scan-1", "http.url": "https://graph.microsoft.com/items"}
+    assert "Board Pack" not in str(cleaned)
