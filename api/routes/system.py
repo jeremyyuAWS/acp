@@ -1347,6 +1347,36 @@ def _admin_activity_snapshot() -> dict:
     worker_roles = core.store.worker_roles_status()
     stats = core.store.job_stats(owner=None)
     runs = core.store.admin_live_activity()
+    _list_instances = getattr(core.store, "list_worker_instances", None)
+    instances = _list_instances() if callable(_list_instances) else []
+    freshness_seconds = 30
+    now = datetime.now(timezone.utc)
+    per_role: dict[str, dict] = {}
+    for instance in instances:
+        worker_id = str(instance.get("worker_id") or "")
+        role = worker_id.split(":", 1)[0] if ":" in worker_id else "mixed"
+        row = per_role.setdefault(role, {"role": role, "capacity_source": "worker_instances",
+            "freshness_threshold_seconds": freshness_seconds, "healthy_replicas": 0,
+            "stale_replicas": 0, "worker_slots": 0, "busy_slots": 0, "instances": []})
+        try:
+            beat = datetime.fromisoformat(str(instance.get("last_heartbeat_at")).replace("Z", "+00:00"))
+            age_s = max(0, (now - beat).total_seconds())
+        except (TypeError, ValueError):
+            beat, age_s = None, float("inf")
+        fresh = age_s <= freshness_seconds
+        state = instance.get("state")
+        healthy = fresh and state in {"ready", "busy"}
+        if healthy:
+            row["healthy_replicas"] += 1
+            row["worker_slots"] += max(0, int(instance.get("concurrency_limit") or 0))
+            row["busy_slots"] += max(0, int(instance.get("active_job_count") or 0))
+        elif not fresh:
+            row["stale_replicas"] += 1
+        row["instances"].append({**instance, "fresh": fresh, "age_s": None if age_s == float("inf") else round(age_s, 1)})
+        measured = beat.isoformat() if beat else None
+        if measured and (not row.get("measured_at") or measured > row["measured_at"]):
+            row["measured_at"] = measured
+
     # The shared heartbeat is last-writer-wins. In production each dedicated service writes its
     # own role heartbeat, so summing the live role pools is the only honest total capacity.
     # Fall back to the legacy shared heartbeat for older/single-pool deployments.
@@ -1356,6 +1386,32 @@ def _admin_activity_snapshot() -> dict:
                                 else core.WORKERS)
     running = sum(int(r.get("running") or 0) for r in runs)
     queued = sum(int(r.get("queued") or 0) for r in runs)
+    _running_by_type = getattr(core.store, "running_jobs_by_type", None)
+    running_by_type = _running_by_type() if callable(_running_by_type) else None
+    for role, row in per_role.items():
+        stage = "discover" if role == "discovery" else role
+        if running_by_type is None:
+            jobs = sum(int(r.get("running") or 0) for r in runs if (r.get("stage") or "unknown") == stage)
+        elif role == "discovery":
+            jobs = sum(running_by_type.get(kind, 0) for kind in core.DISCOVERY_LANE_JOB_TYPES)
+        elif role == "assess":
+            jobs = sum(running_by_type.get(kind, 0) for kind in core.ASSESS_LANE_JOB_TYPES)
+        elif role == "remediate":
+            jobs = sum(running_by_type.get(kind, 0) for kind in core.REMEDIATE_LANE_JOB_TYPES)
+        else:
+            jobs = sum(running_by_type.values())
+        row["jobs_in_flight"] = jobs
+        row["busy_slots"] = min(row["worker_slots"], row["busy_slots"])
+        row["available_slots"] = max(0, row["worker_slots"] - row["busy_slots"])
+        row["unattributed_running"] = max(0, jobs - row["busy_slots"])
+        row["utilization_pct"] = min(100, round(row["busy_slots"] / row["worker_slots"] * 100)) if row["worker_slots"] else None
+        row["status"] = ("stale" if not row["healthy_replicas"] and row["stale_replicas"] else
+                         "saturated" if row["worker_slots"] and row["busy_slots"] >= row["worker_slots"] else
+                         "degraded" if row["stale_replicas"] or row["unattributed_running"] else "online")
+    instance_slots = sum(row["worker_slots"] for row in per_role.values())
+    instance_busy = sum(row["busy_slots"] for row in per_role.values())
+    if instances:
+        slots = instance_slots
     by_stage: dict[str, dict] = {}
     for run in runs:
         stage = run.get("stage") or "unknown"
@@ -1381,7 +1437,7 @@ def _admin_activity_snapshot() -> dict:
             composition = None
     if queued and not wt.get("alive"):
         pressure = "stalled"
-    elif queued and slots and running >= slots:
+    elif queued and slots and (instance_busy if instances else running) >= slots:
         pressure = "saturated"
     elif queued:
         pressure = "busy"
@@ -1399,30 +1455,26 @@ def _admin_activity_snapshot() -> dict:
             "running": running,
             "completed_jobs": int(stats.get("done") or 0),
             "worker_slots": slots,
-            "available_slots": max(0, int(slots or 0) - running),
-            "utilization_pct": min(100, round((running / slots) * 100)) if slots else None,
+            "available_slots": max(0, int(slots or 0) - (instance_busy if instances else running)),
+            "utilization_pct": (min(100, round((instance_busy / slots) * 100))
+                                if instances and slots else None),
             "pressure": pressure,
             "scheduling_policy": "tenant_fair_least_loaded",
             "worker_tier_alive": bool(wt.get("alive")),
             "worker_roles": worker_roles,
+            "worker_capacity_by_role": per_role,
             "by_stage": by_stage,
-            # ACP CANNOT ATTRIBUTE A JOB TO A REPLICA, and saying so is the point of this key.
-            # The `worker_instances` registry that would carry it (replica_id, revision_name,
-            # software_version, per-instance state) exists in the schema with NO WRITER — it is
-            # PR 1 of a five-PR plan whose emit sites are deliberately deferred. Reading it would
-            # return [] and render as "no workers running", which is the opposite of the truth.
+            # During mixed-version rollout an empty registry is unavailable, not zero capacity.
+            # Once any process has reported, worker_capacity_by_role contains the fresh/stale
+            # split and every raw instance needed by the authorized operations drawer.
             # So per-replica ACP health is reported as unavailable, with the reason, and what IS
             # known is reported per SERVICE from the role heartbeats.
             # Whether distributed tracing is on, and why not when it is off. Live Operations
             # offers a trace drill-down from a workflow tile; a link to traces that do not exist
             # is worse than no link, so the UI is given the reason rather than a bare boolean.
             "tracing": _tracing_status(),
-            "worker_instance_attribution": {
-                "available": False,
-                "reason": "ACP does not record which replica ran a job. The worker_instances "
-                          "registry exists but has no writer yet, so job activity is attributed "
-                          "to a service, not to one of its replicas.",
-            },
+            "worker_instance_attribution": {"available": bool(instances),
+                "reason": None if instances else "Per-replica capacity is not yet reporting. Jobs in flight are available, but slot utilization cannot be calculated honestly."},
             # Absent, not empty, when the store cannot answer — see the guard above.
             **({"queue": composition} if composition else {}),
         },

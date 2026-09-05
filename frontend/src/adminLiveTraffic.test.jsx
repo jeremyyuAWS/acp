@@ -150,6 +150,16 @@ describe('Admin live traffic graph', () => {
     ])
   })
 
+  it('uses per-replica busy slots without turning extra running rows into utilization', () => {
+    const [assess] = workerServiceRows({
+      worker_capacity_by_role: { assess: { capacity_source: 'worker_instances', worker_slots: 20,
+        busy_slots: 20, jobs_in_flight: 40, healthy_replicas: 10, stale_replicas: 0,
+        unattributed_running: 20, utilization_pct: 100, measured_at: '2026-09-05T12:00:00Z' } },
+    })
+    expect(assess).toMatchObject({ active: 20, slots: 20, available: 0, jobs_in_flight: 40,
+      healthy_replicas: 10, unattributed_running: 20, utilization_pct: 100 })
+  })
+
   it('shows authoritative Azure sizing without turning missing data into zero', () => {
     expect(capacityValue(2, ' vCPU')).toBe('2 vCPU')
     expect(capacityValue('4Gi')).toBe('4Gi')
@@ -190,7 +200,15 @@ describe('Admin live traffic graph', () => {
     expect(source).toContain("type: 'infra'")
     expect(source).toMatch(/onNodeClick=.*setSelectedKey/)
     expect(source).toContain('infrastructureDetail(selectedNode, snapshot, liveCapacity).facts')
-    expect(drawer).toContain('facts.map(([label, value])')
+    // The drawer no longer maps the flat `facts` array directly: it groups it first
+    // (Capacity / Processing / Deployment / Source / Audit / Other) and renders each group behind
+    // its own `<button aria-expanded>`. What this line was protecting — the SAME drawer consumes
+    // the `facts` prop the tile handed it — is asserted by the wiring below. That every fact
+    // actually reaches the reader, including one whose label the group map does not know, is
+    // asserted at the DOM level in liveOpsDrawerRender.test.jsx, which is the better place for it:
+    // a source grep for one expression cannot tell a rendered fact from a dropped one.
+    expect(drawer).toContain('factGroups(facts)')
+    expect(drawer).toContain('group.facts.map(')
     expect(source).toContain('Idle · select any tile to inspect the ready processing path')
   })
 })
@@ -334,7 +352,7 @@ describe('Idle map: scope and announcement', () => {
     const unlabelled = nodes.filter((n) => n.type === 'infra' && !n.ariaLabel)
     expect(unlabelled.map((n) => n.id)).toEqual([])
     expect(nodes.find((n) => n.id === 'stage:discover').ariaLabel)
-      .toMatch(/Discover workers, online, 0 active of 3 slots/)
+      .toMatch(/Discover workers, online, 0 busy of 3 slots/)
   })
 
   it('keeps worker tiles in non-overlapping lanes with dedicated queue and output ports', () => {

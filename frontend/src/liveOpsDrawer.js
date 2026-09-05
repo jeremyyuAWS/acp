@@ -52,6 +52,11 @@ export const PROVENANCE = {
   session: { label: 'Observed in this session', detail: 'sampled from the live stream' },
   logs: { label: 'Log Analytics', detail: 'delayed' },
   estimate: { label: 'Estimated from configured capacity', detail: 'derived, not measured' },
+  // A DIFFERENT basis from `estimate`, and the difference is the point: that one projects
+  // from what the deployment is configured for, this one from completions actually observed
+  // in this session. Both are estimates and both must say so; a reader deciding whether to
+  // trust a finishing time needs to know which of the two it came from.
+  projection: { label: 'Estimated', detail: 'projected from completions observed in this session' },
   billing: { label: 'Cost Management', detail: 'billing data, not live' },
   unavailable: { label: 'Not reported', detail: 'no measurement available' },
 }
@@ -634,7 +639,15 @@ export function gaugeModel(service = {}, options = {}) {
   // lease produces the same shape. Either way the ratio is not a utilisation, so the percentage is
   // withheld and the condition is named instead of being dressed up as 2550% of capacity.
   const overCommitted = slots > 0 && active > slots
-  const pct = slots > 0 && !overCommitted ? Math.round((active / slots) * 100) : null
+  // BOUNDED AT 100%, ALWAYS. An earlier version withheld the percentage entirely when work
+  // exceeded slots, which avoided printing "2550%" but also removed the one number that is true:
+  // the slots ARE all busy. The gauge now reads 100% and the excess is reported beside it as its
+  // own figure, so the reader gets both facts instead of neither.
+  const pct = slots > 0 ? Math.min(100, Math.round((active / slots) * 100)) : null
+  // The excess, never folded into the gauge. Not called a backlog: a backlog is work waiting in
+  // the queue, and this is work reported as RUNNING beyond what this service says it can run at
+  // once — a different condition with a different cause (see oversubscriptionNote).
+  const oversubscribed = overCommitted ? active - slots : null
   const availableSlots = Math.max(0, slots - active)
   let state = 'available'
   if (!service.alive) state = 'unavailable'
@@ -645,10 +658,15 @@ export function gaugeModel(service = {}, options = {}) {
   const tone = { available: 'ok', approaching: 'warn', saturated: 'bad', idle: 'idle', unavailable: 'idle' }[state]
   return {
     available: true, active, slots, availableSlots, provisioning, fraction, pct, state, tone,
-    overCommitted,
+    overCommitted, oversubscribed,
+    // "N of M slots busy" — the phrasing the brief asks for, and true in both cases because the
+    // busy count is clamped to the slots that exist. The excess rides in its own sentence.
+    busyText: `${Math.min(active, slots)} of ${slots} slots busy`
+      + (pct == null ? '' : ` (${pct}%)`),
     // The accessible equivalent the PRD requires: the gauge is decorative, this sentence is the data.
     text: overCommitted
-      ? `${active} jobs in flight against ${slots} reported worker slots`
+      ? `${slots} of ${slots} slots busy (100%), with ${oversubscribed} more `
+        + `${oversubscribed === 1 ? 'job' : 'jobs'} reported running than this service has slots`
       : `${active} of ${slots} worker slots active`
         + (pct == null ? '' : ` (${pct}%)`)
         + `, ${availableSlots} available`
@@ -657,8 +675,9 @@ export function gaugeModel(service = {}, options = {}) {
     overCommittedNote: overCommitted
       ? 'More jobs are running than this service reports slots for. The slot count comes from a '
         + 'heartbeat that is last-writer-wins across replicas, so it describes one replica while '
-        + 'the job count covers them all; a stale lease looks the same. No utilisation percentage '
-        + 'is shown, because this ratio is not one.'
+        + 'the job count covers them all; a stale lease looks the same. The gauge is capped at '
+        + '100% because the slots that exist are all busy, and the excess is counted separately '
+        + 'rather than shown as more than full.'
       : null,
     stateLabel: overCommitted ? 'Over committed'
       : { available: 'Capacity available', approaching: 'Approaching capacity',
@@ -1847,5 +1866,338 @@ export function queueCapacityGauge(summary = {}) {
     over: false,
     label: `${totalQueued} waiting · ${worst.stage} has ${worst.queued} for ${worst.slots} `
       + `${worst.slots === 1 ? 'slot' : 'slots'}`,
+  }
+}
+
+/* ─────────────────────── Stream state, provisioning, drain ─────────────────────── */
+
+/**
+ * The four states the header must distinguish, each with the last measurement it can point to.
+ *
+ * STALE IS THE ONE THAT WAS MISSING. A connection can be open and reporting nothing: the socket is
+ * live, the reader is happy, and the numbers on screen are minutes old. That renders identically
+ * to a healthy stream unless it is a state of its own — and it is the state where a reader is most
+ * likely to act on a figure that has stopped being true.
+ *
+ * `lastMeasuredAt` travels with every state including Unavailable, because "we lost the stream"
+ * is only actionable next to "and this is how old what you are looking at is".
+ */
+export const STREAM_STATES = {
+  live: { label: 'Live', icon: '●', tone: 'ok' },
+  reconnecting: { label: 'Reconnecting', icon: '◐', tone: 'warn' },
+  stale: { label: 'Stale', icon: '◔', tone: 'warn' },
+  unavailable: { label: 'Unavailable', icon: '■', tone: 'bad' },
+}
+
+/** A frame older than this is stale even on an open connection. Twice the two-second snapshot
+ *  cadence would be jittery; thirty seconds is long enough that silence means something. */
+export const STALE_FRAME_S = 30
+
+export function streamState(connection = 'connecting', { generatedAt = null, nowMs = Date.now() } = {}) {
+  const ageS = secondsSince(generatedAt, nowMs)
+  const at = (key, detail) => ({
+    state: key, ...STREAM_STATES[key], lastMeasuredAt: generatedAt || null, ageS, detail,
+  })
+  if (connection === 'unavailable') {
+    return at('unavailable', generatedAt
+      ? 'The live event stream could not be established. Everything below is the last frame that arrived.'
+      : 'The live event stream could not be established, and no frame has arrived to fall back on.')
+  }
+  if (connection === 'reconnecting') {
+    return at('reconnecting', 'The live event stream dropped and is retrying. Values below are the last frame received.')
+  }
+  // Connected but silent. Checked BEFORE reporting live, because an open socket is not evidence
+  // that anything is arriving over it.
+  if (ageS != null && ageS > STALE_FRAME_S) {
+    return at('stale', `The stream is connected but has not delivered a frame in ${formatDuration(ageS)}. `
+      + 'Values below are that old.')
+  }
+  if (connection === 'live') return at('live', 'Receiving live updates.')
+  return at('reconnecting', 'Connecting to the live event stream.')
+}
+
+/**
+ * A replica's journey to serving work: Requested → Allocating → Starting → Healthy.
+ *
+ * Every stage is derived from a replica state Azure actually reports; none is inferred from a
+ * timestamp. "Requested" is what the scale rule asked for, and it is the count — not a time,
+ * because Azure does not report when a replica was requested and approximating it from the
+ * revision's creation would date every replica from the deploy.
+ */
+export const PROVISIONING_STAGES = [
+  { key: 'requested', label: 'Requested' },
+  { key: 'allocating', label: 'Allocating' },
+  { key: 'starting', label: 'Starting' },
+  { key: 'healthy', label: 'Healthy' },
+]
+
+export function provisioningTimeline(lifecycle = null) {
+  if (!lifecycle?.available) {
+    return { available: false, reason: lifecycle?.reason
+      || 'Replica lifecycle is not reported, so the provisioning stages are unknown.', stages: [] }
+  }
+  const replicas = Array.isArray(lifecycle.replicas) ? lifecycle.replicas : []
+  const countOf = (state) => replicas.filter((r) => r?.state === state).length
+  const healthy = countOf('ready')
+  const starting = countOf('starting')
+  const allocating = countOf('allocating')
+  // What the deployment asked Azure for. Falls back to what is actually there rather than
+  // claiming a target nobody reported.
+  const requested = num(lifecycle.desired) ?? num(lifecycle.target)
+    ?? (healthy + starting + allocating || null)
+  const stages = [
+    { ...PROVISIONING_STAGES[0], count: requested, reached: requested != null },
+    { ...PROVISIONING_STAGES[1], count: allocating, reached: allocating > 0 },
+    { ...PROVISIONING_STAGES[2], count: starting, reached: starting > 0 },
+    { ...PROVISIONING_STAGES[3], count: healthy, reached: healthy > 0 },
+  ]
+  return {
+    available: true,
+    stages,
+    // Where the fleet is right now: the furthest stage that still has replicas in it, which is
+    // the one an operator is waiting on.
+    current: allocating > 0 ? 'allocating' : starting > 0 ? 'starting'
+      : healthy > 0 ? 'healthy' : 'requested',
+    settled: allocating === 0 && starting === 0 && healthy > 0,
+    reason: null,
+  }
+}
+
+/**
+ * How long until the queue is empty, or an honest refusal.
+ *
+ * A drain estimate is a division, and the denominator is the NET rate. When work arrives at least
+ * as fast as it completes the queue is not draining at all, and an ETA there is not a large number
+ * — it does not exist. Saying "not draining" is the answer; extrapolating one anyway would put a
+ * finishing time on a queue that is growing.
+ */
+export function queueDrain(queue = {}) {
+  const waiting = num(queue.total)
+  const arrival = num(queue.arrivalPerMin)
+  const completion = num(queue.completionPerMin)
+  if (waiting == null || arrival == null || completion == null) {
+    return { available: false, reason: 'Arrival and completion rates are not reported, so a drain time cannot be derived.' }
+  }
+  if (!waiting) return { available: true, draining: true, etaS: 0, netPerMin: completion - arrival,
+    reason: 'Nothing is waiting.' }
+  const net = completion - arrival
+  if (net <= 0) {
+    return {
+      available: true, draining: false, etaS: null, netPerMin: net,
+      reason: net === 0
+        ? 'Work is arriving exactly as fast as it completes, so the queue is holding steady rather than draining.'
+        : `Work is arriving faster than it completes by ${Math.abs(Math.round(net * 10) / 10)}/min, `
+          + 'so the queue is growing and has no drain time.',
+    }
+  }
+  return {
+    available: true, draining: true, netPerMin: net,
+    etaS: Math.round((waiting / net) * 60),
+    reason: null,
+  }
+}
+
+/* ─────────────────────── Operational facts, grouped ─────────────────────── */
+
+/**
+ * The five groups the operational-fact wall is read in, in reading order.
+ *
+ * WHY GROUP AT ALL. The facts were the drawer's entire content before the redesign and are kept
+ * verbatim so nothing an operator relied on was removed — but a flat run of ten label/value tiles
+ * behind one `<summary>` is a wall, and the reader arrives at it with a specific question
+ * ("what is it running?", "who asked for this?"). Grouping turns one scan of ten into one click
+ * on one of five.
+ */
+export const FACT_GROUPS = [
+  { key: 'capacity', title: 'Capacity' },
+  { key: 'processing', title: 'Processing' },
+  { key: 'deployment', title: 'Deployment' },
+  { key: 'source', title: 'Source' },
+  { key: 'audit', title: 'Audit' },
+  // Anything this map does not know about. It is a REAL group, rendered like the rest: a fact
+  // whose label is added later must still reach the reader, and silently dropping it would be
+  // the failure this whole drawer exists to avoid.
+  { key: 'other', title: 'Other' },
+]
+
+/** Label → group. Exhaustive over the labels AdminLiveTraffic actually emits today; anything
+ *  else lands in `other` rather than being guessed at from the label text. */
+const _FACT_GROUP = {
+  'Worker slots': 'capacity', 'Replica size': 'capacity', 'Size measured from': 'capacity',
+  Replicas: 'capacity', 'Live utilization': 'capacity', 'Queued jobs': 'capacity',
+  'Users waiting': 'capacity', Scheduling: 'capacity', Pressure: 'capacity', Queue: 'capacity',
+
+  Progress: 'processing', Status: 'processing', 'Job type': 'processing',
+  'Last activity': 'processing', 'Oldest wait': 'processing', 'Active runs': 'processing',
+  'Recent runs': 'processing', 'Live runs': 'processing',
+
+  'Service health': 'deployment', 'Active revision': 'deployment', 'Revision health': 'deployment',
+  Heartbeat: 'deployment', 'SSE connection': 'deployment',
+
+  User: 'source', Source: 'source', 'Connection path': 'source', Role: 'source',
+
+  'Storage class': 'audit', 'Source safety': 'audit', Traceability: 'audit',
+}
+
+/**
+ * Split `[[label, value], ...]` into the groups above, dropping groups with nothing in them.
+ *
+ * Order within a group is the order the facts arrived in — the caller composed that list
+ * deliberately (worker size sits next to the note saying whose size it is), and re-sorting here
+ * would break pairings this module cannot see.
+ */
+export function factGroups(facts = []) {
+  const buckets = new Map(FACT_GROUPS.map((group) => [group.key, []]))
+  for (const entry of facts) {
+    if (!Array.isArray(entry) || entry.length < 2) continue
+    const [label, value] = entry
+    buckets.get(_FACT_GROUP[label] || 'other').push({ label, value })
+  }
+  return FACT_GROUPS
+    .map((group) => ({ ...group, facts: buckets.get(group.key) }))
+    .filter((group) => group.facts.length > 0)
+}
+
+/* ─────────────────────── Running jobs: pipeline, flow, timing, trouble ─────────────────────── */
+
+/** The pipeline a document walks, in order. `release` is included because the store classifies
+ *  publish jobs into it, even though the topology map draws only the first three. */
+export const RUN_STAGES = [
+  { key: 'discover', label: 'Discover' },
+  { key: 'assess', label: 'Assess' },
+  { key: 'remediate', label: 'Remediate' },
+  { key: 'release', label: 'Release' },
+]
+
+/**
+ * Where this scan is in the pipeline, from the OTHER stage rows the snapshot carries for it.
+ *
+ * A run node is one (scan, stage) pair, so the drawer for an Assess run knows nothing about the
+ * Discover that fed it — yet "has discovery finished?" is the first question an operator asks of a
+ * stalled assess.
+ *
+ * THE HONESTY PROBLEM, and why `missing` is not called "not started". `admin_live_activity` returns
+ * live work plus stages whose last job finished inside a recent tail. A stage that completed before
+ * that tail is simply ABSENT — indistinguishable, from here, from one that never ran. Rendering
+ * absence as "Not started" would tell an operator that discovery has not happened on a scan whose
+ * discovery finished an hour ago, which is worse than saying nothing. So a missing stage is
+ * reported as not carried by this snapshot, and the reason travels with it.
+ */
+export function runStagePipeline(scanId, snapshot = {}) {
+  const rows = (snapshot?.runs || []).filter((run) => run.scan_id === scanId)
+  const byStage = new Map(rows.map((run) => [run.stage, run]))
+  const stages = RUN_STAGES.map((stage) => {
+    const row = byStage.get(stage.key)
+    if (!row) return { ...stage, present: false, state: 'unknown', label: stage.label }
+    const completed = num(row.completed) ?? 0
+    const total = num(row.total)
+    return {
+      ...stage,
+      present: true,
+      state: row.status === 'recent' ? 'complete' : 'active',
+      completed,
+      total,
+      running: num(row.running) ?? 0,
+      queued: num(row.queued) ?? 0,
+      pct: total ? Math.min(100, Math.round((completed / total) * 100)) : null,
+    }
+  })
+  return {
+    stages,
+    present: stages.filter((s) => s.present),
+    missing: stages.filter((s) => !s.present).map((s) => s.label),
+    // Said once, under the row, rather than repeated per stage.
+    missingReason: 'A stage that finished before this snapshot’s recent tail is not carried in it. '
+      + 'Absent here means not reported, never “did not run”.',
+  }
+}
+
+/** The four document states as one bounded bar. Shares the queue bar's shape deliberately: the
+ *  same four words mean the same four things on both, and a reader should not have to relearn. */
+export function runFlow(run = {}) {
+  const rows = [
+    { key: 'completed', label: 'Completed', tone: 'ok', count: num(run.completed) ?? 0 },
+    { key: 'running', label: 'Processing', tone: 'info', count: num(run.running) ?? 0 },
+    { key: 'queued', label: 'Waiting', tone: 'warn', count: num(run.queued) ?? 0 },
+    // NOT defaulted to zero. The activity snapshot does not publish a per-run failure count, and
+    // "0 failed" is a much stronger claim than "not counted".
+    { key: 'failed', label: 'Failed', tone: 'bad', count: num(run.failed) },
+  ]
+  const counted = rows.filter((row) => row.count != null)
+  const total = counted.reduce((sum, row) => sum + row.count, 0)
+  return {
+    rows,
+    total,
+    segments: counted.filter((row) => row.count > 0),
+    partial: rows.some((row) => row.count == null),
+  }
+}
+
+/**
+ * How long, measured three different ways, none of them interchangeable.
+ *
+ * `elapsedS` is the run's age; `currentJobS` is how long a worker has held THIS job, from the
+ * immutable `claimed_at` the schema gained in v16; `heartbeatAgeS` is how long since that worker
+ * last checked in. The middle one used to be read off `locked_at` and reset every two minutes,
+ * which is exactly how a job wedged for an hour looked forty seconds old.
+ *
+ * `leaseStale` compares the heartbeat against the worker's own interval rather than a number
+ * invented here: a beat older than several intervals means the holder has stopped reporting, which
+ * is the shape of a wedged handler that reclaim cannot reach.
+ */
+export const HEARTBEAT_INTERVAL_S = 120
+export const STALE_BEATS = 3
+
+export function runTiming(run = {}, { nowMs = Date.now() } = {}) {
+  const heartbeatAgeS = secondsSince(run.current_job_heartbeat_at, nowMs)
+  return {
+    elapsedS: secondsSince(run.started_at, nowMs),
+    updatedAgoS: secondsSince(run.updated_at, nowMs),
+    currentJobS: secondsSince(run.current_job_started_at, nowMs),
+    // Null when the row predates v16 — reported as unknown, never backfilled from the heartbeat.
+    currentJobUnknown: !!run.current_file && !run.current_job_started_at,
+    heartbeatAgeS,
+    leaseStale: heartbeatAgeS != null && heartbeatAgeS > HEARTBEAT_INTERVAL_S * STALE_BEATS,
+    staleThresholdS: HEARTBEAT_INTERVAL_S * STALE_BEATS,
+  }
+}
+
+/**
+ * Retry pressure and the classified reason.
+ *
+ * `last_error_class` comes from a CLOSED vocabulary, which is why it can be shown on a screen that
+ * spans tenants — a free-text error can carry another customer's filename, a vocabulary term
+ * cannot. `attempts` is the highest seen across the stage's jobs, so 1 is not a problem and 4 is.
+ */
+export function runTrouble(run = {}) {
+  const attempts = num(run.max_attempts_seen)
+  const kind = run.last_error_class || null
+  return {
+    attempts,
+    retrying: (attempts ?? 0) > 1,
+    kind,
+    label: kind ? (ERROR_CLASS_LABELS[kind] || kind) : null,
+    // A classified failure with no retry left is a different situation from one being retried.
+    note: kind && (attempts ?? 0) > 1
+      ? 'Retried after a classified failure. The class is a vocabulary term, never the error text.'
+      : kind ? 'A classified failure was recorded for this stage.' : null,
+  }
+}
+
+/** SharePoint site coverage, when the run checkpointed any. Absent for Drive and OneDrive runs by
+ *  design — the backend returns an empty dict rather than zeros, so there is nothing to render. */
+export function runCoverage(run = {}) {
+  const total = num(run.sites_total)
+  if (total == null) return { available: false }
+  const done = num(run.sites_done) ?? 0
+  const unread = num(run.sites_unread) ?? 0
+  return {
+    available: true, total, done, unread,
+    libraries: num(run.libraries_total),
+    pct: total ? Math.min(100, Math.round((done / total) * 100)) : null,
+    // Blocked and skipped are counted together upstream; say so rather than implying a reason.
+    unreadNote: unread
+      ? `${unread} site${unread === 1 ? '' : 's'} not read (blocked or skipped). The exception report says which.`
+      : null,
   }
 }

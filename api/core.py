@@ -1514,6 +1514,13 @@ def _replica_id() -> str:
 _REPLICA_FALLBACK = None
 
 
+def worker_process_instance_id(role: str | None = None) -> str:
+    """Identity for this process, unique across replicas and across restarts."""
+    import joblog  # noqa: PLC0415
+    worker_role = (role or os.environ.get("ACP_WORKER_ROLE") or "mixed").strip().lower()
+    return f"{worker_role}:{_replica_id()}:{joblog.PROC}"
+
+
 def _worker_job_types(index, pool_size):
     """Route dedicated services before falling back to the mixed pool reservation."""
     from worker import HANDLERS
@@ -1551,7 +1558,8 @@ def _spawn_worker() -> None:
     #
     # joblog.REPLICA is the same resolution used for log attribution — the Container Apps replica
     # name, else HOSTNAME, else "unknown" — so the two agree rather than inventing a second answer.
-    w = JobWorker(get_store(), worker_id=f"{_replica_id()}:w{_worker_seq}", on_retry=update_job)
+    process_id = worker_process_instance_id()
+    w = JobWorker(get_store(), worker_id=f"{process_id}:w{_worker_seq}", on_retry=update_job)
     w.job_types = _worker_job_types(len(_worker_handles), WORKERS)
     t = threading.Thread(target=w.run_forever, daemon=True, name=f"jobworker-{_worker_seq}")
     _worker_seq += 1
