@@ -29,6 +29,14 @@ const PRESSURE = {
 // — at the default they overlap for the first stretch and read as a single line.
 const EDGE_ROUTING = { type: 'bezier', pathOptions: { curvature: 0.42 } }
 
+// Worker cards grow with their live gauge and compute/storage line. At the narrow fitView scale
+// that content can wrap to roughly 150px tall, so a 145px pitch lets adjacent borders touch (and
+// at some browser zooms overlap). Keep the topology's vertical rhythm explicit and leave a real
+// gutter after the tallest supported card. Active-run cards start below the whole service stack.
+const WORKER_LANE_TOP = 20
+const WORKER_LANE_GAP = 170
+const RUN_LANE_TOP = 535
+
 function age(iso) {
   if (!iso) return '—'
   const seconds = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000))
@@ -557,7 +565,8 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
     // ariaLabel sits on the NODE, not in `data` — ReactFlow reads node.ariaLabel when it renders
     // the wrapper (index.js: "aria-label": node.ariaLabel). Nested in data it is silently ignored,
     // which is how this was first written and what the announcement test caught.
-    nodes.push({ id: `stage:${stage}`, type: 'infra', position: { x: 720, y: 20 + index * 145 },
+    nodes.push({ id: `stage:${stage}`, type: 'infra',
+      position: { x: 720, y: WORKER_LANE_TOP + index * WORKER_LANE_GAP },
       ariaLabel: `${STAGE[stage].label} workers, ${service.alive ? 'online' : 'standby'}, `
         + `${service.active} active of ${service.slots} slots. Select for details.`,
       data: { kind: 'worker',
@@ -602,7 +611,8 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
     const last = series.at(-1)
     if (!last || ['completed', 'running', 'queued'].some((field) => Number(last[field] || 0) !== sample[field])) series.push(sample)
     historyMap.set(key, series.slice(-30))
-    nodes.push({ id: key, type: 'run', position: { x: 335 + (i % 3) * 255, y: 455 + Math.floor(i / 3) * 145 },
+    nodes.push({ id: key, type: 'run',
+      position: { x: 335 + (i % 3) * 255, y: RUN_LANE_TOP + Math.floor(i / 3) * 145 },
       data: { kind: 'run', run, history: series } })
     // Both of a run's lines resolve to the RUN's own drawer, not to the stage they end at: the
     // work moving along them belongs to this run, and the stage node answers a different question

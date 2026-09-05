@@ -322,9 +322,9 @@ describe('Idle map: scope and announcement', () => {
       graph.nodes.find((node) => node.id === `stage:${stage}`))
     const gaps = stages.slice(1).map((node, index) => node.position.y - stages[index].position.y)
 
-    // Worker cards grow when compute/storage telemetry wraps. The old 105px lane put the next
-    // card underneath it; 145px leaves a real gutter at the narrow fitView scale too.
-    expect(gaps).toEqual([145, 145])
+    // Worker cards grow when gauge and compute/storage telemetry wrap. A 145px lane still let
+    // their borders touch in production; 170px preserves a visible gutter at fitView scale.
+    expect(gaps).toEqual([170, 170])
     const queue = graph.nodes.find((node) => node.id === 'infra:queue')
     const output = graph.nodes.find((node) => node.id === 'infra:output')
     expect(queue.data.outputPorts.map((port) => port.id)).toEqual(['discover', 'assess', 'remediate'])
@@ -341,7 +341,7 @@ describe('Idle map: scope and announcement', () => {
     const graph = buildTrafficGraph(active, new Map(), capacity)
     const lastWorker = graph.nodes.find((node) => node.id === 'stage:remediate')
     const run = graph.nodes.find((node) => node.id === 'scan-1:assess')
-    expect(run.position.y - lastWorker.position.y).toBeGreaterThanOrEqual(125)
+    expect(run.position.y - lastWorker.position.y).toBeGreaterThanOrEqual(175)
   })
 })
 
