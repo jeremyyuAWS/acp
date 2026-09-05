@@ -101,10 +101,15 @@ def build() -> str:
         # `acpctl values` refuses a document with errors, so this is not a paperwork failure: it
         # is the reason the chart cannot be pointed at today's Azure yet, and it is worth saying
         # in the generated half where it stays true rather than in prose that could go stale.
+        # COUNTED, NOT SPELLED. This said "the two rows below" and the count was hardcoded, so
+        # when a third error appeared the generated half — the half that exists precisely so it
+        # cannot go stale — was the part that went stale, in a sentence three lines under a
+        # heading giving the right number.
+        rows = "the row below" if len(result.errors) == 1 else f"the {len(result.errors)} rows below"
         lines.append("`acpctl values` refuses a document with errors, so **the chart cannot yet "
                      "render a release that reproduces today's Azure** — not because the workload "
                      "is inexpressible, but because the deployment does not satisfy the profile "
-                     "it runs under. Clear the two rows below and the render succeeds; the "
+                     f"it runs under. Clear {rows} and the render succeeds; the "
                      "connection pools, the queue-depth scaler on remediate and the private "
                      "worker posture all carry through.")
         lines.append("")

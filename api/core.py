@@ -204,14 +204,109 @@ def is_admin(email: str | None) -> bool:
         return False
 
 
+def suspended_in_store(email: str | None) -> bool:
+    """Does this person's stored record say `suspended`? RAISES if the store cannot be read.
+
+    THE SINGLE DEFINITION OF SUSPENDED, and the reason it is split from `is_suspended` is the
+    failure policy rather than the lookup — the lookup is the same three lines it replaced in
+    three separate modules (app._capability_gate_suspended, routes.system._is_suspended,
+    routes.workspace_roles_admin._suspended), which is three chances for the next person to change
+    one of them.
+
+    THE TWO POLICIES ARE BOTH DELIBERATE AND THEY POINT OPPOSITE WAYS.
+
+    Callers deciding CAPABILITIES want this one, which raises. PRD §14: "Failure to load
+    permissions must fail closed for sensitive operations." An unreadable store there means we
+    cannot establish what somebody may do, and a 500 is the honest answer to that.
+
+    The authentication PERIMETER wants `is_suspended`, which swallows. A suspension check can only
+    ever remove access, so refusing on a failed read protects nothing and converts one unreadable
+    settings row into a workspace-wide outage for people who were never suspended.
+
+    Reads only the `people` records, not `people_with_access`. That merge additionally pulls the
+    allowlist and the admin list to answer "who should the People screen list"; the question here
+    is narrower — "is there a stored record, and does it say suspended".
+    """
+    target = (email or "").strip().lower()
+    if not target:
+        return False
+    return any(r.get("email") == target and r.get("status") == "suspended"
+               for r in get_store().get_people())
+
+
+def is_suspended(email: str | None) -> bool:
+    """Has an administrator withdrawn this person's access? PRD §14: "a suspended user has no
+    effective permissions."
+
+    Read LIVE on every call, deliberately un-memoised. The just-in-time roster memo next door
+    (`_rostered`) is safe to keep in process because it answers "have we seen them before", a fact
+    that only ever moves one way. Suspension is the opposite: it is the act of taking access away
+    RIGHT NOW, and a memo would mean an owner clicking Suspend had to wait for a redeploy to be
+    obeyed — which is the same class of bug as the one this function exists to close, wearing a
+    performance optimisation as a disguise.
+
+    Delegates the lookup to `suspended_in_store` so the perimeter and the capability layer cannot
+    drift about who is suspended; only the failure policy differs, and that difference is stated
+    there.
+    """
+    try:
+        return suspended_in_store(email)
+    except Exception:
+        # Fail OPEN, matching the allowlist read below, and the reasoning is worth stating because
+        # the instinct here is fail-closed. This check can only ever REMOVE access, so refusing on
+        # a failed read does not protect a resource — it turns one unreadable settings row into a
+        # workspace-wide outage for people who are not suspended and never were. The store that
+        # would have to fail for this to matter is the same one `get_allowlist()` reads two lines
+        # down, so a real failure already degrades the gate; this must not additionally weaponise
+        # it. PRD §14's "fail closed for sensitive operations" governs the capability decision in
+        # workspace_roles, which is where a refusal protects something.
+        swallowed("core.is_suspended: reading the people records failed")
+        return False
+
+
 def email_allowed(email: str) -> bool:
     """True if an email may use the app: the protected owner (or an additional admin), the runtime
     test-user list managed from Settings → Test users, or an allowed domain. ACP_ALLOWED_EMAILS is a
     one-time SEED for that list (see seed_allowlist_once), NOT a separate permanent grant
-    — so a user removed from the list is genuinely revoked. Admins are always admitted: an admin who
-    could not sign in would be a contradiction."""
+    — so a user removed from the list is genuinely revoked.
+
+    SUSPENSION BEATS EVERY GRANT BELOW THE OWNER, and that ordering is the fix of 2026-09-05.
+
+    Before it, suspending somebody worked only by accident and only for some people. `PUT
+    /admin/people` drops a suspended person from the ALLOWLIST, so an allow-listed person really
+    was refused here — not because their suspension was read, but because their grant had been
+    deleted. A DOMAIN-admitted person has no allowlist entry to delete, so the final `endswith`
+    admitted them exactly as before: the owner clicked Suspend, the screen said suspended, and
+    nothing whatsoever happened.
+
+    That mattered most in the configuration this product actually ships in. Below the `navigation`
+    rung — `off` and `observe`, and `off` is the default — `workspace_roles.access_for_email`
+    returns `legacy_access()` without consulting `is_suspended` at all, because not-yet-enforcing
+    means "preserve current access" for everyone. So the RBAC layer's own suspension check, which
+    is correct, does not bite until the rollout reaches `navigation`. Measured on the store:
+    a suspended domain user resolved to 10 tabs and 22 capabilities at `off` and at `observe`, and
+    to 0 and 0 at `navigation` and `enforce`. Until the ladder is climbed, THIS is the only place
+    a suspension can take effect, which is why it belongs at the perimeter rather than beside the
+    other checks.
+
+    The owner is exempt and stays first, before any store read can fail or refuse. `update_person`
+    already refuses to modify OWNER_EMAIL (409), so a suspended owner is not a state the product
+    can reach — but the ordering is what makes that a guarantee rather than a coincidence, and an
+    owner locked out is the one failure with no recovery path.
+
+    Env admins (ACP_ADMIN_EMAILS) are NOT exempt, which is a deliberate change from "admins are
+    always admitted". Suspension is only ever set by `PUT /admin/people`, which is owner-gated, so
+    it is always a deliberate act by the one identity that can also undo it. Leaving env admins
+    admitted would have preserved precisely the silent no-op this function is being fixed to stop
+    — and `update_person` already strips a suspended person from the managed admin list, so the
+    two halves of "admin" would otherwise disagree about the same click.
+    """
     email = (email or "").lower()
-    if email and (email == OWNER_EMAIL or email in ADMIN_EMAILS):
+    if email and email == OWNER_EMAIL:
+        return True
+    if is_suspended(email):
+        return False
+    if email and email in ADMIN_EMAILS:
         return True
     try:
         if email in get_store().get_allowlist():
@@ -543,6 +638,14 @@ ALWAYS_PUBLIC = {"/healthz", "/readyz", "/config", "/hub", "/ai/status", "/alert
                  "/openapi/health.json", "/docs/health"}
 # Shared secret for the Grafana alert webhook (public path, key-validated).
 ALERT_KEY = os.environ.get("ACP_ALERT_KEY", "acp-alert-demo-key")
+
+# A single freshness contract for emitters, API aggregation, UI labels and tests. Two missed
+# 15-second beats make a process stale by default; deployments may tune it without code changes.
+try:
+    WORKER_INSTANCE_FRESHNESS_SECONDS = max(
+        1, int(os.environ.get("ACP_WORKER_INSTANCE_FRESHNESS_SECONDS", "30")))
+except ValueError:
+    WORKER_INSTANCE_FRESHNESS_SECONDS = 30
 # Shared secret for the production monitor's aggregate endpoint (public path, key-validated —
 # the same posture as ALERT_KEY above, and deliberately NOT the X-E2E-Key gate bypass).
 #
@@ -1747,6 +1850,9 @@ _JOB_TTL = 3600                            # a scan poll outlives the scan; noth
 # carries a phase change, done, or error flag — those always flush immediately.
 _JOB_COALESCE_SECONDS = float(os.environ.get("ACP_JOB_COALESCE_SECONDS", "0.5") or "0.5")
 _JOB_LAST_REDIS_WRITE: dict[str, float] = {}   # monotonic timestamps, never persisted
+# A failed Redis write leaves this replica's in-memory mirror newer than the shared hash. The
+# next successful update must repair the whole record rather than only its newest patch.
+_JOB_REDIS_DIRTY: set[str] = set()
 
 # scan_id → job_id mapping so scan-based SSE streams can locate the current job without
 # the caller having to thread job_id through every API surface.  Written on set_job (when
@@ -1881,6 +1987,9 @@ def set_job(job_id: str, state: dict) -> None:
     cheap change signal without a full diff."""
     state = {**state, "updated_at": _job_now_iso(), "seq": 0}
     _maybe_checkpoint(job_id, state)   # independent of Redis/in-memory below — see its own comment
+    # A successful Redis write used to return before populating JOBS. If Redis then failed during
+    # update_job, the newer update had no local record to merge into and vanished from both stores.
+    JOBS[job_id] = dict(state)
     r = _get_redis()
     if r is not None:
         try:
@@ -1892,17 +2001,20 @@ def set_job(job_id: str, state: dict) -> None:
             pipe.expire(f"job:{job_id}", _JOB_TTL)
             pipe.execute()
             _JOB_LAST_REDIS_WRITE[job_id] = 0.0   # reset coalesce clock
+            _JOB_REDIS_DIRTY.discard(job_id)
             if state.get("scan_id"):
                 _write_scan_job_mapping(state["scan_id"], job_id)
+            if state.get("done"):
+                JOBS.pop(job_id, None)
             return
         except Exception:
             # fall through to in-memory
+            _JOB_REDIS_DIRTY.add(job_id)
             swallowed("core.set_job: writing the job state to Redis failed")
     if not REDIS_URL:
         import logging as _log
         _log.warning("REDIS_URL not set — job %s state stored in-memory only; "
                      "progress will NOT be visible across replicas", job_id)
-    JOBS[job_id] = state
     if state.get("scan_id"):
         _write_scan_job_mapping(state["scan_id"], job_id)
 
@@ -1921,6 +2033,8 @@ def update_job(job_id: str, patch: dict) -> None:
     import time as _t
     patch = {**patch, "updated_at": _job_now_iso()}
     _maybe_checkpoint(job_id, patch)   # independent of Redis/in-memory below — see its own comment
+    local = JOBS.setdefault(job_id, {})
+    local.update(patch)
     r = _get_redis()
     if r is not None:
         now = _t.monotonic()
@@ -1929,25 +2043,35 @@ def update_job(job_id: str, patch: dict) -> None:
         if is_immediate or now - last >= _JOB_COALESCE_SECONDS:
             try:
                 import json as _j
-                mapping = {k: _j.dumps(v) for k, v in patch.items()}
+                # After an outage, repair from the complete local mirror. Redis owns `seq`, so
+                # never overwrite that cursor with the mirror's older value before HINCRBY.
+                outgoing = dict(local) if job_id in _JOB_REDIS_DIRTY else patch
+                mapping = {k: _j.dumps(v) for k, v in outgoing.items() if k != "seq"}
                 pipe = r.pipeline()
                 pipe.hset(f"job:{job_id}", mapping=mapping)
                 pipe.hincrby(f"job:{job_id}", "seq", 1)
                 pipe.expire(f"job:{job_id}", _JOB_TTL)
                 pipe.execute()
                 _JOB_LAST_REDIS_WRITE[job_id] = now
+                _JOB_REDIS_DIRTY.discard(job_id)
                 if patch.get("scan_id"):
                     _write_scan_job_mapping(patch["scan_id"], job_id)
+                if local.get("done"):
+                    JOBS.pop(job_id, None)
                 return
             except Exception:
+                _JOB_REDIS_DIRTY.add(job_id)
                 swallowed("core.update_job: patching the job state in Redis failed")
+        else:
+            # Coalescing is also an intentionally deferred write. Mark the mirror newer so the
+            # next flush carries every suppressed field, not only that later call's patch.
+            _JOB_REDIS_DIRTY.add(job_id)
     # scan_id mapping must be written even when the coalesce window suppressed the main write.
     if patch.get("scan_id"):
         _write_scan_job_mapping(patch["scan_id"], job_id)
     # In-memory fallback — either Redis unavailable or coalesce window suppressed the write.
     # Also updates JOBS in the coalesce case so same-replica reads stay current.
-    if job_id in JOBS:
-        JOBS[job_id].update(patch)
+    # `local` was updated before the Redis attempt, including when it failed or was coalesced.
 
 
 def get_job_state(job_id: str) -> dict | None:

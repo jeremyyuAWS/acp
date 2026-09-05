@@ -1,19 +1,7 @@
 /**
- * The live-assess card does not appear on Discover.
- *
- * Reported live: the Discover tab rendered "Assessing 148 documents · Document 0 of 148 ·
- * estimating… · Idle" directly above its own "148 documents discovered across 1 source" panel —
- * two progress readings of two different phases stacked on one screen. Discover answers "what do
- * we have"; how far the assessment has got belongs to Assess, which owns a better view of it.
- *
- * Assess remains included as a resilient progress surface across tab navigation. Its snapshot is
- * reconciled to durable file results, so it no longer contradicts AssessRunner's local view.
- *
- * THE COMPONENT IS NOT DELETED, and that is deliberate — CLAUDE.md's standing instruction is to
- * remove the mount, not the code, so a retired surface can come back in one commit.
- * `LiveAssessmentLive` stays live on contextual tabs except Discover and Remediate. Remediate owns
- * its own live Automated Remediation card, which replaces the completed Assessment card there.
- * This test is the written-down half of that: it fails if either stage boundary is widened again.
+ * The live Assessment card follows the user across every tab, including Assess itself. The
+ * detailed AssessRunner file list is complementary activity detail, not a replacement for the
+ * compact stage-level card directly below the tabs.
  *
  * Source-level, like assessSetupWiring.test.jsx and assessmentTimeline.test.js: App.jsx is far too
  * large to mount for a one-line gating fact, and this repo already reads it as text for exactly
@@ -34,33 +22,34 @@ const activeExpr = () => {
   return m[1].replace(/\s+/g, ' ')
 }
 
-describe('the live-assess card yields to the active workflow stage', () => {
-  it('the assess-phase clause excludes Discover and Remediate but keeps Assess resilient', () => {
+describe('the live-assess card follows the user across tabs', () => {
+  it('does not suppress the card on any workflow tab', () => {
     const expr = activeExpr()
-    expect(expr).not.toMatch(/view !== 'assess'/)
-    expect(expr).toMatch(/view !== 'discover'/)
-    expect(expr).toMatch(/view !== 'remediate'/)
+    expect(expr).toBe("assessPhase === 'running'")
+    expect(expr).not.toMatch(/\bview\b/)
   })
 
-  it('a running assess no longer activates the card on Discover', () => {
-    // Evaluate the real gate rather than restating it — a regex alone would pass against a gate
-    // that mentions 'discover' in any position, including one that re-enables it.
+  it('shows on Discover and Remediate while Assessment is running', () => {
     const gate = new Function('busy', 'assessPhase', 'view', `return (${activeExpr()})`)
-    expect(gate(false, 'running', 'discover')).toBe(false)
+    expect(gate(false, 'running', 'discover')).toBe(true)
+    expect(gate(false, 'running', 'remediate')).toBe(true)
     expect(gate(false, 'running', 'assess')).toBe(true)
   })
 
-  it('the Remediation card replaces it on Remediate', () => {
+  it('every away tab shows the live card', () => {
     const gate = new Function('busy', 'assessPhase', 'view', `return (${activeExpr()})`)
-    expect(gate(false, 'running', 'remediate')).toBe(false)
-    expect(app).toMatch(/view === 'remediate'[\s\S]*?<Remediate /)
-  })
-
-  it('other contextual tabs still show it during an assess — this is not a removal', () => {
-    const gate = new Function('busy', 'assessPhase', 'view', `return (${activeExpr()})`)
-    for (const view of ['assess', 'overview', 'publish', 'monitor', 'integrations']) {
+    for (const view of ['discover', 'assess', 'remediate', 'overview', 'publish', 'monitor',
+      'integrations', 'liveops', 'analytics', 'knowledge', 'acr', 'settings']) {
       expect(gate(false, 'running', view), `${view} should still show the live card`).toBe(true)
     }
+  })
+
+  it('is mounted once outside the changing tab content so navigation cannot tear it down', () => {
+    const card = app.indexOf('<LiveAssessmentLive')
+    const main = app.indexOf('<main id="main-content"')
+    expect(card).toBeGreaterThan(-1)
+    expect(main).toBeGreaterThan(card)
+    expect(app.match(/<LiveAssessmentLive/g)).toHaveLength(1)
   })
 
   it('a DISCOVER scan in flight does NOT activate the assess card on any tab', () => {
@@ -71,6 +60,10 @@ describe('the live-assess card yields to the active workflow stage', () => {
     for (const view of ['discover', 'overview', 'remediate', 'publish', 'monitor', 'integrations']) {
       expect(gate(true, 'idle', view), `assess card must not show during discovery on ${view}`).toBe(false)
     }
+  })
+
+  it('does not stack the generic continuity banner above the live Assessment card', () => {
+    expect(app).toMatch(/workflow=\{primaryWorkflow\?\.stage === 'assess' && assessPhase === 'running'[\s\S]*?\? null : primaryWorkflow\}/)
   })
 
   it('the component itself is kept, per the remove-the-mount-not-the-code rule', () => {

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { TILE_KINDS, azureBytes, azureLatest, buildTrafficGraph, capacityValue, flowEdge, infrastructureDetail, nodeGauge, queueConcentration, sizeScopeNote, tileKind, tileStyle, trafficEdgeStyle, trafficGraphForTab, trendToggleLabel, workerServiceRows } from './AdminLiveTraffic.jsx'
+import { TILE_KINDS, azureBytes, azureLatest, buildTrafficGraph, capacityValue, flowEdge, infrastructureDetail, nodeGauge, queueConcentration, sizeScopeNote, tileKind, tileStyle, trafficEdgeStyle, trafficGraphForTab, trendToggleLabel, workerServiceRows, workflowColor } from './AdminLiveTraffic.jsx'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(join(here, 'AdminLiveTraffic.jsx'), 'utf8')
@@ -27,6 +27,15 @@ describe('Admin live traffic graph', () => {
     expect(graph.nodes.every((node) => node.type === 'infra')).toBe(true)
   })
 
+  it('carries unique replica rows from the measured service into its drawer model', () => {
+    const instances = [{ replica_id: 'assess-r1', process_count: 2 }]
+    const [assess] = workerServiceRows({
+      worker_capacity_by_role: { assess: { healthy_replicas: 1, worker_slots: 4,
+        busy_slots: 3, instances } },
+    })
+    expect(assess.instances).toEqual(instances)
+  })
+
   it('connects each live run to its worker stage within the persistent topology', () => {
     const graph = buildTrafficGraph({ runs: [run] })
     expect(graph.nodes.map((node) => node.id)).toContain('s1:assess')
@@ -44,15 +53,17 @@ describe('Admin live traffic graph', () => {
     expect(infrastructure.edges.every((edge) =>
       infrastructure.nodes.some((node) => node.id === edge.source)
       && infrastructure.nodes.some((node) => node.id === edge.target))).toBe(true)
-    expect(jobs.nodes.map((node) => node.id)).toEqual(['s1:assess'])
-    expect(jobs.edges).toEqual([])
-    expect(jobs.nodes[0].position).toEqual({ x: 35, y: 55 })
+    expect(jobs.nodes.map((node) => node.id)).toEqual([
+      'workflow:s1', 's1:assess', 'workflow:done', 'done:assess',
+    ])
+    expect(jobs.edges).toHaveLength(2)
+    expect(jobs.nodes[0].position).toEqual({ x: 25, y: 45 })
   })
 
   it('exposes named tabs for infrastructure and running jobs', () => {
     expect(source).toContain('aria-label="Live Operations flow views"')
     expect(source).toContain("['infrastructure', 'Infrastructure map']")
-    expect(source).toContain("['jobs', `Running jobs (${summary.active_runs || 0})`]")
+    expect(source).toContain("['jobs', `Running jobs (${summary.active_workflows ?? summary.active_runs ?? 0})`]")
   })
 
   it('visually and verbally separates active jobs from worker services', () => {
@@ -67,9 +78,37 @@ describe('Admin live traffic graph', () => {
     expect(TILE_KINDS.job.radius).toBe(6)
     expect(TILE_KINDS.service.radius).toBeGreaterThan(TILE_KINDS.job.radius)
     expect(source).toContain('SERVICE</b> · capacity')
-    expect(source).toContain('Running jobs (${summary.active_runs || 0})')
+    expect(source).toContain('Running jobs (${summary.active_workflows ?? summary.active_runs ?? 0})')
     expect(source).toContain('DATA</b> · sources and outputs')
     expect(source).toContain('aria-label="Map key"')
+  })
+
+  it('assigns a stable workflow accent and keeps simultaneous lanes separate', () => {
+    expect(workflowColor('scan-one')).toBe(workflowColor('scan-one'))
+    const graph = buildTrafficGraph({ generated_at: '2026-09-05T10:00:00Z', summary: {}, runs: [
+      { scan_id: 'one', stage: 'discover', owner: 'a', source: 'drive', status: 'recent', completed: 1, total: 1 },
+      { scan_id: 'one', stage: 'assess', owner: 'a', source: 'drive', status: 'active', running: 1, completed: 0, total: 1 },
+      { scan_id: 'two', stage: 'discover', owner: 'b', source: 'sharepoint', status: 'active', running: 1, completed: 0, total: 1 },
+    ] })
+    const jobs = trafficGraphForTab(graph, 'jobs')
+    const lanes = jobs.nodes.filter((node) => node.type === 'workflow')
+    expect(lanes).toHaveLength(2)
+    expect(lanes[1].position.y - lanes[0].position.y).toBe(185)
+    expect(jobs.edges).toHaveLength(3)
+    expect(jobs.nodes.find((node) => node.id === 'one:discover').position.x)
+      .toBeLessThan(jobs.nodes.find((node) => node.id === 'one:assess').position.x)
+  })
+
+  it('filters whole workflows from an infrastructure stage', () => {
+    const graph = buildTrafficGraph({ summary: {}, runs: [
+      { scan_id: 'one', stage: 'discover', owner: 'a', source: 'drive', status: 'recent' },
+      { scan_id: 'one', stage: 'assess', owner: 'a', source: 'drive', status: 'active' },
+      { scan_id: 'two', stage: 'discover', owner: 'b', source: 'drive', status: 'active' },
+    ] })
+    const jobs = trafficGraphForTab(graph, 'jobs', { stage: 'assess' })
+    expect(jobs.nodes.some((node) => node.id === 'one:discover')).toBe(true)
+    expect(jobs.nodes.some((node) => node.id === 'one:assess')).toBe(true)
+    expect(jobs.nodes.some((node) => node.id === 'two:discover')).toBe(false)
   })
 
   it('uses crisp non-scaling paths at every zoom', () => {
@@ -310,7 +349,8 @@ describe('The lines carry direction, activity and a way in', () => {
     expect(edges.find((edge) => edge.id === 'out:s1:assess').data.detail).toBe('s1:assess')
     expect(edges.find((edge) => edge.id === 'queue:assess').data.detail).toBe('stage:assess')
     expect(edges.find((edge) => edge.id === 'drive:intake').data.detail).toBe('source:drive')
-    expect(source).toContain('onEdgeClick={(_, edge) => setSelectedKey(edge.data?.detail || edge.target)}')
+    expect(source).toContain("if (flowTab === 'infrastructure' && edge.data?.active)")
+    expect(source).toContain("setFlowTab('jobs')")
     expect(edges.every((edge) => edge.interactionWidth >= 20)).toBe(true)
   })
 
@@ -323,7 +363,7 @@ describe('The lines carry direction, activity and a way in', () => {
   })
 
   it('tells the reader the running job cards are selectable', () => {
-    expect(source).toContain('Select a job to inspect its live progress, queue, throughput, and events')
+    expect(source).toContain('Select a stage to inspect progress; connected cards belong to one workflow')
   })
 })
 

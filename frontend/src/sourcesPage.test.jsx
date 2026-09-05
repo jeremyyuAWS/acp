@@ -146,6 +146,9 @@ describe('the Sources page', () => {
     expect(provider?.style.borderRadius).toBe('9px')
     expect(provider?.style.background).toBe('rgb(255, 255, 255)')
     expect(btn(card, /^Manage$/)).toBeTruthy()
+    expect(card.querySelector('[aria-label="More actions"]')).toBeNull()
+    expect(btn(card, /^View files$/)).toBeFalsy()
+    expect(btn(card, /^Details$/)).toBeFalsy()
   })
 
   it('prefers an exact saved SharePoint URL and rejects unsafe connector URLs', () => {

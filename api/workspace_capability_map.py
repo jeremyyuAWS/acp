@@ -177,6 +177,7 @@ _map_many([("GET", "/ai/suggest"), ("GET", "/ai/explain"), ("GET", "/ai/validate
 # ── Release ───────────────────────────────────────────────────────────────────
 # Publishing is a GRANT (PRD §5), never implied by seeing the Release tab.
 _map_many([("POST", "/scans/{sid}/publish")], {"release.publish"})
+_map_many([("GET", "/scans/{sid}/release")], {"release.view"})
 _map_many([("GET", "/scans/{sid}/report.pdf")], {"release.view", "reports.export"})
 
 # ── Monitor ───────────────────────────────────────────────────────────────────
@@ -197,22 +198,24 @@ _map_many([("POST", "/admin/jobs/clear-dead"), ("PATCH", "/control/workers/repli
 _map_many([("GET", "/admin/analytics/overview"), ("GET", "/ai/costs")], {"analytics.view"})
 
 # ── Settings and platform administration ──────────────────────────────────────
-_map_many([("GET", "/settings"), ("GET", "/ai/providers"), ("GET", "/ai/status"),
-           ("GET", "/ai/providers/{provider}/health")],
+_map_many([("GET", "/settings"), ("GET", "/ai/providers"),
+           ("GET", "/ai/second-opinion-policy"), ("GET", "/ai/status"),
+           ("GET", "/ai/providers/health"), ("GET", "/ai/providers/{provider}/health")],
           {"settings.view"})
-_map_many([("PUT", "/settings"), ("PUT", "/ai/providers"), ("POST", "/ai/providers/test"),
+_map_many([("PUT", "/settings"), ("PUT", "/ai/providers"),
+           ("PUT", "/ai/second-opinion-policy"), ("POST", "/ai/providers/test"),
            ("POST", "/ai/providers/{provider}/secret")],
           {"settings.view"})
 _map_many([("PUT", "/workers")], {"workers.manage"})
 _map_many([("GET", "/admin/people"), ("GET", "/admin/allowlist"), ("GET", "/admin/admins")],
           {"people.manage"})
 _map_many([
-    ("POST", "/admin/people"), ("PUT", "/admin/people/{email:path}"),
-    ("DELETE", "/admin/people/{email:path}"), ("PUT", "/admin/allowlist"),
+    ("POST", "/admin/people"), ("PUT", "/admin/people/{email}"),
+    ("DELETE", "/admin/people/{email}"), ("PUT", "/admin/allowlist"),
     ("POST", "/admin/invite"), ("PUT", "/admin/admins"),
 ], {"people.manage"})
-_map_many([("PUT", "/admin/people/{email:path}/role"),
-           ("GET", "/admin/people/{email:path}/role-impact")], {"people.manage"})
+_map_many([("PUT", "/admin/people/{email}/role"),
+           ("GET", "/admin/people/{email}/role-impact")], {"people.manage"})
 _map_many([
     ("GET", "/admin/roles"), ("GET", "/admin/roles/{role_id}"), ("GET", "/admin/capabilities"),
     ("POST", "/admin/roles"), ("PUT", "/admin/roles/{role_id}"),

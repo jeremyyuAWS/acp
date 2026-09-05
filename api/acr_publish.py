@@ -211,3 +211,100 @@ def carry_forward(criteria: list[dict], evidence_by_criterion: dict[str, list],
         carried.append(row)
 
     return carried, reset
+
+
+def projection_inputs(content: dict) -> tuple[dict, list[dict], dict[str, list]]:
+    """Rehydrate a verified snapshot into the three arguments `acr_export_preview.project` takes.
+
+    WHY REHYDRATE INSTEAD OF WRITING A SECOND RENDERER. A published revision and a draft are the
+    same document at two moments, and a customer comparing them must be comparing the report
+    rather than two renderers. A separate builder for published content would give the feature two
+    ways to say the same thing, and the honesty rules in acr_export_preview — no workflow state in
+    the conformance column, no criterion omitted, counts and never a percentage — would then be
+    enforced on one path and merely intended on the other.
+
+    So the snapshot is translated into the projection's input shape and goes through the same
+    `project()` every other export uses. What that costs is this function; what it buys is that a
+    published PDF cannot contain a cell the draft path would have refused.
+
+    WHAT COMES FROM THE SNAPSHOT AND WHAT DOES NOT, which is the whole point of exporting a
+    published revision rather than today's draft:
+
+      · Every CLAIM is the snapshot's, and is covered by the digest the caller has already
+        verified: the conformance level, the remarks, who evaluated and reviewed it, and all of
+        the report metadata.
+      · `principle` and `guideline` are NOT in the snapshot. They come from the catalog, because
+        they are facts about WCAG rather than claims about the product — and because `project()`
+        groups by principle, so without them a published export would come out in a different
+        ORDER than the snapshot it was built from, which reads as a different document.
+      · `draft_status` is forced to None. It is ACP's own suggestion for an undecided criterion; a
+        published revision has none, and injecting today's would put a machine's opinion into a
+        record a human signed.
+
+    A criterion the catalog no longer carries keeps its snapshot row and loses only its grouping.
+    Dropping it would be PRD §19's "conceal failures" arriving by way of a schema change: the
+    claim was published and stays published after WCAG moves on.
+    """
+    import acr_catalog
+
+    report = dict(content.get("report") or {})
+    # `project()` reads both off the report for the header table, and a published export that
+    # renders as a draft misrepresents the most consequential fact about itself.
+    report["status"] = "published"
+    report["catalog_hash"] = content.get("catalog_hash")
+
+    criteria: list[dict] = []
+    evidence_by_criterion: dict[str, list] = {}
+    for row in content.get("criteria") or []:
+        num = row.get("criterion_num")
+        cat = acr_catalog.criterion(num) or {}
+        criteria.append({
+            "criterion_num": num,
+            "criterion_name": row.get("criterion_name") or cat.get("name"),
+            "level": row.get("level") or cat.get("level"),
+            "principle": cat.get("principle"),
+            "guideline": cat.get("guideline"),
+            # The snapshot's column is already named for what it is. `project()` calls it
+            # final_status and `_conformance_cell` re-validates it against the four VPAT terms —
+            # exactly the check worth running again on a record read back out of storage.
+            "final_status": row.get("conformance_level"),
+            "remarks": row.get("remarks") or "",
+            "draft_status": None,
+            # Derived from the snapshot's own approved_at rather than defaulted: a published
+            # criterion carries the approval it was published with, and defaulting every row to
+            # "unapproved" would report an approval gap that publication had already closed.
+            "approval_state": "approved" if row.get("approved_at") else "unapproved",
+            "evaluator": row.get("evaluator"),
+            "reviewer": row.get("reviewer"),
+        })
+        evidence_by_criterion[num] = _evidence_standins(row.get("evidence") or {})
+
+    return report, criteria, evidence_by_criterion
+
+
+class _SnapshotEvidence:
+    """A stand-in carrying the only thing `project()` reads off an evidence record: its id.
+
+    The snapshot stores evidence in SUMMARY form — counts and ids, never the rows — so there is
+    nothing to reconstruct and nothing that should be. These exist so a published export reports
+    the evidence COUNT the snapshot recorded instead of the zero an empty mapping would produce,
+    which would render as a conformance claim with nothing behind it.
+    """
+
+    __slots__ = ("id",)
+
+    def __init__(self, ident: str):
+        self.id = ident
+
+
+def _evidence_standins(summary: dict) -> list:
+    """One stand-in per recorded evidence id, falling back to the recorded total.
+
+    The fallback is for a snapshot written before ids were stored: the count is the fact a reader
+    needs, and losing it because the identifiers are absent would understate what stood behind a
+    published claim.
+    """
+    ids = summary.get("ids")
+    if ids:
+        return [_SnapshotEvidence(str(i)) for i in ids]
+    return [_SnapshotEvidence(f"unrecorded-{n}") for n in range(int(summary.get("total") or 0))]

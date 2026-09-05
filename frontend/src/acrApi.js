@@ -55,7 +55,26 @@ export const getAcrPreview = (id) => call(`/acr/${id}/preview`)
 // Errors go through `call`'s reasoning too: a deployment without the renderer answers 503 with a
 // sentence naming what is missing, and the screen must show THAT rather than "download failed".
 export async function downloadAcrPdf(id) {
-  const res = await fetch(BASE + `/acr/${id}/preview?format=pdf`, { headers: headers() })
+  return pdfDownload(`/acr/${id}/preview?format=pdf`, `acr-${id}.pdf`)
+}
+
+// The PUBLISHED revision's PDF, built from the immutable snapshot rather than the live rows.
+//
+// A SEPARATE ENDPOINT, not a parameter on the one above, because the two answer different
+// questions. `/preview` renders what the report says TODAY; this renders what revision N said
+// when it was frozen, and the two diverge the moment a revision is opened. Sending a customer
+// "the published ACR" by exporting the draft is how they receive a document that does not match
+// the revision it names.
+//
+// The server refuses with 409 when the snapshot's contents no longer match its recorded digest,
+// and `pdfDownload` surfaces that sentence — a caller must not be able to turn an altered record
+// into a document by ignoring a flag.
+export async function downloadAcrRevisionPdf(id, revision) {
+  return pdfDownload(`/acr/${id}/revisions/${revision}/export`, `acr-${id}-rev${revision}.pdf`)
+}
+
+async function pdfDownload(path, fallbackName) {
+  const res = await fetch(BASE + path, { headers: headers() })
   if (!res.ok) {
     let detail = `${res.status} ${res.statusText}`
     try {
@@ -71,7 +90,7 @@ export async function downloadAcrPdf(id) {
   // collision api/acr_export_pdf.py::filename_for exists to avoid.
   const disp = res.headers.get('content-disposition') || ''
   const match = /filename="([^"]+)"/.exec(disp)
-  return { blob: await res.blob(), filename: match ? match[1] : `acr-${id}.pdf` }
+  return { blob: await res.blob(), filename: match ? match[1] : fallbackName }
 }
 export const getAcrGaps = (id) => call(`/acr/${id}/gaps`)
 

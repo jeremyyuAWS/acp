@@ -119,3 +119,158 @@ def test_upload_published_stamps_acp_provenance_on_create_and_update():
     publish.upload_published(updated, "fid", "deck.pptx", b"x")
     assert updated.calls[-1][0] == "update"
     assert provenance.is_acp_generated({"properties": updated.props[-1]})
+
+
+def test_normalize_relative_path_preserves_hierarchy_and_normalizes_separators():
+    folders, leaf = publish.normalize_relative_path(
+        r"HR\Policies\Leave Policy.docx", "Leave Policy.docx")
+    assert folders == ["HR", "Policies"]
+    assert leaf == "Leave Policy.docx"
+
+
+def test_normalize_relative_path_rejects_traversal_absolute_and_controls():
+    import pytest
+    for unsafe in ("../secret/report.pdf", "/etc/report.pdf", "C:/tmp/report.pdf",
+                   "HR//report.pdf", "HR/\x00/report.pdf"):
+        with pytest.raises(publish.UnsafeReleasePath):
+            publish.normalize_relative_path(unsafe, "report.pdf")
+
+
+def test_provider_invalid_characters_are_normalized_without_flattening():
+    assert publish.normalize_relative_path("HR:West/Forms?/a.pdf", "a.pdf") == \
+        (["HR_West", "Forms_"], "a.pdf")
+
+
+def test_publication_key_changes_with_content_version_and_source_identity():
+    one = publish.publication_key("release", "source-a", "checksum-1")
+    assert one == publish.publication_key("release", "source-a", "checksum-1")
+    assert one != publish.publication_key("release", "source-a", "checksum-2")
+    assert one != publish.publication_key("release", "source-b", "checksum-1")
+
+
+def test_idempotent_upload_reuses_existing_document_without_overwrite():
+    svc = _FakeSvc(list_result=[{
+        "id": "published-1", "webViewLink": "https://drive/existing"
+    }])
+    result = publish.upload_published(
+        svc, "release-folder", "report.pdf", b"fixed",
+        idempotency_key="stable-key", return_details=True)
+    assert result["id"] == "published-1"
+    assert result["created"] is False
+    assert not any(call[0] in ("create", "update") for call in svc.calls)
+
+
+def test_sharepoint_relative_path_removes_graph_locator_and_preserves_hierarchy():
+    folders, leaf = publish.sharepoint_relative_path(
+        "/drives/library/root:/HR/Policies", "Leave Plan.docx")
+    assert folders == ["HR", "Policies"]
+    assert leaf == "Leave Plan.docx"
+
+
+def test_sharepoint_child_lookup_follows_nextlink_before_deciding_name_is_free(monkeypatch):
+    import scanner
+    pages = {
+        "https://graph/items/folder/children?$select=id,name,file,size,webUrl&$top=200": {
+            "value": [{"id": str(i), "name": f"other-{i}.pdf"} for i in range(200)],
+            "@odata.nextLink": "https://graph/second",
+        },
+        "https://graph/second": {
+            "value": [{"id": "existing", "name": "report.pdf", "webUrl": "https://sp/report"}]
+        },
+    }
+    calls = []
+    monkeypatch.setattr(scanner, "_sp_get",
+                        lambda token, url: calls.append(url) or pages[url])
+    monkeypatch.setattr(scanner, "_sp_base", lambda drive: "https://graph")
+
+    found = publish._sp_child("token", "drive", "folder", "report.pdf")
+
+    assert found["id"] == "existing"
+    assert calls == [
+        "https://graph/items/folder/children?$select=id,name,file,size,webUrl&$top=200",
+        "https://graph/second",
+    ]
+
+
+def test_sharepoint_release_root_collision_on_later_page_gets_stable_suffix(monkeypatch):
+    import scanner
+    folder_calls = []
+    monkeypatch.setattr(scanner, "_sp_folder_id",
+                        lambda token, drive, name, parent_id="":
+                        folder_calls.append((name, parent_id)) or
+                        ("root" if not parent_id else "release-folder"))
+    monkeypatch.setattr(scanner, "_sp_base", lambda drive: "https://graph")
+    pages = {
+        "https://graph/items/root/children?$select=id,name,folder,webUrl&$top=200": {
+            "value": [{"id": str(i), "name": f"older-{i}", "folder": {}} for i in range(200)],
+            "@odata.nextLink": "https://graph/roots-page-2",
+        },
+        "https://graph/roots-page-2": {
+            "value": [{"id": "same-minute", "name": "2026-09-05 10-00 UTC", "folder": {}}]
+        },
+        "https://graph/items/release-folder?$select=id,name,webUrl": {
+            "id": "release-folder", "name": "2026-09-05 10-00 UTC · abcdef12",
+            "webUrl": "https://sp/release",
+        },
+    }
+    monkeypatch.setattr(scanner, "_sp_get", lambda token, url: pages[url])
+
+    result = publish.ensure_sharepoint_release_folder(
+        "token", "drive", "abcdef123456", "2026-09-05 10-00 UTC")
+
+    assert folder_calls[-1] == ("2026-09-05 10-00 UTC · abcdef12", "root")
+    assert result["id"] == "release-folder"
+
+
+def test_sharepoint_publish_reuses_identical_copy_without_writing(monkeypatch):
+    data = b"corrected"
+    digest = __import__("hashlib").sha256(data).hexdigest()
+    monkeypatch.setattr(publish._blob, "download_remediated", lambda *a, **k: data)
+    monkeypatch.setattr(publish, "_sp_child", lambda *a, **k: {
+        "id": "existing", "name": "report.pdf", "webUrl": "https://sp/existing"
+    })
+    monkeypatch.setattr(publish, "_sp_content_matches",
+                        lambda token, drive, item, expected: expected == digest)
+    import scanner
+    monkeypatch.setattr(scanner, "_sp_folder_id", lambda *a, **k: "unused")
+    monkeypatch.setattr(scanner, "_sp_write",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not write")))
+
+    result = publish.archive_copy_publish_sharepoint(
+        "token", "drive", "release", "owner", "rel", "scan", "report.pdf",
+        None, "source")
+    assert result == {"id": "existing", "url": "https://sp/existing",
+                      "checksum": digest, "verified": True, "created": False,
+                      "filename": "report.pdf"}
+
+
+def test_sharepoint_publish_preserves_hierarchy_and_never_overwrites_collision(monkeypatch):
+    data = b"new corrected bytes"
+    monkeypatch.setattr(publish._blob, "download_remediated", lambda *a, **k: data)
+    children = {
+        "report.pdf": {"id": "source-name", "name": "report.pdf", "webUrl": "old"},
+    }
+    monkeypatch.setattr(publish, "_sp_child",
+                        lambda token, drive, parent, name: children.get(name))
+    monkeypatch.setattr(publish, "_sp_content_matches",
+                        lambda token, drive, item, expected: item == "uploaded")
+    import scanner
+    folders = []
+    monkeypatch.setattr(scanner, "_sp_folder_id",
+                        lambda token, drive, name, parent_id=None:
+                        folders.append((parent_id, name)) or f"folder-{name}")
+    monkeypatch.setattr(scanner, "_sp_base", lambda drive: "https://graph/drive")
+    writes = []
+    def _write(token, **kwargs):
+        writes.append(kwargs)
+        return {"id": "uploaded", "webUrl": "https://sp/uploaded"}
+    monkeypatch.setattr(scanner, "_sp_write", _write)
+
+    result = publish.archive_copy_publish_sharepoint(
+        "token", "drive", "release", "owner", "rel", "scan", "report.pdf",
+        "/drives/drive/root:/HR/Policies", "source")
+
+    assert folders == [("release", "HR"), ("folder-HR", "Policies")]
+    assert result["created"] is True
+    assert result["filename"].startswith("report (")
+    assert writes[0]["put_url"].endswith(f"/{result['filename'].replace(' ', '%20').replace('(', '%28').replace(')', '%29')}:/content")

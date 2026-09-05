@@ -688,16 +688,16 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
         <>
           <div style={{ margin: '4px 0', fontSize: 12, fontWeight: 700, letterSpacing: '.04em',
                         color: 'var(--muted)' }}>
-            DRIVE LOCATIONS
+            {locKey === 'drive' ? 'GOOGLE DRIVE LOCATIONS' : 'SHAREPOINT LOCATIONS'}
           </div>
           <div className="muted" style={{ fontSize: 12.5, marginBottom: 8 }}>
-            Choose which locations ACP should assess. Subfolders are included unless you exclude them.
+            Choose which locations ACP should inventory. Subfolders are included unless you exclude them.
           </div>
 
 
           {/* The two answers, as an explicit choice. Inferring "entire source" from an empty
               selection means the most consequential scope decision is made by NOT clicking. */}
-          <div role="radiogroup" aria-label="What to assess"
+          <div role="radiogroup" aria-label="What to inventory"
                style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
             {/* "Inventory", not "Assess". This screen sets the DISCOVERY boundary — what gets
                 listed — and the assessment boundary is chosen later, in Assess, against the
@@ -929,7 +929,7 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
                        margin: 0, fontSize: 12.5 }}>
             {locKey && (
               <>
-                <dt className="muted">Drive locations</dt>
+                <dt className="muted">{locKey === 'drive' ? 'Google Drive locations' : 'SharePoint locations'}</dt>
                 <dd style={{ margin: 0 }}>
                   {folders.length === 0
                     ? 'Entire connected source'

@@ -31,6 +31,9 @@ from typing import Any
 from . import presets
 from .inventory import (
     API_HEADROOM_CONN,
+    GRAFANA_PORT,
+    IMAGES,
+    OLLAMA_PORT,
     LANE_JOB_TYPES,
     TIER_ROLE,
     build_inventory,
@@ -121,6 +124,12 @@ def build_values(doc: dict[str, Any]) -> dict[str, Any]:
         "image": {
             "registry": rt.get("imageRegistry", ""),
             "tag": rt["version"],
+            # Named here rather than defaulted in the chart, so `acpctl plan` and `helm template`
+            # cannot disagree about which artifact runs the models. inventory.IMAGES is the one
+            # list of release images; taking it from there means adding an image to that table is
+            # the whole change.
+            "ollamaRepository": IMAGES["ollama"],
+            "grafanaRepository": IMAGES["grafana"],
             # PRD S5.1: templates reference digests, not mutable tags. `acpctl install` resolves
             # and verifies signatures; an empty map here is an honest "not yet resolved", not a
             # default that would deploy a tag.
@@ -160,17 +169,25 @@ def build_values(doc: dict[str, Any]) -> dict[str, Any]:
         "secrets": _secret_values(doc),
         "ai": {
             "mode": ai["mode"],
+            # `modelVolumeSize` is deliberately NOT emitted, and its absence is the finding
+            # rather than an omission. The document's `ai.ollama.modelVolume` (200-500Gi across
+            # the examples) described storage that would keep models across a restart — and
+            # deploy/ollama/Dockerfile bakes them into the image layer instead, serving from
+            # /models precisely because a volume mounted at the base image's declared
+            # `VOLUME /root/.ollama` SHADOWS them. So the value described a mount that, made,
+            # would produce an Ollama with no models and no error. The chart renders no volume;
+            # the schema still accepts the field for a deployment supplying its own runtime.
             "ollama": {
                 "enabled": ai.get("ollama", {}).get("enabled", False),
                 "gpu": ai.get("ollama", {}).get("gpu", False),
-                "modelVolumeSize": ai.get("ollama", {}).get("modelVolume", "200Gi"),
+                "port": OLLAMA_PORT,
             },
             "externalProviders": list(ai.get("externalProviders", [])),
         },
         "observability": {
             "openTelemetry": {"enabled": obs.get("openTelemetry", False),
                               "exporter": obs.get("exporter", "local")},
-            "grafana": {"enabled": obs.get("grafana", False)},
+            "grafana": {"enabled": obs.get("grafana", False), "port": GRAFANA_PORT},
             "langfuse": {"mode": obs.get("langfuse", {}).get("mode", "disabled")},
         },
         "migrations": {

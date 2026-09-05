@@ -1,18 +1,29 @@
 import { useEffect, useRef, useState } from 'react'
 import { addPerson, getPeople, removePerson, updatePerson, getWorkspaceRoles, assignWorkspaceRole, roleImpact } from './api.js'
 
+// LABELS ONLY. The colours moved to `.people-badge.is-<status>` in styles.css so they can be the
+// app's semantic tokens (--success-*/--warn-*/--info-*/--error-*) rather than hex literals. Those
+// tokens exist for exactly these states, and `failed` was already reaching for one while the rest
+// were hardcoded — which is what a table looks like after it has drifted rather than been chosen.
 const statusCopy = {
-  active: ['Active', '#287D3C', '#EDF8F0'],
-  access_ready: ['Access ready', '#287D3C', '#EDF8F0'],
-  invited: ['Invitation sent', '#315F9E', '#EDF4FF'],
-  setup_required: ['Setup needed', '#8A5B00', '#FFF6DF'],
-  failed: ['Invite failed', 'var(--error-fg-strong)', '#FFF0F0'],
-  suspended: ['Suspended', '#66616A', '#F2F0F3'],
+  active: 'Active',
+  access_ready: 'Access ready',
+  invited: 'Invitation sent',
+  setup_required: 'Setup needed',
+  failed: 'Invite failed',
+  suspended: 'Suspended',
 }
 
 function Badge({ status }) {
-  const [label, color, background] = statusCopy[status] || [status || 'Access ready', '#555', '#eee']
-  return <span style={{ display: 'inline-block', padding: '3px 8px', borderRadius: 99, fontSize: 12, fontWeight: 700, color, background }}>{label}</span>
+  // The wrapper is load-bearing: a DIRECT grid child is blockified, so the badge's
+  // `display: inline-block` computed to `block` and the tint stretched across the whole column
+  // as a band instead of hugging the label. See the note on `.people-badge` in styles.css.
+  const known = Object.prototype.hasOwnProperty.call(statusCopy, status)
+  return <div className="people-badge-cell">
+    <span className={`people-badge is-${known ? status : 'unknown'}`}>
+      {known ? statusCopy[status] : (status || 'Access ready')}
+    </span>
+  </div>
 }
 
 export default function PeopleAccess() {
@@ -29,6 +40,10 @@ export default function PeopleAccess() {
   const addButtonRef = useRef(null)
 
   const [roles, setRoles] = useState([])
+  // The rollout rung, which GET /admin/roles has always returned and this screen has
+  // always thrown away. See the note it feeds, below the heading.
+  const [enforced, setEnforced] = useState(true)
+  const [rollout, setRollout] = useState(null)
   // The role change awaiting confirmation (PRD §9). Held rather than applied immediately because
   // the confirmation has to say what CHANGES, and that answer comes from the server.
   const [roleChange, setRoleChange] = useState(null)
@@ -38,7 +53,15 @@ export default function PeopleAccess() {
   // Best-effort: a caller without roles.manage gets a 403 here, and that is not an error worth
   // showing them — it means the role column is simply not theirs to use, and the People screen
   // still does everything else it did before.
-  useEffect(() => { getWorkspaceRoles().then((r) => setRoles(r.roles || [])).catch(() => setRoles([])) }, [])
+  useEffect(() => {
+    getWorkspaceRoles()
+      .then((r) => { setRoles(r.roles || []); setEnforced(r.enforced !== false); setRollout(r.rollout || null) })
+      // `enforced` stays TRUE on failure, deliberately. This note exists to warn that an
+      // assignment may do nothing; showing it because a request failed would cry wolf on a screen
+      // where the roles are also missing, and an operator who learns to ignore it once ignores it
+      // when it is true.
+      .catch(() => setRoles([]))
+  }, [])
 
   const askToChangeRole = (person, roleId) => {
     setError('')
@@ -111,12 +134,33 @@ export default function PeopleAccess() {
       <div><h3 id="people-title" style={{ margin: 0 }}>People</h3><div className="muted" style={{ fontSize: 13, marginTop: 3 }}>{active} with access{pending ? ` · ${pending} need attention` : ''}</div></div>
       {data.can_manage && <button ref={addButtonRef} onClick={() => setOpen(true)}>+ Add people</button>}
     </div>
-    {data.domains?.length > 0 && <div role="note" style={{ marginTop: 14, padding: 12, border: '1px solid #E5C875', borderRadius: 9, background: '#FFF8E7', fontSize: 13 }}>
+    {data.domains?.length > 0 && <div role="note" className="people-domain-note">
       <b>Domain-wide access is on.</b> Anyone at {data.domains.map((d) => `@${d}`).join(', ')} can sign in even if they are not listed here.
     </div>}
+    {/* THE SAME WARNING THE ROLES SCREEN CARRIES, ON THE SCREEN WHERE ROLES ARE ACTUALLY GIVEN.
+        WorkspaceRoles.jsx says "Roles are not being enforced yet" because an administrator who
+        designs a role and believes access is now restricted is in a worse position than one who
+        knows it is not. Assigning is the same act with the same consequence, and this screen said
+        nothing: the dropdown changed, "Alice's role was updated" appeared in green, and every
+        route still admitted her exactly as before.
+
+        The server has always sent the rung on this very request — `enforced` and `rollout` come
+        back from GET /admin/roles alongside the roles the dropdown is built from — so
+        the information was already in the response this component throws away. Wording from
+        `rollout.means`, so it cannot drift from what the code does.
+
+        Only when roles EXIST: on a deployment with none there is no dropdown to qualify, and a
+        warning about the effect of an action nobody can take is noise. */}
+    {roles.length > 0 && !enforced && (
+      <div role="note" className="roles-not-enforced" style={{ marginTop: 10 }}>
+        <b>Roles are not being enforced yet.</b>{' '}
+        {rollout?.means || 'You can assign them now; nothing changes for anyone.'}
+        {rollout?.next && <> Next stage: <code>{rollout.next}</code>.</>}
+      </div>
+    )}
     <div role="status" aria-live="polite" style={{ minHeight: 22, marginTop: 10, color: error ? 'var(--error-fg-strong)' : '#287D3C', fontSize: 13 }}>{error || message}</div>
     <div style={{ border: '1px solid var(--line)', borderRadius: 10, overflow: 'hidden' }}>
-      {data.people.length === 0 ? <p className="muted" style={{ padding: 18, margin: 0 }}>No people have been added yet.</p> : data.people.map((person, i) => <div key={person.email} style={{ display: 'grid', gridTemplateColumns: 'minmax(210px, 1.5fr) 110px 140px minmax(180px, 1fr)', gap: 12, alignItems: 'center', padding: '13px 14px', borderTop: i ? '1px solid var(--line)' : 0 }}>
+      {data.people.length === 0 ? <p className="muted" style={{ padding: 18, margin: 0 }}>No people have been added yet.</p> : data.people.map((person) => <div key={person.email} className={roles.length > 0 ? 'people-row has-role-column' : 'people-row'}>
         <div><b style={{ fontSize: 13 }}>{person.email}</b><div className="muted" style={{ fontSize: 12, marginTop: 3 }}>{person.provider === 'microsoft' ? 'Microsoft · SharePoint / OneDrive' : person.provider === 'google' ? 'Google · Drive' : person.role === 'owner' ? 'Workspace owner' : 'Provider not recorded'}</div></div>
         <Badge status={person.status} />
         {person.protected ? <b style={{ fontSize: 12 }}>Owner</b> : data.can_manage ? <select aria-label={`Access level for ${person.email}`} value={person.role || 'user'} onChange={(e) => change(person, { role: e.target.value })}><option value="user">User</option><option value="admin">Platform Admin</option></select> : <span style={{ fontSize: 12 }}>{person.role === 'admin' ? 'Platform Admin' : 'User'}</span>}
@@ -139,7 +183,7 @@ export default function PeopleAccess() {
             )}
           </div>
         )}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <div className="people-row-actions">
           {person.status === 'setup_required' && <a href="https://entra.microsoft.com/#view/Microsoft_AAD_UsersAndTenants/UserManagementMenuBlade/~/GuestUsers" target="_blank" rel="noreferrer">Invite in Entra ↗</a>}
           {person.failure && <span title={person.failure} style={{ fontSize: 12, color: 'var(--error-fg-strong)' }}>Invitation needs attention</span>}
           {data.can_manage && !person.protected && <><button className="ghost small" onClick={() => change(person, { status: person.status === 'suspended' ? 'access_ready' : 'suspended' })}>{person.status === 'suspended' ? 'Restore' : 'Suspend'}</button><button className="ghost small" onClick={() => remove(person)}>Remove</button></>}

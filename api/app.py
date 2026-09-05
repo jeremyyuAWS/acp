@@ -29,7 +29,7 @@ from routes import ROUTERS
 
 app = FastAPI(title="acp — accessibility compliance API", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
-                   allow_methods=["*"], allow_headers=["*"])
+                   allow_methods=["*"], allow_headers=["*"], expose_headers=["X-Acp-Auth"])
 
 # Not every environment has the Postgres driver installed (store.py's SQLite path doesn't need
 # it, and some dev boxes never install it) — guard the import so this module still loads there.
@@ -245,9 +245,7 @@ def _capability_gate_suspended(email: str) -> bool:
     """PRD §14 — a suspended user has no effective permissions. Read from the managed-person
     record, the same source routes/system.py uses, so the two cannot disagree about who is
     suspended."""
-    target = (email or "").strip().lower()
-    person = next((p for p in core.store.get_people() if p.get("email") == target), None)
-    return (person or {}).get("status") == "suspended"
+    return core.suspended_in_store(email)
 
 
 @app.middleware("http")
@@ -277,7 +275,11 @@ async def _access_gate(request, call_next):
         # this; a route that returns 401 for its own reason (an integration not connected) must
         # NOT eject an authenticated user. Found 2026-08-11: /sources 401'ing a Microsoft user who
         # has no Google Drive bounced the whole session and cleared the bearer.
-        _GATE_401 = {"X-Acp-Auth": "session"}
+        # This middleware is outside Starlette's CORS wrapper and can return before that wrapper
+        # adds headers. Include the configured wildcard response headers here so a frontend on a
+        # separate origin can both receive the 401 and read its session-expiry marker.
+        _GATE_401 = {"X-Acp-Auth": "session", "Access-Control-Allow-Origin": "*",
+                     "Access-Control-Expose-Headers": "X-Acp-Auth"}
         hdr = request.headers.get("authorization", "")
         if not hdr.startswith("Bearer "):
             return Response(status_code=401, media_type="application/json", headers=_GATE_401,
@@ -294,8 +296,20 @@ async def _access_gate(request, call_next):
             return Response(status_code=401, media_type="application/json", headers=_GATE_401,
                             content='{"detail":"Session expired — sign in again"}')
         if not core.email_allowed(email):
+            # TWO DIFFERENT REFUSALS, and telling them apart costs nothing and saves a support
+            # ticket. "Access restricted to authorized accounts" is true of somebody who was never
+            # admitted; said to a colleague an administrator suspended this morning it is simply
+            # wrong, and it reads as a bug in the product rather than as the deliberate act it is.
+            #
+            # No enumeration risk in the difference: this branch is reached only AFTER the bearer
+            # verified, so the caller has already proved they own the address. The most anyone can
+            # learn here is the state of their own account, which is the thing we want them to
+            # learn. The second store read is on the refusal path only.
+            detail = ("Your access has been suspended — contact your administrator."
+                      if core.is_suspended(email) else
+                      "Access restricted to authorized accounts")
             return Response(status_code=403, media_type="application/json",
-                            content='{"detail":"Access restricted to authorized accounts"}')
+                            content=json.dumps({"detail": detail}))
         request.state.user_email = email   # so routes can attribute the scan (Langfuse user)
         # JUST-IN-TIME ROSTER (owner decision, 2026-09-05). This is the only point in the codebase
         # where "somebody authenticated successfully" is known, so it is where a person first
@@ -326,6 +340,8 @@ for _router in ROUTERS:
 # prefix allowlist that silently missed five route groups over five weeks.
 core.register_protected_routes(core.enumerate_api_routes(app))
 
+_embedded_worker_reporter = None
+
 
 @app.on_event("startup")
 def _start_job_workers():
@@ -354,6 +370,10 @@ def _start_job_workers():
     core.start_scheduler()
     n = core.start_workers()
     if n:
+        global _embedded_worker_reporter
+        from worker_telemetry import WorkerInstanceReporter
+        _embedded_worker_reporter = WorkerInstanceReporter(core)
+        _embedded_worker_reporter.start()
         print(f"[acp] started {n} async job worker(s)", flush=True)
 
 
@@ -397,7 +417,11 @@ def _drain_job_workers():
     # in-flight jobs aren't stranded ~31min waiting for the lease sweeper on the new
     # container (audit P1).
     try:
+        if _embedded_worker_reporter is not None:
+            _embedded_worker_reporter.stop()
         core.stop_workers()
+        if _embedded_worker_reporter is not None:
+            _embedded_worker_reporter.offline()
         print("[acp] drained job workers for shutdown", flush=True)
     except Exception as e:
         print(f"[acp] shutdown drain error: {e}", flush=True)

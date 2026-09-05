@@ -622,6 +622,35 @@ thing the PRD does not mention.
   re-scan says. Media parts are counted from the zip because `Document.inline_shapes` misses
   header, footer and floating images — the consent fixture's only image is in `word/header1.xml`.
 
+- [x] **P4.10 — Govern and operate assessment-time cloud second opinions.** Completed by #1283,
+  #1458 and #1460. #1283 added
+  the narrow data path: LOW-confidence findings may be escalated to Hugging Face, and the bounded
+  provider/zone/escalated/cost provenance is persisted and shown on the finding. The remaining
+  product work is the management layer; it must not be inferred from environment variables or
+  hidden behind a chip on one finding.
+
+  An administrator can enable or disable escalation, choose an approved provider/model and region,
+  select the eligible criteria and confidence threshold, and set per-scan and daily request/cost
+  ceilings. The screen states what document material leaves ACP, where it is processed, the retention
+  posture, and which tenant policy authorised the call before enablement. It exposes endpoint health,
+  model revision, last successful call, error/fallback rate, latency and measured spend; every policy
+  change and every escalation is auditable without storing or displaying the model's free-text answer.
+  A kill switch takes effect for new calls immediately, in-flight work finishes or fails explicitly,
+  and local/HITL fallback remains available when the provider is disabled, unhealthy or over budget.
+
+  **Acceptance gate:** default off; owner-scoped RBAC; no token in browser state, logs or exports;
+  immutable policy snapshot on each assessment run; truthful `not measured` states; cost labelled
+  measured versus estimated; regression coverage for off/on, threshold boundary, budget exhaustion,
+  provider failure, deduplicated findings, and mid-run disable. This item depends on #1283 landing (or
+  an equivalent provenance contract) but does not require retaining provider-generated document text.
+
+  **Closed 2026-09-05:** AI Governance now owns the default-off consent policy, provider/model,
+  eligible criteria, confidence ceiling, per-scan/day request limits and daily estimated-cost
+  ceiling. Each scan stores an immutable policy snapshot; a live disable is an immediate kill
+  switch for new calls. Atomic reservations prevent retries or concurrent workers exceeding a
+  ceiling. Assessment calls feed the existing `ai_calls` ledger and therefore the shipped provider
+  health, latency, failure and measured-spend views. No provider response text is persisted.
+
 ### From the PRD, deliberately not scheduled
 
 - **North-star framing.** "Maximise AVRR while minimising HER" puts autonomy in the numerator and

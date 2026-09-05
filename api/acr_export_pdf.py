@@ -144,12 +144,105 @@ def with_limitations(html: str, notice: str = UNRUN_GATES) -> str:
     return html[:at] + para + html[at:]
 
 
+# What a holder of the published PDF needs in order to check it themselves, and the sentence that
+# stops the digest being read as something it is not. `api/acr_publish.py` and `api/report.py` both
+# carry the same warning about their own digests; repeating it inside the artifact is the point —
+# the PDF is the copy that travels, and a bare 64-hex string on a conformance document reads as a
+# signature to almost everyone who is not told otherwise.
+DIGEST_IS_NOT_A_SIGNATURE = (
+    "This digest is a SHA-256 over the published snapshot's contents. It is recomputable by "
+    "anyone holding the same snapshot, which makes an alteration detectable. It is not a digital "
+    "signature: it carries no key and identifies no signer, so it establishes what the content is "
+    "and never who produced it."
+)
+
+
+def with_provenance(html: str, *, revision, digest: str, published_at, published_by,
+                    verified: bool) -> str:
+    """State inside the document which published revision it is and what its digest was.
+
+    Anchored after the <h1> like the limitations notice, and applied BEFORE it so the two come out
+    in the order a reader needs: what has not been validated, then which frozen record this is.
+
+    `verified` is passed in rather than recomputed here, because the caller must have already
+    refused to render an unverified snapshot — see the route. It is rendered anyway, so a PDF
+    detached from the endpoint that produced it still says the check ran and passed, and so that a
+    future caller who renders without checking produces a document that visibly says so instead of
+    one that quietly omits the question.
+
+    RAISES with no <h1> to anchor to, for the same reason `with_limitations` does: a silently
+    unmodified return ships a published-looking conformance report carrying no statement of which
+    revision it is, which is precisely the document this function exists to prevent.
+    """
+    marker = "</h1>"
+    idx = html.find(marker)
+    if idx == -1:
+        raise ValueError(
+            "no <h1> in the export HTML to anchor the publication provenance to — refusing to "
+            "build a published-revision PDF that omits which revision it is and what its digest "
+            "was")
+    at = idx + len(marker)
+    checked = ("verified against its contents when this document was produced" if verified
+               else "NOT verified — this document was produced without checking the digest")
+    para = (
+        '\n<p class="notice"><strong>Published revision '
+        f"{escape(str(revision))}.</strong> Published {escape(str(published_at or 'unknown'))}"
+        f" by {escape(str(published_by or 'unknown'))}. "
+        "This is an immutable published record and is not the current draft. "
+        f"Content digest (SHA-256): <code>{escape(str(digest or ''))}</code>, {escape(checked)}. "
+        f"{escape(DIGEST_IS_NOT_A_SIGNATURE)}</p>")
+    return html[:at] + para + html[at:]
+
+
+def published_html(projection: dict, *, revision, digest: str, published_at, published_by,
+                   verified: bool) -> str:
+    """A published revision's HTML, carrying both disclosures, in the order a reader needs them.
+
+    Provenance is applied first so the limitations notice ends up ABOVE it: what has not been
+    validated is the more consequential of the two and belongs first on the page.
+
+    One function rather than a composition each caller performs, because the HTML and PDF forms of
+    a published revision differ only in whether WeasyPrint runs afterwards. Two call sites
+    assembling the same three steps is how one of them ends up with two disclosures and the other
+    with one — the drift is invisible until a customer holds both.
+    """
+    return with_limitations(with_provenance(
+        acr_export_preview.to_html(projection), revision=revision, digest=digest,
+        published_at=published_at, published_by=published_by, verified=verified))
+
+
+def render_published(projection: dict, *, revision, digest: str, published_at, published_by,
+                     verified: bool) -> bytes:
+    """One published snapshot to one PDF, carrying both disclosures."""
+    return render_html(published_html(
+        projection, revision=revision, digest=digest, published_at=published_at,
+        published_by=published_by, verified=verified))
+
+
+def render_projection(projection: dict) -> bytes:
+    """One projection to one PDF — THE only way production code turns a projection into bytes.
+
+    Why this exists rather than callers composing the three steps themselves. #1416 added
+    `with_limitations` and wired it into `render()` below, and the disclosure reached nobody: the
+    route that actually serves the download had built its projection already and called
+    `render_html(to_html(projection))` directly, so the notice was in a function no production
+    code path called. A conformant PDF, a green suite, a merged PR, and an export still making the
+    claim the notice exists to qualify.
+
+    Composing it here makes that class of miss structural instead of remembered. A caller who has
+    a projection cannot reach the renderer without the notice, because this is the function that
+    takes a projection — and `test_acr_export_pdf_notice.py` asserts no module under `api/` calls
+    `render_html` directly, which is the check that would have caught the original seam.
+    """
+    return render_html(with_limitations(acr_export_preview.to_html(projection)))
+
+
 def render(report: dict, criteria: list[dict], *, evidence_by_criterion=None,
            stale_ids=None) -> bytes:
     """The report's accessible PDF, built from the same projection the preview screens use."""
     projection = acr_export_preview.project(
         report, criteria, evidence_by_criterion=evidence_by_criterion, stale_ids=stale_ids)
-    return render_html(with_limitations(acr_export_preview.to_html(projection)))
+    return render_projection(projection)
 
 
 def filename_for(report: dict) -> str:

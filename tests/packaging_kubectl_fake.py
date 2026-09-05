@@ -61,8 +61,12 @@ HEALTHY = {
          "replicas": None, "ready": 1},
         {"name": "acp-worker-assess", "component": "worker", "role": "assess",
          "replicas": 5, "ready": 5},
+        # 5, not 3: the standard-production document raised this tier's FLOOR to 5 on 2026-09-05
+        # to match the five replicas production keeps warm. A "healthy, matching" fixture running
+        # 3 would sit below the floor, and `acpctl status` correctly called it drift — which is
+        # the check doing its job, not a fixture that needed loosening.
         {"name": "acp-worker-remediate", "component": "worker", "role": "remediate",
-         "replicas": None, "ready": 3},
+         "replicas": None, "ready": 5},
     ],
     # Each entry: {name, phase, containers: [{ready, restarts, waiting_reason, message}]}
     "pods": [],

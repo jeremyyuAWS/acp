@@ -115,6 +115,7 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queu
     return <div style={{ ...PANEL, padding: 14 }} role="status">
       <b>Worker utilization unavailable</b>
       <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{gauge.reason}</div>
+      <WorkerTelemetrySignals service={service} />
     </div>
   }
   const color = TONE[gauge.tone]
@@ -164,6 +165,8 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queu
         </div>
       </div>
     </div>
+    <WorkerReplicaTable replicas={service?.instances} nowMs={nowMs} />
+    <WorkerTelemetrySignals service={service} />
     <Saturation saturation={saturation} nowMs={nowMs} measuredAt={capacity?.measured_at} />
     <ScalingActivity capacity={capacity} saturation={saturation} queueDepth={queueDepth}
       lifecycle={replicaLifecycle(capacity, service)} nowMs={nowMs} />
@@ -172,6 +175,72 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queu
     <ReplicaLifecycle lifecycle={replicaLifecycle(capacity, service)} nowMs={nowMs}
       measuredAt={capacity?.measured_at} />
     <AzureMetrics capacity={capacity} service={service} nowMs={nowMs} />
+  </section>
+}
+
+function WorkerReplicaTable({ replicas, nowMs }) {
+  if (!Array.isArray(replicas) || !replicas.length) return null
+  return <section aria-label="ACP worker replicas" style={{ marginTop: 12 }}>
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+      <b style={{ fontSize: 13 }}>ACP worker replicas</b>
+      <span className="muted" style={{ fontSize: 11 }}>{replicas.length} unique reported</span>
+    </div>
+    <ul style={{ listStyle: 'none', margin: '8px 0 0', padding: 0, display: 'grid', gap: 6 }}>
+      {replicas.map((replica) => {
+        const slots = Number(replica.concurrency_limit || 0)
+        const active = Math.min(slots, Number(replica.active_job_count || 0))
+        const processes = Number(replica.process_count || 1)
+        return <li key={replica.replica_id || replica.worker_id} style={{ ...PANEL, padding: 9 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
+            <b style={{ overflowWrap: 'anywhere' }}>{replica.replica_id || 'Replica identity unavailable'}</b>
+            <span style={{ fontSize: 11, fontWeight: 700, color: replica.healthy ? TONE.ok : TONE.warn }}>
+              {replica.healthy ? 'Healthy' : replica.fresh ? 'Not ready' : 'Stale'}
+            </span>
+            <span className="muted" style={{ marginLeft: 'auto', fontSize: 11 }}>
+              {replica.last_heartbeat_at ? updatedAgo(replica.last_heartbeat_at, nowMs) : 'Heartbeat not reported'}
+            </span>
+          </div>
+          <div className="muted" style={{ marginTop: 4, fontSize: 11 }}>
+            {processes} worker {processes === 1 ? 'process' : 'processes'} · {active} of {slots} slots busy
+            {replica.revision_name ? ` · ${replica.revision_name}` : ''}
+            {replica.software_version ? ` · version ${replica.software_version}` : ''}
+          </div>
+        </li>
+      })}
+    </ul>
+    <p className="muted" style={{ margin: '6px 0 0', fontSize: 10.5 }}>
+      Replica totals use unique replica identities; worker processes are shown within their container.
+    </p>
+  </section>
+}
+
+function WorkerTelemetrySignals({ service }) {
+  const alerts = Array.isArray(service?.alerts) ? service.alerts : []
+  const events = Array.isArray(service?.recent_lifecycle_events)
+    ? service.recent_lifecycle_events.slice(-8).reverse() : []
+  const revisions = Object.entries(service?.revision_distribution || {})
+  if (!alerts.length && !events.length && !revisions.length
+      && service?.freshness_threshold_seconds == null) return null
+  return <section aria-label="Worker telemetry signals" style={{ ...PANEL, padding: 14, marginTop: 12 }}>
+    <b>Worker telemetry signals</b>
+    {service?.freshness_threshold_seconds != null && <div className="muted"
+      style={{ marginTop: 6, fontSize: 12 }}>
+      Freshness threshold: {service.freshness_threshold_seconds} seconds
+    </div>}
+    {!!alerts.length && <ul style={{ margin: '8px 0 0', paddingLeft: 20 }}>
+      {alerts.map((alert) => <li key={alert.code} style={{ marginTop: 4,
+        color: alert.severity === 'critical' ? TONE.bad : TONE.warn }}>{alert.message}</li>)}
+    </ul>}
+    {!!revisions.length && <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+      Revision distribution: {revisions.map(([revision, count]) => `${revision} (${count})`).join(' · ')}
+    </div>}
+    {!!events.length && <div style={{ marginTop: 10 }}>
+      <b style={{ fontSize: 12 }}>Recent lifecycle events</b>
+      <ul style={{ margin: '5px 0 0', paddingLeft: 20 }}>
+        {events.map((event) => <li key={event.event_id}
+          style={{ marginTop: 3, fontSize: 12 }}>{event.kind} · {event.occurred_at}</li>)}
+      </ul>
+    </div>}
   </section>
 }
 
@@ -1611,7 +1680,8 @@ function EventTimeline({ events, filter, onFilter, paused, onPause, showAll, onS
     {events.length > visible.length && <button type="button" className="ghost small"
       style={{ marginTop: 9 }} onClick={onShowAll}>Show all events ({events.length})</button>}
     <p className="muted" style={{ fontSize: 11, margin: '9px 0 0' }}>
-      Events are derived from changes observed between live snapshots in this session. Document
+      Remediation lifecycle events come from the durable run log and survive reconnects. Other
+      events are derived from changes observed between live snapshots in this session. Document
       contents, tokens and credentials are never shown.
     </p>
   </section>

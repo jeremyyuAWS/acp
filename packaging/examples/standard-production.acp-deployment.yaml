@@ -2,11 +2,17 @@
 #
 # The sizes mirror the reviewed Azure baseline in deploy/public/rightsize-production.sh exactly
 # (acp-app small; acp-discovery small; acp-assess and acp-remediate standard). The REPLICA RANGES
-# mirror it only where a decision has been taken to make them: the assess tier is pinned warm at
-# 5-5 as production runs it, and the API floor is raised to the two replicas the profile requires.
-# Three ranges still differ from production and no decision has been recorded for them
-# (api.replicas.max, discover.replicas.max, remediate.replicas.min) — packaging/docs/azure-parity.md
-# lists each one, and this header does not claim otherwise.
+# mirror it where a decision has been taken to make them: the assess tier is pinned warm at 5-5 and
+# the remediate FLOOR is 5, both as production runs them and for production's own stated reason.
+#
+# THREE RANGES STILL DIFFER, ALL OF THEM DELIBERATELY, and this header does not claim otherwise:
+# api.replicas.min (2 here, 1 in production — the profile's floor, which production fails),
+# api.replicas.max (4 here, 3 in production) and discover.replicas.max (3 here, 2 in production).
+# Every one now carries a recorded decision in packaging/docs/azure-parity.md rather than sitting
+# unexplained; in each case the contract is authoritative and production is the override to
+# correct. They were decided together, as one capacity question, because a replica ceiling is a
+# term in the fleet's Postgres demand — the two ceilings cost 16 and 18 connections against 267 of
+# headroom, and the remediate floor costs nothing at all, since worst case is set by MAX replicas.
 apiVersion: packaging.acp.mova.io/v1alpha1
 kind: ACPDeployment
 metadata:
@@ -42,8 +48,25 @@ workers:
   assess:
     replicas: { min: 5, max: 5 }
     resources: { preset: standard }
+  # FLOOR RAISED 3 -> 5 TO MATCH PRODUCTION (2026-09-05), and the reason is production's own:
+  # rightsize-production.sh names this tier in the SAME SENTENCE as assess — "Assessment and
+  # Remediation are throughput-sensitive batch stages: keep five replicas warm so large runs
+  # retain the production performance baseline." The owner already carried that operating model
+  # into the contract for assess (#1405); this is the other half of the same decision, and a
+  # contract that accepted the reasoning for one tier while contradicting it for the other was
+  # not describing a considered position.
+  #
+  # IT COSTS NOTHING IN THE CONNECTION BUDGET, which is why it could be decided on its merits.
+  # `connection_budget` sums `db_connections_max`, and worst case is set by MAX replicas — every
+  # replica holds its own pool, so the fleet's demand is unchanged at 418 whether this floor is
+  # 3 or 5. A floor buys warm capacity and costs steady-state money; it does not move the number
+  # Postgres has to be provisioned to survive.
+  #
+  # The autoscale block STAYS, unlike assess. Production really does autoscale this tier —
+  # `apply_remediation_autoscale` attaches a queue-depth rule over the lane's own job types — so
+  # 5-10 with a scale rule is what production runs, and min == max would be the wrong shape here.
   remediate:
-    replicas: { min: 3, max: 10 }
+    replicas: { min: 5, max: 10 }
     resources: { preset: standard }
     autoscale:
       signals: [queue-depth, oldest-job-age]
@@ -86,6 +109,14 @@ secrets:
     redis-url: { name: acp-kv, key: redis-url }
     object-storage: { name: acp-kv, key: blob-account }
     langfuse-secret-key: { name: acp-kv, key: langfuse-secret-key }
+    # What actually turns telemetry on. api/telemetry.py configures the Azure Monitor
+    # OpenTelemetry distribution and starts nothing without it, so a document declaring
+    # `openTelemetry: true` without this is asking for telemetry it will not get.
+    applicationinsights-connection-string: { name: acp-kv, key: appinsights-connection-string }
+    # Optional, and its absence is not silent: without a stable salt telemetry.py OMITS the
+    # tenant and document HMACs rather than computing them from a per-process one, which
+    # would give every replica a different id for the same tenant. status() reports it.
+    acp-telemetry-salt: { name: acp-kv, key: telemetry-salt }
     google-oauth-client-secret: { name: acp-kv, key: google-oauth-client-secret }
     microsoft-oauth-client-secret: { name: acp-kv, key: microsoft-oauth-client-secret }
 sources:

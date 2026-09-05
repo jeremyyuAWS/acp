@@ -11,6 +11,7 @@ const publishAllFiles = vi.fn(() => Promise.resolve({ published: [] }))
 vi.mock('./api.js', () => ({
   openReport: vi.fn(), publishFile: vi.fn(() => Promise.resolve({})),
   publishAllFiles: (...a) => publishAllFiles(...a),
+  getReleaseStatus: vi.fn(() => Promise.resolve({ release_id: null })),
   listHitlQueue: vi.fn(() => Promise.resolve([])),
   getSettings: vi.fn(() => Promise.resolve({ drive_mirror_enabled: false, drive_mirror_folder: 'Remediated' })),
   getSourceStatus: vi.fn(() => Promise.resolve({ files: [], stale_count: 0 })),

@@ -8,6 +8,8 @@ import { preflightVerdict } from './discoveryPreflightGate.js'
 import { scanPollDecision } from './scanPollDecision.js'
 import { scanFailureDetail, hasFallbackInventory } from './scanFailureMessage.js'
 import LiveAssessmentLive from './LiveAssessmentLive.jsx'
+import RemediationRunCard from './RemediationRunCard.jsx'
+import { useRemediationRun } from './useRemediationRun.js'
 import { armNotifyOnComplete, notifyScanComplete, notifyScanFailed, notificationsSupported, notifyPermission } from './scanNotify.js'
 import { refreshDriveToken } from './driveAuth.js'
 import { refreshSPToken } from './spAuth.js'
@@ -70,7 +72,7 @@ import ConfirmDialog from './ConfirmDialog.jsx'
 import { AdminInsights } from './AdminInsights.jsx'
 import AcrWorkspace from './AcrWorkspace.jsx'
 import AccessRestricted from './AccessRestricted.jsx'
-import { visibleTabs, isVisible, canOperate, firstPermittedTab } from './access.js'
+import { visibleTabs, isVisible, canOperate, firstPermittedTab, canOpenSettings } from './access.js'
 import { handleWorkflowTabKeyDown } from './workflowTabs.js'
 
 // Self-scan overlay: on in dev, or on the deployed demo via ?a11y
@@ -98,6 +100,7 @@ const TABS = [
 // workspace. API authorization remains authoritative for privileged mutations; in particular,
 // making these views discoverable must not turn a read-only user into a platform administrator.
 const ALL_TAB_KEYS = TABS.map(([key]) => key)
+
 
 function timeAgo(iso) {
   if (!iso) return null
@@ -477,6 +480,17 @@ export default function App() {
     document.documentElement.dataset.wcag = wcagMode ? 'on' : ''
   }, [wcagMode])
   const [hitlCount, setHitlCount] = useState(0)  // pending HITL items, reported up from Remediate for the nav badge
+
+  // The remediation run's live state, held at App level so the persistent card survives a tab
+  // change — `<Remediate/>` is mounted only on its own tab, so anything it owns dies on a switch.
+  //
+  // POSITION IS LOAD-BEARING, TWICE. It reads `scan?.run?.id` rather than the `run` const derived
+  // further down, because that const is in the temporal dead zone up here. And it must sit ABOVE
+  // the `if (!me) return <SignIn/>` early return below: a hook after a conditional return is
+  // called on some renders and not others, which is "Rendered more hooks than during the previous
+  // render" and takes the whole app down. Both were caught by the full suite rather than by any
+  // test of this card.
+  const remRun = useRemediationRun(scan?.run?.id || null)
   // Durable (background queue) is the default (2026-08-21). The session-scoped path runs as a
   // bare in-process thread with no queue behind it — the code's own comment on it has always said
   // "lost if that replica restarts", and this app auto-deploys on every merge to main, so that was
@@ -656,10 +670,14 @@ export default function App() {
   // acp:session-expired / acp:scan-unavailable rather than threading a callback through the tree.
   // Gated on the settings permission exactly as the ⚙ button and the modal render already are.
   useEffect(() => {
-    const onOpenSettings = () => { if (me?.allow?.includes('settings')) setSettingsOpen(true) }
+    const onOpenSettings = () => { if (canOpenSettings(me, access)) setSettingsOpen(true) }
     window.addEventListener('acp:open-settings', onOpenSettings)
     return () => window.removeEventListener('acp:open-settings', onOpenSettings)
-  }, [me])
+    // `access` belongs here as well as `me`: it arrives from /workspace/bootstrap AFTER the first
+    // render, so a listener registered with only [me] would close over the null payload forever
+    // and keep answering from access.js's fail-open. That direction is the safe one, which is
+    // exactly why it would not have been noticed.
+  }, [me, access])
 
   // Refetch the scan when a remediation or a deferred assessment announces that the server's
   // file_records changed — see scanRefetch.js for which events and why.
@@ -1716,7 +1734,7 @@ export default function App() {
                 {void tick}v{platformVersion || __BUILD_VERSION__} PT · {timeAgo(__BUILD_TIME__)}
               </b></div>
               <div className="menu-separator" />
-              {me.allow?.includes('settings') && <button className="menu-action" aria-label="Platform settings" onClick={() => setSettingsOpen(true)}>⚙ <span>Settings</span></button>}
+              {canOpenSettings(me, access) && <button className="menu-action" aria-label="Platform settings" onClick={() => setSettingsOpen(true)}>⚙ <span>Settings</span></button>}
           {/* SWITCH ACCOUNT — a full teardown, then the sign-in screen, which now asks Google
               and Microsoft for an account chooser rather than reusing the browser's single
               signed-in session.
@@ -2064,8 +2082,11 @@ export default function App() {
                   onClick={() => setStopped(null)}>Dismiss</button>
         </div>
       )}
+      {/* Assessment has a real live card immediately below this fallback. Do not stack a
+          generic “still running” banner above the richer card for the same work. */}
       <WorkflowContinuityBanner
-        workflow={primaryWorkflow}
+        workflow={primaryWorkflow?.stage === 'assess' && assessPhase === 'running'
+          ? null : primaryWorkflow}
         currentView={view}
         onReturn={(stage) => { goToView(stage); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
         onLiveOps={() => { goToView('liveops'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
@@ -2103,28 +2124,24 @@ export default function App() {
           logic (and the OUTER scan-banner's Stop-suppression above, when view === 'assess' &&
           assessPhase === 'running') was written assuming this card would be live during assess.
           It never was, until this line. */}
-      {/* Suppress when the Assess tab is open and an assess is running — AssessRunner.jsx owns
-          that view and shows an authoritative progress panel from the same data. Showing both
-          caused contradictory "Document 0 of 148" vs "10 of 148 · 7%" readings simultaneously.
-
-          DISCOVER is suppressed for the same reason, a step earlier in the funnel. That tab is
-          the inventory: it already carries its own scan progress and its own "148 documents
-          discovered across 1 source" panel. Adding an ASSESS card on top put two progress
-          readings of two different phases on one screen — "Assessing 148 documents · Document 0
-          of 148 · Idle" sitting directly above the discovery count it has nothing to do with.
-          Discover answers "what do we have"; how far the assessment has got belongs to Assess,
-          which owns a better view of it.
-
-          REMEDIATE is suppressed too. Once that stage starts, Remediate.jsx owns the live
-          RemediationRunProgress card. Keeping the completed Assessment card above it produced two
-          stage-status panels and made the finished stage look like the active one. Assessment
-          remains available on its own tab and the remediation card replaces it on Remediate.
-
-          `busy` means a DISCOVER run is live; the assess panel must not activate during
-          discovery. Only assessPhase==='running' should trigger it. */}
+      {/* Keep the authoritative live Assessment card directly below the tabs on EVERY view,
+          including Assess itself. AssessRunner's detailed file list answers a different question;
+          it is not a replacement for the compact stage-level card. `busy` is a DISCOVER-only
+          flag; assessPhase is the authority for whether this card is active. */}
       <LiveAssessmentLive scanId={liveScanId || run?.id}
-                          active={assessPhase === 'running' && view !== 'discover' && view !== 'remediate'}
+                          active={assessPhase === 'running'}
                           onStop={() => stopScan(liveScanId || run?.id)} />
+
+      {/* THE PERSISTENT REMEDIATION CARD. Outside the tabpanel on purpose: `<Remediate/>` below
+          is mounted only while `view === 'remediate'`, so a card rendered inside it — and the
+          state feeding it — is torn down the instant the user opens any other tab. A run that is
+          still applying fixes must stay visible from wherever they are. `useRemediationRun` owns
+          the snapshot for the same reason. */}
+      {view !== 'remediate' && (
+        <RemediationRunCard snapshot={remRun.snapshot} receivedAt={remRun.receivedAt}
+                            connected={remRun.connected}
+                            onOpen={() => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
+      )}
 
       <main id="main-content" tabIndex={-1}>
       <div id="workflow-panel" role="tabpanel" aria-labelledby={`workflow-tab-${view}`}>
@@ -2289,7 +2306,7 @@ export default function App() {
           </>
         ) : (overviewPreview ? <AssessPreviewCard preview={overviewPreview} /> : placeholder))}
 
-        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} assignees={assignees} setAssignees={setAssignees} myEmail={me?.email} aiEnabled={aiEnabled} readOnly={isTimeTravel} onRefresh={() => getScan(run.id, run?.revision).then((r) => { if (r !== NOT_MODIFIED) setScan(r) }).catch(() => {})} onHitlCount={setHitlCount} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} onNavigate={(v) => { setView(v); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /> : placeholder)}
+        {view === 'remediate' && (run ? <Remediate run={run} files={files} decisions={decisions} setDecisions={setDecisions} triage={triage} setTriage={setTriage} assignees={assignees} setAssignees={setAssignees} myEmail={me?.email} aiEnabled={aiEnabled} readOnly={isTimeTravel} onRefresh={() => getScan(run.id, run?.revision).then((r) => { if (r !== NOT_MODIFIED) setScan(r) }).catch(() => {})} onHitlCount={setHitlCount} runStream={remRun} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} onNavigate={(v) => { setView(v); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /> : placeholder)}
 
         {view === 'publish' && (run ? <Publish run={run} files={files} certified={certifiedDocs} readOnly={isTimeTravel} triage={triage} onPublish={(file) => { setPublishedFiles((s) => [...s, file]); schedulePublishRefetch() }} me={me} /> : placeholder)}
 
@@ -2379,7 +2396,7 @@ export default function App() {
       {/* onOntologyChange / onPrivilegeChange are gone with the Business ontology and Permissions
           panels. The ontology DATA path below is untouched — App still annotates the corpus from
           whatever was last published; only its editor left Settings. */}
-      {settingsOpen && me.allow?.includes('settings') && <Settings files={files} onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} onDelegationChange={setDelegations} onFileTypeChange={(cfg) => setFileTypeConfig(cfg)} me={me} />}
+      {settingsOpen && canOpenSettings(me, access) && <Settings files={files} onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} onDelegationChange={setDelegations} onFileTypeChange={(cfg) => setFileTypeConfig(cfg)} me={me} />}
 
       {/* The universal scan gate. Opened by `requestScan` from every entry point; the wizard's
           "Start scan" confirm is the only thing that dispatches `doScan`. The behavior toggles are

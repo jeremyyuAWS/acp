@@ -207,9 +207,9 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openSourceKey])
-  // Every OTHER way of opening the drawer (Manage / View files / Details, below) is a direct
-  // click on a specific card — it always means Overview, never a stale Activity tab left over
-  // from an earlier redirect.
+  // Manage is the ONE direct way to open the source drawer. The former overflow menu repeated
+  // the same destination under "View files" and "Details", so three controls performed one
+  // action and implied distinctions the drawer does not have.
   const openSrc = (s) => { setSelSrcInitialTab('Overview'); setSelSrc(s) }
   const [gdConnecting, setGdConnecting] = useState(false)
   const [gdError,      setGdError]      = useState('')
@@ -516,13 +516,6 @@ export default function Integrations({ sources, files = [], scans = [], onScan, 
                       {providerDestination.label} ↗
                     </a>}
                     <button className="ghost small" onClick={() => openSrc(src)}>Manage</button>
-                    <details className="srccard-ovf">
-                      <summary aria-label="More actions" title="More actions">⋯</summary>
-                      <div className="srccard-ovf-menu">
-                        <button type="button" onClick={() => openSrc(src)}>View files</button>
-                        <button type="button" onClick={() => openSrc(src)}>Details</button>
-                      </div>
-                    </details>
                   </div>
                 </div>
               )

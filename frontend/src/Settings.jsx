@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { resetDemoData, resetMyData, getAllowlist, setAllowlist, inviteTester, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, putAiProviderSecret, testAiProvider, getAiStatus, getAdmins, setAdmins, getMe, getToken } from './api.js'
+import { resetDemoData, resetMyData, getAllowlist, setAllowlist, inviteTester, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, putAiProviderSecret, testAiProvider, getSecondOpinionPolicy, putSecondOpinionPolicy, getAiStatus, getAdmins, setAdmins, getMe, getToken } from './api.js'
 import { SIM } from './sim.js'
 import WorkerReplicaControl from './WorkerReplicaControl.jsx'
 import ReviewMemory from './ReviewMemory.jsx'
@@ -675,6 +675,8 @@ const ADAPTER_READY = new Set(['azure_openai', 'openai', 'anthropic', 'gemini', 
 // the database, and none in the non-secret config PUT.
 export function AIProvidersPanel({ onAccess }) {
   const [providers, setProviders] = useState(null)
+  const [policy, setPolicy] = useState(null)
+  const [policyDraft, setPolicyDraft] = useState(null)
   const [draft, setDraft] = useState({})     // provider -> edited fields
   const [busy, setBusy] = useState('')
   const [note, setNote] = useState('')
@@ -692,9 +694,10 @@ export function AIProvidersPanel({ onAccess }) {
   // that could not persist anything.
   const [denied, setDenied] = useState(false)
   useEffect(() => {
-    getAiProviders()
-      .then((d) => {
+    Promise.all([getAiProviders(), getSecondOpinionPolicy()])
+      .then(([d, p]) => {
         setProviders(d.providers || [])
+        setPolicy(p); setPolicyDraft(p)
         setSecretWrite(d.secret_write || { available: false, reason: '', kind: '' })
         onAccess?.(true)
       })
@@ -703,7 +706,7 @@ export function AIProvidersPanel({ onAccess }) {
         setDenied(forbidden); setProviders([]); onAccess?.(!forbidden)
       })
   }, [])
-  if (!providers) return null
+  if (!providers || !policyDraft) return null
   // Nothing to show read-only either — the GET that would have supplied the rows is what 403'd.
   if (denied) return <ReadOnlyNotice />
   const edit = (p, field, val) => setDraft((d) => ({ ...d, [p]: { ...(d[p] || {}), [field]: val } }))
@@ -740,14 +743,37 @@ export function AIProvidersPanel({ onAccess }) {
       .catch((e) => setNote(e.message || 'save failed'))
       .finally(() => setBusy(''))
   }
+  const savePolicy = () => {
+    setBusy('second-opinion'); setNote('')
+    const next = {
+      enabled: !!policyDraft.enabled,
+      criteria: policyDraft.criteria || [],
+      confidence_threshold: policyDraft.confidence_threshold || 'low',
+      max_requests_per_scan: Number(policyDraft.max_requests_per_scan),
+      max_requests_per_day: Number(policyDraft.max_requests_per_day),
+      max_daily_cost_usd: Number(policyDraft.max_daily_cost_usd),
+      estimated_cost_per_request_usd: Number(policyDraft.estimated_cost_per_request_usd),
+    }
+    putSecondOpinionPolicy(next)
+      .then((res) => {
+        setPolicy(res); setPolicyDraft(res)
+        setNote(wrote(res, '✓ Assessment second-opinion policy saved for future scans'))
+      })
+      .catch((e) => setNote(e.message || 'policy save failed'))
+      .finally(() => setBusy(''))
+  }
+  const policyDirty = JSON.stringify(policyDraft) !== JSON.stringify(policy)
+  const purposeEnabled = (policyDraft.criteria || []).includes('1.3.5')
   return (
     <div>
       <h3 style={{ marginTop: 0 }}>AI providers <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>· governance &amp; bring-your-own-key</span></h3>
       <p className="muted" style={{ fontSize: 13 }}>
         The platform runs <b>local-first</b>: your on-box Ollama handles everything by default, at
-        $0, with no document leaving your network. You may enable a governed cloud provider as a
-        fallback for cases the local model can’t ground (e.g. dense charts) — escalation is
-        transparent and only fires when local falls short.
+        $0, with no document leaving your network. Enabling a governed cloud provider permits ACP
+        to send a document image off-box when the local model cannot ground it, including dense
+        charts and LOW-confidence assessment findings. Assessment second opinions send the first
+        rendered page only; ACP records the provider, processing zone and estimated call cost on
+        the finding. Disable every provider to keep all inference local.
       </p>
       <p className="muted" style={{ fontSize: 13, background: 'var(--card, #f7f4fb)', border: '1px solid var(--line)', borderRadius: 8, padding: '8px 12px' }}>
         🔐 <b>The key value never reaches the database.</b> Your ops team provisions it as a container / Key
@@ -755,6 +781,63 @@ export function AIProvidersPanel({ onAccess }) {
         <code> AZURE_OPENAI_API_KEY</code>). The key value never touches the database, this page, or
         a log — only whether it’s present is shown.
       </p>
+      <section aria-labelledby="second-opinion-heading" style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '12px 14px', margin: '14px 0' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <b id="second-opinion-heading">Assessment second opinions</b>
+          <span style={{ marginLeft: 'auto', fontSize: 12, color: policyDraft.enabled ? '#2C5209' : 'var(--muted)' }}>
+            {policyDraft.enabled ? 'Enabled for future scans' : 'Off · local-only'}
+          </span>
+        </div>
+        <p className="muted" style={{ fontSize: 12 }}>
+          This policy is copied into each new scan. Changing it never silently changes a scan that
+          is already running. A provider must also be enabled below before any call can occur.
+        </p>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}>
+          <input type="checkbox" checked={!!policyDraft.enabled}
+                 onChange={(e) => setPolicyDraft({ ...policyDraft, enabled: e.target.checked })} />
+          Permit cloud second opinions for approved findings
+        </label>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
+          <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
+            <legend className="muted" style={{ fontSize: 12, marginBottom: 6 }}>Eligible WCAG criteria</legend>
+            <label style={{ display: 'flex', gap: 8, fontSize: 13 }}>
+              <input type="checkbox" checked={purposeEnabled}
+                     onChange={(e) => setPolicyDraft({ ...policyDraft,
+                       criteria: e.target.checked ? ['1.3.5'] : [] })} />
+              1.3.5 Identify Input Purpose
+            </label>
+          </fieldset>
+          <L label="Maximum detector confidence">
+            <select value={policyDraft.confidence_threshold || 'low'} style={INP}
+                    onChange={(e) => setPolicyDraft({ ...policyDraft, confidence_threshold: e.target.value })}>
+              <option value="low">Low only</option>
+              <option value="medium">Low and medium</option>
+              <option value="high">Low, medium and high</option>
+            </select>
+          </L>
+          <L label="Maximum requests per scan"><input type="number" min="1" value={policyDraft.max_requests_per_scan}
+            onChange={(e) => setPolicyDraft({ ...policyDraft, max_requests_per_scan: e.target.value })} style={INP} /></L>
+          <L label="Maximum requests per day"><input type="number" min="1" value={policyDraft.max_requests_per_day}
+            onChange={(e) => setPolicyDraft({ ...policyDraft, max_requests_per_day: e.target.value })} style={INP} /></L>
+          <L label="Daily cloud-cost ceiling (USD)"><input type="number" min="0.01" step="0.01" value={policyDraft.max_daily_cost_usd}
+            onChange={(e) => setPolicyDraft({ ...policyDraft, max_daily_cost_usd: e.target.value })} style={INP} /></L>
+          <L label="Estimated cost reserved per request (USD)"><input type="number" min="0.000001" step="0.001" value={policyDraft.estimated_cost_per_request_usd}
+            onChange={(e) => setPolicyDraft({ ...policyDraft, estimated_cost_per_request_usd: e.target.value })} style={INP} /></L>
+        </div>
+        <p className="muted" style={{ fontSize: 11 }}>
+          Request limits are enforced atomically. Cost admission uses the labelled estimate above;
+          measured provider cost is recorded after each call and shown in Live Operations.
+        </p>
+        {policyDraft.enabled && !purposeEnabled && (
+          <p role="alert" style={{ color: 'var(--error-fg-strong)', fontSize: 12 }}>
+            Select at least one criterion before enabling this policy.
+          </p>
+        )}
+        <button className="ghost small" style={{ marginTop: 10 }} onClick={savePolicy}
+                disabled={!policyDirty || busy === 'second-opinion' || (policyDraft.enabled && !purposeEnabled)}>
+          {busy === 'second-opinion' ? 'Saving…' : 'Save second-opinion policy'}
+        </button>
+      </section>
       {providers.map((row) => {
         const ready = ADAPTER_READY.has(row.provider)
         const dirty = !!draft[row.provider] && Object.keys(draft[row.provider]).length > 0
@@ -950,11 +1033,8 @@ export default function Settings({ onClose, files = [], onDelegationChange, me =
         {/* Above the subtabs on purpose — the SIM badge is true of every write path in this panel
             (the Users allowlist included), not only the panels reachable from a tab. */}
         {SIM && <SimNotice />}
-        {/* Scoped to access management (Owners + Users) plus the one self-service action every
-            signed-in user needs (My Data). The remaining admin-only panels (Scoring rules, Estate,
-            File types, Remediated storage, Disposition, the global admin Data reset,
-            AI-provider governance) are still exported from this module and covered by tests —
-            add a button + body to resurface one. */}
+        {/* Access, worker and AI governance live together here. Operational telemetry remains in
+            Live Operations; this surface controls whether off-box AI calls may happen at all. */}
         <div className="subtabs" role="tablist" aria-label="Settings sections">
           <button role="tab" aria-selected={tab === 'owners'} className={tab === 'owners' ? 'fchip on' : 'fchip'} onClick={() => setTab('owners')}>Owners</button>
           <button role="tab" aria-selected={tab === 'users'} className={tab === 'users' ? 'fchip on' : 'fchip'} onClick={() => setTab('users')}>Users</button>
@@ -965,6 +1045,7 @@ export default function Settings({ onClose, files = [], onDelegationChange, me =
           <button role="tab" aria-selected={tab === 'mydata'} className={tab === 'mydata' ? 'fchip on' : 'fchip'} onClick={() => setTab('mydata')}>My Data</button>
           <button role="tab" aria-selected={tab === 'myscope'} className={tab === 'myscope' ? 'fchip on' : 'fchip'} onClick={() => setTab('myscope')}>My Scope</button>
           <button role="tab" aria-selected={tab === 'workers'} className={tab === 'workers' ? 'fchip on' : 'fchip'} onClick={() => setTab('workers')}>Worker Configuration</button>
+          <button role="tab" aria-selected={tab === 'ai'} className={tab === 'ai' ? 'fchip on' : 'fchip'} onClick={() => setTab('ai')}>AI Governance</button>
           {/* ADR 0021's "Settings → Review Memory". The tab renders for everyone because GET
               /org-memory has no admin gate — seeing which house style shaped a draft is not an
               admin privilege — and ReviewMemory itself withholds every write control unless
@@ -978,6 +1059,7 @@ export default function Settings({ onClose, files = [], onDelegationChange, me =
           {tab === 'mydata' && <><ResetMyData /><CopyToken /></>}
           {tab === 'myscope' && <MyScanScope />}
           {tab === 'workers' && <WorkerConfiguration me={me} />}
+          {tab === 'ai' && <AIProvidersPanel />}
           {tab === 'memory' && <ReviewMemory me={me} />}
         </div>
       </div>

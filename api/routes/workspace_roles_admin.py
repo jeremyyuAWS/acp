@@ -61,9 +61,7 @@ def _my_capabilities(request: Request) -> frozenset[str]:
 
 
 def _suspended(email: str) -> bool:
-    target = (email or "").strip().lower()
-    person = next((p for p in core.store.get_people() if p.get("email") == target), None)
-    return (person or {}).get("status") == "suspended"
+    return core.suspended_in_store(email)
 
 
 def _require_roles_manage(request: Request) -> None:
@@ -335,7 +333,7 @@ def delete_role(role_id: str, request: Request):
 
 # ── assignment (PRD §9) ───────────────────────────────────────────────────────
 
-@router.put("/admin/people/{email:path}/role")
+@router.put("/admin/people/{email}/role")
 def assign_person_role(email: str, body: dict, request: Request):
     """Give one person a workspace role.
 
@@ -425,7 +423,7 @@ def _guard_last_role_manager(tenant: str, target: str, new_role_id: str) -> None
                                  "active user a role with the roles.manage permission first")
 
 
-@router.get("/admin/people/{email:path}/role-impact")
+@router.get("/admin/people/{email}/role-impact")
 def role_impact(email: str, request: Request, role_id: str = ""):
     """What changes if this person is given this role (PRD §9's confirmation).
 

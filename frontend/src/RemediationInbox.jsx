@@ -334,10 +334,8 @@ function taskLineOf(f, lane) {
 }
 
 function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFindings = [], onApplyToMatching, cluster = null, draft = null, onDraftChange, saving = false, error = null, headingRef = null, detailExtra = null, emptyState = null }) {
-  const [applyMatching, setApplyMatching] = useState(false)
   const [matchingPreviewOpen, setMatchingPreviewOpen] = useState(false)
   const [copiedValue, setCopiedValue] = useState('')
-  useEffect(() => { setApplyMatching(false) }, [f?.id])
   useEffect(() => { setMatchingPreviewOpen(false) }, [f?.id])
   useEffect(() => { setCopiedValue('') }, [f?.id])
   if (!f) {
@@ -378,12 +376,12 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
     setCopiedValue(kind)
   }
   const why = whyOf(f)
-  const decide = (decision) => {
-    if (applyMatching && matchingCount > LARGE_BATCH_THRESHOLD) {
+  const decideForGroup = (decision) => {
+    if (matchingCount > LARGE_BATCH_THRESHOLD) {
       const ok = window.confirm(`Apply this decision to ${matchingCount + 1} findings across ${new Set([f.file, ...matchingFindings.map((x) => x.file)]).size} documents?`)
       if (!ok) return
     }
-    return applyMatching && matchingCount > 0 ? onApplyToMatching?.(f, decision) : onDecide?.(f, decision)
+    return onApplyToMatching?.(f, decision)
   }
   return (
     <div className="remediation-detail" style={{ display: 'flex', flexDirection: 'column' }}>
@@ -509,12 +507,22 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
               {matchingCount > 5 && <p className="muted" style={{ margin: '4px 0 0' }}>And {matchingCount - 5} more matching findings.</p>}
               </>}
             </div>
-            <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: matchingPreviewOpen ? 'pointer' : 'not-allowed', color: 'var(--ink)' }}>
-              <input type="checkbox" checked={applyMatching} disabled={!matchingPreviewOpen} onChange={(e) => setApplyMatching(e.target.checked)} />
-              <span>Apply this decision to {matchingCount} matching {scKeyOf(f) ? `WCAG ${scKeyOf(f)} ` : ''}finding{matchingCount === 1 ? '' : 's'}</span>
-            </label>
-            {!matchingPreviewOpen && <span className="muted">Review the matching items before applying one decision to the group.</span>}
-            {applyMatching && <span>This affects {matchingCount} additional finding{matchingCount === 1 ? '' : 's'} across {new Set(matchingFindings.map((x) => x.file)).size} additional document{new Set(matchingFindings.map((x) => x.file)).size === 1 ? '' : 's'}.</span>}
+            <div style={{ flexBasis: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+                          padding: '10px 12px', border: '1px solid var(--line,#e2dce4)', borderRadius: 9,
+                          background: 'var(--bg,#fff)' }}>
+              <span style={{ lineHeight: 1.4 }}>
+                <b style={{ display: 'block', color: 'var(--ink)', fontSize: 13 }}>Confident this pattern is right?</b>
+                Apply the same decision to this item and {matchingCount} similar finding{matchingCount === 1 ? '' : 's'}
+                {' '}across {new Set([f.file, ...matchingFindings.map((x) => x.file)]).size} files.
+              </span>
+              <button type="button" className="primary" disabled={saving}
+                      onClick={() => decideForGroup({ state: 'accepted', value: canEdit ? draftValue : undefined })}
+                      style={{ flex: '0 0 auto', fontWeight: 750, padding: '9px 14px' }}>
+                {saving ? 'Applying…' : isAutoFix
+                  ? `Approve all ${matchingCount + 1} similar fixes`
+                  : `Approve & apply to all ${matchingCount + 1}`}
+              </button>
+            </div>
           </div>
         )}
         <div style={{ padding: '12px 22px', display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -540,7 +548,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
                back for a person; it does NOT auto-revert the applied change (no backend undo exists —
                see PR body), so it is labelled as a flag, not a "reject & revert". */
             <>
-              <button className="primary" disabled={saving} onClick={() => decide({ state: 'accepted' })}>
+              <button className="primary" disabled={saving} onClick={() => onDecide?.(f, { state: 'accepted' })}>
                 {saving ? 'Saving…' : 'Approve & next →'}
               </button>
               <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>This looks wrong</button>
@@ -550,7 +558,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
           ) : (
             <>
               <button className="primary" disabled={saving}
-                      onClick={() => decide({ state: 'accepted', value: canEdit ? draftValue : undefined })}>
+                      onClick={() => onDecide?.(f, { state: 'accepted', value: canEdit ? draftValue : undefined })}>
                 {saving ? 'Saving…' : edited ? 'Save edited fix & next →' : 'Approve & next →'}
               </button>
               {/* A specific action, not a bare "Reject": declining an AI fix hands the finding to a
@@ -652,6 +660,8 @@ export default function RemediationInbox({
   useEffect(() => { writeLS('group', group) }, [group])
   const [expandedClusters, setExpandedClusters] = useState({})  // cluster key -> true
   const toggleCluster = (key) => setExpandedClusters((e) => ({ ...e, [key]: !e[key] }))
+  const [bulkPreviewOpen, setBulkPreviewOpen] = useState(false)
+  const [bulkError, setBulkError] = useState('')
 
   const [leftW, setLeftW] = useState(() => clamp(readNum('leftW', 33), 28, 40))
   useEffect(() => { writeLS('leftW', leftW) }, [leftW])
@@ -701,6 +711,13 @@ export default function RemediationInbox({
       (!q || rowModel(f, decisions).issue.toLowerCase().includes(q) || String(f.file).toLowerCase().includes(q)))
     return sortQueue(filtered, sort)
   }, [queue, tab, sort, search, decisions, assignedOnly, assignees, myEmail, priorityFilter, formatFilter]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Bold bulk work is scoped to what the reviewer can currently see and explain. It never reaches
+  // manual, blocked, handed-off or already-decided findings, and every target keeps its own proposal.
+  const visibleBulkTargets = useMemo(() => visible.filter((f) => {
+    const key = laneOf(f).key
+    return !isResolved(f, decisions) && (key === 'apply' || key === 'review') && f.after != null && f.after !== ''
+  }), [visible, decisions])
 
   // Keep a valid selection: default to the first unresolved visible row.
   useEffect(() => {
@@ -848,6 +865,27 @@ export default function RemediationInbox({
     setSelectedId(nextUnresolvedId(visible, f.id, nextDecisions))
   }
 
+  async function applyVisibleBulk() {
+    if (savingId != null || visibleBulkTargets.length === 0) return
+    setSavingId('visible-bulk'); setBulkError('')
+    const results = await Promise.allSettled(visibleBulkTargets.map((f) =>
+      onDecide?.(f, { state: 'accepted', value: f.after })))
+    const failed = visibleBulkTargets.filter((_, i) => results[i].status === 'rejected')
+    setSavingId(null)
+    if (failed.length) {
+      setBulkError(`${visibleBulkTargets.length - failed.length} of ${visibleBulkTargets.length} fixes saved. ${failed.length} still need attention.`)
+      setSelectedId(failed[0].id)
+      return
+    }
+    setBulkPreviewOpen(false)
+    setSavedMessage(`${visibleBulkTargets.length} visible fixes approved and applied.`)
+    clearTimeout(savedTimerRef.current)
+    savedTimerRef.current = setTimeout(() => setSavedMessage(''), 2400)
+  }
+
+  const visibleBulkFiles = new Set(visibleBulkTargets.map((f) => f.file)).size
+  const visibleBulkCriteria = new Set(visibleBulkTargets.map(scKeyOf).filter(Boolean)).size
+
   // Explicit linear navigation through the visible queue — Previous / Next step the SELECTION without
   // acting, so a reviewer can look before deciding and always sees their place ("N of M").
   const visIds = navFindings.map((f) => f.id)
@@ -981,6 +1019,13 @@ export default function RemediationInbox({
               <span>↑/↓ or J/K: move · Home/End: first/last · Enter: open selected item</span>
             </details>
           </div>
+          {visibleBulkTargets.length > 1 && (
+            <button type="button" className="ghost" aria-expanded={bulkPreviewOpen}
+                    onClick={() => { setBulkPreviewOpen((open) => !open); setBulkError('') }}
+                    style={{ marginTop: 8, fontWeight: 700 }}>
+              Bulk actions · {visibleBulkTargets.length} visible fixes
+            </button>
+          )}
           {/* "Assigned to me" filter + a context assign chip for the selected document. Mirrors the
               #417 backend (files_assigned_to); shown only for a signed-in reviewer with an assign
               action, so it is never a dead control. Assigning is per-DOCUMENT (a file's whole set of
@@ -1087,6 +1132,25 @@ export default function RemediationInbox({
 
       </div>
       </div>
+      {bulkPreviewOpen && visibleBulkTargets.length > 1 && (
+        <div role="region" aria-label="Bulk approval summary"
+             style={{ position: 'sticky', bottom: 0, zIndex: 5, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 14,
+                      padding: '12px 16px', border: '1px solid var(--accent,#3b6fd6)', background: 'var(--bg,#fff)', boxShadow: '0 -5px 18px rgba(31,43,58,.14)' }}>
+          <span style={{ fontSize: 13, lineHeight: 1.45 }}>
+            <b>Apply every actionable fix in this view</b>
+            <span style={{ display: 'block' }}>{visibleBulkTargets.length} fixes · {visibleBulkFiles} file{visibleBulkFiles === 1 ? '' : 's'} · {visibleBulkCriteria} WCAG {visibleBulkCriteria === 1 ? 'criterion' : 'criteria'}</span>
+            <span className="muted" style={{ display: 'block' }}>Each file keeps its own proposal. Manual, blocked, handed-off, and decided work is excluded.</span>
+            {bulkError && <span role="alert" style={{ display: 'block', color: 'var(--error-fg-strong,#9f221c)', marginTop: 3 }}>{bulkError}</span>}
+          </span>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flex: '0 0 auto' }}>
+            <button type="button" className="ghost" onClick={() => setBulkPreviewOpen(false)}>Cancel</button>
+            <button type="button" className="primary" disabled={savingId != null} onClick={applyVisibleBulk}
+                    style={{ fontWeight: 750, padding: '10px 16px' }}>
+              {savingId === 'visible-bulk' ? 'Applying visible fixes…' : `Approve & apply all ${visibleBulkTargets.length}`}
+            </button>
+          </div>
+        </div>
+      )}
       {/* Sticky workflow guide (Show → Review → Verify) + Previous / N of M / Next navigation. */}
       <WorkspaceFooter position={position} total={visIds.length} onPrev={goPrev} onNext={goNext}
                        activeStep={selected ? workflowStepIndex(selected, decisions) : null} />

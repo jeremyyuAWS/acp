@@ -136,6 +136,38 @@ describe('Primary visualization per node', () => {
     expect(container.textContent).toContain('Amber from 75% of slots, red at 100%')
   })
 
+  it('shows one ACP replica row with its aggregated worker processes and slots', async () => {
+    const measured = { ...service, instances: [{ replica_id: 'assess-replica-a', healthy: true,
+      fresh: true, process_count: 2, concurrency_limit: 4, active_job_count: 3,
+      revision_name: 'acp-assess--v25', software_version: '2026.9.5.12',
+      last_heartbeat_at: iso(-4) }] }
+    const container = await mount({ nodeId: 'stage:assess',
+      node: { kind: 'worker', label: 'Assess workers', service: measured } })
+    const panel = container.querySelector('[aria-label="ACP worker replicas"]')
+    expect(panel).toBeTruthy()
+    expect(panel.textContent).toContain('1 unique reported')
+    expect(panel.textContent).toContain('assess-replica-a')
+    expect(panel.textContent).toContain('2 worker processes')
+    expect(panel.textContent).toContain('3 of 4 slots busy')
+    expect(panel.textContent).toContain('version 2026.9.5.12')
+  })
+
+  it('shows evidence-only telemetry alerts, revisions, and lifecycle events', async () => {
+    const measured = { ...service,
+      alerts: [{ code: 'stale_replicas', severity: 'warning',
+        message: '1 registered replica has a stale heartbeat.' }],
+      revision_distribution: { 'acp-assess--v25': 2, 'acp-assess--v24': 1 },
+      recent_lifecycle_events: [{ event_id: 'e1', kind: 'worker.busy',
+        occurred_at: '2026-09-05T12:00:00Z' }] }
+    const container = await mount({ nodeId: 'stage:assess',
+      node: { kind: 'worker', label: 'Assess workers', service: measured } })
+    const panel = container.querySelector('[aria-label="Worker telemetry signals"]')
+    expect(panel).toBeTruthy()
+    expect(panel.textContent).toContain('stale heartbeat')
+    expect(panel.textContent).toContain('acp-assess--v25 (2)')
+    expect(panel.textContent).toContain('worker.busy')
+  })
+
   it('does not render an impossible utilisation percentage', async () => {
     // The screenshot that prompted this: "51 of 2 worker slots active (2550%)".
     const container = await mount({ nodeId: 'stage:assess',

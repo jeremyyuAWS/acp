@@ -417,6 +417,17 @@ def required_secret_names(doc: dict) -> list[str]:
         names.append("object-storage")
     if doc["observability"].get("langfuse", {}).get("mode", "disabled") != "disabled":
         names.append("langfuse-secret-key")
+    # TELEMETRY IS A CREDENTIAL, NOT A WORKLOAD. api/telemetry.py configures the Azure Monitor
+    # OpenTelemetry distribution and starts nothing without APPLICATIONINSIGHTS_CONNECTION_STRING
+    # — `configure()` returns {"enabled": false, "reason": "not configured"} and no exporter, SDK
+    # or egress is created. So a document declaring `openTelemetry: true` with the exporter the
+    # application implements has to declare the string, or it is asking for telemetry it will not
+    # get. Required only for `azure-monitor` because that is the only exporter with code behind
+    # it; the others get `_warn_exporter_unimplemented` instead of a requirement they could not
+    # satisfy.
+    if (doc["observability"].get("openTelemetry")
+            and doc["observability"].get("exporter") == "azure-monitor"):
+        names.append("applicationinsights-connection-string")
     sources = doc.get("sources", [])
     if "google-drive" in sources:
         names.append("google-oauth-client-secret")
@@ -598,6 +609,41 @@ def _warn_ai_off(doc: dict, out: Result) -> None:
             "Assessment still runs; AI-drafted remediation content does not", "ai.no-lane"))
 
 
+# The one exporter `api/telemetry.py` has code for. The schema offers four; the other three name
+# destinations no module in this repository can reach, so a document selecting one gets telemetry
+# that is configured, declared, and off.
+IMPLEMENTED_EXPORTERS = frozenset({"azure-monitor"})
+
+
+def _warn_exporter_unimplemented(doc: dict, out: Result) -> None:
+    """`observability.exporter` names a destination with nothing behind it.
+
+    A WARNING RATHER THAN AN ERROR, and the line is worth stating. The schema's enum is a
+    statement of intent — where an installation WOULD send telemetry — and rejecting three of its
+    four values would make the contract unable to describe a deployment somebody plans to build.
+    But silence here is how `openTelemetry: true` came to mean nothing in every profile: the
+    document says telemetry is on, the plan lists it, and no code anywhere sends anything.
+
+    THE REGULATED PROFILE IS THE SHARP CASE. The schema describes `local` as keeping "collection
+    entirely inside the installation, which is what a regulated profile requires", and
+    packaging/examples/regulated.acp-deployment.yaml selects it. There is no local collector and
+    no code path that writes to one, so that profile's stated promise is currently unmet — not
+    violated by sending data somewhere it should not go, but unfulfilled: nothing is collected at
+    all. Named here rather than left for someone to discover from an empty dashboard.
+    """
+    obs = doc["observability"]
+    if not obs.get("openTelemetry"):
+        return
+    exporter = obs.get("exporter")
+    if exporter and exporter not in IMPLEMENTED_EXPORTERS:
+        out.warnings.append(Finding(
+            "observability.exporter",
+            f"'{exporter}' has no implementation in this application — api/telemetry.py "
+            f"configures the Azure Monitor distribution only, so telemetry will be declared and "
+            f"off. Use 'azure-monitor', or accept that this installation collects nothing",
+            "observability.exporter-unimplemented"))
+
+
 def _warn_capacity_defaults(doc: dict, out: Result) -> None:
     if "capacity" not in doc:
         out.warnings.append(Finding(
@@ -639,6 +685,7 @@ _SEMANTIC_RULES = (
     _warn_platform_support,
     _warn_evaluation,
     _warn_ai_off,
+    _warn_exporter_unimplemented,
     _warn_capacity_defaults,
     _warn_no_backups,
 )

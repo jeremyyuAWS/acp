@@ -116,6 +116,60 @@ def _issue_location(i: dict) -> str | None:
     """
     return i.get("location") or i.get("locator")
 
+
+# The four bounded fields of an escalation's provenance, and the reason there are only four.
+# _escalate_low_confidence_findings (handlers.py) sends a page render to a cloud vision provider
+# for a LOW-confidence finding and gets a free-text answer back. NONE of that answer is stored.
+# What is stored is the fact of the call: which provider, which zone, that it happened, what it
+# cost. That is what a reviewer and an auditor need — "this flag was double-checked, by this
+# model, off-box" — and it is the whole of what can be written down without putting a model
+# response, and through it the document's own content, into a database column.
+_HF_PROVENANCE_KEYS = ("provider", "zone", "escalated", "cost_usd")
+
+
+def _issue_provenance(i: dict) -> str | None:
+    """Serialise a finding's escalation provenance for issue_records.hf_provenance.
+
+    A WHITELIST, not a dump. The dict handed over is built in handlers.py today and could grow a
+    key tomorrow — from a provider response, which is to say from outside this repo. Encoding
+    only the four names above means a new key cannot reach the column by being added upstream,
+    which is the difference between a bounded operational record and an open channel out of a
+    model response. Returns None when nothing escalated, so the column stays NULL for the
+    overwhelming majority of findings.
+
+    One accessor, used by both INSERT sites — same reason as _issue_location above.
+    """
+    prov = i.get("hf_provenance")
+    if not isinstance(prov, dict):
+        return None
+    bounded = {k: prov[k] for k in _HF_PROVENANCE_KEYS if k in prov}
+    if not bounded:
+        return None
+    import json as _json
+    try:
+        return _json.dumps(bounded)
+    except Exception:
+        return None
+
+
+def _decode_provenance(raw) -> dict | None:
+    """issue_records.hf_provenance -> the dict the finding carried, or None.
+
+    Tolerant on purpose: the column is NULL for every un-escalated finding (the common case) and
+    could hold a row written by an older or newer build. A value that will not decode to a dict
+    reads as "no escalation recorded" rather than failing the read of an entire scan.
+    """
+    if isinstance(raw, dict):
+        return raw or None
+    if not raw:
+        return None
+    import json as _json
+    try:
+        v = _json.loads(raw)
+    except Exception:
+        return None
+    return v if isinstance(v, dict) and v else None
+
 # Schema is identical between SQLite and Postgres (UPSERT syntax is the same).
 _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS scan_runs (
@@ -220,6 +274,11 @@ _SCHEMA = [
     # Nullable: NULL means the analyser could not attribute a location — never a page-1 default.
     "ALTER TABLE issue_records ADD COLUMN IF NOT EXISTS page INT",
     "ALTER TABLE issue_records ADD COLUMN IF NOT EXISTS location TEXT",
+    # Escalation provenance (ADR 0019): the JSON record of a cloud vision second opinion on a
+    # LOW-confidence finding — provider, zone, escalated, cost_usd, and nothing else. NULL for
+    # every finding that was never escalated, which is almost all of them. The model's answer is
+    # deliberately NOT stored; see _issue_provenance for why the encoder is a whitelist.
+    "ALTER TABLE issue_records ADD COLUMN IF NOT EXISTS hf_provenance TEXT",
     """CREATE TABLE IF NOT EXISTS inventory (
       file TEXT PRIMARY KEY, first_seen TEXT, last_seen TEXT,
       last_status TEXT, last_score INT
@@ -353,6 +412,11 @@ _SCHEMA = [
     # whose temperature/prompt is not yet threaded through (see ai._trace_ai).
     "ALTER TABLE ai_calls ADD COLUMN IF NOT EXISTS temperature REAL",
     "ALTER TABLE ai_calls ADD COLUMN IF NOT EXISTS prompt_version TEXT",
+    """CREATE TABLE IF NOT EXISTS second_opinion_reservations (
+      id TEXT PRIMARY KEY, scan_id TEXT NOT NULL, file TEXT NOT NULL, day TEXT NOT NULL,
+      estimated_cost_usd REAL NOT NULL, created_at TEXT NOT NULL,
+      UNIQUE(scan_id,file)
+    )""",
     # Admin-controlled platform settings (key/value). e.g. ai_enabled='false'
     # forces deterministic-only mode for the whole platform (overrides per-scan ?ai=).
     """CREATE TABLE IF NOT EXISTS app_settings (
@@ -896,6 +960,28 @@ _SCHEMA = [
     # named a second, non-unique index on the same two columns in the same order; it would be
     # pure dead weight beside this one, so only this ships.
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_scan_events_seq ON scan_events(scan_id, seq)",
+    # Structured releases are owner-scoped independently of provider credentials. One release
+    # may have several roots because a SharePoint scan can span multiple Graph drives.
+    """CREATE TABLE IF NOT EXISTS release_executions (
+      id TEXT PRIMARY KEY, scan_id TEXT NOT NULL, owner_email TEXT NOT NULL,
+      source TEXT NOT NULL, folder_name TEXT NOT NULL, documents_total INT NOT NULL,
+      status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    )""",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_release_scan_owner ON release_executions(scan_id,owner_email)",
+    "CREATE INDEX IF NOT EXISTS idx_release_owner ON release_executions(owner_email,created_at)",
+    """CREATE TABLE IF NOT EXISTS release_roots (
+      release_id TEXT NOT NULL, provider TEXT NOT NULL, provider_location TEXT NOT NULL,
+      folder_id TEXT NOT NULL, folder_name TEXT NOT NULL, folder_url TEXT, created_at TEXT NOT NULL,
+      PRIMARY KEY(release_id,provider_location)
+    )""",
+    """CREATE TABLE IF NOT EXISTS release_documents (
+      release_id TEXT NOT NULL, file TEXT NOT NULL, source_document_id TEXT,
+      source_relative_path TEXT NOT NULL, destination_relative_path TEXT,
+      released_document_id TEXT, released_document_url TEXT, corrected_checksum TEXT,
+      verification TEXT, status TEXT NOT NULL, failure_category TEXT, explanation TEXT,
+      created_result INT NOT NULL DEFAULT 0, published_at TEXT,
+      PRIMARY KEY(release_id,file)
+    )""",
     # ADR 0044 — ACP Managed Content Workspace, Phase 1. A workspace is the tenant-scoped
     # container a customer creates before uploading anything; `content_workspace_documents`/
     # `content_workspace_document_versions` (the actual upload targets) are deliberately NOT
@@ -1792,8 +1878,16 @@ class _PgAdapter:
     # locked_at on every heartbeat and two shipped consumers were reading it as a start time.
     # Additive on the usual terms: nullable, defaulted NULL, written only by claim_job. An older
     # replica never writes it and every reader treats NULL as unknown rather than as a time.
-    _SCHEMA_VERSION = 16
-    _SCHEMA_CHECKSUM_AT_VERSION = "0fe97bc49d238af8f6143ec2e42691c8"
+    # v18 adds issue_records.hf_provenance — the JSON record of a cloud vision second opinion on
+    # a LOW-confidence finding. Additive on the usual terms, and additive in BEHAVIOUR: nullable,
+    # defaulted NULL, written only by the two issue_records INSERTs and read only where the
+    # finding is assembled. A replica without this code writes no value and reads no key, so it
+    # keeps saving and serving findings exactly as it does today — it simply records no
+    # escalation. Nothing decides anything from the column; it is evidence for a reviewer.
+    # This follows v17's structured-release tables from main; both changes remain additive and
+    # safe during a rolling deployment.
+    _SCHEMA_VERSION = 19
+    _SCHEMA_CHECKSUM_AT_VERSION = "a014bf53187661bc4edf3efced0948d7"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -2241,10 +2335,10 @@ class Store:
                      f.get("checksum"), f.get("size_kb"), f.get("pages"), f.get("sheets"), f.get("source_modified")))
                 if f["issues"]:
                     self._db.executemany(cur,
-                        "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail,page,location) "
-                        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                        "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail,page,location,hf_provenance) "
+                        "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                         [(sid, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail"),
-                          i.get("page"), _issue_location(i)) for i in f["issues"]])
+                          i.get("page"), _issue_location(i), _issue_provenance(i)) for i in f["issues"]])
                 # Per-rule trace: one row per catalog rule per file — PASS/FAIL/REVIEW/NOT_EVALUATED.
                 # Counts feed the per-rule trace, so they must reflect the conformance target:
                 # an AAA finding picked up as a by-product of an AA check is not this scan's
@@ -3515,10 +3609,10 @@ class Store:
             issues = f.get("issues", [])
             if issues:
                 self._db.executemany(cur,
-                    "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail,page,location) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                    "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail,page,location,hf_provenance) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                     [(scan_id, f["file"], i["ruleId"], i["wcag"], i["severity"], i.get("detail"),
-                      i.get("page"), _issue_location(i)) for i in issues])
+                      i.get("page"), _issue_location(i), _issue_provenance(i)) for i in issues])
             fail_counts, review_counts = _split_sc_counts(
                 filter_issues_to_target(f.get("issues", []), target))
             fmt = _file_format(f["file"])
@@ -3570,10 +3664,15 @@ class Store:
             if not row:
                 return None
             self._db.execute(cur,
-                "SELECT rule_id,wcag,severity,detail,page,location FROM issue_records WHERE scan_id=%s AND file=%s",
+                "SELECT rule_id,wcag,severity,detail,page,location,hf_provenance "
+                "FROM issue_records WHERE scan_id=%s AND file=%s",
                 (scan_id, row["file"]))
             issues = [{"ruleId": r["rule_id"], "wcag": r["wcag"], "severity": r["severity"],
-                       "detail": r["detail"], "page": r["page"], "location": r["location"]}
+                       "detail": r["detail"], "page": r["page"], "location": r["location"],
+                       # Carried forward so a reused analysis keeps saying it was escalated. Both
+                       # readers feed save_file_result, which re-INSERTs through _issue_provenance
+                       # — dropping it here would silently un-escalate every deduplicated copy.
+                       **({"hf_provenance": _p} if (_p := _decode_provenance(r.get("hf_provenance"))) else {})}
                       for r in self._db.fetchall(cur)]
             self._db.execute(cur,
                 "SELECT pii_type,label,count,severity,samples FROM pii_findings "
@@ -3624,10 +3723,15 @@ class Store:
                 return None
             prior_scan_id = row["scan_id"]
             self._db.execute(cur,
-                "SELECT rule_id,wcag,severity,detail,page,location FROM issue_records WHERE scan_id=%s AND file=%s",
+                "SELECT rule_id,wcag,severity,detail,page,location,hf_provenance "
+                "FROM issue_records WHERE scan_id=%s AND file=%s",
                 (prior_scan_id, row["file"]))
             issues = [{"ruleId": r["rule_id"], "wcag": r["wcag"], "severity": r["severity"],
-                       "detail": r["detail"], "page": r["page"], "location": r["location"]}
+                       "detail": r["detail"], "page": r["page"], "location": r["location"],
+                       # Carried forward so a reused analysis keeps saying it was escalated. Both
+                       # readers feed save_file_result, which re-INSERTs through _issue_provenance
+                       # — dropping it here would silently un-escalate every deduplicated copy.
+                       **({"hf_provenance": _p} if (_p := _decode_provenance(r.get("hf_provenance"))) else {})}
                       for r in self._db.fetchall(cur)]
             self._db.execute(cur,
                 "SELECT pii_type,label,count,severity,samples FROM pii_findings "
@@ -3807,13 +3911,15 @@ class Store:
                          "tenant_queue_state",
                          "lifecycle_evaluation", "effective_disposition",
                          "org_memory", "remediation_state", "remediation_diff", "applied_fixes",
-                         "ai_calls", "finding_comments",
+                         "ai_calls", "second_opinion_reservations", "finding_comments",
                          "scan_inputs",  # Stage 1 item 3: per-scan enqueue snapshots are customer data
                          "scan_folder_completions",  # which folders of a scan were counted done
                          "active_discovery_guard",  # transient lock state — cleared on reset
                          "sync_cursors",  # connector sync position is customer-derived, not config
                          "overview_snapshots",  # derived from scan results — customer data, not config
                          "scan_events",  # ADR 0042 lifecycle log — a record OF customer scans
+                         # Release executions and their provider destinations are customer data.
+                         "release_documents", "release_roots", "release_executions",
                          "content_workspaces",  # ADR 0044 — a customer's own workspace, not config
                          "content_workspace_documents", "content_workspace_document_versions",
                          "orchestration_events",  # operational log — carries owner_email, customer data
@@ -3870,7 +3976,8 @@ class Store:
     _RESET_USER_SCAN_TABLES = ["file_records", "issue_records", "scan_rule_traces",
                                "file_stage_timings", "scan_file_manifests", "scan_inventory",
                                "file_tags", "pii_findings", "hitl_queue", "hitl_events",
-                               "remediation_diff", "applied_fixes", "ai_calls", "finding_comments",
+                               "remediation_diff", "applied_fixes", "ai_calls",
+                               "second_opinion_reservations", "finding_comments",
                                "jobs", "overview_snapshots", "scan_events", "orchestration_events",
                                "scan_folder_completions"]
     # Tables that key on doc_id (not scan_id), scoped via a documents.owner_email join.
@@ -3924,6 +4031,16 @@ class Store:
         """
         cleared: list[str] = []
         with self._db.cursor() as cur:
+            # Release children key on release_id rather than scan_id. Remove them before their
+            # owner-scoped executions, while the join can still identify this user's rows.
+            for table in ("release_documents", "release_roots"):
+                self._db.execute(cur,
+                    f"DELETE FROM {table} WHERE release_id IN "
+                    "(SELECT id FROM release_executions WHERE owner_email=%s)", (owner_email,))
+                cleared.append(table)
+            self._db.execute(cur, "DELETE FROM release_executions WHERE owner_email=%s",
+                             (owner_email,))
+            cleared.append("release_executions")
             for t in self._RESET_USER_SCAN_TABLES:
                 self._db.execute(cur,
                     f"DELETE FROM {t} WHERE scan_id IN (SELECT id FROM scan_runs WHERE owner_email=%s)",
@@ -4011,6 +4128,14 @@ class Store:
                 return None
 
         with self._db.cursor() as cur:
+            for table in ("release_documents", "release_roots"):
+                self._db.execute(cur,
+                    f"DELETE FROM {table} WHERE release_id IN "
+                    "(SELECT id FROM release_executions WHERE scan_id=%s AND owner_email=%s)",
+                    (scan_id, owner_email))
+            self._db.execute(cur,
+                "DELETE FROM release_executions WHERE scan_id=%s AND owner_email=%s",
+                (scan_id, owner_email))
             for t in self._RESET_USER_SCAN_TABLES:
                 self._db.execute(cur, f"DELETE FROM {t} WHERE scan_id=%s", (scan_id,))
             self._db.execute(cur, "DELETE FROM scan_runs WHERE id=%s", (scan_id,))
@@ -4976,7 +5101,7 @@ class Store:
                 "SELECT fr.file,fr.engine,fr.status,fr.score,fr.compliant,fr.skipped_rules,"
                 "fr.remediated_at,fr.drive_write_url,fr.acp_stamped,fr.published_at,"
                 "fr.size_kb,fr.pages,fr.sheets,fr.drive_file_id,fr.source_modified,"
-                "si.owner,si.parent_folder "
+                "si.owner,si.parent_folder,si.path AS source_relative_path "
                 "FROM file_records fr "
                 "LEFT JOIN scan_inventory si ON si.scan_id=fr.scan_id AND si.file=fr.file "
                 "WHERE fr.scan_id=%s ORDER BY fr.file", (sid,))
@@ -4987,7 +5112,7 @@ class Store:
             # writes real file_records, those win and this fallback goes quiet.
             if not files:
                 self._db.execute(cur,
-                    "SELECT file,doc_class,size_kb,drive_file_id,owner,parent_folder "
+                    "SELECT file,doc_class,size_kb,drive_file_id,owner,parent_folder,path AS source_relative_path "
                     "FROM scan_inventory WHERE scan_id=%s ORDER BY file", (sid,))
                 inv = self._db.fetchall(cur)
                 files = [{"file": r["file"], "engine": r.get("doc_class") or "inventory",
@@ -4996,7 +5121,8 @@ class Store:
                           "acp_stamped": None, "published_at": None, "size_kb": r.get("size_kb"),
                           "pages": None, "sheets": None, "drive_file_id": r.get("drive_file_id"),
                           "source_modified": None, "owner": r.get("owner"),
-                          "parent_folder": r.get("parent_folder")}
+                          "parent_folder": r.get("parent_folder"),
+                          "source_relative_path": r.get("source_relative_path")}
                          for r in inv]
             # Drop ACP's own remediated copies when they shadow the source document they were
             # made from. They are artifacts, not documents in the estate: counting them
@@ -5024,13 +5150,19 @@ class Store:
             # timeout, so a slow response here just hangs the tab forever rather than erroring).
             # Grouped in Python instead, from one round trip.
             self._db.execute(cur,
-                "SELECT file,rule_id,wcag,severity,detail,page,location FROM issue_records WHERE scan_id=%s",
+                "SELECT file,rule_id,wcag,severity,detail,page,location,hf_provenance "
+                "FROM issue_records WHERE scan_id=%s",
                 (sid,))
             issues_by_file: dict[str, list] = {}
             for row in self._db.fetchall(cur):
                 issues_by_file.setdefault(row["file"], []).append(
                     {"rule_id": row["rule_id"], "wcag": row["wcag"], "severity": row["severity"],
-                     "detail": row["detail"], "page": row["page"], "location": row["location"]})
+                     "detail": row["detail"], "page": row["page"], "location": row["location"],
+                     # Present only when the finding really was escalated — an always-present
+                     # null would add a key to every issue of a several-thousand-file scan's
+                     # payload to say nothing, on the read path that already had to be made one
+                     # query to stop the Discover tab hanging.
+                     **({"hf_provenance": _p} if (_p := _decode_provenance(row.get("hf_provenance"))) else {})})
             for f in files:
                 f["sourceName"] = src_label
                 f["issues"] = issues_by_file.get(f["file"], [])
@@ -5711,6 +5843,27 @@ class Store:
                  int(latency_ms), 1 if ok else 0, float(cost_usd), reason,
                  temperature, prompt_version))
 
+    def reserve_second_opinion(self, *, scan_id: str, file: str, policy: dict) -> tuple[bool, str]:
+        """Atomically reserve one call against scan/day request and estimated-cost ceilings."""
+        import uuid
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc)
+        day = now.date().isoformat()
+        cost = float(policy["estimated_cost_per_request_usd"])
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO second_opinion_reservations(id,scan_id,file,day,estimated_cost_usd,created_at) "
+                "SELECT %s,%s,%s,%s,%s,%s WHERE "
+                "(SELECT COUNT(*) FROM second_opinion_reservations WHERE scan_id=%s)<%s AND "
+                "(SELECT COUNT(*) FROM second_opinion_reservations WHERE day=%s)<%s AND "
+                "(SELECT COALESCE(SUM(estimated_cost_usd),0) FROM second_opinion_reservations WHERE day=%s)+%s<=%s "
+                "ON CONFLICT(scan_id,file) DO NOTHING",
+                (uuid.uuid4().hex, scan_id, file, day, cost, now.isoformat(), scan_id,
+                 int(policy["max_requests_per_scan"]), day, int(policy["max_requests_per_day"]),
+                 day, cost, float(policy["max_daily_cost_usd"])))
+            inserted = cur.rowcount == 1
+        return (inserted, "reserved" if inserted else "duplicate_or_budget_exhausted")
+
     def list_ai_calls(self, scan_id: str | None = None, limit: int = 500) -> list[dict]:
         """Provenance rows for governance/cost views — newest first, optionally per scan."""
         with self._db.cursor() as cur:
@@ -5833,7 +5986,9 @@ class Store:
           ok             successful calls (ok=1)
           errors         failed calls
           avg_latency_ms mean latency of successful calls (0 when no successful calls)
-          p95_latency_ms 95th-percentile latency of successful calls (None when < 2 data points)
+          p95_latency_ms 95th-percentile latency of successful calls using the nearest-rank
+                         convention (same as SQL percentile_disc(0.95)): index
+                         min(ceil(N*0.95), N)-1 into the sorted list. None when no ok calls.
           throttle_count calls that ended with reason='http_429' — HF rate-limits the endpoint
           cold_start_count successful calls with latency > 30 000 ms — dedicated-endpoint cold start
           last_call_ts   ISO timestamp of the most recent call (None when no calls in window)
@@ -5869,13 +6024,13 @@ class Store:
             latencies = [r["latency_ms"] for r in self._db.fetchall(cur)
                          if r.get("latency_ms") is not None]
 
+        import math
         calls = int(row.get("calls") or 0)
         ok_count = int(row.get("ok_count") or 0)
         p95: int | None = None
-        if len(latencies) >= 2:
-            p95 = int(latencies[min(int(len(latencies) * 0.95), len(latencies) - 1)])
-        elif len(latencies) == 1:
-            p95 = int(latencies[0])
+        if latencies:
+            idx = min(math.ceil(len(latencies) * 0.95), len(latencies)) - 1
+            p95 = int(latencies[idx])
         return {
             "provider": provider,
             "window_hours": window_hours,
@@ -6717,6 +6872,128 @@ class Store:
                 self._bump_scan_revision(cur, scan_id)
         return now
 
+    def ensure_release_execution(self, scan_id: str, owner: str, source: str,
+                                 documents_total: int) -> dict:
+        """Return the one durable Release execution for a scan, creating it atomically."""
+        now = self._now()
+        release_id = uuid.uuid4().hex[:16]
+        from datetime import datetime, timezone
+        folder_name = datetime.fromisoformat(now).astimezone(timezone.utc).strftime(
+            "%Y-%m-%d %H-%M UTC")
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO release_executions(id,scan_id,owner_email,source,folder_name,"
+                "documents_total,status,created_at,updated_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s,'running',%s,%s) "
+                "ON CONFLICT(scan_id,owner_email) DO NOTHING",
+                (release_id, scan_id, owner, source, folder_name,
+                 max(0, int(documents_total)), now, now))
+            self._db.execute(cur,
+                "SELECT * FROM release_executions WHERE scan_id=%s AND owner_email=%s",
+                (scan_id, owner))
+            return self._db.fetchone(cur)
+
+    def get_release_root(self, release_id: str, provider_location: str,
+                         owner: str) -> dict | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT r.* FROM release_roots r JOIN release_executions e ON e.id=r.release_id "
+                "WHERE r.release_id=%s AND r.provider_location=%s AND e.owner_email=%s",
+                (release_id, provider_location, owner))
+            return self._db.fetchone(cur)
+
+    def record_release_root(self, release_id: str, owner: str, provider: str,
+                            provider_location: str, folder_id: str,
+                            folder_name: str, folder_url: str | None) -> dict:
+        """Persist a provider root once; a concurrent retry converges on the first row."""
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO release_roots(release_id,provider,provider_location,folder_id,"
+                "folder_name,folder_url,created_at) "
+                "SELECT %s,%s,%s,%s,%s,%s,%s WHERE EXISTS "
+                "(SELECT 1 FROM release_executions WHERE id=%s AND owner_email=%s) "
+                "ON CONFLICT(release_id,provider_location) DO NOTHING",
+                (release_id, provider, provider_location, folder_id, folder_name,
+                 folder_url, now, release_id, owner))
+            self._db.execute(cur,
+                "SELECT r.* FROM release_roots r JOIN release_executions e ON e.id=r.release_id "
+                "WHERE r.release_id=%s AND r.provider_location=%s AND e.owner_email=%s",
+                (release_id, provider_location, owner))
+            return self._db.fetchone(cur)
+
+    def get_release_document(self, release_id: str, file: str, owner: str) -> dict | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT d.* FROM release_documents d JOIN release_executions e "
+                "ON e.id=d.release_id WHERE d.release_id=%s AND d.file=%s AND e.owner_email=%s",
+                (release_id, file, owner))
+            return self._db.fetchone(cur)
+
+    def record_release_document(self, release_id: str, owner: str, result: dict) -> None:
+        """Upsert a safe per-document outcome without accepting a foreign release id."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO release_documents(release_id,file,source_document_id,"
+                "source_relative_path,destination_relative_path,released_document_id,"
+                "released_document_url,corrected_checksum,verification,status,failure_category,"
+                "explanation,created_result,published_at) "
+                "SELECT %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s WHERE EXISTS "
+                "(SELECT 1 FROM release_executions WHERE id=%s AND owner_email=%s) "
+                "ON CONFLICT(release_id,file) DO UPDATE SET "
+                "destination_relative_path=EXCLUDED.destination_relative_path,"
+                "released_document_id=COALESCE(EXCLUDED.released_document_id,release_documents.released_document_id),"
+                "released_document_url=COALESCE(EXCLUDED.released_document_url,release_documents.released_document_url),"
+                "corrected_checksum=COALESCE(EXCLUDED.corrected_checksum,release_documents.corrected_checksum),"
+                "verification=EXCLUDED.verification,status=EXCLUDED.status,"
+                "failure_category=EXCLUDED.failure_category,explanation=EXCLUDED.explanation,"
+                "created_result=EXCLUDED.created_result,"
+                "published_at=COALESCE(EXCLUDED.published_at,release_documents.published_at)",
+                (release_id, result["file"], result.get("source_document_id"),
+                 result.get("original_relative_path") or result["file"],
+                 result.get("released_relative_path"), result.get("released_document_id"),
+                 result.get("published_url"), result.get("corrected_checksum"),
+                 result.get("verification"), result["status"],
+                 result.get("failure_category"), result.get("explanation"),
+                 int(bool(result.get("created"))), result.get("published_at"),
+                 release_id, owner))
+
+    def release_status(self, release_id: str, owner: str) -> dict | None:
+        """Owner-scoped release, roots and document outcomes for retries and UI reloads."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM release_executions WHERE id=%s AND owner_email=%s",
+                (release_id, owner))
+            release = self._db.fetchone(cur)
+            if not release:
+                return None
+            self._db.execute(cur,
+                "SELECT * FROM release_roots WHERE release_id=%s ORDER BY provider_location",
+                (release_id,))
+            roots = self._db.fetchall(cur)
+            self._db.execute(cur,
+                "SELECT * FROM release_documents WHERE release_id=%s ORDER BY file",
+                (release_id,))
+            documents = self._db.fetchall(cur)
+            published = sum(d.get("status") == "published" for d in documents)
+            failed = sum(d.get("status") == "failed" for d in documents)
+            total = int(release.get("documents_total") or 0)
+            status = "completed" if total and published == total else "attention" if failed else "running"
+            self._db.execute(cur,
+                "UPDATE release_executions SET status=%s,updated_at=%s WHERE id=%s AND owner_email=%s",
+                (status, self._now(), release_id, owner))
+            return {**release, "status": status, "roots": roots, "documents": documents,
+                    "published": min(total, published), "failed": failed,
+                    "remaining": max(0, total - published - failed)}
+
+    def release_for_scan(self, scan_id: str, owner: str) -> dict | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id FROM release_executions WHERE scan_id=%s AND owner_email=%s",
+                (scan_id, owner))
+            row = self._db.fetchone(cur)
+        return self.release_status(row["id"], owner) if row else None
+
     def refresh_scan_aggregate(self, scan_id: str) -> dict:
         """Re-compute avg_score and certifiable from current file_records — called after
         a single-file rescore so the scan summary stays consistent without a full finalize."""
@@ -6733,11 +7010,16 @@ class Store:
             return self._db.fetchone(cur) or {}
 
     def get_file_record(self, scan_id: str, file: str) -> dict | None:
-        """Return the full file_records row for one file in a scan."""
+        """Return one file plus its immutable discovery path for release decisions."""
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT file,engine,status,score,compliant,drive_file_id,remediated_at,published_at "
-                "FROM file_records WHERE scan_id=%s AND file=%s",
+                "SELECT f.file,f.engine,f.status,f.score,f.compliant,f.drive_file_id,"
+                "f.remediated_at,f.published_at,f.published_url,f.checksum,"
+                "i.path AS source_relative_path,i.parent_folder,i.drive_id,i.site_id,"
+                "i.library_name,i.site_name "
+                "FROM file_records f LEFT JOIN scan_inventory i "
+                "ON i.scan_id=f.scan_id AND i.file=f.file "
+                "WHERE f.scan_id=%s AND f.file=%s",
                 (scan_id, file))
             return self._db.fetchone(cur)
 
@@ -8706,6 +8988,51 @@ class Store:
                 r["detail"] = None
         return rows
 
+    def recent_remediation_event_summaries(self, scan_ids: list[str], *,
+                                           limit_per_scan: int = 12) -> dict[str, list[dict]]:
+        """Bounded, payload-safe remediation events for the cross-user operations view.
+
+        The customer-facing stream may carry a filename in ``detail``. Live Operations spans
+        workspace users, so this projection deliberately keeps only numeric counts, WCAG
+        criterion and destination. The window function prevents one noisy run from consuming the
+        whole result while still doing one database read for every visible run.
+        """
+        ids = sorted({str(scan_id) for scan_id in scan_ids if scan_id})
+        limit = max(1, min(int(limit_per_scan), 50))
+        if not ids:
+            return {}
+        placeholders = ",".join(["%s"] * len(ids))
+        sql = (
+            "SELECT scan_id,seq,occurred_at,kind,phase,attempt,detail FROM ("
+            "SELECT scan_id,seq,occurred_at,kind,phase,attempt,detail,"
+            "ROW_NUMBER() OVER (PARTITION BY scan_id ORDER BY seq DESC) AS event_rank "
+            f"FROM scan_events WHERE scan_id IN ({placeholders}) AND kind LIKE 'remediate.%'"
+            ") ranked WHERE event_rank<=%s ORDER BY scan_id,seq"
+        )
+        try:
+            with self._db.cursor() as cur:
+                self._db.execute(cur, sql, tuple(ids + [limit]))
+                rows = self._db.fetchall(cur)
+        except Exception:
+            return {}
+        import json as _json
+        result: dict[str, list[dict]] = {}
+        for row in rows:
+            raw = row.get("detail")
+            try:
+                detail = _json.loads(raw) if isinstance(raw, str) and raw else (raw or {})
+            except (TypeError, ValueError):
+                detail = {}
+            safe_detail = {key: detail[key] for key in
+                           ("documents", "fixes", "criterion", "destination")
+                           if key in detail and isinstance(detail[key], (str, int, float, bool))}
+            result.setdefault(str(row["scan_id"]), []).append({
+                "seq": int(row["seq"]), "occurred_at": row.get("occurred_at"),
+                "kind": row.get("kind"), "phase": row.get("phase"),
+                "attempt": row.get("attempt"), "detail": safe_detail,
+            })
+        return result
+
     # ── Operational event stream (orchestration_events / worker_instances) ────
     #
     # PR 1 of a 5-PR delivery plan modeled on ADR 0042's scan_events (the CUSTOMER-FACING
@@ -10207,8 +10534,8 @@ class Store:
                 "sr.owner_email,sr.source,sr.files,sr.files_done,sr.live_checkpoint "
                 "FROM jobs j JOIN scan_runs sr ON sr.id=j.scan_id "
                 "WHERE j.scan_id IN (SELECT DISTINCT scan_id FROM jobs "
-                "WHERE status IN ('queued','running')) OR "
-                "(j.status='done' AND j.updated_at>=%s) "
+                "WHERE status IN ('queued','running') OR "
+                "(status IN ('done','dead') AND updated_at>=%s)) "
                 "ORDER BY j.updated_at DESC LIMIT %s", (recent_cutoff, 5000))
             rows = self._db.fetchall(cur)
 
@@ -10223,7 +10550,7 @@ class Store:
             item = grouped.setdefault(key, {
                 "scan_id": row["scan_id"], "owner": row.get("owner_email") or "unknown",
                 "source": row.get("source") or "unknown", "stage": stage,
-                "queued": 0, "running": 0, "completed": 0, "total": 0,
+                "queued": 0, "running": 0, "completed": 0, "failed": 0, "total": 0,
                 "started_at": row.get("created_at"), "updated_at": row.get("updated_at"),
                 "oldest_queued_at": None, "current_file": None,
                 "current_job_type": None, "current_rule_id": None,
@@ -10246,6 +10573,10 @@ class Store:
             elif status == "running": item["running"] += 1
             elif status == "done":
                 item["completed"] += 1
+                if str(row.get("updated_at") or "") >= recent_cutoff:
+                    recent.add(key)
+            elif status == "dead":
+                item["failed"] += 1
                 if str(row.get("updated_at") or "") >= recent_cutoff:
                     recent.add(key)
             if status in ("queued", "running"):
@@ -10283,7 +10614,18 @@ class Store:
                 item["updated_at"] = row.get("updated_at")
         result = [grouped[key] for key in active | recent]
         for item in result:
-            item["status"] = "active" if (item["queued"] or item["running"]) else "recent"
+            item["status"] = ("active" if (item["queued"] or item["running"]) else
+                              "failed" if item["failed"] else "recent")
+        # The Remediation screen has a durable lifecycle stream. Carry a bounded, sanitized
+        # projection into Live Operations too, so arriving after a fix or reconnecting does not
+        # erase the activity timeline. The helper removes filenames and free text before these
+        # cross-user rows leave the store.
+        remediation_ids = [item["scan_id"] for item in result if item["stage"] == "remediate"]
+        remediation_events = self.recent_remediation_event_summaries(
+            remediation_ids, limit_per_scan=12)
+        for item in result:
+            if item["stage"] == "remediate":
+                item["recent_events"] = remediation_events.get(str(item["scan_id"]), [])
         # Confirmed findings so far, for the throughput panel's findings-per-minute. One aggregate
         # per ACTIVE assess run — bounded by concurrent runs, not by estate size — and deliberately
         # not taken for recent ones, which are finished and whose count no longer moves. It is the
@@ -10305,6 +10647,19 @@ class Store:
         for position, item in enumerate(waiting, 1):
             item["queue_position"] = position
         return result
+
+    def unlinked_active_jobs_count(self) -> int:
+        """Active queue rows that cannot be attached to a durable scan workflow.
+
+        This is deliberately a count, not a record list: it gives operators a repair signal
+        without leaking payloads from malformed or legacy jobs across user boundaries.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs j LEFT JOIN scan_runs sr ON sr.id=j.scan_id "
+                "WHERE j.status IN ('queued','running') AND sr.id IS NULL")
+            row = self._db.fetchone(cur) or {}
+        return int(row.get("n") or 0)
 
     def list_scan_jobs_of_type(self, scan_id: str, job_type: str) -> list[dict]:
         """Every job of one type already enqueued for one scan, whatever its status.

@@ -54,13 +54,13 @@ Platform `compose` · release `2026.9` · VALID
 | `acp-assess` | service | in-cluster | none | 1–1 | 1/2Gi | assess | `database-url`, `langfuse-secret-key` |
 | `acp-remediate` | service | in-cluster | none | 1–1 | 1/2Gi | remediate | `database-url`, `langfuse-secret-key` |
 | `acp-ollama-gateway` | service | in-cluster | internal | 1–1 | 4/8Gi | — | — |
-| `acp-otel-collector` | service | in-cluster | internal | — | — | — | — |
 | `acp-grafana` | service | in-cluster | internal | — | — | — | — |
 | `acp-langfuse` | service | in-cluster | internal | — | — | — | `langfuse-secret-key` |
 
 Postgres connections at maximum replicas: **70** of 150 (80 spare).
 
 > ⚠ evaluation is a single-machine topology with no high availability and is not a supported production posture
+> ⚠ 'local' has no implementation in this application — api/telemetry.py configures the Azure Monitor distribution only, so telemetry will be declared and off. Use 'azure-monitor', or accept that this installation collects nothing
 > ⚠ is 0 — this installation keeps no database backups
 
 ## Profile: high-availability (`high-availability.acp-deployment.yaml`)
@@ -79,13 +79,13 @@ Platform `aws` · release `2026.9` · VALID
 | `acp-assess` | service | in-cluster | none | 4–20 | 4/8Gi | assess | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
 | `acp-remediate` | service | in-cluster | none | 4–20 | 4/8Gi | remediate | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
 | `acp-ollama-gateway` | service | in-cluster | internal | 1–1 | 4/8Gi | — | — |
-| `acp-otel-collector` | service | in-cluster | internal | — | — | — | — |
 | `acp-grafana` | service | in-cluster | internal | — | — | — | — |
 | `acp-langfuse` | service | in-cluster | internal | — | — | — | `langfuse-secret-key` |
 
 Postgres connections at maximum replicas: **1272** of 2000 (728 spare).
 
 > ⚠ platform 'aws' is planned: no reference deployment in this repository runs the contract suite against it yet
+> ⚠ 'cloudwatch' has no implementation in this application — api/telemetry.py configures the Azure Monitor distribution only, so telemetry will be declared and off. Use 'azure-monitor', or accept that this installation collects nothing
 
 ## Profile: regulated (`regulated.acp-deployment.yaml`)
 
@@ -103,13 +103,13 @@ Platform `kubernetes` · release `2026.9` · VALID
 | `acp-assess` | service | in-cluster | none | 3–10 | 4/8Gi | assess | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `microsoft-oauth-client-secret`, `smb-credentials` |
 | `acp-remediate` | service | in-cluster | none | 3–10 | 4/8Gi | remediate | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `microsoft-oauth-client-secret`, `smb-credentials` |
 | `acp-ollama-gateway` | service | in-cluster | internal | 1–1 | 4/8Gi | — | — |
-| `acp-otel-collector` | service | in-cluster | internal | — | — | — | — |
 | `acp-grafana` | service | in-cluster | internal | — | — | — | — |
 | `acp-langfuse` | service | in-cluster | internal | — | — | — | `langfuse-secret-key` |
 
 Postgres connections at maximum replicas: **604** of 800 (196 spare).
 
 > ⚠ platform 'kubernetes' is planned: no reference deployment in this repository runs the contract suite against it yet
+> ⚠ 'local' has no implementation in this application — api/telemetry.py configures the Azure Monitor distribution only, so telemetry will be declared and off. Use 'azure-monitor', or accept that this installation collects nothing
 
 ## Profile: standard (`standard-production.acp-deployment.yaml`)
 
@@ -121,13 +121,12 @@ Platform `azure` · release `2026.9` · VALID
 | `redis` | dependency | managed | internal | — | — | — | — |
 | `object-storage` | dependency | managed | internal | — | — | — | — |
 | `acp-migrations` | job | in-cluster | none | — | — | — | `database-url` |
-| `acp-preflight` | job | in-cluster | none | — | — | — | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
-| `acp-web-api` | service | in-cluster | public | 2–4 | 1/2Gi | — | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
-| `acp-discovery` | service | in-cluster | none | 1–3 | 1/2Gi | discovery | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
-| `acp-assess` | service | in-cluster | none | 5–5 | 2/4Gi | assess | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
-| `acp-remediate` | service | in-cluster | none | 3–10 | 2/4Gi | remediate | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
+| `acp-preflight` | job | in-cluster | none | — | — | — | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `applicationinsights-connection-string`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
+| `acp-web-api` | service | in-cluster | public | 2–4 | 1/2Gi | — | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `applicationinsights-connection-string`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
+| `acp-discovery` | service | in-cluster | none | 1–3 | 1/2Gi | discovery | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `applicationinsights-connection-string`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
+| `acp-assess` | service | in-cluster | none | 5–5 | 2/4Gi | assess | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `applicationinsights-connection-string`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
+| `acp-remediate` | service | in-cluster | none | 5–10 | 2/4Gi | remediate | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `applicationinsights-connection-string`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
 | `acp-ollama-gateway` | service | in-cluster | internal | 1–1 | 4/8Gi | — | — |
-| `acp-otel-collector` | service | in-cluster | internal | — | — | — | — |
 | `acp-grafana` | service | in-cluster | internal | — | — | — | — |
 | `acp-langfuse` | service | in-cluster | internal | — | — | — | `langfuse-secret-key` |
 

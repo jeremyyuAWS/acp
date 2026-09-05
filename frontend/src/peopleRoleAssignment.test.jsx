@@ -48,7 +48,13 @@ vi.mock('./api.js', async (importActual) => ({
 const { default: PeopleAccess } = await import('./PeopleAccess.jsx')
 
 afterEach(() => { unmountAll(); vi.clearAllMocks() })
-beforeEach(() => { IMPACT = { gains: ['discover.run'], loses: ['remediate.run', 'release.view'], enforced: true } })
+beforeEach(() => {
+  IMPACT = { gains: ['discover.run'], loses: ['remediate.run', 'release.view'], enforced: true }
+  // The mock returns ROLES by reference, so a test that changes the rung has to put it back or
+  // the next one inherits it — the same trap the JIT-roster memo sprang on test_staged_rollout.
+  ROLES.enforced = true
+  delete ROLES.rollout
+})
 
 const flush = async () => { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve() }) }
 const click = async (el) => { await act(async () => { el.click() }); await flush() }
@@ -188,5 +194,61 @@ describe('when the caller may not manage roles', () => {
     const c = await mount()
     expect(roleSelect(c)).toBeNull()
     expect(c.querySelector('[role="status"]').textContent).toBe('')
+  })
+})
+
+
+// ── the rung, on the screen where roles are actually given ───────────────────
+
+describe('an assignment that will not do anything yet says so', () => {
+  // WorkspaceRoles.jsx has carried this warning since slice 6, on the screen where roles are
+  // DESIGNED. The screen where they are ASSIGNED said nothing: the dropdown changed, "Jane's role
+  // was updated" appeared in green, and every route still admitted her exactly as before. An
+  // administrator doing the thing the rollout runbook asks for, at the step the runbook names,
+  // got no signal that the step has not taken effect yet.
+  //
+  // The server has always sent the rung on this very request — `enforced` and `rollout` ride back
+  // from GET /admin/roles beside the roles the dropdown is built from — so the
+  // information was in the response this component was discarding.
+
+  const note = (c) => byText(c, '[role="note"]', /not being enforced/i)
+
+  it('names the rung and what it means, in the server\'s words', async () => {
+    ROLES.enforced = false
+    ROLES.rollout = { mode: 'observe', means: 'Roles are calculated and recorded; nobody is refused.',
+                      next: 'navigation' }
+    const c = await mount()
+    expect(note(c)).toBeTruthy()
+    expect(note(c).textContent).toContain('calculated and recorded')
+    expect(note(c).textContent).toContain('navigation')
+  })
+
+  it('still warns when the server sends no rung detail', async () => {
+    // An older server, or a payload without `rollout`. The fallback wording has to stand alone —
+    // a note that renders empty is worse than no note, because it reads as a rendering bug.
+    ROLES.enforced = false
+    const c = await mount()
+    expect(note(c).textContent).toMatch(/nothing changes for anyone/i)
+  })
+
+  it('says nothing when roles ARE enforced — the control', async () => {
+    // Without this, "the note appears" is satisfiable by a note that always appears, which would
+    // train an administrator to ignore the one screen that has to be believed.
+    const c = await mount()          // ROLES.enforced === true, from beforeEach
+    expect(note(c)).toBeFalsy()
+  })
+
+  it('says nothing when there are no roles to assign', async () => {
+    // No dropdown means no action to qualify, and a warning about the effect of something nobody
+    // can do is noise. Restored explicitly because this test mutates the shared fixture.
+    const previous = ROLES.roles
+    ROLES.roles = []
+    ROLES.enforced = false
+    try {
+      const c = await mount()
+      expect(note(c)).toBeFalsy()
+    } finally {
+      ROLES.roles = previous
+    }
   })
 })

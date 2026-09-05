@@ -255,7 +255,25 @@ def add_person(body: dict, request: Request):
     return {"person": record, **_people_payload()}
 
 
-@router.put("/admin/people/{email:path}")
+# `{email}`, NOT `{email:path}`, AND THAT ONE WORD IS A BUG FIX (2026-09-05).
+#
+# The `:path` converter matches `.*` — slashes included — so `PUT /admin/people/{email:path}`
+# also matched `/admin/people/alice@hosp.org/role`, binding email to "alice@hosp.org/role".
+# `routes/__init__.py` includes `system` first and `workspace_roles_admin` last, so this route
+# won the match and `assign_person_role` — the endpoint the People screen's workspace-role
+# dropdown calls — was UNREACHABLE. Every assignment landed here instead, failed the roster
+# lookup on an address with "/role" glued to it, and answered `404 person not found`: the red
+# line an administrator saw on the row they had just used, and the original bug report.
+#
+# It survived because every test for the shadowed endpoint calls the Python function directly
+# (`adm.assign_person_role(...)` — tests/test_workspace_roles_admin.py) rather than issuing a
+# request, so the routing layer was never exercised by anything. The function was correct the
+# whole time. See tests/test_people_route_shadowing.py, which asks the app over HTTP.
+#
+# The default converter is `[^/]+`, which is the right shape for an address in one path segment:
+# the SPA sends it through encodeURIComponent and no provider issues an address containing a
+# literal slash. `:path` bought nothing here and cost the feature.
+@router.put("/admin/people/{email}")
 def update_person(email: str, body: dict, request: Request):
     _require_owner(request)
     target = email.strip().lower()
@@ -285,7 +303,11 @@ def update_person(email: str, body: dict, request: Request):
     return {"person": record, **_people_payload()}
 
 
-@router.delete("/admin/people/{email:path}")
+# `{email}` for the same reason as the PUT above. Nothing registers a DELETE under a person
+# today, so this one shadows nothing yet — which is exactly why it is worth narrowing now: the
+# next `/admin/people/{email}/<something>` endpoint would be swallowed silently, and the failure
+# reads as "that person does not exist" rather than as a routing problem.
+@router.delete("/admin/people/{email}")
 def delete_person(email: str, request: Request):
     _require_owner(request)
     target = email.strip().lower()
@@ -365,9 +387,7 @@ def _is_suspended(email: str) -> bool:
     rather than inferred from absence in the allowlist, which would also be true of somebody who
     was never added and of the demo path where no allowlist is configured at all.
     """
-    target = (email or "").strip().lower()
-    person = next((p for p in core.store.get_people() if p.get("email") == target), None)
-    return (person or {}).get("status") == "suspended"
+    return core.suspended_in_store(email)
 
 
 @router.post("/admin/workspace-roles/bootstrap")
@@ -1147,6 +1167,44 @@ class AIProviderUpdate(BaseModel):
     key_secret_ref: str | None = None       # the NAME of an ops-provisioned env/Key-Vault secret
 
 
+class SecondOpinionPolicyUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+    criteria: list[str]
+    confidence_threshold: str = "low"
+    max_requests_per_scan: int = 25
+    max_requests_per_day: int = 250
+    max_daily_cost_usd: float = 10.0
+    estimated_cost_per_request_usd: float = 0.01
+
+
+@router.get("/ai/second-opinion-policy")
+def get_second_opinion_policy(request: Request):
+    """Owner-visible consent policy; credentials and provider output are never part of it."""
+    _require_admin(request)
+    from second_opinion_policy import load_policy
+    return load_policy(core.store)
+
+
+@router.put("/ai/second-opinion-policy")
+def put_second_opinion_policy(body: SecondOpinionPolicyUpdate, request: Request):
+    """Set policy for future scans. Existing scans retain their immutable snapshot."""
+    _require_admin(request)
+    from second_opinion_policy import SETTING_KEY, normalize_policy
+    policy = normalize_policy(body.model_dump())
+    if body.confidence_threshold.lower() not in ("low", "medium", "high"):
+        raise HTTPException(422, "confidence_threshold must be low, medium, or high")
+    if policy["enabled"] and not policy["criteria"]:
+        raise HTTPException(422, "at least one eligible criterion is required when enabled")
+    core.store.set_setting(SETTING_KEY, json.dumps(policy, sort_keys=True))
+    actor = getattr(request.state, "user_email", None) or "admin"
+    core.store.log_decision(actor, "settings.second_opinion_policy",
+                            detail=(f"enabled={policy['enabled']} · criteria="
+                                    f"{','.join(policy['criteria']) or '(none)'} · threshold="
+                                    f"{policy['confidence_threshold']} · future scans only"))
+    return policy
+
+
 @router.get("/ai/providers")
 def get_ai_providers(request: Request):
     """Admin: the configurable cloud AI providers as SAFE views — endpoint, model, whether the
@@ -1342,40 +1400,87 @@ def jobs(request: Request, status: str | None = None, limit: int = 100):
             "jobs": core.store.list_jobs(status=status, limit=limit, owner=owner)}
 
 
-def _admin_activity_snapshot() -> dict:
-    wt = core.store.worker_tier_status()
-    worker_roles = core.store.worker_roles_status()
-    stats = core.store.job_stats(owner=None)
-    runs = core.store.admin_live_activity()
-    _list_instances = getattr(core.store, "list_worker_instances", None)
-    instances = _list_instances() if callable(_list_instances) else []
-    freshness_seconds = 30
-    now = datetime.now(timezone.utc)
-    per_role: dict[str, dict] = {}
+def _replica_capacity(instances: list[dict], *, now: datetime,
+                      freshness_seconds: int | None = None) -> dict[str, dict]:
+    """Aggregate process heartbeats into physical replicas, then into service roles.
+
+    ``worker_id`` identifies a process (role:replica:process), so counting rows as replicas
+    inflates the fleet whenever a container runs more than one worker process. Capacity remains
+    the sum of fresh process pools, while replica health/counts and drawer rows use the stable
+    ``replica_id``. Rows without a replica id retain the legacy one-row-per-worker behavior.
+    """
+    freshness_seconds = (freshness_seconds if freshness_seconds is not None
+                         else core.WORKER_INSTANCE_FRESHNESS_SECONDS)
+    replicas: dict[tuple[str, str], dict] = {}
     for instance in instances:
         worker_id = str(instance.get("worker_id") or "")
         role = worker_id.split(":", 1)[0] if ":" in worker_id else "mixed"
-        row = per_role.setdefault(role, {"role": role, "capacity_source": "worker_instances",
-            "freshness_threshold_seconds": freshness_seconds, "healthy_replicas": 0,
-            "stale_replicas": 0, "worker_slots": 0, "busy_slots": 0, "instances": []})
+        replica_id = str(instance.get("replica_id") or worker_id or "unknown")
+        key = (role, replica_id)
         try:
             beat = datetime.fromisoformat(str(instance.get("last_heartbeat_at")).replace("Z", "+00:00"))
             age_s = max(0, (now - beat).total_seconds())
         except (TypeError, ValueError):
             beat, age_s = None, float("inf")
         fresh = age_s <= freshness_seconds
-        state = instance.get("state")
-        healthy = fresh and state in {"ready", "busy"}
-        if healthy:
+        healthy_process = fresh and instance.get("state") in {"ready", "busy"}
+        replica = replicas.setdefault(key, {
+            **instance, "worker_id": worker_id, "replica_id": replica_id,
+            "process_count": 0, "concurrency_limit": 0, "active_job_count": 0,
+            "fresh": False, "healthy": False, "age_s": None,
+        })
+        replica["process_count"] += 1
+        replica["fresh"] = replica["fresh"] or fresh
+        replica["healthy"] = replica["healthy"] or healthy_process
+        if healthy_process:
+            replica["concurrency_limit"] += max(0, int(instance.get("concurrency_limit") or 0))
+            replica["active_job_count"] += max(0, int(instance.get("active_job_count") or 0))
+        if age_s != float("inf") and (replica["age_s"] is None or age_s < replica["age_s"]):
+            replica["age_s"] = round(age_s, 1)
+            replica["last_heartbeat_at"] = beat.isoformat() if beat else None
+            replica["revision_name"] = instance.get("revision_name")
+            replica["software_version"] = instance.get("software_version")
+        if healthy_process and instance.get("state") == "busy":
+            replica["state"] = "busy"
+        elif healthy_process and replica.get("state") != "busy":
+            replica["state"] = "ready"
+
+    per_role: dict[str, dict] = {}
+    for (role, _replica_id), replica in replicas.items():
+        row = per_role.setdefault(role, {"role": role, "capacity_source": "worker_instances",
+            "freshness_threshold_seconds": freshness_seconds, "healthy_replicas": 0,
+            "stale_replicas": 0, "worker_slots": 0, "busy_slots": 0, "instances": []})
+        if replica["healthy"]:
             row["healthy_replicas"] += 1
-            row["worker_slots"] += max(0, int(instance.get("concurrency_limit") or 0))
-            row["busy_slots"] += max(0, int(instance.get("active_job_count") or 0))
-        elif not fresh:
+            row["worker_slots"] += replica["concurrency_limit"]
+            row["busy_slots"] += replica["active_job_count"]
+        elif not replica["fresh"]:
             row["stale_replicas"] += 1
-        row["instances"].append({**instance, "fresh": fresh, "age_s": None if age_s == float("inf") else round(age_s, 1)})
-        measured = beat.isoformat() if beat else None
+            replica["state"] = "stale"
+        row["instances"].append(replica)
+        measured = replica.get("last_heartbeat_at")
         if measured and (not row.get("measured_at") or measured > row["measured_at"]):
             row["measured_at"] = measured
+    for row in per_role.values():
+        row["instances"].sort(key=lambda item: str(item.get("replica_id") or ""))
+    return per_role
+
+
+def _admin_activity_snapshot() -> dict:
+    wt = core.store.worker_tier_status()
+    worker_roles = core.store.worker_roles_status()
+    stats = core.store.job_stats(owner=None)
+    runs = core.store.admin_live_activity()
+    _unlinked = getattr(core.store, "unlinked_active_jobs_count", None)
+    try:
+        unlinked_active_jobs = int(_unlinked()) if callable(_unlinked) else None
+    except Exception:
+        unlinked_active_jobs = None
+    _list_instances = getattr(core.store, "list_worker_instances", None)
+    instances = _list_instances() if callable(_list_instances) else []
+    freshness_seconds = core.WORKER_INSTANCE_FRESHNESS_SECONDS
+    now = datetime.now(timezone.utc)
+    per_role = _replica_capacity(instances, now=now, freshness_seconds=freshness_seconds)
 
     # The shared heartbeat is last-writer-wins. In production each dedicated service writes its
     # own role heartbeat, so summing the live role pools is the only honest total capacity.
@@ -1388,6 +1493,8 @@ def _admin_activity_snapshot() -> dict:
     queued = sum(int(r.get("queued") or 0) for r in runs)
     _running_by_type = getattr(core.store, "running_jobs_by_type", None)
     running_by_type = _running_by_type() if callable(_running_by_type) else None
+    _list_events = getattr(core.store, "list_orchestration_events", None)
+    lifecycle_events = _list_events(limit=200) if callable(_list_events) else []
     for role, row in per_role.items():
         stage = "discover" if role == "discovery" else role
         if running_by_type is None:
@@ -1401,13 +1508,43 @@ def _admin_activity_snapshot() -> dict:
         else:
             jobs = sum(running_by_type.values())
         row["jobs_in_flight"] = jobs
-        row["busy_slots"] = min(row["worker_slots"], row["busy_slots"])
+        reported_busy = row["busy_slots"]
+        row["reported_busy_slots"] = reported_busy
+        row["busy_slots"] = min(row["worker_slots"], reported_busy)
         row["available_slots"] = max(0, row["worker_slots"] - row["busy_slots"])
         row["unattributed_running"] = max(0, jobs - row["busy_slots"])
         row["utilization_pct"] = min(100, round(row["busy_slots"] / row["worker_slots"] * 100)) if row["worker_slots"] else None
         row["status"] = ("stale" if not row["healthy_replicas"] and row["stale_replicas"] else
                          "saturated" if row["worker_slots"] and row["busy_slots"] >= row["worker_slots"] else
                          "degraded" if row["stale_replicas"] or row["unattributed_running"] else "online")
+        alerts = []
+        if row["stale_replicas"]:
+            alerts.append({"code": "stale_replicas", "severity": "warning",
+                           "message": f"{row['stale_replicas']} registered replica(s) have stale heartbeats."})
+        if row["unattributed_running"]:
+            alerts.append({"code": "unattributed_running", "severity": "warning",
+                           "message": f"{row['unattributed_running']} running job record(s) are not attributed to live worker slots."})
+        if reported_busy > row["worker_slots"]:
+            alerts.append({"code": "active_exceeds_concurrency", "severity": "critical",
+                           "message": "Reported active slots exceed configured concurrency; utilization remains capped."})
+        revisions = sorted({str(item.get("revision_name")) for item in row["instances"]
+                            if item.get("fresh") and item.get("revision_name")})
+        row["revision_distribution"] = {
+            revision: sum(1 for item in row["instances"]
+                          if item.get("fresh") and str(item.get("revision_name")) == revision)
+            for revision in revisions}
+        if len(revisions) > 1:
+            alerts.append({"code": "mixed_revisions", "severity": "warning",
+                           "message": f"Fresh replicas report {len(revisions)} active revisions."})
+        queued_for_role = sum(int(run.get("queued") or 0) for run in runs
+                              if (run.get("stage") or "unknown") == stage)
+        if queued_for_role and not row["worker_slots"]:
+            alerts.append({"code": "no_capacity_with_queue", "severity": "critical",
+                           "message": f"{queued_for_role} job(s) are queued with no fresh reported capacity."})
+        row["alerts"] = alerts
+        row["recent_lifecycle_events"] = [event for event in lifecycle_events
+            if str(event.get("worker_id") or "").startswith(f"{role}:")
+            and str(event.get("kind") or "").startswith("worker.")][-20:]
     instance_slots = sum(row["worker_slots"] for row in per_role.values())
     instance_busy = sum(row["busy_slots"] for row in per_role.values())
     if instances:
@@ -1443,9 +1580,11 @@ def _admin_activity_snapshot() -> dict:
         pressure = "busy"
     else:
         pressure = "healthy"
+    workflows = _workflow_rows(runs)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "runs": runs,
+        "workflows": workflows,
         "summary": {
             "active_runs": sum(1 for r in runs if r.get("status") == "active"),
             "recent_runs": sum(1 for r in runs if r.get("status") == "recent"),
@@ -1464,6 +1603,13 @@ def _admin_activity_snapshot() -> dict:
             "worker_roles": worker_roles,
             "worker_capacity_by_role": per_role,
             "by_stage": by_stage,
+            "active_workflows": sum(1 for row in workflows if row["status"] != "completed"),
+            "recent_workflows": sum(1 for row in workflows if row["status"] == "completed"),
+            "workflow_correlation": {
+                "attributed_stage_runs": len(runs),
+                "unlinked_active_jobs": unlinked_active_jobs,
+                "complete": unlinked_active_jobs == 0 if unlinked_active_jobs is not None else None,
+            },
             # During mixed-version rollout an empty registry is unavailable, not zero capacity.
             # Once any process has reported, worker_capacity_by_role contains the fresh/stale
             # split and every raw instance needed by the authorized operations drawer.
@@ -1479,6 +1625,95 @@ def _admin_activity_snapshot() -> dict:
             **({"queue": composition} if composition else {}),
         },
     }
+
+
+def _workflow_rows(runs: list[dict]) -> list[dict]:
+    """Turn stage aggregates into the durable workflow contract used by Live Ops.
+
+    ``scan_id`` is already the parent identity stamped on every queue record in the pipeline.
+    Calling it ``workflow_id`` here makes that relationship explicit without creating a second
+    identity that could drift.  Stage ids are deterministic because the current queue model has
+    one aggregate stage per scan; individual attempts remain inspectable in the stage detail.
+    """
+    grouped: dict[str, dict] = {}
+    stage_order = {"discover": 0, "assess": 1, "remediate": 2, "release": 3}
+    for run in runs:
+        scan_id = str(run.get("scan_id") or "").strip()
+        stage = str(run.get("stage") or "").strip()
+        if not scan_id or not stage:
+            continue
+        workflow = grouped.setdefault(scan_id, {
+            "workflow_id": scan_id,
+            "scan_id": scan_id,
+            "owner_display_name": run.get("owner") or "unknown",
+            "source": run.get("source") or "unknown",
+            "created_at": run.get("started_at"),
+            "updated_at": run.get("updated_at"),
+            "status": "completed",
+            "current_stage": None,
+            "available_next_actions": [],
+            "stages": [],
+        })
+        if str(run.get("started_at") or "") < str(workflow.get("created_at") or run.get("started_at") or ""):
+            workflow["created_at"] = run.get("started_at")
+        if str(run.get("updated_at") or "") > str(workflow.get("updated_at") or ""):
+            workflow["updated_at"] = run.get("updated_at")
+        stage_status = ("running" if int(run.get("running") or 0) else
+                        "waiting" if int(run.get("queued") or 0) else
+                        "failed" if int(run.get("failed") or 0) else "completed")
+        workflow["stages"].append({
+            "stage": stage,
+            "stage_run_id": f"{scan_id}:{stage}",
+            "attempt": max(1, int(run.get("max_attempts_seen") or 0)),
+            "status": stage_status,
+            "total": int(run.get("total") or 0),
+            "completed": int(run.get("completed") or 0),
+            "active": int(run.get("running") or 0),
+            "waiting": int(run.get("queued") or 0),
+            "failed": int(run.get("failed") or 0),
+            "started_at": run.get("started_at"),
+            "completed_at": run.get("updated_at") if stage_status == "completed" else None,
+            "latest_progress_at": run.get("updated_at"),
+            "waiting_reason": None,
+            "next_retry_at": None,
+        })
+    for workflow in grouped.values():
+        workflow["stages"].sort(key=lambda row: (stage_order.get(row["stage"], 99), row["stage"]))
+        active = [row for row in workflow["stages"] if row["status"] != "completed"]
+        if active:
+            workflow["current_stage"] = active[-1]["stage"]
+            workflow["status"] = ("running" if any(row["status"] == "running" for row in active) else
+                                  "waiting" if any(row["status"] == "waiting" for row in active) else
+                                  "failed")
+        elif workflow["stages"]:
+            workflow["current_stage"] = workflow["stages"][-1]["stage"]
+    return sorted(grouped.values(), key=lambda row: str(row.get("updated_at") or ""), reverse=True)
+
+
+def _scope_activity_snapshot(snapshot: dict, viewer: str) -> dict:
+    """Admins see fleet workflows; other signed-in users receive only their own identities.
+
+    Aggregate capacity remains fleet-wide operational context.  Only the records that name or
+    identify another user are filtered here, in one place shared by the initial read and SSE.
+    """
+    if core.is_admin(viewer):
+        return snapshot
+    scoped = dict(snapshot)
+    scoped["runs"] = [row for row in snapshot.get("runs", [])
+                      if str(row.get("owner") or "").strip().lower() == viewer]
+    scoped["workflows"] = [row for row in snapshot.get("workflows", [])
+                           if str(row.get("owner_display_name") or "").strip().lower() == viewer]
+    summary = dict(snapshot.get("summary") or {})
+    summary.update({
+        "active_runs": sum(1 for row in scoped["runs"] if row.get("status") == "active"),
+        "recent_runs": sum(1 for row in scoped["runs"] if row.get("status") == "recent"),
+        "active_workflows": sum(1 for row in scoped["workflows"] if row.get("status") != "completed"),
+        "recent_workflows": sum(1 for row in scoped["workflows"] if row.get("status") == "completed"),
+        "active_users": 1 if scoped["runs"] else 0,
+        "waiting_users": 1 if any(row.get("queued") for row in scoped["runs"]) else 0,
+    })
+    scoped["summary"] = summary
+    return scoped
 
 
 def _tracing_status() -> dict:
@@ -1516,7 +1751,8 @@ def admin_activity(request: Request, response: Response):
     reading immediately rather than waiting for the stream's next Azure frame."""
     _require_user(request)
     response.headers["Cache-Control"] = "no-store"
-    snapshot = _admin_activity_snapshot()
+    viewer = str(getattr(request.state, "user_email", "") or "").strip().lower()
+    snapshot = _scope_activity_snapshot(_admin_activity_snapshot(), viewer)
     azure = _azure_block()
     if azure is not None:
         snapshot["azure"] = azure
@@ -1529,13 +1765,15 @@ async def admin_activity_stream(request: Request):
     import asyncio
 
     _require_user(request)
+    viewer = str(getattr(request.state, "user_email", "") or "").strip().lower()
 
     async def _gen():
         last = None
         last_measured = None
         idle = 0
         while not await request.is_disconnected():
-            snapshot = await asyncio.to_thread(_admin_activity_snapshot)
+            snapshot = _scope_activity_snapshot(
+                await asyncio.to_thread(_admin_activity_snapshot), viewer)
             signature = json.dumps({"runs": snapshot["runs"], "summary": snapshot["summary"]},
                                    sort_keys=True, default=str)
             if signature != last:
@@ -1656,6 +1894,27 @@ def test_ai_provider(body: AIProviderTest, request: Request):
                f"latency_ms={result.get('latency_ms') or '—'} (synthetic probe image; "
                f"no customer document sent)")
     return result
+
+
+@router.get("/ai/providers/health")
+def get_all_ai_provider_health(request: Request,
+                               window_hours: int = Query(24, ge=1, le=168)):
+    """Admin: health snapshot for ALL cloud vision providers in one call.
+
+    Returns the same fields as the per-provider endpoint, keyed by provider name.
+    This is the route the Live Operations panel uses to avoid N round-trips.
+    Must be registered BEFORE the /{provider}/health route so FastAPI resolves
+    the literal path 'health' here rather than treating it as a provider name.
+    """
+    _require_admin(request)
+    import providers as _providers
+    return {
+        "window_hours": window_hours,
+        "providers": {
+            p: core.store.ai_provider_health_stats(p, window_hours=window_hours)
+            for p in _providers.CLOUD_PROVIDERS
+        },
+    }
 
 
 @router.get("/ai/providers/{provider}/health")
