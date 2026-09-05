@@ -13,6 +13,20 @@
  */
 import { createRoot } from 'react-dom/client'
 import { act } from 'react-dom/test-utils'
+import { afterEach } from 'vitest'
+
+const mounted = new Set()
+
+// Overview starts an asynchronous inventory read on mount. Leaving its React root alive until
+// jsdom tears `window` down lets that promise dispatch state into a dead environment — a CI-only
+// unhandled error whose timing depends on how quickly the rest of the suite finishes.
+afterEach(() => {
+  for (const entry of mounted) {
+    act(() => { entry.root.unmount() })
+    entry.container.remove()
+  }
+  mounted.clear()
+})
 
 /** Every accordion header currently reporting itself collapsed. */
 export const collapsedToggles = (root) =>
@@ -26,6 +40,7 @@ export const collapsedToggles = (root) =>
 export function mountExpanded(element, { container = document.createElement('div') } = {}) {
   document.body.appendChild(container)
   const root = createRoot(container)
+  mounted.add({ root, container })
   act(() => { root.render(element) })
   for (let pass = 0; pass < 5; pass++) {
     const shut = collapsedToggles(container)
