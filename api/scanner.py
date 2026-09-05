@@ -4913,6 +4913,7 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
     # ADR 0027 Tier A — scanned-PDF vision layout extraction. Feature-flagged via
     # ACP_SCANNED_PDF_TIER_A env var; a no-op when the flag is off or the file is not a
     # scanned/untagged PDF. Stores per-page layout descriptions; never raises.
+    # ADR 0027 Tier B — REVIEW findings injected from the layouts (same guard, same block).
     if ext == ".pdf" and scan_id:
         try:
             import pdf_vision_assess as _pva
@@ -4928,8 +4929,16 @@ def analyse_and_assess(tmp: Path, name: str, *, detect_pii: bool = False,
                             f"[scan] scanned-PDF Tier A: {name} → {len(_layouts)} page(s) assessed",
                             flush=True,
                         )
+                        import pdf_vision_review as _pvr
+                        _tier_b = _pvr.findings_from_layouts(_layouts, filename=name)
+                        if _tier_b:
+                            raw["issues"] = list(raw.get("issues", [])) + _tier_b
+                            print(
+                                f"[scan] scanned-PDF Tier B: {name} → {len(_tier_b)} REVIEW finding(s)",
+                                flush=True,
+                            )
         except Exception:
-            swallowed("scanner.analyse_and_assess: scanned-PDF Tier A failed", scan_id)
+            swallowed("scanner.analyse_and_assess: scanned-PDF Tier A/B failed", scan_id)
     # Score over the IN-SCOPE findings, but keep every finding on the record. `Rubric.assess`
     # computes `100 - sum(penalty(severity))` over whatever it is handed and knows nothing about
     # scope, so scoring the full list gave a scoped scan unscoped scores — a document with no
