@@ -75,6 +75,39 @@ describe('the discovery step checklist', () => {
     expect(html).toContain('1 document library')
   })
 
+  it('summarizes live SharePoint coverage, enumeration and Graph retries', () => {
+    const html = renderToStaticMarkup(createElement(DiscoverRunProgress, {
+      busy: true, source: 'sharepoint', freshness: 'live',
+      progress: { phase: 'discovering', files_found: 41, sites: [
+        { id: 's1', name: 'Clinical', status: 'scanning',
+          active_library: { id: 'l2', name: 'Policies', mode: 'full' },
+          libraries: [
+            { id: 'l1', name: 'Documents', status: 'complete', mode: 'delta', throttled: 2 },
+            { id: 'l2', name: 'Policies', status: 'scanning', mode: 'full', throttled: 1 },
+          ] },
+        { id: 's2', name: 'Finance', status: 'complete',
+          libraries: [{ id: 'l3', name: 'Records', status: 'complete', mode: 'delta' }] },
+      ] },
+      scope: { kind: 'sharepoint', sites: [{ id: 's1', name: 'Clinical' }, { id: 's2', name: 'Finance' }] },
+    }))
+    expect(html).toContain('SharePoint integration status')
+    expect(html).toContain('Microsoft Graph')
+    expect(html).toContain('Live updates connected')
+    expect(html).toContain('1 of 2 sites read')
+    expect(html).toContain('2 of 3 libraries complete')
+    expect(html).toContain('Mixed enumeration')
+    expect(html).toContain('3 Graph retries')
+    expect(html).toContain('Reading <strong>Clinical</strong> / Policies')
+  })
+
+  it('does not show SharePoint integration status for Google Drive', () => {
+    const html = renderToStaticMarkup(createElement(DiscoverRunProgress, {
+      progress: PROG, busy: true, source: 'drive', scope: { kind: 'drive' }, freshness: 'live',
+    }))
+    expect(html).not.toContain('SharePoint integration status')
+    expect(html).not.toContain('Microsoft Graph')
+  })
+
   it('shows Discovering documents heading', () => {
     const html = render(PROG, true)
     expect(html).toContain('Discovering documents')
