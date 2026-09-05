@@ -100,3 +100,37 @@ def test_drain_error_still_exits(monkeypatch):
     monkeypatch.setattr(core, "stop_scheduler", lambda: None)
     worker_main._stop.set()
     worker_main.run(poll_seconds=0.01, _install_signals=False)   # must not raise
+
+
+def test_process_registry_records_lifecycle_and_busy_slots(monkeypatch):
+    import core
+    rows = []
+
+    class Store:
+        def set_setting(self, *_args): pass
+        def upsert_worker_instance(self, worker_id, **fields):
+            rows.append({"worker_id": worker_id, **fields})
+
+    class Worker:
+        job_types = ("scan_assess",)
+        active_job_id = "opaque-job-id"
+
+    monkeypatch.setattr(core, "get_store", lambda: Store())
+    monkeypatch.setattr(core, "reload_scheduler", lambda: None)
+    monkeypatch.setattr(core, "start_scheduler", lambda: None)
+    monkeypatch.setattr(core, "start_workers", lambda: 2)
+    monkeypatch.setattr(core, "stop_workers", lambda: setattr(core, "WORKERS", 0))
+    monkeypatch.setattr(core, "stop_scheduler", lambda: None)
+    monkeypatch.setattr(core, "WORKERS", 2)
+    monkeypatch.setattr(core, "_worker_handles", [(Worker(), object())])
+    monkeypatch.setattr(core, "worker_process_instance_id", lambda role: f"{role}:replica-1:proc-1")
+    monkeypatch.setattr(core, "_replica_id", lambda: "replica-1")
+    worker_main._stop.set()
+    worker_main.run(poll_seconds=0.01, _install_signals=False)
+
+    assert [row["state"] for row in rows] == ["starting", "ready", "draining", "offline"]
+    assert rows[1]["worker_id"] == "mixed:replica-1:proc-1"
+    assert rows[1]["concurrency_limit"] == 2
+    assert rows[1]["active_job_count"] == 1
+    assert rows[1]["available_slots"] == 1
+    assert rows[1]["last_claimed_job_id"] == "opaque-job-id"

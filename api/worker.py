@@ -265,6 +265,7 @@ class JobWorker:
         self.worker_id = worker_id or f"worker-{uuid.uuid4().hex[:8]}"
         self.poll_interval = poll_interval
         self._running = False
+        self.active_job_id = None
         # Optional (job_id: str, patch: dict) -> None hook, called after a transient failure
         # is requeued (never on dead-letter). Dependency-injected rather than imported here:
         # this module is intentionally infrastructure-only (see its docstring) and does not
@@ -280,6 +281,7 @@ class JobWorker:
                if self.job_types is not None else self.store.claim_job(self.worker_id))
         if job is None:
             return False
+        self.active_job_id = job["id"]
         # Flushed the moment the job is claimed, BEFORE any handler runs. A native crash
         # (2026-08-30: exit 139 after glibc heap corruption) never unwinds, so anything emitted
         # after this point may not survive — and anything emitted before it is the only record
@@ -323,6 +325,7 @@ class JobWorker:
             _log("job.no_handler", **_logf)
             self.store.fail_job(job["id"], f"no handler for job type '{job['type']}'",
                                 backoff_seconds=_backoff_seconds(job["attempts"]), **_claim)
+            self.active_job_id = None
             return True
         # Heartbeat: extend the lease every 2 min while the handler runs, so a
         # slow-but-alive job (e.g. a long PII scan) isn't reclaimed by the sweeper —
@@ -445,6 +448,7 @@ class JobWorker:
             # a worker running nested turns cannot clear an outer job's hook.
             _cancel_cv.reset(_cancel_token)
             stop_hb.set()
+            self.active_job_id = None
         return True
 
     def run_forever(self, stop=lambda: False) -> None:
