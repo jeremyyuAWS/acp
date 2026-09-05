@@ -1,9 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 import RemediationOpsPanel from './RemediationOpsPanel.jsx'
 import { freshness, partitionSums, headline, isNewer, counterRows, secondaryRows }
   from './remediationSnapshot.js'
+
+const here = dirname(fileURLToPath(import.meta.url))
 
 // The Remediation Real-Time Operations Panel. These tests are about the CONTRADICTIONS the panel
 // exists to make impossible — a queued run reporting "Applying fixes", a SharePoint run labelled
@@ -48,7 +53,7 @@ describe('the panel renders the server snapshot and never assembles its own', ()
     const html = render({ snapshot: SNAP, connected: true, receivedAt: Date.now() })
     expect(html).toContain('Remediation in progress')
     expect(html).toContain('Applying approved fixes')
-    expect(html).toContain('10 in scope')
+    expect(html).toContain('10 documents in scope')
     for (const label of ['Completed', 'Processing', 'Waiting', 'Review', 'Failed', 'Skipped']) {
       expect(html).toContain(label)
     }
@@ -317,5 +322,41 @@ describe('counters flash their increase like Discovery does', () => {
     const cell = html.slice(html.indexOf('>', open) + 1, html.indexOf('</dd>', open))
     expect(cell).toBe('—')
     expect(cell).not.toContain('livecounter')
+  })
+})
+
+describe('the v2 live operations hierarchy', () => {
+  it('renders reconciled progress before pipeline, active work, throughput, activity, and exceptions', () => {
+    const html = render({ snapshot: { ...SNAP, active_attempts: [
+      { file: 'guide.docx', phase: 're-verifying', elapsed_s: 8, attempt: 1 },
+    ] }, connected: true, receivedAt: Date.now(), events: [
+      { key: '17', kind: 'remediate.delivered', tone: 'success',
+        occurredAt: '2026-09-05T12:00:00Z', line: 'Corrected copy delivered for guide.docx' },
+    ] })
+    const labels = ['documents complete', 'Active document pipeline', 'In flight now',
+      'Throughput', 'Live activity', 'Needs attention']
+    const positions = labels.map((label) => html.indexOf(label))
+    expect(positions.every((position) => position >= 0)).toBe(true)
+    expect(positions).toEqual([...positions].sort((a, b) => a - b))
+    expect(html).toContain('Corrected copy delivered')
+  })
+
+  it('provides a motion-only pause without changing transport props', () => {
+    const html = render({ snapshot: SNAP, connected: true, receivedAt: Date.now() })
+    expect(html).toContain('Pause visual updates')
+    expect(html).toContain('aria-pressed="false"')
+    const source = readFileSync(join(here, 'RemediationOpsPanel.jsx'), 'utf8')
+    expect(source).toContain('remops-motion-paused')
+    expect(source).not.toMatch(/close\(|AbortController|openRemediationStream/)
+  })
+
+  it('labels polling fallback and never animates waiting, review, failed, or skipped counts', () => {
+    const html = render({ snapshot: SNAP, connected: false, receivedAt: Date.now(), updateMode: 'polling' })
+    expect(html).toContain('Updating by polling')
+    for (const key of ['waiting', 'review', 'failed', 'skipped']) {
+      const open = html.indexOf(`data-testid="rem-count-${key}"`)
+      const cell = html.slice(html.indexOf('>', open) + 1, html.indexOf('</dd>', open))
+      expect(cell).not.toContain('livecounter')
+    }
   })
 })

@@ -103,6 +103,9 @@ const EXPECTED_UNMOUNTED = [
   // Retired 2026-09-04: the two-column Remediation PRD removes the third preview pane. The
   // full-document action remains in the review header; keep this component for easy restoration.
   'RemediationPreview',
+  // Retired 2026-09-05: RemediationOpsPanel now owns the reconciled progress partition, active
+  // workstream, throughput, activity and exceptions. Keep the legacy card for one-commit restore.
+  'RemediationRunProgress',
   // Retired 2026-09-04: the oversized Found → Proposed → Verified tiles were replaced by the
   // readable Current / Proposed rows and a collapsed definition list. Kept per retirement policy.
   'RemediationTransform',

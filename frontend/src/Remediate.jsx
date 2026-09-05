@@ -5,7 +5,6 @@ import ReviewDrawer from './ReviewDrawer.jsx'
 import RemediationInbox from './RemediationInbox.jsx'
 import RemediationRunHeader from './RemediationRunHeader.jsx'
 import RemediationRunDetails from './RemediationRunDetails.jsx'
-import RemediationRunProgress from './RemediationRunProgress.jsx'
 // The approved-board core (R2/R3, R5, R6, R9, R11, R12). Every one of these shipped to main
 // unmounted; this is the pass that puts them on the screen they were written for.
 import RemediationWork from './RemediationWork.jsx'
@@ -33,6 +32,7 @@ import { TraceChip } from './Transparency.jsx'
 import QueuePanel from './QueuePanel.jsx'
 import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
 import RemediationOpsPanel from './RemediationOpsPanel.jsx'
+import './remediation-prior-results.css'
 import { deriveRemediateProcessingState } from './remediateProcessingState.js'
 import { groupFixesByRule, summarizeImpact, totalFixes, scOf } from './fixSummary.js'
 import { remediationWork, batchScope } from './remediationWork.js'
@@ -417,12 +417,10 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // The resume cursor: the last scan_events.seq this browser actually rendered. Null means "no
   // cursor" — a first connection, which the server answers with live frames and no backfill.
   const [serverFixed, setServerFixed] = useState(0)  // files fixed server-side this scan (persists after each batch)
-  const [staleDismissed, setStaleDismissed] = useState(false)
   const [runDetailsOpen, setRunDetailsOpen] = useState(false)  // the Run details disclosure (PRD §11)
   const pollRef = useRef(null)
   const remStartRef = useRef(false)   // synchronous guard — remBusy is state, two clicks in one frame both read false
   useEffect(() => () => clearInterval(pollRef.current), [])
-  useEffect(() => { setStaleDismissed(false) }, [runId])
   // The "Estimated pickup" range (GET /scans/{id}/queue-estimate?kind=remediate) for the window
   // between clicking Remediate and the first document actually finishing — same 10s cadence as
   // Discover's and Assess's own pickup polls. Stops the instant a document completes (remProg.done
@@ -993,7 +991,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
   const _DONE_STATES = new Set(['done', 'complete', 'completed', 'finalized', 'cancelled', 'interrupted', 'superseded'])
   const assessRunning = run?.status && !_DONE_STATES.has(run.status)
-  const showStaleBanner = assessRunning && files.length > 0 && !staleDismissed
+  const showPriorResultsNotice = assessRunning && files.length > 0
 
   // ── The page, composed in the order a reviewer needs it ──────────────────────────────────────
   // The compact run header states what ACP already did. The review workspace is the next thing on
@@ -1591,40 +1589,12 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
 
   return (
     <>
-      {/* Snapshot separation: when a new assessment is running, the remediation results below are
-          from the prior assessment phase. Show a persistent warning so users know the numbers belong
-          to two different snapshots. Dismissible so they can keep working from the old results. */}
-      {showStaleBanner && (
-        <div role="status" style={{
-          display: 'flex', alignItems: 'flex-start', gap: 16, justifyContent: 'space-between',
-          background: 'color-mix(in srgb, #d97706 12%, var(--surface))',
-          border: '1px solid color-mix(in srgb, #d97706 30%, transparent)',
-          borderRadius: 8, padding: '10px 14px', marginBottom: 12, flexWrap: 'wrap',
-        }}>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start', minWidth: 0 }}>
-            <span aria-hidden="true" style={{ fontSize: 16, lineHeight: '20px', flexShrink: 0 }}>⚠</span>
-            <div>
-              <strong style={{ fontSize: 13.5 }}>A new assessment is running</strong>
-              <div style={{ fontSize: 12.5, color: 'var(--ink)', marginTop: 2 }}>
-                The remediation results below are from{assessedAt ? ` ${assessedAt}` : ' a previous assessment'}.
-                They will not update until the new assessment completes.
-              </div>
-            </div>
-          </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexShrink: 0 }}>
-            <button
-              onClick={() => onNavigate?.('assess')}
-              style={{ fontSize: 12.5, padding: '4px 10px', borderRadius: 6, border: '1px solid var(--line)',
-                       background: 'var(--surface)', cursor: 'pointer', whiteSpace: 'nowrap' }}>
-              View assessment progress
-            </button>
-            <button
-              onClick={() => setStaleDismissed(true)}
-              style={{ fontSize: 12.5, padding: '4px 10px', borderRadius: 6, border: 'none',
-                       background: 'transparent', cursor: 'pointer', color: 'var(--muted)', whiteSpace: 'nowrap' }}>
-              Continue from previous results
-            </button>
-          </div>
+      {/* App owns the live Assessment card above the workflow tabs. This compact label only
+          qualifies the older Remediation snapshot below; it does not compete with that card. */}
+      {showPriorResultsNotice && (
+        <div className="rem-prior-results" role="status">
+          <strong>Previous remediation results · read only</strong>
+          <span>The results below are from{assessedAt ? ` ${assessedAt}` : ' the previous assessment'} and will refresh after the active assessment completes.</span>
         </div>
       )}
 
@@ -1647,13 +1617,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       <RemediationOpsPanel snapshot={runStream?.snapshot || null}
                            connected={!!runStream?.connected}
                            receivedAt={runStream?.receivedAt || null}
-                           events={runStream?.events || []} />
-      {/* The authenticated remediation SSE already supplies these values. Keep its progress in
-          the main workflow, rather than hiding the only live signal inside Run details. */}
-      {remProg && (
-        <RemediationRunProgress progress={remProg} updateMode={remUpdates} runId={runId}
-                                source={run?.source} scope={run?.scope} />
-      )}
+                           events={runStream?.events || []}
+                           updateMode={remUpdates} />
       {/* THE WORK. Second on the page, not eleventh — the review workspace is the only part of this
           screen that needs a person, so nothing but the run header and a blocking warning precedes
           it. It is also the ONLY finding-level approval surface: the standalone approvals panel that
