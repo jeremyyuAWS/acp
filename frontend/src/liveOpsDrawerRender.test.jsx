@@ -698,3 +698,118 @@ describe('Detailed facts are preserved, not discarded', () => {
     expect(details.textContent).toContain('are never estimated')
   })
 })
+
+describe('Active alerts panel', () => {
+  const workerNode = { kind: 'worker', label: 'Assess workers', service }
+  const withAlerts = (alerts) => ({ ...capacity, alerts })
+  const rule = (over = {}) => ({
+    name: 'assess-cpu-high', severity: 2, severity_label: 'Warning', enabled: true,
+    state: 'resolved', since: null, condition: 'Average CpuPercentage GreaterThan 85',
+    description: null, window: 'PT5M', frequency: 'PT1M', ...over,
+  })
+  const panel = (container) =>
+    container.querySelector('[aria-label="Active alerts"]')
+
+  it('says "Not monitored" rather than showing a clear panel when no rule watches the service', async () => {
+    // The whole reason the panel exists. On screen, not just in the model: a green tick over an
+    // unmonitored service answers "is this healthy?" with evidence nobody has.
+    const container = await mount({
+      nodeId: 'stage:assess', node: workerNode,
+      capacity: withAlerts({ queried: true, rules_total: 0, rules_enabled: 0, firing: [], rules: [] }),
+    })
+    const text = panel(container).textContent
+    expect(text).toContain('Not monitored')
+    expect(text).toMatch(/No alert rules watch this service/)
+    expect(text).not.toMatch(/No alerts firing/)
+  })
+
+  it('says "No alerts firing" only when rules actually exist to fire', async () => {
+    const container = await mount({
+      nodeId: 'stage:assess', node: workerNode,
+      capacity: withAlerts({ queried: true, rules_total: 2, rules_enabled: 2, firing: [], rules: [rule(), rule({ name: 'assess-restarts' })] }),
+    })
+    const text = panel(container).textContent
+    expect(text).toContain('No alerts firing')
+    expect(text).not.toContain('Not monitored')
+  })
+
+  it('shows a firing rule, its severity in words, and when it started', async () => {
+    const fired = rule({ name: 'assess-queue-stalled', severity: 0, severity_label: 'Critical',
+      state: 'fired', since: iso(-600) })
+    const container = await mount({
+      nodeId: 'stage:assess', node: workerNode,
+      capacity: withAlerts({ queried: true, rules_total: 2, rules_enabled: 2, firing: [fired], rules: [fired, rule()] }),
+    })
+    const text = panel(container).textContent
+    expect(text).toContain('assess-queue-stalled')
+    expect(text).toContain('Firing')
+    expect(text).toContain('Critical')
+    expect(text).toMatch(/Firing since/)
+    expect(text).toContain('1 of 2 rules firing.')
+  })
+
+  it('renders a rule nobody could read as "Not reported", never as clear', async () => {
+    const container = await mount({
+      nodeId: 'stage:assess', node: workerNode,
+      capacity: withAlerts({ queried: true, rules_total: 1, rules_enabled: 1, firing: [],
+        rules: [rule({ state: 'unknown' })] }),
+    })
+    const text = panel(container).textContent
+    expect(text).toContain('Not reported')
+    expect(text).not.toMatch(/\bClear\b/)
+  })
+
+  it('names the missing Monitoring Reader grant, which is the version an operator can act on', async () => {
+    const container = await mount({
+      nodeId: 'stage:assess', node: workerNode,
+      capacity: withAlerts({ queried: false, rules_total: null, firing: [], rules: [],
+        unavailable_reason: 'permission' }),
+    })
+    expect(panel(container).textContent).toMatch(/Monitoring Reader/)
+  })
+
+  it('is unavailable, not clear, when the deployment reports no alerts block at all', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: workerNode, capacity })
+    const text = panel(container).textContent
+    expect(text).toContain('Not reported')
+    expect(text).not.toContain('No alerts firing')
+  })
+
+  it('distinguishes its states without relying on colour', async () => {
+    // WCAG 1.4.1. Each state has to be readable with the styles stripped.
+    const shapes = []
+    for (const alerts of [
+      { queried: true, rules_total: 0, rules_enabled: 0, firing: [], rules: [] },
+      { queried: true, rules_total: 1, rules_enabled: 1, firing: [], rules: [rule()] },
+      { queried: true, rules_total: 1, rules_enabled: 1, firing: [rule({ state: 'fired' })], rules: [rule({ state: 'fired' })] },
+      { queried: false, firing: [], rules: [], unavailable_reason: 'error' },
+    ]) {
+      const container = await mount({ nodeId: 'stage:assess', node: workerNode, capacity: withAlerts(alerts) })
+      shapes.push(panel(container).textContent.replace(/\s+/g, ' ').slice(0, 60))
+    }
+    expect(new Set(shapes).size).toBe(shapes.length)
+  })
+
+  it('does not claim an Azure provenance for a reading Azure never gave', async () => {
+    const container = await mount({
+      nodeId: 'stage:assess', node: workerNode,
+      capacity: withAlerts({ queried: false, firing: [], rules: [], unavailable_reason: 'error' }),
+    })
+    const text = panel(container).textContent
+    expect(text).not.toMatch(/Azure Monitor · /)
+    // And no age either: "20s ago" beside "Not reported" would date a measurement nobody took.
+    expect(text).not.toMatch(/\d+s ago/)
+  })
+
+  it('is not shown for a node that has no container app behind it', async () => {
+    // A run and a source are not backed by a worker app, so there is no rule set to report and
+    // an empty panel there would read as "no alerts" for something never checked.
+    for (const node of [
+      { kind: 'run', label: 'Run s1', run: snapshot.runs[0] },
+      { kind: 'queue', label: 'Shared queue' },
+    ]) {
+      const container = await mount({ nodeId: 'x', node })
+      expect(panel(container)).toBeNull()
+    }
+  })
+})
