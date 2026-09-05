@@ -198,6 +198,7 @@ def test_instance_capacity_uses_busy_slots_not_running_rows(monkeypatch):
     assert assess["jobs_in_flight"] == 40
     assert assess["unattributed_running"] == 20
     assert assess["utilization_pct"] == 100
+    assert [alert["code"] for alert in assess["alerts"]] == ["unattributed_running"]
     assert summary["utilization_pct"] == 100
 
 
@@ -267,3 +268,16 @@ def test_stale_instances_remain_visible_but_add_no_capacity(monkeypatch):
     assert assess["busy_slots"] == 0
     assert assess["status"] == "stale"
     assert assess["instances"][0]["fresh"] is False
+    assert assess["alerts"][0]["code"] == "stale_replicas"
+
+
+def test_capacity_uses_the_central_freshness_threshold(monkeypatch):
+    from datetime import timedelta
+    monkeypatch.setattr(system.core, "WORKER_INSTANCE_FRESHNESS_SECONDS", 90)
+    now = system.datetime.now(system.timezone.utc)
+    heartbeat = (now - timedelta(seconds=45)).isoformat()
+    rows = system._replica_capacity([{"worker_id": "assess:r:p", "replica_id": "r",
+        "state": "ready", "last_heartbeat_at": heartbeat, "concurrency_limit": 2,
+        "active_job_count": 0}], now=now)
+    assert rows["assess"]["healthy_replicas"] == 1
+    assert rows["assess"]["freshness_threshold_seconds"] == 90

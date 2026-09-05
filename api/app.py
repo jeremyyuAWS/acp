@@ -326,6 +326,8 @@ for _router in ROUTERS:
 # prefix allowlist that silently missed five route groups over five weeks.
 core.register_protected_routes(core.enumerate_api_routes(app))
 
+_embedded_worker_reporter = None
+
 
 @app.on_event("startup")
 def _start_job_workers():
@@ -354,6 +356,10 @@ def _start_job_workers():
     core.start_scheduler()
     n = core.start_workers()
     if n:
+        global _embedded_worker_reporter
+        from worker_telemetry import WorkerInstanceReporter
+        _embedded_worker_reporter = WorkerInstanceReporter(core)
+        _embedded_worker_reporter.start()
         print(f"[acp] started {n} async job worker(s)", flush=True)
 
 
@@ -397,7 +403,11 @@ def _drain_job_workers():
     # in-flight jobs aren't stranded ~31min waiting for the lease sweeper on the new
     # container (audit P1).
     try:
+        if _embedded_worker_reporter is not None:
+            _embedded_worker_reporter.stop()
         core.stop_workers()
+        if _embedded_worker_reporter is not None:
+            _embedded_worker_reporter.offline()
         print("[acp] drained job workers for shutdown", flush=True)
     except Exception as e:
         print(f"[acp] shutdown drain error: {e}", flush=True)

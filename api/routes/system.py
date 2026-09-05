@@ -1343,7 +1343,7 @@ def jobs(request: Request, status: str | None = None, limit: int = 100):
 
 
 def _replica_capacity(instances: list[dict], *, now: datetime,
-                      freshness_seconds: int = 30) -> dict[str, dict]:
+                      freshness_seconds: int | None = None) -> dict[str, dict]:
     """Aggregate process heartbeats into physical replicas, then into service roles.
 
     ``worker_id`` identifies a process (role:replica:process), so counting rows as replicas
@@ -1351,6 +1351,8 @@ def _replica_capacity(instances: list[dict], *, now: datetime,
     the sum of fresh process pools, while replica health/counts and drawer rows use the stable
     ``replica_id``. Rows without a replica id retain the legacy one-row-per-worker behavior.
     """
+    freshness_seconds = (freshness_seconds if freshness_seconds is not None
+                         else core.WORKER_INSTANCE_FRESHNESS_SECONDS)
     replicas: dict[tuple[str, str], dict] = {}
     for instance in instances:
         worker_id = str(instance.get("worker_id") or "")
@@ -1379,6 +1381,7 @@ def _replica_capacity(instances: list[dict], *, now: datetime,
             replica["age_s"] = round(age_s, 1)
             replica["last_heartbeat_at"] = beat.isoformat() if beat else None
             replica["revision_name"] = instance.get("revision_name")
+            replica["software_version"] = instance.get("software_version")
         if healthy_process and instance.get("state") == "busy":
             replica["state"] = "busy"
         elif healthy_process and replica.get("state") != "busy":
@@ -1412,7 +1415,7 @@ def _admin_activity_snapshot() -> dict:
     runs = core.store.admin_live_activity()
     _list_instances = getattr(core.store, "list_worker_instances", None)
     instances = _list_instances() if callable(_list_instances) else []
-    freshness_seconds = 30
+    freshness_seconds = core.WORKER_INSTANCE_FRESHNESS_SECONDS
     now = datetime.now(timezone.utc)
     per_role = _replica_capacity(instances, now=now, freshness_seconds=freshness_seconds)
 
@@ -1427,6 +1430,8 @@ def _admin_activity_snapshot() -> dict:
     queued = sum(int(r.get("queued") or 0) for r in runs)
     _running_by_type = getattr(core.store, "running_jobs_by_type", None)
     running_by_type = _running_by_type() if callable(_running_by_type) else None
+    _list_events = getattr(core.store, "list_orchestration_events", None)
+    lifecycle_events = _list_events(limit=200) if callable(_list_events) else []
     for role, row in per_role.items():
         stage = "discover" if role == "discovery" else role
         if running_by_type is None:
@@ -1440,13 +1445,43 @@ def _admin_activity_snapshot() -> dict:
         else:
             jobs = sum(running_by_type.values())
         row["jobs_in_flight"] = jobs
-        row["busy_slots"] = min(row["worker_slots"], row["busy_slots"])
+        reported_busy = row["busy_slots"]
+        row["reported_busy_slots"] = reported_busy
+        row["busy_slots"] = min(row["worker_slots"], reported_busy)
         row["available_slots"] = max(0, row["worker_slots"] - row["busy_slots"])
         row["unattributed_running"] = max(0, jobs - row["busy_slots"])
         row["utilization_pct"] = min(100, round(row["busy_slots"] / row["worker_slots"] * 100)) if row["worker_slots"] else None
         row["status"] = ("stale" if not row["healthy_replicas"] and row["stale_replicas"] else
                          "saturated" if row["worker_slots"] and row["busy_slots"] >= row["worker_slots"] else
                          "degraded" if row["stale_replicas"] or row["unattributed_running"] else "online")
+        alerts = []
+        if row["stale_replicas"]:
+            alerts.append({"code": "stale_replicas", "severity": "warning",
+                           "message": f"{row['stale_replicas']} registered replica(s) have stale heartbeats."})
+        if row["unattributed_running"]:
+            alerts.append({"code": "unattributed_running", "severity": "warning",
+                           "message": f"{row['unattributed_running']} running job record(s) are not attributed to live worker slots."})
+        if reported_busy > row["worker_slots"]:
+            alerts.append({"code": "active_exceeds_concurrency", "severity": "critical",
+                           "message": "Reported active slots exceed configured concurrency; utilization remains capped."})
+        revisions = sorted({str(item.get("revision_name")) for item in row["instances"]
+                            if item.get("fresh") and item.get("revision_name")})
+        row["revision_distribution"] = {
+            revision: sum(1 for item in row["instances"]
+                          if item.get("fresh") and str(item.get("revision_name")) == revision)
+            for revision in revisions}
+        if len(revisions) > 1:
+            alerts.append({"code": "mixed_revisions", "severity": "warning",
+                           "message": f"Fresh replicas report {len(revisions)} active revisions."})
+        queued_for_role = sum(int(run.get("queued") or 0) for run in runs
+                              if (run.get("stage") or "unknown") == stage)
+        if queued_for_role and not row["worker_slots"]:
+            alerts.append({"code": "no_capacity_with_queue", "severity": "critical",
+                           "message": f"{queued_for_role} job(s) are queued with no fresh reported capacity."})
+        row["alerts"] = alerts
+        row["recent_lifecycle_events"] = [event for event in lifecycle_events
+            if str(event.get("worker_id") or "").startswith(f"{role}:")
+            and str(event.get("kind") or "").startswith("worker.")][-20:]
     instance_slots = sum(row["worker_slots"] for row in per_role.values())
     instance_busy = sum(row["busy_slots"] for row in per_role.values())
     if instances:

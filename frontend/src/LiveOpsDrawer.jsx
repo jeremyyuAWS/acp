@@ -115,6 +115,7 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queu
     return <div style={{ ...PANEL, padding: 14 }} role="status">
       <b>Worker utilization unavailable</b>
       <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{gauge.reason}</div>
+      <WorkerTelemetrySignals service={service} />
     </div>
   }
   const color = TONE[gauge.tone]
@@ -165,6 +166,7 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queu
       </div>
     </div>
     <WorkerReplicaTable replicas={service?.instances} nowMs={nowMs} />
+    <WorkerTelemetrySignals service={service} />
     <Saturation saturation={saturation} nowMs={nowMs} measuredAt={capacity?.measured_at} />
     <ScalingActivity capacity={capacity} saturation={saturation} queueDepth={queueDepth}
       lifecycle={replicaLifecycle(capacity, service)} nowMs={nowMs} />
@@ -201,6 +203,7 @@ function WorkerReplicaTable({ replicas, nowMs }) {
           <div className="muted" style={{ marginTop: 4, fontSize: 11 }}>
             {processes} worker {processes === 1 ? 'process' : 'processes'} · {active} of {slots} slots busy
             {replica.revision_name ? ` · ${replica.revision_name}` : ''}
+            {replica.software_version ? ` · version ${replica.software_version}` : ''}
           </div>
         </li>
       })}
@@ -208,6 +211,36 @@ function WorkerReplicaTable({ replicas, nowMs }) {
     <p className="muted" style={{ margin: '6px 0 0', fontSize: 10.5 }}>
       Replica totals use unique replica identities; worker processes are shown within their container.
     </p>
+  </section>
+}
+
+function WorkerTelemetrySignals({ service }) {
+  const alerts = Array.isArray(service?.alerts) ? service.alerts : []
+  const events = Array.isArray(service?.recent_lifecycle_events)
+    ? service.recent_lifecycle_events.slice(-8).reverse() : []
+  const revisions = Object.entries(service?.revision_distribution || {})
+  if (!alerts.length && !events.length && !revisions.length
+      && service?.freshness_threshold_seconds == null) return null
+  return <section aria-label="Worker telemetry signals" style={{ ...PANEL, padding: 14, marginTop: 12 }}>
+    <b>Worker telemetry signals</b>
+    {service?.freshness_threshold_seconds != null && <div className="muted"
+      style={{ marginTop: 6, fontSize: 12 }}>
+      Freshness threshold: {service.freshness_threshold_seconds} seconds
+    </div>}
+    {!!alerts.length && <ul style={{ margin: '8px 0 0', paddingLeft: 20 }}>
+      {alerts.map((alert) => <li key={alert.code} style={{ marginTop: 4,
+        color: alert.severity === 'critical' ? TONE.bad : TONE.warn }}>{alert.message}</li>)}
+    </ul>}
+    {!!revisions.length && <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+      Revision distribution: {revisions.map(([revision, count]) => `${revision} (${count})`).join(' · ')}
+    </div>}
+    {!!events.length && <div style={{ marginTop: 10 }}>
+      <b style={{ fontSize: 12 }}>Recent lifecycle events</b>
+      <ul style={{ margin: '5px 0 0', paddingLeft: 20 }}>
+        {events.map((event) => <li key={event.event_id}
+          style={{ marginTop: 3, fontSize: 12 }}>{event.kind} · {event.occurred_at}</li>)}
+      </ul>
+    </div>}
   </section>
 }
 
