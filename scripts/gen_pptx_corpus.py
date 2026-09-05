@@ -2,7 +2,7 @@
 """A LABELLED .pptx corpus — the third format to get ground truth, after .docx and .xlsx.
 
 WHY THIS EXISTS. `scripts/gen_fixture_coverage.py` reports coverage per (criterion, format) pair;
-pptx sat at 0 of 17 because no labelled corpus existed. This declares TEN of them.
+pptx sat at 0 of 17 because no labelled corpus existed. This declares FOURTEEN of them.
 
 SAME RULE AS THE XLSX CORPUS: a pair is only declared when a FIRST-PARTY detector — pure Python
 in `api/office_structure.py`, no .NET engine — was driven against the fixture and confirmed to
@@ -21,10 +21,20 @@ number without raising what the number measures.
     1.3.3   a sensory-only instruction in a box    textchecks.detect_sensory
     4.1.2   an embedded control (same fixture)     office_control_review_checks
 
-The seven not here (1.3.1, 1.3.2, 1.4.5, 2.1.1, 2.4.2, 3.1.1, 3.1.2) run through the .NET
-analyser, tesseract, langdetect, or — for 2.1.1 — are human-only on pptx by registration.
-1.3.3 was on that list until it was checked: it is a TEXT predicate with no engine, and is
-declared below. A criterion's neighbours are not evidence of its reachability.
+    2.4.2   a slide with no title placeholder      .NET SlideTitleRule       (DECLARED_ENGINE)
+    3.1.1   no language anywhere in the package     .NET DocumentLanguageRule (DECLARED_ENGINE)
+
+The last two are the exception to the rule above and are kept in a SEPARATE tuple for it: no
+first-party Python detector exists for either on ANY Office format, so their labels are proven
+where the .NET analyser is built and skipped where it is not. They earn the asymmetry by being
+certifying pairs — 2.4.2 and 3.1.1 are among the seventeen (criterion, format) pairs in the whole
+preset that can return a PASS, so a false clean result on them is a certification rather than an
+advisory, and before these fixtures nothing in the suite checked either.
+
+The three not here (1.3.1, 1.3.2, 2.1.1) run through the .NET analyser's table and reading-order
+rules or — for 2.1.1 — are human-only on pptx by registration. 1.3.3 was on that list until it
+was checked: it is a TEXT predicate with no engine, and is declared below. A criterion's
+neighbours are not evidence of its reachability.
 
 TWO DETECTOR SUBTLETIES WORTH KNOWING, because a fixture that ignores them silently covers
 nothing:
@@ -59,6 +69,15 @@ INK = (0x1A, 0x1F, 0x26)      # ~15:1 on white
 FAINT = (0xDD, 0xDD, 0xDD)    # ~1.6:1 on white — under even the 3:1 large-text bar
 PAPER = (0xFF, 0xFF, 0xFF)
 
+# Stamped on the base deck so that only the fixture that deliberately withholds it can raise
+# 3.1.1 under the .NET analyser. The xlsx corpus learned this the expensive way: openpyxl leaves
+# the language unset, so before its base workbook set one EVERY fixture there also carried a
+# 3.1.1 finding, and the single-criterion labels were true only because a bare container has no
+# .NET. python-pptx is quieter about it — its default template's masters carry lang attributes,
+# which happens to keep the rule silent — but "happens to" is not a property to rely on, and an
+# explicit metadata language is the same guarantee without the accident.
+DOC_LANG = "en-GB"
+
 # A 1x1 PNG, inline — the fixture needs an image to embed, not a picture of anything, and a
 # committed binary is provenance a reviewer has to take on trust.
 _PNG_1PX = bytes.fromhex(
@@ -73,6 +92,7 @@ def _deck(title: str = "Q3 regional revenue"):
     prs = Presentation()
     slide = prs.slides.add_slide(prs.slide_layouts[5])   # title only
     slide.shapes.title.text = title
+    prs.core_properties.language = DOC_LANG
     return prs, slide
 
 
@@ -118,9 +138,22 @@ def _replace_parts(path: Path, parts: dict[str, str]) -> None:
 # ── 2.4.6 Headings and Labels ────────────────────────────────────────────────────
 
 def f_title_empty(prs, slide):
+    """AN EMPTY TITLE PLACEHOLDER IS TWO VIOLATIONS, and this fixture has to say so.
+
+    It is the 2.4.6 case (a heading with no label) and, under the .NET analyser, also the 2.4.2
+    case — SlideTitleRule flags a title placeholder "present but contains no text" in the same
+    branch as a missing one. Before 2.4.2 was declared, this fixture was labelled single-criterion
+    and was simply wrong in CI, in the way that is hardest to notice: nothing on a bare checkout
+    can raise 2.4.2, so nothing here could contradict it.
+
+    The dedicated 2.4.2 fixture is `no-slide-title`, which removes the placeholder entirely and so
+    isolates the criterion. This one cannot: the two coincide on the same shape.
+    """
     slide.shapes.title.text = ""
     _textbox(slide, "Revenue grew across every region this quarter.")
-    return {"2.4.6": "REVIEW"}, "a title placeholder present but left empty"
+    return ({"2.4.6": "REVIEW", "2.4.2": "FAIL"},
+            "a title placeholder present but left empty — 2.4.6 by the first-party detector, and "
+            "2.4.2 under the analyser, which treats an empty placeholder as an absent title")
 
 
 def f_title_ok(prs, slide):
@@ -367,6 +400,102 @@ def f_image_of_text_logo_ok(prs, slide):
 
 
 
+# ── 2.4.2 Page Titled and 3.1.1 Language of Page — the ENGINE-VERIFIED pairs ────
+# No first-party Python detector exists for either on any Office format, so these are confirmed
+# by the .NET analyser (PptxRuleIds.SlideTitle, PptxRuleIds.DocumentLanguage) and only where it
+# is built. That is what DECLARED_ENGINE keeps countable without diluting what DECLARED means —
+# the same split the xlsx corpus introduced, and both are worth the asymmetry because 2.4.2 and
+# 3.1.1 are among the seventeen (criterion, format) pairs in the preset that can return a PASS.
+# A false clean result here is a certification, not an advisory.
+#
+# BUILT FROM THE VENDORED RULE SOURCE, AND THE PPTX RULE IS NOT THE XLSX ONE. Both formats have a
+# class called DocumentLanguageRule and they read different things:
+#
+#   Xlsx/Rules/DocumentLanguageRule.cs    document.PackageProperties.Language, and nothing else
+#   Pptx/Rules/DocumentLanguageRule.cs    that OR any lang/altLang on an a:rPr or a:endParaRPr in
+#                                         any slide, slide master, or master's layout
+#
+# The xlsx recipe — clear `core_properties.language` — therefore does NOT trip the pptx rule.
+# Measured, not reasoned: a deck built that way still answers "has content language" because
+# python-pptx's default template ships `<a:rPr lang="en-US" smtClean="0"/>` in
+# ppt/slideMasters/slideMaster1.xml. The fixture below strips those attributes from every slide,
+# master and layout, which is the only way the rule's second branch goes quiet.
+#
+# The comment in that rule says why the branch exists: reading only PackageProperties.Language
+# "false-positived essentially every real deck". So this is not an obscure edge — it is the
+# normal case, and a fixture transplanted from the xlsx corpus would have declared the pair and
+# detected nothing.
+
+_LANG_BEARING_PARTS = ("ppt/slides/slide", "ppt/slideMasters/slideMaster",
+                       "ppt/slideLayouts/slideLayout")
+
+
+def strip_run_languages(path: Path) -> None:
+    """Remove lang/altLang from every a:rPr and a:endParaRPr in slides, masters and layouts.
+
+    Scoped to those two elements rather than to every `lang=` in the package: the rule reads
+    A.RunProperties and A.EndParagraphRunProperties, so a broader strip would change parts the
+    rule never looks at and make the fixture a test of the zip surgery instead of the rule.
+    """
+    import re
+    import shutil
+    import tempfile
+    tmp = Path(tempfile.mkdtemp()) / path.name
+    with zipfile.ZipFile(path) as zin, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+        for item in zin.infolist():
+            data = zin.read(item.filename)
+            if item.filename.endswith(".xml") and item.filename.startswith(_LANG_BEARING_PARTS):
+                data = re.sub(
+                    r"(<a:(?:rPr|endParaRPr)\b[^>]*?)>",
+                    lambda m: re.sub(r'\s+(?:alt)?[Ll]ang="[^"]*"', "", m.group(1)) + ">",
+                    data.decode("utf-8")).encode("utf-8")
+            zout.writestr(item, data)
+    shutil.move(str(tmp), str(path))
+
+
+def f_no_slide_title(prs, slide):
+    """A slide with no title PLACEHOLDER at all — built on the blank layout.
+
+    Distinct from `title-empty`, which has a placeholder and empties it. Both trip 2.4.2 under
+    the rule (it flags a missing placeholder and an empty one separately), and this one is the
+    fixture for 2.4.2 because it isolates the criterion: an empty placeholder is ALSO the 2.4.6
+    violation, so `title-empty` cannot be a single-criterion label for either.
+    """
+    from pptx import Presentation
+    prs2 = Presentation()
+    s = prs2.slides.add_slide(prs2.slide_layouts[6])          # blank: no placeholders
+    _textbox(s, "Revenue grew across every region this quarter.")
+    prs2.core_properties.language = DOC_LANG                  # so 3.1.1 stays quiet
+    return prs2, ({"2.4.2": "FAIL"},
+                  "a slide with no title placeholder — nothing identifies or navigates to it")
+
+
+def f_slide_title_ok(prs, slide):
+    _textbox(slide, "Revenue grew across every region this quarter.")
+    return ({"2.4.2": "PASS"},
+            "a title placeholder holding real text — must not be flagged (adversarial)")
+
+
+def f_no_language(prs, slide):
+    """BOTH branches of the rule have to be closed, and only one of them is reachable here.
+
+    Clearing the metadata language undoes what `_deck` stamps. The run-level lang attributes the
+    default template writes into the masters and layouts are removed after the save, by
+    POST_SAVE — python-pptx has no API for them, and leaving them is exactly the mistake that
+    makes an xlsx-shaped fixture declare this pair and detect nothing.
+    """
+    prs.core_properties.language = ""
+    _textbox(slide, "Revenue grew across every region this quarter.")
+    return ({"3.1.1": "FAIL"},
+            "no metadata language and no run-level lang on any slide, master or layout")
+
+
+def f_language_ok(prs, slide):
+    _textbox(slide, "Revenue grew across every region this quarter.")
+    return ({"3.1.1": "PASS"},
+            f"metadata language set to {DOC_LANG!r} (adversarial)")
+
+
 # ── 3.1.2 Language of Parts — decided by the prose, like 1.3.3 ──────────────────
 # textchecks.detect_language_parts reads EXTRACTED TEXT: it needs at least two segments of
 # >= _MIN_SEG_WORDS (12) real words, in at least two confidently-detected languages, and it
@@ -454,10 +583,26 @@ FIXTURES = [
     ("language-parts-ok",       f_language_parts_ok,       "adversarial"),
     ("language-parts-marked-ok", f_language_parts_marked_ok, "adversarial"),
     ("no-picture-ok",           f_no_picture_ok,           "adversarial"),
+    ("no-slide-title",          f_no_slide_title,          "violation"),
+    ("slide-title-ok",          f_slide_title_ok,          "adversarial"),
+    ("no-language",             f_no_language,             "violation"),
+    ("language-ok",             f_language_ok,             "adversarial"),
 ]
+
+# Transforms applied AFTER python-pptx has written the package, keyed by fixture name. Only one
+# case needs it: the default template's masters and layouts carry the run-level lang attributes
+# that Pptx/Rules/DocumentLanguageRule.cs reads, and python-pptx has no API for removing them.
+POST_SAVE = {"no-language": strip_run_languages}
 
 DECLARED = ("1.1.1", "1.3.3", "1.4.1", "1.4.11", "1.4.3", "1.4.5", "2.1.2", "2.4.3",
             "2.4.4", "2.4.6", "3.1.2", "4.1.2")
+
+# Declared, but confirmed only where the .NET Office analyser is built — CI, not a bare
+# container. A SEPARATE tuple rather than folded into DECLARED so one number keeps one meaning:
+# DECLARED is "a detector was driven against this fixture anywhere the suite runs", and merging
+# the two would quietly make the coverage column mean two different things in the same row.
+# gen_fixture_coverage counts both and reports the split.
+DECLARED_ENGINE = ("2.4.2", "3.1.1")
 
 
 def _validate(name: str, expectations: dict[str, str]) -> list[str]:
@@ -494,6 +639,12 @@ def build_all(docs: Path) -> tuple[list[dict], list[str]]:
         prs.save(path)
         if parts:
             _replace_parts(path, parts)
+        # A post-save transform, for the one case that cannot be expressed through python-pptx:
+        # stripping run-level lang attributes the default template writes into the masters and
+        # layouts. Keyed by fixture name rather than returned by the builder because the builder
+        # runs before the package exists.
+        if name in POST_SAVE:
+            POST_SAVE[name](path)
         problems += _validate(name, expectations)
         manifest.append({"file": f"docs/{name}.pptx", "name": name, "kind": kind,
                          "format": FMT, "expect": expectations, "note": note})

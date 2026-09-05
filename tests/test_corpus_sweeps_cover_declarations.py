@@ -58,6 +58,13 @@ PROVEN_ELSEWHERE = {
     ("xlsx", "2.4.2"): "DECLARED_ENGINE — proven by the .NET analyser in "
                        "test_the_engine_confirms_the_declared_pairs, skipped on a bare checkout",
     ("xlsx", "3.1.1"): "DECLARED_ENGINE — same .NET-gated sweep",
+    ("pptx", "2.4.2"): "DECLARED_ENGINE — proven by the .NET analyser in "
+                       "test_the_engine_confirms_the_declared_pairs, skipped on a bare checkout. "
+                       "The structural half (does the fixture still carry or withhold what "
+                       "SlideTitleRule reads?) IS proven everywhere, in "
+                       "test_the_title_fixtures_carry_or_withhold_what_the_rule_reads",
+    ("pptx", "3.1.1"): "DECLARED_ENGINE — same .NET-gated sweep, with the same structural half in "
+                       "test_the_language_fixtures_carry_or_withhold_what_the_rule_reads",
 }
 
 

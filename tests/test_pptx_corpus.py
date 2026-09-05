@@ -42,6 +42,7 @@ import office_structure as osx  # noqa: E402
 import ocr as _ocr  # noqa: E402
 import pii as _pii  # noqa: E402
 import textchecks as _tc  # noqa: E402
+from engines import NO_OFFICE, OFFICE_OK  # noqa: E402
 
 _spec = importlib.util.spec_from_file_location(
     "gen_pptx_corpus", ROOT / "scripts" / "gen_pptx_corpus.py")
@@ -244,18 +245,23 @@ def test_contrast_needs_an_explicit_fill_and_the_fixture_supplies_one(corpus):
 def test_the_coverage_report_counts_this_corpus(corpus):
     import gen_fixture_coverage as gfc
     cov = gfc.coverage()
+    declared = set(gen.DECLARED) | set(gen.DECLARED_ENGINE)
     assert cov["pptx"]["has_generator"] is True, (
         "gen_fixture_coverage does not know about the pptx corpus — add it to GENERATORS")
-    assert sorted(cov["pptx"]["covered"]) == sorted(gen.DECLARED)
-    assert gfc.BASELINE["pptx"] == len(gen.DECLARED), (
+    assert sorted(cov["pptx"]["covered"]) == sorted(declared)
+    assert sorted(cov["pptx"]["engine_only"]) == sorted(gen.DECLARED_ENGINE), (
+        "the report's engine-only split disagrees with the generator — the headline number "
+        "would be counting pairs nobody can confirm on a bare checkout as if they were the same "
+        "as the rest")
+    assert gfc.BASELINE["pptx"] == len(declared), (
         f"BASELINE['pptx'] is {gfc.BASELINE['pptx']} but the corpus declares "
-        f"{len(gen.DECLARED)} — the ratchet would have slack in it")
+        f"{len(declared)} — the ratchet would have slack in it")
 
 
 def test_the_declared_set_matches_what_the_fixtures_actually_declare(corpus):
     _out, rows = corpus
     from_fixtures = {sc for row in rows.values() for sc in row["expect"]}
-    assert from_fixtures == set(gen.DECLARED)
+    assert from_fixtures == set(gen.DECLARED) | set(gen.DECLARED_ENGINE)
 
 
 def test_every_violation_has_a_paired_adversarial_fixture(corpus):
@@ -284,3 +290,178 @@ def test_ocr_is_present_in_ci():
     assert _ocr.is_available(), (
         "tesseract is unavailable in CI, so 1.4.5 was NOT exercised — the corpus would report "
         "the pair as covered while proving nothing about it")
+
+
+# ── the engine-verified pairs: structure here, detection in CI ───────────────────
+# 2.4.2 and 3.1.1 have no first-party Python detector on ANY Office format, so their labels are
+# proven where the .NET analyser is built and skipped where it is not — DECLARED_ENGINE, the same
+# split the xlsx corpus introduced. Both are worth the asymmetry: they are among the seventeen
+# (criterion, format) pairs in the preset that can return a PASS, so before these fixtures a clean
+# scan CERTIFIED a pptx file against two criteria nothing in the suite checked.
+
+def _title_with_text(path: Path) -> str | None:
+    """SlideTitleRule's predicate, transcribed: a Title/CenteredTitle placeholder holding
+    non-blank text on every slide. Returns the reason it would fire, or None."""
+    from pptx import Presentation
+    prs = Presentation(str(path))
+    for index, slide in enumerate(prs.slides):
+        title = next((s for s in slide.shapes
+                      if s.is_placeholder
+                      and str(s.placeholder_format.type).startswith(("TITLE", "CENTER_TITLE"))),
+                     None)
+        if title is None:
+            return f"slide {index}: no title placeholder"
+        text = "".join(r.text or "" for p in title.text_frame.paragraphs for r in p.runs).strip()
+        if not text:
+            return f"slide {index}: title placeholder is empty"
+    return None
+
+
+def _content_language(path: Path) -> str | None:
+    """DocumentLanguageRule's predicate, transcribed. Returns the reason it would fire, or None.
+
+    THE SECOND BRANCH IS THE WHOLE POINT, and it is what makes the pptx rule different from the
+    xlsx one of the same name: metadata language OR any lang/altLang on an a:rPr or a:endParaRPr
+    in any slide, slide master, or master's layout. The rule's own comment says reading only
+    PackageProperties.Language "false-positived essentially every real deck".
+    """
+    import re
+    import zipfile
+    from pptx import Presentation
+    if (Presentation(str(path)).core_properties.language or "").strip():
+        return None
+    with zipfile.ZipFile(str(path)) as z:
+        for name in z.namelist():
+            if not (name.endswith(".xml") and name.startswith(gen._LANG_BEARING_PARTS)):
+                continue
+            body = z.read(name).decode("utf-8", "replace")
+            for element in re.finditer(r"<a:(?:rPr|endParaRPr)\b[^>]*>", body):
+                if re.search(r'\b(?:alt)?[Ll]ang="[^"]+"', element.group(0)):
+                    return None
+    return "no metadata language and no run-level lang anywhere"
+
+
+@pytest.mark.parametrize("name,fires", [
+    ("no-slide-title", True),
+    ("title-empty", True),
+    ("slide-title-ok", False),
+    ("title-ok", False),
+])
+def test_the_title_fixtures_carry_or_withhold_what_the_rule_reads(corpus, name, fires):
+    """What this file CAN prove without the .NET analyser, and the half that actually rots.
+
+    Detection is asserted below, gated on the engine. But a fixture silently losing the property
+    it was built around is a corpus defect no engine is needed to catch — and it is the likelier
+    failure, because it happens whenever someone edits the base deck rather than the fixture.
+    Splitting the two means a broken fixture fails everywhere and only the detection claim waits
+    for CI.
+    """
+    out, rows = corpus
+    reason = _title_with_text(out / rows[name]["file"])
+    if fires:
+        assert reason, f"{name} is a 2.4.2 fixture and now has a titled slide"
+    else:
+        assert reason is None, f"{name} should have a real title and does not: {reason}"
+
+
+@pytest.mark.parametrize("name,fires", [("no-language", True), ("language-ok", False)])
+def test_the_language_fixtures_carry_or_withhold_what_the_rule_reads(corpus, name, fires):
+    out, rows = corpus
+    reason = _content_language(out / rows[name]["file"])
+    if fires:
+        assert reason, f"{name} is the 3.1.1 fixture and now declares a language somewhere"
+    else:
+        assert reason is None, f"{name} should declare a language and does not"
+
+
+def test_the_xlsx_recipe_would_not_have_worked_here(corpus):
+    """THE FINDING THIS PAIR COST, kept as a test because a paragraph cannot fail.
+
+    Two formats have a rule class called DocumentLanguageRule. The xlsx one reads
+    `PackageProperties.Language` and nothing else; the pptx one ALSO scans slides, masters and
+    layouts for run-level lang. So the xlsx fixture recipe — clear the core property — declares
+    the pair on pptx and detects nothing, because python-pptx's default template ships
+    `<a:rPr lang="en-US" .../>` in ppt/slideMasters/slideMaster1.xml.
+
+    Built here rather than asserted, so that a python-pptx release which stops shipping those
+    attributes turns this into a failure to re-read rather than a comment that has become false.
+    """
+    from pptx import Presentation
+    out, _rows = corpus
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[5])
+    slide.shapes.title.text = "Q3 regional revenue"
+    prs.core_properties.language = ""          # the xlsx recipe, verbatim
+    transplant = out / "docs" / "_xlsx-recipe-transplanted.pptx"
+    prs.save(transplant)
+
+    assert _content_language(transplant) is None, (
+        "clearing only the core property now DOES silence the pptx rule — python-pptx has "
+        "stopped shipping run-level lang in its template, and gen_pptx_corpus.strip_run_languages "
+        "may no longer be needed")
+    assert _content_language(out / "docs" / "no-language.pptx"), (
+        "the real fixture must still trip the rule the transplant cannot")
+    transplant.unlink()
+
+
+def test_no_fixture_carries_an_undeclared_engine_finding(corpus):
+    """THE CORRECTNESS FIX THIS PAIR SURFACED, and the xlsx corpus's hardest-won test.
+
+    An empty title placeholder is the 2.4.6 violation AND, under the analyser, the 2.4.2 one —
+    SlideTitleRule flags "present but contains no text" in the same branch as a missing
+    placeholder. So `title-empty` was labelled single-criterion and was simply wrong in CI, in the
+    way that is hardest to notice: nothing on a bare checkout can raise 2.4.2, so nothing here
+    could contradict it.
+
+    This sweeps every fixture against both engine predicates and requires any that would fire to
+    have declared it. It is what stops the next fixture reintroducing the same silent mislabel.
+    """
+    out, rows = corpus
+    for name, row in rows.items():
+        path = out / row["file"]
+        if _title_with_text(path):
+            assert "2.4.2" in row["expect"], (
+                f"{name} would raise 2.4.2 under the analyser ({_title_with_text(path)}) and does "
+                f"not declare it — its label is wrong in CI")
+        if _content_language(path):
+            assert "3.1.1" in row["expect"], (
+                f"{name} would raise 3.1.1 under the analyser and does not declare it")
+
+
+@pytest.mark.skipif(not OFFICE_OK, reason=NO_OFFICE)
+@pytest.mark.parametrize("name,sc,fires", [
+    ("no-slide-title", "2.4.2", True),
+    ("slide-title-ok", "2.4.2", False),
+    ("no-language", "3.1.1", True),
+    ("language-ok", "3.1.1", False),
+])
+def test_the_engine_confirms_the_declared_pairs(corpus, name, sc, fires):
+    """The detection half, and the reason these two sit in DECLARED_ENGINE rather than DECLARED.
+
+    SC ids come through `assessment_policy._extract_sc`, not a string split: the .NET analyser
+    reports `wcag` in enum form ("SC_2_4_2") where the first-party checks report "2.4.2 Page
+    Titled", so splitting on whitespace yields "SC_2_4_2" and matches nothing. That is what the
+    first CI run of the xlsx version of this test failed on — both detectors HAD fired and the
+    assertion could not see it.
+    """
+    from assessment_policy import _extract_sc
+    from scanner import analyse_and_assess
+    out, rows = corpus
+    path = out / rows[name]["file"]
+    fd, _ = analyse_and_assess(path.parent, path.name, detect_pii=False)
+    found = {sc for i in (fd or {}).get("issues", []) if (sc := _extract_sc(i.get("wcag", "")))}
+    if fires:
+        assert sc in found, (
+            f"{name} declares {sc} but the analyser reported {sorted(found) or 'nothing'}")
+    else:
+        assert sc not in found, f"{name} is the clean control for {sc} but the analyser flagged it"
+
+    # The other engine pair must stay quiet whichever way this fixture goes. `no-slide-title`
+    # withholds a title but stamps a language; `no-language` keeps its title. Before the base deck
+    # stamped a language explicitly, this held only because python-pptx's template happens to
+    # carry run-level lang — which is an accident, not a guarantee.
+    other = "3.1.1" if sc == "2.4.2" else "2.4.2"
+    assert other not in found, (
+        f"{name} also raised {other} — the base deck has stopped stamping "
+        f"{'a language' if other == '3.1.1' else 'a title'}, so every fixture in this corpus is "
+        f"now carrying an undeclared finding")
