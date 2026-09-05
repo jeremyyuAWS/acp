@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { resetDemoData, resetMyData, getAllowlist, setAllowlist, inviteTester, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, putAiProviderSecret, testAiProvider, getAiStatus, getAdmins, setAdmins, getMe, getToken } from './api.js'
+import { resetDemoData, resetMyData, getAllowlist, setAllowlist, inviteTester, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, putAiProviderSecret, testAiProvider, getSecondOpinionPolicy, putSecondOpinionPolicy, getAiStatus, getAdmins, setAdmins, getMe, getToken } from './api.js'
 import { SIM } from './sim.js'
 import WorkerReplicaControl from './WorkerReplicaControl.jsx'
 import ReviewMemory from './ReviewMemory.jsx'
@@ -675,6 +675,8 @@ const ADAPTER_READY = new Set(['azure_openai', 'openai', 'anthropic', 'gemini', 
 // the database, and none in the non-secret config PUT.
 export function AIProvidersPanel({ onAccess }) {
   const [providers, setProviders] = useState(null)
+  const [policy, setPolicy] = useState(null)
+  const [policyDraft, setPolicyDraft] = useState(null)
   const [draft, setDraft] = useState({})     // provider -> edited fields
   const [busy, setBusy] = useState('')
   const [note, setNote] = useState('')
@@ -692,9 +694,10 @@ export function AIProvidersPanel({ onAccess }) {
   // that could not persist anything.
   const [denied, setDenied] = useState(false)
   useEffect(() => {
-    getAiProviders()
-      .then((d) => {
+    Promise.all([getAiProviders(), getSecondOpinionPolicy()])
+      .then(([d, p]) => {
         setProviders(d.providers || [])
+        setPolicy(p); setPolicyDraft(p)
         setSecretWrite(d.secret_write || { available: false, reason: '', kind: '' })
         onAccess?.(true)
       })
@@ -703,7 +706,7 @@ export function AIProvidersPanel({ onAccess }) {
         setDenied(forbidden); setProviders([]); onAccess?.(!forbidden)
       })
   }, [])
-  if (!providers) return null
+  if (!providers || !policyDraft) return null
   // Nothing to show read-only either — the GET that would have supplied the rows is what 403'd.
   if (denied) return <ReadOnlyNotice />
   const edit = (p, field, val) => setDraft((d) => ({ ...d, [p]: { ...(d[p] || {}), [field]: val } }))
@@ -740,6 +743,27 @@ export function AIProvidersPanel({ onAccess }) {
       .catch((e) => setNote(e.message || 'save failed'))
       .finally(() => setBusy(''))
   }
+  const savePolicy = () => {
+    setBusy('second-opinion'); setNote('')
+    const next = {
+      enabled: !!policyDraft.enabled,
+      criteria: policyDraft.criteria || [],
+      confidence_threshold: policyDraft.confidence_threshold || 'low',
+      max_requests_per_scan: Number(policyDraft.max_requests_per_scan),
+      max_requests_per_day: Number(policyDraft.max_requests_per_day),
+      max_daily_cost_usd: Number(policyDraft.max_daily_cost_usd),
+      estimated_cost_per_request_usd: Number(policyDraft.estimated_cost_per_request_usd),
+    }
+    putSecondOpinionPolicy(next)
+      .then((res) => {
+        setPolicy(res); setPolicyDraft(res)
+        setNote(wrote(res, '✓ Assessment second-opinion policy saved for future scans'))
+      })
+      .catch((e) => setNote(e.message || 'policy save failed'))
+      .finally(() => setBusy(''))
+  }
+  const policyDirty = JSON.stringify(policyDraft) !== JSON.stringify(policy)
+  const purposeEnabled = (policyDraft.criteria || []).includes('1.3.5')
   return (
     <div>
       <h3 style={{ marginTop: 0 }}>AI providers <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>· governance &amp; bring-your-own-key</span></h3>
@@ -757,6 +781,63 @@ export function AIProvidersPanel({ onAccess }) {
         <code> AZURE_OPENAI_API_KEY</code>). The key value never touches the database, this page, or
         a log — only whether it’s present is shown.
       </p>
+      <section aria-labelledby="second-opinion-heading" style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '12px 14px', margin: '14px 0' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <b id="second-opinion-heading">Assessment second opinions</b>
+          <span style={{ marginLeft: 'auto', fontSize: 12, color: policyDraft.enabled ? '#2C5209' : 'var(--muted)' }}>
+            {policyDraft.enabled ? 'Enabled for future scans' : 'Off · local-only'}
+          </span>
+        </div>
+        <p className="muted" style={{ fontSize: 12 }}>
+          This policy is copied into each new scan. Changing it never silently changes a scan that
+          is already running. A provider must also be enabled below before any call can occur.
+        </p>
+        <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 13 }}>
+          <input type="checkbox" checked={!!policyDraft.enabled}
+                 onChange={(e) => setPolicyDraft({ ...policyDraft, enabled: e.target.checked })} />
+          Permit cloud second opinions for approved findings
+        </label>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 12 }}>
+          <fieldset style={{ border: 0, padding: 0, margin: 0 }}>
+            <legend className="muted" style={{ fontSize: 12, marginBottom: 6 }}>Eligible WCAG criteria</legend>
+            <label style={{ display: 'flex', gap: 8, fontSize: 13 }}>
+              <input type="checkbox" checked={purposeEnabled}
+                     onChange={(e) => setPolicyDraft({ ...policyDraft,
+                       criteria: e.target.checked ? ['1.3.5'] : [] })} />
+              1.3.5 Identify Input Purpose
+            </label>
+          </fieldset>
+          <L label="Maximum detector confidence">
+            <select value={policyDraft.confidence_threshold || 'low'} style={INP}
+                    onChange={(e) => setPolicyDraft({ ...policyDraft, confidence_threshold: e.target.value })}>
+              <option value="low">Low only</option>
+              <option value="medium">Low and medium</option>
+              <option value="high">Low, medium and high</option>
+            </select>
+          </L>
+          <L label="Maximum requests per scan"><input type="number" min="1" value={policyDraft.max_requests_per_scan}
+            onChange={(e) => setPolicyDraft({ ...policyDraft, max_requests_per_scan: e.target.value })} style={INP} /></L>
+          <L label="Maximum requests per day"><input type="number" min="1" value={policyDraft.max_requests_per_day}
+            onChange={(e) => setPolicyDraft({ ...policyDraft, max_requests_per_day: e.target.value })} style={INP} /></L>
+          <L label="Daily cloud-cost ceiling (USD)"><input type="number" min="0.01" step="0.01" value={policyDraft.max_daily_cost_usd}
+            onChange={(e) => setPolicyDraft({ ...policyDraft, max_daily_cost_usd: e.target.value })} style={INP} /></L>
+          <L label="Estimated cost reserved per request (USD)"><input type="number" min="0.000001" step="0.001" value={policyDraft.estimated_cost_per_request_usd}
+            onChange={(e) => setPolicyDraft({ ...policyDraft, estimated_cost_per_request_usd: e.target.value })} style={INP} /></L>
+        </div>
+        <p className="muted" style={{ fontSize: 11 }}>
+          Request limits are enforced atomically. Cost admission uses the labelled estimate above;
+          measured provider cost is recorded after each call and shown in Live Operations.
+        </p>
+        {policyDraft.enabled && !purposeEnabled && (
+          <p role="alert" style={{ color: 'var(--error-fg-strong)', fontSize: 12 }}>
+            Select at least one criterion before enabling this policy.
+          </p>
+        )}
+        <button className="ghost small" style={{ marginTop: 10 }} onClick={savePolicy}
+                disabled={!policyDirty || busy === 'second-opinion' || (policyDraft.enabled && !purposeEnabled)}>
+          {busy === 'second-opinion' ? 'Saving…' : 'Save second-opinion policy'}
+        </button>
+      </section>
       {providers.map((row) => {
         const ready = ADAPTER_READY.has(row.provider)
         const dirty = !!draft[row.provider] && Object.keys(draft[row.provider]).length > 0

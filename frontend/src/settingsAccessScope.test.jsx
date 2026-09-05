@@ -90,6 +90,9 @@ describe('the AI Governance tab', () => {
     expect(c.textContent).toMatch(/AI providers/)
     expect(c.textContent).toMatch(/LOW-confidence assessment findings/)
     expect(c.textContent).toMatch(/first rendered page only/)
+    expect(c.textContent).toMatch(/Assessment second opinions/)
+    expect(c.textContent).toMatch(/1\.3\.5 Identify Input Purpose/)
+    expect(c.textContent).toMatch(/copied into each new scan/)
   })
 })
 

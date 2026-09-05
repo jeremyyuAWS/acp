@@ -1167,6 +1167,44 @@ class AIProviderUpdate(BaseModel):
     key_secret_ref: str | None = None       # the NAME of an ops-provisioned env/Key-Vault secret
 
 
+class SecondOpinionPolicyUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+    criteria: list[str]
+    confidence_threshold: str = "low"
+    max_requests_per_scan: int = 25
+    max_requests_per_day: int = 250
+    max_daily_cost_usd: float = 10.0
+    estimated_cost_per_request_usd: float = 0.01
+
+
+@router.get("/ai/second-opinion-policy")
+def get_second_opinion_policy(request: Request):
+    """Owner-visible consent policy; credentials and provider output are never part of it."""
+    _require_admin(request)
+    from second_opinion_policy import load_policy
+    return load_policy(core.store)
+
+
+@router.put("/ai/second-opinion-policy")
+def put_second_opinion_policy(body: SecondOpinionPolicyUpdate, request: Request):
+    """Set policy for future scans. Existing scans retain their immutable snapshot."""
+    _require_admin(request)
+    from second_opinion_policy import SETTING_KEY, normalize_policy
+    policy = normalize_policy(body.model_dump())
+    if body.confidence_threshold.lower() not in ("low", "medium", "high"):
+        raise HTTPException(422, "confidence_threshold must be low, medium, or high")
+    if policy["enabled"] and not policy["criteria"]:
+        raise HTTPException(422, "at least one eligible criterion is required when enabled")
+    core.store.set_setting(SETTING_KEY, json.dumps(policy, sort_keys=True))
+    actor = getattr(request.state, "user_email", None) or "admin"
+    core.store.log_decision(actor, "settings.second_opinion_policy",
+                            detail=(f"enabled={policy['enabled']} · criteria="
+                                    f"{','.join(policy['criteria']) or '(none)'} · threshold="
+                                    f"{policy['confidence_threshold']} · future scans only"))
+    return policy
+
+
 @router.get("/ai/providers")
 def get_ai_providers(request: Request):
     """Admin: the configurable cloud AI providers as SAFE views — endpoint, model, whether the
