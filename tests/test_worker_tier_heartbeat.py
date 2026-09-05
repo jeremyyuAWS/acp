@@ -36,6 +36,28 @@ def _envelope(delta_s: float, pool_size: int | None = 12) -> str:
     return json.dumps(body)
 
 
+def _wait_until(predicate, timeout=5.0, interval=0.01):
+    """Wait for the thing under test to actually happen, rather than sleeping a guess.
+
+    WHY THIS REPLACED A FIXED SLEEP. `worker_main.run` writes its first heartbeat INSIDE
+    `while not _stop.is_set()`, and reaches that loop only after `import core` pulls in
+    apscheduler, the store and the scheduler stack. The old `time.sleep(0.15)` was the entire
+    margin for all of that: when `_stop.set()` won the race the loop body never ran, no beat was
+    ever written, and `worker_tier_alive()` was correctly False. That is how this test failed CI
+    on 2026-09-05 during an unrelated frontend-only PR (#1412) while passing everywhere else.
+
+    A longer fixed sleep would be the same race with a bigger constant. The timeout here is a
+    ceiling on failure, not a duration the happy path pays: a beat that lands in 20 ms is waited
+    on for 20 ms.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if predicate():
+            return True
+        time.sleep(interval)
+    return False
+
+
 def test_alive_when_beat_is_fresh(isolated_store):
     s = isolated_store
     s.set_setting("worker_tier_heartbeat", _stamp(5))
@@ -144,9 +166,13 @@ def test_worker_main_loop_beats(monkeypatch, isolated_store):
     worker_main._stop.clear()
     t = threading.Thread(target=lambda: worker_main.run(poll_seconds=0.02, _install_signals=False))
     t.start()
-    time.sleep(0.15)
+    # Wait for the beat this test is about, not for a fixed interval — see _wait_until.
+    beat_written = _wait_until(lambda: bool(isolated_store.get_setting("worker_tier_heartbeat")))
     worker_main._stop.set()
     t.join(timeout=2)
+    # Asserted separately so a timeout says "no beat in 5s" rather than surfacing as a confusing
+    # `alive is False` further down.
+    assert beat_written, "worker_main.run wrote no heartbeat within the timeout"
     assert not t.is_alive()
     assert isolated_store.worker_tier_alive() is True
     assert isolated_store.worker_tier_status()["pool_size"] == 12
