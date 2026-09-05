@@ -3911,7 +3911,7 @@ class Store:
                          "tenant_queue_state",
                          "lifecycle_evaluation", "effective_disposition",
                          "org_memory", "remediation_state", "remediation_diff", "applied_fixes",
-                         "ai_calls", "finding_comments",
+                         "ai_calls", "second_opinion_reservations", "finding_comments",
                          "scan_inputs",  # Stage 1 item 3: per-scan enqueue snapshots are customer data
                          "scan_folder_completions",  # which folders of a scan were counted done
                          "active_discovery_guard",  # transient lock state — cleared on reset
@@ -3976,7 +3976,8 @@ class Store:
     _RESET_USER_SCAN_TABLES = ["file_records", "issue_records", "scan_rule_traces",
                                "file_stage_timings", "scan_file_manifests", "scan_inventory",
                                "file_tags", "pii_findings", "hitl_queue", "hitl_events",
-                               "remediation_diff", "applied_fixes", "ai_calls", "finding_comments",
+                               "remediation_diff", "applied_fixes", "ai_calls",
+                               "second_opinion_reservations", "finding_comments",
                                "jobs", "overview_snapshots", "scan_events", "orchestration_events",
                                "scan_folder_completions"]
     # Tables that key on doc_id (not scan_id), scoped via a documents.owner_email join.
