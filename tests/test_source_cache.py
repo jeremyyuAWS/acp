@@ -34,7 +34,15 @@ class _FakeBlob:
             raise RuntimeError("ContainerNotFound")
         self._store[(self._container, self._path)] = bytes(data)
 
-    def download_blob(self):
+    def download_blob(self, **kwargs):
+        # Accepts the transport budget download_source passes (see tests/test_blob_read_timeout.py)
+        # and asserts it, rather than absorbing whatever it is handed. THE SWALLOW MAKES THIS
+        # MATTER: download_source turns any exception into None, which the caller reads as a plain
+        # cache miss — so a kwarg the real client rejected would silently disable the source cache
+        # in production and look exactly like "nothing was ever cached". A strict double is the
+        # only place that difference is visible.
+        assert kwargs.get("read_timeout"), "the cached-source read must carry a read timeout"
+        assert kwargs.get("connection_timeout"), "the cached-source read must carry a connect timeout"
         data = self._store.get((self._container, self._path))
         if data is None:
             raise RuntimeError("BlobNotFound")
