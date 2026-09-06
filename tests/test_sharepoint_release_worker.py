@@ -47,6 +47,9 @@ class FakeStore:
     def get_release_root(self, release_id, location, owner):
         return self.root
 
+    def claim_release_root_name(self, release_id, owner, provider, location, name):
+        return name
+
     def record_release_root(self, release_id, owner, provider, location, folder_id, name, url):
         self.root = {"folder_id": folder_id, "folder_name": name, "folder_url": url}
         return self.root
@@ -102,6 +105,49 @@ def test_sharepoint_worker_publishes_and_records_verified_copy(monkeypatch):
     assert result["released_relative_path"] == "HR/Policies/Leave.docx"
     assert result["verification"] == "content verified"
     assert store.published == (SID, FILE, "https://sp/copy")
+
+
+def test_sharepoint_worker_reuses_claim_after_crash_between_graph_and_database(monkeypatch):
+    import core
+    import handlers
+    import publish
+    import pytest
+
+    store = FakeStore()
+    monkeypatch.setattr(core, "store", store)
+    monkeypatch.setattr(core, "get_scan_tokens", lambda scan_id: {"sp": "token"})
+    claimed = []
+    monkeypatch.setattr(store, "claim_release_root_name",
+                        lambda *args: claimed.append(args[-1]) or args[-1])
+    ensured = []
+    monkeypatch.setattr(publish, "ensure_sharepoint_release_folder",
+                        lambda token, drive, release, name:
+                        ensured.append(name) or {"id": "root-1", "name": name,
+                                                 "url": "https://sp/root"})
+    real_record = store.record_release_root
+    attempts = 0
+
+    def record_root(*args):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ConnectionError("worker stopped before the root row committed")
+        return real_record(*args)
+
+    monkeypatch.setattr(store, "record_release_root", record_root)
+    monkeypatch.setattr(publish, "archive_copy_publish_sharepoint",
+                        lambda *args, **kwargs: {"id": "copy-1", "url": "https://sp/copy",
+                                                "checksum": "sha256", "created": True,
+                                                "filename": FILE})
+    payload = {"scan_id": SID, "release_id": "release-1", "file": FILE, "owner": OWNER}
+
+    with pytest.raises(ConnectionError):
+        handlers._publish_file(payload, {"attempts": 1, "max_attempts": 5})
+    handlers._publish_file(payload, {"attempts": 2, "max_attempts": 5})
+
+    assert claimed == ["2026-09-05 10-00 UTC", "2026-09-05 10-00 UTC"]
+    assert ensured == ["2026-09-05 10-00 UTC", "2026-09-05 10-00 UTC"]
+    assert store.root["folder_id"] == "root-1"
 
 
 def test_sharepoint_worker_restores_original_name_after_internal_dedupe(monkeypatch):

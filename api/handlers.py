@@ -769,8 +769,10 @@ def _publish_file(payload: dict, job: dict) -> None:
             raise FatalJobError("release execution not found")
         root = core.store.get_release_root(release_id, location, owner)
         if not root:
+            claimed_name = core.store.claim_release_root_name(
+                release_id, owner, "sharepoint", location, release["folder_name"])
             detail = _publish.ensure_sharepoint_release_folder(
-                token, drive_id, release_id, release["folder_name"])
+                token, drive_id, release_id, claimed_name)
             root = core.store.record_release_root(
                 release_id, owner, "sharepoint", location, detail["id"],
                 detail["name"], detail.get("url"))

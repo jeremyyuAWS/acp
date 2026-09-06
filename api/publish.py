@@ -159,18 +159,13 @@ def _sp_find_child(token: str, url: str, name: str, *, folder_only: bool = False
 
 def ensure_sharepoint_release_folder(token: str, drive_id: str | None, release_id: str,
                                      folder_name: str) -> dict:
-    """Create a distinct ``Remediated/<timestamp>`` root in one Graph drive/library."""
+    """Find/create the release's durably claimed root in one Graph drive/library."""
     import scanner
     root_id = _sp_ensure_folder(token, drive_id, None, RELEASE_ROOT)
     base = scanner._sp_base(drive_id)
-    children_url = f"{base}/items/{root_id}/children?$select=id,name,folder,webUrl&$top=200"
-    collision = _sp_find_child(token, children_url, folder_name, folder_only=True)
-    # Graph enforces sibling-name uniqueness. Preserve the clean timestamp normally and add a
-    # stable release suffix only when another execution began in the same minute.
-    actual_name = folder_name if collision is None else f"{folder_name} · {release_id[:8]}"
-    folder_id = _sp_ensure_folder(token, drive_id, root_id, actual_name)
+    folder_id = _sp_ensure_folder(token, drive_id, root_id, folder_name)
     item = scanner._sp_get(token, f"{base}/items/{folder_id}?$select=id,name,webUrl")
-    return {"id": folder_id, "name": item.get("name") or actual_name,
+    return {"id": folder_id, "name": item.get("name") or folder_name,
             "url": item.get("webUrl")}
 
 

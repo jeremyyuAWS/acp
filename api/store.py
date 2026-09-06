@@ -1082,6 +1082,14 @@ _SCHEMA = [
       folder_id TEXT NOT NULL, folder_name TEXT NOT NULL, folder_url TEXT, created_at TEXT NOT NULL,
       PRIMARY KEY(release_id,provider_location)
     )""",
+    # Reserve the provider-visible name before Graph creates the folder. A retry after Graph
+    # succeeds but before release_roots is written can then find and reuse the exact same folder.
+    """CREATE TABLE IF NOT EXISTS release_root_claims (
+      release_id TEXT NOT NULL, owner_email TEXT NOT NULL, provider TEXT NOT NULL,
+      provider_location TEXT NOT NULL, folder_name TEXT NOT NULL, claimed_at TEXT NOT NULL,
+      PRIMARY KEY(release_id,provider_location),
+      UNIQUE(owner_email,provider_location,folder_name)
+    )""",
     """CREATE TABLE IF NOT EXISTS release_documents (
       release_id TEXT NOT NULL, file TEXT NOT NULL, source_document_id TEXT,
       source_relative_path TEXT NOT NULL, destination_relative_path TEXT,
@@ -2105,8 +2113,11 @@ class _PgAdapter:
     # columns, while newer replicas fall back to the scan id for pre-v24 rows.
     # v25 adds scan_inventory.source_name so provider basenames survive ACP's internal
     # same-name disambiguation and can be restored when corrected copies are published.
-    _SCHEMA_VERSION = 26
-    _SCHEMA_CHECKSUM_AT_VERSION = "99abe2532a455e8e1e560b0455c5f077"
+    # v27 is the union of main's v26 workflow-lineage migration and release_root_claims, the
+    # pre-provider name reservation that closes the
+    # SharePoint-folder creation crash window.
+    _SCHEMA_VERSION = 27
+    _SCHEMA_CHECKSUM_AT_VERSION = "97a24ec0c197f75099ef4df62a89fe92"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -4259,7 +4270,8 @@ class Store:
                          # reset — the same reading release_executions gets two lines below.
                          "remediation_delivery", "remediation_run_hold",
                          # Release executions and their provider destinations are customer data.
-                         "release_documents", "release_roots", "release_executions",
+                         "release_documents", "release_roots", "release_root_claims",
+                         "release_executions",
                          "content_workspaces",  # ADR 0044 — a customer's own workspace, not config
                          "content_workspace_documents", "content_workspace_document_versions",
                          "orchestration_events",  # operational log — carries owner_email, customer data
@@ -4384,7 +4396,7 @@ class Store:
         with self._db.cursor() as cur:
             # Release children key on release_id rather than scan_id. Remove them before their
             # owner-scoped executions, while the join can still identify this user's rows.
-            for table in ("release_documents", "release_roots"):
+            for table in ("release_documents", "release_roots", "release_root_claims"):
                 self._db.execute(cur,
                     f"DELETE FROM {table} WHERE release_id IN "
                     "(SELECT id FROM release_executions WHERE owner_email=%s)", (owner_email,))
@@ -4486,7 +4498,7 @@ class Store:
                 return None
 
         with self._db.cursor() as cur:
-            for table in ("release_documents", "release_roots"):
+            for table in ("release_documents", "release_roots", "release_root_claims"):
                 self._db.execute(cur,
                     f"DELETE FROM {table} WHERE release_id IN "
                     "(SELECT id FROM release_executions WHERE scan_id=%s AND owner_email=%s)",
@@ -7744,6 +7756,32 @@ class Store:
                 "WHERE r.release_id=%s AND r.provider_location=%s AND e.owner_email=%s",
                 (release_id, provider_location, owner))
             return self._db.fetchone(cur)
+
+    def claim_release_root_name(self, release_id: str, owner: str, provider: str,
+                                provider_location: str, folder_name: str) -> str:
+        """Atomically reserve one stable provider folder name for a release/location."""
+        now = self._now()
+        candidates = (folder_name, f"{folder_name} · {release_id[:8]}",
+                      f"{folder_name} · {release_id}")
+        with self._db.cursor() as cur:
+            for candidate in candidates:
+                self._db.execute(cur,
+                    "INSERT INTO release_root_claims(release_id,owner_email,provider,"
+                    "provider_location,folder_name,claimed_at) "
+                    "SELECT %s,%s,%s,%s,%s,%s WHERE EXISTS "
+                    "(SELECT 1 FROM release_executions WHERE id=%s AND owner_email=%s) "
+                    "ON CONFLICT DO NOTHING",
+                    (release_id, owner, provider, provider_location, candidate, now,
+                     release_id, owner))
+                self._db.execute(cur,
+                    "SELECT c.folder_name FROM release_root_claims c "
+                    "JOIN release_executions e ON e.id=c.release_id "
+                    "WHERE c.release_id=%s AND c.provider_location=%s AND e.owner_email=%s",
+                    (release_id, provider_location, owner))
+                claimed = self._db.fetchone(cur)
+                if claimed:
+                    return claimed["folder_name"]
+        raise ValueError("release execution not found or no release-folder name was available")
 
     def record_release_root(self, release_id: str, owner: str, provider: str,
                             provider_location: str, folder_id: str,
