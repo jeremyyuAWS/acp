@@ -113,13 +113,13 @@ def test_a_second_identity_gets_its_own_three_resources(azure):
 # ── the connection ceiling, derived rather than typed ────────────────────────────────────────
 
 def test_the_server_requirement_is_derived_from_the_fleet(azure):
-    """82 of demand plus 15 the server keeps for itself. The document's declared 150 is not
+    """100 of demand plus 15 the server keeps for itself. The document's declared 859 is not
     consulted: the point of the inversion is that demand tells the adapter what to build."""
     from acpctl.adapter_azure import requirements
     from acpctl.inventory import SERVER_RESERVED_CONNECTIONS, connection_budget
 
     demand = connection_budget(azure)["worstCaseConnections"]
-    assert demand == 90
+    assert demand == 100
     row = [r for r in requirements(azure) if r.setting == "max_connections"]
     assert len(row) == 1
     assert row[0].value == f">= {demand + SERVER_RESERVED_CONNECTIONS}"
@@ -150,7 +150,7 @@ def test_the_band_where_the_document_validates_and_the_server_still_runs_out(azu
     from acpctl.spec import validate
 
     tight = copy.deepcopy(azure)
-    tight["data"]["postgres"]["maxConnections"] = 90     # clears 82, leaves 8 of the 15 needed
+    tight["data"]["postgres"]["maxConnections"] = 100  # clears demand, leaves none of 15 reserve
 
     rules = {f.rule for f in validate(tight).errors}
     assert "data.connection-budget" not in rules, "the budget check should still pass here"

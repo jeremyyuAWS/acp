@@ -16,12 +16,9 @@ one.
 ## The two things the contract could not say
 
 **A per-replica connection pool.** `rightsize-production.sh` pins `ACP_DB_MAX_CONN=2` on all
-three worker tiers (PR #1370), which is what holds the fleet inside the Postgres server's
-measured 150-connection ceiling. The contract derived each replica's pool from
-`ACP_WORKERS + headroom` and had no way to record an override — so the honest document, with
-today's real replica ranges and the real server, computed **384** worst-case connections and read
-as 2.5× oversubscribed. The deployment it described sits at **82** and has never exhausted its
-pool.
+three worker tiers (PR #1370). The contract originally had no way to record that override. It can
+now express the pin, and the derived document carries both the current 859-connection General
+Purpose server and the intentionally bounded worker pools.
 
 The contract was not *wrong* about production. It was *unable to describe it*, which is the
 quieter failure: `acpctl plan` would have refused a configuration that is demonstrably safe, and a
@@ -105,11 +102,11 @@ Worst case at max replicas, against the server production actually runs.
 |---|---|---:|---:|
 | `acp-web-api` | 1–3 | 16 (derived) | 48 |
 | `acp-discovery` | 4–6 | 2 (pinned) | 12 |
-| `acp-assess` | 5–5 | 2 (pinned) | 10 |
+| `acp-assess` | 5–10 | 2 (pinned) | 20 |
 | `acp-remediate` | 5–10 | 2 (pinned) | 20 |
-| **total** | | | **90** |
+| **total** | | | **100** |
 
-Against `maxConnections: 150` — **within budget**, headroom 60.
+Against `maxConnections: 859` — **within budget**, headroom 759.
 
 ## What the contract could not express
 

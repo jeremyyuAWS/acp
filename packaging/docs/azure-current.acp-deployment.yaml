@@ -37,9 +37,12 @@ workers:
   assess:
     replicas:
       min: 5
-      max: 5
+      max: 10
     resources:
       preset: standard
+    autoscale:
+      signals:
+      - queue-depth
     connectionPool: 2
   remediate:
     replicas:
@@ -54,7 +57,7 @@ workers:
 data:
   postgres:
     mode: managed
-    maxConnections: 150
+    maxConnections: 859
   redis:
     mode: managed
   objectStorage:

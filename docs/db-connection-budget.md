@@ -1,15 +1,22 @@
 # Postgres connection budget — proposal (H-02)
 
-**Status:** The original analysis below is retained for audit history. The reviewed production
-baseline now explicitly limits every dedicated worker replica to two database connections and
-allows `acp-remediate` to scale from 5 to 10 replicas from its own queue. The executable model in
-`tests/test_db_connection_budget.py` gives an 82-connection steady ceiling and a 120-connection
-rolling-deploy ceiling; with the 15-connection reserve, both fit the measured 150-connection
-server limit. **Created:** 30 August 2026. **Capacity correction:** 5 September 2026.
+> **Production update, 2026-09-06.** The historical 150-connection Burstable analysis below is
+> retained because it explains the original constraint and regression tests. Production now runs
+> PostgreSQL 16 on General Purpose `Standard_D2ds_v4`, with `max_connections=859` (the SKU
+> default). `acp-app` receives the same value as `ACP_PG_MAX_CONNECTIONS`; Assess is 5–10 with a
+> queue scaler, Discovery is 4–6, and Remediation is 5–10. The former R3 block is therefore
+> resolved. Staging remains a separate, smaller budget and must not inherit this value.
 
-The scale rule counts only `remediate_file`, `rescore_file`, and `apply_approved_values` jobs and
-targets four queued jobs per replica. The connection cap is what makes that throughput increase
-safe; raising replicas without it would reproduce the over-budget topology documented below.
+**Status:** The original analysis below is retained for audit history. The reviewed production
+baseline limits every dedicated worker replica to two database connections and allows Assess and
+Remediation to scale from 5 to 10 replicas from their own queues. The executable model gives a
+100-connection steady ceiling and a 144-connection rolling-deploy ceiling; with the 15-connection
+reserve, both fit the measured 859-connection server limit. **Created:** 30 August 2026.
+**Capacity correction:** 6 September 2026.
+
+Each scale rule counts only jobs its lane can claim now, excluding delayed and exhausted retries.
+Assess targets eight queued jobs per replica; Remediation targets four. The per-replica pool cap
+still prevents idle replicas reserving connections they do not use.
 
 > **Correction, 4 September 2026 — the topology in §1 and §2 is stale, and the headline number is
 > an understatement.** Everything below models ONE worker tier at 3–10 replicas. Production runs

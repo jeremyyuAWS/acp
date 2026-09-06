@@ -1,7 +1,16 @@
 # PRD — Settings → Scheduling
 
 **Product:** ACP
-**Status:** Reviewed, Phase 1 in progress
+**Status:** Phases 1–3 implemented; production capacity prerequisite completed 2026-09-06
+
+> **R3 resolved in production (2026-09-06).** PostgreSQL moved from Burstable
+> `Standard_B2s` to General Purpose `Standard_D2ds_v4`. The server's explicit
+> `max_connections=150` override was raised to the SKU's PostgreSQL 16 default of **859**, and
+> `ACP_PG_MAX_CONNECTIONS=859` is published to `acp-app` so validation uses the live ceiling.
+> Assess now runs **5–10** with the claimable-work PostgreSQL scaler (8 queued jobs per replica),
+> rather than the out-of-band 10–10 pin found immediately before the change. Discovery is 4–6
+> and Remediation is 5–10. `/healthz`, `/readyz`, all three worker heartbeats, and the latest
+> Container App revisions were healthy after both required PostgreSQL restarts.
 **Owner:** Platform Operations
 **Scope:** Scheduled warm capacity for Discover, Assess, Remediate, web, and optional GPU services
 

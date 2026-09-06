@@ -21,6 +21,11 @@ DRY_RUN=false
 # partially-processed documents. acp-app serves HTTP and acp-ollama holds no ACP job.
 WORKER_TERMINATION_GRACE_SECONDS="${ACP_WORKER_TERMINATION_GRACE_SECONDS:-600}"
 WORKER_DRAIN_SECONDS="${ACP_WORKER_DRAIN_SECONDS:-540}"
+# Production moved to General Purpose Standard_D2ds_v4 on 2026-09-06. Its PostgreSQL 16
+# max_connections default is 859; publish the measured server ceiling to the API so the
+# Scheduling validator and UI price proposed floors against the database that is actually live.
+# Keep this overridable for a restored server or a later resize.
+PG_MAX_CONNECTIONS="${ACP_PG_MAX_CONNECTIONS:-859}"
 
 update_app() {
   local name="$1" cpu="$2" memory="$3" min="$4" max="$5" db_pool="${6:-}"
@@ -70,18 +75,11 @@ apply_remediation_autoscale() {
 }
 
 apply_assess_autoscale() {
-  # ASSESS HAS NO QUEUE SCALER TODAY, AND ATTACHING ONE WOULD NOT GIVE IT AUTOSCALING. The tier
-  # runs 5-5 below: floor equals ceiling, so a scaler on it can compute any replica count it
-  # likes and Azure cannot act on it. That is why this is guarded rather than simply added — an
-  # `az containerapp update --scale-rule-*` creates a REVISION, and paying a worker restart for a
-  # rule that provably cannot fire is worse than not having the rule.
-  #
-  # WHAT IS BLOCKING THE CEILING IS THE CONNECTION BUDGET, NOT AN OVERSIGHT.
-  # tests/test_capacity_budget.py computes it: at assess 5-10 the fleet wants 136 connections
-  # during a revision overlap plus the 15-connection reserve, against a server that has 150 — and
-  # that is before discovery's own range is settled. Raising this ceiling is a decision about
-  # where those connections come from (a larger Postgres SKU, a smaller acp-app pool, or lower
-  # business-hours floors), not a line to edit here.
+  # Keep the guard even though production is now 5-10. It prevents a future parity edit from
+  # attaching an inert scaler to a pinned tier: an `az containerapp update --scale-rule-*`
+  # creates a revision, and paying a worker restart for a rule that cannot fire is worse than
+  # skipping it. R3's former connection-budget blocker was resolved by the 2026-09-06 PostgreSQL
+  # General Purpose upgrade; the live 859 ceiling is published above.
   #
   # DEFINED AFTER apply_remediation_autoscale DELIBERATELY.
   # tests/test_packaging_chart.py finds the remediate rule by name now rather than by taking the
@@ -115,15 +113,21 @@ apply_assess_autoscale() {
 # rule. Assessment and Remediation are throughput-sensitive batch stages: keep
 # five replicas warm so large runs retain the production performance baseline.
 update_app acp-app       1.0 2Gi 1 3
+if $DRY_RUN; then
+  printf 'az containerapp update --subscription %q --resource-group %q --name acp-app --set-env-vars %q\n' \
+    "$SUBSCRIPTION" "$RESOURCE_GROUP" "ACP_PG_MAX_CONNECTIONS=$PG_MAX_CONNECTIONS"
+else
+  echo "Publishing PostgreSQL connection ceiling ($PG_MAX_CONNECTIONS) to the Scheduling validator"
+  az containerapp update --subscription "$SUBSCRIPTION" --resource-group "$RESOURCE_GROUP" \
+    --name acp-app --set-env-vars "ACP_PG_MAX_CONNECTIONS=$PG_MAX_CONNECTIONS" --output none
+fi
 # Dedicated worker replicas serve no HTTP traffic. Their two job threads share a two-connection
 # pool; scheduler/heartbeat operations wait briefly for a slot instead of reserving idle
-# connections. This keeps the full fleet beneath Postgres's measured 150-connection ceiling,
-# including old+new revision overlap during deploy.
-# DISCOVERY IS 4-6 BY DECISION, 2026-09-06, AND THE CEILING IS SET BY A DEPLOY, NOT BY STEADY
-# STATE. It ran 1-2 here and 4-8 in Azure; the drift was found the way remediate's was
-# (packaging/docs/azure-parity.md), production having been scaled up by hand with nobody folding
-# it back. The owner chose the live FLOOR of 4. The live ceiling of 8 could not be kept, and the
-# reason is the one tests/test_db_connection_budget.py exists to catch:
+# connections. This keeps the full fleet well beneath the General Purpose server's measured
+# 859-connection ceiling, including old+new revision overlap during deploy.
+#
+# DISCOVERY IS 4-6 BY DECISION, 2026-09-06. The historical 150-connection Burstable server made
+# 4-6 the largest safe range and is why the guard below remains documented and tested:
 #
 #   discovery   steady   during revision overlap   + reserve   fits 150?
 #      1-2        82              120                  135        yes
@@ -133,16 +137,18 @@ update_app acp-app       1.0 2Gi 1 3
 #
 # ACA runs the old and new revisions together during a rollout, so the overlap column — not the
 # steady one — is what a Postgres ceiling has to survive. At 4-8 the fleet wants 153 connections
-# against 150. 4-6 is the largest ceiling that still fits, with one connection to spare.
+# against 150. The General Purpose upgrade later removed that constraint; 4-6 remains the
+# reviewed service range rather than being expanded implicitly as a side effect of buying DB
+# headroom.
 #
 # PRODUCTION WAS RUNNING 4-8 WHEN THIS WAS WRITTEN, so that exposure was live on every rollout and
 # was not created by this line — it was hidden by the old 1-2, which understated the estate. Bring
 # Azure down to 6 to match.
 update_app acp-discovery 1.0 2Gi 4 6  2
-update_app acp-assess    2.0 4Gi 5 5  2
+update_app acp-assess    2.0 4Gi 5 10 2
 update_app acp-remediate 2.0 4Gi 5 10 2
 apply_remediation_autoscale
-apply_assess_autoscale 5 5
+apply_assess_autoscale 5 10
 
 # Production and staging point at acp-ollama-gpu. Keep this legacy fallback
 # available but cold until explicitly addressed through its internal ingress.
