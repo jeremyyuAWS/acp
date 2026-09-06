@@ -8,6 +8,9 @@ import ErrorBoundary from './ErrorBoundary.jsx'
 // finished outright. Reported 2026-09-06: selecting "Recently completed" showed the 93%-complete
 // remediate card, because the filter matched a run and then admitted its whole workflow.
 vi.mock('./api.js', () => ({
+  // CapacityModeStrip, mounted by AdminLiveTraffic, reads this. Declared here
+  // rather than left undefined so these tests exercise the real path.
+  getCapacitySchedule: vi.fn(async () => ({ applied: false })),
   getAdminActivity: vi.fn(async () => ({
     generated_at: '2026-09-06T14:00:00Z',
     runs: [

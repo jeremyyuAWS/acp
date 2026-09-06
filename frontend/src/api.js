@@ -1550,6 +1550,59 @@ export const setWorkerReplicas = (minReplicas) => (SIM
       headers: { ...headers(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ min_replicas: minReplicas }),
     }).then(j))
+// The capacity SCHEDULE — what warm capacity ACP intends and when, plus what Azure actually
+// runs and whether the two agree. Read-only in Phase 2: this endpoint writes nothing, and the
+// schedule it returns is the PRD's proposal, which is why `applied` is false and `drift` is
+// empty. A caller must not render this as a live schedule — see CapacitySchedule.jsx.
+//
+// SIM returns the same SHAPE with nothing configured, so the demo renders the tab's honest
+// "not configured" state rather than a blank panel or a fabricated schedule.
+export const getCapacitySchedule = () => (SIM
+  ? sim({ enabled: false, timezone: 'America/Los_Angeles', days: [], start: null, end: null,
+          business_hours: {}, off_hours: {}, maximums: {}, effective_mode: 'off_hours',
+          next_transition_at: null, next_transition_to: null, version: 0, applied: false,
+          validation: null, scalers: {}, observed: {}, drift: [], drift_evaluated: false,
+          azure_configured: false })
+  : fetch(`${BASE}/control/capacity-schedule`, { headers: headers() }).then(j))
+// Phase 3's writes. All admin-only at the API (each handler runs _require_admin); the SPA hides
+// the controls too, which is convenience, not the gate.
+//
+// SIM RESOLVES RATHER THAN REJECTS, returning the shape the caller expects with nothing changed.
+// A demo that threw here would render an error the demo cannot explain; one that pretended to
+// save would be worse — see SIM_NOT_WRITTEN in Settings.jsx for the same reasoning.
+export const putCapacitySchedule = (body) => (SIM
+  ? sim({ ...body, version: body.version, applied: false, azure_applied: false })
+  : fetch(`${BASE}/control/capacity-schedule`, {
+      method: 'PUT',
+      headers: { ...headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j))
+// The dry run. Returns findings and the projected fleet cost; saves nothing, on any path.
+export const validateCapacitySchedule = (body) => (SIM
+  ? sim({ blocked: false, findings: [], capacity: null, proposed: null })
+  : fetch(`${BASE}/control/capacity-schedule/validate`, {
+      method: 'POST',
+      headers: { ...headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j))
+export const createCapacityOverride = (body) => (SIM
+  ? sim({ override: null, correlation_id: null })
+  : fetch(`${BASE}/control/capacity-schedule/override`, {
+      method: 'POST',
+      headers: { ...headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j))
+export const deleteCapacityOverride = () => (SIM
+  ? sim({ cleared: false })
+  : fetch(`${BASE}/control/capacity-schedule/override`, {
+      method: 'DELETE', headers: headers(),
+    }).then(j))
+// What ACP would apply to Azure under the current schedule — rendered, never applied. Read-only,
+// same grant as the schedule it derives from.
+export const getCapacityPolicy = () => (SIM
+  ? sim({ schedule_version: 0, applied: false, apps: [], az_commands: [],
+          transitions_create_no_revision: true })
+  : fetch(`${BASE}/control/capacity-schedule/policy`, { headers: headers() }).then(j))
 // Azure-side capacity EVIDENCE — how many replicas are actually running right now and recent
 // CPU/memory utilization — distinct from getWorkerReplicas' CONFIGURED min/max. Read-only, open
 // to any signed-in user (same reasoning as getWorkerReplicas). Individual fields (current_replicas,
@@ -1608,24 +1661,6 @@ export const getSchedule = () => (SIM
 export const putSchedule = (body) => (SIM
   ? sim({ ...body, next_at: null, last_at: null })
   : fetch(`${BASE}/schedule`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) }).then(j))
-
-const SIM_CAPACITY_SCHEDULE = {
-  enabled: false, timezone: 'America/Los_Angeles', days: ['mon', 'tue', 'wed', 'thu', 'fri'],
-  start: '06:00', end: '20:00', version: 0, applied: false,
-  application_status: 'SIM — no backend policy was changed',
-  business_hours: { web: 2, discovery: 2, assess: 5, remediate: 5, gpu: 1 },
-  off_hours: { web: 1, discovery: 1, assess: 1, remediate: 1, gpu: 0 },
-  maximums: { web: 3, discovery: 4, assess: 10, remediate: 10, gpu: 1 },
-}
-export const getCapacitySchedule = () => (SIM
-  ? sim({ ...SIM_CAPACITY_SCHEDULE, simulated: true })
-  : fetch(`${BASE}/control/capacity-schedule`, { headers: headers() }).then(j))
-export const validateCapacitySchedule = (body) => (SIM
-  ? sim({ valid: true, errors: [], warnings: [], projection: {}, simulated: true })
-  : fetch(`${BASE}/control/capacity-schedule/validate`, { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) }).then(j))
-export const putCapacitySchedule = (body) => (SIM
-  ? sim({ ...body, version: body.version + 1, applied: false, application_status: SIM_CAPACITY_SCHEDULE.application_status, simulated: true })
-  : fetch(`${BASE}/control/capacity-schedule`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) }).then(j))
 
 export const markRemediated = (scanId, file) => (SIM
   ? sim({ remediated_at: new Date().toISOString() })

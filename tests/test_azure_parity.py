@@ -221,6 +221,41 @@ def test_remediation_now_autoscales_on_its_own_lane_job_types():
     assert "remediation-queue" in baseline()["acp-remediate"].scale_rules
 
 
+def test_a_scale_rule_on_a_pinned_tier_is_reported_as_inert():
+    """A rule the tier cannot act on must not read as an autoscaler it has.
+
+    `acp-assess` runs a floor equal to its ceiling, so KEDA may compute any replica count it
+    likes and Azure cannot apply it. rightsize-production.sh generates the `assess-queue` rule
+    and then SKIPS it for exactly that reason — applying it would cost a revision, and a worker
+    restart, for something that provably cannot fire. The parser sees the rule in the script
+    either way, so without this the generated table said production had an autoscaler it does
+    not have.
+
+    Derived from `min == max`, not from parsing the script's guard: the replica range is already
+    a column in the same row, and shell control flow is a second thing to keep true. Raise the
+    ceiling and the marker disappears, which is correct — that is when the script applies it.
+    """
+    from acpctl.azure_baseline import baseline
+    apps = baseline()
+    assess = apps["acp-assess"]
+    assert assess.min_replicas == assess.max_replicas, (
+        "acp-assess is no longer pinned — the assess-queue rule is live now, and this test "
+        "should assert that the marker is GONE rather than present")
+    assert "assess-queue" in assess.scale_rules
+
+    document = (ROOT / "packaging" / "docs" / "azure-parity.md").read_text(encoding="utf-8")
+    row = [ln for ln in document.splitlines() if ln.startswith("| `acp-assess` |")]
+    assert len(row) == 1, row
+    assert "`assess-queue` (inert: tier pinned)" in row[0], row[0]
+
+    # Bite check: the marker must be about THIS tier, not stamped on every rule. acp-remediate
+    # is 5-10, so its rule is live and must carry no marker.
+    remediate = [ln for ln in document.splitlines() if ln.startswith("| `acp-remediate` |")]
+    assert len(remediate) == 1, remediate
+    assert "`remediation-queue`" in remediate[0]
+    assert "inert" not in remediate[0], remediate[0]
+
+
 def test_the_connection_pool_ceiling_is_carried_into_the_baseline():
     """#1370 also pinned ACP_DB_MAX_CONN per worker replica, to hold the fleet under Postgres's
     measured 150-connection ceiling. A replica ceiling means something different once each replica

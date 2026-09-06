@@ -115,7 +115,7 @@ spec:
         query: >-
           SELECT count(*) FROM jobs WHERE status = 'queued' AND type IN (
           {{- range $i, $t := $cfg.autoscaling.queueJobTypes }}{{ if $i }}, {{ end }}'{{ $t }}'{{ end -}}
-          )
+          ) AND run_after::timestamptz <= now() AND attempts < max_attempts
         targetQueryValue: {{ $cfg.autoscaling.queueDepthTarget | default 10 | quote }}
       authenticationRef:
         name: {{ include "acp.fullname" $ }}-queue-auth
@@ -127,12 +127,20 @@ spec:
           Depth alone is not enough. A queue holding three jobs for forty minutes is a worse
           state than one holding thirty for ten seconds, and only the age trigger sees it —
           which is the difference between a backlog that drains and one that has stalled.
+
+          AND IT COUNTS CLAIMABLE JOBS ONLY, which matters more here than on the depth trigger.
+          Depth is bounded by the backlog; age is not. One row a worker can never claim — an
+          attempts-exhausted job waiting for the reaper, or one sitting out a 600s retry backoff
+          — makes this trigger report an age that only grows, and pins the tier at maxReplicas
+          for as long as the row exists, with an empty queue. `store.claim_job` needs
+          status='queued' AND run_after <= now AND attempts < max_attempts; both triggers now
+          test all three. api/queue_scaler.py owns the predicate.
         */}}
         query: >-
           SELECT COALESCE(EXTRACT(EPOCH FROM (now() - MIN(created_at::timestamptz))), 0)::int
           FROM jobs WHERE status = 'queued' AND type IN (
           {{- range $i, $t := $cfg.autoscaling.queueJobTypes }}{{ if $i }}, {{ end }}'{{ $t }}'{{ end -}}
-          )
+          ) AND run_after::timestamptz <= now() AND attempts < max_attempts
         targetQueryValue: {{ $cfg.autoscaling.oldestJobAgeSeconds | default 300 | quote }}
       authenticationRef:
         name: {{ include "acp.fullname" $ }}-queue-auth

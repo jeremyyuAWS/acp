@@ -3,6 +3,7 @@ import { resetDemoData, resetMyData, getAllowlist, setAllowlist, inviteTester, g
 import { SIM } from './sim.js'
 import WorkerReplicaControl from './WorkerReplicaControl.jsx'
 import ReviewMemory from './ReviewMemory.jsx'
+import CapacitySchedule from './CapacitySchedule.jsx'
 import PeopleAccess from './PeopleAccess.jsx'
 import WorkspaceRoles from './WorkspaceRoles.jsx'
 
@@ -1019,52 +1020,6 @@ function WorkerConfiguration({ me }) {
   )
 }
 
-const CAPACITY_SERVICES = [['web', 'Web app'], ['discovery', 'Discovery'], ['assess', 'Assess'], ['remediate', 'Remediate'], ['gpu', 'GPU vision']]
-const WEEKDAYS = [['mon', 'Mon'], ['tue', 'Tue'], ['wed', 'Wed'], ['thu', 'Thu'], ['fri', 'Fri'], ['sat', 'Sat'], ['sun', 'Sun']]
-
-function CapacityScheduling({ me }) {
-  const [policy, setPolicy] = useState(null)
-  const [check, setCheck] = useState(null)
-  const [msg, setMsg] = useState('')
-  const [busy, setBusy] = useState(false)
-  const canEdit = !!me?.is_admin
-  useEffect(() => { getCapacitySchedule().then((p) => { setPolicy(p); setCheck(p.validation || null) }).catch((e) => setMsg(e.message || 'Could not load scheduling')) }, [])
-  if (!policy) return <p className="muted">Loading capacity schedule…</p>
-  const body = () => ({ enabled: policy.enabled, timezone: policy.timezone, days: policy.days,
-    start: policy.start, end: policy.end, business_hours: policy.business_hours,
-    off_hours: policy.off_hours, maximums: policy.maximums, version: policy.version })
-  const changeCount = (group, service, value) => setPolicy((p) => ({ ...p, [group]: { ...p[group], [service]: Number(value) } }))
-  const validate = async () => {
-    setBusy(true); setMsg('')
-    try { const v = await validateCapacitySchedule(body()); setCheck(v); setMsg(v.valid ? '✓ Schedule is within the configured fleet limits.' : 'Schedule needs attention.') }
-    catch (e) { setMsg(e.message || 'Validation failed') } finally { setBusy(false) }
-  }
-  const save = async () => {
-    setBusy(true); setMsg('')
-    try { const next = await putCapacitySchedule(body()); setPolicy(next); setCheck(next.validation); setMsg(next.simulated ? SIM_NOT_WRITTEN : '✓ Schedule saved. Azure application remains guarded until reconciliation is enabled.') }
-    catch (e) { setMsg(e.message || 'Save failed') } finally { setBusy(false) }
-  }
-  return <div style={{ maxWidth: 760 }}>
-    <h3 style={{ marginTop: 0 }}>Capacity scheduling</h3>
-    <p className="muted" style={{ fontSize: 13 }}>Keep ACP warm during expected work hours and economical outside them. Queue-driven scaling remains responsible for unexpected demand. This tab configures capacity; scheduled re-scans remain in Monitor.</p>
-    <div style={{ padding: 12, border: '1px solid var(--line)', borderRadius: 8, marginBottom: 14 }}>
-      <b>{policy.enabled ? 'Scheduled policy enabled' : 'Scheduled policy disabled'}</b>
-      <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>{policy.application_status}</div>
-      {!policy.applied && <div style={{ color: '#8A5A00', fontSize: 12, marginTop: 5 }}>Saved values do not change live Azure replicas yet.</div>}
-    </div>
-    <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}><input type="checkbox" checked={policy.enabled} disabled={!canEdit} onChange={(e) => setPolicy({ ...policy, enabled: e.target.checked })} /> Enable business-hours capacity</label>
-    <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 12 }}>
-      <label>Timezone<br/><input aria-label="Capacity timezone" value={policy.timezone} disabled={!canEdit} onChange={(e) => setPolicy({ ...policy, timezone: e.target.value })} /></label>
-      <label>Start<br/><input aria-label="Business hours start" type="time" value={policy.start} disabled={!canEdit} onChange={(e) => setPolicy({ ...policy, start: e.target.value })} /></label>
-      <label>End<br/><input aria-label="Business hours end" type="time" value={policy.end} disabled={!canEdit} onChange={(e) => setPolicy({ ...policy, end: e.target.value })} /></label>
-    </div>
-    <div style={{ display: 'flex', gap: 9, marginBottom: 14 }}>{WEEKDAYS.map(([key, label]) => <label key={key} style={{ fontSize: 12 }}><input type="checkbox" checked={policy.days.includes(key)} disabled={!canEdit} onChange={(e) => setPolicy({ ...policy, days: e.target.checked ? [...policy.days, key] : policy.days.filter((d) => d !== key) })} /> {label}</label>)}</div>
-    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}><thead><tr><th align="left">Service</th><th>Business hours</th><th>Off hours</th><th>Maximum</th></tr></thead><tbody>{CAPACITY_SERVICES.map(([key, label]) => <tr key={key}><td>{label}</td>{['business_hours', 'off_hours', 'maximums'].map((group) => <td key={group} align="center"><input aria-label={`${label} ${group.replace('_', ' ')}`} type="number" min="0" max="100" value={policy[group][key]} disabled={!canEdit} onChange={(e) => changeCount(group, key, e.target.value)} style={{ width: 58 }} /></td>)}</tr>)}</tbody></table>
-    {check && <div style={{ marginTop: 14, fontSize: 12 }}><b>{check.valid ? 'Validation passed' : 'Validation failed'}</b>{check.projection && <span className="muted"> · {check.projection.maximum_vcpu ?? '—'} vCPU · {check.projection.database_connections ?? '—'} database connections including deployment overlap</span>}{(check.errors || []).map((x) => <div key={x} style={{ color: 'var(--error-fg-strong)' }}>• {x}</div>)}{(check.warnings || []).map((x) => <div key={x} style={{ color: '#8A5A00' }}>• {x}</div>)}</div>}
-    {canEdit && <div style={{ display: 'flex', gap: 8, marginTop: 16 }}><button className="ghost small" disabled={busy} onClick={validate}>Validate</button><button disabled={busy || check?.valid === false} onClick={save}>Save schedule</button></div>}
-    {msg && <p style={{ color: msg.startsWith('✓') ? 'var(--success-fg)' : msg.startsWith('SIM') ? '#6B4A0B' : 'var(--error-fg-strong)', fontSize: 12 }}>{msg}</p>}
-  </div>
-}
 
 export default function Settings({ onClose, files = [], onDelegationChange, me = null }) {
   const [tab, setTab] = useState('users')
@@ -1092,6 +1047,11 @@ export default function Settings({ onClose, files = [], onDelegationChange, me =
           <button role="tab" aria-selected={tab === 'mydata'} className={tab === 'mydata' ? 'fchip on' : 'fchip'} onClick={() => setTab('mydata')}>My Data</button>
           <button role="tab" aria-selected={tab === 'myscope'} className={tab === 'myscope' ? 'fchip on' : 'fchip'} onClick={() => setTab('myscope')}>My Scope</button>
           <button role="tab" aria-selected={tab === 'workers'} className={tab === 'workers' ? 'fchip on' : 'fchip'} onClick={() => setTab('workers')}>Worker Configuration</button>
+          {/* PRD "Settings -> Scheduling" §4: immediately after Worker Configuration, because the
+              two are one job — Worker Configuration sets warm capacity NOW, Scheduling says when
+              ACP should hold more of it. The writable capacity control stays where it is
+              (queuePanelCapacity.test.jsx); Live Operations gets a read-only mode strip, never a
+              second place to change capacity. */}
           <button role="tab" aria-selected={tab === 'scheduling'} className={tab === 'scheduling' ? 'fchip on' : 'fchip'} onClick={() => setTab('scheduling')}>Scheduling</button>
           <button role="tab" aria-selected={tab === 'ai'} className={tab === 'ai' ? 'fchip on' : 'fchip'} onClick={() => setTab('ai')}>AI Governance</button>
           {/* ADR 0021's "Settings → Review Memory". The tab renders for everyone because GET
@@ -1107,7 +1067,7 @@ export default function Settings({ onClose, files = [], onDelegationChange, me =
           {tab === 'mydata' && <><ResetMyData /><CopyToken /></>}
           {tab === 'myscope' && <MyScanScope />}
           {tab === 'workers' && <WorkerConfiguration me={me} />}
-          {tab === 'scheduling' && <CapacityScheduling me={me} />}
+          {tab === 'scheduling' && <CapacitySchedule me={me} />}
           {tab === 'ai' && <AIProvidersPanel />}
           {tab === 'memory' && <ReviewMemory me={me} />}
         </div>
