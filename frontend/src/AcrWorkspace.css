@@ -192,3 +192,24 @@
     flex-direction: column;
   }
 }
+
+/* The bulk applicability control under each Section 508 chapter. Deliberately quiet: it is a
+   convenience for a decision a person is making, not a primary action on the screen. The textarea
+   is full width because the reason it carries is stored on 69 rows and read in a procurement
+   document — it deserves room to be written properly. */
+.acr-bulk {
+  margin: 0.5rem 0 1.5rem;
+  padding: 0.75rem;
+  border: 1px solid #767676;
+}
+
+.acr-bulk label {
+  display: block;
+  margin-bottom: 0.25rem;
+}
+
+.acr-bulk textarea {
+  display: block;
+  width: 100%;
+  margin-bottom: 0.5rem;
+}

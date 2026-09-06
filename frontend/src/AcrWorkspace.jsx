@@ -6,7 +6,7 @@ import AcrExportAssurance from './AcrExportAssurance.jsx'
 import './AcrWorkspace.css'
 import { listAcrReports, createAcrReport, getAcrReport, listAcrCriteria, getAcrValidation,
          getAcrPreview, getAcrGaps, downloadAcrPdf, downloadAcrDocx,
-         getAcrDocxGate } from './acrApi'
+         getAcrDocxGate, setAcrApplicability } from './acrApi'
 
 // PRD §15 — the ACR list and the report workspace
 // (Overview · Criteria · Evidence gaps · Validation · Publication · Draft export).
@@ -34,6 +34,128 @@ const FILTERS = [
   ['decided', 'Decided'],
   ['unapproved', 'Awaiting approval'],
 ]
+
+// The Revised Section 508 chapters, for a 508-edition report. The row stores its chapter NUMBER;
+// the names are regulation text from 36 CFR 1194 Appendix C and are repeated here so the criteria
+// list does not have to fetch the export projection to label a heading.
+//
+// Repeating them is a drift risk, so it is guarded rather than trusted: acrSection508Workspace
+// .test.jsx reads config/section-508.json and asserts this map matches it. An unknown chapter
+// still renders, under its number — a requirement must never vanish because a label is missing.
+const SECTION_508 = 'section-508'
+const SECTION_508_CHAPTERS = {
+  3: 'Functional Performance Criteria',
+  4: 'Hardware',
+  5: 'Software',
+  6: 'Support Documentation and Services',
+}
+
+// Split a matrix into the WCAG table and the Section 508 chapters, the same shape
+// api/acr_export_preview.py projects the document in — so the screen a person decides on and the
+// document that ships are organised the same way, rather than by two independent groupings that
+// can disagree. Exported for its own test.
+export function groupCriteria(rows) {
+  const wcag = []
+  const byChapter = new Map()
+  for (const row of rows) {
+    if (row.requirement_set === SECTION_508) {
+      const num = String(row.chapter || '')
+      if (!byChapter.has(num)) byChapter.set(num, [])
+      byChapter.get(num).push(row)
+    } else {
+      wcag.push(row)
+    }
+  }
+  const chapters = [...byChapter.entries()]
+    .sort((a, b) => Number(a[0]) - Number(b[0]))
+    .map(([num, chapterRows]) => ({
+      num,
+      name: SECTION_508_CHAPTERS[num] || `Chapter ${num}`,
+      rows: chapterRows,
+    }))
+  return { wcag, chapters }
+}
+
+// Mark a whole 508 chapter Not Applicable — the affordance Chapter 4 forces the question of.
+//
+// WHY IT EXISTS. A hosted web application supplies no hardware, so all 69 of Chapter 4's rows end
+// Not Applicable. `acr_catalog.build_matrix` deliberately does not pre-empt that: PRD §10 makes
+// applicability a human decision with a stated reason, and a system that quietly dropped a chapter
+// would be deciding it. So the human still decides — once, for the chapter, with a reason they
+// type — and ACP does the typing.
+//
+// WHY IT IS STILL ONE REQUEST PER ROW. Each row's applicability is its own decision and earns its
+// own entry in acr_decision_log (PRD §12, §17). Collapsing 69 decisions into one write would make
+// the audit history say something that did not happen. The cost is a slow button, so it reports
+// progress rather than freezing.
+//
+// WHAT IT WILL NOT TOUCH: a row somebody has already decided. Bulk convenience must never quietly
+// overwrite a judgement a person made row by row.
+function BulkApplicability({ reportId, chapter, onDone }) {
+  const [rationale, setRationale] = useState('')
+  const [progress, setProgress] = useState(null)
+  const [failed, setFailed] = useState([])
+
+  const pending = chapter.rows.filter(
+    (r) => !r.final_status && r.applicable !== false && r.applicable !== 0)
+  const inputId = `acr-bulk-na-${chapter.num}`
+
+  if (!pending.length) {
+    return (
+      <p className="muted">
+        Nothing left to mark in Chapter {chapter.num}: every requirement is decided or already
+        marked Not Applicable.
+      </p>
+    )
+  }
+
+  const run = async () => {
+    const reason = rationale.trim()
+    if (!reason) return
+    setFailed([])
+    const problems = []
+    for (let i = 0; i < pending.length; i += 1) {
+      setProgress({ done: i, total: pending.length })
+      try {
+        await setAcrApplicability(reportId, pending[i].criterion_num, false, reason)
+      } catch (e) {
+        problems.push(`${pending[i].criterion_num}: ${e.message || e}`)
+      }
+    }
+    setProgress({ done: pending.length, total: pending.length })
+    setFailed(problems)
+    setRationale('')
+    if (onDone) await onDone()
+  }
+
+  const busy = progress !== null && progress.done < progress.total
+  return (
+    <div className="acr-bulk">
+      <label htmlFor={inputId}>
+        Reason for marking Chapter {chapter.num} Not Applicable (required)
+      </label>
+      <textarea id={inputId} rows={2} value={rationale} disabled={busy}
+                onChange={(e) => setRationale(e.target.value)} />
+      {/* One string, not fragments: a name assembled from JSX children across lines picks up the
+          source's newlines, and the accessible name a screen reader announces then reads as
+          "Mark  2  undecided requirements  in Chapter  4". */}
+      <button type="button" disabled={busy || !rationale.trim()} onClick={run}>
+        {`Mark ${pending.length} undecided requirement${pending.length === 1 ? '' : 's'} `
+         + `in Chapter ${chapter.num} Not Applicable`}
+      </button>
+      {/* Announced, because a 69-request loop is otherwise a button that appears to do nothing. */}
+      <p role="status" aria-live="polite">
+        {progress ? `${progress.done} of ${progress.total} marked.` : ''}
+      </p>
+      {failed.length > 0 && (
+        <div role="alert" className="lockwarn">
+          <p>{failed.length} requirement{failed.length === 1 ? '' : 's'} could not be marked:</p>
+          <ul>{failed.map((f) => <li key={f}>{f}</li>)}</ul>
+        </div>
+      )}
+    </div>
+  )
+}
 
 function ReadinessStep({ state, title, detail, action, onAction }) {
   const label = state === 'done' ? 'Complete'
@@ -272,6 +394,7 @@ export default function AcrWorkspace() {
         : filter === 'decided' ? !!c.final_status
           : filter === 'unapproved' ? c.approval_state !== 'approved'
             : true))
+  const grouped = groupCriteria(shownCriteria)
 
   const p = report?.progress
   const roles = report?.roles || []
@@ -430,7 +553,7 @@ export default function AcrWorkspace() {
               </tr>
             </thead>
             <tbody>
-              {shownCriteria.map((c) => (
+              {grouped.wcag.map((c) => (
                 <tr key={c.criterion_num}>
                   <th scope="row">{c.criterion_num} {c.criterion_name}</th>
                   <td>{c.level}</td>
@@ -450,6 +573,55 @@ export default function AcrWorkspace() {
               ))}
             </tbody>
           </table>
+
+          {/* One table per chapter, matching the document rather than inventing a second shape,
+              and no Level column — a Section 508 requirement has no WCAG level, and an empty
+              column under that heading reads as a missing value rather than as a category that
+              does not apply. */}
+          {grouped.chapters.length > 0 && (
+            <section>
+              <h4>Revised Section 508 requirements</h4>
+              <p className="muted">
+                36 CFR Part 1194, Appendix C. Applicability is a decision a person makes with a
+                stated reason — ACP does not mark a chapter inapplicable on your behalf.
+              </p>
+              {grouped.chapters.map((chapter) => (
+                <div key={chapter.num}>
+                  <table>
+                    <caption>Chapter {chapter.num}: {chapter.name}</caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">Requirement</th>
+                        <th scope="col">Conformance level</th><th scope="col">Approval</th>
+                        <th scope="col">Open</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {chapter.rows.map((c) => (
+                        <tr key={c.criterion_num}>
+                          <th scope="row">{c.criterion_num} {c.criterion_name}</th>
+                          <td>
+                            {c.applicable === false || c.applicable === 0
+                              ? <span className="muted">Not Applicable</span>
+                              : c.final_status || <span className="muted">not yet evaluated</span>}
+                          </td>
+                          <td>{c.approval_state}</td>
+                          <td>
+                            <button type="button" onClick={() => setSelected(c.criterion_num)}>
+                              Open<span className="sr-only"> {c.criterion_num} {c.criterion_name}</span>
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {canEdit && (
+                    <BulkApplicability reportId={reportId} chapter={chapter} onDone={refresh} />
+                  )}
+                </div>
+              ))}
+            </section>
+          )}
 
           {selected && (
             <AcrCriterionDetail reportId={reportId} criterionNum={selected}
