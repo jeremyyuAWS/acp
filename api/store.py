@@ -767,6 +767,9 @@ _SCHEMA = [
     "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS owner TEXT",
     "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS parent_folder TEXT",
     "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS discovered_at TEXT",
+    # The source provider's exact basename, before ACP adds an internal collision suffix to
+    # keep two same-named documents distinct under the legacy (scan_id, file) identity.
+    "ALTER TABLE scan_inventory ADD COLUMN IF NOT EXISTS source_name TEXT",
     # SharePoint's Content Type name, best-effort and SharePoint-only — None for every other
     # source and None whenever the tenant did not return one (scanner._sp_enrich_content_types).
     # The one field of "read SharePoint-native metadata as a rule input" (docs/sharepoint-gaps.md)
@@ -2644,7 +2647,8 @@ class Store:
         if _inventory_items:
             try:
                 import classify as _cls
-                inv_rows = [{"file": it["name"], "drive_file_id": it.get("id"),
+                inv_rows = [{"file": it["name"], "source_name": it.get("source_name") or it["name"],
+                            "drive_file_id": it.get("id"),
                             "mime": it.get("source_mime"), "path": it.get("path"),
                             "checksum": it.get("checksum"),
                             "doc_class": _cls.classify_from_metadata(
@@ -2963,14 +2967,15 @@ class Store:
         if not items:
             return {"new": 0, "updated": 0, "unchanged": 0, "failed": 0}
         now = self._now()
-        sql = ("INSERT INTO scan_inventory(scan_id,file,drive_file_id,mime,size_kb,doc_class,"
+        sql = ("INSERT INTO scan_inventory(scan_id,file,source_name,drive_file_id,mime,size_kb,doc_class,"
                "checksum,path,created_at,source_modified,owner,parent_folder,discovered_at,drive_id,"
                "content_type,drive_account_id,site_id,library_name,site_name,"
                "retention_label,sensitivity_label,sharing_scope,item_kind,checked_out_by,"
                "sp_version,modified_by,sp_metadata) "
                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,"
-               "%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+               "%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                "ON CONFLICT(scan_id,file) DO UPDATE SET "
+               "source_name=COALESCE(EXCLUDED.source_name, scan_inventory.source_name), "
                "drive_file_id=EXCLUDED.drive_file_id, mime=EXCLUDED.mime, size_kb=EXCLUDED.size_kb, "
                "doc_class=EXCLUDED.doc_class, checksum=EXCLUDED.checksum, path=EXCLUDED.path, "
                "created_at=EXCLUDED.created_at, source_modified=EXCLUDED.source_modified, "
@@ -3002,7 +3007,8 @@ class Store:
                "sp_metadata=COALESCE(EXCLUDED.sp_metadata, scan_inventory.sp_metadata)")
 
         def _params(it: dict) -> tuple:
-            return (scan_id, it.get("file"), it.get("drive_file_id"), it.get("mime"),
+            return (scan_id, it.get("file"), it.get("source_name") or it.get("file"),
+                    it.get("drive_file_id"), it.get("mime"),
                     it.get("size_kb"), it.get("doc_class"), it.get("checksum"), it.get("path"),
                     it.get("created_at"), it.get("source_modified"), it.get("owner"),
                     it.get("parent_folder"), it.get("discovered_at") or now, it.get("drive_id"),
@@ -3220,7 +3226,7 @@ class Store:
                 "SELECT MAX(discovered_at) AS at FROM scan_inventory WHERE scan_id=%s", (scan_id,))
             return (self._db.fetchone(cur) or {}).get("at")
 
-    _INV_COLS = ("scan_id,file,drive_file_id,mime,size_kb,doc_class,checksum,path,"
+    _INV_COLS = ("scan_id,file,source_name,drive_file_id,mime,size_kb,doc_class,checksum,path,"
                  "created_at,source_modified,owner,parent_folder,discovered_at,drive_id,"
                  "lifecycle_status,lifecycle_rule_id,lifecycle_reason,exclusion_reason,"
                  "lifecycle_override_reason,lifecycle_overridden_by,lifecycle_overridden_at,"
@@ -7837,7 +7843,7 @@ class Store:
             self._db.execute(cur,
                 "SELECT f.file,f.engine,f.status,f.score,f.compliant,f.drive_file_id,"
                 "f.remediated_at,f.published_at,f.published_url,f.checksum,"
-                "i.path AS source_relative_path,i.parent_folder,i.drive_id,i.site_id,"
+                "i.source_name,i.path AS source_relative_path,i.parent_folder,i.drive_id,i.site_id,"
                 "i.library_name,i.site_name "
                 "FROM file_records f LEFT JOIN scan_inventory i "
                 "ON i.scan_id=f.scan_id AND i.file=f.file "

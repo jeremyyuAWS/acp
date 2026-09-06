@@ -19,6 +19,13 @@ def test_content_type_round_trips(st):
     assert st.list_inventory("s1")[0]["content_type"] == "Policy"
 
 
+def test_original_source_name_round_trips_separately_from_internal_identity(st):
+    st.add_inventory("s1", [{"file": "Report (1).docx", "source_name": "Report.docx"}])
+    row = st.list_inventory("s1")[0]
+    assert row["file"] == "Report (1).docx"
+    assert row["source_name"] == "Report.docx"
+
+
 def test_absent_for_every_source_that_never_supplies_one(st):
     # Drive / local / a SharePoint tenant that returned nothing — the column exists and is None,
     # not missing, not an error.
