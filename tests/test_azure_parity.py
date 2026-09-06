@@ -68,6 +68,28 @@ def test_the_baseline_reads_sizing_from_the_reviewed_capacity_script():
     assert baseline()["acp-app"].max_replicas == 3, "the baseline is reading the wrong file"
 
 
+def test_deploy_parser_resolves_parameterised_resource_defaults():
+    """Staging may override worker sizing without turning shell variable names into quantities.
+
+    The parity report describes the script's default production deployment.  A quoted variable in
+    an Azure flag therefore resolves through its fail-safe ``${ACP_*:-default}`` assignment, while
+    an unresolved variable remains absent instead of being presented as a real resource value.
+    """
+    from acpctl.azure_baseline import parse_deploy
+    script = '''
+WORKER_APP="${ACP_WORKER:-acp-worker}"
+WK_CPU="${ACP_WORKER_CPU:-2.0}"
+WK_MEMORY="${ACP_WORKER_MEMORY:-4.0Gi}"
+WK_MIN_REPLICAS="${ACP_WORKER_MIN_REPLICAS:-1}"
+WK_MAX_REPLICAS="${ACP_WORKER_MAX_REPLICAS:-3}"
+az containerapp create -n "$WORKER_APP" --cpu "$WK_CPU" --memory "$WK_MEMORY" \\
+  --min-replicas "$WK_MIN_REPLICAS" --max-replicas "$WK_MAX_REPLICAS" -o none
+'''
+    worker = parse_deploy(script)["acp-worker"]
+    assert (worker.cpu, worker.memory) == (2.0, "4.0Gi")
+    assert (worker.min_replicas, worker.max_replicas) == (1, 3)
+
+
 def test_every_deployed_app_is_either_a_tier_or_explicitly_out_of_scope():
     """An app nobody classified is the gap a parity report exists to surface — so it cannot be
     dropped silently. Adding a container app to the deployment fails this until somebody decides

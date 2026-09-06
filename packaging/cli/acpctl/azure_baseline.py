@@ -122,10 +122,10 @@ _NAMED_SCALE_RULE = re.compile(
 
 _CREATE = re.compile(r"az containerapp create .*?-n \"?\$(?P<var>[A-Z_]+)\"?(?P<body>.*?)-o none",
                      re.DOTALL)
-_CPU = re.compile(r"--cpu\s+([\d.]+)")
-_MEMORY = re.compile(r"--memory\s+(\S+)")
-_MIN = re.compile(r"--min-replicas\s+(\d+)")
-_MAX = re.compile(r"--max-replicas\s+(\d+)")
+_CPU = re.compile(r'--cpu\s+"?(\$[A-Z_]+|[\d.]+)"?')
+_MEMORY = re.compile(r'--memory\s+"?(\$[A-Z_]+|[\d.]+Gi)"?')
+_MIN = re.compile(r'--min-replicas\s+"?(\$[A-Z_]+|\d+)"?')
+_MAX = re.compile(r'--max-replicas\s+"?(\$[A-Z_]+|\d+)"?')
 _INGRESS = re.compile(r"--ingress\s+(\w+)")
 _SCALE_RULE = re.compile(r"--scale-rule-name\s+(\S+)")
 
@@ -171,8 +171,9 @@ def parse_deploy(text: str | None = None) -> dict[str, AzureApp]:
     # overridable names and `GF_APP="acp-grafana"` for the fixed one. Matching only the first
     # silently dropped Grafana from the baseline — an app the deployment creates and the report
     # never mentioned, which is the exact shape of omission a parity report must not have.
-    defaults = dict(re.findall(r'^(\w+)="\$\{[A-Z_]+:-([\w-]+)\}"', body, re.MULTILINE))
-    defaults.update(dict(re.findall(r'^(\w+)="([\w-]+)"\s*$', body, re.MULTILINE)))
+    defaults = dict(re.findall(
+        r'^\s*(\w+)="\$\{[A-Z_]+:-([\w.-]+)\}"', body, re.MULTILINE))
+    defaults.update(dict(re.findall(r'^\s*(\w+)="([\w-]+)"\s*$', body, re.MULTILINE)))
     apps: dict[str, AzureApp] = {}
     for match in _CREATE.finditer(body):
         name = defaults.get(match["var"])
@@ -186,7 +187,10 @@ def parse_deploy(text: str | None = None) -> dict[str, AzureApp]:
                                     (_MIN, "min_replicas", int), (_MAX, "max_replicas", int)):
             found = pattern.search(chunk)
             if found:
-                setattr(app, attr, cast(found.group(1)))
+                raw = found.group(1)
+                value = defaults.get(raw[1:]) if raw.startswith("$") else raw
+                if value is not None:
+                    setattr(app, attr, cast(value))
         apps[name] = app
 
     # Scale rules are attached by a separate `az containerapp update` (see deploy.sh's comment
