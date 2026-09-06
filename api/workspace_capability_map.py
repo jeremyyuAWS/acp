@@ -160,6 +160,16 @@ _map_many([
     ("POST", "/scans/{sid}/remediation/pause"),
     ("POST", "/scans/{sid}/remediation/resume"),
 ], {"remediate.run"})
+# Live Ops recovery remains independently platform-admin gated in routes/system.py. The
+# capability middleware still needs to name the underlying action: the dynamic stage endpoint
+# can stop assess, remediate, or release work, so any one of those operating rights gets the
+# request as far as the stricter admin boundary; Resume is remediation only.
+_map_many([
+    ("POST", "/admin/activity/workflows/{scan_id}/stages/{stage}/cancel"),
+], {"assess.cancel", "remediate.run", "release.publish"})
+_map_many([
+    ("POST", "/admin/activity/workflows/{scan_id}/stages/remediate/resume"),
+], {"remediate.run"})
 _map_many([
     ("GET", "/scans/{sid}/remediation-status"),
     # The reconciled run snapshot reads the same run as remediation-status and carries strictly

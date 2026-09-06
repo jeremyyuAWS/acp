@@ -10534,6 +10534,38 @@ class Store:
             detail={"documents": int(counts.get("total") or 0), "completed": int(counts.get("done") or 0),
                     "failed": dead, "cancelled": cancelled, "stage_execution_id": job["batch_id"]})
 
+    def request_stage_cancel(self, scan_id: str, stage: str) -> dict:
+        """Cancel the newest durable execution of one stage without touching sibling stages."""
+        types = tuple(kind for kind, mapped in self._BATCH_JOB_STAGES.items() if mapped == stage)
+        if not types:
+            raise ValueError(f"stage cannot be cancelled: {stage}")
+        now = self._now()
+        placeholders = ",".join(["%s"] * len(types))
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"SELECT batch_id FROM jobs WHERE scan_id=%s AND type IN ({placeholders}) "
+                "AND batch_id IS NOT NULL AND status IN ('queued','running') "
+                "ORDER BY created_at DESC LIMIT 1", (scan_id, *types))
+            row = self._db.fetchone(cur)
+            if not row:
+                return {"found": False, "cancelled": 0, "requested": 0}
+            batch_id = row["batch_id"]
+            self._db.execute(cur,
+                "UPDATE jobs SET status='cancelled',cancel_requested_at=%s,updated_at=%s "
+                "WHERE scan_id=%s AND batch_id=%s AND status='queued'", (now, now, scan_id, batch_id))
+            cancelled = max(0, int(getattr(cur, "rowcount", 0) or 0))
+            self._db.execute(cur,
+                "UPDATE jobs SET cancel_requested_at=%s,updated_at=%s "
+                "WHERE scan_id=%s AND batch_id=%s AND status='running' AND cancel_requested_at IS NULL",
+                (now, now, scan_id, batch_id))
+            requested = max(0, int(getattr(cur, "rowcount", 0) or 0))
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT * FROM jobs WHERE scan_id=%s AND batch_id=%s LIMIT 1",
+                             (scan_id, batch_id))
+            representative = self._db.fetchone(cur)
+        self._record_stage_terminal_if_ready(representative)
+        return {"found": True, "batch_id": batch_id, "cancelled": cancelled, "requested": requested}
+
     def get_job(self, job_id: str) -> dict | None:
         with self._db.cursor() as cur:
             self._db.execute(cur, "SELECT * FROM jobs WHERE id=%s", (job_id,))
@@ -11560,9 +11592,10 @@ class Store:
                 # this method is cross-user, and an error string can carry another tenant's
                 # filename, while a vocabulary term cannot.
                 "SELECT j.scan_id,j.type,j.status,j.created_at,j.updated_at,j.payload,"
-                "j.locked_at,j.claimed_at,j.error_class,j.attempts,"
+                "j.locked_at,j.claimed_at,j.error_class,j.attempts,rh.paused_at,"
                 "sr.owner_email,sr.source,sr.files,sr.files_done,sr.live_checkpoint "
                 "FROM jobs j JOIN scan_runs sr ON sr.id=j.scan_id "
+                "LEFT JOIN remediation_run_hold rh ON rh.scan_id=j.scan_id "
                 "WHERE j.scan_id IN (SELECT DISTINCT scan_id FROM jobs "
                 "WHERE status IN ('queued','running') OR "
                 "(status IN ('done','dead') AND updated_at>=%s)) "
@@ -11585,6 +11618,7 @@ class Store:
                 "oldest_queued_at": None, "current_file": None,
                 "current_job_type": None, "current_rule_id": None,
                 "current_job_started_at": None, "last_error_class": None, "max_attempts_seen": 0,
+                "paused": stage == "remediate" and bool(row.get("paused_at")),
                 # SharePoint COVERAGE, for the operations map. A 30-site walk is one long
                 # "discovering" bar there today: the file count ticks and nothing says which
                 # sites are done, which are queued, or that one is blocked on a consent that

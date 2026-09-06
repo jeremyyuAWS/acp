@@ -132,3 +132,34 @@ def test_cancelled_stage_is_distinct_from_failed(isolated_store):
     cancelled = [event for event in events if event.get("kind") == "job.stage_cancelled"]
     assert len(cancelled) == 1
     assert cancelled[0]["error_class"] == "cancelled"
+
+
+def test_operator_cancel_targets_only_the_newest_selected_stage_batch(isolated_store):
+    _scan(isolated_store)
+    assess = _execution(isolated_store)
+    release = isolated_store.enqueue_stage_batch(
+        "stage-scan", "release", "publish_file", [{"file": "a.docx"}],
+        snapshot_id="release-1", request_fingerprint="release")
+    result = isolated_store.request_stage_cancel("stage-scan", "assess")
+    assert result == {"found": True, "batch_id": assess["batch_id"], "cancelled": 2, "requested": 0}
+    assert {isolated_store.get_job(job_id)["status"] for job_id in assess["job_ids"]} == {"cancelled"}
+    assert isolated_store.get_job(release["job_ids"][0])["status"] == "queued"
+
+
+def test_operator_cancel_requests_running_work_and_immediately_stops_queued_work(isolated_store):
+    _scan(isolated_store)
+    execution = _execution(isolated_store)
+    _hold(isolated_store, execution["job_ids"][0])
+    result = isolated_store.request_stage_cancel("stage-scan", "assess")
+    assert result["cancelled"] == 1 and result["requested"] == 1
+    running = isolated_store.get_job(execution["job_ids"][0])
+    assert running["status"] == "running" and running["cancel_requested_at"]
+
+
+def test_operator_cancel_rejects_a_stage_that_is_already_terminal(isolated_store):
+    _scan(isolated_store)
+    execution = _execution(isolated_store)
+    for job_id in execution["job_ids"]:
+        isolated_store.complete_job(job_id, **_hold(isolated_store, job_id))
+    assert isolated_store.request_stage_cancel("stage-scan", "assess") == {
+        "found": False, "cancelled": 0, "requested": 0}

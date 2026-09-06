@@ -96,6 +96,37 @@ def test_live_activity_read_still_rejects_anonymous_users():
     assert denied.value.status_code == 401
 
 
+def test_live_ops_cancel_is_admin_gated_and_stage_scoped(monkeypatch):
+    calls = []
+    monkeypatch.setattr(system, "_require_admin", lambda request: calls.append(("guard", request)))
+    monkeypatch.setattr(system.core.store, "get_scan", lambda scan_id: {"_scan_id": scan_id})
+    monkeypatch.setattr(system.core.store, "request_stage_cancel",
+                        lambda scan_id, stage: {"found": True, "batch_id": "b1",
+                                                "cancelled": 3, "requested": 1})
+    request = _Request("admin@example.org")
+    result = system.cancel_workflow_stage("scan-1", "assess", request)
+    assert calls == [("guard", request)]
+    assert result == {"workflow_id": "scan-1", "stage": "assess", "found": True,
+                      "batch_id": "b1", "cancelled": 3, "requested": 1}
+
+
+def test_live_ops_cancel_refuses_non_cancellable_stage(monkeypatch):
+    monkeypatch.setattr(system, "_require_admin", lambda request: None)
+    with pytest.raises(HTTPException) as denied:
+        system.cancel_workflow_stage("scan-1", "discover", _Request("admin@example.org"))
+    assert denied.value.status_code == 400
+
+
+def test_live_ops_resume_uses_existing_durable_remediation_hold(monkeypatch):
+    monkeypatch.setattr(system, "_require_admin", lambda request: None)
+    monkeypatch.setattr(system.core.store, "get_scan", lambda scan_id: {"_scan_id": scan_id})
+    monkeypatch.setattr(system.core.store, "resume_remediation_run",
+                        lambda scan_id, actor: {"resumed_at": "now", "released": 2})
+    result = system.resume_workflow_remediation("scan-1", _Request("admin@example.org"))
+    assert result["paused"] is False
+    assert result["released"] == 2
+
+
 def test_admin_live_activity_groups_active_stage_without_exposing_payload(isolated_store):
     isolated_store.save_scan(_scan())
     isolated_store.enqueue_job("scan_file", {"file": "Private Report.docx", "secret": "never-return"},
@@ -126,6 +157,18 @@ def test_admin_live_activity_exposes_only_safe_running_context(isolated_store):
     assert row["current_rule_id"] == "1.1.1"
     assert row["current_job_type"] == "remediate_file"
     assert "secret" not in str(row)
+
+
+def test_admin_live_activity_exposes_the_durable_remediation_hold(isolated_store):
+    isolated_store.save_scan(_scan())
+    isolated_store.enqueue_stage_batch(
+        "scan-live-1", "remediate", "remediate_file", [{"file": "Private Report.docx"}],
+        snapshot_id="remediate-1", request_fingerprint="remediate")
+    isolated_store.pause_remediation_run("scan-live-1", actor="operator@example.org")
+    row = isolated_store.admin_live_activity()[0]
+    assert row["stage"] == "remediate"
+    assert row["paused"] is True
+    assert "paused_by" not in row
 
 
 def test_admin_live_activity_carries_bounded_sanitized_remediation_events(isolated_store):
