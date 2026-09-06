@@ -203,6 +203,7 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
   const cur = m.queue ? m.queue.current : null
   const eta = throughput && (throughput.etaText || (throughput.calibrating ? 'estimating…' : null))
   const opinion = m.secondOpinion
+  const updateMode = snapshot?._live?.mode || 'live'
 
   return (
     <section className="assess-run-progress" role="region"
@@ -221,10 +222,11 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
               <strong style={{ fontSize: 14.5 }}>{isFinished ? 'Assessment complete' : 'Assessing documents'}</strong>
               <span role="status" style={{ fontSize: 11.5, padding: '2px 7px', borderRadius: 4,
                                             display: 'inline-flex', alignItems: 'center', gap: 5,
-                                            background: 'var(--green-bg,#f0f7e6)', color: 'var(--success-fg)',
-                                            border: '1px solid var(--green-line,#a8cf7a)' }}>
-                {!isFinished && <span className="pulsedot" aria-hidden="true" />}
-                {isFinished ? 'Updates complete' : 'Live'}
+                                            background: updateMode === 'reconnecting' ? 'var(--amber-bg,#fff8e6)' : 'var(--green-bg,#f0f7e6)',
+                                            color: updateMode === 'reconnecting' ? 'var(--amber,#92400e)' : 'var(--success-fg)',
+                                            border: `1px solid ${updateMode === 'reconnecting' ? 'var(--amber-line,#e7c46a)' : 'var(--green-line,#a8cf7a)'}` }}>
+                {!isFinished && updateMode === 'live' && <span className="pulsedot" aria-hidden="true" />}
+                {isFinished ? 'Updates complete' : updateMode === 'reconnecting' ? 'Reconnecting · last update kept' : 'Live updates'}
               </span>
             </div>
 

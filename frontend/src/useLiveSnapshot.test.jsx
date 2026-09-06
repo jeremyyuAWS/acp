@@ -52,6 +52,38 @@ describe('useLiveSnapshot', () => {
     expect(container.textContent).toBe('seq:1 done:10')                       // last good retained
   })
 
+  it('backs off unchanged snapshots but returns to the fast interval after progress', async () => {
+    getScanLive
+      .mockResolvedValueOnce(frame(1, 10))
+      .mockResolvedValueOnce(frame(1, 10))
+      .mockResolvedValueOnce(frame(2, 11))
+    const { root } = createTestRoot()
+    await act(async () => { root.render(createElement(Probe, { scanId: 's1' })) })
+    await flush()
+    expect(getScanLive).toHaveBeenCalledTimes(1)
+
+    await act(async () => { vi.advanceTimersByTime(1000) }); await flush()
+    expect(getScanLive).toHaveBeenCalledTimes(2)
+    // One unchanged frame doubles the next interval.
+    await act(async () => { vi.advanceTimersByTime(1000) }); await flush()
+    expect(getScanLive).toHaveBeenCalledTimes(2)
+    await act(async () => { vi.advanceTimersByTime(1000) }); await flush()
+    expect(getScanLive).toHaveBeenCalledTimes(3)
+  })
+
+  it('marks a retained frame as reconnecting after a transport failure', async () => {
+    getScanLive.mockResolvedValueOnce(frame(1, 10)).mockRejectedValueOnce(new Error('offline'))
+    function StatusProbe() {
+      const s = useLiveSnapshot('s1', { intervalMs: 1000 })
+      return createElement('div', null, s ? `${s.kpis.completed}:${s._live?.mode}` : 'none')
+    }
+    const { container, root } = createTestRoot()
+    await act(async () => { root.render(createElement(StatusProbe)) }); await flush()
+    expect(container.textContent).toBe('10:live')
+    await act(async () => { vi.advanceTimersByTime(1000) }); await flush()
+    expect(container.textContent).toBe('10:reconnecting')
+  })
+
   it('re-polls immediately when the tab becomes visible again (refocus-fresh)', async () => {
     getScanLive.mockResolvedValue(frame(1, 10))
     const { root } = createTestRoot()
