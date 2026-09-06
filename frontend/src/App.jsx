@@ -2137,6 +2137,7 @@ export default function App() {
           ? null : primaryWorkflow}
         currentView={view}
         onReturn={(stage) => { goToView(stage); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+        onViewPrevious={(scanId) => { switchScan(scanId); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
         onLiveOps={() => { goToView('liveops'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
       />
       {busy && progress && view !== 'discover' && (

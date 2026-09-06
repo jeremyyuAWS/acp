@@ -39,6 +39,24 @@ describe('workflow continuity', () => {
     expect(workflowRevisionLabel({})).toBe('Workflow revision 1')
   })
 
+  it('opens the exact previous revision without interrupting current work', () => {
+    const onViewPrevious = vi.fn()
+    const container = render({ currentView: 'overview', onReturn: () => {}, onLiveOps: () => {},
+      onViewPrevious, workflow: { stage: 'remediate', workflow_revision: 2,
+        previous_scan_id: 'scan-revision-one', source: 'sharepoint' } })
+    const button = [...container.querySelectorAll('button')]
+      .find((item) => item.textContent === 'View previous revision')
+    expect(button).toBeTruthy()
+    act(() => button.click())
+    expect(onViewPrevious).toHaveBeenCalledWith('scan-revision-one')
+  })
+
+  it('does not offer previous revision for legacy or first-revision work', () => {
+    const container = render({ currentView: 'overview', onReturn: () => {}, onLiveOps: () => {},
+      onViewPrevious: () => {}, workflow: { stage: 'discover', workflow_revision: 1 } })
+    expect(container.textContent).not.toContain('View previous revision')
+  })
+
   it('does not duplicate the status inside its own stage', () => {
     const container = render({ currentView: 'discover', workflow: { stage: 'discover' },
       onReturn: () => {}, onLiveOps: () => {} })

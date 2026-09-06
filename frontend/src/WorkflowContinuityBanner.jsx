@@ -15,7 +15,7 @@ export function workflowRevisionLabel(workflow = {}) {
   return `Workflow revision ${revision}`
 }
 
-export default function WorkflowContinuityBanner({ workflow, currentView, onReturn, onLiveOps }) {
+export default function WorkflowContinuityBanner({ workflow, currentView, onReturn, onLiveOps, onViewPrevious }) {
   if (!workflow || workflow.stage === currentView) return null
   const label = LABELS[workflow.stage] || 'Work'
   const active = Number(workflow.running || 0)
@@ -28,6 +28,11 @@ export default function WorkflowContinuityBanner({ workflow, currentView, onRetu
       </div>
       <div className="workflow-continuity-actions">
         <button className="secondary" onClick={() => onReturn(workflow.stage)}>Continue current {label}</button>
+        {workflow.previous_scan_id && onViewPrevious && (
+          <button className="ghost" onClick={() => onViewPrevious(workflow.previous_scan_id)}>
+            View previous revision
+          </button>
+        )}
         <button className="link-button" onClick={onLiveOps}>View Live Ops</button>
       </div>
     </section>
