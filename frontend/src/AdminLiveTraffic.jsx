@@ -7,7 +7,7 @@ import LiveOpsDrawer from './LiveOpsDrawer.jsx'
 import LiveOpsCostSummary from './LiveOpsCostSummary.jsx'
 import LiveOpsAiSummary from './LiveOpsAiSummary.jsx'
 import { appendSample, deriveEvents, formatDuration, mergeEvents, queueCapacityGauge,
-  durableRunEvents, sampleForNode, secondsSince } from './liveOpsDrawer.js'
+  durableRunEvents, sampleForNode, secondsSince, workflowStageRuns } from './liveOpsDrawer.js'
 
 ensureResizeObserver(typeof window === 'undefined' ? globalThis : window)
 
@@ -575,7 +575,7 @@ export function flowEdge({ id, source, target, color, active = false, detail, ..
 }
 
 export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = null, connection = 'connecting') {
-  const runs = snapshot?.runs || []
+  const runs = workflowStageRuns(snapshot)
   const services = workerServiceRows(snapshot?.summary || {})
   const serviceByStage = new Map(services.map((service) => [service.stage, service]))
   const sourceKinds = ['drive', 'sharepoint']

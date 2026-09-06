@@ -99,6 +99,25 @@ describe('Admin live traffic graph', () => {
       .toBeLessThan(jobs.nodes.find((node) => node.id === 'one:assess').position.x)
   })
 
+  it('keeps a durable completed stage connected after its queue rows age out', () => {
+    const graph = buildTrafficGraph({ summary: {}, runs: [
+      { scan_id: 'one', stage: 'assess', owner: 'a', source: 'sharepoint', status: 'active',
+        running: 1, queued: 0, completed: 0, total: 1 },
+    ], workflows: [{ scan_id: 'one', owner_display_name: 'a', source: 'sharepoint', stages: [
+      { stage: 'discover', stage_run_id: 'd1', status: 'completed', completed: 1, total: 1,
+        active: 0, waiting: 0, completed_at: '2026-09-05T09:00:00Z', completion_recorded: true },
+      { stage: 'assess', stage_run_id: 'a1', status: 'running', completed: 0, total: 1,
+        active: 1, waiting: 0 },
+    ] }] })
+    const jobs = trafficGraphForTab(graph, 'jobs')
+    expect(jobs.nodes.map((node) => node.id)).toEqual([
+      'workflow:one', 'one:discover', 'one:assess',
+    ])
+    expect(jobs.edges.map((edge) => [edge.source, edge.target])).toEqual([
+      ['workflow:one', 'one:discover'], ['one:discover', 'one:assess'],
+    ])
+  })
+
   it('filters whole workflows from an infrastructure stage', () => {
     const graph = buildTrafficGraph({ summary: {}, runs: [
       { scan_id: 'one', stage: 'discover', owner: 'a', source: 'drive', status: 'recent' },

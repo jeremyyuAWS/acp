@@ -1859,6 +1859,7 @@ describe('factGroups', () => {
 
 import {
   RUN_STAGES, HEARTBEAT_INTERVAL_S, runCoverage, runFlow, runStagePipeline, runTiming, runTrouble,
+  workflowStageRuns,
 } from './liveOpsDrawer.js'
 
 describe('runStagePipeline', () => {
@@ -1898,6 +1899,43 @@ describe('runStagePipeline', () => {
     ]))
     expect(p.present.map((s) => s.key)).toEqual(['discover', 'remediate'])
     expect(RUN_STAGES.map((s) => s.key)).toEqual(['discover', 'assess', 'remediate', 'release'])
+  })
+
+  it('restores an older completed stage from the durable workflow contract', () => {
+    const snapshot = {
+      runs: [{ scan_id: 's1', stage: 'assess', status: 'active', completed: 1, total: 2 }],
+      workflows: [{ scan_id: 's1', owner_display_name: 'a@example.org', source: 'sharepoint',
+        stages: [{ stage: 'discover', stage_run_id: 'discover-batch', status: 'completed',
+          total: 2, completed: 2, active: 0, waiting: 0,
+          completed_at: '2026-09-05T10:00:00Z', completion_recorded: true }] }],
+    }
+    const p = runStagePipeline('s1', snapshot)
+    expect(p.present.map((stage) => stage.key)).toEqual(['discover', 'assess'])
+    expect(p.stages[0]).toMatchObject({ state: 'complete', completed: 2, total: 2 })
+    expect(p.missing).toEqual(['Remediate', 'Release'])
+  })
+})
+
+describe('workflowStageRuns', () => {
+  it('keeps live operational detail and fills only missing durable stages', () => {
+    const rows = workflowStageRuns({
+      runs: [{ scan_id: 's1', stage: 'assess', status: 'active', current_file: 'live.docx',
+        running: 1, queued: 1, completed: 3, total: 5 }],
+      workflows: [{ scan_id: 's1', owner_display_name: 'owner@example.org', source: 'sharepoint',
+        stages: [
+          { stage: 'discover', stage_run_id: 'd1', status: 'completed', total: 5, completed: 5,
+            completed_at: '2026-09-05T09:00:00Z', completion_recorded: true },
+          { stage: 'assess', stage_run_id: 'a1', status: 'running', total: 5, completed: 3,
+            active: 1, waiting: 1 },
+        ] }],
+    })
+    expect(rows).toHaveLength(2)
+    expect(rows.find((row) => row.stage === 'discover')).toMatchObject({
+      status: 'recent', stage_run_id: 'd1', completion_recorded: true,
+    })
+    expect(rows.find((row) => row.stage === 'assess')).toMatchObject({
+      current_file: 'live.docx', running: 1, stage_run_id: 'a1',
+    })
   })
 })
 
