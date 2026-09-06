@@ -228,11 +228,13 @@ _map_many([("POST", "/admin/jobs/clear-dead"), ("PATCH", "/control/workers/repli
 _map_many([("GET", "/admin/analytics/overview"), ("GET", "/ai/costs")], {"analytics.view"})
 
 # ── Settings and platform administration ──────────────────────────────────────
-_map_many([("GET", "/settings"), ("GET", "/ai/providers"),
+_map_many([("GET", "/settings"), ("GET", "/control/capacity-schedule"),
+           ("GET", "/ai/providers"),
            ("GET", "/ai/second-opinion-policy"), ("GET", "/ai/status"),
            ("GET", "/ai/providers/health"), ("GET", "/ai/providers/{provider}/health")],
           {"settings.view"})
-_map_many([("PUT", "/settings"), ("PUT", "/ai/providers"),
+_map_many([("PUT", "/settings"), ("PUT", "/control/capacity-schedule"),
+           ("POST", "/control/capacity-schedule/validate"), ("PUT", "/ai/providers"),
            ("PUT", "/ai/second-opinion-policy"), ("POST", "/ai/providers/test"),
            ("POST", "/ai/providers/{provider}/secret")],
           {"settings.view"})
