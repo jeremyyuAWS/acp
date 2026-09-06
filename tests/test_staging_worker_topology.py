@@ -54,9 +54,10 @@ def test_redeploy_rejects_duplicate_role_targets_before_azure():
 def test_redeploy_checks_every_live_environment_stamp_before_build():
     script = (ROOT / "deploy/public/redeploy.sh").read_text()
     stamp = script.index("ACTUAL_DEPLOY_ENV=")
+    ci_gate = script.index('gh run list --commit "$PIN"')
     build = script.index('say "building $IMG"')
-    assert stamp < build
-    block = script[script.rindex('for a in "$APP"', 0, stamp):script.index("# ── 1. pin", stamp)]
+    assert ci_gate < stamp < build
+    block = script[script.rindex('for a in "$APP"', 0, stamp):script.index("# ── 2. isolated clone", stamp)]
     assert 'for a in "$APP" "${LANE_WORKERS[@]}"' in block
     assert "expected '$DEPLOY_TARGET_ENV'" in block
 

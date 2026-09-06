@@ -86,17 +86,6 @@ SUB="$(az account show ${ACP_SUBSCRIPTION:+--subscription "$ACP_SUBSCRIPTION"} -
 [ -n "$SUB" ] || die "no active Azure subscription — run 'az login', or set ACP_SUBSCRIPTION"
 AZ=(--subscription "$SUB")
 
-# Suffixes catch the common mistake; the live environment stamp catches a deliberately or
-# accidentally misleading name. Every target must already exist for redeploy, and all four must
-# agree before even the image build starts. First-time staging creation belongs to staging_up.sh.
-for a in "$APP" "${LANE_WORKERS[@]}"; do
-  ACTUAL_DEPLOY_ENV="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$a" \
-    --query "properties.template.containers[0].env[?name=='ACP_DEPLOY_ENV'].value | [0]" \
-    -o tsv 2>/dev/null || true)"
-  [ "$ACTUAL_DEPLOY_ENV" = "$DEPLOY_TARGET_ENV" ] \
-    || die "$a is missing or stamped '$ACTUAL_DEPLOY_ENV', expected '$DEPLOY_TARGET_ENV'; refusing cross-environment deployment"
-done
-
 # ── 1. pin ─────────────────────────────────────────────────────────────────────────────────
 SRC_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$SRC_ROOT"
@@ -174,6 +163,19 @@ else
     *)       die "CI on ${PIN:0:7} concluded '$CI_CONC', not success — refusing to deploy it." ;;
   esac
 fi
+
+# Suffixes catch the common mistake; the live environment stamp catches a deliberately or
+# accidentally misleading name. Every target must already exist for redeploy, and all four must
+# agree after the requested commit passes CI but before even the image build starts. This order
+# preserves pin diagnostics: an invalid ref must be reported as invalid, not disguised as an
+# unrelated live-target error. First-time staging creation belongs to staging_up.sh.
+for a in "$APP" "${LANE_WORKERS[@]}"; do
+  ACTUAL_DEPLOY_ENV="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$a" \
+    --query "properties.template.containers[0].env[?name=='ACP_DEPLOY_ENV'].value | [0]" \
+    -o tsv 2>/dev/null || true)"
+  [ "$ACTUAL_DEPLOY_ENV" = "$DEPLOY_TARGET_ENV" ] \
+    || die "$a is missing or stamped '$ACTUAL_DEPLOY_ENV', expected '$DEPLOY_TARGET_ENV'; refusing cross-environment deployment"
+done
 
 # ── 2. isolated clone ──────────────────────────────────────────────────────────────────────
 # `az acr build` uploads the working directory as build context. This repo is worked by many
