@@ -190,6 +190,11 @@ def test_stage_snapshot_publishes_one_intuitive_reconciliation_equation(isolated
         "equation": "total = queued + processing + completed + failed + cancelled + skipped",
         "total": 2, "accounted": 2, "unaccounted": 0, "exact": True,
     }
+    lineage = isolated_store.canonical_stage_lineage(sid, owner=OWNER)
+    assert lineage["available"] is True
+    assert lineage["integrity"]["ok"] is True
+    assert [stage["stage"] for stage in lineage["stages"]] == ["remediate"]
+    assert lineage["stages"][0]["reconciliation"]["exact"] is True
 
 
 def test_historical_backfill_is_idempotent_and_never_invents_evidence(isolated_store):

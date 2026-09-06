@@ -211,6 +211,12 @@ dd { color: #2B2330; margin-left: 12px; }
   hash <strong>{{ rubric_hash }}</strong> — results are reproducible from the rubric hash.
   Scans run read-only; documents are never retained.
 </p>
+{% if stage_lineage_digest %}
+<p class="muted">
+  Canonical stage lineage <strong>{{ stage_lineage_status }}</strong> · SHA-256
+  <strong>{{ stage_lineage_digest }}</strong>. Stage totals use sealed execution snapshots.
+</p>
+{% endif %}
 
 <!-- Certification decision -->
 <section aria-labelledby="decision-heading">
@@ -499,6 +505,8 @@ def _prepare_context(run: dict, files: list, meta: dict,
         "run_id": run.get("id", ""),
         "rubric_display": rubric_display,
         "rubric_hash": rubric_hash,
+        "stage_lineage_digest": meta.get("stage_lineage_digest"),
+        "stage_lineage_status": meta.get("stage_lineage_status"),
         "total_files": total_files,
         "certifiable": certifiable,
         "avg_score": avg_score,

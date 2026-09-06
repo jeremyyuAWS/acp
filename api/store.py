@@ -11119,6 +11119,56 @@ class Store:
                 "ON CONFLICT(event_id) DO NOTHING",
                 (event_id, execution_id, work_item_id, payload_digest, payload, now, now))
         return self.get_stage_execution(execution_id) or {"execution_id": execution_id}
+    def canonical_stage_lineage(self, scan_id: str, *, owner: str | None = None) -> dict:
+        """Return the current sealed execution chain and one reconciliation authority per stage."""
+        workflow = self.workflow_for_scan(scan_id, owner=owner)
+        workflow_id = (workflow or {}).get("id") or scan_id
+        with self._db.cursor() as cur:
+            sql = ("SELECT execution_id FROM stage_executions WHERE scan_id=%s AND workflow_id=%s "
+                   "AND is_current=1")
+            params = [scan_id, workflow_id]
+            if owner is not None:
+                sql += " AND owner_email=%s"
+                params.append(owner)
+            self._db.execute(cur, sql, tuple(params))
+            execution_ids = [row["execution_id"] for row in self._db.fetchall(cur)]
+        order = {"discover": 0, "assess": 1, "remediate": 2, "release": 3,
+                 "conformance": 4}
+        stages = []
+        for execution_id in execution_ids:
+            snapshot = self.stage_execution_snapshot(execution_id, owner=owner)
+            if not snapshot:
+                continue
+            manifest_id = snapshot.get("output_manifest_id")
+            manifest = self.get_stage_output_manifest(manifest_id, owner=owner) if manifest_id else None
+            snapshot["sealed_output"] = None if not manifest else {
+                "manifest_id": manifest["manifest_id"], "digest": manifest["digest"],
+                "item_count": int(manifest["item_count"]),
+                "upstream_manifest_id": manifest.get("upstream_manifest_id"),
+                "contract_version": int(manifest.get("contract_version") or 1),
+                "sealed_at": manifest["sealed_at"],
+            }
+            stages.append(snapshot)
+        stages.sort(key=lambda row: (order.get(row["stage"], 99), row["stage"]))
+        broken_links = []
+        for row in stages:
+            upstream = row.get("input_manifest_id")
+            source = self.get_stage_output_manifest(upstream, owner=owner) if upstream else None
+            if upstream and (not source or source.get("workflow_id") != workflow_id):
+                broken_links.append({"stage": row["stage"], "input_manifest_id": upstream})
+        return {
+            "schema_version": 1, "workflow_id": workflow_id,
+            "workflow_revision": int((workflow or {}).get("revision") or 1),
+            "scan_id": scan_id, "generated_at": self._now(), "available": bool(stages),
+            "stages": stages,
+            "integrity": {
+                "ok": bool(stages) and not broken_links and
+                      all(row["integrity"]["ok"] for row in stages),
+                "broken_manifest_links": broken_links,
+                "inconsistent_stages": [row["stage"] for row in stages
+                                        if not row["integrity"]["ok"]],
+            },
+        }
 
     def stage_execution_events(self, execution_id: str, *, owner: str | None = None) -> list[dict]:
         if owner is not None and not self.get_stage_execution(execution_id, owner=owner):

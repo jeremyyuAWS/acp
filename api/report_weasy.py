@@ -261,6 +261,12 @@ dd { color: #2B2330; margin-left: 12px; }
   hash <strong>{{ rubric_hash }}</strong> — results are reproducible from the rubric hash.
   Scans run read-only; documents are never retained.
 </p>
+{% if stage_lineage_digest %}
+<p class="muted">
+  Canonical stage lineage <strong>{{ stage_lineage_status }}</strong> · SHA-256
+  <strong>{{ stage_lineage_digest }}</strong>. Stage totals use sealed execution snapshots.
+</p>
+{% endif %}
 
 <section>
 <h2>Certification Decision</h2>

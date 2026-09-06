@@ -30,6 +30,9 @@ STATUS = {
 
 
 class _Store:
+    def get_scan_head(self, sid, owner=None):
+        return {"id": sid} if sid == "scan-1" and owner == "owner@example.com" else None
+
     def get_scan(self, sid, owner=None):
         return {"run": {"id": sid}} if owner == "owner@example.com" else None
 
@@ -38,6 +41,19 @@ class _Store:
 
     def stage_snapshot_id(self, sid):
         return "snapshot-1"
+
+    def canonical_stage_lineage(self, sid, owner=None):
+        return {"schema_version": 1, "workflow_id": sid, "workflow_revision": 1,
+                "scan_id": sid, "generated_at": "changes-every-call", "available": True,
+                "stages": [{"stage": "release", "execution_id": "release-execution",
+                            "generated_at": "changes-every-call", "provenance": "observed",
+                            "reconciliation": {"unit": "work items", "scope": "this execution",
+                                               "total": 1, "accounted": 1,
+                                               "unaccounted": 0, "exact": True},
+                            "integrity": {"ok": True, "affected": [], "violations": []},
+                            "sealed_output": {"manifest_id": "sealed-release", "digest": "d" * 64}}],
+                "integrity": {"ok": True, "broken_manifest_links": [],
+                              "inconsistent_stages": []}}
 
 
 def _request(owner="owner@example.com"):
@@ -57,6 +73,9 @@ def test_release_manifest_comes_from_persisted_server_evidence(monkeypatch):
     assert manifest["documents"][0]["corrected_sha256"] == "a" * 64
     assert manifest["documents"][0]["created"] is True
     assert manifest["manifest_generated_by"]["release_version"] == "2026.9.6.1"
+    assert manifest["canonical_stage_lineage"]["stages"][0]["reconciliation"]["exact"] is True
+    assert "generated_at" not in manifest["canonical_stage_lineage"]
+    assert "generated_at" not in manifest["canonical_stage_lineage"]["stages"][0]
     assert len(first["content_digest"]["value"]) == 64
     assert "not a digital signature" in first["digest_note"]
 
@@ -65,4 +84,17 @@ def test_release_manifest_is_owner_scoped(monkeypatch):
     monkeypatch.setattr(scans.core, "store", _Store())
     with pytest.raises(HTTPException) as exc:
         scans.get_release_manifest("scan-1", _request("someone@example.com"))
+    assert exc.value.status_code == 404
+
+
+def test_stage_lineage_route_is_stable_owner_scoped_and_canonical(monkeypatch):
+    monkeypatch.setattr(scans.core, "store", _Store())
+    first = scans.stage_lineage("scan-1", _request())
+    second = scans.stage_lineage("scan-1", _request())
+    assert first == second
+    assert first["lineage"]["stages"][0]["reconciliation"]["exact"] is True
+    assert first["lineage"]["integrity"]["ok"] is True
+    assert len(first["content_digest"]["value"]) == 64
+    with pytest.raises(HTTPException) as exc:
+        scans.stage_lineage("scan-1", _request("someone@example.com"))
     assert exc.value.status_code == 404
