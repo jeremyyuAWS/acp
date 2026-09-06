@@ -29,6 +29,16 @@ describe('ReleaseHistory', () => {
     expect(container.textContent).toContain('Failed · Permission denied')
     expect(container.querySelector('a[href="https://example.com/folder"]')).toBeTruthy()
     expect(container.querySelector('a[href="https://example.com/file"]')).toBeTruthy()
+
+    const search = container.querySelector('input[type="search"]')
+    const type = (value) => act(() => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(search, value)
+      search.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    type('permission denied')
+    expect(container.textContent).toContain('failed.docx')
+    type('no match')
+    expect(container.textContent).toContain('No releases match “no match”')
   })
 
   it('makes loading failures retryable', async () => {

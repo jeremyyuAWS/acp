@@ -20,6 +20,7 @@ const outcome = (release) => [
 export default function ReleaseHistory({ refreshKey, loadHistory = listReleaseHistory,
   loadManifest = getReleaseManifest }) {
   const [state, setState] = useState({ loading: true, releases: [], error: '' })
+  const [query, setQuery] = useState('')
   const load = () => {
     setState((old) => ({ ...old, loading: true, error: '' }))
     loadHistory(50).then((result) => setState({ loading: false, releases: result?.releases || [], error: '' }))
@@ -36,6 +37,13 @@ export default function ReleaseHistory({ refreshKey, loadHistory = listReleaseHi
       setState((old) => ({ ...old, error: error?.message || 'The manifest could not be downloaded.' }))
     }
   }
+  const needle = query.trim().toLocaleLowerCase()
+  const visible = needle ? state.releases.filter((release) => [
+    release.release_id, release.scan_id, release.actor, release.source, release.folder_name,
+    ...(release.destinations || []).flatMap((item) => [item.location, item.folder_name, item.provider]),
+    ...(release.documents || []).flatMap((item) => [item.file, item.destination_path,
+      item.status, item.verification, item.failure_category, item.explanation]),
+  ].some((value) => String(value || '').toLocaleLowerCase().includes(needle))) : state.releases
 
   return (
     <details className="panel release-history">
@@ -44,9 +52,15 @@ export default function ReleaseHistory({ refreshKey, loadHistory = listReleaseHi
         <span>{state.loading ? 'Loading…' : `${state.releases.length} release${state.releases.length === 1 ? '' : 's'}`}</span>
       </summary>
       <div className="release-record__body">
+        {state.releases.length > 0 && <label className="release-history__search">
+          <span>Search release history</span>
+          <input type="search" value={query} onChange={(event) => setQuery(event.target.value)}
+                 placeholder="Folder, actor, file, destination, or execution ID" />
+        </label>}
         {state.error && <div className="release-recovery" role="alert"><div><b>History needs attention</b><p>{state.error}</p></div><button className="ghost small" onClick={load}>Retry</button></div>}
         {!state.loading && !state.error && state.releases.length === 0 && <p className="muted">No releases have been created yet.</p>}
-        {state.releases.map((release) => (
+        {!state.loading && !state.error && state.releases.length > 0 && visible.length === 0 && <p className="muted">No releases match “{query}”.</p>}
+        {visible.map((release) => (
           <details key={release.release_id} className="release-history__execution">
             <summary>
               <span><b>{release.folder_name || 'Release'}</b><small>{when(release.created_at)} · {release.actor || 'Actor unavailable'}</small></span>
