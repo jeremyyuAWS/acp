@@ -1697,7 +1697,12 @@ export default function App() {
   const defaultScanId = pickDefaultScan(scanList)?.id
   const isTimeTravel = !!(run && scanList.some((s) => s.id === run.id) && defaultScanId !== run.id)
   const narrowDefault = !explicitTimeTravel ? narrowScanDefaultContext(scanList, run?.id) : null
-  const showScanHistoryBanner = isTimeTravel || !!narrowDefault
+  // A background scan can finish while another stage is active. The persistent stage card is
+  // the useful foreground truth in that moment; stacking "New scan available" above it makes
+  // the completed inventory sound like a second live run. Keep deliberate replay and the narrow-
+  // scan safeguard visible, but defer the passive new-scan notice until active work is finished.
+  const showScanHistoryBanner = (isTimeTravel && (explicitTimeTravel || !primaryWorkflow))
+    || !!narrowDefault
 
 
   return (

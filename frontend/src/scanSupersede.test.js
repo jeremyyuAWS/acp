@@ -54,7 +54,11 @@ describe('scan superseding — background poll + banner differentiation', () => 
     expect(app).toContain('Both remain in Scan History')
     expect(app).toContain("narrowScanDefaultContext(scanList, run?.id)")
     expect(app).toContain("narrowDefault ? 'View narrow scan' : '↩ Switch to latest'")
-    expect(app).toContain('const showScanHistoryBanner = isTimeTravel || !!narrowDefault')
+    expect(app).toContain('|| !!narrowDefault')
+  })
+
+  it('defers the passive new-scan notice while a durable workflow card is active', () => {
+    expect(app).toMatch(/showScanHistoryBanner = \(isTimeTravel && \(explicitTimeTravel \|\| !primaryWorkflow\)\)/)
   })
 
   it('"new scan available" banner is gated on !explicitTimeTravel', () => {
