@@ -31,13 +31,18 @@ async function ensureInstance() {
   return _initPromise
 }
 
-export async function refreshSPToken() {
+export async function refreshSPToken({ interactive = true } = {}) {
   const inst = await ensureInstance()
   if (!inst) throw new Error('MSAL not ready')
   const account = inst.getActiveAccount() || inst.getAllAccounts()[0]
   if (!account) throw new Error('no active Microsoft account')
-  const tok = await inst.acquireTokenSilent({ scopes: SCOPES, account })
-    .catch(() => inst.acquireTokenPopup({ scopes: SCOPES, account }))
+  let tok
+  try {
+    tok = await inst.acquireTokenSilent({ scopes: SCOPES, account })
+  } catch (error) {
+    if (!interactive) throw error
+    tok = await inst.acquireTokenPopup({ scopes: SCOPES, account })
+  }
   try { sessionStorage.setItem('sp_token', tok.accessToken) } catch { /* ignore */ }
   return tok.accessToken
 }

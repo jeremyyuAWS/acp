@@ -165,6 +165,24 @@ def test_active_workflows_are_owner_scoped_and_payload_free(app_client, isolated
     assert "file" not in body["active_workflows"][0]
 
 
+def test_active_workflows_expose_sharepoint_release_without_document_payload(app_client, isolated_store):
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "INSERT INTO scan_runs (id, owner_email, source, status, started_at) "
+            "VALUES (%s,%s,%s,%s,%s)",
+            ("release-scan", "demo", "sharepoint", "completed", "2026-09-05T10:00:00Z"))
+        isolated_store._db.execute(cur,
+            "INSERT INTO jobs (id, scan_id, type, status, payload, created_at, updated_at) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            ("release-job", "release-scan", "publish_file", "running",
+             '{"file":"secret.docx"}', "2026-09-05T10:00:00Z", "2026-09-05T10:01:00Z"))
+
+    [workflow] = app_client.get("/workspace/active-workflows").json()["active_workflows"]
+    assert workflow["stage"] == "publish"
+    assert workflow["source"] == "sharepoint"
+    assert "payload" not in workflow and "file" not in workflow
+
+
 def test_bootstrap_is_tenant_isolated(app_client, isolated_store):
     _seed_scan(isolated_store, "s-alice", "alice@example.com", files=10)
     # The test client's default identity is "demo" (no auth header) — alice's scan must

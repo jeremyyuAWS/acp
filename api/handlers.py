@@ -758,6 +758,7 @@ def _publish_file(payload: dict, job: dict) -> None:
         # user retries with a fresh token. Marking this successful would make Retry a no-op.
         raise FatalJobError("SharePoint session expired — reconnect and retry")
     import publish as _publish
+    import scanner as _scanner
     source_path = record.get("source_relative_path") or record.get("parent_folder") or filename
     source_name = record.get("source_name") or filename
     source_id = record.get("drive_file_id") or filename
@@ -796,6 +797,13 @@ def _publish_file(payload: dict, job: dict) -> None:
             "corrected_checksum": publication.get("checksum"),
             "created": publication.get("created", False),
         })
+    except _scanner.SharePointSessionExpired:
+        if int((job or {}).get("attempts") or 1) < int((job or {}).get("max_attempts") or 5):
+            raise
+        _release_failure(release_id, owner, filename, record,
+                         "provider_session_expired",
+                         "Reconnect SharePoint and retry this document.")
+        raise FatalJobError("SharePoint session expired — reconnect and retry")
     except PermissionError:
         _release_failure(release_id, owner, filename, record,
                          "provider_permission_denied",

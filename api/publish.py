@@ -193,7 +193,9 @@ def _sp_ensure_folder(token: str, drive_id: str | None, parent_id: str | None,
         headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
         json={"name": name, "folder": {}, "@microsoft.graph.conflictBehavior": "fail"},
         timeout=30, follow_redirects=True)
-    if response.status_code in (401, 403):
+    if response.status_code == 401:
+        raise scanner.SharePointSessionExpired("Microsoft Graph access token expired.")
+    if response.status_code == 403:
         raise PermissionError("Microsoft Graph refused to create the SharePoint release folder.")
     if response.status_code == 409:
         winner = _sp_find_child(token, listing, name, folder_only=True)
@@ -211,6 +213,8 @@ def _sp_content_matches(token: str, drive_id: str | None, item_id: str,
     response = httpx.get(f"{scanner._sp_base(drive_id)}/items/{item_id}/content",
                          headers={"Authorization": f"Bearer {token}"}, timeout=120,
                          follow_redirects=True)
+    if response.status_code == 401:
+        raise scanner.SharePointSessionExpired("Microsoft Graph access token expired.")
     response.raise_for_status()
     return hashlib.sha256(response.content).hexdigest() == expected_sha256
 

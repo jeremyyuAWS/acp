@@ -4986,11 +4986,11 @@ class Store:
             "scan_file": "assess", "scan_assess": "assess", "assess_trace": "assess",
             "remediate_file": "remediate", "deliver_corrected_copy": "remediate",
             "rescore_file": "remediate", "apply_approved_values": "remediate",
+            "publish_file": "publish",
         }
-        # NOT the same list as core.REMEDIATE_LANE_JOB_TYPES, and the difference is deliberate:
-        # `publish_file` is Release work that a user reaches from a different tab, and naming it
-        # "remediate" here would report a release as remediation still running. A job type absent
-        # from this map is dropped below rather than mislabelled.
+        # NOT the same list as core.REMEDIATE_LANE_JOB_TYPES. publish_file is its own Release
+        # stage; exposing it here also lets the browser keep its delegated Microsoft token fresh
+        # while a large queued release outlives the token it started with.
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "SELECT j.id,j.scan_id,j.type,j.status,j.created_at,j.updated_at,"
@@ -5028,7 +5028,7 @@ class Store:
                 item["started_at"] = row.get("created_at")
             if str(row.get("updated_at") or "") > str(item.get("updated_at") or ""):
                 item["updated_at"] = row.get("updated_at")
-        priority = {"remediate": 3, "assess": 2, "discover": 1}
+        priority = {"publish": 4, "remediate": 3, "assess": 2, "discover": 1}
         return sorted(grouped.values(),
                       key=lambda item: (str(item.get("updated_at") or ""),
                                         priority.get(item["stage"], 0)), reverse=True)

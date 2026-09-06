@@ -453,22 +453,38 @@ export default function App() {
   const [hasSPToken, setHasSPToken] = useState(() => !!sessionStorage.getItem('sp_token'))
   const [tokenRefreshError, setTokenRefreshError] = useState(null)
 
-  // Keep a long-running SharePoint scan's MSAL token fresh. Mirrors the Drive keep-alive above.
-  // Best-effort; no-op without MSAL configured or without an active SharePoint session.
+  // Keep every long-running SharePoint workflow's MSAL token fresh, including Release jobs that
+  // run after the scan itself is complete. Refresh immediately when the session opens and then
+  // every 20 minutes. Background refresh is silent-only: a timer must never summon a popup.
   useEffect(() => {
-    if (!hasSPToken) return
-    const iv = setInterval(async () => {
+    if (!hasSPToken || !me) return
+    let alive = true
+    const refresh = async () => {
       try {
-        const a = await getActiveScan()
-        if (!a?.id) return
-        const tok = await refreshSPToken()
+        const response = await getActiveWorkflows()
+        if (!alive) return
+        const workflows = response?.active_workflows || []
+        setActiveWorkflows(workflows)
+        let ids = [...new Set(workflows
+          .filter((workflow) => workflow?.source === 'sharepoint' && workflow?.scan_id)
+          .map((workflow) => workflow.scan_id))]
+        // Compatibility for an older API replica during a rolling deploy: it does not expose
+        // publish_file yet, but can still report a live SharePoint scan through this endpoint.
+        if (!ids.length) {
+          const active = await getActiveScan()
+          if (active?.id) ids = [active.id]
+        }
+        if (!ids.length || !alive) return
+        const tok = await refreshSPToken({ interactive: false })
         setSPToken(tok)
-        await refreshScanSPToken(a.id)
+        await Promise.all(ids.map((id) => refreshScanSPToken(id)))
         setTokenRefreshError(null)
-      } catch { setTokenRefreshError('SharePoint session may have expired — files added since then may be skipped. Re-sign in to SharePoint to continue.') }
-    }, 20 * 60 * 1000)
-    return () => clearInterval(iv)
-  }, [hasSPToken])
+      } catch { setTokenRefreshError('SharePoint session may have expired — remaining scan or release files are paused until you re-sign in to SharePoint.') }
+    }
+    refresh()
+    const iv = setInterval(refresh, 20 * 60 * 1000)
+    return () => { alive = false; clearInterval(iv) }
+  }, [hasSPToken, me])
   const [delegations, setDelegations] = useState(loadDelegations)
   const [fileTypeConfig, setFileTypeConfig] = useState(loadFileTypeConfig)
   const [rolePrivileges, setRolePrivileges] = useState(loadRolePrivileges)

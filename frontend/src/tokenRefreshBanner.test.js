@@ -38,6 +38,12 @@ describe('token-refresh failure surfaces a dismissable banner', () => {
     expect(app).toMatch(/refreshScanSPToken[\s\S]{0,400}setTokenRefreshError\(/)
   })
 
+  it('refreshes active SharePoint releases immediately and without a background popup', () => {
+    expect(app).toMatch(/workflow\?\.source === 'sharepoint'/)
+    expect(app).toMatch(/refreshSPToken\(\{ interactive: false \}\)/)
+    expect(app).toMatch(/refresh\(\)[\s\S]{0,150}setInterval\(refresh, 20 \* 60 \* 1000\)/)
+  })
+
   it('a successful Drive refresh clears the error so it cannot outlive the problem', () => {
     expect(app).toMatch(/refreshScanDriveToken[\s\S]{0,300}setTokenRefreshError\(null\)/)
   })

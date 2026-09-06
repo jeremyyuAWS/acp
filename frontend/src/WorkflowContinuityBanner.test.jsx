@@ -19,8 +19,9 @@ describe('workflow continuity', () => {
       { stage: 'discover', updated_at: '2026-09-05T10:00:00Z' },
       { stage: 'remediate', updated_at: '2026-09-05T10:00:00Z' },
       { stage: 'assess', updated_at: '2026-09-05T09:00:00Z' },
+      { stage: 'publish', updated_at: '2026-09-05T10:00:00Z' },
     ]
-    expect(primaryActiveWorkflow(items).stage).toBe('remediate')
+    expect(primaryActiveWorkflow(items).stage).toBe('publish')
   })
 
   it('returns to existing work without presenting a start action', () => {
@@ -42,5 +43,13 @@ describe('workflow continuity', () => {
     const container = render({ currentView: 'discover', workflow: { stage: 'discover' },
       onReturn: () => {}, onLiveOps: () => {} })
     expect(container.innerHTML).toBe('')
+  })
+
+  it('names active publishing as Release', () => {
+    const container = render({ currentView: 'overview', workflow: {
+      stage: 'publish', source: 'sharepoint', running: 1, queued: 8,
+    }, onReturn: () => {}, onLiveOps: () => {} })
+    expect(container.textContent).toContain('Release is still running')
+    expect(container.querySelector('button').textContent).toContain('Release')
   })
 })
