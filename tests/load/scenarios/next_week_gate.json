@@ -1,0 +1,47 @@
+{
+  "name": "next-week-multi-user-assess-remediate-chaos",
+  "seed": 20260906,
+  "workers": 12,
+  "workload": {
+    "scans_per_tenant": 4,
+    "documents_per_scan": 75,
+    "tenant_submit_stagger_seconds": 0.25,
+    "scan_submit_stagger_seconds": 0.5,
+    "remediation_rate": 0.7,
+    "remediation_duration_ratio": 0.65,
+    "tenants": [
+      {"name": "alpha"},
+      {"name": "bravo"},
+      {"name": "charlie"},
+      {"name": "delta"},
+      {"name": "echo"},
+      {"name": "foxtrot"}
+    ],
+    "file_mix": [
+      {"extension": ".docx", "weight": 0.28, "assess_seconds": 1.7, "duration_jitter": 0.3},
+      {"extension": ".xlsx", "weight": 0.17, "assess_seconds": 1.4, "duration_jitter": 0.3},
+      {"extension": ".pptx", "weight": 0.2, "assess_seconds": 2.3, "duration_jitter": 0.35},
+      {"extension": ".pdf", "weight": 0.35, "assess_seconds": 3.8, "duration_jitter": 0.4}
+    ]
+  },
+  "faults": {
+    "redis_error_rate": 0.008,
+    "database_error_rate": 0.012,
+    "terminal_error_rate": 0.001,
+    "max_attempts": 3,
+    "retry_backoff_seconds": 0.5,
+    "deploy": {"at_seconds": 28, "downtime_seconds": 4, "retry_delay_seconds": 0.25}
+  },
+  "thresholds": [
+    {"metric": "queue_wait_seconds.p95", "operator": "max", "value": 400, "reason": "p95 queue wait exceeds the burst-test SLO"},
+    {"metric": "end_to_end_seconds.p99", "operator": "max", "value": 470, "reason": "p99 completion latency exceeds the burst-test SLO"},
+    {"metric": "throughput_jobs_per_second", "operator": "min", "value": 4.2, "reason": "worker throughput is below the planned test floor"},
+    {"metric": "jobs_dead_lettered", "operator": "max", "value": 4, "reason": "too many documents exhausted retries or failed terminally"},
+    {"metric": "retries", "operator": "max", "value": 90, "reason": "retry amplification exceeds the injected-fault budget"},
+    {"metric": "fairness.jain_index", "operator": "min", "value": 0.995, "reason": "tenant completion distribution is unfair"},
+    {"metric": "fairness.max_min_completed_ratio", "operator": "max", "value": 1.08, "reason": "one tenant receives materially less service"},
+    {"metric": "redis_errors", "operator": "max", "value": 35, "reason": "Redis error budget exceeded"},
+    {"metric": "database_errors", "operator": "max", "value": 55, "reason": "database error budget exceeded"},
+    {"metric": "deploy_interruption_recovery_rate", "operator": "min", "value": 1.0, "reason": "not every deploy-interrupted job recovered"}
+  ]
+}
