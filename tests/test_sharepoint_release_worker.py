@@ -89,9 +89,9 @@ def test_sharepoint_worker_publishes_and_records_verified_copy(monkeypatch):
     monkeypatch.setattr(publish, "ensure_sharepoint_release_folder",
                         lambda *args: {"id": "root-1", "name": "release", "url": "https://sp/root"})
     monkeypatch.setattr(publish, "archive_copy_publish_sharepoint",
-                        lambda *args: {"id": "copy-1", "url": "https://sp/copy",
-                                       "checksum": "sha256", "created": True,
-                                       "filename": "Leave.docx"})
+                        lambda *args, **kwargs: {"id": "copy-1", "url": "https://sp/copy",
+                                                "checksum": "sha256", "created": True,
+                                                "filename": "Leave.docx"})
 
     handlers._publish_file({"scan_id": SID, "release_id": "release-1",
                             "file": FILE, "owner": OWNER},
@@ -102,6 +102,35 @@ def test_sharepoint_worker_publishes_and_records_verified_copy(monkeypatch):
     assert result["released_relative_path"] == "HR/Policies/Leave.docx"
     assert result["verification"] == "content verified"
     assert store.published == (SID, FILE, "https://sp/copy")
+
+
+def test_sharepoint_worker_restores_original_name_after_internal_dedupe(monkeypatch):
+    import core
+    import handlers
+    import publish
+
+    store = FakeStore()
+    monkeypatch.setattr(core, "store", store)
+    monkeypatch.setattr(core, "get_scan_tokens", lambda scan_id: {"sp": "token"})
+    monkeypatch.setattr(store, "get_file_record", lambda scan_id, filename: {
+        "file": filename, "source_name": "Report.docx", "compliant": 1,
+        "remediated_at": "now", "drive_file_id": "source-2", "drive_id": "library-1",
+        "source_relative_path": "/drives/library-1/root:/Legal"})
+    monkeypatch.setattr(publish, "ensure_sharepoint_release_folder",
+                        lambda *args: {"id": "root-1", "name": "release", "url": "https://sp/root"})
+    captured = {}
+    def _publish(*args, **kwargs):
+        captured.update(internal_name=args[6], source_name=kwargs.get("source_filename"))
+        return {"id": "copy-2", "url": "https://sp/copy-2", "checksum": "sha256",
+                "created": True, "filename": kwargs["source_filename"]}
+    monkeypatch.setattr(publish, "archive_copy_publish_sharepoint", _publish)
+
+    handlers._publish_file({"scan_id": SID, "release_id": "release-1",
+                            "file": "Report (1).docx", "owner": OWNER},
+                           {"attempts": 1, "max_attempts": 5})
+
+    assert captured == {"internal_name": "Report (1).docx", "source_name": "Report.docx"}
+    assert store.documents["Report (1).docx"]["released_relative_path"] == "Legal/Report.docx"
 
 
 def test_sharepoint_worker_exposes_actionable_expired_session(monkeypatch):

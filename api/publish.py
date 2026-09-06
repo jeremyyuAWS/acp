@@ -223,13 +223,14 @@ def _sp_content_matches(token: str, drive_id: str | None, item_id: str,
 def archive_copy_publish_sharepoint(token: str, drive_id: str | None, folder_id: str,
                                     owner: str, release_id: str, scan_id: str,
                                     filename: str, relative_path: str | None,
-                                    source_id: str, folder_cache: dict | None = None) -> dict | None:
+                                    source_id: str, folder_cache: dict | None = None,
+                                    source_filename: str | None = None) -> dict | None:
     """Publish one Blob-backed corrected copy into a Graph drive without overwriting a source."""
     import scanner
     data = _blob.download_remediated(owner, scan_id, filename)
     if not data:
         return None
-    folders, safe_name = sharepoint_relative_path(relative_path, filename)
+    folders, safe_name = sharepoint_relative_path(relative_path, source_filename or filename)
     cache = folder_cache if folder_cache is not None else {}
     parent = folder_id
     for segment in folders:

@@ -162,7 +162,9 @@ def test_sp_distinct_items_sharing_a_name_are_both_kept(monkeypatch):
     out = scanner._sp_list("tok", max_files=50)
     assert [o["id"] for o in out] == ["A", "B"]
     # names still collide here; _list's _dedupe_names is what separates them
-    assert [o["name"] for o in scanner._dedupe_names(out)] == ["Report.pptx", "Report (1).pptx"]
+    deduped = scanner._dedupe_names(out)
+    assert [o["name"] for o in deduped] == ["Report.pptx", "Report (1).pptx"]
+    assert [o["source_name"] for o in deduped] == ["Report.pptx", "Report.pptx"]
 
 
 def test_sp_skips_folders_and_unsupported_types(monkeypatch):

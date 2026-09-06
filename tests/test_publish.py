@@ -298,6 +298,29 @@ def test_sharepoint_publish_preserves_hierarchy_and_never_overwrites_collision(m
     assert writes[0]["force_session"] is True
 
 
+def test_sharepoint_publish_uses_original_name_but_internal_blob_identity(monkeypatch):
+    downloaded = []
+    monkeypatch.setattr(publish._blob, "download_remediated",
+                        lambda owner, scan, name: downloaded.append(name) or b"corrected")
+    monkeypatch.setattr(publish, "_sp_child", lambda *a, **k: None)
+    monkeypatch.setattr(publish, "_sp_content_matches", lambda *a, **k: True)
+    monkeypatch.setattr(publish, "_sp_ensure_folder", lambda *a, **k: "parent")
+    import scanner
+    monkeypatch.setattr(scanner, "_sp_base", lambda drive: "https://graph/drive")
+    writes = []
+    monkeypatch.setattr(scanner, "_sp_write",
+                        lambda token, **kwargs: writes.append(kwargs) or
+                        {"id": "created", "webUrl": "https://sp/created"})
+
+    result = publish.archive_copy_publish_sharepoint(
+        "token", "drive", "release", "owner", "rel", "scan", "report (1).pdf",
+        "/drives/drive/root:/Legal", "source-2", source_filename="report.pdf")
+
+    assert downloaded == ["report (1).pdf"]
+    assert writes[0]["put_url"].endswith("/report.pdf:/content")
+    assert result["filename"] == "report.pdf"
+
+
 def test_sharepoint_publish_uses_atomic_fail_on_conflict_even_for_small_files(monkeypatch):
     """The child lookup is advisory. A sibling can appear after it, so a path PUT must never
     silently replace that new file; every release copy uses Graph's atomic session contract."""

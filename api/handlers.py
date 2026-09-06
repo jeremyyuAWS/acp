@@ -759,6 +759,7 @@ def _publish_file(payload: dict, job: dict) -> None:
         raise FatalJobError("SharePoint session expired — reconnect and retry")
     import publish as _publish
     source_path = record.get("source_relative_path") or record.get("parent_folder") or filename
+    source_name = record.get("source_name") or filename
     source_id = record.get("drive_file_id") or filename
     drive_id = record.get("drive_id")
     location = f"graph:{drive_id or 'me'}"
@@ -775,11 +776,11 @@ def _publish_file(payload: dict, job: dict) -> None:
                 detail["name"], detail.get("url"))
         publication = _publish.archive_copy_publish_sharepoint(
             token, drive_id, root["folder_id"], owner, release_id, scan_id,
-            filename, source_path, source_id)
+            filename, source_path, source_id, source_filename=source_name)
         if publication is None:
             raise IOError("corrected content was unavailable")
-        folders, _ = _publish.sharepoint_relative_path(source_path, filename)
-        released_name = publication.get("filename") or filename
+        folders, _ = _publish.sharepoint_relative_path(source_path, source_name)
+        released_name = publication.get("filename") or source_name
         published_at = core.store.record_publish(
             scan_id, filename, published_url=publication.get("url"))
         core.store.record_release_document(release_id, owner, {
@@ -1900,7 +1901,8 @@ def _discover_norm_row(it: dict) -> dict:
     resumed scan whose early sites are missing metadata the late ones have, which reads as a
     tenant that labels some sites and not others.
     """
-    return {"file": it["name"], "drive_file_id": it.get("id"), "mime": it.get("mime"),
+    return {"file": it["name"], "source_name": it.get("source_name") or it["name"],
+            "drive_file_id": it.get("id"), "mime": it.get("mime"),
             "path": it.get("path"), "checksum": it.get("checksum"),
             "drive_id": it.get("driveId"),
             # WHICH SharePoint site and library this document came from. Carried on the
@@ -1927,7 +1929,8 @@ def _discover_inventory_row(it: dict) -> dict:
     """One normalised record as the scan_inventory row add_inventory persists. See
     _discover_norm_row for why this is a function rather than a comprehension."""
     import classify as _cls
-    return {"file": it["file"], "drive_file_id": it.get("drive_file_id"),
+    return {"file": it["file"], "source_name": it.get("source_name") or it["file"],
+            "drive_file_id": it.get("drive_file_id"),
             "mime": it.get("source_mime"), "size_kb": it.get("size_kb"),
             "doc_class": _cls.classify_from_metadata(it["file"], it.get("source_mime"))["doc_class"],
             "checksum": it.get("checksum"), "path": it.get("path"),

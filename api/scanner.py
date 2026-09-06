@@ -320,6 +320,7 @@ def _dedupe_inventory_files(rows: list[dict]) -> None:
     seen: dict[str, int] = {}
     for r in rows:
         name = r.get("file") or ""
+        r.setdefault("source_name", name)
         n = seen.get(name, 0)
         seen[name] = n + 1
         if n:
@@ -3225,7 +3226,7 @@ def _sp_file_from_inventory_row(row: dict) -> dict:
     """
     size_kb = row.get("size_kb")
     hashes = {"quickXorHash": row["checksum"]} if row.get("checksum") else {}
-    out = {"id": row.get("drive_file_id"), "name": row.get("file"),
+    out = {"id": row.get("drive_file_id"), "name": row.get("source_name") or row.get("file"),
            "file": {"mimeType": row.get("mime"), "hashes": hashes},
            "createdDateTime": row.get("created_at"),
            "lastModifiedDateTime": row.get("source_modified"),
@@ -3543,14 +3544,15 @@ def _dedupe_names(items: list[dict]) -> list[dict]:
     out = []
     for it in items:
         name = it["name"]
+        item = {**it, "source_name": it.get("source_name") or name}
         n = seen.get(name, 0)
         seen[name] = n + 1
         if n == 0:
-            out.append(it)
+            out.append(item)
         else:
             stem, dot, ext = name.rpartition(".")
             disambiguated = f"{stem or name} ({n}){dot}{ext}" if dot else f"{name} ({n})"
-            out.append({**it, "name": disambiguated})
+            out.append({**item, "name": disambiguated})
     return out
 
 
