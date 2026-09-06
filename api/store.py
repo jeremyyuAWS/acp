@@ -9892,6 +9892,7 @@ class Store:
     # display. Extend by design amendment, not in passing.
     ORCHESTRATION_EVENT_KINDS = frozenset({
         "job.submitted", "job.eligible", "job.claimed", "job.stage_started", "job.stage_completed",
+        "job.stage_failed", "job.stage_cancelled",
         "job.completed", "job.cancel_requested", "job.cancelled", "job.failed",
         "job.retry_scheduled", "job.retry_started", "job.lease_expired", "job.reclaimed",
         "job.dead_lettered", "job.zombie_write_suppressed",
@@ -9934,6 +9935,7 @@ class Store:
     _ORCH_DETAIL_MAX_BYTES = 2048
 
     def append_orchestration_event(self, *, owner_email: str, kind: str,
+                                   event_id: str | None = None,
                                    occurred_at: str | None = None, scan_id: str | None = None,
                                    job_id: str | None = None, job_type: str | None = None,
                                    attempt: int | None = None, workflow: str | None = None,
@@ -9994,12 +9996,13 @@ class Store:
                 if len(raw.encode("utf-8")) > self._ORCH_DETAIL_MAX_BYTES:
                     raw = _json.dumps({"truncated": True, "original_size": len(raw.encode("utf-8"))})
                 payload = raw
-        event_id = uuid.uuid4().hex
+        event_id = event_id or uuid.uuid4().hex
         sql = ("INSERT INTO orchestration_events "
                "(event_id,occurred_at,owner_email,scan_id,job_id,job_type,attempt,workflow,stage,"
                "kind,severity,worker_id,replica_id,revision_name,correlation_id,provider,"
                "error_class,duration_ms,detail_json,schema_version) "
-               "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)")
+               "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+               "ON CONFLICT(event_id) DO NOTHING")
         try:
             with self._db.cursor() as cur:
                 self._db.execute(cur, sql, (
@@ -10007,7 +10010,7 @@ class Store:
                     stage, kind, severity, worker_id, replica_id, revision_name, correlation_id,
                     provider, error_class, duration_ms, payload,
                     self._ORCH_EVENT_SCHEMA_VERSION))
-            return event_id
+            return event_id if (getattr(cur, "rowcount", 0) or 0) > 0 else None
         except Exception:
             return None
 
@@ -10069,6 +10072,64 @@ class Store:
             else:
                 r["detail"] = None
             r.pop("detail_json", None)
+        return rows
+
+    def list_workflow_stage_events(self, *, recent_hours: int = 24, limit: int = 5000) -> list[dict]:
+        """Durable workflow-stage transitions for the Live Ops projection, oldest first.
+
+        Unlike the general operational feed's small mixed-event window, this read selects only
+        stage transitions. Completed stages therefore remain available after their queue rows
+        fall out of admin_live_activity's recent tail. The scan join adds source without putting
+        it into event detail, and owner_email remains the tenant boundary used by the route.
+        """
+        from datetime import datetime, timedelta, timezone
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, recent_hours))).isoformat()
+        try:
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "SELECT e.*,s.source FROM orchestration_events e "
+                    "LEFT JOIN scan_runs s ON s.id=e.scan_id "
+                    "WHERE e.kind IN ('job.stage_started','job.stage_completed',"
+                    "'job.stage_failed','job.stage_cancelled') "
+                    "AND e.occurred_at>=%s "
+                    "ORDER BY e.occurred_at DESC,e.event_id DESC LIMIT %s", (cutoff, int(limit)))
+                rows = self._db.fetchall(cur)
+                # Discover predates the stage-event emitter, but already owns an idempotent,
+                # durable completion fact: scan_runs.discovered_at. Project that fact into the
+                # same contract so the first card does not disappear while Assess is still live.
+                self._db.execute(cur,
+                    "SELECT id,owner_email,source,started_at,discovered_at,files FROM scan_runs "
+                    "WHERE discovered_at IS NOT NULL AND discovered_at>=%s "
+                    "ORDER BY discovered_at DESC LIMIT %s", (cutoff, int(limit)))
+                discoveries = self._db.fetchall(cur)
+        except Exception:
+            return []
+        import json as _json
+        for row in rows:
+            raw = row.get("detail_json")
+            try:
+                row["detail"] = _json.loads(raw) if raw else None
+            except (TypeError, ValueError):
+                row["detail"] = None
+            row.pop("detail_json", None)
+        completed_discoveries = {(str(row.get("scan_id")), str(row.get("stage"))) for row in rows
+                                 if row.get("kind") == "job.stage_completed"}
+        for scan in discoveries:
+            key = (str(scan.get("id")), "discover")
+            if key in completed_discoveries:
+                continue
+            correlation = f"{scan['id']}:discover"
+            common = {"owner_email": scan.get("owner_email"), "scan_id": scan["id"],
+                      "workflow": scan["id"], "stage": "discover",
+                      "correlation_id": correlation, "source": scan.get("source"),
+                      "attempt": 1, "detail": {"documents": int(scan.get("files") or 0)}}
+            rows.extend([
+                {**common, "event_id": self._stage_event_id(scan["id"], "discover", correlation, "started"),
+                 "kind": "job.stage_started", "occurred_at": scan.get("started_at")},
+                {**common, "event_id": self._stage_event_id(scan["id"], "discover", correlation, "completed"),
+                 "kind": "job.stage_completed", "occurred_at": scan.get("discovered_at")},
+            ])
+        rows.sort(key=lambda row: (str(row.get("occurred_at") or ""), str(row.get("event_id") or "")))
         return rows
 
     # Columns upsert_worker_instance may write. A whitelist, not the caller's kwarg names taken
@@ -10358,10 +10419,114 @@ class Store:
                     (job_id, job_type, _json.dumps(payload), priority, now, batch_id,
                      scan_id, now, now))
                 job_ids.append(job_id)
+        self._record_stage_started(scan_id, stage, batch_id, job_type, len(job_ids))
         return {"batch_id": batch_id, "job_ids": job_ids, "reused": False,
                 # Uniform shape with the reuse/revive path above, so a caller can read `requeued`
                 # without knowing which branch answered it.
                 "requeued": 0, "statuses": ["queued"] * len(job_ids)}
+
+    @staticmethod
+    def _stage_event_id(scan_id: str, stage: str, batch_id: str, transition: str) -> str:
+        """Stable event identity: replaying a stage transition cannot append it twice."""
+        import hashlib as _hashlib
+        return _hashlib.sha256(
+            f"workflow-stage:{scan_id}:{stage}:{batch_id}:{transition}".encode()
+        ).hexdigest()[:32]
+
+    def _stage_owner(self, scan_id: str) -> str | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT owner_email FROM scan_runs WHERE id=%s", (scan_id,))
+            row = self._db.fetchone(cur)
+        return (row or {}).get("owner_email")
+
+    def _record_stage_started(self, scan_id: str, stage: str, batch_id: str,
+                              job_type: str, documents: int) -> None:
+        """Best-effort durable start marker, idempotent for one stage execution."""
+        owner = self._stage_owner(scan_id)
+        if not owner:
+            return
+        self.append_orchestration_event(
+            event_id=self._stage_event_id(scan_id, stage, batch_id, "started"),
+            owner_email=owner, kind="job.stage_started", scan_id=scan_id,
+            job_type=job_type, workflow=scan_id, stage=stage, correlation_id=batch_id,
+            detail={"documents": documents, "stage_execution_id": batch_id})
+
+    _BATCH_JOB_STAGES = {
+        "scan_assess": "assess", "assess_trace": "assess",
+        "remediate_file": "remediate", "rescore_file": "remediate",
+        "apply_approved_values": "remediate", "publish_file": "release",
+    }
+
+    def _record_stage_completed_if_ready(self, job: dict | None) -> None:
+        """Emit one completion after every job in a durable stage batch succeeded.
+
+        The event id is deterministic and the events table primary key is the concurrency
+        fence. Two workers finishing the last documents can both observe readiness, but only
+        one row can land. Dead/cancelled batches deliberately do not claim completion; if their
+        rows are revived by enqueue_stage_batch, the eventual successful retry completes the
+        same stage execution exactly once.
+        """
+        if not job or not job.get("scan_id") or not job.get("batch_id"):
+            return
+        stage = self._BATCH_JOB_STAGES.get(job.get("type"))
+        if not stage:
+            return
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS total, "
+                "SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done "
+                "FROM jobs WHERE scan_id=%s AND batch_id=%s",
+                (job["scan_id"], job["batch_id"]))
+            counts = self._db.fetchone(cur) or {}
+        total = int(counts.get("total") or 0)
+        done = int(counts.get("done") or 0)
+        if not total or done != total:
+            return
+        owner = self._stage_owner(job["scan_id"])
+        if not owner:
+            return
+        self.append_orchestration_event(
+            event_id=self._stage_event_id(job["scan_id"], stage, job["batch_id"], "completed"),
+            owner_email=owner, kind="job.stage_completed", scan_id=job["scan_id"],
+            job_id=job.get("id"), job_type=job.get("type"), attempt=job.get("attempts"),
+            workflow=job["scan_id"], stage=stage, correlation_id=job["batch_id"],
+            detail={"documents": total, "stage_execution_id": job["batch_id"]})
+
+    def _record_stage_terminal_if_ready(self, job: dict | None) -> None:
+        """Record a failed/cancelled batch once every document has reached a terminal state."""
+        if not job or not job.get("scan_id") or not job.get("batch_id"):
+            return
+        stage = self._BATCH_JOB_STAGES.get(job.get("type"))
+        if not stage:
+            return
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS total,"
+                "SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done,"
+                "SUM(CASE WHEN status='dead' THEN 1 ELSE 0 END) AS dead,"
+                "SUM(CASE WHEN status='cancelled' THEN 1 ELSE 0 END) AS cancelled,"
+                "SUM(CASE WHEN status IN ('queued','running') THEN 1 ELSE 0 END) AS active "
+                "FROM jobs WHERE scan_id=%s AND batch_id=%s", (job["scan_id"], job["batch_id"]))
+            counts = self._db.fetchone(cur) or {}
+        if int(counts.get("active") or 0) or not int(counts.get("total") or 0):
+            return
+        dead, cancelled = int(counts.get("dead") or 0), int(counts.get("cancelled") or 0)
+        if not dead and not cancelled:
+            return
+        outcome = "failed" if dead else "cancelled"
+        owner = self._stage_owner(job["scan_id"])
+        if not owner:
+            return
+        self.append_orchestration_event(
+            event_id=self._stage_event_id(job["scan_id"], stage, job["batch_id"], outcome),
+            owner_email=owner, kind=f"job.stage_{outcome}", scan_id=job["scan_id"],
+            job_id=job.get("id"), job_type=job.get("type"), attempt=job.get("attempts"),
+            workflow=job["scan_id"], stage=stage, correlation_id=job["batch_id"],
+            error_class=(job.get("error_class")
+                         if job.get("error_class") in self.ERROR_CLASS_VOCABULARY
+                         else "unknown") if outcome == "failed" else "cancelled",
+            detail={"documents": int(counts.get("total") or 0), "completed": int(counts.get("done") or 0),
+                    "failed": dead, "cancelled": cancelled, "stage_execution_id": job["batch_id"]})
 
     def get_job(self, job_id: str) -> dict | None:
         with self._db.cursor() as cur:
@@ -10555,6 +10720,7 @@ class Store:
         for the later one. Both are REQUIRED keyword arguments, deliberately — an optional
         guard is one a future caller forgets, silently. Pinned by
         tests/test_outcome_claim_ownership.py."""
+        job = self.get_job(job_id)
         scrubbed = self._scrub_payload_secrets(job_id)
         with self._db.cursor() as cur:
             if scrubbed is not None:
@@ -10570,6 +10736,8 @@ class Store:
             won = (getattr(cur, "rowcount", 0) or 0) > 0
         if not won:
             print(f"[acp] complete_job: job {job_id} already terminal — zombie-worker no-op", flush=True)
+        else:
+            self._record_stage_completed_if_ready(job)
         return won
 
     def request_job_cancellation(self, job_id: str) -> bool:
@@ -10605,6 +10773,7 @@ class Store:
         matters more since #1079 — cancellation now reaches the pool threads, so more attempts
         can raise it and arrive here.
         Returns True if this call's write applied, False if it did not."""
+        job = self.get_job(job_id)
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "UPDATE jobs SET status='cancelled', updated_at=%s "
@@ -10613,6 +10782,8 @@ class Store:
             won = (getattr(cur, "rowcount", 0) or 0) > 0
         if not won:
             print(f"[acp] mark_job_cancelled: job {job_id} already terminal — zombie-worker no-op", flush=True)
+        else:
+            self._record_stage_terminal_if_ready(job)
         return won
 
     # A job that reached a terminal state because someone STOPPED it, not because it failed.
@@ -11035,6 +11206,7 @@ class Store:
                 except Exception:
                     # best-effort — the dead-letter itself must still be recorded
                     swallowed("store.fail_job: rolling back the fail_job transaction failed")
+            self._record_stage_terminal_if_ready({**job, "error_class": error_class})
             return "dead"
         run_after = (now + timedelta(seconds=backoff_seconds)).isoformat()
         # Same reclaimed-job guard as the dead-letter branch above: a zombie's late transient

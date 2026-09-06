@@ -33,28 +33,78 @@ export function useLiveSnapshot(scanId, { active = true, intervalMs = 2000 } = {
       setSnapshot(null)
     }
     let cancelled = false
+    let timer = null
+    let unchanged = 0
+    let failures = 0
+    let lastContent = null
+
+    // Assess is an authenticated snapshot feed rather than EventSource. Keep it close to live
+    // while work is moving, but do not make every open browser re-run the same database reads at
+    // full speed while a queue is idle. Discover and Remediate retain their push streams; this is
+    // their proxy-safe counterpart for Assess.
+    const MAX_IDLE_MS = Math.max(intervalMs, 8000)
+    const contentKey = (s) => {
+      if (!s || typeof s !== 'object') return String(s)
+      const { generated_at: _generatedAt, _live: _transport, ...content } = s
+      try { return JSON.stringify(content) } catch { return String(s.sequence ?? '') }
+    }
+
+    const schedule = (delay) => {
+      clearTimeout(timer)
+      if (cancelled) return
+      // A hidden tab gets one immediate refresh when it returns; it does not need to keep a
+      // server and database busy while nobody can see the animation.
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      timer = setTimeout(poll, delay)
+    }
 
     const poll = async () => {
       try {
         const s = await getScanLive(scanId)
         if (cancelled || !s) return
+        failures = 0
+        const key = contentKey(s)
+        unchanged = key === lastContent ? unchanged + 1 : 0
+        lastContent = key
         if (isNewerFrame(seqRef.current, s.sequence)) {
           if (typeof s.sequence === 'number') seqRef.current = s.sequence
-          setSnapshot(s)
+          setSnapshot({ ...s, _live: { mode: 'live', measuredAt: Date.now() } })
+        } else {
+          // Queue activity can change without the completed-document sequence increasing. Keep
+          // the newest authoritative frame; the sequence guard only rejects genuinely older data.
+          const current = seqRef.current
+          if (typeof s.sequence !== 'number' || current == null || s.sequence === current) {
+            setSnapshot({ ...s, _live: { mode: 'live', measuredAt: Date.now() } })
+          }
         }
       } catch {
-        /* transient — keep the last good snapshot rather than blanking the panel */
+        failures += 1
+        // Preserve the last good values and make the interruption visible. The next successful
+        // response replaces this marker without making the card disappear.
+        setSnapshot((previous) => previous
+          ? { ...previous, _live: { ...(previous._live || {}), mode: 'reconnecting' } }
+          : previous)
+      } finally {
+        if (!cancelled) {
+          const idleDelay = Math.min(MAX_IDLE_MS, intervalMs * (2 ** Math.min(unchanged, 2)))
+          const retryDelay = Math.min(MAX_IDLE_MS, intervalMs * (2 ** Math.min(failures, 2)))
+          schedule(failures ? retryDelay : idleDelay)
+        }
       }
     }
 
     poll()
-    const iv = setInterval(poll, intervalMs)
     // Snap to current the moment a backgrounded tab is shown again (don't wait out the interval).
-    const onVisible = () => { if (typeof document !== 'undefined' && document.visibilityState === 'visible') poll() }
+    const onVisible = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        clearTimeout(timer)
+        poll()
+      }
+    }
     if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisible)
     return () => {
       cancelled = true
-      clearInterval(iv)
+      clearTimeout(timer)
       if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisible)
     }
   }, [scanId, active, intervalMs])

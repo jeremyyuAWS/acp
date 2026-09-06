@@ -1495,6 +1495,8 @@ def _admin_activity_snapshot() -> dict:
     running_by_type = _running_by_type() if callable(_running_by_type) else None
     _list_events = getattr(core.store, "list_orchestration_events", None)
     lifecycle_events = _list_events(limit=200) if callable(_list_events) else []
+    _list_stage_events = getattr(core.store, "list_workflow_stage_events", None)
+    stage_events = _list_stage_events() if callable(_list_stage_events) else lifecycle_events
     for role, row in per_role.items():
         stage = "discover" if role == "discovery" else role
         if running_by_type is None:
@@ -1580,7 +1582,7 @@ def _admin_activity_snapshot() -> dict:
         pressure = "busy"
     else:
         pressure = "healthy"
-    workflows = _workflow_rows(runs)
+    workflows = _workflow_rows(runs, stage_events)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "runs": runs,
@@ -1627,7 +1629,7 @@ def _admin_activity_snapshot() -> dict:
     }
 
 
-def _workflow_rows(runs: list[dict]) -> list[dict]:
+def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None) -> list[dict]:
     """Turn stage aggregates into the durable workflow contract used by Live Ops.
 
     ``scan_id`` is already the parent identity stamped on every queue record in the pipeline.
@@ -1635,8 +1637,47 @@ def _workflow_rows(runs: list[dict]) -> list[dict]:
     identity that could drift.  Stage ids are deterministic because the current queue model has
     one aggregate stage per scan; individual attempts remain inspectable in the stage detail.
     """
+    # Event-only stages are projection inputs, not queue rows. Work on a copy so returning the
+    # canonical workflow history cannot silently widen the endpoint's separate `runs` contract.
+    runs = list(runs)
     grouped: dict[str, dict] = {}
+    durable_stages: dict[tuple[str, str], dict] = {}
+    for event in lifecycle_events or []:
+        if event.get("kind") not in ("job.stage_started", "job.stage_completed",
+                                      "job.stage_failed", "job.stage_cancelled"):
+            continue
+        key = (str(event.get("scan_id") or ""), str(event.get("stage") or ""))
+        if not all(key):
+            continue
+        state = durable_stages.setdefault(key, {})
+        transition = event["kind"].removeprefix("job.stage_")
+        previous = state.get(transition)
+        if not previous or (str(event.get("occurred_at") or ""), str(event.get("event_id") or "")) > \
+                (str(previous.get("occurred_at") or ""), str(previous.get("event_id") or "")):
+            state[transition] = event
+    represented = {(str(run.get("scan_id") or ""), str(run.get("stage") or "")) for run in runs}
+    # A terminal stage remains part of the flow after its queue rows leave the recent tail. Only
+    # a terminal event can be reconstructed without live jobs; a lone old start is not evidence that
+    # work is still active, so it is deliberately not synthesized.
+    for key, state in durable_stages.items():
+        terminal = max((event for name, event in state.items() if name != "started"),
+                       key=lambda event: str(event.get("occurred_at") or ""), default=None)
+        if key in represented or not terminal:
+            continue
+        completed = terminal
+        started = state.get("started") or {}
+        detail = completed.get("detail") or {}
+        runs.append({
+            "scan_id": key[0], "stage": key[1], "owner": completed.get("owner_email"),
+            "source": completed.get("source") or "unknown",
+            "status": "recent" if completed.get("kind") == "job.stage_completed" else "failed",
+            "running": 0, "queued": 0, "failed": 0,
+            "completed": int(detail.get("documents") or 0),
+            "total": int(detail.get("documents") or 0), "max_attempts_seen": completed.get("attempt"),
+            "started_at": started.get("occurred_at"), "updated_at": completed.get("occurred_at"),
+        })
     stage_order = {"discover": 0, "assess": 1, "remediate": 2, "release": 3}
+    now = datetime.now(timezone.utc)
     for run in runs:
         scan_id = str(run.get("scan_id") or "").strip()
         stage = str(run.get("stage") or "").strip()
@@ -1661,9 +1702,36 @@ def _workflow_rows(runs: list[dict]) -> list[dict]:
         stage_status = ("running" if int(run.get("running") or 0) else
                         "waiting" if int(run.get("queued") or 0) else
                         "failed" if int(run.get("failed") or 0) else "completed")
+        durable = durable_stages.get((scan_id, stage), {})
+        durable_start = durable.get("started") or {}
+        durable_terminal = max((event for name, event in durable.items() if name != "started"),
+                               key=lambda event: str(event.get("occurred_at") or ""), default={})
+        durable_completion = durable_terminal if durable_terminal.get("kind") == "job.stage_completed" else {}
+        durable_failure = durable_terminal if durable_terminal.get("kind") in ("job.stage_failed", "job.stage_cancelled") else {}
+        if durable_failure and not int(run.get("running") or 0) and not int(run.get("queued") or 0):
+            stage_status = "cancelled" if durable_failure.get("kind") == "job.stage_cancelled" else "failed"
+        heartbeat = run.get("current_job_heartbeat_at")
+        stalled = False
+        if stage_status == "running" and heartbeat:
+            try:
+                beat = datetime.fromisoformat(str(heartbeat).replace("Z", "+00:00"))
+                if beat.tzinfo is None:
+                    beat = beat.replace(tzinfo=timezone.utc)
+                stalled = (now - beat).total_seconds() > 360
+            except (TypeError, ValueError):
+                stalled = False
+        # A stage-completed event is the authoritative once-only transition for new executions.
+        # Queue aggregation remains the rolling-deploy fallback for jobs completed before the
+        # emitter existed, and continues to provide live document counts.
+        if durable_completion and stage_status == "completed":
+            completed_at = durable_completion.get("occurred_at")
+        else:
+            completed_at = run.get("updated_at") if stage_status == "completed" else None
         workflow["stages"].append({
             "stage": stage,
-            "stage_run_id": f"{scan_id}:{stage}",
+            "stage_run_id": (durable_terminal.get("correlation_id")
+                             or durable_start.get("correlation_id")
+                             or f"{scan_id}:{stage}"),
             "attempt": max(1, int(run.get("max_attempts_seen") or 0)),
             "status": stage_status,
             "total": int(run.get("total") or 0),
@@ -1671,10 +1739,16 @@ def _workflow_rows(runs: list[dict]) -> list[dict]:
             "active": int(run.get("running") or 0),
             "waiting": int(run.get("queued") or 0),
             "failed": int(run.get("failed") or 0),
-            "started_at": run.get("started_at"),
-            "completed_at": run.get("updated_at") if stage_status == "completed" else None,
+            "started_at": durable_start.get("occurred_at") or run.get("started_at"),
+            "completed_at": completed_at,
+            "completion_recorded": bool(durable_completion),
+            "terminal_outcome": ("failed" if durable_failure.get("kind") == "job.stage_failed" else
+                                 "cancelled" if durable_failure else
+                                 "completed" if durable_completion else None),
+            "error_class": durable_failure.get("error_class") or run.get("last_error_class"),
             "latest_progress_at": run.get("updated_at"),
-            "waiting_reason": None,
+            "stalled": stalled,
+            "waiting_reason": "worker_heartbeat_stale" if stalled else None,
             "next_retry_at": None,
         })
     for workflow in grouped.values():

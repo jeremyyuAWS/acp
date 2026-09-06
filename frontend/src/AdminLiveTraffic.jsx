@@ -7,7 +7,7 @@ import LiveOpsDrawer from './LiveOpsDrawer.jsx'
 import LiveOpsCostSummary from './LiveOpsCostSummary.jsx'
 import LiveOpsAiSummary from './LiveOpsAiSummary.jsx'
 import { appendSample, deriveEvents, formatDuration, mergeEvents, queueCapacityGauge,
-  durableRunEvents, sampleForNode, secondsSince } from './liveOpsDrawer.js'
+  durableRunEvents, sampleForNode, secondsSince, workflowStageRuns } from './liveOpsDrawer.js'
 
 ensureResizeObserver(typeof window === 'undefined' ? globalThis : window)
 
@@ -274,7 +274,9 @@ function RunNode({ data }) {
   const accent = data.workflowColor || cfg.color
   const pct = data.run.total ? Math.round((data.run.completed / data.run.total) * 100) : 0
   const statusLabel = data.run.status === 'recent' ? 'Complete'
-    : data.run.status === 'failed' ? 'Failed' : `${pct}%`
+    : data.run.status === 'failed' ? 'Failed'
+      : data.run.status === 'cancelled' ? 'Cancelled'
+        : data.run.stalled ? 'Stalled' : `${pct}%`
   return <div title="Select for live run details; double-click to open charts"
     style={{ width: 225, padding: 12,
       ...tileStyle('run', accent),
@@ -575,7 +577,7 @@ export function flowEdge({ id, source, target, color, active = false, detail, ..
 }
 
 export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = null, connection = 'connecting') {
-  const runs = snapshot?.runs || []
+  const runs = workflowStageRuns(snapshot)
   const services = workerServiceRows(snapshot?.summary || {})
   const serviceByStage = new Map(services.map((service) => [service.stage, service]))
   const sourceKinds = ['drive', 'sharepoint']
