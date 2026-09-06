@@ -316,6 +316,9 @@ function RunNode({ data }) {
       <b>{cfg.label}</b><span style={{ color: ['attention', 'stalled'].includes(operationalState) ? 'var(--error-fg)' : cfg.color,
         fontWeight: 700 }}>{statusLabel}</span>
     </div>
+    <div className="muted" style={{ fontSize: 10, marginTop: 2 }}>
+      Workflow revision {Math.max(1, Number(data.run.workflow_revision || 1))}
+    </div>
     <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{data.run.owner}</div>
     <div style={{ height: 5, background: 'var(--line)', borderRadius: 4, margin: '9px 0 7px' }}>
       <div style={{ width: `${pct}%`, height: '100%', background: cfg.color, borderRadius: 4 }} />
@@ -343,7 +346,9 @@ function WorkflowNode({ data }) {
     background: 'var(--surface)', boxShadow: '0 2px 8px rgba(24,20,28,.07)' }}>
     <div style={{ color: data.color, fontSize: 9.5, fontWeight: 800, letterSpacing: '.09em' }}>WORKFLOW</div>
     <b style={{ display: 'block', marginTop: 4, overflowWrap: 'anywhere' }}>{data.owner}</b>
-    <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>{data.source}</div>
+    <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+      Revision {data.workflowRevision} · {data.source}
+    </div>
     <div style={{ fontSize: 11, marginTop: 9, fontWeight: 700 }}>{data.status}</div>
     <div className="muted" style={{ fontSize: 10, marginTop: 3 }}>{data.workflowId}</div>
     <Handle type="source" position={Position.Right} />
@@ -549,6 +554,9 @@ export function infrastructureDetail(data, snapshot = {}, capacity = null) {
       facts: [['Queued jobs', `${summary.queued || 0}`], ['Users waiting', `${summary.waiting_users || 0}`], ['Scheduling', 'Tenant-fair'], ['Pressure', PRESSURE[summary.pressure]?.label || PRESSURE.healthy.label]] },
     output: { title: 'Durable outputs and audit trail', subtitle: 'Corrected copies, conformance results, and provenance', color: data.color,
       facts: [['Storage class', 'Durable application storage'], ['Source safety', 'Original source documents remain unchanged'], ['Traceability', 'Run, rule, decision, and validation evidence retained']] },
+    workflow: { title: `Workflow revision ${data.workflowRevision}`, subtitle: 'One continuous Discover, Assess, Remediate, and Release lineage', color: data.color,
+      facts: [['Owner', data.owner], ['Source', data.source], ['Current state', data.status],
+        ['Current revision', `${data.workflowRevision}`], ['Stable workflow ID', data.workflowId]] },
   }
   return details[data.kind] || { title: data.label, subtitle: data.detail, color: data.color, facts: [] }
 }
@@ -565,6 +573,9 @@ export function runFacts(run = {}, nowMs = Date.now()) {
   return [
     ['User', run.owner || 'Not reported'],
     ['Source', run.source || 'Not reported'],
+    ['Workflow revision', `${Math.max(1, Number(run.workflow_revision || 1))}`],
+    ['Workflow lineage', run.workflow_id || run.scan_id || 'Not reported'],
+    ['Revision scan', run.scan_id || 'Not reported'],
     ['Progress', `${run.completed ?? 0} of ${run.total ?? 0}`],
     ['Queue', `${run.running ?? 0} active · ${run.queued ?? 0} waiting`],
     ['Status', run.status === 'recent' ? 'Recently completed'
@@ -746,11 +757,12 @@ export function trafficGraphForTab(graph = { nodes: [], edges: [] }, tab = 'infr
       && (!filter?.source || node.data?.run?.source === filter.source)
       && (!filter?.state || filter.state === 'all'
         || runOperationalState(node.data?.run) === filter.state))
-      .map((node) => node.data?.run?.scan_id))
-    const runs = filter ? allRuns.filter((node) => matchingIds.has(node.data?.run?.scan_id)) : allRuns
+      .map((node) => node.data?.run?.workflow_id || node.data?.run?.scan_id))
+    const runs = filter ? allRuns.filter((node) => matchingIds.has(
+      node.data?.run?.workflow_id || node.data?.run?.scan_id)) : allRuns
     const byWorkflow = new Map()
     for (const node of runs) {
-      const id = node.data?.run?.scan_id
+      const id = node.data?.run?.workflow_id || node.data?.run?.scan_id
       if (!byWorkflow.has(id)) byWorkflow.set(id, [])
       byWorkflow.get(id).push(node)
     }
@@ -762,21 +774,26 @@ export function trafficGraphForTab(graph = { nodes: [], edges: [] }, tab = 'infr
     })
     const nodes = []
     const edges = []
-    const stageX = { discover: 310, assess: 580, remediate: 850, release: 1120 }
     ordered.forEach(([workflowId, workflowRuns], lane) => {
       const y = 45 + lane * 185
       const color = workflowColor(workflowId)
       const first = workflowRuns[0]?.data.run || {}
       const active = workflowRuns.filter((node) => node.data.run.status === 'active')
       const failed = workflowRuns.some((node) => node.data.run.status === 'failed')
+      const workflowRevision = Math.max(...workflowRuns.map((node) =>
+        Math.max(1, Number(node.data.run.workflow_revision || 1))))
       nodes.push({ id: `workflow:${workflowId}`, type: 'workflow', position: { x: 25, y },
-        ariaLabel: `Workflow ${workflowId}, ${first.owner || 'owner not reported'}, ${active.length ? 'active' : 'recently completed'}.`,
-        data: { workflowId, owner: first.owner || 'Owner not reported', source: first.source || 'Source not reported',
+        ariaLabel: `Workflow ${workflowId}, revision ${workflowRevision}, ${first.owner || 'owner not reported'}, ${active.length ? 'active' : 'recently completed'}.`,
+        data: { kind: 'workflow', workflowId, owner: first.owner || 'Owner not reported', source: first.source || 'Source not reported',
+          workflowRevision,
           status: active.length ? `${active.at(-1).data.run.stage} in progress`
             : failed ? 'Needs attention' : 'Recently completed', color } })
-      const stages = workflowRuns.sort((a, b) => (stageX[a.data.run.stage] || 1390) - (stageX[b.data.run.stage] || 1390))
+      const stageOrder = { discover: 0, assess: 1, remediate: 2, release: 3 }
+      const stages = workflowRuns.sort((a, b) =>
+        Number(a.data.run.workflow_revision || 1) - Number(b.data.run.workflow_revision || 1)
+        || (stageOrder[a.data.run.stage] ?? 99) - (stageOrder[b.data.run.stage] ?? 99))
       stages.forEach((node, index) => {
-        nodes.push({ ...node, position: { x: stageX[node.data.run.stage] || 1390, y },
+        nodes.push({ ...node, position: { x: 310 + index * 270, y },
           data: { ...node.data, workflowColor: color } })
         const prior = index ? stages[index - 1].id : `workflow:${workflowId}`
         const live = Number(node.data.run.running || 0) > 0 || Number(node.data.run.queued || 0) > 0

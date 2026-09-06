@@ -2222,6 +2222,8 @@ export function workflowStageRuns(snapshot = {}) {
       const held = rows.get(key)
       const durable = {
         scan_id: workflow.scan_id,
+        workflow_id: workflow.workflow_id || workflow.scan_id,
+        workflow_revision: Number(workflow.workflow_revision || 1),
         owner: workflow.owner_display_name,
         source: workflow.source,
         stage: stage.stage,

@@ -3,7 +3,7 @@ import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createTestRoot, unmountAll } from './testRoots.js'
-import WorkflowContinuityBanner, { primaryActiveWorkflow } from './WorkflowContinuityBanner'
+import WorkflowContinuityBanner, { primaryActiveWorkflow, workflowRevisionLabel } from './WorkflowContinuityBanner'
 
 afterEach(unmountAll)
 
@@ -26,10 +26,16 @@ describe('workflow continuity', () => {
   it('returns to existing work without presenting a start action', () => {
     const onReturn = vi.fn()
     const container = render({ currentView: 'overview', onReturn, onLiveOps: () => {},
-      workflow: { stage: 'assess', source: 'sharepoint', running: 2, queued: 12 } })
+      workflow: { stage: 'assess', source: 'sharepoint', workflow_revision: 3, running: 2, queued: 12 } })
     expect(container.textContent).not.toMatch(/start/i)
+    expect(container.textContent).toContain('Workflow revision 3')
+    expect(container.querySelector('button').textContent).toBe('Continue current Assessment')
     act(() => container.querySelector('button').click())
     expect(onReturn).toHaveBeenCalledWith('assess')
+  })
+
+  it('uses revision one for legacy active-workflow responses', () => {
+    expect(workflowRevisionLabel({})).toBe('Workflow revision 1')
   })
 
   it('does not duplicate the status inside its own stage', () => {

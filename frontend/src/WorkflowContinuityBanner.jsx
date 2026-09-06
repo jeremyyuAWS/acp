@@ -10,6 +10,11 @@ export function primaryActiveWorkflow(items = []) {
   })[0] || null
 }
 
+export function workflowRevisionLabel(workflow = {}) {
+  const revision = Math.max(1, Number(workflow.workflow_revision || workflow.revision || 1))
+  return `Workflow revision ${revision}`
+}
+
 export default function WorkflowContinuityBanner({ workflow, currentView, onReturn, onLiveOps }) {
   if (!workflow || workflow.stage === currentView) return null
   const label = LABELS[workflow.stage] || 'Work'
@@ -19,10 +24,10 @@ export default function WorkflowContinuityBanner({ workflow, currentView, onRetu
     <section className="workflow-continuity" aria-live="polite" aria-label="Work still in progress">
       <div>
         <strong>{label} is still running</strong>
-        <span>{workflow.source} · {active} active{queued ? ` · ${queued} waiting` : ''}</span>
+        <span>{workflowRevisionLabel(workflow)} · {workflow.source} · {active} active{queued ? ` · ${queued} waiting` : ''}</span>
       </div>
       <div className="workflow-continuity-actions">
-        <button className="secondary" onClick={() => onReturn(workflow.stage)}>Return to {label}</button>
+        <button className="secondary" onClick={() => onReturn(workflow.stage)}>Continue current {label}</button>
         <button className="link-button" onClick={onLiveOps}>View Live Ops</button>
       </div>
     </section>
