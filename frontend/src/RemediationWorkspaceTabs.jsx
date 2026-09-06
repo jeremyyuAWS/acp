@@ -18,7 +18,7 @@ function storedMode(runId) {
 }
 
 export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snapshot = null,
-  receivedAt = null, connected = false, review, live }) {
+  receivedAt = null, connected = false, events = [], review, live }) {
   // Null means the user has not chosen: the live server facts may still select the best default.
   const [chosen, setChosen] = useState(() => modeFromLocation() || storedMode(runId))
   const liveHeading = useRef(null)
@@ -59,7 +59,7 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
 
   return <>
     <RemediationRunCard snapshot={snapshot} receivedAt={receivedAt} connected={connected}
-      onOpen={() => select('live', { focusPanel: true })} />
+      events={events} onOpen={() => select('live', { focusPanel: true })} />
     <div className="rem-workspace-tabs" role="tablist" aria-label="Remediation workspace">
       <button ref={(node) => { tabs.current[0] = node }} type="button" role="tab"
         id="rem-mode-review" aria-controls="rem-panel-review" aria-selected={mode === 'review'}

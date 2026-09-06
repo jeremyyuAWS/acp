@@ -2206,7 +2206,7 @@ export default function App() {
           the snapshot for the same reason. */}
       {view !== 'remediate' && (
         <RemediationRunCard snapshot={remRun.snapshot} receivedAt={remRun.receivedAt}
-                            connected={remRun.connected}
+                            connected={remRun.connected} events={remRun.events}
                             onOpen={() => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
       )}
 

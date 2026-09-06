@@ -1,6 +1,7 @@
 import { progressBar, etaGate, runHeadline, shouldShowCard } from './remediationRunCard.js'
 import { freshness } from './remediationSnapshot.js'
 import LiveCounter from './LiveCounter.jsx'
+import ActivityPulse from './ActivityPulse.jsx'
 
 // The persistent remediation run card — visible on EVERY tab while a run is live.
 //
@@ -73,7 +74,7 @@ function ProgressBar({ bar }) {
  */
 export default function RemediationRunCard({ snapshot = null, receivedAt = null,
                                              connected = false, throughput = null,
-                                             onOpen = null }) {
+                                             events = [], onOpen = null }) {
   if (!shouldShowCard(snapshot)) return null
 
   const head = runHeadline(snapshot)
@@ -102,6 +103,12 @@ export default function RemediationRunCard({ snapshot = null, receivedAt = null,
           )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 12 }}>
+          {/* The last sixty seconds of durable events, beside the freshness words rather than
+              under the bar. Both answer "is this still moving?" — freshness from the transport,
+              the pulse from what the run recorded — and reading them together is what tells a
+              connected-but-idle run apart from a busy one. It renders nothing when no events
+              landed, so a quiet run does not carry an empty widget across every tab. */}
+          <ActivityPulse events={events} generatedAt={snapshot.generated_at} compact />
           {/* Freshness in WORDS, next to the dot — the dot alone would be colour-only. */}
           <span className="muted" title={fresh.detail}>
             {FRESHNESS_WORDS[fresh.level] || fresh.level}
