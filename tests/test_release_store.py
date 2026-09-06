@@ -96,6 +96,34 @@ def test_release_status_counts_success_failure_and_remaining(isolated_store):
     assert isolated_store.release_status(release["id"], "someone@example.com") is None
 
 
+def test_release_history_is_owner_scoped_and_includes_durable_evidence(isolated_store):
+    owner = "owner@example.com"
+    _scan(isolated_store, "scan-history", owner)
+    _scan(isolated_store, "scan-foreign", "someone@example.com")
+    release = isolated_store.ensure_release_execution(
+        "scan-history", owner, "sharepoint", 2, preferred_folder_name="Finance Release")
+    isolated_store.record_release_root(
+        release["id"], owner, "sharepoint", "graph:finance", "folder-1",
+        "Finance Release", "https://sharepoint.example/finance")
+    isolated_store.record_release_document(release["id"], owner, {
+        "file": "report.pdf", "status": "published", "created": False,
+        "released_relative_path": "Remediated/Finance Release/report.pdf",
+        "corrected_checksum": "a" * 64, "verification": "sha256",
+        "published_at": "2026-09-06T12:00:00Z",
+    })
+    isolated_store.ensure_release_execution(
+        "scan-foreign", "someone@example.com", "sharepoint", 1)
+
+    history = isolated_store.list_release_history(owner)
+
+    assert [row["id"] for row in history] == [release["id"]]
+    assert history[0]["folder_name"] == "Finance Release"
+    assert history[0]["roots"][0]["folder_url"] == "https://sharepoint.example/finance"
+    assert history[0]["documents"][0]["created_result"] == 0
+    assert history[0]["documents"][0]["corrected_checksum"] == "a" * 64
+    assert (history[0]["published"], history[0]["failed"], history[0]["remaining"]) == (1, 0, 1)
+
+
 def test_deleting_a_scan_also_removes_its_release_records(isolated_store):
     _scan(isolated_store, "scan-delete", "owner@example.com")
     release = isolated_store.ensure_release_execution(
