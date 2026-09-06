@@ -63,7 +63,7 @@ describe('the settings panel includes access, worker and AI governance', () => {
     // decision recorded in a diff rather than something that quietly appears — the tab list is
     // the whole navigation of the admin panel.
     expect(tabTexts(await render())).toEqual(
-      ['Owners', 'Users', 'Roles', 'My Data', 'My Scope', 'Worker Configuration', 'AI Governance', 'Review Memory'])
+      ['Owners', 'Users', 'Roles', 'My Data', 'My Scope', 'Worker Configuration', 'Scheduling', 'AI Governance', 'Review Memory'])
   })
 
   it('no longer offers any of the removed ADMIN-ONLY tabs', async () => {
@@ -111,6 +111,22 @@ describe('the Worker Configuration tab', () => {
     await settle()
     expect(c.textContent).toMatch(/Warm capacity/)
     expect(c.textContent).not.toMatch(/Async job queue/)
+  })
+})
+
+describe('the Scheduling tab', () => {
+  it('separates capacity scheduling from scan scheduling and says Azure is not yet changed', async () => {
+    const { container, root } = createTestRoot()
+    await act(async () => { root.render(createElement(Settings, { onClose: () => {}, me: { is_admin: true } })) })
+    await settle()
+    const tab = [...container.querySelectorAll('button[role="tab"]')]
+      .find((b) => b.textContent.trim() === 'Scheduling')
+    await act(async () => { tab.click() })
+    await settle()
+    expect(container.textContent).toMatch(/Capacity scheduling/)
+    expect(container.textContent).toMatch(/scheduled re-scans remain in Monitor/i)
+    expect(container.textContent).toMatch(/do not change live Azure replicas yet/i)
+    expect(container.querySelector('button')?.disabled).toBe(false)
   })
 })
 

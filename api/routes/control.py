@@ -18,6 +18,7 @@ document nobody sees is recoverable, a document the wrong customer sees is not.
 from __future__ import annotations
 
 import os
+import json
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -139,6 +140,148 @@ def estate(request: Request, dept: str = "", owner: str = ""):
 class ReplicaBody(BaseModel):
     min_replicas: int = Field(..., ge=1, le=5,
         description="Minimum warm replicas for the acp-worker Container App (1–5).")
+
+
+# Capacity scheduling is deliberately a DESIRED policy first. Applying it to Azure is a later,
+# separately verified reconciler: a Settings save must never claim it changed live replicas when
+# the queue scalers or fleet budget are unhealthy. The JSON lives in app_settings so it survives
+# restarts and the existing reset paths preserve it with every other platform setting.
+_CAPACITY_SCHEDULE_KEY = "capacity_schedule"
+_CAPACITY_SERVICES = ("web", "discovery", "assess", "remediate", "gpu")
+_CAPACITY_CPU = {"web": 1.0, "discovery": 1.0, "assess": 2.0, "remediate": 2.0, "gpu": 0.0}
+_CAPACITY_DEFAULT = {
+    "enabled": False,
+    "timezone": "America/Los_Angeles",
+    "days": ["mon", "tue", "wed", "thu", "fri"],
+    "start": "06:00",
+    "end": "20:00",
+    "business_hours": {"web": 2, "discovery": 2, "assess": 5, "remediate": 5, "gpu": 1},
+    "off_hours": {"web": 1, "discovery": 1, "assess": 1, "remediate": 1, "gpu": 0},
+    "maximums": {"web": 3, "discovery": 4, "assess": 10, "remediate": 10, "gpu": 1},
+    "version": 0,
+}
+
+
+class CapacityScheduleBody(BaseModel):
+    enabled: bool = False
+    timezone: str = "America/Los_Angeles"
+    days: list[str]
+    start: str
+    end: str
+    business_hours: dict[str, int]
+    off_hours: dict[str, int]
+    maximums: dict[str, int]
+    version: int = Field(..., ge=0)
+
+
+def _capacity_schedule() -> dict:
+    raw = core.store.get_setting(_CAPACITY_SCHEDULE_KEY, "") or ""
+    try:
+        saved = json.loads(raw) if raw else {}
+    except (TypeError, ValueError):
+        saved = {}
+    out = {**_CAPACITY_DEFAULT, **saved}
+    for key in ("business_hours", "off_hours", "maximums"):
+        out[key] = {**_CAPACITY_DEFAULT[key], **(saved.get(key) or {})}
+    return out
+
+
+def _validate_capacity_schedule(policy: dict) -> dict:
+    errors, warnings = [], []
+    try:
+        from zoneinfo import ZoneInfo
+        ZoneInfo(str(policy.get("timezone") or ""))
+    except Exception:
+        errors.append("timezone must be an IANA timezone such as America/Los_Angeles")
+    import re as _re
+    for key in ("start", "end"):
+        if not _re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", str(policy.get(key) or "")):
+            errors.append(f"{key} must use 24-hour HH:MM")
+    days = policy.get("days") or []
+    valid_days = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+    if not days or any(d not in valid_days for d in days) or len(set(days)) != len(days):
+        errors.append("days must contain unique weekday names")
+    if policy.get("start") == policy.get("end"):
+        errors.append("start and end must define a non-empty window")
+
+    for service in _CAPACITY_SERVICES:
+        try:
+            day = int((policy.get("business_hours") or {})[service])
+            night = int((policy.get("off_hours") or {})[service])
+            maximum = int((policy.get("maximums") or {})[service])
+        except (KeyError, TypeError, ValueError):
+            errors.append(f"{service} requires business-hours, off-hours, and maximum values")
+            continue
+        if min(day, night, maximum) < 0 or max(day, night, maximum) > 100:
+            errors.append(f"{service} capacity must be between 0 and 100")
+        if day > maximum or night > maximum:
+            errors.append(f"{service} warm capacity cannot exceed its maximum")
+        if service != "gpu" and night < 1:
+            errors.append(f"{service} must keep at least one off-hours replica")
+
+    maximums = policy.get("maximums") or {}
+    # Price old + new revisions concurrently, matching the real ACA deployment shape. GPU is on
+    # its own workload profile and has 0 in _CAPACITY_CPU, so it is not falsely charged to the
+    # Consumption profile's quota here.
+    cpu_required = round(2 * sum(int(maximums.get(s, 0)) * _CAPACITY_CPU[s]
+                                 for s in _CAPACITY_SERVICES), 2)
+    cpu_limit = float(os.environ.get("ACP_CAPACITY_CPU_LIMIT", "100"))
+    worker_max = sum(int(maximums.get(s, 0)) for s in ("discovery", "assess", "remediate"))
+    db_pool = int(os.environ.get("ACP_DB_MAX_CONN", "2"))
+    db_reserve = int(os.environ.get("ACP_CAPACITY_DB_RESERVE", "30"))
+    db_limit = int(os.environ.get("ACP_CAPACITY_DB_LIMIT", "150"))
+    # Old and new worker revisions can overlap during deployment; price both, plus API/ops reserve.
+    db_required = worker_max * db_pool * 2 + db_reserve
+    if cpu_required > cpu_limit:
+        errors.append(f"maximum fleet needs {cpu_required:g} vCPU; limit is {cpu_limit:g}")
+    if db_required > db_limit:
+        errors.append(f"maximum fleet needs {db_required} database connections including overlap; limit is {db_limit}")
+    if int((policy.get("off_hours") or {}).get("gpu", 0)) == 0:
+        warnings.append("GPU vision may cold-start on the first off-hours request")
+    return {"valid": not errors, "errors": errors, "warnings": warnings,
+            "projection": {"maximum_vcpu": cpu_required, "cpu_limit": cpu_limit,
+                           "database_connections": db_required, "database_limit": db_limit}}
+
+
+def _capacity_schedule_response(policy: dict) -> dict:
+    validation = _validate_capacity_schedule(policy)
+    return {**policy, "effective_mode": "disabled" if not policy.get("enabled") else "scheduled",
+            "applied": False,
+            "application_status": "Saved policy only — Azure reconciliation is not enabled",
+            "validation": validation}
+
+
+@router.get("/control/capacity-schedule")
+def get_capacity_schedule():
+    """Desired capacity schedule. Readable wherever shared worker capacity is readable."""
+    return _capacity_schedule_response(_capacity_schedule())
+
+
+@router.post("/control/capacity-schedule/validate")
+def validate_capacity_schedule(body: CapacityScheduleBody, request: Request):
+    from .system import _require_admin
+    _require_admin(request)
+    return _validate_capacity_schedule(body.model_dump())
+
+
+@router.put("/control/capacity-schedule")
+def put_capacity_schedule(body: CapacityScheduleBody, request: Request):
+    """Persist an audited desired policy; does not mutate Azure until the reconciler ships."""
+    from .system import _require_admin
+    _require_admin(request)
+    current = _capacity_schedule()
+    if body.version != current["version"]:
+        raise HTTPException(409, "schedule changed since it was loaded; refresh and try again")
+    policy = body.model_dump()
+    check = _validate_capacity_schedule(policy)
+    if not check["valid"]:
+        raise HTTPException(422, {"message": "capacity schedule is unsafe", **check})
+    policy["version"] = current["version"] + 1
+    core.store.set_setting(_CAPACITY_SCHEDULE_KEY, json.dumps(policy, sort_keys=True))
+    actor = getattr(request.state, "user_email", None) or "admin"
+    core.store.log_decision(actor, "settings.capacity_schedule",
+                            detail=f"capacity schedule version {policy['version']} saved; enabled={policy['enabled']}; not yet applied to Azure")
+    return _capacity_schedule_response(policy)
 
 
 @router.get("/control/workers/replicas")
