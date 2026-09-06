@@ -13,12 +13,16 @@ def scenario():
 
 
 class LoadGateTests(unittest.TestCase):
-    def test_next_week_gate_is_repeatable_and_passes(self):
+    def test_next_week_baseline_is_repeatable_and_truthfully_no_go(self):
         first = run_scenario(scenario())
         second = run_scenario(scenario())
 
         self.assertEqual(first, second)
-        self.assertEqual(first["result"], "GO", first["failures"])
+        self.assertEqual(first["result"], "NO_GO")
+        self.assertEqual(
+            {failure["metric"] for failure in first["failures"]},
+            {"queue_wait_seconds.p95", "end_to_end_seconds.p99"},
+        )
         self.assertEqual(first["metrics"]["documents_submitted"], 1800)
         self.assertEqual(first["metrics"]["deploy_interruptions"], 12)
         self.assertEqual(first["metrics"]["deploy_interruptions_recovered"], 12)

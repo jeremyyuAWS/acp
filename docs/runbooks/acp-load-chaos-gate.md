@@ -57,8 +57,8 @@ gate requires:
 
 | Signal | GO threshold |
 |---|---:|
-| Queue wait p95 | <= 400 s |
-| End-to-end p99 | <= 470 s |
+| Queue wait p95 | <= 300 s |
+| End-to-end p99 | <= 420 s |
 | Throughput | >= 4.2 completed jobs/s |
 | Dead letters | <= 4 |
 | Retries | <= 90 |
@@ -88,6 +88,9 @@ signal.
    record to the test evidence. A `NO_GO` requires an owner and rerun; it must not be waived by
    deleting the failed metric.
 
-The simulator result proves that the scenario and decision logic are executable and deterministic.
-The staging run remains required to validate real ACP queue, database, Redis, file-processing, and
+The committed baseline is deliberately `NO_GO`: its 368.5-second queue p95 and 445.8-second
+end-to-end p99 exceed the next-week targets. A deterministic simulation that labels those tails
+acceptable would make the gate green before the performance work it is meant to require. The
+simulator proves that the scenario and decision logic are executable and deterministic; the
+staging run remains required to validate real ACP queue, database, Redis, file-processing, and
 deployment behavior.

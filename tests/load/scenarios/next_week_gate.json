@@ -33,8 +33,8 @@
     "deploy": {"at_seconds": 28, "downtime_seconds": 4, "retry_delay_seconds": 0.25}
   },
   "thresholds": [
-    {"metric": "queue_wait_seconds.p95", "operator": "max", "value": 400, "reason": "p95 queue wait exceeds the burst-test SLO"},
-    {"metric": "end_to_end_seconds.p99", "operator": "max", "value": 470, "reason": "p99 completion latency exceeds the burst-test SLO"},
+    {"metric": "queue_wait_seconds.p95", "operator": "max", "value": 300, "reason": "p95 queue wait exceeds the burst-test SLO"},
+    {"metric": "end_to_end_seconds.p99", "operator": "max", "value": 420, "reason": "p99 completion latency exceeds the burst-test SLO"},
     {"metric": "throughput_jobs_per_second", "operator": "min", "value": 4.2, "reason": "worker throughput is below the planned test floor"},
     {"metric": "jobs_dead_lettered", "operator": "max", "value": 4, "reason": "too many documents exhausted retries or failed terminally"},
     {"metric": "retries", "operator": "max", "value": 90, "reason": "retry amplification exceeds the injected-fault budget"},
