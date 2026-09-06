@@ -439,7 +439,7 @@ delivery. What exists, and where:
 | The rows those functions judge | `store.remediation_run_facts` |
 | `GET /scans/{sid}/remediation/snapshot`, and the same snapshot on the SSE frame | `api/routes/scans.py` |
 | Client normalization + freshness (never run state) | `frontend/src/remediationSnapshot.js` |
-| Regions A, B and C | `frontend/src/RemediationOpsPanel.jsx`, mounted in `Remediate.jsx` |
+| Regions A, B, C and E | `frontend/src/RemediationOpsPanel.jsx` (+ `RemediationExceptions.jsx`), mounted in `Remediate.jsx` |
 | Contract tests for every invariant and precedence rule | `tests/test_remediation_run_snapshot.py`, `frontend/src/remediationOpsPanel.test.jsx` |
 | Resumable event IDs and reconcile-on-unhonourable-cursor (ADR 0051) | `routes/scans.py::_resume_plan` + `stream_remediation_status`; client cursor in `frontend/src/useRemediationRun.js` |
 | Structured event record — document, attempt, phase, timestamp, event ID, correlation ID (ADR 0052) | `scan_events.document` / `.correlation_id`, `store.append_scan_event`, `store.list_scan_events(document=…)` |
@@ -467,11 +467,15 @@ missing feature:
   until the progress clock stopped counting heartbeats: while `latest_progress_at` was
   `max(jobs.updated_at)` and `touch_job` rewrote that on every beat, the age could not exceed the
   threshold and `stalled` could not be reached by any path. See ADR 0052.
-- **`paused` (§7)** is declared in `RUN_STATES` and never derived: ACP has no pause control for a
-  remediation run, and inferring it from an idle queue is the same class of error as inferring
-  "Applying fixes" from a queued one.
-- **Regions D and E** (live workstream cards, grouped exception routing) are Phases 2-3. The
-  snapshot already carries `active_attempts` for D.
+- **`paused` (§7)** is now DERIVED, and only from a durable hold (`store.remediation_run_hold`,
+  written by `POST /scans/{sid}/remediation/pause`). The original rule is unchanged and is why
+  this reads as it does: an idle queue with no hold row is still `waiting`. A run whose documents
+  are all terminal is never reported as paused either — a hold over finished work holds nothing.
+  The pause defers UNCLAIMED jobs only; an attempt in flight runs to completion, and
+  `remediation_exceptions.CONTROL_SPECS['pause']['scope']` is the sentence the panel shows so the
+  limit is stated before the button is pressed rather than discovered afterwards.
+- **Region D** (live workstream cards) is Phase 2; the snapshot already carries `active_attempts`
+  for it. **Region E** (grouped exception routing) is implemented — see the seam table below.
 - **Resumable event IDs (§8)** ARE implemented (ADR 0051, extended by ADR 0052) — this entry used
   to say they were not, and is corrected here rather than deleted, because a status list that
   understates what shipped sends the next change to rebuild it. The stream still re-pushes the
@@ -492,12 +496,14 @@ already exists.
 | Surface | Where | What it still owes |
 |---|---|---|
 | Run state, counters, phases, invariants | `api/remediation_run.py` | Nothing for Phase 1. Phase 2 adds phase events as an input rather than deriving the rail from counts alone. |
-| Snapshot facts | `store.remediation_run_facts` | Batch-scoped and one-row-per-document already. `latest_progress_at` now counts MATERIAL progress only and `latest_heartbeat_at` reports liveness beside it (ADR 0052) — it used to be `max(jobs.updated_at)`, which a lease heartbeat rewrites, so a wedged worker read as a progressing run. Owes per-attempt delivery state (§11's delivery-failure class is inferred from `drive_write_url`, not recorded as an outcome). |
+| Snapshot facts | `store.remediation_run_facts` | Batch-scoped and one-row-per-document already. `latest_progress_at` now counts MATERIAL progress only and `latest_heartbeat_at` reports liveness beside it (ADR 0052) — it used to be `max(jobs.updated_at)`, which a lease heartbeat rewrites, so a wedged worker read as a progressing run. §11's delivery-failure class is still *derived* from `remediated_at` + `drive_write_url` — the honest reading of two columns, which needs no per-attempt outcome to be correct — but a delivery ATTEMPT is now a durable row (`remediation_delivery`, keyed by its idempotency key) carrying actor, destination, artifact digest and result. |
+| Exceptions and scoped recovery | `api/remediation_exceptions.py` (pure), `store.remediation_exception_facts`, `GET/POST /scans/{sid}/remediation/exceptions*` | The five groups of §6E, the refusal codes, the delivery-retry gate, the run controls, and the completed outcomes each linked to its corrected copy and its before→after evidence (§13). Those links are relative API paths to routes that are already owner-scoped — a reference, never an access grant; the pre-signed blob URL the store holds is deliberately not among them. Owes per-lane policy labels (§6D's "deterministic / grouped approval / individual review"), which nothing records per document. |
+| Delivery-only retry | `api/remediation_delivery.py`, `handlers._deliver_corrected_copy` | SharePoint, OneDrive and Google Drive. Writes into the configured mirror folder, never in place over a source document. Owes an in-place replace lane, which is a destructive action and needs its own decision, not a retry button. |
 | Snapshot endpoint | `GET /scans/{sid}/remediation/snapshot` | Carries revision, state, reason, freshness thresholds and the reconciled partition. Owes `links` (currently always `{}`) and `policy_version` / `execution_mode`, which nothing records. |
 | Live updates | `GET /scans/{sid}/remediation/stream` | Nothing outstanding here. Resumable event IDs shipped (ADR 0051) and the close condition now reads the snapshot's own `completing` state rather than `in_flight` (ADR 0052) — it stays open through delivery and reconciliation, and deliberately does NOT stay open for `needs_attention`, where the wait is on a human and the client polls. |
 | Legacy status | `GET /scans/{sid}/remediation-status` | Unchanged and still feeding the progress bar. Its `fixes_applied` / `verified_documents` mislabelling is corrected in the snapshot, not in this endpoint; the two must not be mixed in one view. |
 | Activity | `activity.current(sid)` | One current line cannot represent parallel documents. Region D reads `snapshot.active_attempts` instead, which is already a list. |
-| Client | `remediationSnapshot.js`, `RemediationOpsPanel.jsx` | Regions D and E. `RemediationRunProgress` still renders a serial "last fixed ‹file›" beside the panel — two accounts of one run, and the older one implies serial work. |
+| Client | `remediationSnapshot.js`, `RemediationOpsPanel.jsx`, `RemediationExceptions.jsx` | Region E is served by its own endpoint and decides nothing locally. `RemediationRunProgress` still renders a serial "last fixed ‹file›" beside the panel — two accounts of one run, and the older one implies serial work. |
 
 ### On naming
 

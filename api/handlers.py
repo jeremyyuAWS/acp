@@ -14,6 +14,7 @@ Per-file fan-out (PDF/HTML) is a possible future optimization (ADR 0004 step 3).
 """
 from __future__ import annotations
 
+import hashlib as _hashlib
 import json as _json
 import logging
 import os as _os
@@ -1278,7 +1279,13 @@ def _remediate_file(payload: dict, job: dict) -> None:
         print(f"[remediate] source mirror: {filename} skipped — {source} scan; corrected copy "
               "stored in ACP", flush=True)
 
-    core.store.record_remediation(scan_id, filename, drive_write_url=web_url, blob_url=blob_url)
+    # The digest of the bytes that were actually stored, recorded WITH the correction rather
+    # than derived later. A delivery-only retry checks the stored object against this value, so
+    # a correction saved without one can never be re-delivered — the gate answers
+    # `artifact_provenance_unknown` rather than sending bytes whose provenance nobody can state.
+    _digest = _hashlib.sha256(fixed_bytes).hexdigest()
+    core.store.record_remediation(scan_id, filename, drive_write_url=web_url, blob_url=blob_url,
+                                  corrected_sha256=_digest, corrected_bytes=len(fixed_bytes))
     # `delivered` names the DESTINATION write, not the correction. A corrected copy that
     # reached blob but not the provider is stored-not-delivered — PRD §11's delivery-failure
     # class — and the snapshot counts it as pending. Saying `delivered` for it would make a
@@ -4783,3 +4790,108 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
                 detail="all findings resolved (auto-fixed + approved values written) — advanced to Publish")
     except Exception:
         swallowed("_apply_approved_values: marking the file compliant after revalidation failed", scan_id)
+
+
+@handler("deliver_corrected_copy")
+def _deliver_corrected_copy(payload: dict, job: dict) -> None:
+    """Re-send ONE already-verified corrected copy to its source provider. Fixes nothing.
+
+    This is the worker behind PRD §11's "retry delivery only". Read what it does NOT do first,
+    because that is the contract: it does not open the source document, does not run a fixer,
+    does not re-verify, and does not touch `applied_fixes`, `remediation_diff`, `hitl_queue` or
+    `file_records.remediated_at`. A delivery failure must not reduce the applied or verified
+    counts, and the way that is guaranteed is that nothing on this path can write them.
+
+    The route has already gated the request (owner, capability, artifact provenance, destination)
+    and taken the idempotency claim. This re-checks the artifact against its digest anyway —
+    see remediation_delivery.load_artifact for why once is not enough — and then makes exactly
+    one provider write.
+
+    THE CLAIM IS ALWAYS CLOSED. Every exit below finishes the `remediation_delivery` row, because
+    a row left `in_flight` refuses every future retry of that artifact with `retry_in_flight` and
+    nothing would ever clear it. A refusal closes it as refused, a provider error as failed.
+    """
+    import remediation_delivery as _delivery
+    import remediation_exceptions as _exceptions
+
+    scan_id = payload.get("scan_id")
+    filename = payload.get("file")
+    key = payload.get("idempotency_key")
+    digest = payload.get("artifact_digest")
+    destination = payload.get("destination") or {}
+    provider = (destination.get("provider") or payload.get("provider") or "").lower()
+    owner = payload.get("owner")
+    actor = payload.get("actor")
+    if not (scan_id and filename and key):
+        raise FatalJobError("deliver_corrected_copy job missing scan_id/file/idempotency_key")
+
+    import blob as _blob
+
+    def _refuse(code: str) -> None:
+        core.store.finish_delivery(key, status="refused", error=code)
+        _rem_event(scan_id, "remediate.delivery_retry_refused", job, filename,
+                   destination=provider or None, reason=code)
+        core.store.log_decision(actor or "system", "remediate.delivery_retry_refused",
+                                scan_id=scan_id, file=filename,
+                                detail=_audit_detail(_exceptions.audit_payload(
+                                    actor=actor, run_id=scan_id, file=filename,
+                                    action="retry_delivery", outcome="refused",
+                                    destination=destination, idempotency_key=key, reason=code)))
+
+    try:
+        data = _delivery.load_artifact(owner=owner, scan_id=scan_id, file=filename,
+                                       expected_digest=digest or "",
+                                       download=_blob.download_remediated)
+    except _delivery.DeliveryRefused as refused:
+        _refuse(refused.code)
+        return
+
+    _phase(job, "delivering the corrected copy")
+    try:
+        url = _delivery.perform_delivery(
+            provider=provider, destination=destination, filename=filename, data=data,
+            drive_client=_drive_client(payload["drive_token"]) if payload.get("drive_token")
+            else None,
+            graph_token=payload.get("sp_token"))
+    except _delivery.DeliveryRefused as refused:
+        _refuse(refused.code)
+        return
+    except Exception as exc:      # noqa: BLE001 — a provider failure is an outcome, not a crash
+        core.store.finish_delivery(key, status="failed", error=f"{type(exc).__name__}: {exc}")
+        _rem_event(scan_id, "remediate.delivery_failed", job, filename,
+                   destination=provider or None)
+        core.store.log_decision(actor or "system", "remediate.delivery_retry_failed",
+                                scan_id=scan_id, file=filename,
+                                detail=_audit_detail(_exceptions.audit_payload(
+                                    actor=actor, run_id=scan_id, file=filename,
+                                    action="retry_delivery", outcome="failed",
+                                    destination=destination, idempotency_key=key,
+                                    reason=type(exc).__name__)))
+        raise
+
+    # ONE COLUMN. record_remediation would restamp `remediated_at` and make a week-old
+    # correction look like it was produced now — see store.record_delivery_url.
+    if url:
+        core.store.record_delivery_url(scan_id, filename, url)
+    core.store.finish_delivery(key, status="delivered", delivered_url=url)
+    _rem_event(scan_id, "remediate.delivered", job, filename, destination="provider")
+    core.store.log_decision(actor or "system", "remediate.delivery_retry_delivered",
+                            scan_id=scan_id, file=filename,
+                            detail=_audit_detail(_exceptions.audit_payload(
+                                actor=actor, run_id=scan_id, file=filename,
+                                action="retry_delivery", outcome="delivered",
+                                destination=destination, idempotency_key=key)))
+
+
+def _audit_detail(payload: dict) -> str:
+    """A bounded audit payload as the one string log_decision stores.
+
+    JSON rather than prose so the fields stay machine-readable, and truncated to the column's
+    own limit here rather than by whatever the database does silently. The payload is already a
+    whitelist (remediation_exceptions.audit_payload); this only decides how it is spelled.
+    """
+    import json as _json
+    try:
+        return _json.dumps(payload, sort_keys=True)[:400]
+    except (TypeError, ValueError):
+        return str(payload)[:400]

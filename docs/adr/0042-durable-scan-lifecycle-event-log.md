@@ -239,6 +239,40 @@ contention real, and `file_records` already holds that data.
 `scan.retrying` · `scan.paused` · `scan.resumed` · `scan.cancelled` · `scan.completed` ·
 `scan.failed` · `scan.interrupted`
 
+**Amendment — the remediation vocabulary.** The remediation real-time operations panel writes to
+this same log rather than starting a second one (see `Store.SCAN_EVENT_KINDS`, whose comment gives
+the ordering argument). Its kinds were added to the code without amending this list, which is the
+drift a "closed set, extended only by ADR amendment" rule exists to prevent; they are recorded here
+now, together with the five added for exception actions.
+
+*Per-document lifecycle:* `remediate.accepted` · `remediate.fix_applied` · `remediate.verified` ·
+`remediate.verification_failed` · `remediate.delivered` · `remediate.delivery_failed` ·
+`remediate.review_requested` · `remediate.document_completed`
+
+*Human actions on a run (PRD §11, §13):* `remediate.delivery_retry_requested` ·
+`remediate.delivery_retry_refused` · `remediate.cancel_requested` · `remediate.paused` ·
+`remediate.resumed`
+
+The outcome of a delivery-only retry re-uses `remediate.delivered` / `remediate.delivery_failed`
+rather than minting a parallel pair: a corrected copy reaching the provider is the same fact
+however the write was triggered, and two spellings of it is how a delivered document reads as
+undelivered to whichever consumer knows only one.
+
+**The retention obligation this ADR set is still outstanding.** "If a later ADR admits per-file
+events into this table, it must ship a retention decision in the same PR" — the per-document
+remediation kinds did, and none shipped. The arithmetic is materially better than the 7,000/scan
+row the table above prices, because these are per-document TRANSITIONS and not activity ticks: a
+remediated document produces at most one accepted, one or two fix_applied, one verified or
+verification_failed, one delivered or delivery_failed, and one completed — call it six, so a
+147-document batch is ~900 rows and the 7,000-file estate is ~42,000. That is one to two orders of
+magnitude below the row this ADR called unaffordable, and it is still not a retention decision.
+PRD §22's window (24 hours or 10,000 events per run) is the intended answer and nothing implements
+it; `store.scan_event_bounds` is already written to notice a pruned log the day one exists.
+
+The exception-action kinds are per-RUN, except `remediate.delivery_retry_requested` /
+`_refused`, which are one per retried document — bounded by the size of the delivery-failure
+group, i.e. by documents that already produced six events each.
+
 **`detail` is a JSON object**, per-kind, and deliberately small: `{"files_found": 4100}`,
 `{"error_class": "rate_limit", "message": "…"[:200]}`, `{"reason": "lease_expired"}`. It is
 narration, never a second source of truth for a count that `scan_runs` already holds.
