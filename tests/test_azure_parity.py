@@ -250,19 +250,25 @@ def test_the_known_divergences_are_exactly_these(report):
     assert found == set(), sorted(found)
 
 
-def test_three_real_differences_remain_and_every_one_is_explained(report):
+def test_four_real_differences_remain_and_every_one_is_explained(report):
     """THE OTHER HALF, and without it the test above is satisfiable by a comparison that found
     nothing at all — the vacuous-pass shape this file already guards against elsewhere.
 
     Zero UNEXPLAINED is not zero differences. Production still runs a different API floor, a
-    different API ceiling and a different discovery ceiling, all deliberately.
+    different API ceiling, and both ends of a different discovery range, all deliberately.
+
+    Discovery's FLOOR joined the set on 2026-09-06. Correcting the script from 1-2 to the 4-8 the
+    estate was actually running turned one difference into two: the ceiling was already
+    acknowledged, and a floor of 4 against the contract's 1 is a separate fact that would be
+    hidden if it were folded into the ceiling's row.
     """
     from acpctl.azure_parity import ACKNOWLEDGED
-    assert report["stillDiffers"] == 3
+    assert report["stillDiffers"] == 4
     assert all(d.classification == ACKNOWLEDGED for d in report["differences"])
     assert {(d.tier, d.field) for d in report["differences"]} == {
         ("api", "replicas.min"),
         ("api", "replicas.max"),
+        ("discover", "replicas.min"),
         ("discover", "replicas.max"),
     }
 
@@ -298,12 +304,17 @@ def test_the_flag_says_what_it_measures_rather_than_claiming_parity(report):
 
     `noUnexplainedDifferences` says the narrow thing it measures; `stillDiffers` carries the number
     that stops it being misread. The module's own docstring calls the overstatement out by name.
+
+    FOUR, not three, since 2026-09-06: discovery was found running 4-8 against a script that said
+    1-2, the owner chose the live shape, and correcting the script split one acknowledged row into
+    two — `replicas.min` joined `replicas.max`, because a floor of 4 against the contract's 1 is
+    its own difference and folding it into the ceiling's row would hide it.
     """
     assert "parity" not in report, (
         "the flag is back under a name that claims more than it measures")
     assert report["noUnexplainedDifferences"] is True
     assert report["divergences"] == 0
-    assert report["stillDiffers"] == 3
+    assert report["stillDiffers"] == 4
 
 
 # ── what the repository can and cannot confirm ────────────────────────────────

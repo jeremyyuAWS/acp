@@ -119,7 +119,7 @@ def test_the_server_requirement_is_derived_from_the_fleet(azure):
     from acpctl.inventory import SERVER_RESERVED_CONNECTIONS, connection_budget
 
     demand = connection_budget(azure)["worstCaseConnections"]
-    assert demand == 82
+    assert demand == 90
     row = [r for r in requirements(azure) if r.setting == "max_connections"]
     assert len(row) == 1
     assert row[0].value == f">= {demand + SERVER_RESERVED_CONNECTIONS}"

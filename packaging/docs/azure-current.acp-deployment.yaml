@@ -29,8 +29,8 @@ api:
 workers:
   discover:
     replicas:
-      min: 1
-      max: 2
+      min: 4
+      max: 6
     resources:
       preset: small
     connectionPool: 2

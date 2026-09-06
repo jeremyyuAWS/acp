@@ -50,7 +50,26 @@ update_app acp-app       1.0 2Gi 1 3
 # pool; scheduler/heartbeat operations wait briefly for a slot instead of reserving idle
 # connections. This keeps the full fleet beneath Postgres's measured 150-connection ceiling,
 # including old+new revision overlap during deploy.
-update_app acp-discovery 1.0 2Gi 1 2  2
+# DISCOVERY IS 4-6 BY DECISION, 2026-09-06, AND THE CEILING IS SET BY A DEPLOY, NOT BY STEADY
+# STATE. It ran 1-2 here and 4-8 in Azure; the drift was found the way remediate's was
+# (packaging/docs/azure-parity.md), production having been scaled up by hand with nobody folding
+# it back. The owner chose the live FLOOR of 4. The live ceiling of 8 could not be kept, and the
+# reason is the one tests/test_db_connection_budget.py exists to catch:
+#
+#   discovery   steady   during revision overlap   + reserve   fits 150?
+#      1-2        82              120                  135        yes
+#      4-6        90              134                  149        yes
+#      4-7        92              136                  151        NO
+#      4-8        94              138                  153        NO
+#
+# ACA runs the old and new revisions together during a rollout, so the overlap column — not the
+# steady one — is what a Postgres ceiling has to survive. At 4-8 the fleet wants 153 connections
+# against 150. 4-6 is the largest ceiling that still fits, with one connection to spare.
+#
+# PRODUCTION WAS RUNNING 4-8 WHEN THIS WAS WRITTEN, so that exposure was live on every rollout and
+# was not created by this line — it was hidden by the old 1-2, which understated the estate. Bring
+# Azure down to 6 to match.
+update_app acp-discovery 1.0 2Gi 4 6  2
 update_app acp-assess    2.0 4Gi 5 5  2
 update_app acp-remediate 2.0 4Gi 5 10 2
 apply_remediation_autoscale
