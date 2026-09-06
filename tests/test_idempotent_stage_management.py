@@ -20,6 +20,33 @@ def _submit(store, sid, *, intent=None, snapshot="snapshot-a"):
         snapshot_id=snapshot, request_fingerprint=fingerprint)
 
 
+def test_discover_acceptance_and_dynamic_fanout_share_one_execution(isolated_store):
+    sid = "discover-canonical"
+    returned, entry_job_id = isolated_store.enqueue_scan(
+        sid, "sharepoint", OWNER, "scan_discover", {"scan_id": sid},
+        inputs={"source": "sharepoint", "folder_ids": ["root"]})
+    assert returned == sid
+    workflow = isolated_store.workflow_for_scan(sid, OWNER)
+    execution = isolated_store.current_stage_execution(workflow["id"], "discover", owner=OWNER)
+    assert execution["state"] == "queued"
+    assert execution["expected_items"] == 1
+    entry = isolated_store.get_job(entry_job_id)
+    assert entry["batch_id"] == execution["execution_id"]
+    assert entry["payload"]["stage_execution_id"] == execution["execution_id"]
+
+    child_id = isolated_store.enqueue_job(
+        "scan_folder", {"scan_id": sid, "folder_id": "folder-a"}, scan_id=sid)
+    finalizer_id = isolated_store.enqueue_job("scan_finalize", {"scan_id": sid}, scan_id=sid)
+    current = isolated_store.get_stage_execution(execution["execution_id"], owner=OWNER)
+    assert current["expected_items"] == 3
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "SELECT job_id FROM stage_work_items WHERE execution_id=%s ORDER BY job_id",
+            (execution["execution_id"],))
+        job_ids = {row["job_id"] for row in isolated_store._db.fetchall(cur)}
+    assert job_ids == {entry_job_id, child_id, finalizer_id}
+
+
 def test_canonical_json_and_immutable_input_define_execution_identity(isolated_store):
     sid = _scan(isolated_store)
     left = isolated_store.canonical_request_fingerprint({"policy": {"b": 2, "a": 1}})

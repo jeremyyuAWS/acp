@@ -1183,6 +1183,14 @@ def publish(report_id: str, request: Request):
         content_json=json.dumps(content, sort_keys=True, separators=(",", ":"),
                                 ensure_ascii=False),
         content_digest=digest, published_by=who)
+    conformance_execution = core.store.record_synchronous_stage_completion(
+        workflow_id=f"acr:{report_id}", scan_id=report_id, owner_email=owner,
+        stage="conformance", workflow_revision=int(report.get("revision") or 1),
+        input_snapshot_id=digest,
+        request_fingerprint=core.store.canonical_request_fingerprint({
+            "report_id": report_id, "revision": int(report.get("revision") or 1),
+            "catalog_hash": acr_catalog.catalog_hash()}),
+        output_manifest_id=snapshot_id, result_digest=digest)
 
     warning = acr_authz.separation_warning(
         who, _decision_makers(criteria), other_approvers=_other_approvers(report_id, owner, who))
@@ -1193,6 +1201,7 @@ def publish(report_id: str, request: Request):
 
     return {
         "snapshot_id": snapshot_id, "revision": report.get("revision"),
+        "stage_execution_id": conformance_execution["execution_id"],
         "published_at": published_at, "published_by": who,
         "content_digest": digest,
         # Repeated on the response, not left to the module docstring. Someone reading an API

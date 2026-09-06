@@ -2873,6 +2873,10 @@ class Store:
         scope_fingerprint = _hashlib.sha256(_json.dumps(
             inputs or {"source": source}, sort_keys=True, separators=(",", ":"),
             default=str).encode()).hexdigest()
+        discover_request = self.canonical_request_fingerprint({
+            "job_type": job_type, "source": source, "scope": scope_fingerprint})
+        discover_execution = self._stage_identity(
+            workflow_id, "discover", scope_fingerprint, discover_request)[:24]
         if priority is None:
             priority = job_priority(job_type)
         with self._db.cursor() as cur:
@@ -2904,11 +2908,32 @@ class Store:
                 (workflow_id, scan_id, owner, source, workflow_revision, scope_fingerprint,
                  now, now))
             self._db.execute(cur,
+                "UPDATE stage_executions SET is_current=0,revision=revision+1,updated_at=%s "
+                "WHERE workflow_id=%s AND stage='discover' AND is_current=1 "
+                "AND execution_id<>%s", (now, workflow_id, discover_execution))
+            canonical_payload = dict(payload or {}, input_id=f"entry:{job_id}",
+                                     snapshot_id=scope_fingerprint,
+                                     stage_execution_id=discover_execution)
+            self._db.execute(cur,
                 "INSERT INTO jobs(id,type,payload,status,priority,attempts,max_attempts,"
-                "run_after,scan_id,created_at,updated_at) "
-                "VALUES(%s,%s,%s,'queued',%s,0,%s,%s,%s,%s,%s)",
-                (job_id, job_type, _json.dumps(payload or {}), priority, max_attempts,
-                 run_after or now, scan_id, now, now))
+                "run_after,batch_id,scan_id,created_at,updated_at) "
+                "VALUES(%s,%s,%s,'queued',%s,0,%s,%s,%s,%s,%s,%s)",
+                (job_id, job_type, _json.dumps(canonical_payload), priority, max_attempts,
+                 run_after or now, discover_execution, scan_id, now, now))
+            self._db.execute(cur,
+                "INSERT INTO stage_executions(execution_id,workflow_id,workflow_revision,scan_id,"
+                "owner_email,stage,input_snapshot_id,request_fingerprint,state,revision,is_current,"
+                "expected_items,terminal_items,created_at,updated_at) "
+                "VALUES(%s,%s,%s,%s,%s,'discover',%s,%s,'queued',1,1,1,0,%s,%s) "
+                "ON CONFLICT(execution_id) DO NOTHING",
+                (discover_execution, workflow_id, workflow_revision, scan_id, owner,
+                 scope_fingerprint, discover_request, now, now))
+            discover_item = self._work_item_identity(discover_execution, f"entry:{job_id}")
+            self._db.execute(cur,
+                "INSERT INTO stage_work_items(work_item_id,execution_id,input_id,job_id,state,"
+                "revision,attempt,created_at,updated_at) VALUES(%s,%s,%s,%s,'queued',1,0,%s,%s) "
+                "ON CONFLICT(work_item_id) DO NOTHING",
+                (discover_item, discover_execution, f"entry:{job_id}", job_id, now, now))
             if inputs is not None:
                 self._db.execute(cur,
                     "INSERT INTO scan_inputs(scan_id,source,folder_ids,exclude_folder_ids,"
@@ -10892,12 +10917,40 @@ class Store:
         if priority is None:
             priority = job_priority(type)
         with self._db.cursor() as cur:
+            # Discovery discovers its fan-out while it runs. Attach those child/finalizer jobs to
+            # the live execution before they become claimable, so expected_items grows in the
+            # same commit as the queue and the entry worker cannot make the stage look finished.
+            if batch_id is None and scan_id and type in ("scan_folder", "scan_finalize"):
+                self._db.execute(cur,
+                    "SELECT execution_id,input_snapshot_id FROM stage_executions WHERE scan_id=%s "
+                    "AND stage='discover' AND is_current=1 "
+                    "AND state IN ('accepted','queued','processing','paused') "
+                    "ORDER BY updated_at DESC LIMIT 1",
+                    (scan_id,))
+                discover = self._db.fetchone(cur)
+                if discover:
+                    batch_id = discover["execution_id"]
+                    payload = dict(payload or {}, snapshot_id=discover["input_snapshot_id"],
+                                   stage_execution_id=batch_id)
             self._db.execute(cur,
                 "INSERT INTO jobs(id,type,payload,status,priority,attempts,max_attempts,"
                 "run_after,campaign_id,batch_id,scan_id,created_at,updated_at) "
                 "VALUES(%s,%s,%s,'queued',%s,0,%s,%s,%s,%s,%s,%s,%s)",
                 (job_id, type, _json.dumps(payload or {}), priority, max_attempts,
                  run_after or now, campaign_id, batch_id, scan_id, now, now))
+            if batch_id and scan_id and type in ("scan_folder", "scan_finalize"):
+                input_id = f"{type}:{job_id}"
+                work_item_id = self._work_item_identity(batch_id, input_id)
+                self._db.execute(cur,
+                    "INSERT INTO stage_work_items(work_item_id,execution_id,input_id,job_id,state,"
+                    "revision,attempt,created_at,updated_at) VALUES(%s,%s,%s,%s,'queued',1,0,%s,%s) "
+                    "ON CONFLICT(work_item_id) DO NOTHING",
+                    (work_item_id, batch_id, input_id, job_id, now, now))
+                if (getattr(cur, "rowcount", 0) or 0) > 0:
+                    self._db.execute(cur,
+                        "UPDATE stage_executions SET expected_items=expected_items+1,"
+                        "revision=revision+1,updated_at=%s WHERE execution_id=%s",
+                        (now, batch_id))
         return job_id
 
     def stage_snapshot_id(self, scan_id: str) -> str:
@@ -11009,6 +11062,63 @@ class Store:
             sql += " ORDER BY updated_at DESC LIMIT 1"
             self._db.execute(cur, sql, tuple(params))
             return self._db.fetchone(cur)
+
+    def record_synchronous_stage_completion(self, *, workflow_id: str, scan_id: str,
+                                            owner_email: str, stage: str,
+                                            workflow_revision: int = 1,
+                                            input_snapshot_id: str,
+                                            request_fingerprint: str,
+                                            output_manifest_id: str,
+                                            result_digest: str) -> dict:
+        """Record an immediate, non-worker stage using the same canonical authority.
+
+        Certification publication is transactional application work rather than queued worker
+        work.  It still needs a stable execution, item and completion fact so stage history does
+        not disappear merely because no lease was involved. Replays reuse the same identities.
+        """
+        import hashlib as _hashlib
+        import json as _json
+        full_id = self._stage_identity(
+            workflow_id, stage, input_snapshot_id, request_fingerprint)
+        execution_id = full_id[:24]
+        work_item_id = self._work_item_identity(execution_id, output_manifest_id)
+        event_id = _hashlib.sha256(f"sync-stage\0{work_item_id}\0completed".encode()).hexdigest()
+        now = self._now()
+        payload = _json.dumps({"result_digest": result_digest,
+                               "output_manifest_id": output_manifest_id},
+                              sort_keys=True, separators=(",", ":"))
+        payload_digest = _hashlib.sha256(payload.encode()).hexdigest()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE stage_executions SET is_current=0,revision=revision+1,updated_at=%s "
+                "WHERE workflow_id=%s AND stage=%s AND is_current=1 AND execution_id<>%s",
+                (now, workflow_id, stage, execution_id))
+            self._db.execute(cur,
+                "INSERT INTO stage_executions(execution_id,workflow_id,workflow_revision,scan_id,"
+                "owner_email,stage,input_snapshot_id,request_fingerprint,state,revision,is_current,"
+                "expected_items,terminal_items,output_manifest_id,provenance,created_at,updated_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,'succeeded',1,1,1,1,%s,'observed',%s,%s) "
+                "ON CONFLICT(execution_id) DO NOTHING",
+                (execution_id, workflow_id, max(1, int(workflow_revision)), scan_id, owner_email,
+                 stage, input_snapshot_id,
+                 request_fingerprint, output_manifest_id, now, now))
+            self._db.execute(cur,
+                "INSERT INTO stage_work_items(work_item_id,execution_id,input_id,state,revision,"
+                "attempt,result_digest,created_at,updated_at) "
+                "VALUES(%s,%s,%s,'completed',1,0,%s,%s,%s) ON CONFLICT(work_item_id) DO NOTHING",
+                (work_item_id, execution_id, output_manifest_id, result_digest, now, now))
+            self._db.execute(cur,
+                "SELECT payload_digest FROM stage_events WHERE event_id=%s", (event_id,))
+            prior = self._db.fetchone(cur)
+            if prior and prior["payload_digest"] != payload_digest:
+                raise ValueError("synchronous stage event replayed with different content")
+            self._db.execute(cur,
+                "INSERT INTO stage_events(event_id,execution_id,work_item_id,event_type,"
+                "expected_revision,resulting_revision,payload_digest,payload,occurred_at,recorded_at) "
+                "VALUES(%s,%s,%s,'work_item.completed',0,1,%s,%s,%s,%s) "
+                "ON CONFLICT(event_id) DO NOTHING",
+                (event_id, execution_id, work_item_id, payload_digest, payload, now, now))
+        return self.get_stage_execution(execution_id) or {"execution_id": execution_id}
 
     def stage_execution_events(self, execution_id: str, *, owner: str | None = None) -> list[dict]:
         if owner is not None and not self.get_stage_execution(execution_id, owner=owner):
