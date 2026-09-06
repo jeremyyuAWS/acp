@@ -339,7 +339,13 @@ def test_the_production_autoscaler_counts_every_remediate_job_type():
     import core
 
     script = (root / "deploy/public/rightsize-production.sh").read_text()
-    match = re.search(r"type IN \(([^)]*)\)", script)
+    # ANCHORED ON THE RULE'S NAME, not on the first `type IN (...)` in the file. That shortcut
+    # was safe only while the remediate rule was the sole scaler in the script; it stopped being
+    # safe on 2026-09-06, when an assess rule joined it and a reordering of the two functions
+    # would silently have pointed this guard at the wrong lane's query.
+    block = re.search(r"--scale-rule-name remediation-queue.*?--scale-rule-auth", script, re.S)
+    assert block, "the remediate autoscale rule is no longer named `remediation-queue`"
+    match = re.search(r"type IN \(([^)]*)\)", block.group(0))
     assert match, "the remediate autoscale rule no longer contains a `type IN (...)` predicate"
     counted = tuple(value.strip().strip("'") for value in match.group(1).split(","))
     assert set(counted) == set(core.REMEDIATE_LANE_JOB_TYPES), (

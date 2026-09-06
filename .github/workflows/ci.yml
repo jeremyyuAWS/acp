@@ -233,6 +233,16 @@ jobs:
         # Every source a per-cell ceiling is derived from is parsed structurally. When one
         # moves, the generator raises rather than quietly producing a wrong ceiling.
 
+      - name: Scaler guard — the queue scalers count claimable jobs
+        if: ${{ matrix.group == 1 }}
+        run: python scripts/gen_queue_scalers.py --check
+        # Four KEDA scaler queries live in this tree and none of them is where the truth lives.
+        # Until 2026-09-06 every one counted `status='queued'` while store.claim_job also
+        # requires run_after <= now and attempts < max_attempts — so a job in retry backoff, or
+        # one waiting for the reaper, asked for a replica no worker was allowed to use. On the
+        # chart's oldest-job-age trigger that number has no ceiling and pins the tier at max.
+        # api/queue_scaler.py owns the predicate; this holds the copies to it.
+
       - name: Backlog guard — docs/TODO.md coverage block is current
         if: ${{ matrix.group == 1 }}
         run: python scripts/gen_todo_status.py --check

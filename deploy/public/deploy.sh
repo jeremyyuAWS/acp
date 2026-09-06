@@ -515,6 +515,16 @@ for s in json.loads(os.environ.get("APP_SECRETS_JSON") or "[]"):
   # second replica. It sat at 1 replica x ACP_WORKERS threads no matter how deep the backlog got;
   # `--max-replicas 3` was decorative.
   #
+  # COUNTS CLAIMABLE JOBS, NOT QUEUED ROWS. store.claim_job needs status='queued' AND
+  # run_after <= now AND attempts < max_attempts; this rule tested only the first until
+  # 2026-09-06, so a job waiting out its retry backoff — up to 600s — asked for a replica that
+  # was not allowed to take it, and an attempts-exhausted row (queued until the reaper marks it
+  # dead) was a floor the depth could never fall below. The predicate is generated from
+  # api/queue_scaler.py; `python scripts/gen_queue_scalers.py --check` fails if this drifts.
+  #
+  # NO `type IN (...)` FILTER HERE, unlike the per-lane rules in rightsize-production.sh, and
+  # that is correct for this app: $WORKER_APP is the mixed-role tier that claims every handler,
+  # so filtering it to one lane would hide the others' backlog from its own scaler.
   # KEDA's postgresql scaler counts queued jobs and ACA scales replicas = ceil(count/target).
   # `connection` comes from the `database-url` secret the block above guarantees exists (it
   # refuses to create the app without it), so no new secret and no connection string in argv.
@@ -534,7 +544,7 @@ for s in json.loads(os.environ.get("APP_SECRETS_JSON") or "[]"):
     if az containerapp update "${AZ[@]}" -g "$RG" -n "$WORKER_APP" \
          --scale-rule-name jobs-queued \
          --scale-rule-type postgresql \
-         --scale-rule-metadata "query=SELECT count(*) FROM jobs WHERE status='queued'" \
+         --scale-rule-metadata "query=SELECT count(*) FROM jobs WHERE status='queued' AND run_after::timestamptz <= now() AND attempts < max_attempts" \
                                "targetQueryValue=5" \
          --scale-rule-auth "connection=database-url" \
          -o none 2>/tmp/acp_scale_err; then
