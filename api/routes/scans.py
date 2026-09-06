@@ -3209,6 +3209,12 @@ def clear_scan_tokens(sid: str, request: Request):
     return {"scan_id": sid, "cleared": True}
 
 
+def _release_timezone(owner: str) -> str:
+    """Read the additive preference while remaining compatible with minimal store adapters."""
+    getter = getattr(core.store, "get_user_setting", None)
+    return (getter(owner, "release_timezone") if callable(getter) else None) or "UTC"
+
+
 @router.post("/scans/{sid}/publish")
 def publish_files(sid: str, request: Request, body: dict):
     """Publish one or more re-validated files — ADR 0010 archive-copy, NON-destructive.
@@ -3234,7 +3240,7 @@ def publish_files(sid: str, request: Request, body: dict):
     except _publish.UnsafeReleasePath as exc:
         raise HTTPException(422, str(exc)) from exc
     if not preferred_folder_name:
-        release_tz = core.store.get_user_setting(owner, "release_timezone") or "UTC"
+        release_tz = _release_timezone(owner)
         preferred_folder_name = _publish.release_folder_name(timezone_name=release_tz)
     release = core.store.ensure_release_execution(
         sid, owner, source, len(eligible),
@@ -3518,7 +3524,7 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
         if requested_name:
             folder_name = requested_name
         else:
-            release_tz = core.store.get_user_setting(owner, "release_timezone") or "UTC"
+            release_tz = _release_timezone(owner)
             folder_name = _publish.release_folder_name(timezone_name=release_tz)
         folder_state = "proposed"
     source = (scan.get("run") or {}).get("source") or "local"
