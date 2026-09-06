@@ -53,7 +53,16 @@ describe('Release Center: confirmation before a release', () => {
     expect(s).toMatch(/releaseConfirmLines\(\{ count: cnt, provider: releaseProvider, anyDrive: batchAnyDrive/)
     expect(s).toMatch(/setConfirm\(null\); if \(isBatch\) publishAll\(targets\.map\(\(f\) => f\.file\), confirm\.folderName \|\| ''\); else publish\(confirm\.file\)/)
     // Escape closes it.
-    expect(s).toMatch(/if \(e\.key === 'Escape'\) setConfirm\(null\)/)
+    expect(s).toMatch(/if \(e\.key === 'Escape'\)/)
+  })
+
+  it('traps keyboard focus and restores it when confirmation closes', () => {
+    const s = pub()
+    expect(s).toMatch(/confirmDialogRef\.current\?\.querySelectorAll/)
+    expect(s).toMatch(/e\.shiftKey && document\.activeElement === first/)
+    expect(s).toMatch(/document\.activeElement === last/)
+    expect(s).toMatch(/previousFocus\?\.isConnected/)
+    expect(s).toMatch(/ref=\{confirmCancelRef\}/)
   })
 
   it('labels each row with where its corrected copy will land', () => {
@@ -103,6 +112,15 @@ describe('Release Center: confirmation before a release', () => {
     expect(s).toMatch(/changed at the source in \{sourceProduct\}/)
     expect(s).toMatch(/Open in \{sourceProduct\}/)
     expect(s).not.toMatch(/changed at the source in Drive/)
+  })
+
+  it('offers visible and optional system completion notifications', () => {
+    const s = pub()
+    expect(s).toMatch(/className="release-notice" role="status"/)
+    expect(s).toMatch(/new Notification\(/)
+    expect(s).toMatch(/document\.hidden/)
+    expect(s).toMatch(/Play a short sound when a release finishes/)
+    expect(s).toMatch(/Enable browser notifications/)
   })
 })
 

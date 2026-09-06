@@ -42,6 +42,12 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [previewingRelease, setPreviewingRelease] = useState(false)
   const [selectedFiles, setSelectedFiles] = useState(() => new Set())
   const builderRef = useRef(null)
+  const confirmDialogRef = useRef(null)
+  const confirmCancelRef = useRef(null)
+  const releaseHadPendingRef = useRef(false)
+  const [completionSound, setCompletionSound] = useState(() => {
+    try { return window.localStorage.getItem('acp.release.completionSound') === 'on' } catch { return false }
+  })
   const [sel, setSel] = useState(null)
   // Why is the publish queue empty? A remediated file only becomes certifiable once its
   // human-review findings are approved. Fetch the pending HITL queue so the empty state can
@@ -77,9 +83,23 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [confirm, setConfirm] = useState(null)
   useEffect(() => {
     if (!confirm) return
-    const onKey = (e) => { if (e.key === 'Escape') setConfirm(null) }
+    const previousFocus = document.activeElement
+    const frame = window.requestAnimationFrame(() => confirmCancelRef.current?.focus())
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); setConfirm(null); return }
+      if (e.key !== 'Tab') return
+      const focusable = [...(confirmDialogRef.current?.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])') || [])]
+      if (!focusable.length) return
+      const first = focusable[0]; const last = focusable[focusable.length - 1]
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+    }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.removeEventListener('keydown', onKey)
+      if (previousFocus?.isConnected) window.requestAnimationFrame(() => previousFocus.focus())
+    }
   }, [confirm])
   // Source-staleness (Phase 3): has each file's SOURCE changed in Drive since the scan? Best-effort
   // — a scan with nothing trackable returns all-untracked, and any error leaves the map empty (no
@@ -129,6 +149,21 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const orgLabel = me?.email
     ? me.email.split('@')[1]?.replace(/\.[^.]+$/, '') || me.name || 'your organisation'
     : me?.name || 'your organisation'
+  const notifyReleaseComplete = (successful, failed) => {
+    const body = `${successful} ${successful === 1 ? 'copy' : 'copies'} delivered${failed ? `; ${failed} need attention` : ''}.`
+    if (document.hidden && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      const notice = new Notification(failed ? 'Release completed with issues' : 'Release complete', { body })
+      notice.onclick = () => { window.focus(); document.getElementById('workflow-tab-publish')?.click() }
+    }
+    if (completionSound) {
+      try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext
+        const audio = new AudioContext(); const oscillator = audio.createOscillator(); const gain = audio.createGain()
+        oscillator.frequency.value = failed ? 330 : 660; gain.gain.value = 0.04
+        oscillator.connect(gain); gain.connect(audio.destination); oscillator.start(); oscillator.stop(audio.currentTime + 0.14)
+      } catch { /* sound is optional */ }
+    }
+  }
   const rememberRelease = (res, expectedFiles = []) => {
     if (res?.release_id) setReleaseId(res.release_id)
     const roots = res?.release_folders || res?.roots || []
@@ -165,6 +200,11 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     }
     const failed = rows.filter((row) => row.status === 'failed').length
     const inFlight = rows.filter((row) => row.status === 'queued' || row.status === 'running').length
+    if (inFlight) releaseHadPendingRef.current = true
+    else if (rows.length && releaseHadPendingRef.current) {
+      releaseHadPendingRef.current = false
+      notifyReleaseComplete(successful.length, failed)
+    }
     setReleaseAnnouncement(inFlight
       ? `${inFlight} corrected ${inFlight === 1 ? 'copy is' : 'copies are'} being released.`
       : `${successful.length} corrected ${successful.length === 1 ? 'copy' : 'copies'} released${failed ? `; ${failed} need attention` : ''}.`)
@@ -436,6 +476,12 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           </div>
         </section>
       )}
+      {releaseAnnouncement && !releaseError && (
+        <div className="release-notice" role="status">
+          <span>{releaseAnnouncement}</span>
+          <button className="ghost small" onClick={() => setReleaseAnnouncement('')}>Dismiss</button>
+        </div>
+      )}
       {/* Release Center — the controlled-release summary. NOT a conformance certificate: ACP's
           automated checks verify WITHIN the selected scope; they cannot certify overall WCAG
           conformance. The estate score and "certifiable/conformant" language are gone for exactly
@@ -538,6 +584,15 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         </summary>
         <div className="muted" style={{ fontSize: 12.5, marginTop: 6, lineHeight: 1.6 }}>
           The source file is <b>never overwritten</b>. ACP verifies the criteria in scope — it does not certify overall WCAG conformance.
+        </div>
+        <div className="release-notification-settings">
+          <label><input type="checkbox" checked={completionSound} onChange={(e) => {
+            setCompletionSound(e.target.checked)
+            try { window.localStorage.setItem('acp.release.completionSound', e.target.checked ? 'on' : 'off') } catch { /* preference stays in this tab */ }
+          }} /> Play a short sound when a release finishes</label>
+          {typeof Notification !== 'undefined' && Notification.permission === 'default' && (
+            <button className="ghost small" onClick={() => Notification.requestPermission()}>Enable browser notifications</button>
+          )}
         </div>
         <details style={{ marginTop: 8 }}>
           <summary className="linklike" style={{ cursor: 'pointer', fontSize: 12.5 }}>Why can’t I replace the original?</summary>
@@ -745,7 +800,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         return (
           <div role="dialog" aria-modal="true" aria-label="Confirm release" onClick={() => setConfirm(null)}
                style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.42)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20 }}>
-            <div onClick={(e) => e.stopPropagation()}
+            <div ref={confirmDialogRef} onClick={(e) => e.stopPropagation()}
                  style={{ background: 'var(--panel, #fff)', color: 'var(--ink)', border: '1px solid var(--line)', borderRadius: 12, padding: '20px 22px', maxWidth: 520, width: '100%', boxShadow: '0 12px 40px rgba(0,0,0,0.25)' }}>
               <h3 style={{ margin: '0 0 12px' }}>{isBatch ? `Publish ${cnt} corrected ${cnt === 1 ? 'copy' : 'copies'}?` : `Release ${confirm.file}?`}</h3>
               <ul style={{ margin: '0 0 18px', paddingLeft: 18, fontSize: 13.5, lineHeight: 1.65 }}>
@@ -753,7 +808,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                 {lines.map((l, i) => <li key={i}>{l}</li>)}
               </ul>
               <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-                <button className="ghost" onClick={() => setConfirm(null)}>Cancel</button>
+                <button ref={confirmCancelRef} className="ghost" onClick={() => setConfirm(null)}>Cancel</button>
                 <button className="qbtn approve" onClick={onGo} disabled={cnt === 0}>{isBatch ? `Publish ${cnt}` : 'Release'}</button>
               </div>
             </div>
