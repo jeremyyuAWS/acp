@@ -195,3 +195,29 @@ def test_sharepoint_worker_exposes_actionable_expired_session(monkeypatch):
 
     assert store.documents[FILE]["failure_category"] == "provider_session_expired"
     assert "Reconnect SharePoint" in store.documents[FILE]["explanation"]
+
+
+def test_sharepoint_worker_retries_a_401_so_silent_refresh_can_replace_the_token(monkeypatch):
+    import core
+    import handlers
+    import publish
+    import pytest
+    import scanner
+    from worker import FatalJobError
+
+    store = FakeStore()
+    store.root = {"folder_id": "root-1", "folder_name": "release", "folder_url": "https://sp/root"}
+    monkeypatch.setattr(core, "store", store)
+    monkeypatch.setattr(core, "get_scan_tokens", lambda scan_id: {"sp": "expired-token"})
+    monkeypatch.setattr(publish, "archive_copy_publish_sharepoint",
+                        lambda *args, **kwargs: (_ for _ in ()).throw(
+                            scanner.SharePointSessionExpired("expired")))
+    payload = {"scan_id": SID, "release_id": "release-1", "file": FILE, "owner": OWNER}
+
+    with pytest.raises(scanner.SharePointSessionExpired):
+        handlers._publish_file(payload, {"attempts": 1, "max_attempts": 5})
+    assert FILE not in store.documents
+
+    with pytest.raises(FatalJobError):
+        handlers._publish_file(payload, {"attempts": 5, "max_attempts": 5})
+    assert store.documents[FILE]["failure_category"] == "provider_session_expired"

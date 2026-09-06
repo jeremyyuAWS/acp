@@ -47,3 +47,11 @@ describe('the login screen offers Microsoft sign-in only when SharePoint is conf
     expect(SRC).toMatch(/cfg\.azure_client_id \|\| import\.meta\.env\.VITE_AZURE_CLIENT_ID/)
   })
 })
+
+describe('background Microsoft renewal stays silent', () => {
+  const SRC = readFileSync(join(HERE, 'spAuth.js'), 'utf8')
+  it('throws a silent-acquisition failure instead of opening a popup from a timer', () => {
+    expect(SRC).toMatch(/if \(!interactive\) throw error/)
+    expect(SRC).toMatch(/acquireTokenPopup/)
+  })
+})

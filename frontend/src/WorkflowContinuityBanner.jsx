@@ -1,9 +1,9 @@
 import React from 'react'
 
-const LABELS = { discover: 'Discovery', assess: 'Assessment', remediate: 'Remediation' }
+const LABELS = { discover: 'Discovery', assess: 'Assessment', remediate: 'Remediation', publish: 'Release' }
 
 export function primaryActiveWorkflow(items = []) {
-  const priority = { remediate: 3, assess: 2, discover: 1 }
+  const priority = { publish: 4, remediate: 3, assess: 2, discover: 1 }
   return [...items].sort((a, b) => {
     const freshness = String(b.updated_at || '').localeCompare(String(a.updated_at || ''))
     return freshness || (priority[b.stage] || 0) - (priority[a.stage] || 0)

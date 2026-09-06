@@ -1791,12 +1791,14 @@ def _get_redis():
 
 
 def register_scan_tokens(scan_id: str, *, drive: str | None = None, sp: str | None = None) -> None:
-    toks = {}
+    # Refreshing one provider must not erase the other provider's still-live credential. This
+    # matters now that the SharePoint keep-alive updates a completed scan throughout Release.
+    toks = dict(get_scan_tokens(scan_id))
     if drive:
         toks["drive"] = drive
     if sp:
         toks["sp"] = sp
-    if not toks:
+    if not (drive or sp):
         return
     r = _get_redis()
     if r is not None:

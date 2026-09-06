@@ -1481,9 +1481,11 @@ def _sp_get(token: str, url: str, timeout: int = 30):
             # Callers that genuinely know their target — the readiness endpoint and the discovery
             # preflight — pass `on_site` to diagnose_refusal directly.
             import sp_readiness
-            raise PermissionError(
-                sp_readiness.diagnose_refusal(r.status_code, token=token)["message"]
-                + " URL: " + url.split("?")[0])
+            message = (sp_readiness.diagnose_refusal(r.status_code, token=token)["message"]
+                       + " URL: " + url.split("?")[0])
+            if r.status_code == 401:
+                raise SharePointSessionExpired(message)
+            raise PermissionError(message)
         if (r.status_code == 429 or r.status_code >= 500) and attempt <= attempts:
             _sp_note_retry(r.status_code)
             delay = _sp_retry_delay(r, attempt)
@@ -3333,11 +3335,17 @@ def sp_reconstructed_listing(prior_files: list[dict], changed_files: list[dict],
     return result
 
 
+class SharePointSessionExpired(PermissionError):
+    """A delegated Graph token expired; a freshly supplied token can make a retry succeed."""
+
+
 def _sp_put(token: str, url: str, data: bytes, content_type: str):
     import httpx
     r = httpx.put(url, headers={"Authorization": f"Bearer {token}", "Content-Type": content_type},
                   content=data, timeout=120, follow_redirects=True)
-    if r.status_code in (401, 403):
+    if r.status_code == 401:
+        raise SharePointSessionExpired("Microsoft Graph access token expired.")
+    if r.status_code == 403:
         raise PermissionError(
             "Microsoft Graph refused the write. Writing remediated copies needs a WRITE scope "
             "(Files.ReadWrite.All, or Sites.ReadWrite.All for a team site) on the Azure app "
@@ -3369,7 +3377,9 @@ def _sp_folder_id(token: str, drive_id: str, name: str, parent_id: str = "") -> 
                    json={"name": name, "folder": {},
                          "@microsoft.graph.conflictBehavior": "fail"},
                    timeout=30, follow_redirects=True)
-    if r.status_code in (401, 403):
+    if r.status_code == 401:
+        raise SharePointSessionExpired("Microsoft Graph access token expired.")
+    if r.status_code == 403:
         raise PermissionError(
             f"Microsoft Graph refused to create the '{name}' folder — this needs a WRITE scope "
             "(Files.ReadWrite.All / Sites.ReadWrite.All).")
@@ -3407,7 +3417,9 @@ def _sp_archive_original(token: str, drive_id: str, item_id: str, today: str) ->
                             "Content-Type": "application/json"},
                    json={"parentReference": {"id": dated}},
                    timeout=60, follow_redirects=True)
-    if r.status_code in (401, 403):
+    if r.status_code == 401:
+        raise SharePointSessionExpired("Microsoft Graph access token expired.")
+    if r.status_code == 403:
         raise PermissionError(
             "Microsoft Graph refused to archive the original — replacing a file in place needs a "
             "WRITE scope (Files.ReadWrite.All / Sites.ReadWrite.All). Nothing was overwritten.")
@@ -3437,7 +3449,9 @@ def _sp_write(token: str, *, put_url: str, session_url: str, content: bytes,
                             "Content-Type": "application/json"},
                    json={"item": {"@microsoft.graph.conflictBehavior": conflict_behavior}},
                    timeout=30, follow_redirects=True)
-    if r.status_code in (401, 403):
+    if r.status_code == 401:
+        raise SharePointSessionExpired("Microsoft Graph access token expired.")
+    if r.status_code == 403:
         raise PermissionError(
             "Microsoft Graph refused to open an upload session — writing needs "
             "Files.ReadWrite.All / Sites.ReadWrite.All.")
@@ -3456,6 +3470,8 @@ def _sp_write(token: str, *, put_url: str, session_url: str, content: bytes,
         cr = httpx.put(url, headers={"Content-Length": str(end - start + 1),
                                      "Content-Range": f"bytes {start}-{end}/{total}"},
                        content=content[start:end + 1], timeout=300)
+        if cr.status_code == 401:
+            raise SharePointSessionExpired("Microsoft Graph upload session expired.")
         cr.raise_for_status()
         if cr.content:
             out = cr.json()
