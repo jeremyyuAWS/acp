@@ -381,6 +381,18 @@ def test_workflow_contract_keeps_a_durable_failed_stage_after_queue_tail_expires
     assert stage["completion_recorded"] is False
 
 
+def test_workflow_contract_keeps_a_manual_stop_distinct_after_queue_tail_expires():
+    events = [{"event_id": "stopped", "kind": "job.stage_cancelled", "scan_id": "scan-stop",
+               "stage": "assess", "correlation_id": "batch-stop",
+               "owner_email": "a@example.org", "source": "sharepoint",
+               "occurred_at": "2026-09-05T08:02:00+00:00", "attempt": 1,
+               "detail": {"documents": 12, "completed": 9, "cancelled": 3}}]
+    stage = system._workflow_rows([], events)[0]["stages"][0]
+    assert stage["status"] == "cancelled"
+    assert stage["terminal_outcome"] == "cancelled"
+    assert stage["error_class"] is None
+
+
 def test_workflow_contract_flags_a_running_stage_with_a_stale_worker_heartbeat():
     run = {"scan_id": "scan-stalled", "stage": "assess", "owner": "a@example.org",
            "source": "sharepoint", "running": 1, "queued": 0, "completed": 3, "total": 12,
@@ -398,6 +410,9 @@ def test_workflow_contract_carries_the_stop_request_into_the_stage():
     stage = system._workflow_rows([run])[0]["stages"][0]
     assert stage["cancel_requested"] is True
     assert stage["cancel_requested_at"] == "2026-09-05T10:03:00+00:00"
+
+    workflow = system._workflow_rows([run])[0]
+    assert workflow["status"] == "stopping"
 
 
 def test_recovery_summary_matches_only_requested_stage_cancellations():

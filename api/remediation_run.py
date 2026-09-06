@@ -726,11 +726,10 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
             locations=facts.get("locations"), scan_snapshot_id=facts.get("scan_snapshot_id")),
         "total_documents": total,
         "total_findings": assessed_findings,
-        # This is a cross-stage HANDOFF, not a false partition. Assessment findings, verified
-        # changes and review cards are different units. `review.findings` says how many assessed
-        # instances the pending cards represent; an exact resolved/unresolved finding ledger is
-        # deliberately not inferred from fix rows because one finding can require several edits.
-        "finding_reconciliation": {
+        # One finding unit from Assessment through Release. New runs use the durable disposition
+        # ledger; the nullable fallback preserves honest Phase-1 semantics for historical runs
+        # created before finding identities existed.
+        "finding_reconciliation": facts.get("finding_reconciliation") or {
             "assessed": assessed_findings,
             "resolved_verified": None,
             "awaiting_review": review_findings,
@@ -789,6 +788,9 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
         "links": facts.get("links") or {},
     }
     violations = check_invariants(snapshot)
+    for violation in (snapshot.get("finding_reconciliation") or {}).get("violations") or []:
+        violations.append({"invariant": violation.get("code", "finding_reconciliation"),
+                           "metric": "finding_reconciliation", "detail": str(violation)})
     snapshot["integrity"] = {"ok": not violations, "violations": violations,
                              "affected": sorted({v["metric"] for v in violations})}
     return snapshot

@@ -39,6 +39,14 @@ _PII_SEV_RANK = {"critical": 3, "moderate": 2, "low": 1}
 _ISSUE_SEV_RANK = {"CRITICAL": 4, "SERIOUS": 3, "MODERATE": 2, "MINOR": 1}
 
 
+class FindingRevisionConflict(RuntimeError):
+    """A finding disposition changed after the caller read its revision."""
+
+
+class FindingEventConflict(RuntimeError):
+    """One event id was replayed with different transition content."""
+
+
 def _parse_worker_tier_heartbeat(raw: str) -> tuple[str, int | None, str | None]:
     """Split a `worker_tier_heartbeat` setting value into (iso_timestamp, pool_size, version).
 
@@ -697,6 +705,23 @@ _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS remediation_state (
       doc_id TEXT, rule_id TEXT, state TEXT, updated_at TEXT, last_scan_id TEXT,
       PRIMARY KEY (doc_id, rule_id)
+    )""",
+    # Cross-stage finding identity and current disposition, scoped to an immutable Assessment
+    # snapshot AND one idempotent remediation batch. A later batch gets new rows; prior batches
+    # remain audit evidence and can never contribute to the current reconciliation.
+    """CREATE TABLE IF NOT EXISTS finding_disposition (
+      scan_id TEXT, batch_id TEXT, finding_id TEXT, workflow_id TEXT, snapshot_id TEXT,
+      document_id TEXT, file TEXT, rule_id TEXT, instance_key TEXT,
+      assessment_status TEXT, disposition TEXT, review_item_id TEXT,
+      fix_evidence_ids TEXT, verified_at TEXT, revision INT, created_at TEXT, updated_at TEXT,
+      PRIMARY KEY (scan_id, batch_id, finding_id)
+    )""",
+    # Append-only transition evidence. event_id is supplied by the publisher; replaying the same
+    # event is a no-op before the current row is touched.
+    """CREATE TABLE IF NOT EXISTS finding_disposition_event (
+      event_id TEXT PRIMARY KEY, scan_id TEXT, batch_id TEXT, finding_id TEXT,
+      from_disposition TEXT, to_disposition TEXT, from_revision INT, to_revision INT,
+      review_item_id TEXT, fix_evidence_ids TEXT, verified_at TEXT, created_at TEXT
     )""",
     # Per-fix before→after evidence (what actually changed), keyed by the scan+file the
     # UI has on hand. Written by the remediate_file worker ONLY for fixes that verifiably
@@ -2248,8 +2273,10 @@ class _PgAdapter:
     # v30 makes the stage outbox an operational delivery queue. All columns are additive and
     # existing unpublished rows default to pending; older replicas continue inserting their
     # original column set and therefore safely produce pending messages for the new dispatcher.
-    _SCHEMA_VERSION = 31
-    _SCHEMA_CHECKSUM_AT_VERSION = "8ee782def4bfee4337e895baec6b7b1f"
+    # v32 adds the finding disposition ledger and its append-only transition evidence on top of
+    # the complete v31 canonical stage schema.
+    _SCHEMA_VERSION = 32
+    _SCHEMA_CHECKSUM_AT_VERSION = "28f2e211cd425c4ec84bc39849c06b27"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -4447,7 +4474,8 @@ class Store:
                          "disposition_audit", "decision_log", "inventory", "jobs", "documents",
                          "tenant_queue_state",
                          "lifecycle_evaluation", "effective_disposition",
-                         "org_memory", "remediation_state", "remediation_diff", "applied_fixes",
+                         "org_memory", "remediation_state", "finding_disposition",
+                         "finding_disposition_event", "remediation_diff", "applied_fixes",
                          "ai_calls", "second_opinion_reservations", "finding_comments",
                          "scan_inputs",  # Stage 1 item 3: per-scan enqueue snapshots are customer data
                          "scan_folder_completions",  # which folders of a scan were counted done
@@ -4530,6 +4558,7 @@ class Store:
     _RESET_USER_SCAN_TABLES = ["file_records", "issue_records", "scan_rule_traces",
                                "file_stage_timings", "scan_file_manifests", "scan_inventory",
                                "file_tags", "pii_findings", "hitl_queue", "hitl_events",
+                               "finding_disposition", "finding_disposition_event",
                                "remediation_diff", "applied_fixes", "ai_calls",
                                "second_opinion_reservations", "finding_comments",
                                "jobs", "overview_snapshots", "scan_events", "orchestration_events",
@@ -6762,6 +6791,192 @@ class Store:
                     (scan_id, file, rid, seq,
                      str(d.get("before") or "")[:2000], str(d.get("after") or "")[:2000],
                      str(d.get("note") or "")[:500]))
+        by_rule: dict[str, list[str]] = {}
+        for seq, diff in enumerate(diffs):
+            rule_id = str(diff.get("rule_id") or "")
+            if rule_id:
+                by_rule.setdefault(rule_id, []).append(f"remediation_diff:{file}:{rule_id}:{seq}")
+        for rule_id, evidence_ids in by_rule.items():
+            self.set_finding_group_disposition(
+                scan_id, file, rule_id, "resolved_verified",
+                event_key=f"verified:{file}:{rule_id}", fix_evidence_ids=evidence_ids,
+                verified_at=self._now())
+
+    def seed_finding_dispositions(self, scan_id: str, batch_id: str, *,
+                                  snapshot_id: str | None = None) -> list[dict]:
+        """Create one stable row per assessed finding for this immutable remediation batch.
+
+        `scan_rule_traces` is criterion-aggregate data, so an ordinal is the only honest locator
+        when the detector did not persist an element locator. It is stable within the immutable
+        Assessment snapshot and never falls back to filename as identity.
+        """
+        from documents import resolve_doc_id
+        from finding_ledger import normalize_instance_key, stable_finding_id
+
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT source,COALESCE(workflow_id,id) AS workflow_id FROM scan_runs WHERE id=%s",
+                (scan_id,))
+            run = self._db.fetchone(cur)
+            if not run:
+                raise ValueError(f"scan not found: {scan_id}")
+            self._db.execute(cur,
+                "SELECT t.file,t.rule_id,t.finding_count,f.drive_file_id,f.checksum "
+                "FROM scan_rule_traces t LEFT JOIN file_records f "
+                "ON f.scan_id=t.scan_id AND f.file=t.file "
+                "WHERE t.scan_id=%s AND t.outcome='FAIL' ORDER BY t.file,t.rule_id",
+                (scan_id,))
+            traces = self._db.fetchall(cur)
+            for trace in traces:
+                document_id = resolve_doc_id(
+                    run.get("source") or "local", trace.get("drive_file_id"), trace["file"],
+                    trace.get("checksum"))
+                for ordinal in range(1, int(trace.get("finding_count") or 0) + 1):
+                    instance_key = normalize_instance_key(None, ordinal=ordinal)
+                    finding_id = stable_finding_id(document_id, trace["rule_id"], instance_key)
+                    self._db.execute(cur,
+                        "INSERT INTO finding_disposition(scan_id,batch_id,finding_id,workflow_id,"
+                        "snapshot_id,document_id,file,rule_id,instance_key,assessment_status,"
+                        "disposition,review_item_id,fix_evidence_ids,verified_at,revision,created_at,"
+                        "updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,'fail',NULL,NULL,NULL,NULL,"
+                        "0,%s,%s) ON CONFLICT(scan_id,batch_id,finding_id) DO NOTHING",
+                        (scan_id, batch_id, finding_id, run["workflow_id"], snapshot_id or scan_id,
+                         document_id, trace["file"], trace["rule_id"], instance_key, now, now))
+            self._db.execute(cur,
+                "SELECT * FROM finding_disposition WHERE scan_id=%s AND batch_id=%s "
+                "ORDER BY file,rule_id,instance_key", (scan_id, batch_id))
+            return self._db.fetchall(cur)
+
+    def list_finding_dispositions(self, scan_id: str, batch_id: str) -> list[dict]:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM finding_disposition WHERE scan_id=%s AND batch_id=%s "
+                "ORDER BY file,rule_id,instance_key", (scan_id, batch_id))
+            rows = self._db.fetchall(cur)
+        for row in rows:
+            try:
+                row["fix_evidence_ids"] = json.loads(row["fix_evidence_ids"] or "[]")
+            except (TypeError, ValueError):
+                row["fix_evidence_ids"] = []
+        return rows
+
+    def transition_finding_disposition(
+            self, scan_id: str, batch_id: str, finding_id: str, disposition: str, *,
+            expected_revision: int, event_id: str, review_item_id: str | None = None,
+            fix_evidence_ids: list[str] | None = None,
+            verified_at: str | None = None) -> dict:
+        """Compare-and-set one disposition; an identical event replay is a no-op."""
+        from finding_ledger import DISPOSITIONS
+        if disposition not in DISPOSITIONS:
+            raise ValueError(f"invalid finding disposition: {disposition}")
+        evidence = json.dumps(fix_evidence_ids or [], separators=(",", ":"))
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM finding_disposition_event WHERE event_id=%s", (event_id,))
+            replay = self._db.fetchone(cur)
+            if replay:
+                same = (replay.get("scan_id") == scan_id and replay.get("batch_id") == batch_id
+                        and replay.get("finding_id") == finding_id
+                        and replay.get("to_disposition") == disposition)
+                if not same:
+                    raise FindingEventConflict(event_id)
+                self._db.execute(cur,
+                    "SELECT * FROM finding_disposition WHERE scan_id=%s AND batch_id=%s "
+                    "AND finding_id=%s", (scan_id, batch_id, finding_id))
+                return self._db.fetchone(cur)
+            self._db.execute(cur,
+                "SELECT disposition,revision FROM finding_disposition WHERE scan_id=%s "
+                "AND batch_id=%s AND finding_id=%s", (scan_id, batch_id, finding_id))
+            prior = self._db.fetchone(cur)
+            if not prior:
+                raise KeyError(finding_id)
+            self._db.execute(cur,
+                "UPDATE finding_disposition SET disposition=%s,review_item_id=%s,"
+                "fix_evidence_ids=%s,verified_at=%s,revision=revision+1,updated_at=%s "
+                "WHERE scan_id=%s AND batch_id=%s AND finding_id=%s AND revision=%s",
+                (disposition, review_item_id, evidence, verified_at, now, scan_id, batch_id,
+                 finding_id, expected_revision))
+            if (getattr(cur, "rowcount", 0) or 0) != 1:
+                raise FindingRevisionConflict(finding_id)
+            self._db.execute(cur,
+                "INSERT INTO finding_disposition_event(event_id,scan_id,batch_id,finding_id,"
+                "from_disposition,to_disposition,from_revision,to_revision,review_item_id,"
+                "fix_evidence_ids,verified_at,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,"
+                "%s,%s)",
+                (event_id, scan_id, batch_id, finding_id, prior.get("disposition"), disposition,
+                 expected_revision, expected_revision + 1, review_item_id, evidence, verified_at,
+                 now))
+            self._db.execute(cur,
+                "SELECT * FROM finding_disposition WHERE scan_id=%s AND batch_id=%s "
+                "AND finding_id=%s", (scan_id, batch_id, finding_id))
+            return self._db.fetchone(cur)
+
+    def finding_reconciliation(self, scan_id: str, batch_id: str) -> dict:
+        from finding_ledger import reconcile
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COALESCE(SUM(finding_count),0) AS n FROM scan_rule_traces "
+                "WHERE scan_id=%s AND outcome='FAIL'", (scan_id,))
+            assessed = int((self._db.fetchone(cur) or {}).get("n") or 0)
+            self._db.execute(cur,
+                "SELECT disposition,COUNT(*) AS n FROM finding_disposition "
+                "WHERE scan_id=%s AND batch_id=%s GROUP BY disposition", (scan_id, batch_id))
+            grouped = self._db.fetchall(cur)
+        counts = {row["disposition"]: int(row["n"]) for row in grouped
+                  if row.get("disposition")}
+        rows = sum(int(row["n"]) for row in grouped)
+        return reconcile(assessed, counts, rows=rows)
+
+    def set_finding_group_disposition(
+            self, scan_id: str, file: str, rule_id: str, disposition: str, *,
+            event_key: str, review_item_id: str | None = None,
+            fix_evidence_ids: list[str] | None = None, verified_at: str | None = None,
+            limit: int | None = None) -> int:
+        """Idempotently move findings in the latest batch, in stable instance order."""
+        from finding_ledger import DISPOSITIONS
+        if disposition not in DISPOSITIONS:
+            raise ValueError(f"invalid finding disposition: {disposition}")
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT batch_id FROM jobs WHERE scan_id=%s AND type='remediate_file' "
+                "ORDER BY created_at DESC,id DESC LIMIT 1", (scan_id,))
+            batch_id = (self._db.fetchone(cur) or {}).get("batch_id")
+            if not batch_id:
+                return 0
+            self._db.execute(cur,
+                "SELECT finding_id,revision,disposition FROM finding_disposition WHERE scan_id=%s AND "
+                "batch_id=%s AND file=%s AND rule_id=%s ORDER BY instance_key",
+                (scan_id, batch_id, file, rule_id))
+            rows = self._db.fetchall(cur)
+        if disposition != "resolved_verified":
+            rows = [row for row in rows if row.get("disposition") != "resolved_verified"]
+        if limit is not None:
+            rows = rows[:max(0, int(limit))]
+        for row in rows:
+            self.transition_finding_disposition(
+                scan_id, batch_id, row["finding_id"], disposition,
+                expected_revision=int(row.get("revision") or 0),
+                event_id=f"{event_key}:{row['finding_id']}",
+                review_item_id=review_item_id, fix_evidence_ids=fix_evidence_ids,
+                verified_at=verified_at)
+        return len(rows)
+
+    def sync_hitl_finding_dispositions(self, item_id: str, status: str) -> int:
+        """Project one review-card state onto its assessed-finding rows."""
+        item = self.get_hitl_item(item_id)
+        if not item or not item.get("scan_id") or not item.get("file") or not item.get("rule_id"):
+            return 0
+        disposition = {"pending": "awaiting_review", "in_review": "awaiting_review",
+                       "approved": "approved_pending_verification",
+                       "rejected": "unchanged_no_fix", "skipped": "unchanged_no_fix"}.get(status)
+        if not disposition:
+            return 0
+        return self.set_finding_group_disposition(
+            item["scan_id"], item["file"], item["rule_id"], disposition,
+            event_key=f"hitl:{item_id}:{status}", review_item_id=item_id,
+            limit=int(item.get("finding_count") or 1))
 
     def record_hitl_event(self, scan_id: str, file: str, rule_id: str, item_id: str,
                           action: str, *, edited: bool = False, review_ms: int | None = None,
@@ -7538,6 +7753,8 @@ class Store:
                 "SELECT COALESCE(SUM(finding_count),0) AS n FROM scan_rule_traces "
                 "WHERE scan_id=%s AND outcome='FAIL'", (scan_id,))
             out["total_findings"] = int((self._db.fetchone(cur) or {}).get("n") or 0)
+            out["finding_reconciliation"] = (
+                self.finding_reconciliation(scan_id, batch_id) if batch_id else None)
 
             # WHERE the documents came from, from the run's OWN inventory — never from the
             # signed-in account or a default connector (PRD §6A). NULL for every non-SharePoint
@@ -8560,6 +8777,7 @@ class Store:
                              "finding_count": c["finding_count"], "status": "pending", "created_at": now,
                              "page": pages[0] if pages else None, "pages": _pages_csv(pages),
                              "location": location})
+            self.sync_hitl_finding_dispositions(item_id, "pending")
         return created
 
     def queue_hitl_deferral(self, scan_id: str, file: str, note: str, count: int = 1,
@@ -8593,6 +8811,7 @@ class Store:
                 if (count or 0) > (row.get("finding_count") or 0):
                     self._db.execute(cur, "UPDATE hitl_queue SET finding_count=%s WHERE id=%s",
                                      (count, row["id"]))
+                self.sync_hitl_finding_dispositions(row["id"], "pending")
                 return None    # merged, not created — callers must not fire a "new item" webhook
             item_id = uuid.uuid4().hex[:12]
             pages = self._pages_for(cur, scan_id, file, canonical)
@@ -8601,6 +8820,7 @@ class Store:
                 "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)",
                 (item_id, datetime.now(timezone.utc).isoformat(), scan_id, file, canonical,
                  (rule_name or note)[:200], count, pages[0] if pages else None, _pages_csv(pages)))
+        self.sync_hitl_finding_dispositions(item_id, "pending")
         return item_id
 
     def queue_hitl_review_for_file(self, scan_id: str, file: str,
@@ -8650,6 +8870,8 @@ class Store:
                 created.append({"id": item_id, "scan_id": scan_id, "file": file,
                                 "rule_id": rid, "rule_name": name, "finding_count": count,
                                 "status": "pending", "created_at": now})
+        for item in created:
+            self.sync_hitl_finding_dispositions(item["id"], "pending")
         return created
 
     def enqueue_proposals(self, scan_id: str, file: str, sc: str, proposals: list[dict],
@@ -8690,6 +8912,7 @@ class Store:
                     "UPDATE hitl_queue SET proposals=%s, validated=%s, finding_count=%s "
                     "WHERE id=%s",
                     (blob, vflag, merged, row["id"]))
+                self.sync_hitl_finding_dispositions(row["id"], "pending")
                 return row["id"]
             item_id = uuid.uuid4().hex[:12]
             self._db.execute(cur,
@@ -8697,6 +8920,7 @@ class Store:
                 "finding_count,status,proposals,validated) "
                 "VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)",
                 (item_id, now, scan_id, file, sc, rule_name or sc, count, blob, vflag))
+        self.sync_hitl_finding_dispositions(item_id, "pending")
         return item_id
 
     def auto_approve_proposals(self, scan_id: str, file: str, sc: str) -> str | None:
@@ -8735,6 +8959,7 @@ class Store:
                 "UPDATE hitl_queue SET status='approved', reviewed_at=%s, reviewer_note=%s, "
                 "proposals=%s, applied=1 WHERE id=%s",
                 (now, note, _json.dumps(props), item_id))
+        self.sync_hitl_finding_dispositions(item_id, "approved")
         return item_id
 
     def attach_hitl_evidence(self, scan_id: str, file: str, sc: str,
@@ -12286,6 +12511,8 @@ class Store:
                 "SELECT COUNT(*) AS total,"
                 "SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done,"
                 "SUM(CASE WHEN status='dead' THEN 1 ELSE 0 END) AS dead,"
+                "SUM(CASE WHEN status='dead' AND cancel_requested_at IS NULL THEN 1 ELSE 0 END) "
+                "AS failed_dead,"
                 "SUM(CASE WHEN status='cancelled' THEN 1 ELSE 0 END) AS cancelled,"
                 "SUM(CASE WHEN status IN ('queued','running') THEN 1 ELSE 0 END) AS active "
                 "FROM jobs WHERE scan_id=%s AND batch_id=%s", (job["scan_id"], job["batch_id"]))
@@ -12293,9 +12520,13 @@ class Store:
         if int(counts.get("active") or 0) or not int(counts.get("total") or 0):
             return
         dead, cancelled = int(counts.get("dead") or 0), int(counts.get("cancelled") or 0)
+        failed_dead = int(counts.get("failed_dead") or 0)
         if not dead and not cancelled:
             return
-        outcome = "failed" if dead else "cancelled"
+        # `_end_running_scan` deliberately terminalizes outstanding rows as `dead`, but stamps
+        # cancel_requested_at in the same write. That is an operator decision, not exhaustion of
+        # retries. Only dead rows without cancellation evidence make this a failed stage.
+        outcome = "failed" if failed_dead else "cancelled"
         owner = self._stage_owner(job["scan_id"])
         if not owner:
             return
@@ -12308,7 +12539,8 @@ class Store:
                          if job.get("error_class") in self.ERROR_CLASS_VOCABULARY
                          else "unknown") if outcome == "failed" else "cancelled",
             detail={"documents": int(counts.get("total") or 0), "completed": int(counts.get("done") or 0),
-                    "failed": dead, "cancelled": cancelled, "stage_execution_id": job["batch_id"]})
+                    "failed": failed_dead, "cancelled": cancelled + (dead - failed_dead),
+                    "stage_execution_id": job["batch_id"]})
         self._update_workflow_stage(job["scan_id"], stage, outcome)
 
     def request_stage_cancel(self, scan_id: str, stage: str, *, actor: str | None = None) -> dict:

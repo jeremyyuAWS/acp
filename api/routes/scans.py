@@ -739,6 +739,7 @@ async def remediate_scan(sid: str, request: Request):
     execution = _enqueue_stage_batch(
         sid, "remediate", "remediate_file", payloads, snapshot_id=snapshot_id,
         request_fingerprint=request_fingerprint)
+    core.store.seed_finding_dispositions(sid, execution["batch_id"], snapshot_id=snapshot_id)
     # AFTER the jobs exist, never before: the run is "accepted" precisely when durable work has
     # been enqueued for it, and an acceptance event that led the enqueue would let the panel show
     # a run that nothing will ever claim. Emitted once per batch — the run-level transition PRD §7

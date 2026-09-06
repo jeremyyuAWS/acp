@@ -1833,7 +1833,8 @@ def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None)
         runs.append({
             "scan_id": key[0], "stage": key[1], "owner": completed.get("owner_email"),
             "source": completed.get("source") or "unknown",
-            "status": "recent" if completed.get("kind") == "job.stage_completed" else "failed",
+            "status": ("recent" if completed.get("kind") == "job.stage_completed" else
+                       "cancelled" if completed.get("kind") == "job.stage_cancelled" else "failed"),
             "running": 0, "queued": 0, "failed": 0,
             "completed": int(detail.get("documents") or 0),
             "total": int(detail.get("documents") or 0), "max_attempts_seen": completed.get("attempt"),
@@ -1924,8 +1925,10 @@ def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None)
         active = [row for row in workflow["stages"] if row["status"] != "completed"]
         if active:
             workflow["current_stage"] = active[-1]["stage"]
-            workflow["status"] = ("running" if any(row["status"] == "running" for row in active) else
+            workflow["status"] = ("stopping" if any(row.get("cancel_requested") for row in active) else
+                                  "running" if any(row["status"] == "running" for row in active) else
                                   "waiting" if any(row["status"] == "waiting" for row in active) else
+                                  "stopped" if all(row["status"] == "cancelled" for row in active) else
                                   "failed")
         elif workflow["stages"]:
             workflow["current_stage"] = workflow["stages"][-1]["stage"]
