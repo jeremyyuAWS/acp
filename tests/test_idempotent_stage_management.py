@@ -193,7 +193,7 @@ def test_stage_snapshot_publishes_one_intuitive_reconciliation_equation(isolated
     lineage = isolated_store.canonical_stage_lineage(sid, owner=OWNER)
     assert lineage["available"] is True
     assert lineage["integrity"]["ok"] is True
-    assert [stage["stage"] for stage in lineage["stages"]] == ["remediate"]
+    assert [stage["stage"] for stage in lineage["stages"]] == ["discover", "remediate"]
     assert lineage["stages"][0]["reconciliation"]["exact"] is True
 
 
