@@ -831,7 +831,8 @@ def preview(report_id: str, request: Request, format: str = "json"):
 
     STILL NOT A VPAT. The official ITI VPAT 2.5Rev template is blocked on a licensing decision,
     not on engineering, and vendoring a third-party artifact under that trademark is something
-    this repo decides in an ADR first (ADR 0029 is the precedent). Every format below says so on
+    this repo decides in an ADR first — ADR 0053, which separates the trademark question from the
+    redistribution one and answers neither. Every format below says so on
     its face; see api/acr_export_preview.py.
 
     `format=docx` is no longer excluded by that, and the distinction is the whole reason it can

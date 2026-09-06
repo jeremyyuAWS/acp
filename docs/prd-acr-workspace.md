@@ -301,7 +301,7 @@ already been read as evidence that the guard worked.
 | 10 | Reports with unevaluated applicable criteria cannot publish | ✅ |
 | 11 | Only an approver can publish | ✅ `POST /acr/{id}/publish`, gated on `acr_authz.may_publish` and never `core.is_admin` |
 | 12 | Publication creates an immutable snapshot | ✅ `acr_snapshot`, digest re-verified on every read |
-| 13 | Exported Word document follows the official VPAT structure | ⬜ still blocked on the licensing decision, not on engineering — the renderer and its table shape exist, the ITI template does not |
+| 13 | Exported Word document follows the official VPAT structure | ⬜ **ADR 0053** — three separable questions, not one: may a generated document be CALLED a VPAT (counsel), may the template FILE be redistributed here (counsel), does the STRUCTURE need the file (no — already rendered). The renderer and table shape exist; the ITI template does not |
 | 14 | Generated Word document passes ACP's accessibility checks | ✅ enforced at `GET /acr/{id}/preview?format=docx`, which refuses to serve a document that FAILs — it does NOT depend on 13 |
 | 15 | Report identifies version, methods, tools, environments, reviewers | ✅ required to publish |
 | 16 | Automated tests for authorization, decision rules, freshness, validation, snapshots, export | ✅ all six — 18 `test_acr_*.py` files |
