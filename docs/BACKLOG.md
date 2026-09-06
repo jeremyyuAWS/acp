@@ -9,6 +9,8 @@ under-reporting closed. The full list is in **Closed on 2026-08-09** near the fo
 read the "Still open after today" note there before approving any deploy. Phase 5 itself: P5.1
 (#214), P5.2 (#215) and P5.5 (#216) closed — each measured with a red fixture before any fix — and
 P5.3/P5.4 marked blocked on installs (LibreOffice, a mutation runner) rather than on design.
+**Both closed since, on 2026-09-06** — P5.3 in #1487 and #1513, P5.4 in #1503. The entries under
+Phase 5 below are the current state; this paragraph is the 2026-08-09 snapshot.
 
 **Synced 2026-08-09.** Six entries had gone stale in two days — Phase 0 was fully closed, P2.4,
 P2.5 and P4.8 were done, and P4.2 was half done — while the file still listed all of them as open.
@@ -816,8 +818,10 @@ argued.
 - [x] **Phase 5 — silent under-reporting closed (#214, #215, #216).** Link purpose is now judged
   in headers, footers and notes rather than the body alone (#214); tracked deletions no longer
   leak into extracted text (#215); the v2 capability table is synced to the backend and guarded so
-  it stays synced (#216). Each was measured with a red fixture first. P5.3/P5.4 remain blocked on
-  installs (LibreOffice, a mutation runner), not on design.
+  it stays synced (#216). Each was measured with a red fixture first. P5.3/P5.4 were blocked on
+  installs (LibreOffice, a mutation runner), not on design, when this entry was written — **both
+  closed on 2026-09-06** (P5.3 #1487 and #1513, P5.4 #1503), which completes Phase 5. Read the
+  Phase 5 entries above for the current state, not this line.
 - [x] **Security & privacy (#209, #210, #213).** A non-owner could be redirected to another user's
   remediated document (#209); a reviewer's note left as text rather than a length (#210); a
   filename that names a patient now travels as a label, not the name (#213).
