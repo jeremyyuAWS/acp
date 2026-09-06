@@ -1,6 +1,8 @@
 """The legacy probe must reach ACA from a non-interactive Actions runner."""
 from __future__ import annotations
 
+import base64
+import gzip
 import os
 from pathlib import Path
 import runpy
@@ -63,8 +65,22 @@ def test_redeploy_sends_no_quoted_python_c_program_to_aca():
     script = (ROOT / "deploy/public/redeploy.sh").read_text()
     gate = script[script.index("LEGACY_PROBE_B64="):script.index("BOOTSTRAP_REDIS BOOTSTRAP_QUEUED")]
     assert "_aca_exec_tty az containerapp exec" in gate
-    assert "python -c exec(__import__('base64').b64decode(" in gate
+    assert "python -c exec(__import__('gzip').decompress(__import__('base64').b64decode(" in gate
     assert 'python -c \\"' not in gate
+
+
+def test_probe_payload_fits_the_live_websocket_handshake_and_round_trips():
+    source = (ROOT / "deploy/public/legacy_bootstrap_probe.py").read_bytes()
+    payload = base64.b64encode(gzip.compress(source, mtime=0)).decode()
+    command = (
+        "python -c exec(__import__('gzip').decompress("
+        f"__import__('base64').b64decode('{payload}')))"
+    )
+
+    # The 3,432-character raw command was rejected before Azure printed its connected banner;
+    # the 1,457-character compressed command completed against that same live staging replica.
+    assert len(command) < 1_800
+    assert gzip.decompress(base64.b64decode(payload)) == source
 
 
 def test_linux_transcript_marker_survives_a_nonzero_transport_exit(monkeypatch, capsys):

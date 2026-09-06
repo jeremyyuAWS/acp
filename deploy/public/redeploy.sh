@@ -331,10 +331,14 @@ except Exception: print("")' <<<"$HEALTH_BEFORE")"
   # Execute the independent probe in the CURRENT app revision, where secret-backed REDIS_URL and
   # DATABASE_URL already resolve to the same shared services used by the workers. The source is
   # transmitted because, by definition, this old image does not contain the new probe yet.
-  LEGACY_PROBE_B64="$(python3 -c 'import base64,pathlib; print(base64.b64encode(pathlib.Path("deploy/public/legacy_bootstrap_probe.py").read_bytes()).decode())')"
+  # Azure carries --command in its websocket handshake. The raw base64 source made that request
+  # too large: the handshake failed before its "connected" banner, while the same identity and a
+  # tiny command succeeded. gzip keeps this below the live-tested limit without changing a byte
+  # of the program Python executes after decompression. mtime=0 makes the payload reproducible.
+  LEGACY_PROBE_B64="$(python3 -c 'import base64,gzip,pathlib; print(base64.b64encode(gzip.compress(pathlib.Path("deploy/public/legacy_bootstrap_probe.py").read_bytes(), mtime=0)).decode())')"
   # ACA splits --command on spaces itself; quoting the -c program is passed to Python literally.
   # Keep the program space-free so it remains one argument after Azure's parser handles it.
-  LEGACY_PROBE_COMMAND="python -c exec(__import__('base64').b64decode('$LEGACY_PROBE_B64'))"
+  LEGACY_PROBE_COMMAND="python -c exec(__import__('gzip').decompress(__import__('base64').b64decode('$LEGACY_PROBE_B64')))"
   LEGACY_PROBE_EXIT=0
   LEGACY_PROBE_RAW="$(_aca_exec_tty az containerapp exec "${AZ[@]}" -g "$RG" -n "$APP" \
     --command "$LEGACY_PROBE_COMMAND" 2>&1)" || LEGACY_PROBE_EXIT=$?
