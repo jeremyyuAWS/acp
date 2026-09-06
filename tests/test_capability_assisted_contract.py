@@ -50,6 +50,11 @@ PPTX_PDF_APPLIER_REGISTRY = frozenset({
     # pptx in _LANGUAGE_EXTS → apply_text_values writes language marks.
     # pdf is NOT in _LANGUAGE_EXTS → downgraded to HUMAN.
     ("pptx", "3.1.2"),
+    # ── images of text (1.4.5 / 1.4.9) ───────────────────────────────────────
+    # approved_images_of_text_values reads rule_ids "1.4.5" and "1.4.9".
+    # pptx in _IMAGE_OF_TEXT_EXTS → apply_pptx_image_of_text writes descr.
+    ("pptx", "1.4.5"),
+    ("pptx", "1.4.9"),
 })
 
 SCOPED_FORMATS = frozenset({"pptx", "pdf"})
