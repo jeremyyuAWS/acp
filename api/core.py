@@ -1779,6 +1779,21 @@ REDIS_URL = os.environ.get("REDIS_URL", "")
 _redis = None
 
 
+class SharedTokenStoreUnavailable(RuntimeError):
+    """A split-worker scan cannot safely start because its shared token was not stored."""
+
+
+def _reset_token_redis() -> None:
+    """Drop a failed client so the bounded retry opens a fresh connection."""
+    global _redis
+    failed, _redis = _redis, None
+    try:
+        if failed is not None:
+            failed.close()
+    except Exception:
+        swallowed("core._reset_token_redis: closing the failed Redis client failed")
+
+
 def _get_redis():
     global _redis
     if not REDIS_URL:
@@ -1790,7 +1805,8 @@ def _get_redis():
     return _redis
 
 
-def register_scan_tokens(scan_id: str, *, drive: str | None = None, sp: str | None = None) -> None:
+def register_scan_tokens(scan_id: str, *, drive: str | None = None, sp: str | None = None,
+                         require_shared: bool = False) -> None:
     # Refreshing one provider must not erase the other provider's still-live credential. This
     # matters now that the SharePoint keep-alive updates a completed scan throughout Release.
     toks = dict(get_scan_tokens(scan_id))
@@ -1800,28 +1816,41 @@ def register_scan_tokens(scan_id: str, *, drive: str | None = None, sp: str | No
         toks["sp"] = sp
     if not (drive or sp):
         return
-    r = _get_redis()
-    if r is not None:
-        try:
-            import json as _j
-            r.set(f"scantok:{scan_id}", _j.dumps(toks), ex=_TOKEN_TTL)
-            return
-        except Exception:
-            # fall through to in-memory
-            swallowed("core.register_scan_tokens: registering the scan tokens in Redis failed", scan_id)
+    if REDIS_URL:
+        import json as _j
+        for attempt in range(2):
+            try:
+                r = _get_redis()
+                if r is not None and r.set(f"scantok:{scan_id}", _j.dumps(toks), ex=_TOKEN_TTL):
+                    return
+            except Exception:
+                swallowed("core.register_scan_tokens: registering the scan tokens in Redis failed", scan_id)
+            _reset_token_redis()
+            if attempt == 0:
+                _time.sleep(0.05)
+        if require_shared:
+            raise SharedTokenStoreUnavailable(
+                "shared credential store unavailable; the scan was not started"
+            )
+        # Compatibility for non-queued callers: keep the credential usable by this process.
     SCAN_TOKENS[scan_id] = toks
 
 
 def get_scan_tokens(scan_id: str) -> dict:
-    r = _get_redis()
-    if r is not None:
-        try:
-            import json as _j
-            v = r.get(f"scantok:{scan_id}")
-            if v:
-                return _j.loads(v)
-        except Exception:
-            swallowed("core.get_scan_tokens: reading the scan tokens from Redis failed", scan_id)
+    if REDIS_URL:
+        import json as _j
+        for attempt in range(2):
+            try:
+                r = _get_redis()
+                v = r.get(f"scantok:{scan_id}") if r is not None else None
+                if v:
+                    return _j.loads(v)
+                break
+            except Exception:
+                swallowed("core.get_scan_tokens: reading the scan tokens from Redis failed", scan_id)
+                _reset_token_redis()
+                if attempt == 0:
+                    _time.sleep(0.05)
     return SCAN_TOKENS.get(scan_id, {})
 
 
