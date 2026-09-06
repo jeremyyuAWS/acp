@@ -477,6 +477,20 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(text).not.toContain('Image needs alt text')
   })
 
+  it('does not label a deterministic proposal as AI-assisted', async () => {
+    const proposals = [
+      { proposed_value: 'A chart summary', source: 'chart data (deterministic — from the document chart XML)' },
+    ]
+    await render({ queue: [{ id: 9, file: 'chart.docx', title: 'DOCX · Chart alternative',
+      hasProposal: true, after: 'A chart summary', proposalSource: proposals[0].source, proposals }], decisions: {} })
+    const select = container.querySelector('select[aria-label="Filter by fix source"]')
+    expect(select.textContent).toContain('AI-assisted drafts (0)')
+    const setValue = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set
+    await act(async () => { setValue.call(select, 'ai'); select.dispatchEvent(new Event('change', { bubbles: true })) })
+    expect(container.querySelectorAll('.rinbox-row')).toHaveLength(0)
+    expect(container.textContent).toContain('No findings match these filters')
+  })
+
   // ── Keyboard + screen-reader accessibility of the review queue ──
   const liveRegion = () => container.querySelector('[aria-live="polite"]')
   const queueList = () => container.querySelector('[aria-label^="Findings"]')

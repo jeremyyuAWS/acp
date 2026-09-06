@@ -59,6 +59,21 @@ export const LANES = {
 
 export const LANE_ORDER = ['review', 'apply', 'manual', 'handoff', 'recheck', 'blocked']
 
+// A proposal is not automatically an AI proposal. The backend also offers values derived from
+// OCR, chart XML, link targets and structural detectors. Prefer the proposal's persisted source
+// over the coarse `hasProposal` compatibility flag so the UI never credits a model for a value it
+// did not produce. Legacy rows without source metadata retain the old behaviour.
+const NON_MODEL_SOURCE = /\b(deterministic|ocr|chart data|link target|floating text|heuristic|speech recognition|no model)\b/i
+const MODEL_SOURCE = /\b(ai|model|ollama|claude|anthropic|openai|gemini|bedrock|hugging\s*face|qwen|llama|vision)\b/i
+export function isAiAssistedDraft(f) {
+  if (!f?.hasProposal) return false
+  const sources = [f.proposalSource, ...(Array.isArray(f.proposals) ? f.proposals.map((p) => p?.source) : [])]
+    .map((source) => String(source || '').trim()).filter(Boolean)
+  if (!sources.length) return true
+  if (sources.some((source) => MODEL_SOURCE.test(source) && !NON_MODEL_SOURCE.test(source))) return true
+  return !sources.every((source) => NON_MODEL_SOURCE.test(source))
+}
+
 // The colour of a row's 4px lane rail. Attention lanes (blocked, rejected-handoff) keep their
 // saturated colour so they stand out; everything else gets a neutral rail. This is what "reserve
 // orange for items that genuinely require attention" comes down to in the queue.

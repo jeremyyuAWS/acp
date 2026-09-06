@@ -1,7 +1,8 @@
 import { useMemo, useState, useEffect, useRef } from 'react'
 import {
   rowModel, laneOf, sortQueue, groupByDocument, nextUnresolvedId, progress, railColorOf,
-  matchesWorkflow, workflowCounts, workflowStepIndex, isResolved, WORKFLOW_TABS, WORKFLOW_LABELS, SORTS,
+  matchesWorkflow, workflowCounts, workflowStepIndex, isResolved, isAiAssistedDraft,
+  WORKFLOW_TABS, WORKFLOW_LABELS, SORTS,
 } from './remediationInboxModel.js'
 import { clusterRows, clusterOfFinding, batchTargetsOf } from './remediationClusters.js'
 import { fixSteps, appName } from './remediationGuide.js'
@@ -716,6 +717,9 @@ export default function RemediationInbox({
   const myAssignedCount = useMemo(
     () => (myEmail ? queue.filter(assignedToMe).length : 0),
     [queue, assignees, myEmail]) // eslint-disable-line react-hooks/exhaustive-deps
+  const aiDraftCount = useMemo(
+    () => queue.filter((f) => matchesWorkflow(f, tab, decisions) && isAiAssistedDraft(f)).length,
+    [queue, tab, decisions])
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -723,7 +727,7 @@ export default function RemediationInbox({
       (!assignedOnly || assignedToMe(f)) &&
       (priorityFilter === 'all' || String(f.severity || 'unrated').toLowerCase() === priorityFilter) &&
       (formatFilter === 'all' || fmtOf(f.file) === formatFilter) &&
-      (sourceFilter === 'all' || (sourceFilter === 'ai' ? !!f.hasProposal : !f.hasProposal)) &&
+      (sourceFilter === 'all' || (sourceFilter === 'ai' ? isAiAssistedDraft(f) : !isAiAssistedDraft(f))) &&
       (!q || rowModel(f, decisions).issue.toLowerCase().includes(q) || String(f.file).toLowerCase().includes(q)))
     return sortQueue(filtered, sort)
   }, [queue, tab, sort, search, decisions, assignedOnly, assignees, myEmail, priorityFilter, formatFilter, sourceFilter]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -1029,7 +1033,7 @@ export default function RemediationInbox({
             </select>
             <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)} aria-label="Filter by fix source">
               <option value="all">All fix sources</option>
-              <option value="ai">AI-assisted drafts</option>
+              <option value="ai">AI-assisted drafts ({aiDraftCount})</option>
               <option value="other">Automatic &amp; manual</option>
             </select>
             {(priorityFilter !== 'all' || formatFilter !== 'all' || sourceFilter !== 'all') && (
