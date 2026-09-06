@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
-  laneOf, LANES, effortSecOf, effortLabel, isResolved, issueLabel, locationLabel, rowModel,
+  laneOf, LANES, effortSecOf, effortLabel, isResolved, isAiAssistedDraft, issueLabel, locationLabel, rowModel,
   tabOf, tabCounts, matchesTab, sortQueue, groupByDocument, nextUnresolvedId, progress,
   normSc, autoFixRows, railColorOf, NEUTRAL_RAIL, workflowStatusOf,
 } from './remediationInboxModel.js'
@@ -13,6 +13,17 @@ const F = {
   recheck: { id: 5, file: 'Report.xlsx', title: 'XLSX · edited, needs recheck', status: 'recheck' },
 }
 const ALL = Object.values(F)
+
+describe('proposal provenance', () => {
+  it('distinguishes model drafts from deterministic proposals using the persisted source', () => {
+    expect(isAiAssistedDraft({ hasProposal: true, proposalSource: 'AI text model (claude-haiku-4-5)' })).toBe(true)
+    expect(isAiAssistedDraft({ hasProposal: true, proposals: [{ source: 'AI vision model (llava:13b)' }] })).toBe(true)
+    expect(isAiAssistedDraft({ hasProposal: true, proposalSource: 'OCR (tesseract) — human confirmation required' })).toBe(false)
+    expect(isAiAssistedDraft({ hasProposal: true, proposalSource: 'chart data (deterministic — from document XML)' })).toBe(false)
+    expect(isAiAssistedDraft({ hasProposal: true })).toBe(true)
+    expect(isAiAssistedDraft({ hasProposal: false })).toBe(false)
+  })
+})
 
 describe('lane taxonomy', () => {
   it('maps a finding to exactly one lane by status then remediation shape', () => {
