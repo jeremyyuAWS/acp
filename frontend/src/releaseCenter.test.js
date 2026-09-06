@@ -105,4 +105,20 @@ describe('Release builder', () => {
     expect(s).toMatch(/srcOf\(f\) !== 'stale'/)
     expect(s).toMatch(/disabled=\{done\[f\.file\] \|\| srcOf\(f\) === 'stale'\}/)
   })
+
+  it('moves focus from the overview action to the real builder', () => {
+    const s = pub()
+    expect(s).toMatch(/const builderRef = useRef\(null\)/)
+    expect(s).toMatch(/onClick=\{startRelease\}>Start a release/)
+    expect(s).toMatch(/builderRef\.current\?\.scrollIntoView/)
+    expect(s).toMatch(/builderRef\.current\?\.focus/)
+    expect(s).toMatch(/ref=\{builderRef\} tabIndex=\{-1\} aria-labelledby="release-workspace-title"/)
+  })
+
+  it('collapses the secondary record so it no longer buries the workflow', () => {
+    const s = pub()
+    expect(s).toMatch(/<details className="panel release-record"/)
+    expect(s).toMatch(/Release details and evidence/)
+    expect(s).toMatch(/<summary className="release-record__summary">/)
+  })
 })
