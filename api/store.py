@@ -4681,9 +4681,13 @@ class Store:
         kinds = {
             "scan_discover": "discover", "scan_folder": "discover", "scan_batch": "discover",
             "scan_file": "assess", "scan_assess": "assess", "assess_trace": "assess",
-            "remediate_file": "remediate", "rescore_file": "remediate",
-            "apply_approved_values": "remediate",
+            "remediate_file": "remediate", "deliver_corrected_copy": "remediate",
+            "rescore_file": "remediate", "apply_approved_values": "remediate",
         }
+        # NOT the same list as core.REMEDIATE_LANE_JOB_TYPES, and the difference is deliberate:
+        # `publish_file` is Release work that a user reaches from a different tab, and naming it
+        # "remediate" here would report a release as remediation still running. A job type absent
+        # from this map is dropped below rather than mislabelled.
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "SELECT j.id,j.scan_id,j.type,j.status,j.created_at,j.updated_at,"
