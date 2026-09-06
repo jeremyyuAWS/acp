@@ -1491,6 +1491,20 @@ def _admin_activity_snapshot() -> dict:
         unlinked_active_jobs = None
     _list_instances = getattr(core.store, "list_worker_instances", None)
     instances = _list_instances() if callable(_list_instances) else []
+    # Which replica is running what, from `locked_by` — ACP's own data, so it is as fresh as the
+    # stream itself rather than waiting on the 30s Azure capacity cache. getattr-guarded like
+    # every other optional store method here, so a FakeStore or an older store reads as
+    # unavailable rather than raising.
+    _by_replica = getattr(core.store, "running_jobs_by_replica", None)
+    try:
+        job_attribution = _by_replica() if callable(_by_replica) else {
+            "available": False, "replicas": [], "attributed": None, "unattributed": None,
+            "reason": "This deployment's job store does not report per-replica attribution."}
+    except Exception:
+        swallowed("routes.system._admin_activity_snapshot: reading per-replica job attribution failed")
+        job_attribution = {"available": False, "replicas": [], "attributed": None,
+                           "unattributed": None,
+                           "reason": "Per-replica job attribution could not be read."}
     freshness_seconds = core.WORKER_INSTANCE_FRESHNESS_SECONDS
     now = datetime.now(timezone.utc)
     per_role = _replica_capacity(instances, now=now, freshness_seconds=freshness_seconds)
@@ -1638,6 +1652,10 @@ def _admin_activity_snapshot() -> dict:
             "tracing": _tracing_status(),
             "worker_instance_attribution": {"available": bool(instances),
                 "reason": None if instances else "Per-replica capacity is not yet reporting. Jobs in flight are available, but slot utilization cannot be calculated honestly."},
+            # Distinct from the block above: that one is about SLOT capacity per replica, this is
+            # about which replica holds each running JOB. They can disagree honestly — a replica
+            # whose telemetry row has gone stale can still be visibly holding claims.
+            "job_attribution": job_attribution,
             # Absent, not empty, when the store cannot answer — see the guard above.
             **({"queue": composition} if composition else {}),
         },

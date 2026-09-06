@@ -577,3 +577,47 @@ def test_app_unavailable_is_false_when_the_app_reads_fine(open_client, monkeypat
     import routes.control as control_module
     monkeypatch.setattr(control_module, "_AZ_CONFIGURED", False)
     assert open_client.get("/control/workers/capacity").json()["app_unavailable"] is False
+
+
+def test_each_app_reports_its_own_replica_count(open_client, monkeypatch):
+    """Production reads three worker apps; each must count ITS OWN replicas.
+
+    `_capacity_for_app(app_name)` passed the module-level `_AZ_APP` to list_replicas while every
+    other call in it used `app_name`. Production sets WORKER_APP_NAMES and no WORKER_APP_NAME, so
+    `_AZ_APP` was None and every app's `current_replicas` degraded to "couldn't measure"; with
+    both set, all three apps reported one app's count as their own. Neither failed loudly — the
+    whole existing suite passed with the bug in place, because every test configured a single app
+    where `_AZ_APP` and `app_name` happen to agree.
+    """
+    import routes.control as control_module
+    monkeypatch.setattr(control_module, "_AZ_CONFIGURED", True)
+    monkeypatch.setattr(control_module, "_AZ_APP", None)
+    monkeypatch.setattr(control_module, "_AZ_APP_NAMES",
+                        ("acp-discovery", "acp-assess", "acp-remediate"))
+
+    counts = {"acp-discovery": 4, "acp-assess": 2, "acp-remediate": 7}
+    asked = []
+
+    def _list_replicas(rg, name, rev):
+        asked.append(name)
+        # A real client raises on a None app name; mirroring that is what makes this test fail
+        # rather than quietly return the wrong app's rows.
+        if name not in counts:
+            raise RuntimeError(f"no such container app: {name!r}")
+        return SimpleNamespace(value=[object()] * counts[name])
+
+    az_client = SimpleNamespace(
+        container_apps=SimpleNamespace(get=lambda rg, name: _fake_app(app_id=f"/subs/x/{name}")),
+        container_apps_revision_replicas=SimpleNamespace(list_replicas=_list_replicas),
+    )
+    monkeypatch.setattr(control_module, "_az_client", lambda: az_client)
+    monkeypatch.setattr(control_module, "_monitor_client",
+                        lambda: SimpleNamespace(metrics=SimpleNamespace(
+                            list=lambda *a, **kw: SimpleNamespace(value=[]))))
+
+    r = open_client.get("/control/workers/capacity")
+    assert r.status_code == 200
+    apps = r.json().get("apps") or {}
+
+    assert sorted(asked) == ["acp-assess", "acp-discovery", "acp-remediate"]
+    assert {name: apps[name]["current_replicas"] for name in counts} == counts

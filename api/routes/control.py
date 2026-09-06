@@ -618,7 +618,13 @@ def _capacity_for_app(app_name: str) -> dict:
 
     try:
         revision = app.properties.latest_ready_revision_name
-        replicas = client.container_apps_revision_replicas.list_replicas(_AZ_RG, _AZ_APP, revision)
+        # `app_name`, NOT the module-level _AZ_APP. This function is called once per entry in
+        # WORKER_APP_NAMES, and every other call in it is already scoped to the app being read.
+        # With _AZ_APP here, production (which sets WORKER_APP_NAMES and no WORKER_APP_NAME) got
+        # None and every app's current_replicas degraded to "couldn't measure"; with both set,
+        # all three apps reported ONE app's replica count as their own — the same class of quiet
+        # wrongness the WORKER_APP_NAME comment at the top of this module was written about.
+        replicas = client.container_apps_revision_replicas.list_replicas(_AZ_RG, app_name, revision)
         # Defensive about the exact collection shape: an OData-style `.value` list is the norm
         # for this SDK generation, but falling back to treating the result as directly iterable
         # costs nothing and avoids a shape mismatch turning into a silent None where a real count

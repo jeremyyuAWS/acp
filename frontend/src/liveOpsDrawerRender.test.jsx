@@ -1770,3 +1770,71 @@ describe('Task 19 — worker and queue, as the brief specifies', () => {
     expect(new Set(seen).size).toBe(4)
   })
 })
+
+describe('Job placement', () => {
+  // The drawer used to state that per-replica placement was impossible. `locked_by` carries the
+  // Container Apps replica name, so it is now answerable from ACP's own claim rows — these pin
+  // what is rendered, including the two disagreements with Azure that matter.
+  const attribution = {
+    available: true, attributed: 4, unattributed: 2, reason: null,
+    replicas: [
+      { replica_id: 'acp-assess--v25-aaa', roles: ['assess'], running: 3, processes: 2,
+        oldest_claim_age_s: 930, job_types: { scan_file: 2, extract_text: 1 } },
+      { replica_id: 'acp-assess--v24-old', roles: ['assess'], running: 1, processes: 1,
+        oldest_claim_age_s: 20, job_types: { scan_file: 1 } },
+    ],
+  }
+  const withReplicas = (names) => ({ ...capacity, replicas: names.map((name) => ({ name })) })
+  const placed = { ...snapshot, summary: { ...snapshot.summary, job_attribution: attribution } }
+
+  it('names each replica, what it is running, and its oldest claim', async () => {
+    const container = await mount({ nodeId: 'stage:assess',
+      snapshot: placed,
+      capacity: withReplicas(['acp-assess--v25-aaa', 'acp-assess--v24-old', 'acp-assess--v25-idle']),
+      node: { kind: 'worker', label: 'Assess workers', service } })
+    const panel = container.querySelector('[aria-label="Per-replica job placement"]')
+
+    expect(panel).toBeTruthy()
+    expect(panel.textContent).toContain('acp-assess--v25-aaa')
+    expect(panel.textContent).toContain('3 jobs')
+    expect(panel.textContent).toContain('scan file 2')
+    expect(panel.textContent).toContain('2 processes')
+    // The oldest claim on that replica, formatted — not a raw second count.
+    expect(panel.textContent).toMatch(/oldest claim 15m/)
+    // A replica Azure lists that holds nothing is named as idle, which is the figure that
+    // decides whether scaling out would help.
+    expect(panel.textContent).toContain('Idle, no job claimed: acp-assess--v25-idle')
+    // Counted, never placed on an invented replica.
+    expect(panel.textContent).toMatch(/2 running jobs fleet-wide/)
+  })
+
+  it('flags a replica still holding work that Azure no longer lists', async () => {
+    const container = await mount({ nodeId: 'stage:assess',
+      snapshot: placed,
+      capacity: withReplicas(['acp-assess--v25-aaa']),
+      node: { kind: 'worker', label: 'Assess workers', service } })
+    const panel = container.querySelector('[aria-label="Per-replica job placement"]')
+    expect(panel.textContent).toContain('not in the Azure replica list')
+    // Not the escaped literal an earlier draft of this panel rendered.
+    expect(panel.textContent).not.toContain('u2019')
+  })
+
+  it('carries no filename, owner or payload', async () => {
+    const container = await mount({ nodeId: 'stage:assess',
+      snapshot: placed, capacity: withReplicas(['acp-assess--v25-aaa']),
+      node: { kind: 'worker', label: 'Assess workers', service } })
+    const panel = container.querySelector('[aria-label="Per-replica job placement"]')
+    // The snapshot above carries both, and `Current work` renders them; this panel must not.
+    expect(panel.textContent).not.toContain('Mediation Record')
+    expect(panel.textContent).not.toContain('operator@example.org')
+  })
+
+  it('says so when the deployment does not report placement', async () => {
+    const container = await mount({ nodeId: 'stage:assess',
+      node: { kind: 'worker', label: 'Assess workers', service } })
+    const panel = container.querySelector('[aria-label="Per-replica job placement"]')
+    expect(panel.textContent).toMatch(/does not report which replica/i)
+    // No fabricated rows, and no "0 replicas" that would read as an idle fleet.
+    expect(panel.querySelectorAll('li')).toHaveLength(0)
+  })
+})
