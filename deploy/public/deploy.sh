@@ -28,6 +28,8 @@ _retry() {  # ACA serializes revision writes; retry the conflict it raises when 
 RG="${ACP_RG:-mdk-accessibility}"
 ACR="${ACP_ACR:-mdkaccessibilityacr}"
 APP="${ACP_APP:-acp-app}"
+DEPLOY_TARGET_ENV="${ACP_DEPLOY_TARGET_ENV:-production}"
+DEPLOY_AUXILIARIES="${ACP_DEPLOY_AUXILIARIES:-1}"
 # unique per build: ACA caches images by tag, so a reused tag (e.g. uncommitted
 # working tree → same HEAD sha twice) is never re-pulled. Timestamp suffix forces it.
 TAG="$(git rev-parse --short HEAD 2>/dev/null || echo manual)-$(date +%s)"
@@ -67,6 +69,16 @@ EOF
 fi
 
 echo "== 0/5 preflight =="
+case "$DEPLOY_TARGET_ENV:$DEPLOY_AUXILIARIES" in
+  production:0|production:1) ;;
+  staging:0)
+    case "$APP" in *-staging) ;; *) echo "refusing: staging app '$APP' must end in -staging" >&2; exit 1 ;; esac
+    if [ "${ACP_DEPLOY_WORKER:-}" = 1 ]; then
+      case "${ACP_WORKER:-}" in *-staging) ;; *) echo "refusing: staging worker '${ACP_WORKER:-}' must end in -staging" >&2; exit 1 ;; esac
+    fi ;;
+  staging:1) echo "refusing: staging first-deploy must set ACP_DEPLOY_AUXILIARIES=0; fixed-name production auxiliaries are outside its target set" >&2; exit 1 ;;
+  *) echo "refusing: ACP_DEPLOY_TARGET_ENV must be production or staging and ACP_DEPLOY_AUXILIARIES must be 0 or 1" >&2; exit 1 ;;
+esac
 # $ACP_ENV is ambiguous and must not be honoured. It named the Container Apps environment here,
 # and api/core.py reads the same name to mean the *deployment* environment (IS_PROD).
 # docs/production-hardening.md told operators to `export ACP_ENV=production` as step 1 -- which
@@ -424,12 +436,12 @@ fi
 # Stamp it so core.IS_PROD is true, which refuses the X-E2E-Key / X-Demo-Key bypasses even
 # if someone later sets ACP_ENABLE_TEST_BYPASS on the app. ACP_DEPLOY_ENV is the only name for
 # this; the ACA environment name is now ACP_ACA_ENV, and ACP_ENV is refused outright (preflight).
-DEPLOY_ENV_ENV="ACP_DEPLOY_ENV=production"
+DEPLOY_ENV_ENV="ACP_DEPLOY_ENV=$DEPLOY_TARGET_ENV"
 # ADR 0020 stage 4 — Discover lists only; the download + WCAG analysis run at Assess. Default ON.
 # Instant revert without a code change:  ACP_DEFER_ANALYSIS_TO_ASSESS=0 bash deploy/public/deploy.sh
 DEFER_ENV="ACP_DEFER_ANALYSIS_TO_ASSESS=${ACP_DEFER_ANALYSIS_TO_ASSESS:-1}"
 echo "   defer analysis to Assess = ${ACP_DEFER_ANALYSIS_TO_ASSESS:-1} (ADR 0020)"
-echo "   deploy env = production (test/demo auth bypasses refused)"
+echo "   deploy env = $DEPLOY_TARGET_ENV"
 echo "   workers = ${ACP_WORKERS:-${WORKERS_ENV:+inherited}}${WORKERS_ENV:+}"
 echo "   allowed emails = ${ACP_ALLOWED_EMAILS:-${EMAILS_ENV:+inherited}}"
 echo "   blob account = $BLOB_ACCOUNT"
@@ -621,7 +633,7 @@ FQDN="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$APP" --query properties.co
 # it to provision the datasource. Skipped for SQLite-only deployments.
 GF_APP="acp-grafana"
 GF_IMAGE="acp-grafana:${TAG}"
-if [ -n "$DATABASE_URL" ]; then
+if [ "$DEPLOY_AUXILIARIES" = 1 ] && [ -n "$DATABASE_URL" ]; then
   echo "== Grafana: build + deploy ACP-specific dashboard container =="
   # Parse Postgres DSN → Grafana env vars.
   # Expected format: postgresql://user:pass@host[:port]/db?...
@@ -663,6 +675,8 @@ if [ -n "$DATABASE_URL" ]; then
   fi
   GF_FQDN="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$GF_APP" --query properties.configuration.ingress.fqdn -o tsv)"
   echo "   Grafana:    https://$GF_FQDN   (anonymous viewer; sign in as admin for edits)"
+elif [ "$DEPLOY_AUXILIARIES" = 0 ]; then
+  echo "   Grafana:    skipped — auxiliary provisioning disabled for isolated target"
 else
   echo "   Grafana:    skipped — ACP_DATABASE_URL not set (SQLite mode)"
 fi

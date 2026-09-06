@@ -112,6 +112,10 @@ for i in 0 1 2; do
     ACP_WORKER="${LANE_NAMES[$i]}"
     ACP_WORKER_ROLE="${LANE_ROLES[$i]}"
     ACP_DEPLOY_WORKER=1
+    ACP_DEPLOY_TARGET_ENV=staging
+    # deploy.sh also manages fixed-name production auxiliaries (currently acp-grafana). Staging
+    # reuses its existing observability setup and must never enter that mutation path.
+    ACP_DEPLOY_AUXILIARIES=0
     # Keep the migration overlap inside one CPU: the legacy worker remains live until all three
     # heartbeats prove healthy, so each temporary staging lane starts at the ACA minimum size.
     ACP_WORKER_CPU="${ACP_STAGING_WORKER_CPU:-0.25}"
