@@ -5,7 +5,8 @@ WHAT THIS IS AND, EMPHATICALLY, WHAT IT IS NOT
 PRD §16 requires the exported ACR to be built on the official ITI VPAT® 2.5Rev template. That
 template is not here and cannot be until a licensing decision is made — vendoring a third-party
 artifact under the VPAT® trademark's usage terms is a decision this repo makes in an ADR first
-(the precedent is ADR 0029, the PDF analyser). So this module renders the report's CONTENT into an
+(see ADR 0053 — NOT ADR 0029, which this comment used to cite and which contains no licensing
+reasoning). So this module renders the report's CONTENT into an
 accessible .docx with the VPAT table's shape, and says on its own first page that it is not a
 VPAT. When the template lands, the renderer below is what gets replaced; the projection it
 consumes does not change.
