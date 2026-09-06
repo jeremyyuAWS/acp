@@ -7991,6 +7991,37 @@ class Store:
             row = self._db.fetchone(cur)
         return self.release_status(row["id"], owner) if row else None
 
+    def list_release_history(self, owner: str, *, limit: int = 50) -> list[dict]:
+        """Return durable releases newest-first, including their audit evidence.
+
+        Deliberately owner-scoped at the first query. Child rows are then loaded only for release
+        ids returned by that gate, so a guessed id can never expose another user's destination or
+        document history.
+        """
+        safe_limit = max(1, min(100, int(limit)))
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM release_executions WHERE owner_email=%s "
+                "ORDER BY updated_at DESC,id DESC LIMIT %s", (owner, safe_limit))
+            releases = self._db.fetchall(cur)
+            history = []
+            for release in releases:
+                self._db.execute(cur,
+                    "SELECT * FROM release_roots WHERE release_id=%s ORDER BY provider_location",
+                    (release["id"],))
+                roots = self._db.fetchall(cur)
+                self._db.execute(cur,
+                    "SELECT * FROM release_documents WHERE release_id=%s "
+                    "ORDER BY published_at DESC,file", (release["id"],))
+                documents = self._db.fetchall(cur)
+                published = sum(row.get("status") == "published" for row in documents)
+                failed = sum(row.get("status") == "failed" for row in documents)
+                total = int(release.get("documents_total") or 0)
+                history.append({**release, "roots": roots, "documents": documents,
+                                "published": min(total, published), "failed": failed,
+                                "remaining": max(0, total - published - failed)})
+            return history
+
     def refresh_scan_aggregate(self, scan_id: str) -> dict:
         """Re-compute avg_score and certifiable from current file_records — called after
         a single-file rescore so the scan summary stays consistent without a full finalize."""

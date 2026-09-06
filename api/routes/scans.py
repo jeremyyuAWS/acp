@@ -3397,6 +3397,46 @@ def publish_files(sid: str, request: Request, body: dict):
             "remaining": status.get("remaining", 0), "published": results}
 
 
+@router.get("/releases")
+def get_release_history(request: Request, limit: int = Query(50, ge=1, le=100)):
+    """Owner-scoped release executions across scans, newest first."""
+    owner = _owner(request)
+    releases = core.store.list_release_history(owner, limit=limit)
+    return {"releases": [{
+        "release_id": release["id"],
+        "scan_id": release["scan_id"],
+        "actor": release["owner_email"],
+        "source": release.get("source"),
+        "folder_name": release.get("folder_name"),
+        "status": release.get("status"),
+        "created_at": release.get("created_at"),
+        "updated_at": release.get("updated_at"),
+        "documents_total": release.get("documents_total", 0),
+        "published": release.get("published", 0),
+        "failed": release.get("failed", 0),
+        "remaining": release.get("remaining", 0),
+        "destinations": [{
+            "provider": root.get("provider"),
+            "location": root.get("provider_location"),
+            "folder_name": root.get("folder_name"),
+            "folder_url": root.get("folder_url"),
+        } for root in release.get("roots", [])],
+        "documents": [{
+            "file": row.get("file"),
+            "status": row.get("status"),
+            "destination_path": row.get("destination_relative_path"),
+            "released_url": row.get("released_document_url"),
+            "created": bool(row.get("created_result")),
+            "checksum": row.get("corrected_checksum"),
+            "verification": row.get("verification"),
+            "failure_category": row.get("failure_category"),
+            "explanation": row.get("explanation"),
+            "published_at": row.get("published_at"),
+        } for row in release.get("documents", [])],
+        "manifest_url": f"/api/scans/{release['scan_id']}/release/manifest",
+    } for release in releases]}
+
+
 @router.get("/scans/{sid}/release")
 def get_release_status(sid: str, request: Request):
     """Return the durable structured-release state for this owner and scan."""
