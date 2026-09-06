@@ -127,6 +127,25 @@ function ReportReadiness({ progress, validation, gaps, onOpen }) {
   )
 }
 
+// A gate finding, in the shape ACP's Word analyser actually emits.
+//
+// THE FIELD NAMES ARE `ruleId` AND `wcag`, from api/office_structure.py::_finding and
+// _review_finding — NOT `rule`, `criterion` or `message`. This read them as `f.rule || f.criterion`
+// until now, and none of those keys has ever existed, so every FAIL rendered as the literal
+// "check: failed" and every REVIEW lost its criterion number.
+//
+// It shipped because the tests mocked the gate with a shape I INVENTED rather than the one the
+// analyser produces: the mock agreed with the component because the same wrong guess wrote both,
+// so the suite proved the code worked against data that never occurs. The fixtures below now come
+// from _finding's real output.
+//
+// `detail` is real and REVIEW findings carry it; FAIL findings do not, so the caller's fallback is
+// the honest thing to print there rather than an invented sentence.
+const findingLabel = (f, fallback = 'failed') => {
+  const name = f.ruleId || f.wcag || 'check'
+  return `${name}: ${f.detail || fallback}`
+}
+
 export default function AcrWorkspace() {
   const [reports, setReports] = useState(null)
   const [reportId, setReportId] = useState(null)
@@ -587,7 +606,7 @@ export default function AcrWorkspace() {
                   itself inaccessible is the one document this product cannot hand over.
                   <ul>
                     {docxGate.failures.map((f, i) => (
-                      <li key={i}>{f.rule || f.criterion || 'check'}: {f.message || f.detail || 'failed'}</li>
+                      <li key={i}>{findingLabel(f)}</li>
                     ))}
                   </ul>
                 </div>
@@ -599,7 +618,7 @@ export default function AcrWorkspace() {
                   The document downloads; signing it off is yours.
                   <ul>
                     {docxGate.reviews.map((f, i) => (
-                      <li key={i}>{f.rule || f.criterion || 'check'}: {f.message || f.detail || 'needs review'}</li>
+                      <li key={i}>{findingLabel(f, 'needs review')}</li>
                     ))}
                   </ul>
                 </div>

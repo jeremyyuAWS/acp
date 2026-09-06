@@ -97,6 +97,21 @@ const EMPTY_GAPS = {
 }
 const CLEAN_GATE = { ok: true, failures: [], reviews: [] }
 
+// FINDING SHAPE — copied from api/office_structure.py, not invented.
+//
+//   _finding(rule_id, wcag, severity)        -> {ruleId, wcag, severity}
+//   _review_finding(rule_id, wcag, detail)   -> {ruleId, wcag, severity: 'REVIEW',
+//                                                advisory: true, detail}
+//
+// There is no `rule`, no `criterion` and no `message`. The first version of this file used all
+// three, and that is exactly why the bug shipped: a mock is a claim about what the other side
+// sends, and when the same wrong guess writes the mock AND the component, the test agrees with
+// the code about a world neither of them lives in. A FAIL finding carries no prose at all, which
+// is why the component needs a fallback rather than a missing sentence.
+const FAIL_FINDING = { ruleId: '1.3.1', wcag: '1.3.1', severity: 'FAIL' }
+const REVIEW_FINDING = { ruleId: '1.1.1', wcag: '1.1.1', severity: 'REVIEW', advisory: true,
+                         detail: 'image alt text needs a human' }
+
 let container
 let anchors
 
@@ -204,20 +219,31 @@ describe('the export accessibility gate', () => {
   it('shows the failing checks and disables the download when ACP fails its own document', async () => {
     // The server would answer 500 here. Letting the user press a button that cannot succeed, to
     // be told afterwards, is worse than saying so up front — and the reason is the actionable part.
-    await openExport({ ok: false, reviews: [],
-                       failures: [{ rule: '1.3.1', message: 'no heading structure' }] })
+    await openExport({ ok: false, reviews: [], failures: [FAIL_FINDING] })
     expect(container.textContent).toMatch(/Word export is blocked/i)
+    // The criterion, from `ruleId`. The first version of this test invented `rule` and
+    // `message`, the component read the same invented keys, and both agreed — so it shipped
+    // rendering the literal "check: failed" for every finding. See FINDING SHAPE above.
     expect(container.textContent).toContain('1.3.1')
-    expect(container.textContent).toContain('no heading structure')
     expect(wordButton().disabled).toBe(true)
+  })
+
+  it('never renders a finding as the literal word "check"', async () => {
+    // The regression this whole change exists for, stated as the thing a reader would see. A FAIL
+    // finding carries no prose — only ruleId, wcag and severity — so if the name is read from the
+    // wrong key there is nothing left on the line but "check: failed", for every finding, and the
+    // screen looks populated while saying nothing.
+    await openExport({ ok: false, reviews: [], failures: [FAIL_FINDING] })
+    expect(container.textContent).not.toMatch(/\bcheck: failed\b/)
+    expect(container.textContent).toContain('1.3.1: failed')
   })
 
   it('surfaces REVIEW findings and still allows the download', async () => {
     // REVIEW is "a human has to look", not "approved" and not "broken". Blocking on it would
     // train people to ignore it; hiding it would turn "ACP could not decide" into "ACP approved".
-    await openExport({ ok: true, failures: [],
-                       reviews: [{ rule: '1.1.1', message: 'image alt text needs a human' }] })
+    await openExport({ ok: true, failures: [], reviews: [REVIEW_FINDING] })
     expect(container.textContent).toMatch(/need a person to look/i)
+    expect(container.textContent).toContain('1.1.1')
     expect(container.textContent).toContain('image alt text needs a human')
     expect(wordButton().disabled).toBe(false)
   })
