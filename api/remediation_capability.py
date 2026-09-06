@@ -268,9 +268,9 @@ REMEDIATION: dict[str, dict[str, str]] = {
         "2.4.2": AUTO,       # missing slide/document title
         "2.4.3": HUMAN,      # focus order — placeholder reorder is a layout decision; no deterministic fix
         "2.4.4": ASSISTED,   # link purpose — same link-text proposer as docx (a:hlinkClick)
-        "2.4.6": HUMAN,      # empty title placeholder — propose_slide_titles emits cards but
-                             # pptx is not in _STRUCTURE_LABEL_EXTS (only xlsx), so
-                             # _apply_approved_values never writes the approved title back.
+        "2.4.6": ASSISTED,   # empty title placeholder — propose_slide_titles drafts a title
+                             # from the slide's own content; apply_pptx_slide_titles writes it
+                             # back into the title placeholder shape once a reviewer approves.
         "2.4.9": ASSISTED,   # reused link text — link-text proposer, per destination
         "3.1.1": AUTO,       # presentation language (docProps/core.xml)
         "3.1.2": ASSISTED,
