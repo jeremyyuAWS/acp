@@ -39,10 +39,9 @@ describe('Release Center: honest policy panel', () => {
 })
 
 describe('Release Center: confirmation before a release', () => {
-  it('routes both Release and Release-all through a confirm step, not a direct write', () => {
+  it('routes the selected batch through a confirm step, not a direct write', () => {
     const s = pub()
-    expect(s).toMatch(/onClick=\{\(\) => setConfirm\(\{ kind: 'all' \}\)\}/)
-    expect(s).toMatch(/onClick=\{\(\) => setConfirm\(\{ kind: 'file', file: f\.file \}\)\}/)
+    expect(s).toMatch(/onClick=\{\(\) => setConfirm\(\{ kind: 'selected', files: selectedReady\.map/)
     // The old direct-fire handlers are gone.
     expect(s).not.toMatch(/onClick=\{publishAll\}/)
     expect(s).not.toMatch(/onClick=\{\(\) => publish\(f\.file\)\}/)
@@ -52,7 +51,7 @@ describe('Release Center: confirmation before a release', () => {
     const s = pub()
     expect(s).toMatch(/role="dialog" aria-modal="true"/)
     expect(s).toMatch(/releaseConfirmLines\(\{ count: cnt, provider: releaseProvider, anyDrive: batchAnyDrive/)
-    expect(s).toMatch(/setConfirm\(null\); if \(isAll\) publishAll\(\); else publish\(confirm\.file\)/)
+    expect(s).toMatch(/setConfirm\(null\); if \(isBatch\) publishAll\(targets\.map\(\(f\) => f\.file\)\); else publish\(confirm\.file\)/)
     // Escape closes it.
     expect(s).toMatch(/if \(e\.key === 'Escape'\) setConfirm\(null\)/)
   })
@@ -79,5 +78,31 @@ describe('Release Center: confirmation before a release', () => {
     expect(s).toMatch(/await getReleaseStatus\(run\.id\)/)
     expect(s).toMatch(/row\.status === 'queued' \|\| row\.status === 'running'/)
     expect(s).toMatch(/still running safely in the background/)
+  })
+})
+
+describe('Release builder', () => {
+  it('starts with an eligible-file selection and offers real publish and download paths', () => {
+    const s = pub()
+    expect(s).toMatch(/Start a release/)
+    expect(s).toMatch(/Choose files/)
+    expect(s).toMatch(/Choose delivery/)
+    expect(s).toMatch(/Publish copies/)
+    expect(s).toMatch(/Download corrected files/)
+    expect(s).toMatch(/downloadRemediated\(run\?\.id, file\.file\)/)
+  })
+
+  it('publishes only the selected files and states the consequence before writing', () => {
+    const s = pub()
+    expect(s).toMatch(/setConfirm\(\{ kind: 'selected', files: selectedReady\.map/)
+    expect(s).toMatch(/publishAll\(targets\.map/)
+    expect(s).toMatch(/Original files will not be changed/)
+    expect(s).toMatch(/Publish \$\{selectedReady\.length\}/)
+  })
+
+  it('does not allow changed sources into the releasable selection', () => {
+    const s = pub()
+    expect(s).toMatch(/srcOf\(f\) !== 'stale'/)
+    expect(s).toMatch(/disabled=\{done\[f\.file\] \|\| srcOf\(f\) === 'stale'\}/)
   })
 })
