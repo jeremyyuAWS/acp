@@ -5,7 +5,8 @@ import AcrPublish from './AcrPublish.jsx'
 import AcrExportAssurance from './AcrExportAssurance.jsx'
 import './AcrWorkspace.css'
 import { listAcrReports, createAcrReport, getAcrReport, listAcrCriteria, getAcrValidation,
-         getAcrPreview, getAcrGaps, downloadAcrPdf } from './acrApi'
+         getAcrPreview, getAcrGaps, downloadAcrPdf, downloadAcrDocx,
+         getAcrDocxGate } from './acrApi'
 
 // PRD §15 — the ACR list and the report workspace
 // (Overview · Criteria · Evidence gaps · Validation · Publication · Draft export).
@@ -140,6 +141,10 @@ export default function AcrWorkspace() {
   const [error, setError] = useState(null)
   const [busy, setBusy] = useState(false)
   const [pdfBusy, setPdfBusy] = useState(false)
+  const [docxBusy, setDocxBusy] = useState(false)
+  // The Word export's accessibility gate: {ok, failures, reviews}, or null while it is unknown.
+  // Fetched rather than assumed, because "no findings" and "not checked yet" must not look alike.
+  const [docxGate, setDocxGate] = useState(null)
 
   useEffect(() => {
     listAcrReports().then((d) => {
@@ -167,7 +172,16 @@ export default function AcrWorkspace() {
     if (tab === 'validation' || tab === 'overview') {
       getAcrValidation(reportId).then(setValidation).catch((e) => setError(String(e.message || e)))
     }
-    if (tab === 'export') getAcrPreview(reportId).then(setPreview).catch((e) => setError(String(e.message || e)))
+    if (tab === 'export') {
+      getAcrPreview(reportId).then(setPreview).catch((e) => setError(String(e.message || e)))
+      // Deliberately BEFORE anyone presses download. AcrExportAssurance's whole premise is that
+      // the limits are visible before a document is circulated, and the same applies here: an
+      // approver needs to know what ACP could not decide while they can still act on it.
+      // A failed gate check is not an error banner — it leaves the verdict unknown, and the
+      // download below says so rather than claiming the document is fine.
+      setDocxGate(null)
+      getAcrDocxGate(reportId).then(setDocxGate).catch(() => setDocxGate({ unavailable: true }))
+    }
     if (tab === 'gaps' || tab === 'overview') {
       getAcrGaps(reportId).then(setGapData).catch((e) => setError(String(e.message || e)))
     }
@@ -512,6 +526,89 @@ export default function AcrWorkspace() {
                 {' '}
                 <span className="muted">Tagged PDF/UA-1 — same rows as below.</span>
               </p>
+
+              {/* THE WORD EXPORT, AND ITS GATE. api/acr_export_docx.py renders the same projection
+                  as the PDF and the table below, then runs ACP's own Word analyser over the
+                  result; the server refuses to serve a document that FAILs.
+
+                  The gate is "no FAIL", not "all PASS" — PASS is unreachable for any Word document
+                  in this repo because no docx registration declares Coverage.FULL. So REVIEW does
+                  not mean "minor": it means ACP could not decide, and a person has to. Those
+                  findings are shown HERE because a .docx download is bytes and an approver cannot
+                  read them out of an attachment. */}
+              <p>
+                <button
+                  type="button"
+                  disabled={docxBusy || docxGate?.ok === false}
+                  onClick={async () => {
+                    setDocxBusy(true)
+                    setError(null)
+                    try {
+                      const { blob, filename } = await downloadAcrDocx(reportId)
+                      const url = URL.createObjectURL(blob)
+                      const a = document.createElement('a')
+                      a.href = url
+                      a.download = filename
+                      document.body.appendChild(a)
+                      a.click()
+                      a.remove()
+                      URL.revokeObjectURL(url)
+                    } catch (e) {
+                      // The server's sentence again: a 500 here names which of ACP's own checks
+                      // the generated document failed, and a 503 names the missing renderer.
+                      setError(String(e.message || e))
+                    } finally {
+                      setDocxBusy(false)
+                    }
+                  }}
+                >
+                  {docxBusy ? 'Preparing Word document…' : 'Download accessible Word document'}
+                </button>
+                {' '}
+                <span className="muted">
+                  .docx — same rows as below. Not a VPAT: the official ITI template is a separate,
+                  licensing decision.
+                </span>
+              </p>
+
+              {docxGate === null && (
+                <p className="muted" role="status">Checking the Word export…</p>
+              )}
+              {docxGate?.unavailable && (
+                <p role="status" className="muted">
+                  The Word export could not be checked just now, so what it contains is unknown.
+                  The download will still refuse if the document fails ACP's checks.
+                </p>
+              )}
+              {docxGate?.ok === false && (
+                <div role="alert" className="notice">
+                  <strong>The Word export is blocked.</strong> The document ACP generates fails its
+                  own accessibility checks, so it will not be served — a conformance report that is
+                  itself inaccessible is the one document this product cannot hand over.
+                  <ul>
+                    {docxGate.failures.map((f, i) => (
+                      <li key={i}>{f.rule || f.criterion || 'check'}: {f.message || f.detail || 'failed'}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {docxGate?.ok === true && docxGate.reviews?.length > 0 && (
+                <div role="note" className="notice">
+                  <strong>{docxGate.reviews.length} finding(s) need a person to look.</strong>{' '}
+                  ACP found nothing it can decide here, which is not the same as approving them.
+                  The document downloads; signing it off is yours.
+                  <ul>
+                    {docxGate.reviews.map((f, i) => (
+                      <li key={i}>{f.rule || f.criterion || 'check'}: {f.message || f.detail || 'needs review'}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {docxGate?.ok === true && !docxGate.reviews?.length && (
+                <p className="muted" role="status">
+                  The Word export passes ACP's document checks with nothing outstanding.
+                </p>
+              )}
               <table>
                 <caption>WCAG {preview.report.wcag_version} Report</caption>
                 <thead>

@@ -55,7 +55,7 @@ export const getAcrPreview = (id) => call(`/acr/${id}/preview`)
 // Errors go through `call`'s reasoning too: a deployment without the renderer answers 503 with a
 // sentence naming what is missing, and the screen must show THAT rather than "download failed".
 export async function downloadAcrPdf(id) {
-  return pdfDownload(`/acr/${id}/preview?format=pdf`, `acr-${id}.pdf`)
+  return binaryDownload(`/acr/${id}/preview?format=pdf`, `acr-${id}.pdf`)
 }
 
 // The PUBLISHED revision's PDF, built from the immutable snapshot rather than the live rows.
@@ -67,13 +67,34 @@ export async function downloadAcrPdf(id) {
 // the revision it names.
 //
 // The server refuses with 409 when the snapshot's contents no longer match its recorded digest,
-// and `pdfDownload` surfaces that sentence — a caller must not be able to turn an altered record
+// and `binaryDownload` surfaces that sentence — a caller must not be able to turn an altered record
 // into a document by ignoring a flag.
 export async function downloadAcrRevisionPdf(id, revision) {
-  return pdfDownload(`/acr/${id}/revisions/${revision}/export`, `acr-${id}-rev${revision}.pdf`)
+  return binaryDownload(`/acr/${id}/revisions/${revision}/export`, `acr-${id}-rev${revision}.pdf`)
 }
 
-async function pdfDownload(path, fallbackName) {
+// The Word export, and the gate that decides whether there is one to download.
+//
+// SAME HELPER AS THE PDF, which is why it was renamed: `binaryDownload` was never PDF-specific,
+// and a second format using a function called `pdfDownload` is the kind of small untruth that
+// makes the next reader check whether it does something PDF-shaped.
+//
+// The server refuses with 500 when the document it just generated fails ACP's own docx analyser,
+// naming the failing checks. That sentence is the whole value of the refusal, so it must reach
+// the screen rather than becoming "download failed".
+export async function downloadAcrDocx(id) {
+  return binaryDownload(`/acr/${id}/preview?format=docx`, `acr-${id}.docx`)
+}
+
+// The gate's verdict WITHOUT the document: `{ok, failures, reviews}`.
+//
+// This exists because REVIEW findings have nowhere else to go. The gate is "no FAIL", so REVIEW
+// means "a human has to look" — and a .docx download is bytes, which an approver cannot read
+// findings out of. Fetching this before offering the download is what lets the screen say what
+// is outstanding rather than handing over a document and hoping somebody checks later.
+export const getAcrDocxGate = (id) => call(`/acr/${id}/preview?format=docx-gate`)
+
+async function binaryDownload(path, fallbackName) {
   const res = await fetch(BASE + path, { headers: headers() })
   if (!res.ok) {
     let detail = `${res.status} ${res.statusText}`
