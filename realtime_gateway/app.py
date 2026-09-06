@@ -21,6 +21,69 @@ def _control(kind: str, payload: Mapping) -> bytes:
     return f"event: {kind}\ndata: {json.dumps(dict(payload), separators=(',', ':'))}\n\n".encode()
 
 
+def event_stream_response(
+    request: Request, *, scope: str, store: RedisEventStore, block_ms: int,
+    last_event_id: str | None = None, snapshot_provider: SnapshotProvider | None = None,
+    close_store: bool = False,
+) -> StreamingResponse:
+    """Serve one owner-scoped canonical stream behind any already-authenticated edge.
+
+    The standalone gateway and ACP's same-origin bridge intentionally share this implementation,
+    so cursor/replay semantics cannot drift while the shadow rollout remains default-off.
+    """
+    invalid_reason = None
+
+    async def body():
+        nonlocal invalid_reason
+        cursor = last_event_id
+        try:
+            if cursor:
+                try:
+                    parse_last_event_id(cursor)
+                    status = await store.cursor_status(scope, cursor)
+                    if status != "valid":
+                        invalid_reason = status
+                except ValueError:
+                    invalid_reason = "malformed"
+            if not cursor or invalid_reason:
+                if invalid_reason:
+                    yield _control("reconciliation-required", {"reason": invalid_reason})
+                if snapshot_provider is not None:
+                    yield _control("snapshot", await snapshot_provider(scope))
+                cursor = "$"
+            else:
+                rows = await store.replay(scope, cursor, limit=MAX_REPLAY_EVENTS)
+                for row_id, event in rows:
+                    cursor = row_id
+                    yield event.to_sse().encode()
+                if len(rows) == MAX_REPLAY_EVENTS:
+                    yield _control("reconciliation-required", {"reason": "replay-limit"})
+                    return
+            listener = store.listen(scope, cursor, block_ms=block_ms)
+            try:
+                while not await request.is_disconnected():
+                    try:
+                        _row_id, event = await asyncio.wait_for(anext(listener), timeout=15)
+                    except StopAsyncIteration:
+                        return
+                    except TimeoutError:
+                        yield b": keepalive\n\n"
+                        continue
+                    yield event.to_sse().encode()
+            finally:
+                with suppress(Exception):
+                    await listener.aclose()
+        finally:
+            if close_store:
+                with suppress(Exception):
+                    await store.close()
+
+    return StreamingResponse(
+        body(), media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 def create_app(
     *, settings: Settings | None = None, store: RedisEventStore | None = None,
     snapshot_provider: SnapshotProvider | None = None,
@@ -65,50 +128,9 @@ def create_app(
         last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
     ):
         scope = authenticated_scope(authorization)
-        invalid_reason = None
-        if last_event_id:
-            try:
-                parse_last_event_id(last_event_id)
-                status = await app.state.store.cursor_status(scope, last_event_id)
-                if status != "valid":
-                    invalid_reason = status
-            except ValueError:
-                invalid_reason = "malformed"
-
-        async def body():
-            cursor = last_event_id
-            if not cursor or invalid_reason:
-                if invalid_reason:
-                    yield _control("reconciliation-required", {"reason": invalid_reason})
-                if snapshot_provider is not None:
-                    yield _control("snapshot", await snapshot_provider(scope))
-                cursor = "$"
-            else:
-                rows = await app.state.store.replay(scope, cursor, limit=MAX_REPLAY_EVENTS)
-                for row_id, event in rows:
-                    cursor = row_id
-                    yield event.to_sse().encode()
-                if len(rows) == MAX_REPLAY_EVENTS:
-                    yield _control("reconciliation-required", {"reason": "replay-limit"})
-                    return
-            listener = app.state.store.listen(scope, cursor, block_ms=settings.block_ms)
-            try:
-                while not await request.is_disconnected():
-                    try:
-                        _row_id, event = await asyncio.wait_for(anext(listener), timeout=15)
-                    except StopAsyncIteration:
-                        return
-                    except TimeoutError:
-                        yield b": keepalive\n\n"
-                        continue
-                    yield event.to_sse().encode()
-            finally:
-                with suppress(Exception):
-                    await listener.aclose()
-
-        return StreamingResponse(
-            body(), media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        return event_stream_response(
+            request, scope=scope, store=app.state.store, block_ms=settings.block_ms,
+            last_event_id=last_event_id, snapshot_provider=snapshot_provider,
         )
 
     return app

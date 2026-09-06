@@ -393,7 +393,12 @@ STREAM_TWINS: dict[tuple[str, str], tuple[str, str]] = {
     ("GET", "/scans/{sid}/remediation/stream"): ("GET", "/scans/{sid}/remediation-status"),
     ("GET", "/scans/jobs/{job_id}/stream"): ("GET", "/scans/jobs/{job_id}"),
     ("GET", "/admin/activity/stream"): ("GET", "/admin/activity"),
+    ("GET", "/api/realtime/v1/stream"): ("GET", "/api/realtime/v1/status"),
 }
+# The multiplexed owner stream can carry Discover, Assess, Remediate, Release, and Monitor
+# transitions. Its snapshot twin has the same read union; the route still derives owner identity
+# from the access gate, so neither endpoint can be used to select another person's stream.
+_map("GET", "/api/realtime/v1/status", _SCAN_READ)
 for _stream, _twin in STREAM_TWINS.items():
     _map(_stream[0], _stream[1], ROUTE_CAPABILITIES[_twin])
 

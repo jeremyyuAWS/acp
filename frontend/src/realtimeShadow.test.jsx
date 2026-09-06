@@ -5,10 +5,12 @@ import { createTestRoot, unmountAll } from './testRoots.js'
 import RealtimeShadowPanel from './RealtimeShadowPanel.jsx'
 import { RealtimeShadowClient } from './realtimeShadowClient.js'
 
-const envelope = (id, sequence, overrides = {}) => ({
-  event_id: id, event_version: 1, event_type: 'scan.lifecycle.completed',
-  occurred_at: new Date().toISOString(), tenant_id: 'tenant-1', correlation_id: 'scan-1',
-  source: 'discovery', priority: 'high', sequence, payload: {}, ...overrides,
+const envelope = (sequence, overrides = {}) => ({
+  event_id: `00000000-0000-4000-8000-${String(sequence).padStart(12, '0')}`,
+  stream_id: `${sequence}-0`, schema_version: '1.0', kind: 'discover.completed',
+  occurred_at: new Date().toISOString(), observed_at: new Date().toISOString(),
+  owner_scope: '0123456789abcdef01234567', priority: 1, source_seq: sequence,
+  scan_id: 'scan-1', payload: {}, ...overrides,
 })
 
 function panelClient(initial = {}) {
@@ -31,37 +33,52 @@ describe('realtime shadow transport', () => {
     const client = new RealtimeShadowClient()
     const received = []
     client.onEvent((event) => received.push(event.event_id))
-    expect(client.accept(envelope('event-2', 2))).toBe(true)
-    expect(client.accept(envelope('event-2', 2))).toBe(false)
-    expect(client.accept(envelope('event-1', 1))).toBe(false)
-    expect(client.accept(envelope('event-3', 3))).toBe(true)
-    expect(received).toEqual(['event-2', 'event-3'])
+    const second = envelope(2); const first = envelope(1); const third = envelope(3)
+    expect(client.accept(second, '2-0')).toBe(true)
+    expect(client.accept(second, '2-0')).toBe(false)
+    expect(client.accept(first, '1-0')).toBe(false)
+    expect(client.accept(third, '3-0')).toBe(true)
+    expect(received).toEqual([second.event_id, third.event_id])
+    expect(client.snapshot().lastEventId).toBe('3-0')
   })
 
   it('coalesces only low-priority progress, retaining the newest ordered update', () => {
     const client = new RealtimeShadowClient({ coalesceMs: 50 })
     const received = []
     client.onEvent((event) => received.push(event.event_id))
-    client.accept(envelope('p1', 1, { priority: 'low', event_type: 'scan.progress' }))
-    client.accept(envelope('p2', 2, { priority: 'low', event_type: 'scan.progress' }))
+    client.accept(envelope(1, { priority: 3, kind: 'assess.progressed', coalesce_key: 'scan-1' }))
+    client.accept(envelope(2, { priority: 3, kind: 'assess.progressed', coalesce_key: 'scan-1' }))
     expect(received).toEqual([])
     vi.advanceTimersByTime(50)
-    expect(received).toEqual(['p2'])
+    expect(received).toEqual([envelope(2).event_id])
   })
 
   it('reconnects with Last-Event-ID after a transport failure', async () => {
     const fetchImpl = vi.fn()
       .mockRejectedValueOnce(new Error('offline'))
       .mockImplementationOnce(() => new Promise(() => {}))
-    const client = new RealtimeShadowClient({ fetchImpl, retryMs: 25 })
-    client.accept(envelope('resume-from-me', 1))
+    const client = new RealtimeShadowClient({ endpoint: '/api/realtime/v1/stream', headersProvider: () => ({ Authorization: 'Bearer browser-token' }), fetchImpl, retryMs: 25 })
+    client.accept(envelope(7, { stream_id: '1700000000000-7' }), '1700000000000-7')
     client.start()
     await act(async () => { await Promise.resolve() })
     expect(client.snapshot().state).toBe('fallback')
     await act(async () => { vi.advanceTimersByTime(25); await Promise.resolve() })
     expect(fetchImpl).toHaveBeenCalledTimes(2)
-    expect(fetchImpl.mock.calls[1][1].headers['Last-Event-ID']).toBe('resume-from-me')
+    expect(fetchImpl.mock.calls[1][1].headers['Last-Event-ID']).toBe('1700000000000-7')
+    expect(fetchImpl.mock.calls[1][1].headers.Authorization).toBe('Bearer browser-token')
     client.stop()
+  })
+
+  it('reconciles an unusable cursor from the authoritative snapshot and clears it', async () => {
+    const snapshotProvider = vi.fn().mockResolvedValue({ scan_id: 'scan-1', scan_status: 'running' })
+    const client = new RealtimeShadowClient({ snapshotProvider })
+    const received = []
+    client.onEvent((event) => received.push(event))
+    client.accept(envelope(9), '9-0')
+    await client.reconcile('stale')
+    expect(snapshotProvider).toHaveBeenCalledTimes(1)
+    expect(received.at(-1)).toMatchObject({ kind: 'snapshot', control: true, payload: { snapshot: { scan_id: 'scan-1' } } })
+    expect(client.snapshot()).toMatchObject({ state: 'connected', lastEventId: null, error: null })
   })
 
   it('aborts and cancels retry work during cleanup', async () => {
@@ -93,7 +110,7 @@ describe('RealtimeShadowPanel', () => {
       createElement(RealtimeShadowPanel, { enabled: true, client, currentSnapshot: { completed: 42 } }),
     )) })
     await act(async () => {
-      client.event(envelope('snapshot', 1, { payload: { snapshot: { completed: 41 } } }))
+      client.event(envelope(1, { payload: { snapshot: { completed: 41 } } }))
       client.health({ state: 'fallback' })
     })
     expect(container.querySelector('[data-testid="production-value"]').textContent).toBe('42 complete')

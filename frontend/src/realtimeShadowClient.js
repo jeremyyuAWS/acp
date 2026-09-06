@@ -1,28 +1,38 @@
 // Deliberately distinct from the legacy per-scan `/events` snapshot stream. This endpoint is the
 // versioned multiplexed feed backed by the isolated `realtime:v1` namespace.
-const DEFAULT_ENDPOINT = '/api/realtime/v1/stream'
+import { getRealtimeAuthoritativeSnapshot, getRealtimeStreamRequest } from './api.js'
+
 const SEEN_LIMIT = 2048
 
 export const REALTIME_SHADOW_ENABLED = import.meta.env.VITE_REALTIME_SHADOW_ENABLED === 'true'
 
 function parseFrame(block) {
   const lines = block.split(/\r?\n/)
+  const type = lines.find((line) => line.startsWith('event:'))?.slice(6).trim() || 'message'
+  const id = lines.find((line) => line.startsWith('id:'))?.slice(3).trim() || null
   const data = lines.filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trimStart()).join('\n')
   if (!data) return null
-  try { return JSON.parse(data) } catch { return null }
+  try { return { type, id, data: JSON.parse(data) } } catch { return null }
 }
 
 function validEnvelope(event) {
-  return event && typeof event.event_id === 'string' && event.event_version === 1
-    && typeof event.event_type === 'string' && typeof event.occurred_at === 'string'
-    && typeof event.tenant_id === 'string' && typeof event.correlation_id === 'string'
-    && typeof event.source === 'string' && typeof event.priority === 'string'
-    && Number.isFinite(event.sequence) && Object.hasOwn(event, 'payload')
+  return event && typeof event.event_id === 'string' && /^1\.\d+$/.test(event.schema_version)
+    && typeof event.kind === 'string' && typeof event.owner_scope === 'string'
+    && typeof event.occurred_at === 'string' && Number.isInteger(event.priority)
+    && Object.hasOwn(event, 'payload')
+}
+
+const streamTuple = (id) => /^\d+-\d+$/.test(id || '') ? id.split('-').map(Number) : null
+const after = (candidate, prior) => {
+  const a = streamTuple(candidate); const b = streamTuple(prior)
+  return a && (!b || a[0] > b[0] || (a[0] === b[0] && a[1] > b[1]))
 }
 
 export class RealtimeShadowClient {
-  constructor({ endpoint = DEFAULT_ENDPOINT, fetchImpl = globalThis.fetch, retryMs = 1000, coalesceMs = 100 } = {}) {
+  constructor({ endpoint, headersProvider, snapshotProvider = getRealtimeAuthoritativeSnapshot, fetchImpl = globalThis.fetch, retryMs = 1000, coalesceMs = 100 } = {}) {
     this.endpoint = endpoint
+    this.headersProvider = headersProvider
+    this.snapshotProvider = snapshotProvider
     this.fetchImpl = fetchImpl
     this.retryMs = retryMs
     this.coalesceMs = coalesceMs
@@ -30,7 +40,6 @@ export class RealtimeShadowClient {
     this.eventListeners = new Set()
     this.seen = new Set()
     this.seenOrder = []
-    this.sequences = new Map()
     this.health = { state: 'idle', latencyMs: null, lastEventId: null, reconnects: 0, error: null }
     this.controller = null
     this.retryTimer = null
@@ -72,9 +81,12 @@ export class RealtimeShadowClient {
     this.controller = controller
     this.publish({ state: 'connecting', error: null })
     try {
-      const headers = { Accept: 'text/event-stream' }
+      const request = this.endpoint
+        ? { endpoint: this.endpoint, headers: this.headersProvider?.() || {} }
+        : getRealtimeStreamRequest()
+      const headers = { ...request.headers, Accept: 'text/event-stream' }
       if (this.health.lastEventId) headers['Last-Event-ID'] = this.health.lastEventId
-      const response = await this.fetchImpl(this.endpoint, { headers, signal: controller.signal, credentials: 'same-origin' })
+      const response = await this.fetchImpl(request.endpoint, { headers, signal: controller.signal, credentials: 'same-origin' })
       if (!response.ok || !response.body) throw new Error(`Realtime stream returned ${response.status}`)
       this.publish({ state: 'connected' })
       const reader = response.body.getReader()
@@ -86,7 +98,13 @@ export class RealtimeShadowClient {
         buffer += decoder.decode(value, { stream: true })
         const blocks = buffer.split(/\r?\n\r?\n/)
         buffer = blocks.pop()
-        blocks.forEach((block) => { const event = parseFrame(block); if (event) this.accept(event) })
+        for (const block of blocks) {
+          const frame = parseFrame(block)
+          if (!frame) continue
+          if (frame.type === 'acp-event') this.accept(frame.data, frame.id)
+          else if (frame.type === 'reconciliation-required') await this.reconcile(frame.data?.reason)
+          else if (frame.type === 'snapshot') this.deliverSnapshot(frame.data)
+        }
       }
       if (!controller.signal.aborted) throw new Error('Realtime stream ended')
     } catch (error) {
@@ -96,17 +114,15 @@ export class RealtimeShadowClient {
     }
   }
 
-  accept(event) {
-    if (!validEnvelope(event) || this.seen.has(event.event_id)) return false
-    const orderKey = `${event.tenant_id}:${event.source}:${event.correlation_id}`
-    const prior = this.sequences.get(orderKey) ?? -1
-    if (event.sequence <= prior) return false
-    this.sequences.set(orderKey, event.sequence)
+  accept(event, frameId = event?.stream_id) {
+    if (!validEnvelope(event) || !after(frameId, this.health.lastEventId) || this.seen.has(event.event_id)) return false
+    if (event.stream_id && event.stream_id !== frameId) return false
     this.seen.add(event.event_id); this.seenOrder.push(event.event_id)
     if (this.seenOrder.length > SEEN_LIMIT) this.seen.delete(this.seenOrder.shift())
     const latencyMs = Math.max(0, Date.now() - Date.parse(event.occurred_at))
-    this.publish({ state: 'connected', latencyMs, lastEventId: event.event_id, error: null })
-    if (event.priority === 'low' && event.event_type.endsWith('.progress')) {
+    this.publish({ state: 'connected', latencyMs, lastEventId: frameId, error: null })
+    const orderKey = event.coalesce_key || event.scan_id || event.job_id || event.kind
+    if (event.priority === 3 && event.kind.endsWith('.progressed')) {
       this.pendingProgress.set(orderKey, event)
       if (!this.progressTimer) this.progressTimer = setTimeout(() => this.flushProgress(), this.coalesceMs)
     } else {
@@ -117,9 +133,26 @@ export class RealtimeShadowClient {
 
   flushProgress() {
     this.progressTimer = null
-    const events = [...this.pendingProgress.values()].sort((a, b) => a.sequence - b.sequence)
+    const events = [...this.pendingProgress.values()].sort((a, b) => {
+      const left = streamTuple(a.stream_id); const right = streamTuple(b.stream_id)
+      return left[0] - right[0] || left[1] - right[1]
+    })
     this.pendingProgress.clear()
     events.forEach((event) => this.eventListeners.forEach((fn) => fn(event)))
+  }
+
+  deliverSnapshot(snapshot) {
+    this.eventListeners.forEach((fn) => fn({ kind: 'snapshot', payload: { snapshot }, control: true }))
+  }
+
+  async reconcile(reason) {
+    this.publish({ state: 'reconciling', error: reason || 'Realtime history needs reconciliation' })
+    try {
+      this.deliverSnapshot(await this.snapshotProvider())
+      this.publish({ state: 'connected', lastEventId: null, error: null })
+    } catch (error) {
+      this.scheduleReconnect(error)
+    }
   }
 }
 

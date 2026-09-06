@@ -38,7 +38,7 @@ export default function RealtimeShadowPanel({ enabled = REALTIME_SHADOW_ENABLED,
         <dt>Event latency</dt><dd style={{ margin: 0 }}>{latency}</dd>
         <dt>Reconnects</dt><dd style={{ margin: 0 }}>{health.reconnects}</dd>
         <dt>UI differences</dt><dd style={{ margin: 0 }}>{mismatchCount}</dd>
-        <dt>Last event</dt><dd style={{ margin: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{lastEvent?.event_type || 'none'}</dd>
+        <dt>Last event</dt><dd style={{ margin: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>{lastEvent?.kind || 'none'}</dd>
       </dl>
       {health.state === 'fallback' && <p role="status" style={{ margin: '8px 0 0' }}>Existing live updates remain active.</p>}
     </aside>
