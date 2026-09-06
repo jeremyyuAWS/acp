@@ -301,8 +301,8 @@ already been read as evidence that the guard worked.
 | 10 | Reports with unevaluated applicable criteria cannot publish | ✅ |
 | 11 | Only an approver can publish | ✅ `POST /acr/{id}/publish`, gated on `acr_authz.may_publish` and never `core.is_admin` |
 | 12 | Publication creates an immutable snapshot | ✅ `acr_snapshot`, digest re-verified on every read |
-| 13 | Exported Word document follows the official VPAT structure | ⬜ Phase 5 — blocked on the licensing decision, not on engineering |
-| 14 | Generated Word document passes ACP's accessibility checks | ⬜ Phase 5 — depends on 13; the gate is settled below |
+| 13 | Exported Word document follows the official VPAT structure | ⬜ still blocked on the licensing decision, not on engineering — the renderer and its table shape exist, the ITI template does not |
+| 14 | Generated Word document passes ACP's accessibility checks | ✅ enforced at `GET /acr/{id}/preview?format=docx`, which refuses to serve a document that FAILs — it does NOT depend on 13 |
 | 15 | Report identifies version, methods, tools, environments, reviewers | ✅ required to publish |
 | 16 | Automated tests for authorization, decision rules, freshness, validation, snapshots, export | ✅ all six — 18 `test_acr_*.py` files |
 | 17 | UI has keyboard, focus, screen-reader, reflow and automated accessibility tests | ✅ |
@@ -322,3 +322,21 @@ declares `Coverage.FULL`** — so `PASS` is unreachable by construction and an "
 never go green. The honest gate is **"no FAIL"**, with every `REVIEW` surfaced for the approver to
 sign off. ACP's docx analyser already covers heading structure, table header rows, document
 language, document title, link text and alt text, so this is a real check rather than a formality.
+
+**Row 14 no longer waits for row 13, and the earlier reading that it did was wrong.** The gate
+applies to whatever Word document ACP generates; the licence governs which TEMPLATE those tables
+sit in. So the gate ships now, enforced at `GET /acr/{id}/preview?format=docx`: a rendered
+document that FAILs is refused with the failing checks named, rather than served with a warning.
+When the ITI template lands it replaces the renderer and this gate runs over its output unchanged.
+
+**REVIEW findings needed somewhere to go.** "No FAIL" leaves REVIEW meaning *a human has to look*,
+and a `.docx` download is bytes — an approver cannot read findings out of an attachment. The
+download carries the count in `X-ACP-Accessibility-Reviews`; `format=docx-gate` returns the full
+verdict as JSON without the document, and answers `200 {"ok": false, ...}` on a failing gate
+rather than refusing, so the endpoint that explains a refusal does not refuse for the same reason.
+
+**How this was found.** `api/acr_export_docx.py` and its seventeen module tests had been on `main`
+with **no application code importing them** — the export existed and was reachable by nobody. A
+status table cannot show that, and neither can a module test, because a module test imports the
+module directly. Only a route test can, which is why every one of the thirteen in
+`tests/test_acr_export_docx_route.py` goes through HTTP.
