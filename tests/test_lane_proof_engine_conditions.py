@@ -1,4 +1,4 @@
-"""The 17-lane milestone states the engine condition it was measured under.
+"""The 18-lane milestone states the engine condition it was measured under.
 
 THE PROBLEM. "REMEDIATION-VERIFIED 17 of 17" was the same string in two situations that prove
 materially different things:
@@ -48,15 +48,15 @@ def _lanes() -> list:
 
 
 def test_the_split_between_engine_dependent_and_in_process_lanes():
-    """15 Office lanes need the .NET analyser to grade a re-scan trustworthy; 2 pdf lanes run
+    """16 Office lanes need the .NET analyser to grade a re-scan trustworthy; 2 pdf lanes run
     in-process (pikepdf) and are engine-independent on any host. If a lane is added, this fails
     until the split is restated — which is the point, since a new Office lane inherits the
     engine condition and a new pdf one does not."""
     lanes = _lanes()
     office = [l for l in lanes if not l.endswith(" pdf")]
     inproc = [l for l in lanes if l.endswith(" pdf")]
-    assert len(lanes) == 17, f"the lane set changed ({len(lanes)}); restate the engine split"
-    assert len(office) == 15, f"expected 15 Office lanes, got {len(office)}: {office}"
+    assert len(lanes) == 18, f"the lane set changed ({len(lanes)}); restate the engine split"
+    assert len(office) == 16, f"expected 16 Office lanes, got {len(office)}: {office}"
     assert sorted(inproc) == ["1.1.1 pdf", "4.1.2 pdf"], inproc
 
 

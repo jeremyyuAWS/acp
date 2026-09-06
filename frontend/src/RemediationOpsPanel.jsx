@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import LiveCounter from './LiveCounter.jsx'
 import { counterRows, secondaryRows, freshness, headline, integrityAffects, partitionSums } from './remediationSnapshot.js'
-import { activityBuckets, attemptStage, milestoneCrossings, retrySeconds } from './remediationLivePanel.js'
+import { attemptStage, milestoneCrossings, retrySeconds } from './remediationLivePanel.js'
+import ActivityPulse from './ActivityPulse.jsx'
 import RemediationExceptions, { useRemediationExceptions, exceptionCount } from './RemediationExceptions.jsx'
 import './remediation-ops-panel.css'
 import './remediation-live-detail.css'
@@ -119,13 +120,6 @@ function RecoveryNotice({ recovery = {} }) {
 
 function Milestones({ notices, onDismiss }) {
   return notices.length ? <aside className="remops-milestones" aria-label="Completion milestones">{notices.map((notice) => <div key={notice.key}><span><span aria-hidden="true">✓</span> {notice.text}</span><button type="button" aria-label={`Dismiss ${notice.text}`} onClick={() => onDismiss(notice.key)}>×</button></div>)}</aside> : null
-}
-
-function ActivityPulse({ events, generatedAt }) {
-  const buckets = activityBuckets(events, generatedAt)
-  const max = Math.max(0, ...buckets)
-  if (!max) return null
-  return <div className="remops-pulse-strip" aria-label={`Last 60 seconds: ${buckets.reduce((sum, value) => sum + value, 0)} recorded events`}><span>Last 60 seconds</span><span className="remops-pulse-bars" aria-hidden="true">{buckets.map((value, index) => <i key={index} style={{ height: `${Math.max(2, value / max * 12)}px` }} />)}</span></div>
 }
 
 function Throughput({ snapshot, frozen = false }) {

@@ -84,7 +84,7 @@ export const CAPABILITY_FALLBACK = {
     "2.4.2": "auto",
     "2.4.3": "human",
     "2.4.4": "assisted",
-    "2.4.6": "human",
+    "2.4.6": "assisted",
     "2.4.9": "assisted",
     "3.1.1": "auto",
     "3.1.2": "assisted",

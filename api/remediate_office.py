@@ -1516,6 +1516,88 @@ def _draft_docx_assisted(entries: dict, path: Path, proposals: list | None, *,
     return made
 
 
+def _draft_pptx_assisted(entries: dict, path: Path, proposals: list | None, *,
+                         scan_id: str | None = None, in_scope=None) -> int:
+    """Draft — never write — 3.1.2 language-of-parts fixes for a pptx file.
+
+    Mirrors _draft_docx_assisted for the docx lane: reads slide text, runs the same
+    detect_language_parts detector the assessment uses, and calls suggest_fix for each
+    unmarked foreign passage. Results go into `proposals` as HITL cards a reviewer can
+    approve; nothing is written until they do.
+
+    The write-back path (apply_text_values._pptx_set_lang) is already wired and has been
+    since LANGUAGE_EXTS included pptx; this function supplies the proposals that were
+    previously absent, closing the detect → draft → approve → apply loop.
+
+    Returns the number of drafts produced. Best-effort: no draft is worth failing a job.
+    """
+    if proposals is None:
+        return 0
+    import ai as _ai
+    import proposals as _prop
+    if not _ai.model_is_available():
+        return 0
+
+    slides = sorted((n for n in entries if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)),
+                    key=lambda s: int(re.search(r"(\d+)", s).group()))
+    if not slides:
+        return 0
+
+    import textchecks as _tc
+
+    made = 0
+
+    def _draft(sc: str, rule_name: str, detail: str, before: str, locator: str, source: str):
+        nonlocal made
+        if made >= _ASSISTED_MAX_DRAFTS or not _sc_ok(in_scope, sc):
+            return
+        _act_record(scan_id, file=path.name, sc=sc,
+                    action=f"drafting a fix for {rule_name}",
+                    detail="draft only — nothing is written without approval",
+                    phase="remediating")
+        out = _ai.suggest_fix(sc, rule_name, "A", path.name, detail=detail)
+        value = (out or {}).get("suggestion")
+        if not value:
+            return
+        proposals.append(_prop.proposal(
+            locator=locator, before=before, proposed_value=value,
+            rationale=f"drafted from the slide text by {out.get('model', 'the local model')}",
+            source=source, sc=sc,
+            model=out.get("model"),
+            why_review=(f"ACP can detect this {rule_name} problem but cannot fix it "
+                        "automatically — the correction rewrites your own wording, and only "
+                        "you know what the original was meant to say. The draft below is a "
+                        "starting point, not a decision."),
+            context=detail))
+        made += 1
+
+    try:
+        # Concatenate visible text from all slides as a single body — the same view
+        # detect_language_parts takes in the assessment.
+        body_parts = []
+        for slide_name in slides:
+            raw = entries.get(slide_name)
+            if not raw:
+                continue
+            try:
+                xml = raw.decode("utf-8")
+            except (UnicodeDecodeError, AttributeError):
+                continue
+            body_parts.append(" ".join(_A_T.findall(xml)))
+        body = " ".join(body_parts).strip()
+        if body:
+            for f in (_tc.detect_language_parts(body) or [])[:_ASSISTED_MAX_DRAFTS]:
+                detail = str(f.get("detail") or "")[:300]
+                _draft("3.1.2", "Language of Parts", detail,
+                       before=detail, locator="ppt/slides#lang-part",
+                       source="AI draft marking the passage's language")
+    except Exception:
+        swallowed("remediate_office._draft_pptx_assisted: drafting pptx 3.1.2 proposals "
+                  "failed", scan_id)
+
+    return made
+
+
 def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True,
                      scan_id: str | None = None, applied_fixes: list | None = None,
                      proposals: list | None = None, evidence: list | None = None, diffs=None,
@@ -1648,6 +1730,18 @@ def remediate_office(path: Path, *, lang: str = "en-US", ai_enabled: bool = True
             applied.extend(_remediate_pptx_slides(entries, diffs, in_scope))
         except Exception:
             skipped.append("slide-level pptx fixes (title/contrast/reading order) could not be applied")
+        # Assisted criteria — DRAFTED for review, never written.  Currently covers 3.1.2
+        # (language of parts): detect_language_parts runs over all slide text and suggest_fix
+        # drafts a correction for each unmarked foreign passage. apply_text_values._pptx_set_lang
+        # is the write-back once a reviewer approves.
+        if ai_enabled:
+            try:
+                n = _draft_pptx_assisted(entries, path, proposals, scan_id=scan_id,
+                                         in_scope=in_scope)
+                if n:
+                    skipped.append(f"{n} language-of-parts finding(s) drafted for review (3.1.2)")
+            except Exception:
+                skipped.append("pptx assisted-criteria drafts could not be produced")
 
     # xlsx contrast recolour (1.4.3 / 1.4.6) — clone offending fonts to reach the
     # luma-diff the detector requires (mirrors the pptx contrast fix).
