@@ -5,11 +5,10 @@
 thing and the 120 missing rows said another. It closed that by refusing the edition. 6.1 landed
 the requirements. This is the builder that can actually produce them.
 
-WHAT IS AND IS NOT REACHABLE YET. `requirement_sets_available()` still returns WCAG alone, so a
-508 report cannot be CREATED through the API — the routes refuse it and `build_matrix` refuses it
-below them. The tests here reach the 508 path by supplying the availability the projection cannot
-yet render for, which is deliberate: the plumbing is proven before the gate opens, not after. 6.3
-opens it, when the export can print a Revised Section 508 Report.
+6.3 OPENED THE GATE, so the fixture that used to supply availability is gone: a 508 report is
+created through the API now, and these tests exercise the real builder rather than a patched one.
+What stays is the refusal — `build_matrix` still raises for an edition whose requirement sets this
+build cannot supply, which is the EU and INT editions until EN 301 549 has a catalog.
 """
 from __future__ import annotations
 
@@ -22,18 +21,6 @@ ACP = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ACP / "api"))
 
 import acr_catalog  # noqa: E402
-
-
-@pytest.fixture
-def _508_supplied(monkeypatch):
-    """Pretend this build can supply Section 508, without pretending it can render it.
-
-    Patching `requirement_sets_available` rather than editing the module keeps the real gate shut
-    for every other test in the suite, and makes the dependency explicit: everything below is
-    about the BUILDER, and none of it claims the edition is offerable.
-    """
-    monkeypatch.setattr(acr_catalog, "requirement_sets_available",
-                        lambda: frozenset({acr_catalog.REQ_WCAG, acr_catalog.REQ_SECTION_508}))
 
 
 def test_the_wcag_edition_is_unchanged_and_is_still_the_default():
@@ -56,7 +43,7 @@ def test_every_wcag_row_still_carries_its_wcag_axes():
         assert row["criterion_name"]
 
 
-def test_a_508_edition_carries_both_requirement_sets(_508_supplied):
+def test_a_508_edition_carries_both_requirement_sets():
     matrix = acr_catalog.build_matrix("rep508", acr_catalog.EDITION_508)
     by_set: dict[str, int] = {}
     for row in matrix:
@@ -65,7 +52,7 @@ def test_a_508_edition_carries_both_requirement_sets(_508_supplied):
     assert len(matrix) == 175
 
 
-def test_508_rows_carry_a_chapter_and_no_wcag_axes(_508_supplied):
+def test_508_rows_carry_a_chapter_and_no_wcag_axes():
     """The whole point of the column. A 508 row that carried a level would render inside a WCAG
     conformance table, which is the false-claim shape #1532 fixed arriving by another route."""
     rows = [r for r in acr_catalog.build_matrix("rep508", acr_catalog.EDITION_508)
@@ -76,7 +63,7 @@ def test_508_rows_carry_a_chapter_and_no_wcag_axes(_508_supplied):
     assert all(r["guideline"] is None for r in rows)
 
 
-def test_508_rows_start_unevaluated_like_every_other_row(_508_supplied):
+def test_508_rows_start_unevaluated_like_every_other_row():
     """PRD §10 — publication is blocked while an applicable row is unevaluated, and a 508 row is
     not exempt from that just because it arrived from a different catalog."""
     rows = [r for r in acr_catalog.build_matrix("rep508", acr_catalog.EDITION_508)
@@ -87,7 +74,7 @@ def test_508_rows_start_unevaluated_like_every_other_row(_508_supplied):
     assert all(r["approval_state"] == "unapproved" for r in rows)
 
 
-def test_hardware_is_not_quietly_dropped(_508_supplied):
+def test_hardware_is_not_quietly_dropped():
     """69 of the 120 rows are Chapter 4, and for a hosted web application every one of them ends
     Not Applicable. Applicability is a human decision with required remarks (PRD §10), so the
     builder does not pre-empt it — the cost is a bulk-mark affordance owed to the UI, not a
@@ -98,7 +85,7 @@ def test_hardware_is_not_quietly_dropped(_508_supplied):
     assert all(r["applicable"] is True for r in rows)
 
 
-def test_numbers_do_not_collide_between_the_two_catalogs(_508_supplied):
+def test_numbers_do_not_collide_between_the_two_catalogs():
     """criterion_num is half the primary key. A WCAG number ("1.4.3") and a 508 number ("402.2.1")
     must never be the same string, or one row would silently overwrite the other on insert."""
     matrix = acr_catalog.build_matrix("rep508", acr_catalog.EDITION_508)
@@ -108,19 +95,19 @@ def test_numbers_do_not_collide_between_the_two_catalogs(_508_supplied):
 
 def test_an_edition_this_build_cannot_supply_is_refused():
     """The layer below the routes, for the reason #1532 gave: a report restored, imported or
-    migrated never passed them."""
-    with pytest.raises(ValueError) as e:
-        acr_catalog.build_matrix("rep508", acr_catalog.EDITION_508)
-    assert "Revised Section 508" in str(e.value)
-    assert "false claim" in str(e.value)
-
-
-def test_the_eu_edition_is_refused_even_once_508_is_supplied(_508_supplied):
-    """EN 301 549 is a separate requirement set with a separate source, and supplying one must not
-    open the gate on the other."""
+    migrated never passed them. EN 301 549 has no catalog, so the EU edition is that case now."""
     with pytest.raises(ValueError) as e:
         acr_catalog.build_matrix("repeu", acr_catalog.EDITION_EU)
     assert "EN 301 549" in str(e.value)
+    assert "false claim" in str(e.value)
+
+
+def test_the_int_edition_is_refused_even_though_508_is_supplied():
+    """INT obliges all three sets. Supplying two must not open the gate on the third."""
+    with pytest.raises(ValueError) as e:
+        acr_catalog.build_matrix("repint", acr_catalog.EDITION_INT)
+    assert "EN 301 549" in str(e.value)
+    assert "Section 508" not in str(e.value), "naming a set that IS supplied misdirects the author"
 
 
 def test_an_unknown_edition_is_refused_with_a_different_message():
@@ -161,8 +148,8 @@ def test_a_row_from_pre_phase_6_code_is_stored_as_wcag(isolated_store):
     assert row["chapter"] is None
 
 
-def test_the_508_edition_is_still_not_offerable_for_real():
-    """The fixture above supplies availability; the module must not. If this ever fails without
-    6.3 having landed, a 508 report can be created whose export prints no Section 508 rows."""
-    assert acr_catalog.requirement_sets_available() == frozenset({acr_catalog.REQ_WCAG})
-    assert acr_catalog.offerable_editions() == [acr_catalog.EDITION_WCAG]
+def test_the_508_edition_is_offerable_for_real():
+    """Held shut through 6.1 and 6.2, opened by 6.3 when the exports could print the rows."""
+    assert acr_catalog.requirement_sets_available() == frozenset(
+        {acr_catalog.REQ_WCAG, acr_catalog.REQ_SECTION_508})
+    assert acr_catalog.offerable_editions() == [acr_catalog.EDITION_WCAG, acr_catalog.EDITION_508]

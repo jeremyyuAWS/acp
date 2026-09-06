@@ -276,6 +276,8 @@ def render(projection: dict, *, language: str = DOCUMENT_LANGUAGE,
                        f"for audit history").strip()
         row.cells[3].text = remarks
 
+    _add_section_508(document, projection)
+
     for paragraph in document.paragraphs:
         for run in paragraph.runs:
             if run.font.size is None:
@@ -284,6 +286,51 @@ def render(projection: dict, *, language: str = DOCUMENT_LANGUAGE,
     buffer = io.BytesIO()
     document.save(buffer)
     return buffer.getvalue()
+
+
+def _add_section_508(document, projection: dict) -> None:
+    """The Revised Section 508 Report — one table per chapter, or nothing at all.
+
+    Three columns, not four: a 508 requirement has no WCAG level, and an empty Level column would
+    read as a missing value rather than as a category that does not apply. Each chapter is its own
+    table with its own heading, matching how the standard is organised and how a screen-reader user
+    navigates a long Word document — by heading, not by scrolling one 120-row table.
+
+    The accessibility gate in `check()` runs over whatever this produces, unchanged: heading
+    structure, table header rows and repeat-header are the very things it inspects, so the tables
+    below are built the same way the WCAG one is rather than by a shortcut.
+    """
+    section = projection.get("section_508")
+    if not section:
+        return
+
+    document.add_heading("Revised Section 508 Report", level=2)
+    document.add_paragraph(f"Requirements from {section['citation']}.")
+    document.add_paragraph(", ".join(f"{k}: {v}" for k, v in section["totals"].items()))
+
+    for chapter in section["chapters"]:
+        document.add_heading(f"Chapter {chapter['num']}: {chapter['name']}", level=3)
+        document.add_paragraph(", ".join(f"{k}: {v}" for k, v in chapter["totals"].items()))
+        table = document.add_table(rows=1, cols=3)
+        table.style = "Table Grid"
+        header = table.rows[0]
+        for index, label in enumerate(
+                ("Criteria", "Conformance Level", "Remarks and Explanations")):
+            header.cells[index].text = label
+        _repeat_header_row(header)
+
+        for req in chapter["rows"]:
+            row = table.add_row()
+            row.cells[0].text = f"{req['criterion_num']} {req.get('criterion_name') or ''}".strip()
+            cell = req["conformance_level"]
+            if not req["decided"] and req.get("draft_status"):
+                cell = f"{cell}\nACP draft suggestion (not a decision): {req['draft_status']}"
+            row.cells[1].text = cell
+            remarks = req.get("remarks") or ""
+            if req.get("evidence_stale"):
+                remarks = (f"{remarks}\n{req['evidence_stale']} stale evidence record(s), retained "
+                           f"for audit history").strip()
+            row.cells[2].text = remarks
 
 
 def check(docx_bytes: bytes, *, tmp_dir: Path | None = None) -> dict:
