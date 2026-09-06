@@ -137,7 +137,7 @@ function FunnelStage({ label, count, maxCount, color }) {
                     fontVariantNumeric: 'tabular-nums', marginBottom: 6 }}>
         {fmt(count)}
       </div>
-      <div style={{ height: 6, background: 'var(--border)', borderRadius: 3, overflow: 'hidden' }}>
+      <div style={{ height: 6, background: 'var(--line)', borderRadius: 3, overflow: 'hidden' }}>
         <div style={{ height: '100%', width: `${w}%`, background: color || 'var(--ink)', borderRadius: 3,
                       transition: 'width 0.4s ease' }} />
       </div>
@@ -220,7 +220,7 @@ export function AdminInsights({ me }) {
       </div>
 
       {error && (
-        <div className="panel" style={{ color: 'var(--error)', marginBottom: 20, padding: 16 }}>{error}</div>
+        <div className="panel" style={{ color: 'var(--error-fg-strong)', marginBottom: 20, padding: 16 }}>{error}</div>
       )}
 
       {/* KPI row */}
@@ -302,7 +302,7 @@ export function AdminInsights({ me }) {
           {sources.length > 0 ? (
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
-                <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                <tr style={{ borderBottom: '1px solid var(--line)' }}>
                   {['Source', 'Docs', 'Certifiable', 'Rate'].map((h) => (
                     <th key={h} style={{ textAlign: h === 'Source' ? 'left' : 'right',
                                          padding: '4px 0 8px', fontWeight: 600, color: 'var(--muted)', fontSize: 12 }}>
@@ -316,7 +316,7 @@ export function AdminInsights({ me }) {
                   const b = data.by_source[src]
                   const rate = b.docs ? Math.round(b.certifiable / b.docs * 100) : null
                   return (
-                    <tr key={src} style={{ borderBottom: '1px solid var(--border)' }}>
+                    <tr key={src} style={{ borderBottom: '1px solid var(--line)' }}>
                       <td style={{ padding: '7px 0', fontWeight: 500 }}>
                         <span style={{ color: SOURCE_COLOR[src], marginRight: 6, fontSize: 10 }}>●</span>
                         {SOURCE_LABEL[src] || src}
@@ -385,7 +385,7 @@ export function AdminInsights({ me }) {
               ].map(({ label, value, unit, color }, i, arr) => (
                 <div key={label} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                                           padding: '10px 0',
-                                          borderBottom: i < arr.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                                          borderBottom: i < arr.length - 1 ? '1px solid var(--line)' : 'none' }}>
                   <span style={{ fontSize: 13, color: 'var(--muted)' }}>{label}</span>
                   <span style={{ fontSize: 16, fontWeight: 700, fontVariantNumeric: 'tabular-nums',
                                   color: color || 'var(--ink)' }}>
@@ -410,7 +410,7 @@ export function AdminInsights({ me }) {
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
-                <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                <tr style={{ borderBottom: '1px solid var(--line)' }}>
                   {['Date', 'Source', 'Docs', 'Certifiable', 'Score', 'Owner'].map((h) => (
                     <th key={h} style={{ textAlign: 'left', padding: '4px 10px 8px 0',
                                          fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>{h}</th>
@@ -422,7 +422,7 @@ export function AdminInsights({ me }) {
                   const pct = s.files && s.certifiable != null
                     ? Math.round(s.certifiable / s.files * 100) : null
                   return (
-                    <tr key={s.id || i} style={{ borderBottom: '1px solid var(--border)' }}>
+                    <tr key={s.id || i} style={{ borderBottom: '1px solid var(--line)' }}>
                       <td style={{ padding: '7px 10px 7px 0', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
                         {fmtDate(s.completed_at)}
                       </td>

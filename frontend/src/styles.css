@@ -166,7 +166,7 @@ td { padding: 10px 0; border-top: 1px solid var(--line); }
 .lifecycle-integrity-warning { margin: 10px 0; padding: 10px 12px; border: 1px solid #B7791F;
   border-radius: 8px; background: #FFF8E6; color: #744210; line-height: 1.45; }
 .discover-integrity-recovery { margin: 0 0 18px; padding: 18px; border: 1px solid var(--warn-line, #B7791F);
-  border-left: 4px solid var(--warn-fg, #744210); border-radius: 12px; background: var(--panel); color: var(--ink); }
+  border-left: 4px solid var(--warn-fg, #744210); border-radius: 12px; background: var(--surface); color: var(--ink); }
 .discover-integrity-recovery__head { display: flex; justify-content: space-between; align-items: flex-start;
   gap: 20px; }
 .discover-integrity-recovery__head h2 { margin: 3px 0 5px; font-size: 18px; }
@@ -1394,7 +1394,7 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .rpstructrows { display: flex; flex-direction: column; gap: 5px; }
 .rpstructrows.compact .rpstructrow { padding: 5px 8px; }
 .rpstructrow { display: grid; grid-template-columns: auto 2fr 12px 2fr; gap: 5px; align-items: center; background: #fff; border-radius: 7px; padding: 7px 10px; border: 1px solid var(--line); font-size: 11px; }
-.rpstructlabel { font-weight: 600; color: var(--fg); font-size: 10.5px; }
+.rpstructlabel { font-weight: 600; color: var(--ink); font-size: 10.5px; }
 .rpstructbefore { color: #9E3D12; font-style: italic; text-align: right; font-size: 10.5px; }
 .rpstructarrow { color: #b7afbd; text-align: center; font-size: 9px; }
 .rpstructafter { color: #5F5E5A; font-size: 10.5px; }

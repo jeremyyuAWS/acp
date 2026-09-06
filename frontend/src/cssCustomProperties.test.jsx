@@ -16,15 +16,17 @@
  * a BARE `var(--x)` naming an undeclared property is a bug. This file draws exactly that line, and
  * drawing it anywhere else would flag most of the codebase.
  *
- * THE ALLOWLIST IS DEBT, NOT PERMISSION. Seven other properties have the same defect today. They
- * are recorded rather than fixed because they belong to screens this change does not touch, and a
- * silent list is how the next one gets added. Several are worse than the one that prompted this:
- * `background: var(--border)` and `background: var(--panel)` render TRANSPARENT rather than merely
- * inheriting a colour.
+ * THE ALLOWLIST IS EMPTY, AND THAT IS THE POINT. It shipped with seven entries — the properties
+ * that had this defect on screens the --text fix did not touch. All seven are now fixed, so the
+ * list is empty and the rule is absolute: no bare undeclared custom property, anywhere.
+ *
+ * Keep it that way by fixing the property rather than adding a name here. An entry is a statement
+ * that a known-broken colour is acceptable for now, and the seven were only ever acceptable
+ * because they were about to be fixed.
  *
  * The assertion runs in both directions, like unmountedComponents.test.jsx: adding a new bare
- * undeclared property fails, and FIXING one also fails until it is removed from the list. That is
- * deliberate — a ratchet only tightens if removing an entry is forced rather than optional.
+ * undeclared property fails, and FIXING one also fails until it is removed from the list. With an
+ * empty list only the first direction can fire, which is the state to preserve.
  */
 import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'fs'
@@ -32,15 +34,17 @@ import { resolve, join } from 'path'
 
 const SRC = resolve(import.meta.dirname)
 
-// Known-undeclared, bare, and NOT fixed here. Shrink this list; never grow it.
-//   --accent      FolderPicker.jsx
-//   --border      AdminInsights.jsx, AdminLiveTraffic.jsx, App.jsx  (renders transparent)
-//   --danger-fg   Publish.jsx
-//   --error       AdminInsights.jsx
-//   --fg          FixOutcomes.jsx, ManualWork.jsx, styles.css
-//   --page        AdminLiveTraffic.jsx
-//   --panel       AdminLiveTraffic.jsx, styles.css                  (renders transparent)
-const KNOWN_UNDECLARED = ['--accent', '--border', '--danger-fg', '--error', '--fg', '--page', '--panel']
+// Empty, and to be kept empty. The seven this shipped with were fixed in the follow-up that
+// emptied it; each was mapped to the declared token its own use already implied:
+//   --accent    -> --info-fg            FolderPicker's clickable breadcrumb segments
+//   --border    -> --line               15 sites; --line IS the border token
+//   --danger-fg -> --error-fg-strong    Publish's failed-release alert
+//   --error     -> --error-fg-strong    AdminInsights, which used the right token 4 lines away
+//   --fg        -> --ink                3 sites; --ink IS the text token
+//   --page      -> --bg                 AdminLiveTraffic's page-coloured wells
+//   --panel     -> --surface            5 sites; all 13 fallbacks elsewhere said #fff, and
+//                                       --surface is the codebase's opaque #fff card token
+const KNOWN_UNDECLARED = []
 
 const sourceFiles = () => {
   const out = []
@@ -98,6 +102,17 @@ describe('custom properties used without a fallback must be declared', () => {
     expect(unexpected, `bare undeclared custom properties:\n${detail}`).toEqual([])
   })
 
+  it('has an EMPTY allowlist, so a regression cannot be waved through by listing it', () => {
+    // THIS ASSERTION EXISTS BECAUSE A BITE CHECK FAILED TO BITE. With the list merely "asserted
+    // in both directions", reintroducing a bare property AND adding its name here passed both of
+    // the tests around this one — which is the exact move the list invites, and it is silent.
+    //
+    // Now that every entry is fixed, the empty list is itself the assertion. Adding a name means
+    // deleting this test, and deleting a test that says why it exists is a decision somebody has
+    // to make in a diff rather than a string somebody appends to a line.
+    expect(KNOWN_UNDECLARED).toEqual([])
+  })
+
   it('does not still carry an entry that has since been fixed', () => {
     // The other direction. Without it the list only ever grows, and a stale entry reads as a
     // defect that is still there.
@@ -109,6 +124,7 @@ describe('custom properties used without a fallback must be declared', () => {
     // The specific regression this file was written for. `--text` was in LiveOperationsNotifier
     // and twice in remediation-live-detail.css; all three now use `--ink`, which is declared.
     const { declared, bare } = scan()
+    expect(declared.has('--line') && declared.has('--bg') && declared.has('--surface')).toBe(true)
     expect(bare.has('--text'), 'the --text property is used bare again, and it is declared nowhere').toBe(false)
     expect(declared.has('--ink')).toBe(true)
   })

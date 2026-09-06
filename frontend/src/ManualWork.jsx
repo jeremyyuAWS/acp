@@ -56,7 +56,7 @@ function CriterionBlock({ c, app }) {
   return (
     <div className="manual-criterion" style={{ borderTop: '1px solid var(--line)', padding: '10px 0' }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)' }}>{c.label || `WCAG ${c.sc}`}</span>
+        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)' }}>{c.label || `WCAG ${c.sc}`}</span>
         <span className="muted" style={{ fontSize: 11.5, fontVariantNumeric: 'tabular-nums' }}>WCAG {c.sc}</span>
         <span style={{ fontSize: 11.5, fontWeight: 600, color: SEV_TONE[c.severity] || 'var(--muted)' }}>
           {String(c.severity || '').toLowerCase()}

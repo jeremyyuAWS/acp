@@ -454,7 +454,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                   <dt>Destination path</dt><dd>{selectedResult?.released_relative_path || `Remediated / ${releaseFolder?.name || '<release timestamp>'} / ${sourcePath(sel)}`}</dd>
                   <dt>Verification</dt><dd>{selectedResult?.verification || 'Pending release'}</dd>
                 </dl>
-                {selectedResult?.status === 'failed' && <div role="alert" style={{ marginTop: 14, color: 'var(--danger-fg)' }}><b>Needs attention:</b> {selectedResult.explanation}</div>}
+                {selectedResult?.status === 'failed' && <div role="alert" style={{ marginTop: 14, color: 'var(--error-fg-strong)' }}><b>Needs attention:</b> {selectedResult.explanation}</div>}
                 {selectedResult?.published_url && <a href={selectedResult.published_url} target="_blank" rel="noopener noreferrer" aria-label={`Open released document ${sel.file}`}>Open released document ↗</a>}
                 <details style={{ marginTop: 16 }}><summary>Audit history</summary><p className="muted">{selectedResult?.published_at ? `Released ${new Date(selectedResult.published_at).toLocaleString()} · ${selectedResult.created ? 'created' : 'reused'}` : 'No release event yet.'}</p></details>
               </> : <p className="muted">Select a document to see its original path, destination, verification, and audit history.</p>}
