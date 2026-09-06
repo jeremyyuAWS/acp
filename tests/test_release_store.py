@@ -26,6 +26,25 @@ def test_release_execution_and_roots_are_stable_across_retries(isolated_store):
     assert root["folder_id"] == "folder-a"
 
 
+def test_release_root_name_claim_survives_retries_and_separates_concurrent_releases(isolated_store):
+    owner = "owner@example.com"
+    _scan(isolated_store, "scan-claim-1", owner)
+    _scan(isolated_store, "scan-claim-2", owner)
+    first = isolated_store.ensure_release_execution("scan-claim-1", owner, "sharepoint", 1)
+    second = isolated_store.ensure_release_execution("scan-claim-2", owner, "sharepoint", 1)
+    timestamp = "2026-09-05 10-00 UTC"
+
+    first_name = isolated_store.claim_release_root_name(
+        first["id"], owner, "sharepoint", "graph:drive-a", timestamp)
+    retry_name = isolated_store.claim_release_root_name(
+        first["id"], owner, "sharepoint", "graph:drive-a", timestamp)
+    second_name = isolated_store.claim_release_root_name(
+        second["id"], owner, "sharepoint", "graph:drive-a", timestamp)
+
+    assert first_name == retry_name == timestamp
+    assert second_name == f"{timestamp} · {second['id'][:8]}"
+
+
 def test_release_status_counts_success_failure_and_remaining(isolated_store):
     _scan(isolated_store, "scan-2", "owner@example.com")
     release = isolated_store.ensure_release_execution(

@@ -212,7 +212,7 @@ def test_sharepoint_folder_reuse_follows_every_page_and_does_not_create(monkeypa
     assert publish._sp_ensure_folder("token", "drive", "parent", "Policies") == "winner"
 
 
-def test_sharepoint_release_root_collision_on_later_page_gets_stable_suffix(monkeypatch):
+def test_sharepoint_release_root_reuses_its_durably_claimed_name(monkeypatch):
     import scanner
     folder_calls = []
     monkeypatch.setattr(publish, "_sp_ensure_folder",
@@ -221,15 +221,8 @@ def test_sharepoint_release_root_collision_on_later_page_gets_stable_suffix(monk
                         ("root" if not parent_id else "release-folder"))
     monkeypatch.setattr(scanner, "_sp_base", lambda drive: "https://graph")
     pages = {
-        "https://graph/items/root/children?$select=id,name,folder,webUrl&$top=200": {
-            "value": [{"id": str(i), "name": f"older-{i}", "folder": {}} for i in range(200)],
-            "@odata.nextLink": "https://graph/roots-page-2",
-        },
-        "https://graph/roots-page-2": {
-            "value": [{"id": "same-minute", "name": "2026-09-05 10-00 UTC", "folder": {}}]
-        },
         "https://graph/items/release-folder?$select=id,name,webUrl": {
-            "id": "release-folder", "name": "2026-09-05 10-00 UTC · abcdef12",
+            "id": "release-folder", "name": "2026-09-05 10-00 UTC",
             "webUrl": "https://sp/release",
         },
     }
@@ -238,7 +231,7 @@ def test_sharepoint_release_root_collision_on_later_page_gets_stable_suffix(monk
     result = publish.ensure_sharepoint_release_folder(
         "token", "drive", "abcdef123456", "2026-09-05 10-00 UTC")
 
-    assert folder_calls[-1] == ("2026-09-05 10-00 UTC · abcdef12", "root")
+    assert folder_calls[-1] == ("2026-09-05 10-00 UTC", "root")
     assert result["id"] == "release-folder"
 
 

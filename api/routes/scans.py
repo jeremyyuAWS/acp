@@ -3250,8 +3250,10 @@ def publish_files(sid: str, request: Request, body: dict):
                 location = f"graph:{drive_id or 'me'}"
                 root = core.store.get_release_root(release_id, location, owner)
                 if not root:
+                    claimed_name = core.store.claim_release_root_name(
+                        release_id, owner, "sharepoint", location, folder_name)
                     detail = _publish.ensure_sharepoint_release_folder(
-                        sp_token, drive_id, release_id, folder_name)
+                        sp_token, drive_id, release_id, claimed_name)
                     root = core.store.record_release_root(
                         release_id, owner, "sharepoint", location, detail["id"],
                         detail["name"], detail.get("url"))
