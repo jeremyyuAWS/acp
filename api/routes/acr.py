@@ -218,6 +218,34 @@ class SetApplicability(BaseModel):
 
 # ── reports ────────────────────────────────────────────────────────────────────
 
+
+def _check_edition(edition: str | None) -> None:
+    """Refuse an edition this deployment cannot honestly produce (PRD phase 6).
+
+    Two different problems, two different messages: an edition that is not one of ITI's four is a
+    typo, and one that is but whose requirement catalogs are absent is unbuilt work. Telling an
+    author "invalid" for the second would send them hunting for a spelling mistake.
+
+    acr_validation makes the same judgement at publish time and that is the gate of record — this
+    is the earlier, kinder half, so the answer arrives while the field is still in front of them
+    rather than after a report has been filled in.
+    """
+    if edition is None:
+        return
+    edition = str(edition).strip()
+    if not acr_catalog.edition_known(edition):
+        raise HTTPException(400, f"{edition!r} is not a VPAT 2.5Rev edition — ITI publishes "
+                                 f"{', '.join(sorted(acr_catalog.EDITIONS))}")
+    absent = acr_catalog.missing_requirement_sets(edition)
+    if absent:
+        names = ", ".join(sorted(acr_catalog.REQUIREMENT_SET_NAMES.get(r, r) for r in absent))
+        raise HTTPException(
+            400,
+            f"the {edition} edition must carry {names}, and this deployment has no catalog for "
+            f"it — a report in this edition would name a standard it does not contain. Offered "
+            f"today: {', '.join(acr_catalog.offerable_editions())}")
+
+
 @router.post("/acr")
 def create_report(body: CreateReport, request: Request):
     """Create a draft report and its FULL applicable criteria matrix (PRD §21.2).
@@ -231,7 +259,8 @@ def create_report(body: CreateReport, request: Request):
     for k in ("report_title", "product_name", "product_version", "build_id"):
         if getattr(body, k) is not None:
             meta[k] = getattr(body, k)
-    meta.setdefault("vpat_edition", "VPAT 2.5Rev WCAG")
+    meta.setdefault("vpat_edition", acr_catalog.EDITION_WCAG)
+    _check_edition(meta.get("vpat_edition"))
     meta.setdefault("wcag_version", acr_catalog.meta()["version"])
     meta.setdefault("wcag_levels", "A, AA")
 
@@ -252,6 +281,32 @@ def create_report(body: CreateReport, request: Request):
 def list_reports(request: Request):
     owner = _tenant()
     return {"reports": core.store.list_acr_reports(owner)}
+
+
+@router.get("/acr/editions")
+def list_editions():
+    """The four VPAT 2.5Rev editions and which of them this deployment can produce.
+
+    DECLARED ABOVE `/acr/{report_id}` DELIBERATELY. FastAPI matches in declaration order, so the
+    wildcard would swallow "editions" as a report id and answer 404 — the same shadowing that made
+    role assignment 404 earlier in this repo's history. Moving this below that route is a silent
+    break, not a syntax error, so the test asserts the status code rather than the ordering.
+
+    Unauthenticated-safe: it is a property of the build, identical for every tenant, and carries no
+    report data.
+    """
+    offerable = acr_catalog.offerable_editions()
+    return {
+        "editions": [
+            {"edition": e,
+             "offered": e in offerable,
+             "requires": sorted(acr_catalog.EDITION_REQUIREMENT_SETS[e]),
+             "missing": sorted(acr_catalog.missing_requirement_sets(e))}
+            for e in (acr_catalog.EDITION_WCAG, acr_catalog.EDITION_508,
+                      acr_catalog.EDITION_EU, acr_catalog.EDITION_INT)
+        ],
+        "requirement_set_names": dict(acr_catalog.REQUIREMENT_SET_NAMES),
+    }
 
 
 @router.get("/acr/{report_id}")
@@ -285,6 +340,10 @@ def patch_report(report_id: str, body: PatchReport, request: Request):
         # revision rather than editing what was published.
         raise HTTPException(409, "this report is published — changes create a new draft revision")
     _require(acr_authz.ROLE_EDITOR, request, report_id)
+    # The path a report author actually takes: the metadata form PATCHes this field. Guarding only
+    # creation would leave the free-text hole open where it is used.
+    if "vpat_edition" in body.fields:
+        _check_edition(body.fields["vpat_edition"])
     written = core.store.update_acr_report_metadata(report_id, owner_email=owner,
                                                     fields=body.fields)
     core.store.append_acr_decision_log(report_id, owner_email=owner, actor=owner,

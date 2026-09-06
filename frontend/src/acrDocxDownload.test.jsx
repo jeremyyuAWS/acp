@@ -44,6 +44,12 @@ const api = {
 }
 
 vi.mock('./acrApi', () => ({
+  // AcrMetadataForm fetches the VPAT editions on mount. This mock is NON-PARTIAL, so an export
+  // the component imports and this object omits is `undefined` at the call site and throws from
+  // inside an effect — which surfaces as every test in the file failing on unrelated assertions.
+  // Resolving to an empty list keeps the edition field a plain text input here, which is what
+  // these tests were written against; the select itself is covered in acrMetadataForm.test.jsx.
+  getAcrEditions: () => Promise.resolve({ editions: [] }),
   listAcrReports: (...a) => api.listAcrReports(...a),
   createAcrReport: vi.fn(),
   getAcrReport: (...a) => api.getAcrReport(...a),
