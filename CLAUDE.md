@@ -420,6 +420,46 @@ git fetch -q origin main && git show origin/main:<path> | grep -n "<the line you
 A squash title names the first commit, not the branch. Reading the title is how a missing
 correction stays missing.
 
+### "Is it in production?" is an ANCESTRY question, and `/healthz` answers it
+
+That check settles whether your change is on `main`. The next question is whether it is *live*,
+and since #1529 the app names the commit it was built from:
+
+```
+curl -fsS "https://$FQDN/healthz"
+  {"version":"2026.9.6.15","commit":"734fec29…","built_at":"…","version_stamped":true}
+```
+
+**Compare by ANCESTRY, never by equality.** Deploys build the TIP of `main`, not your merge
+commit, so the live sha is whichever tip happened to ship. On 2026-09-06 two further commits
+landed on top of #1529's merge (`29c629c9`) while its deploy queued, and the build that carried
+it stamped `734fec29` — an equality test would have read that entirely correct deploy as a
+failure:
+
+```
+LIVE="$(curl -fsS "https://$FQDN/healthz" | python3 -c 'import sys,json;print(json.load(sys.stdin)["commit"])')"
+git -C <repo> cat-file -e "$LIVE^{commit}"              # the sha is real, not a string
+git -C <repo> merge-base --is-ancestor <your-sha> "$LIVE"   # exit 0 = your change is live
+```
+
+**`cat-file -e` first, and this is the part that bites.** `merge-base --is-ancestor` exits **128**
+on a commit the clone does not have — measured, with `fatal: Not a valid commit name` — and 128
+is not 1. So the natural `if … ; then "live"; else "not live"; fi` reports **NOT LIVE for a commit
+you simply have not fetched**, which is the false direction: it says your fix is missing from
+production when it is sitting there. Sessions here start on a SHALLOW clone (55 commits on
+2026-09-06), so this is the common case, not the exotic one — `git fetch --deepen` or fetch the
+sha before concluding anything.
+
+Two more readings of that field. `null` means the image predates #1529 and cannot name its
+commit — not that the deploy failed. A `-dirty` suffix means `deploy.sh` built from a working
+directory with uncommitted changes, so the sha names a tree that is NOT what shipped.
+
+**Why this is written down.** Before the field existed, establishing that a merge reached
+production took a CalVer stamp, two workflow-run timestamps and a cancelled deploy run to
+disambiguate — and the conclusion was still an inference from WHEN a build happened rather than
+from what it contained. A build stamp advancing after a merge is consistent with your change
+shipping and also with someone else's; only the sha distinguishes them.
+
 ## Some writes are refused by the PROXY, not by GitHub — hand those to the user
 
 The refusal names itself, but only if you read the body rather than the status. Measured
