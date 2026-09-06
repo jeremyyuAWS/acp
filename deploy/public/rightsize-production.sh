@@ -50,7 +50,13 @@ update_app acp-app       1.0 2Gi 1 3
 # pool; scheduler/heartbeat operations wait briefly for a slot instead of reserving idle
 # connections. This keeps the full fleet beneath Postgres's measured 150-connection ceiling,
 # including old+new revision overlap during deploy.
-update_app acp-discovery 1.0 2Gi 1 2  2
+# DISCOVERY IS 4-8 BY DECISION, 2026-09-06. It ran 1-2 here and 4-8 in Azure, and the drift was
+# found the same way remediate's was (packaging/docs/azure-parity.md): production had been scaled
+# up by hand and nobody folded it back. Asked which was right, the owner chose the live shape — so
+# this line now records it, and the acknowledgement in azure_parity.py no longer says the ceiling
+# is unexplained, because it is not. Priced: 418 -> 508 worst-case Postgres connections against a
+# 700 server maximum, leaving 192 of headroom.
+update_app acp-discovery 1.0 2Gi 4 8  2
 update_app acp-assess    2.0 4Gi 5 5  2
 update_app acp-remediate 2.0 4Gi 5 10 2
 apply_remediation_autoscale

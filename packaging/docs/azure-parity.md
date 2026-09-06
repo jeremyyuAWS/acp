@@ -284,7 +284,7 @@ Parsed from the deployment scripts, not from a live subscription.
 |---|---|---:|---:|---|---:|---|---|---|---|
 | `acp-app` | `api` | 1.0 | 2Gi | 1–3 | — | yes | external | none in this repo | rightsize-production.sh + deploy.sh |
 | `acp-assess` | `assess` | 2.0 | 4Gi | 5–5 | 2 | **no** | none | none in this repo | rightsize-production.sh |
-| `acp-discovery` | `discover` | 1.0 | 2Gi | 1–2 | 2 | yes | none | none in this repo | rightsize-production.sh |
+| `acp-discovery` | `discover` | 1.0 | 2Gi | 4–8 | 2 | yes | none | none in this repo | rightsize-production.sh |
 | `acp-grafana` | — | 0.5 | 1.0Gi | 1–1 | — | **no** | external | none in this repo | deploy.sh |
 | `acp-ollama` | — | 4.0 | 8Gi | 0–1 | — | yes | none | none in this repo | rightsize-production.sh |
 | `acp-remediate` | `remediate` | 2.0 | 4Gi | 5–10 | 2 | yes | none | `remediation-queue` | rightsize-production.sh |
@@ -301,15 +301,16 @@ Parsed from the deployment scripts, not from a live subscription.
 
 ## Differences
 
-**0 unexplained**, 3 acknowledged.
+**0 unexplained**, 4 acknowledged.
 
-Every difference now carries a recorded decision. Production still differs from the contract in **3** places — that is the point of the acknowledgements, not something they undo. Each row below says which side is authoritative and why.
+Every difference now carries a recorded decision. Production still differs from the contract in **4** places — that is the point of the acknowledgements, not something they undo. Each row below says which side is authoritative and why.
 
 | Tier | Field | Azure | Contract | | Why |
 |---|---|---|---|---|---|
 | `api` | `replicas.min` | `1` | `2` | acknowledged | The example raises the API floor from 1 to 2 because the standard profile requires two API replicas (PRD S8), and the example's own header says so. Azure runs 1 — so today's production would FAIL its own profile's floor, which is a finding about the deployment rather than about the contract. |
 | `api` | `replicas.max` | `3` | `4` | acknowledged | Production's ceiling of 3 was chosen against a floor of 1 — rightsize-production.sh says 'The web tier retains burst headroom', which is a statement about the RANGE. The contract corrects that floor to 2 for the profile, so holding the ceiling at 3 would silently halve the burst range production says it wants (3x down to 1.5x); 2-4 keeps it at 2x. Priced: the extra replica is 16 Postgres connections against 267 of headroom. The contract stands and Azure's ceiling is the override to correct alongside its floor. |
-| `discover` | `replicas.max` | `2` | `3` | acknowledged | Production runs 1-2 and records no reason for the ceiling — rightsize-production.sh's only comment on this tier ('Discovery can use its existing CPU scale rule') is about the scale rule, and that rule is itself UNVERIFIABLE from this repository. An unexplained 2 is not evidence of a considered 2. Priced: the third replica is 18 Postgres connections against 267 of headroom. The contract stands as the authoritative range; Azure's ceiling is recorded here as a production override, not as the target. |
+| `discover` | `replicas.min` | `4` | `1` | acknowledged | Production runs a floor of 4 against the contract's 1. Decided 2026-09-06: discovery was found scaled up by hand, the owner confirmed the live shape is the intended one, and the script was corrected to match rather than the estate shrunk to meet a range nobody had argued for. A floor costs what it always costs — it is paid continuously — but the worst case is set by the ceiling below, so this row adds nothing to the budget. |
+| `discover` | `replicas.max` | `8` | `3` | acknowledged | Production runs a ceiling of 8 against the contract's 3, and unlike the previous 2 this one is explained: the owner chose the live shape on 2026-09-06 after the drift was found (packaging/docs/azure-parity.md). Priced: the five extra replicas are 90 Postgres connections, taking the fleet worst case from 418 to 508 against a 700 server maximum and leaving 192 of headroom. The contract's 3 is now the value with no argument behind it; raising it is the open question, and this row is where that is recorded. |
 
 ## Deployed, and not modelled by the contract
 
