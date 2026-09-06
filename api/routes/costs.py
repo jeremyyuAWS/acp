@@ -45,6 +45,18 @@ _COST_API_VERSION = "2024-08-01"
 _COST_SCOPE_HOST = "https://management.azure.com"
 _COST_TOKEN_SCOPE = "https://management.azure.com/.default"
 _BILLING_TTL_S = float(os.environ.get("ACP_BILLING_TTL_S") or 3600)
+# A FAILURE IS NOT WORTH AN HOUR. The long TTL above exists because Cost Management rate-limits
+# and Microsoft advises against querying it more than daily — but that reasoning applies to a
+# SUCCESSFUL answer, which is stale-but-usable and costs a quota call to refresh. A failure is
+# the opposite: it is almost always something an operator is actively fixing, and holding it for
+# an hour means the panel keeps naming a missing role for fifty-nine minutes after the role was
+# granted. Observed on 2026-09-06: the fix was to restart the revision, which is a blunt remedy
+# for a cache this code chose.
+#
+# Not zero, either. An unconfigured or broken deployment would then re-query on every request
+# from a panel that polls every 60 seconds, spending the quota fastest exactly when no answer is
+# coming back.
+_BILLING_FAILURE_TTL_S = float(os.environ.get("ACP_BILLING_FAILURE_TTL_S") or 60)
 _BILLING_TIMEOUT_S = float(os.environ.get("ACP_BILLING_TIMEOUT_S") or 15)
 _BILLING_REFRESH_NOTE = ("Azure Cost Management refreshes roughly every four hours; "
                          "month-to-date is a measurement, not a live figure.")
@@ -216,7 +228,10 @@ def billing_block(*, now=None) -> dict:
         return _billing_unavailable("not_configured", "Azure billing feed not configured")
     clock = now() if now else time.monotonic()
     held = _billing_cache.get("value")
-    if held is not None and clock - _billing_cache.get("at", 0.0) < _BILLING_TTL_S:
+    # `configured` is the discriminator: only a query that came back with a number sets it, and
+    # every failure shape from _billing_unavailable leaves it False.
+    ttl = _BILLING_TTL_S if (held or {}).get("configured") else _BILLING_FAILURE_TTL_S
+    if held is not None and clock - _billing_cache.get("at", 0.0) < ttl:
         return held
     # A throttle is honoured, not retried. Serving the LAST GOOD block through it is the honest
     # answer — it carries its own updated_at, so the panel says how old the figure is rather than

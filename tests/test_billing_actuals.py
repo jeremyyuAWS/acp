@@ -281,3 +281,76 @@ def test_every_billing_shape_carries_the_delay_note(monkeypatch):
         lambda path, body, token: (_answer(["Cost", "Currency"], [[1.0, "USD"]]), None, None))
     assert costs_module._query_billing()["delay_note"]
     assert costs_module._billing_unavailable("error", "nope")["delay_note"]
+
+
+# -- a failure is not worth an hour ------------------------------------------------------------
+
+def test_a_failure_is_retried_long_before_a_success_would_be(monkeypatch):
+    """Observed 2026-09-06: the panel named a missing Cost Management Reader role, the role was
+    granted, and the panel kept naming it — because the denial was cached for the same hour a
+    real answer gets. The remedy was restarting the revision, which is a blunt fix for a cache
+    this code chose.
+    """
+    calls = []
+    monkeypatch.setattr(costs_module, "_AZ_SUB", "sub-1")
+    answers = [costs_module._billing_unavailable("permission", "role needed"),
+               {"configured": True, "unavailable_reason": None, "actual_month_to_date_usd": 12.0}]
+
+    def _query():
+        calls.append(1)
+        return answers[min(len(calls) - 1, len(answers) - 1)]
+
+    monkeypatch.setattr(costs_module, "_query_billing", _query)
+    clock = [1000.0]
+    assert costs_module.billing_block(now=lambda: clock[0])["configured"] is False
+    assert len(calls) == 1
+
+    # Inside the failure window it is held, so a broken deployment cannot re-query on every one
+    # of the panel's 60-second polls.
+    clock[0] += costs_module._BILLING_FAILURE_TTL_S - 1
+    costs_module.billing_block(now=lambda: clock[0])
+    assert len(calls) == 1
+
+    # Past it — and long before the hour a SUCCESS would have been held for — it tries again and
+    # picks up the granted role.
+    clock[0] += 2
+    assert costs_module.billing_block(now=lambda: clock[0])["actual_month_to_date_usd"] == 12.0
+    assert len(calls) == 2
+    assert costs_module._BILLING_FAILURE_TTL_S < costs_module._BILLING_TTL_S
+
+
+def test_a_success_is_still_held_for_the_full_hour(monkeypatch):
+    # The long TTL is the whole reason this cache exists: Cost Management rate-limits and the
+    # panel polls every 60 seconds. Shortening the failure window must not shorten this one.
+    calls = []
+    monkeypatch.setattr(costs_module, "_AZ_SUB", "sub-1")
+    monkeypatch.setattr(costs_module, "_query_billing",
+                        lambda: calls.append(1) or {"configured": True, "unavailable_reason": None,
+                                                    "actual_month_to_date_usd": 5.0})
+    clock = [1000.0]
+    costs_module.billing_block(now=lambda: clock[0])
+    clock[0] += costs_module._BILLING_TTL_S - 1
+    costs_module.billing_block(now=lambda: clock[0])
+    assert len(calls) == 1
+
+    clock[0] += 2
+    costs_module.billing_block(now=lambda: clock[0])
+    assert len(calls) == 2
+
+
+def test_a_throttle_still_honours_retry_after_over_the_failure_window(monkeypatch):
+    # Throttling has its own, longer hold — Retry-After is Azure telling us when to come back,
+    # and the shorter failure window must not override it into re-querying sooner.
+    monkeypatch.setattr(costs_module, "_AZ_SUB", "sub-1")
+    calls = []
+    monkeypatch.setattr(costs_module, "_query_billing",
+                        lambda: calls.append(1) or {"configured": False,
+                                                    "unavailable_reason": "throttled",
+                                                    "retry_after_s": 900.0})
+    clock = [1000.0]
+    costs_module.billing_block(now=lambda: clock[0])
+    assert len(calls) == 1
+
+    clock[0] += costs_module._BILLING_FAILURE_TTL_S + 5
+    costs_module.billing_block(now=lambda: clock[0])
+    assert len(calls) == 1, "Retry-After must outrank the failure window"
