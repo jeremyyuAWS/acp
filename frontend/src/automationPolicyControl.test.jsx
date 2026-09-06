@@ -21,6 +21,8 @@ describe('AutomationPolicyControl', () => {
     expect(slider.min).toBe('1')
     expect(slider.max).toBe('5')
     expect(slider.getAttribute('aria-valuetext')).toContain('Balanced')
+    expect([...container.querySelectorAll('.automation-policy__ticks span')].map((tick) => tick.style.left))
+      .toEqual(['0%', '25%', '50%', '75%', '100%'])
   })
 
   it('updates its honest current-queue forecast without changing the run', async () => {

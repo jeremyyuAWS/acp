@@ -46,7 +46,8 @@ export default function AutomationPolicyControl({ findings = [], runId = null })
           aria-valuetext={`${selected.name}: ${selected.description}`}
         />
         <div className="automation-policy__ticks" aria-hidden="true">
-          {AUTOMATION_LEVELS.map((option) => <span key={option.value}>{option.name}</span>)}
+          {AUTOMATION_LEVELS.map((option, index) =>
+            <span key={option.value} style={{ left: `${index * 25}%` }}>{option.name}</span>)}
         </div>
       </div>
 
