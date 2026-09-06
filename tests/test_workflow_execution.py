@@ -26,6 +26,45 @@ def test_scan_acceptance_creates_a_first_class_workflow_atomically(isolated_stor
     assert scan["workflow_revision"] == 1
 
 
+def test_workflow_exposes_the_frozen_lifecycle_policy_ledger(isolated_store):
+    rules = [
+        {"policy_id": "archive-old", "version": 3, "condition": {"age_days": 365}},
+        {"policy_id": "delete-temp", "version": 2, "condition": {"path": "Temp/"}},
+    ]
+    sid, _ = isolated_store.enqueue_scan(
+        "scan-workflow-policy", "sharepoint", OWNER, "scan_discover", {},
+        inputs={"source": "sharepoint", "lifecycle_rules": rules})
+
+    workflow = isolated_store.workflow_for_scan(sid, OWNER)
+    assert workflow["lifecycle_policy_count"] == 2
+    assert workflow["lifecycle_policy_versions"] == [
+        {"policy_id": "archive-old", "version": 3},
+        {"policy_id": "delete-temp", "version": 2},
+    ]
+    assert len(workflow["lifecycle_policy_digest"]) == 64
+
+    [active] = isolated_store.active_workflows(OWNER)
+    assert active["lifecycle_policy_digest"] == workflow["lifecycle_policy_digest"]
+    assert active["lifecycle_policy_versions"] == workflow["lifecycle_policy_versions"]
+
+
+def test_stage_snapshot_is_bound_to_the_frozen_lifecycle_rules(isolated_store):
+    sid, _ = isolated_store.enqueue_scan(
+        "scan-workflow-snapshot", "sharepoint", OWNER, "scan_discover", {},
+        inputs={"source": "sharepoint", "lifecycle_rules": [
+            {"policy_id": "archive-old", "version": 1}]})
+    first = isolated_store.stage_snapshot_id(sid)
+
+    # scan_inputs is immutable through the product API. This direct corruption demonstrates the
+    # identity is cryptographically sensitive to the policy snapshot rather than ignoring it.
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(
+            cur, "UPDATE scan_inputs SET lifecycle_rules=%s WHERE scan_id=%s",
+            ('[{"policy_id":"archive-old","version":2}]', sid))
+
+    assert isolated_store.stage_snapshot_id(sid) != first
+
+
 def test_workflow_stage_projection_advances_with_durable_stage_events(isolated_store):
     sid, _ = isolated_store.enqueue_scan(
         "scan-workflow-2", "sharepoint", OWNER, "scan_discover",
