@@ -145,6 +145,24 @@ describe('Component state is a shape and a word, not a colour', () => {
     const state = (connection) => componentState({ kind: 'intake' }, { snapshot: {}, connection }).key
     expect([state('live'), state('reconnecting'), state('unavailable')]).toEqual(['online', 'degraded', 'offline'])
   })
+
+  it('calls a terminal run with failures needs attention, never idle', () => {
+    const state = componentState({ kind: 'run', run: {
+      status: 'failed', completed: 209, total: 258, running: 0, queued: 0, failed: 49,
+    } }, ctx)
+    expect(state.key).toBe('degraded')
+    expect(state.label).toBe('Needs attention')
+    expect(state.detail).toContain('49 documents failed')
+  })
+
+  it('does not infer idle from the last frame while the activity stream is reconnecting', () => {
+    const state = componentState({ kind: 'run', run: {
+      status: 'active', running: 0, queued: 0, failed: 0,
+    } }, { ...ctx, connection: 'reconnecting' })
+    expect(state.key).toBe('degraded')
+    expect(state.label).toBe('Live status unavailable')
+    expect(state.detail).toMatch(/last confirmed run state/i)
+  })
 })
 
 describe('Worker gauge thresholds come from a documented rule', () => {
