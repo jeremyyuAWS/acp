@@ -165,13 +165,17 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queu
         </div>
       </div>
     </div>
-    <WorkerReplicaTable replicas={service?.instances} nowMs={nowMs} />
+    {/* WORK FIRST. A reader opens this to see what the service is doing, and the answer used to
+        sit below the replica inventory, the telemetry signals, the saturation split and the
+        scaling history — four panels about the fleet's SIZE before one about its WORK. Replica
+        identity is the least interesting fact on this screen and now sits where that belongs. */}
+    <JobHealth health={health} />
     <WorkerTelemetrySignals service={service} />
     <Saturation saturation={saturation} nowMs={nowMs} measuredAt={capacity?.measured_at} />
     <ScalingActivity capacity={capacity} saturation={saturation} queueDepth={queueDepth}
       lifecycle={replicaLifecycle(capacity, service)} nowMs={nowMs} />
-    <JobHealth health={health} />
     <ReplicaJobLoad load={placement} />
+    <WorkerReplicaTable replicas={service?.instances} nowMs={nowMs} />
     <ProvisioningTimeline timeline={provisioningTimeline(replicaLifecycle(capacity, service))} />
     <ReplicaLifecycle lifecycle={replicaLifecycle(capacity, service)} nowMs={nowMs}
       measuredAt={capacity?.measured_at} />
@@ -179,15 +183,39 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queu
   </section>
 }
 
+/** How many replica rows are worth putting on a live panel before the list becomes the noise. */
+export const REPLICA_ROW_LIMIT = 12
+
+/**
+ * The replicas actually serving, and a count of the rows that are not.
+ *
+ * `worker_instances` is written on every heartbeat and pruned by nothing, so a day of rollouts
+ * leaves a tombstone per replica per revision. On 2026-09-06 this rendered as "1000 unique
+ * reported" — every row Stale, every one `0 of 0 slots busy`, all from revisions retired 25
+ * hours earlier — above the panel saying what the service was actually working on.
+ *
+ * Stale rows are SUMMARISED rather than dropped: "none of the 1000 rows are live" is a real
+ * signal about the registry, and silently showing nothing would hide it. What they are not is
+ * worth twelve screens of scrolling.
+ */
 function WorkerReplicaTable({ replicas, nowMs }) {
   if (!Array.isArray(replicas) || !replicas.length) return null
+  const live = replicas.filter((replica) => replica.healthy || replica.fresh)
+  const stale = replicas.length - live.length
+  const shown = live.slice(0, REPLICA_ROW_LIMIT)
   return <section aria-label="ACP worker replicas" style={{ marginTop: 12 }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
       <b style={{ fontSize: 13 }}>ACP worker replicas</b>
-      <span className="muted" style={{ fontSize: 11 }}>{replicas.length} unique reported</span>
+      <span className="muted" style={{ fontSize: 11 }}>
+        {live.length} reporting{stale ? ` · ${stale} stale` : ''}
+      </span>
     </div>
+    {!live.length && <p className="muted" style={{ fontSize: 12, margin: '6px 0 0' }}>
+      No replica is currently reporting. {replicas.length} stale
+      {replicas.length === 1 ? ' row remains' : ' rows remain'} from earlier revisions.
+    </p>}
     <ul style={{ listStyle: 'none', margin: '8px 0 0', padding: 0, display: 'grid', gap: 6 }}>
-      {replicas.map((replica) => {
+      {shown.map((replica) => {
         const slots = Number(replica.concurrency_limit || 0)
         const active = Math.min(slots, Number(replica.active_job_count || 0))
         const processes = Number(replica.process_count || 1)
@@ -209,8 +237,13 @@ function WorkerReplicaTable({ replicas, nowMs }) {
         </li>
       })}
     </ul>
+    {live.length > shown.length && <p className="muted" style={{ margin: '6px 0 0', fontSize: 11 }}>
+      {live.length - shown.length} more reporting replicas not listed.
+    </p>}
     <p className="muted" style={{ margin: '6px 0 0', fontSize: 10.5 }}>
       Replica totals use unique replica identities; worker processes are shown within their container.
+      Stale rows are counted, not listed: the registry keeps a row per replica per revision and
+      prunes none, so retired revisions accumulate.
     </p>
   </section>
 }
@@ -871,23 +904,45 @@ function ScalingActivity({ capacity, saturation, queueDepth, lifecycle, nowMs })
  * a job, and the panel says so rather than letting a reader assume the join exists just because
  * the replica list is right above it.
  */
+/**
+ * What this service is working on, document by document.
+ *
+ * One row per IN-FLIGHT JOB. It used to be one row per RUN, built from `current_file` — whichever
+ * running row the store read first — so a service with forty jobs in flight named one document
+ * and read as though it were barely working.
+ *
+ * Each row carries the four facts an operator actually asks for: which document, which criterion,
+ * what the handler says it is doing right now (`phase`, written as it works), and how long it has
+ * been on it. Runtime and heartbeat are shown as SEPARATE facts: a job running an hour with a
+ * two-second-old lease is healthy, one running a minute with a two-minute-old lease is not, and
+ * runtime alone cannot tell them apart.
+ */
 function JobHealth({ health }) {
   if (!health) return null
   return <section aria-label="Current work" style={{ marginTop: 12 }}>
-    <b style={{ fontSize: 13 }}>Current work</b>
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, alignItems: 'baseline' }}>
+      <b style={{ fontSize: 13 }}>Current work</b>
+      {!!health.jobs.length && <span className="muted" style={{ fontSize: 11 }}>
+        {health.jobs.length} document{health.jobs.length === 1 ? '' : 's'} in flight
+      </span>}
+    </div>
     {health.jobs.length === 0
       ? <p className="muted" style={{ fontSize: 12, margin: '6px 0 0' }}>
         No job is being processed by this service right now.
       </p>
       : <ul style={{ listStyle: 'none', margin: '7px 0 0', padding: 0, display: 'grid', gap: 6 }}>
-        {health.jobs.map((job) => <li key={job.scanId} style={{ ...PANEL, padding: 9, fontSize: 12 }}>
-          <div style={{ overflowWrap: 'anywhere' }}>
-            <code>{job.file || 'file not reported'}</code>
+        {health.jobs.map((job) => <li key={job.key} style={{ ...PANEL, padding: 9, fontSize: 12 }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
+            <code style={{ overflowWrap: 'anywhere', flex: '1 1 auto' }}>{job.file || 'file not reported'}</code>
+            {job.phase && <span style={{ fontSize: 11, fontWeight: 700, color: TONE.info,
+              whiteSpace: 'nowrap' }}>{job.phase}</span>}
           </div>
           <div className="muted" style={{ fontSize: 11, marginTop: 3, overflowWrap: 'anywhere' }}>
             {job.ruleId ? `${job.ruleId} · ` : ''}{job.jobType || 'job type not reported'}
             {' · '}
             {job.runtimeS == null ? 'claim time not reported' : `running ${formatDuration(job.runtimeS)}`}
+            {job.heartbeatS == null ? '' : ` · lease ${formatDuration(job.heartbeatS)} old`}
+            {job.attempts ? ` · attempt ${job.attempts + 1}` : ''}
             {job.owner ? ` · ${job.owner}` : ''}
           </div>
         </li>)}

@@ -70,6 +70,13 @@ describe('workflow continuity', () => {
     expect(container.innerHTML).toBe('')
   })
 
+  it('does not stack a generic banner above the persistent discovery card', () => {
+    const container = render({ currentView: 'overview', workflow: {
+      stage: 'discover', source: 'sharepoint', running: 1, queued: 0,
+    }, onReturn: () => {}, onLiveOps: () => {} })
+    expect(container.innerHTML).toBe('')
+  })
+
   it('names active publishing as Release', () => {
     const container = render({ currentView: 'overview', workflow: {
       stage: 'publish', source: 'sharepoint', running: 1, queued: 8,

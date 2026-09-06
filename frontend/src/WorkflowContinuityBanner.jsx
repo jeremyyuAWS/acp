@@ -16,10 +16,13 @@ export function workflowRevisionLabel(workflow = {}) {
 }
 
 export default function WorkflowContinuityBanner({ workflow, currentView, onReturn, onLiveOps, onViewPrevious }) {
-  // Remediation has its own persistent live card, fed by the same App-owned stream as the full
-  // Live Processing panel. Stacking this generic continuity banner above it repeats the status
-  // with less useful data and gives the user two competing ways back to the same work.
-  if (!workflow || workflow.stage === currentView || workflow.stage === 'remediate') return null
+  // Discovery and Remediation have their own persistent live cards, fed by the same App-owned
+  // state as their full processing panels. Stacking this generic continuity banner above either
+  // card repeats the status with less useful data and gives the user two competing ways back to
+  // the same work. Assessment is suppressed by App for the same reason while its compact card is
+  // mounted there.
+  if (!workflow || workflow.stage === currentView
+      || workflow.stage === 'discover' || workflow.stage === 'remediate') return null
   const label = LABELS[workflow.stage] || 'Work'
   const active = Number(workflow.running || 0)
   const queued = Number(workflow.queued || 0)

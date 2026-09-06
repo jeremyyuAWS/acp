@@ -166,6 +166,14 @@ steps:
   - script: python scripts/gen_matrix_coverage.py --check
     displayName: Matrix guard — capability ceiling still derivable
 
+  # Four KEDA scaler queries live in this tree and none of them is where the truth lives. Until
+  # 2026-09-06 every one counted `status='queued'` while store.claim_job also requires
+  # run_after <= now and attempts < max_attempts — so a job in retry backoff, or one waiting for
+  # the reaper, asked for a replica no worker was allowed to use. api/queue_scaler.py owns the
+  # predicate; this holds the four copies to it.
+  - script: python scripts/gen_queue_scalers.py --check
+    displayName: Scaler guard — the queue scalers count claimable jobs
+
   # docs/TODO.md carries generated coverage facts alongside its authored backlog. Those facts
   # went 387 commits stale because nothing checked them, and the stalest part was the headline.
   # This is the thing that stops it recurring; it is cheap and it fails loudly.

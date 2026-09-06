@@ -5,6 +5,9 @@ import { createTestRoot, unmountAll } from './testRoots.js'
 import ErrorBoundary from './ErrorBoundary.jsx'
 
 vi.mock('./api.js', () => ({
+  // CapacityModeStrip, mounted by AdminLiveTraffic, reads this. Declared here
+  // rather than left undefined so these tests exercise the real path.
+  getCapacitySchedule: vi.fn(async () => ({ applied: false })),
   getAdminActivity: vi.fn(async () => ({
     generated_at: '2026-09-04T20:00:00Z', runs: [], summary: {
       active_runs: 0, recent_runs: 0, running: 0, queued: 0, waiting_users: 0,

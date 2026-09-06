@@ -224,17 +224,50 @@ _map_many([("GET", "/admin/activity"), ("GET", "/jobs"), ("GET", "/jobs/{job_id}
 _map_many([("POST", "/admin/jobs/clear-dead"), ("PATCH", "/control/workers/replicas")],
           {"workers.manage"})
 
+# ── Capacity scheduling (Settings -> Scheduling, and the Live Operations mode strip) ──────────
+# ONE BLOCK, DELIBERATELY. These routes were mapped in two places after two implementations of
+# this PRD landed together — here and again in the Settings block below. ROUTE_CAPABILITIES is a
+# dict, so the LATER mapping silently won, and the later one granted the GET on settings.view
+# alone: the Live Operations capacity strip would have been blank for an operations-only user,
+# with nothing anywhere reporting why. The Settings block no longer names these routes.
+#
+# The writes carry settings.view AS WELL AS workers.manage. settings.view granting a write looks
+# wrong in isolation and is this repository's existing convention for the Settings panel (PUT
+# /settings and every /ai write are mapped the same way); dropping it here would have revoked an
+# access #1538 deliberately granted. Holding ANY capability in the set is enough, so the union
+# preserves both intents rather than picking a winner. _require_admin in each handler is the
+# authoritative gate either way; this map only narrows who may reach them.
+# The GET is granted by EITHER capability because the same payload feeds two surfaces: the
+# read-only Scheduling tab in Settings (PRD §4 gives a view-only Settings user the right to
+# inspect the schedule and, per §10, its validation result) and the capacity-mode strip in Live
+# Operations. Mapping it to one of them would blank the other for exactly the users it is for.
+_map_many([("GET", "/control/capacity-schedule")], {"operations.view", "settings.view"})
+# Pricing a proposed schedule is the dry run that precedes Phase 3's write, so it sits with the
+# capability that manages capacity rather than with the ones that only read it. The handler
+# additionally enforces _require_admin — this map narrows who may reach it, not who may act.
+_map_many([("POST", "/control/capacity-schedule/validate")],
+          {"settings.view", "workers.manage"})
+# Phase 3's writes. All three change durable state and two can reach Azure, so they sit with the
+# capability that manages capacity — and each handler additionally enforces _require_admin, which
+# is the authoritative gate; this map narrows who may reach them.
+_map_many([("PUT", "/control/capacity-schedule"),
+           ("POST", "/control/capacity-schedule/override"),
+           ("DELETE", "/control/capacity-schedule/override")],
+          {"settings.view", "workers.manage"})
+# The rendered policy is a READ — what ACP would apply, inspectable before anyone applies it,
+# which is the whole argument for showing it. Same grant as the schedule it derives from.
+_map_many([("GET", "/control/capacity-schedule/policy")], {"operations.view", "settings.view"})
+
 # ── Scan Analytics ────────────────────────────────────────────────────────────
 _map_many([("GET", "/admin/analytics/overview"), ("GET", "/ai/costs")], {"analytics.view"})
 
 # ── Settings and platform administration ──────────────────────────────────────
-_map_many([("GET", "/settings"), ("GET", "/control/capacity-schedule"),
+_map_many([("GET", "/settings"),
            ("GET", "/ai/providers"),
            ("GET", "/ai/second-opinion-policy"), ("GET", "/ai/status"),
            ("GET", "/ai/providers/health"), ("GET", "/ai/providers/{provider}/health")],
           {"settings.view"})
-_map_many([("PUT", "/settings"), ("PUT", "/control/capacity-schedule"),
-           ("POST", "/control/capacity-schedule/validate"), ("PUT", "/ai/providers"),
+_map_many([("PUT", "/settings"), ("PUT", "/ai/providers"),
            ("PUT", "/ai/second-opinion-policy"), ("POST", "/ai/providers/test"),
            ("POST", "/ai/providers/{provider}/secret")],
           {"settings.view"})

@@ -488,9 +488,10 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, s
     )
   }
 
-  // Interrupted card — the worker DIED holding this job (store.reclaim_stuck_jobs marks the
-  // requeued row phase='reclaimed'). Distinct from 'retrying' directly above, and the distinction
-  // is the whole reason this card exists rather than reusing that one:
+  // Worker-handoff cards. An unexpected death is phase='reclaimed'; a graceful rollout is
+  // phase='deployment_requeue'. Both are queued rather than failed, but name the cause honestly.
+  // Distinct from 'retrying' directly above, and the distinction is the whole reason this card
+  // exists rather than reusing that one:
   //
   //   retrying    a handler raised and fail_job requeued with backoff. The process is fine; the
   //               WORK failed, and last_error says how.
@@ -507,17 +508,21 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, s
   // No countdown and no ETA: the job is waiting for whichever worker claims it next, which
   // nothing here can predict — the same reasoning that keeps the queued card free of a queue
   // position and the retrying card free of a backoff timer.
-  if (busy && phase === 'reclaimed') {
+  if (busy && (phase === 'reclaimed' || phase === 'deployment_requeue')) {
+    const deploymentHandoff = phase === 'deployment_requeue'
     const attempt = progress.attempt ?? null
     const maxAttempts = progress.max_attempts ?? null
     return (
-      <section className="discover-run-progress" role="region" aria-label="Discovery interrupted"
+      <section className="discover-run-progress" role="region"
+               aria-label={deploymentHandoff ? 'Discovery deployment handoff' : 'Discovery interrupted'}
                style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
         <div className="assess-run-card" style={{ border: '1px solid var(--line,#e4e8ec)', borderRadius: 12,
                                                   padding: '14px 16px', background: 'var(--panel,#fff)' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                         gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-            <div style={{ fontSize: 14.5, fontWeight: 650 }}>Discovery interrupted</div>
+            <div style={{ fontSize: 14.5, fontWeight: 650 }}>
+              {deploymentHandoff ? 'Discovery deployment handoff' : 'Discovery interrupted'}
+            </div>
             {onStop && (
               <button type="button" className="ghost small" onClick={handleStop}
                       disabled={stopping}
@@ -529,7 +534,7 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, s
           <div role="status" aria-live="polite" style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <span className="prep-pulse" aria-hidden="true" />
             <span style={{ fontSize: 13.5 }}>
-              Worker interrupted; retrying
+              {deploymentHandoff ? 'Service updated; resuming safely' : 'Worker interrupted; retrying'}
               {/* The attempt number is stated only when the server actually supplied one. It
                   arrives either on the scan.interrupted event or on the job poll; if neither is
                   in hand, this says nothing rather than guessing a number, because "attempt 2"
@@ -543,8 +548,9 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, s
           </div>
           <div style={{ marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--line,#e4e8ec)',
                         fontSize: 12.5, color: 'var(--muted)', lineHeight: 1.6 }}>
-            The worker processing this run stopped without reporting. The job has been returned to
-            the queue and will be picked up again.
+            {deploymentHandoff
+              ? 'The service reached a safe checkpoint before updating. This run was returned to the queue without consuming a retry and will continue on the new version.'
+              : 'The worker processing this run stopped without reporting. The job has been returned to the queue and will be picked up again.'}
           </div>
           <StopAcknowledgment />
         </div>
