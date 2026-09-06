@@ -179,7 +179,9 @@ first tells a reader to be careful, the second tells them what to go and fix.
 
   * `rightsize-production.sh` — `update_app acp-remediate 2.0 4Gi 5 10 2`, then
     `apply_remediation_autoscale`, a KEDA `postgresql` rule named `remediation-queue` counting
-    queued `remediate_file` / `rescore_file` / `apply_approved_values` jobs at 4 per replica.
+    queued `remediate_file` / `deliver_corrected_copy` / `rescore_file` /
+    `apply_approved_values` / `publish_file` jobs at 4 per replica. (#1526 listed three of
+    these five; the script had already gained `deliver_corrected_copy` and `publish_file`.)
   * `standard-production.acp-deployment.yaml` — `replicas: { min: 5, max: 10 }` with the
     `autoscale` block deliberately RETAINED, and the reasoning recorded above: *"Production really
     does autoscale this tier — 5-10 with a scale rule is what production runs, and min == max would
@@ -221,6 +223,40 @@ that tier by configuration**, so any reading of that incident has to account for
 
 Either is defensible. What is not defensible is leaving a contract that asserts, in production's
 own voice, a shape production does not have.
+
+## And it has been hit a second time, in the opposite direction: acp-discovery
+
+The remediate row above records production sitting BELOW what the scripts declare. Discovery sits
+ABOVE it, which matters because the two are found by the same reading and fixed by the same script
+— and running that script blind would correct one while undoing the other.
+
+| | replicas | scale rule |
+|---|---|---|
+| `rightsize-production.sh` declares | **1–2** | "Discovery can use its existing CPU scale rule" |
+| production ran, 2026-09-06 | **4–8** | `discovery-cpu`, a `cpu` trigger |
+
+The floor is four times the declared one and the declared CEILING is below the live FLOOR, so this
+is not drift at the margin — applying the script as written would take discovery from four warm
+replicas to one, with a ceiling of two.
+
+**Which is right is not established here, and the asymmetry is the reason to say so.** Remediate
+drifted below its declaration and looks like a step that failed or never ran. Discovery drifted
+above its declaration and looks like somebody deliberately scaled a tier up and did not come back
+to the script. Those want opposite fixes: production should move for the first, and the script
+should move for the second — but only if the second reading is right, and this document cannot
+tell an intentional scale-up from an accidental one.
+
+**The rule half was already known, and is not new here.** The generated section below has recorded
+for some time that *"no scale rule for acp-discovery exists anywhere in this repository — it was
+applied outside these scripts"*. What is new is the RANGE: `1 2` in `update_app acp-discovery`
+against a live `4–8`. The two facts compound — a tier whose rule this repository cannot see, and
+whose replica range it states wrongly.
+
+**The practical consequence, today.** `rightsize-production.sh` is the script that fixes the
+remediate drift, and it cannot be run as-is without shrinking discovery. Either scope the remediate
+correction to its own two `az` calls, or settle discovery's range first and update `update_app
+acp-discovery 1.0 2Gi 1 2 2` to match. The first was done on 2026-09-06 as the immediate fix; the
+second is the durable one and is still open.
 
 ## On ADR 0048's Container Apps claims
 
