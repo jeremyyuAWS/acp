@@ -3,7 +3,7 @@
 Status: **Proposed** — nothing here is implemented. This is the design half of the boot-lock
 work; the code half (replicas verify instead of replay) is a separate PR. No deployment-policy
 change, pipeline change, or production migration is being asked for by this ADR alone · Date:
-2026-08-31 · Related: [ADR 0029](0029-vendored-pdf-engine.md), `docs/db-connection-budget.md`
+2026-08-31 · Related: [ADR 0029](0029-vendor-the-pdf-analyser.md), `docs/db-connection-budget.md`
 
 ## Context
 
