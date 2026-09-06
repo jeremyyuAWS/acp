@@ -1619,9 +1619,6 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         runId={runId}
         reviewCount={reviewCount}
         snapshot={runStream?.snapshot || null}
-        connected={!!runStream?.connected}
-        receivedAt={runStream?.receivedAt || null}
-        events={runStream?.events || []}
         review={reviewWorkspace}
         live={<>
           {/* The large panel consumes the App-owned controller. Mounting this view opens no
