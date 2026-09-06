@@ -7,15 +7,12 @@ from fastapi import APIRouter, Header, HTTPException, Request
 
 from realtime_events import owner_scope
 from realtime_event_store import RedisEventStore
+from realtime_feature import gateway_enabled
 from realtime_stream import event_stream_response
 import core
 
 
 router = APIRouter()
-
-
-def _enabled() -> bool:
-    return os.getenv("ACP_REALTIME_V1_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _store():
@@ -33,7 +30,7 @@ def _owner(request: Request) -> str:
 @router.get("/api/realtime/v1/status")
 async def status(request: Request):
     """Small authoritative twin used when the replay cursor can no longer be honored."""
-    if not _enabled():
+    if not gateway_enabled():
         raise HTTPException(404, "realtime shadow is disabled")
     owner = _owner(request)
     active = core.store.active_scan(owner=owner) or {}
@@ -54,7 +51,7 @@ async def stream(
     The browser sends its normal Google/Microsoft bearer to the outer ACP access gate. This route
     never forwards that credential and never accepts an owner supplied by the client.
     """
-    if not _enabled():
+    if not gateway_enabled():
         raise HTTPException(404, "realtime shadow is disabled")
     owner = _owner(request)
     return event_stream_response(

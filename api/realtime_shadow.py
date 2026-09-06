@@ -14,13 +14,11 @@ import threading
 import time
 
 from realtime_events import KIND_SPECS, RealtimeEvent, coalescing_bucket, owner_scope, stream_key
+from realtime_feature import publisher_enabled
 from swallowed import swallowed
 
-_TRUE = frozenset({"1", "true", "yes", "on"})
-
-
 def enabled() -> bool:
-    return (os.environ.get("ACP_REALTIME_SHADOW_ENABLED") or "").strip().lower() in _TRUE
+    return publisher_enabled()
 
 
 def _integer(name: str, default: int, minimum: int = 1) -> int:

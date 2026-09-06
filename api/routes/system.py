@@ -855,6 +855,7 @@ def config(request: Request = None):
     lf_project = _lf._project_id()
     import ai as _ai   # AI provenance (ADR 0019 Phase 0): active model + local/cloud zone
     import scanner
+    from realtime_feature import gateway_enabled
     return {"google_client_id": core.GOOGLE_CLIENT_ID,
             "drive_scope": core.DRIVE_SCOPES[0],
             # Entra app for the SharePoint/OneDrive connect — runtime so the tenant can be set per
@@ -877,6 +878,9 @@ def config(request: Request = None):
             # through one it will refuse after the operator has finished choosing.
             "sharepoint_max_sites": scanner._sp_max_sites(),
             "auth": "gis" if core.GOOGLE_CLIENT_ID else "demo",
+            # Runtime rather than Vite build-time state: one generic image can remain inert in
+            # production while staging explicitly exposes the diagnostics-only shadow panel.
+            "realtime_shadow_enabled": gateway_enabled(),
             **_build_info(),
             "ai": _ai.provenance(),
             "scope": _active_scope_info(),
