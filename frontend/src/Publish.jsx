@@ -33,7 +33,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [manifestError, setManifestError] = useState('')
   const [publishing, setPublishing] = useState(false)
   const [downloading, setDownloading] = useState(false)
-  const [builderOpen, setBuilderOpen] = useState(false)
+  const [builderStep, setBuilderStep] = useState(1)
   const [deliveryMethod, setDeliveryMethod] = useState('publish')
   const [selectedFiles, setSelectedFiles] = useState(() => new Set())
   const builderRef = useRef(null)
@@ -313,7 +313,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     }
   }
   const startRelease = () => {
-    setBuilderOpen(false)
+    setBuilderStep(1)
     window.requestAnimationFrame(() => {
       builderRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
       builderRef.current?.focus({ preventScroll: true })
@@ -539,14 +539,16 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         {ready.length > 0 && (
           <div className="release-builder" aria-label="Release builder">
             <div className="release-builder__steps" aria-label="Release steps">
-              <span className={!builderOpen ? 'active' : 'complete'}>1 <b>Choose files</b></span><span className={builderOpen ? 'active' : ''}>2 <b>Choose delivery</b></span><span className={builderOpen ? 'active' : ''}>3 <b>Review</b></span>
+              <span className={builderStep === 1 ? 'active' : 'complete'} aria-current={builderStep === 1 ? 'step' : undefined}>1 <b>Choose files</b></span>
+              <span className={builderStep === 2 ? 'active' : builderStep > 2 ? 'complete' : ''} aria-current={builderStep === 2 ? 'step' : undefined}>2 <b>Choose delivery</b></span>
+              <span className={builderStep === 3 ? 'active' : ''} aria-current={builderStep === 3 ? 'step' : undefined}>3 <b>Review</b></span>
             </div>
-            {!builderOpen ? (
+            {builderStep === 1 ? (
               <div className="release-builder__continue">
                 <span className="muted">{selectedReady.length ? `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file is' : 'files are'} ready.` : 'Select at least one ready file.'}</span>
-                <button className="qbtn approve" disabled={!selectedReady.length} onClick={() => setBuilderOpen(true)}>Continue</button>
+                <button className="qbtn approve" disabled={!selectedReady.length} onClick={() => setBuilderStep(2)}>Choose delivery</button>
               </div>
-            ) : <>
+            ) : builderStep === 2 ? <>
               <fieldset className="release-methods">
                 <legend>How do you want to receive the corrected files?</legend>
                 <label className={deliveryMethod === 'publish' ? 'selected' : ''}>
@@ -563,6 +565,11 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                   <b>Not ready to deliver?</b><span>Do nothing—corrected copies remain safely stored in ACP.</span>
                 </div>
               </fieldset>
+              <div className="release-builder__continue release-builder__navigation">
+                <button className="ghost" onClick={() => setBuilderStep(1)}>Back to files</button>
+                <button className="qbtn approve" onClick={() => setBuilderStep(3)}>Review release</button>
+              </div>
+            </> : <>
               <div className="release-plan">
                 <div>
                   <b>Review your release plan</b>
@@ -571,7 +578,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                     : `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file' : 'files'} will be downloaded to this device. Original files will not be changed.`}</p>
                 </div>
                 <div className="release-plan__actions">
-                  <button className="ghost" onClick={() => setBuilderOpen(false)}>Back</button>
+                  <button className="ghost" onClick={() => setBuilderStep(2)}>Back to delivery</button>
                   {deliveryMethod === 'publish'
                     ? <button className="qbtn approve" disabled={readOnly || publishing || !selectedReady.length} onClick={() => setConfirm({ kind: 'selected', files: selectedReady.map((f) => f.file) })}>{publishing ? 'Publishing…' : `Publish ${selectedReady.length} ${selectedReady.length === 1 ? 'copy' : 'copies'}`}</button>
                     : <button className="qbtn approve" disabled={downloading || !selectedReady.length} onClick={downloadSelected}>{downloading ? 'Downloading…' : `Download ${selectedReady.length} ${selectedReady.length === 1 ? 'file' : 'files'}`}</button>}

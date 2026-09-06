@@ -1184,6 +1184,7 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .release-metrics span { color: var(--muted); font-size: 12px; }
 .release-metric--warn b { color: var(--warn-fg); }
 .release-builder { border-top: 1px solid var(--line); margin-top: 18px; padding-top: 18px; }
+.release-builder__navigation { margin-top: 16px; }
 .release-builder__steps { display: grid; grid-template-columns: repeat(3, 1fr); margin-bottom: 18px; }
 .release-builder__steps span { color: var(--muted); border-bottom: 3px solid var(--line); padding: 0 8px 9px; font-size: 12.5px; }
 .release-builder__steps span.active { color: var(--ink); border-color: var(--plum); }
