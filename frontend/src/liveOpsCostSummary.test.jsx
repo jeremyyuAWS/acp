@@ -80,3 +80,76 @@ describe('Live Operations cost transparency', () => {
     expect(money(null)).toBe('Not reported')
   })
 })
+
+describe('Azure billing actuals', () => {
+  // `billing.configured` was hardcoded False and no Cost Management call existed, so this panel
+  // could only ever show a rate-card estimate. These pin how a real invoice figure is presented:
+  // as a measurement of a stale window, never as a live cost, and never blended with the estimate.
+  const withBilling = (billing) => ({
+    measured_at: new Date().toISOString(), rate_source: 'East US 2 Consumption',
+    estimate_label: 'Estimated from configured capacity', estimated_hourly_usd: 0.96,
+    estimated_daily_usd: 23.04, services: [], billing,
+  })
+
+  it('shows month-to-date spend with when it was read, and the four-hour caveat', async () => {
+    await render(withBilling({
+      configured: true, actual_month_to_date_usd: 418.62, forecast_month_usd: 910.4,
+      currency: 'USD', updated_at: new Date().toISOString(),
+      freshness_label: 'Azure billing data last updated',
+      refresh_note: 'Azure Cost Management refreshes roughly every four hours; month-to-date is a measurement, not a live figure.',
+      unavailable_reason: null, forecast_unavailable_reason: null,
+    }))
+    expect(host.textContent).toContain('$418.62')
+    expect(host.textContent).toContain('$910.40')
+    expect(host.textContent).toContain('Azure billing data last updated')
+    expect(host.textContent).toContain('four hours')
+    // Never presented as live, whatever else the panel says.
+    expect(host.textContent.toLowerCase()).not.toContain('live cost')
+  })
+
+  it('keeps the estimate and the invoice as separate numbers', async () => {
+    // They are different kinds of number: one is what Azure billed, the other what this capacity
+    // would cost at a rate card ACP was told. Summing or blending them would make both wrong.
+    await render(withBilling({
+      configured: true, actual_month_to_date_usd: 100, forecast_month_usd: null,
+      currency: 'USD', updated_at: new Date().toISOString(),
+      freshness_label: 'Azure billing data last updated', unavailable_reason: null,
+      forecast_unavailable_reason: 'no_data',
+    }))
+    expect(host.textContent).toContain('$0.9600')
+    expect(host.textContent).toContain('$100.00')
+    expect(host.textContent).toContain('AZURE BILLING ACTUALS')
+    expect(host.textContent).toContain('Forecast not returned')
+  })
+
+  it('names a non-dollar currency instead of relabelling it', async () => {
+    await render(withBilling({
+      configured: true, actual_month_to_date_usd: 55.5, forecast_month_usd: null,
+      currency: 'EUR', updated_at: new Date().toISOString(),
+      freshness_label: 'Azure billing data last updated', unavailable_reason: null,
+    }))
+    expect(host.textContent).toContain('EUR')
+  })
+
+  it('says which role is missing rather than just "not reported"', async () => {
+    // An operator told only "unavailable" grants the wrong role: Cost Management Reader is a
+    // different assignment from the Monitoring Reader the metrics path needs.
+    await render(withBilling({
+      configured: false, actual_month_to_date_usd: null, forecast_month_usd: null,
+      currency: null, updated_at: null,
+      freshness_label: 'Azure billing actuals unavailable: Cost Management Reader role needed',
+      unavailable_reason: 'permission', forecast_unavailable_reason: 'permission',
+    }))
+    expect(host.textContent).toContain('Cost Management Reader role needed')
+    // And no dollar figure is invented in its place.
+    expect(host.textContent).not.toContain('$0.00')
+  })
+
+  it('renders against a backend that predates the billing block', async () => {
+    // Mid-rollout the API can be older than the bundle; the tile falls back to its label rather
+    // than throwing on a missing key.
+    await render(withBilling(undefined))
+    expect(host.textContent).toContain('AZURE BILLING ACTUALS')
+    expect(host.textContent).toContain('Not reported')
+  })
+})

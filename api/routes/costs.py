@@ -9,14 +9,232 @@ from __future__ import annotations
 
 import json
 import os
+import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 
 from fastapi import APIRouter
+
+from swallowed import swallowed
 
 router = APIRouter()
 
 _AZ_SUB = os.environ.get("AZURE_SUBSCRIPTION_ID")
 _AZ_RG = os.environ.get("AZURE_RESOURCE_GROUP", "mdk-accessibility")
+
+# ── Azure Cost Management: actual spend, never live ───────────────────────────────────────────
+#
+# WHY REST AND NOT AN SDK. Every other Azure surface here uses an azure-mgmt-* client, and the
+# reason this one does not is that Cost Management is a single POST whose BODY IS THE SEMANTICS:
+# the timeframe, the granularity and the aggregation decide what the number means. Wrapped in a
+# client those become keyword arguments two files away from the value they describe, and
+# azure-mgmt-costmanagement is not otherwise a dependency. azure-identity — already required for
+# every other call in this package — supplies the token.
+#
+# WHY IT IS CACHED HARD. Microsoft's own guidance is not to query Cost Management more than
+# daily, and it rate-limits aggressively (429 with Retry-After). The Live Operations cost panel
+# polls this endpoint every 60 SECONDS. Querying per request would be abusive and would spend the
+# subscription's Cost Management quota on a panel nobody is reading, so the answer is held for
+# _BILLING_TTL_S and a throttle response is honoured rather than retried.
+#
+# WHAT THIS NUMBER IS NOT. It is not live and must never be labelled as such: Cost Management
+# refreshes roughly every four hours, so month-to-date is a real measurement of a stale window.
+# The block therefore carries `updated_at` — when ACP asked — and a label that says both.
+_COST_API_VERSION = "2024-08-01"
+_COST_SCOPE_HOST = "https://management.azure.com"
+_COST_TOKEN_SCOPE = "https://management.azure.com/.default"
+_BILLING_TTL_S = float(os.environ.get("ACP_BILLING_TTL_S") or 3600)
+_BILLING_TIMEOUT_S = float(os.environ.get("ACP_BILLING_TIMEOUT_S") or 15)
+_BILLING_REFRESH_NOTE = ("Azure Cost Management refreshes roughly every four hours; "
+                         "month-to-date is a measurement, not a live figure.")
+# Verbatim from #1580, which renders it as "Billing freshness: …". Kept as its own string rather
+# than folded into the note above so that panel's line does not change wording under it.
+_BILLING_DELAY_NOTE = "Azure Cost Management actuals can lag by about four hours."
+
+# Held across requests: {"at": monotonic, "value": block, "blocked_until": monotonic}
+_billing_cache: dict = {"at": 0.0, "value": None, "blocked_until": 0.0}
+
+
+def _billing_unavailable(reason: str, label: str) -> dict:
+    """The shape every failure returns. Never a zero: a subscription that could not be read has
+    not spent nothing."""
+    return {"configured": False, "actual_month_to_date_usd": None, "forecast_month_usd": None,
+            "currency": None, "updated_at": None, "freshness_label": label,
+            "unavailable_reason": reason, "refresh_note": _BILLING_REFRESH_NOTE,
+            # #1580's key, kept on every shape so its "Billing freshness" line never blanks.
+            "delay_note": _BILLING_DELAY_NOTE}
+
+
+def _bearer_token():
+    from azure.identity import DefaultAzureCredential  # noqa: PLC0415
+    return DefaultAzureCredential().get_token(_COST_TOKEN_SCOPE).token
+
+
+def _cost_post(path: str, body: dict, token: str) -> tuple[dict | None, str | None, float | None]:
+    """POST one Cost Management query. Returns (payload, reason, retry_after_seconds).
+
+    Distinguishes the cases an operator can act on: 401/403 is the Cost Management Reader role
+    this endpoint's docstring names, 429 is throttling and carries how long to wait. Everything
+    else is "error" rather than a category the response does not actually support.
+    """
+    request = urllib.request.Request(
+        f"{_COST_SCOPE_HOST}{path}?api-version={_COST_API_VERSION}",
+        data=json.dumps(body).encode(),
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=_BILLING_TIMEOUT_S) as answer:
+            return json.loads(answer.read().decode() or "{}"), None, None
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            return None, "permission", None
+        if e.code == 429:
+            retry = e.headers.get("Retry-After") if e.headers else None
+            try:
+                return None, "throttled", float(retry)
+            except (TypeError, ValueError):
+                return None, "throttled", None
+        return None, "error", None
+    except Exception:  # noqa: BLE001 — network, DNS, timeout, a malformed body
+        return None, "error", None
+
+
+def _total_from(payload: dict | None) -> tuple[float | None, str | None]:
+    """Pull (cost, currency) out of a Cost Management result BY COLUMN NAME.
+
+    The response is columns plus rows, and the column order is not contractual. Reading row[0] as
+    the cost is the mistake this exists to avoid: with a different aggregation the first column is
+    the currency, and a currency string coerced through float() is not a number that fails loudly
+    — it is a total that quietly disappears.
+    """
+    props = (payload or {}).get("properties") or {}
+    columns = [str((column or {}).get("name") or "") for column in (props.get("columns") or [])]
+    rows = props.get("rows") or []
+    if not columns or not rows:
+        return None, None
+    lowered = [name.lower() for name in columns]
+    cost_at = next((i for i, name in enumerate(lowered)
+                    if name in ("cost", "pretaxcost", "costusd", "totalcost")), None)
+    currency_at = next((i for i, name in enumerate(lowered)
+                        if name in ("currency", "billingcurrency", "currencycode")), None)
+    if cost_at is None:
+        return None, None
+    total = 0.0
+    currency = None
+    seen = False
+    for row in rows:
+        if cost_at >= len(row):
+            continue
+        try:
+            total += float(row[cost_at])
+            seen = True
+        except (TypeError, ValueError):
+            continue
+        if currency is None and currency_at is not None and currency_at < len(row):
+            currency = str(row[currency_at]) or None
+    return (round(total, 2), currency) if seen else (None, None)
+
+
+def _query_billing() -> dict:
+    """One month-to-date actual, and one forecast, as two INDEPENDENT calls.
+
+    Independent because the forecast endpoint is the more fragile of the two — it takes an
+    explicit window and rejects more shapes — and losing a real month-to-date figure because a
+    forecast 400'd would be trading the measurement for the projection.
+    """
+    scope = f"/subscriptions/{_AZ_SUB}/resourceGroups/{_AZ_RG}"
+    try:
+        token = _bearer_token()
+    except Exception:  # noqa: BLE001
+        swallowed("routes.costs: acquiring a management token for Cost Management failed")
+        return _billing_unavailable(
+            "credential", "Azure billing actuals unavailable: no managed identity token")
+
+    payload, reason, retry_after = _cost_post(f"{scope}/providers/Microsoft.CostManagement/query", {
+        "type": "ActualCost",
+        "timeframe": "MonthToDate",
+        "dataset": {"granularity": "None",
+                    "aggregation": {"totalCost": {"name": "Cost", "function": "Sum"}}},
+    }, token)
+    if reason:
+        block = _billing_unavailable(reason, {
+            "permission": "Azure billing actuals unavailable: Cost Management Reader role needed",
+            "throttled": "Azure billing actuals unavailable: Cost Management is throttling",
+        }.get(reason, "Azure billing actuals unavailable: Cost Management query failed"))
+        block["retry_after_s"] = retry_after
+        return block
+
+    actual, currency = _total_from(payload)
+    if actual is None:
+        # A query that answered with no rows is not a zero bill. Say so.
+        return _billing_unavailable(
+            "no_data", "Azure billing actuals unavailable: Cost Management returned no rows")
+
+    now = datetime.now(timezone.utc)
+    # The forecast window is the rest of THIS month, which is what "forecast_month_usd" means.
+    last_day = (now.replace(day=28) + _timedelta_days(4)).replace(day=1) - _timedelta_days(1)
+    forecast_payload, forecast_reason, _ = _cost_post(
+        f"{scope}/providers/Microsoft.CostManagement/forecast", {
+            "type": "ActualCost",
+            "timeframe": "Custom",
+            "timePeriod": {"from": now.strftime("%Y-%m-%dT00:00:00Z"),
+                           "to": last_day.strftime("%Y-%m-%dT23:59:59Z")},
+            "dataset": {"granularity": "None",
+                        "aggregation": {"totalCost": {"name": "Cost", "function": "Sum"}}},
+            "includeActualCost": True, "includeFreshPartialCost": False,
+        }, token)
+    forecast, _forecast_currency = (None, None) if forecast_reason else _total_from(forecast_payload)
+
+    return {
+        "configured": True,
+        "actual_month_to_date_usd": actual,
+        "forecast_month_usd": forecast,
+        # Read from the answer, never assumed: a subscription billed in EUR must not have its
+        # total relabelled as dollars by a hardcoded string.
+        "currency": currency,
+        "updated_at": now.isoformat(),
+        # Never "live". This says WHEN ACP ASKED; the note says how stale Azure's own answer is.
+        "freshness_label": "Azure billing data last updated",
+        "unavailable_reason": None,
+        "refresh_note": _BILLING_REFRESH_NOTE,
+        "delay_note": _BILLING_DELAY_NOTE,
+        # Stated rather than left to the reader: a null forecast is a call that did not answer,
+        # not a forecast of nothing.
+        "forecast_unavailable_reason": forecast_reason or (None if forecast is not None else "no_data"),
+    }
+
+
+def _timedelta_days(n):
+    from datetime import timedelta  # noqa: PLC0415
+    return timedelta(days=n)
+
+
+def billing_block(*, now=None) -> dict:
+    """The cached billing block. `now` is a seam for tests; production uses the monotonic clock."""
+    if not _AZ_SUB:
+        return _billing_unavailable("not_configured", "Azure billing feed not configured")
+    clock = now() if now else time.monotonic()
+    held = _billing_cache.get("value")
+    if held is not None and clock - _billing_cache.get("at", 0.0) < _BILLING_TTL_S:
+        return held
+    # A throttle is honoured, not retried. Serving the LAST GOOD block through it is the honest
+    # answer — it carries its own updated_at, so the panel says how old the figure is rather than
+    # replacing a real measurement with an error.
+    if clock < _billing_cache.get("blocked_until", 0.0):
+        return held if held is not None else _billing_unavailable(
+            "throttled", "Azure billing actuals unavailable: Cost Management is throttling")
+
+    block = _query_billing()
+    if block.get("unavailable_reason") == "throttled":
+        wait = block.get("retry_after_s")
+        _billing_cache["blocked_until"] = clock + (wait if wait else _BILLING_TTL_S)
+        if held is not None:
+            return held
+        return block
+    _billing_cache["at"] = clock
+    _billing_cache["value"] = block
+    return block
 
 
 def _app_names() -> list[str]:
@@ -102,6 +320,9 @@ def get_costs():
                          if None in (_number((rates.get(name) or {}).get("vcpu_hour")),
                                      _number((rates.get(name) or {}).get("gib_hour")))]
     rate_configured = bool(apps and rate_source and not missing_rate_apps)
+    # Read BEFORE the `configured` gate below: a subscription with no WORKER_APP_NAMES has no
+    # capacity estimate to make and still has a real bill.
+    billing = billing_block()
     response = {
         "configured": capacity_configured,
         "currency": "USD",
@@ -112,12 +333,8 @@ def get_costs():
         "services": [],
         "estimated_hourly_usd": None,
         "estimated_daily_usd": None,
-        "billing": {
-            "configured": False, "actual_month_to_date_usd": None,
-            "forecast_month_usd": None, "updated_at": None,
-            "freshness_label": "Azure billing feed not configured",
-            "delay_note": "Azure Cost Management actuals can lag by about four hours.",
-        },
+        # Actual spend from Cost Management, cached hard and never called live.
+        "billing": billing,
         "setup": {
             "capacity": {
                 "configured": capacity_configured,
@@ -132,9 +349,13 @@ def get_costs():
                            "No operations-approved rate card is configured" if not rates else
                            "Rates are missing for: " + ", ".join(missing_rate_apps)),
             },
+            # Derived from the query, not hardcoded: this row said "Azure Cost Management is
+            # not connected" unconditionally, which is now a claim the code can actually check.
+            # When it is NOT connected the reason is the billing block's own label, so the
+            # setup row and the tile above it cannot disagree about why.
             "billing_actuals": {
-                "configured": False,
-                "reason": "Azure Cost Management is not connected",
+                "configured": bool(billing.get("configured")),
+                "reason": None if billing.get("configured") else billing.get("freshness_label"),
             },
         },
     }
