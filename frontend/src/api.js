@@ -1453,6 +1453,30 @@ export const getReleaseManifest = (scanId) => (SIM
       content_digest: { algorithm: 'SHA-256', value: 'simulation' },
       digest_note: 'Simulation manifest.' }, 50)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/manifest`, { headers: headers() }).then(j))
+export const downloadReleasePackage = (scanId, files) => {
+  if (SIM) return Promise.resolve()
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/package`, {
+    method: 'POST',
+    headers: headers({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ files }),
+  })
+    .then(async (r) => {
+      if (!r.ok) {
+        const detail = await r.json().then((body) => body?.detail).catch(() => null)
+        throw new Error(detail || `package download ${r.status}`)
+      }
+      return { blob: await r.blob(), disposition: r.headers.get('Content-Disposition') || '' }
+    })
+    .then(({ blob, disposition }) => {
+      const match = disposition.match(/filename="?([^";]+)"?/i)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = match?.[1] || `acp-release-${scanId}.zip`
+      document.body.appendChild(a); a.click(); a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+    })
+}
 
 // Queue state: depth by status + recent jobs (drives the in-app queue panel).
 export const getJobs = (status = null) => (SIM

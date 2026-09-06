@@ -5,8 +5,11 @@ import hashlib
 import json as _json
 import logging
 import os
+import re
+import tempfile
 import threading
 import uuid
+import zipfile
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -3479,6 +3482,107 @@ def get_release_manifest(sid: str, request: Request):
         "digest_note": ("This digest makes changes detectable. It is not a digital signature "
                         "and does not provide non-repudiation."),
     }
+
+
+class ReleasePackageRequest(BaseModel):
+    files: list[str]
+
+
+def _remediated_bytes(owner: str, scan_id: str, filename: str) -> bytes | None:
+    """Read one corrected copy, including an unchanged file inherited by an incremental scan."""
+    import blob as _blob
+    urls = core.store.get_remediation_urls(scan_id, filename, owner=owner)
+    source_scan_id, source_file = scan_id, filename
+    if not urls or not (urls.get("blob_url") or urls.get("drive_write_url")):
+        alt = core.store.find_remediation_for_file(owner, scan_id, filename)
+        if not alt or not (alt.get("blob_url") or alt.get("drive_write_url")):
+            return None
+        source_scan_id, source_file = alt["scan_id"], alt["file"]
+    return _blob.download_remediated(owner, source_scan_id, source_file)
+
+
+@router.post("/scans/{sid}/release/package")
+def download_release_package(sid: str, request: Request, body: ReleasePackageRequest):
+    """Return selected corrected copies as one hierarchy-preserving, owner-scoped ZIP."""
+    scan = core.store.get_scan(sid, owner=_owner(request))
+    if scan is None:
+        raise HTTPException(404, "scan not found")
+    selected = list(dict.fromkeys(name for name in body.files if name))
+    if not selected:
+        raise HTTPException(422, "select at least one corrected file")
+    rows = {row.get("file"): row for row in scan.get("files", [])}
+    unknown = [name for name in selected if name not in rows]
+    if unknown:
+        raise HTTPException(404, f"corrected file not found: {unknown[0]}")
+
+    import publish as _publish
+    owner = _owner(request)
+    source = (scan.get("run") or {}).get("source") or "local"
+    documents: list[dict] = []
+    used_paths: set[str] = set()
+    output = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)
+    try:
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for name in selected:
+                row = rows[name]
+                data = _remediated_bytes(owner, sid, name)
+                if data is None:
+                    raise HTTPException(409, f"corrected copy is not available for packaging: {name}")
+                source_path = (row.get("source_relative_path") or row.get("path")
+                               or row.get("parent_folder") or name)
+                if source == "sharepoint":
+                    folders, safe_name = _publish.sharepoint_relative_path(source_path, name)
+                else:
+                    folders, safe_name = _publish.normalize_relative_path(source_path, name)
+                archive_path = "/".join(["Remediated", *folders, safe_name])
+                collision_key = archive_path.casefold()
+                if collision_key in used_paths:
+                    raise HTTPException(409, f"two selected files resolve to the same package path: {archive_path}")
+                used_paths.add(collision_key)
+                archive.writestr(archive_path, data)
+                documents.append({
+                    "file": row.get("file"),
+                    "source_relative_path": row.get("source_relative_path") or row.get("path"),
+                    "package_path": archive_path,
+                    "corrected_sha256": hashlib.sha256(data).hexdigest(),
+                })
+            status = core.store.release_for_scan(sid, owner)
+            release_manifest = (_release_manifest_payload(
+                status, scan_id=sid, owner=owner, snapshot_id=core.store.stage_snapshot_id(sid))
+                if status is not None else None)
+            manifest = {
+                "schema_version": 1,
+                "package_type": "acp-corrected-files",
+                "scan_id": sid,
+                "snapshot_id": core.store.stage_snapshot_id(sid),
+                "actor": owner,
+                "original_files_unchanged": True,
+                "documents": documents,
+                "release": release_manifest,
+            }
+            archive.writestr("release-manifest.json", _json.dumps(
+                manifest, sort_keys=True, indent=2, ensure_ascii=False,
+                default=str).encode("utf-8"))
+    except Exception:
+        output.close()
+        raise
+    output.seek(0, 2)
+    content_length = output.tell()
+    output.seek(0)
+
+    def stream_package():
+        try:
+            while chunk := output.read(1024 * 1024):
+                yield chunk
+        finally:
+            output.close()
+
+    filename = f'acp-release-{re.sub(r"[^A-Za-z0-9._-]", "_", sid)}.zip'
+    return StreamingResponse(
+        stream_package(), media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"',
+                 "Cache-Control": "private, no-store",
+                 "Content-Length": str(content_length)})
 
 
 @router.get("/scans/{scan_id}/files/{filename:path}/remediated")
