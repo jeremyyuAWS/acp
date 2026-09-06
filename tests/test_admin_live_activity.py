@@ -562,3 +562,13 @@ def test_capacity_uses_the_central_freshness_threshold(monkeypatch):
         "active_job_count": 0}], now=now)
     assert rows["assess"]["healthy_replicas"] == 1
     assert rows["assess"]["freshness_threshold_seconds"] == 90
+
+
+def test_activity_signature_includes_durable_workflow_changes():
+    base = {"runs": [], "summary": {"running": 0}, "workflows": [
+        {"scan_id": "s1", "stages": [{"stage": "assess", "status": "active"}]},
+    ]}
+    changed = {**base, "workflows": [
+        {"scan_id": "s1", "stages": [{"stage": "assess", "status": "completed"}]},
+    ]}
+    assert system._activity_signature(base) != system._activity_signature(changed)

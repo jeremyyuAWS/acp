@@ -1644,6 +1644,25 @@ function IntakeSummary({ snapshot, state }) {
   </section>
 }
 
+function WorkflowCorrelation({ summary = {} }) {
+  const model = summary.workflow_correlation || {}
+  const known = model.complete != null
+  const unlinked = Number(model.unlinked_active_jobs || 0)
+  return <section aria-label="Workflow data linkage" style={{ ...PANEL, padding: 12, marginTop: 10,
+    borderLeft: `4px solid ${!known ? TONE.idle : unlinked ? TONE.warn : TONE.ok}` }}>
+    <b>{!known ? 'Workflow linkage not reported' : unlinked ? 'Workflow view is incomplete' : 'Workflow linkage complete'}</b>
+    <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
+      {model.attributed_stage_runs == null ? 'Linked stage runs are not reported.'
+        : `${model.attributed_stage_runs} stage run${model.attributed_stage_runs === 1 ? '' : 's'} linked.`}
+      {' '}{!known
+        ? 'ACP cannot verify whether every active job appears in the workflow view.'
+        : unlinked
+          ? `${unlinked} active job${unlinked === 1 ? '' : 's'} cannot be attributed to a workflow. Queue totals remain authoritative.`
+          : 'Every active job is represented in the workflow view.'}
+    </p>
+  </section>
+}
+
 /* ─────────────────── C. Real-time trend strip ─────────────────── */
 
 function TrendStrip({ groups, metricKey, onMetric, chart, markers, paused, source, measuredAt, nowMs }) {
@@ -1943,6 +1962,7 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
       </Section>
 
       <Section n={5} title="Alerts and platform health">
+        <WorkflowCorrelation summary={snapshot?.summary} />
         {isAzureBacked(node)
           ? <><ActiveAlerts alerts={alertsModel(serviceCapacity)}
               measuredAt={serviceCapacity?.measured_at} nowMs={nowMs} />

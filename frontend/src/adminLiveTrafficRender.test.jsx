@@ -9,6 +9,7 @@ vi.mock('./api.js', () => ({
     generated_at: '2026-09-04T20:00:00Z', runs: [], summary: {
       active_runs: 0, recent_runs: 0, running: 0, queued: 0, waiting_users: 0,
       available_slots: 7, worker_slots: 7, utilization_pct: 0, worker_tier_alive: true,
+      workflow_correlation: { attributed_stage_runs: 3, unlinked_active_jobs: 0, complete: true },
       by_stage: {}, worker_roles: {
         discovery: { alive: true, pool_size: 3, age_s: 4, version: 'v25' },
         assess: { alive: true, pool_size: 2, age_s: 2, version: 'v25' },
@@ -42,6 +43,9 @@ describe('Live Operations runtime rendering', () => {
     expect(container.textContent).toContain('Google Drive')
     expect(container.textContent).toContain('SharePoint')
     expect(container.textContent).toContain('ACP intake')
+    expect(container.textContent).toContain('WORKFLOW WIRING')
+    expect(container.textContent).toContain('3 stage runs linked')
+    expect(container.textContent).toContain('Every active job is represented in the workflow view.')
     expect(container.textContent).toContain('Idle · select any tile to inspect the ready processing path')
   })
 })

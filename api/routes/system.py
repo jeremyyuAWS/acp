@@ -1942,6 +1942,16 @@ def resume_workflow_remediation(scan_id: str, request: Request):
     return {"workflow_id": scan_id, "stage": "remediate", "paused": False, **result}
 
 
+def _activity_signature(snapshot: dict) -> str:
+    """Stable identity for every activity field that can change the live UI."""
+    return json.dumps(
+        {"runs": snapshot.get("runs", []),
+         "workflows": snapshot.get("workflows", []),
+         "summary": snapshot.get("summary", {})},
+        sort_keys=True, default=str,
+    )
+
+
 @router.get("/admin/activity/stream")
 async def admin_activity_stream(request: Request):
     """Authenticated SSE snapshots for the live multi-user traffic map."""
@@ -1957,8 +1967,11 @@ async def admin_activity_stream(request: Request):
         while not await request.is_disconnected():
             snapshot = _scope_activity_snapshot(
                 await asyncio.to_thread(_admin_activity_snapshot), viewer)
-            signature = json.dumps({"runs": snapshot["runs"], "summary": snapshot["summary"]},
-                                   sort_keys=True, default=str)
+            # Durable workflow rows can change without a queue row or aggregate moving (for
+            # example, a stage records its terminal outcome after the last job leaves the live
+            # tail). Include them in change detection so that the UI receives those transitions
+            # immediately instead of waiting for an unrelated job or summary change.
+            signature = _activity_signature(snapshot)
             if signature != last:
                 last = signature
                 idle = 0
