@@ -508,7 +508,12 @@ export default function App() {
   // called on some renders and not others, which is "Rendered more hooks than during the previous
   // render" and takes the whole app down. Both were caught by the full suite rather than by any
   // test of this card.
-  const remRun = useRemediationRun(scan?.run?.id || null)
+  // Bootstrap already carries the owner-scoped active workflow before the full scan payload
+  // finishes loading. Use that id for active Remediation so its persistent card can connect
+  // immediately after sign-in/reload instead of waiting behind the estate-sized getScan.
+  const activeRemediationScanId = primaryWorkflow?.stage === 'remediate'
+    ? primaryWorkflow.scan_id : null
+  const remRun = useRemediationRun(activeRemediationScanId || scan?.run?.id || null)
   // Durable (background queue) is the default (2026-08-21). The session-scoped path runs as a
   // bare in-process thread with no queue behind it — the code's own comment on it has always said
   // "lost if that replica restarts", and this app auto-deploys on every merge to main, so that was
@@ -2133,7 +2138,7 @@ export default function App() {
       {/* Assessment has a real live card immediately below this fallback. Do not stack a
           generic “still running” banner above the richer card for the same work. */}
       <WorkflowContinuityBanner
-        workflow={primaryWorkflow?.stage === 'assess' && assessPhase === 'running'
+        workflow={primaryWorkflow?.stage === 'assess'
           ? null : primaryWorkflow}
         currentView={view}
         onReturn={(stage) => { goToView(stage); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
@@ -2176,10 +2181,15 @@ export default function App() {
       {/* Keep the authoritative live Assessment card directly below the tabs on EVERY view,
           including Assess itself. AssessRunner's detailed file list answers a different question;
           it is not a replacement for the compact stage-level card. `busy` is a DISCOVER-only
-          flag; assessPhase is the authority for whether this card is active. */}
-      <LiveAssessmentLive scanId={liveScanId || run?.id}
-                          active={assessPhase === 'running'}
-                          onStop={() => stopScan(liveScanId || run?.id)} />
+          flag; local phase gives immediate feedback and the server-owned active workflow restores
+          the same card after sign-in or reload. */}
+      <LiveAssessmentLive scanId={primaryWorkflow?.stage === 'assess'
+                                    ? primaryWorkflow.scan_id
+                                    : (liveScanId || run?.id)}
+                          active={assessPhase === 'running' || primaryWorkflow?.stage === 'assess'}
+                          onStop={() => stopScan(primaryWorkflow?.stage === 'assess'
+                            ? primaryWorkflow.scan_id
+                            : (liveScanId || run?.id))} />
 
       {/* THE PERSISTENT REMEDIATION CARD. Outside the tabpanel on purpose: `<Remediate/>` below
           is mounted only while `view === 'remediate'`, so a card rendered inside it — and the

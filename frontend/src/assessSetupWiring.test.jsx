@@ -261,7 +261,7 @@ describe('App composes the Assess tab the way the board specifies', () => {
     expect(s).toMatch(/onStop=\{liveScanId \? \(\) => stopScan\(liveScanId\) : undefined\}/)
     // LiveAssessmentLive goes through stopScan too, not a bare cancelScan call. Both Stops
     // use the same helper — the regression that let them drift apart was two call sites.
-    expect(s).toMatch(/<LiveAssessmentLive[\s\S]{0,400}?onStop=\{\(\) => stopScan\(liveScanId \|\| run\?\.id\)/)
+    expect(s).toMatch(/<LiveAssessmentLive[\s\S]{0,500}?onStop=\{\(\) => stopScan\(primaryWorkflow\?\.stage === 'assess'[\s\S]{0,120}?primaryWorkflow\.scan_id/)
     // and neither may go back to swallowing the outcome
     expect(s).not.toMatch(/cancelScan\([^)]*\)\.catch\(\(\) => \{\}\)/)
   })
@@ -285,14 +285,10 @@ describe('App composes the Assess tab the way the board specifies', () => {
     // excluded too (see discoverNoAssessCard.test.js, which owns the per-view truth table and
     // evaluates the real expression); pinning the literal here just meant this test failed for a
     // change it does not describe. What it cares about is that the card is mounted with the
-    // run?.id fallback and activates on assessPhase, not only on `busy`.
-    expect(s).toMatch(/<LiveAssessmentLive scanId=\{liveScanId \|\| run\?\.id\}/)
-    // Only `assessPhase === 'running'` drives the active expression — `busy` was removed because
-    // it signals a DISCOVERY run, not an assessment run, and its presence caused the assess panel
-    // to activate (showing "Preparing assessment") on all non-Discover tabs during discovery.
-    expect(s).toMatch(/assessPhase === 'running'/)
-    expect(s).toMatch(/active=\{assessPhase === 'running'\}/)
-    expect(s).not.toMatch(/active=\{assessPhase === 'running'[\s\S]{0,80}?view !== 'assess'/)
+    // server-owned active-workflow id and activates from either local or restored state, never busy.
+    expect(s).toMatch(/<LiveAssessmentLive scanId=\{primaryWorkflow\?\.stage === 'assess'/)
+    expect(s).toMatch(/active=\{assessPhase === 'running' \|\| primaryWorkflow\?\.stage === 'assess'\}/)
+    expect(s).not.toMatch(/active=\{assessPhase === 'running'[\s\S]{0,120}?view !== 'assess'/)
   })
 })
 

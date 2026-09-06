@@ -313,7 +313,7 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
         <p className="muted" style={{ fontSize: 12.5, margin: 0, lineHeight: 1.6, flex: '1 1 260px' }}>
           Results appear when the run finishes, not before — a half-populated count of failures reads as a
           verdict, and there is no honest way to caption one mid-run. Stopping keeps the documents already
-          assessed; nothing is written back to your drive at any point.
+          assessed; nothing is written back to the connected source during assessment.
         </p>
       </div>
     </section>

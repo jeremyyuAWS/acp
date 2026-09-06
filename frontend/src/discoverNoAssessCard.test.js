@@ -25,22 +25,22 @@ const activeExpr = () => {
 describe('the live-assess card follows the user across tabs', () => {
   it('does not suppress the card on any workflow tab', () => {
     const expr = activeExpr()
-    expect(expr).toBe("assessPhase === 'running'")
+    expect(expr).toBe("assessPhase === 'running' || primaryWorkflow?.stage === 'assess'")
     expect(expr).not.toMatch(/\bview\b/)
   })
 
   it('shows on Discover and Remediate while Assessment is running', () => {
-    const gate = new Function('busy', 'assessPhase', 'view', `return (${activeExpr()})`)
-    expect(gate(false, 'running', 'discover')).toBe(true)
-    expect(gate(false, 'running', 'remediate')).toBe(true)
-    expect(gate(false, 'running', 'assess')).toBe(true)
+    const gate = new Function('busy', 'assessPhase', 'view', 'primaryWorkflow', `return (${activeExpr()})`)
+    expect(gate(false, 'running', 'discover', null)).toBe(true)
+    expect(gate(false, 'running', 'remediate', null)).toBe(true)
+    expect(gate(false, 'running', 'assess', null)).toBe(true)
   })
 
   it('every away tab shows the live card', () => {
-    const gate = new Function('busy', 'assessPhase', 'view', `return (${activeExpr()})`)
+    const gate = new Function('busy', 'assessPhase', 'view', 'primaryWorkflow', `return (${activeExpr()})`)
     for (const view of ['discover', 'assess', 'remediate', 'overview', 'publish', 'monitor',
       'integrations', 'liveops', 'analytics', 'knowledge', 'acr', 'settings']) {
-      expect(gate(false, 'running', view), `${view} should still show the live card`).toBe(true)
+      expect(gate(false, 'running', view, null), `${view} should still show the live card`).toBe(true)
     }
   })
 
@@ -56,14 +56,20 @@ describe('the live-assess card follows the user across tabs', () => {
     // `busy` means doScan/reconnectScan — a discovery run. The assess panel must never show
     // "Preparing assessment" during discovery regardless of which tab is active, because the
     // assess card has no meaningful data to show during discovery and displayed confusingly.
-    const gate = new Function('busy', 'assessPhase', 'view', `return (${activeExpr()})`)
+    const gate = new Function('busy', 'assessPhase', 'view', 'primaryWorkflow', `return (${activeExpr()})`)
     for (const view of ['discover', 'overview', 'remediate', 'publish', 'monitor', 'integrations']) {
-      expect(gate(true, 'idle', view), `assess card must not show during discovery on ${view}`).toBe(false)
+      expect(gate(true, 'idle', view, { stage: 'discover' }), `assess card must not show during discovery on ${view}`).toBe(false)
     }
   })
 
+  it('restores from the server-owned active workflow before local Assess state mounts', () => {
+    const gate = new Function('busy', 'assessPhase', 'view', 'primaryWorkflow', `return (${activeExpr()})`)
+    expect(gate(false, 'idle', 'overview', { stage: 'assess', scan_id: 'sp-live' })).toBe(true)
+    expect(app).toMatch(/scanId=\{primaryWorkflow\?\.stage === 'assess'[\s\S]{0,120}?primaryWorkflow\.scan_id/)
+  })
+
   it('does not stack the generic continuity banner above the live Assessment card', () => {
-    expect(app).toMatch(/workflow=\{primaryWorkflow\?\.stage === 'assess' && assessPhase === 'running'[\s\S]*?\? null : primaryWorkflow\}/)
+    expect(app).toMatch(/workflow=\{primaryWorkflow\?\.stage === 'assess'[\s\S]*?\? null : primaryWorkflow\}/)
   })
 
   it('the component itself is kept, per the remove-the-mount-not-the-code rule', () => {
