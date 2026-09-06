@@ -3044,12 +3044,34 @@ html[data-wcag="on"] .wcag-toggle--on {
    `.setoverlay`, whose backdrop-filter would otherwise make it the containing block and pin this
    to the corner of a scrolling panel instead of the window. See the Overlay note in
    PeopleAccess.jsx — that is the bug this screen was just fixed for. */
+/* IT DOES NOT TAKE CLICKS FROM THE LIST UNDERNEATH IT, and that is a fix rather than a nicety.
+   `.setbody` scrolls INTERNALLY with its top around y=126 — above this toast's bottom edge at
+   y=190 — so on a narrow window the rows ride up into the toast's band and it swallows their
+   controls. Measured in Chromium against the real Settings chrome, panel scrolled to the bottom,
+   counting controls whose own centre hit-tests to the toast:
+
+     viewport      top:18 (was)   bottom:18   pointer-events:none
+     1024x800        6 blocked     2 blocked       0 blocked
+     1152x800        3 blocked     1 blocked       0 blocked
+     1280x800        0 blocked     0 blocked       0 blocked
+     1024x640        6 blocked     4 blocked       0 blocked
+
+   MOVING IT DOES NOT FIX IT — that is why it has not moved. Relocating to the bottom relocates
+   the collision to whichever rows are at the bottom, and in a SHORT window it is worse than the
+   corner it came from. Any fixed overlay on a scrolling list can cover something; what it must
+   never do is intercept the click.
+
+   The buttons take `auto` back, so Undo and the dismiss × still work. Keeping the toast where it
+   is also preserves the deliberate geometry agreement with LiveOperationsToast — the application
+   has one top-right toast, and a second at different coordinates reads as a different product. */
 .people-toast { position: fixed; right: 18px; top: 18px; z-index: 10000;
   width: min(360px, calc(100vw - 36px)); text-align: left;
   padding: 14px; border-radius: 10px;
   border: 1px solid var(--success-fg); border-left: 5px solid var(--success-fg-strong);
   background: var(--surface, #fff); color: var(--ink);
+  pointer-events: none;
   isolation: isolate; box-shadow: 0 12px 32px rgba(20, 16, 24, .28); }
+.people-toast button { pointer-events: auto; }
 .people-toast-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .people-toast-line { margin: 6px 0 0; font-size: 12.5px; line-height: 1.5; }
 .people-toast-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
