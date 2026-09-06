@@ -30,4 +30,16 @@ describe('LiveThroughput', () => {
     expect(html).toContain('Fix throughput · calibrating')
     expect(html).not.toContain('<svg')
   })
+
+  it('offers a compact sparkline without the full chart furniture', () => {
+    const html = renderToStaticMarkup(
+      <LiveThroughput compact points={[1, 3, 8]} ratePerMin={5} label="Release throughput" unitLabel="delivered" />,
+    )
+    expect(html).toContain('width="220"')
+    expect(html).toContain('height="42"')
+    expect(html).toContain('Release throughput: 5 documents/min')
+    expect(html).toContain('delivered count moved from 1 to 8')
+    expect(html).not.toContain('Earlier')
+    expect(html).not.toContain('live updates</div>')
+  })
 })

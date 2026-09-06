@@ -1,4 +1,6 @@
-import React from 'react'
+import React, { useRef } from 'react'
+import LiveThroughput from './LiveThroughput.jsx'
+import { useThroughput } from './useThroughput.js'
 
 const LABELS = { discover: 'Discovery', assess: 'Assessment', remediate: 'Remediation', publish: 'Release' }
 
@@ -16,6 +18,23 @@ export function workflowRevisionLabel(workflow = {}) {
 }
 
 export default function WorkflowContinuityBanner({ workflow, currentView, onReturn, onLiveOps, onViewPrevious }) {
+  const workflowKey = workflow
+    ? `${workflow.workflow_id || workflow.scan_id || 'active'}:${workflow.stage || 'work'}`
+    : undefined
+  const outstanding = workflow && workflow.stage === 'publish'
+    ? Number(workflow.running || 0) + Number(workflow.queued || 0)
+    : undefined
+  const releaseBaseline = useRef({ key: null, maximum: 0 })
+  if (releaseBaseline.current.key !== workflowKey) {
+    releaseBaseline.current = { key: workflowKey, maximum: outstanding ?? 0 }
+  } else if (typeof outstanding === 'number') {
+    releaseBaseline.current.maximum = Math.max(releaseBaseline.current.maximum, outstanding)
+  }
+  const releaseDelivered = typeof outstanding === 'number'
+    ? Math.max(0, releaseBaseline.current.maximum - outstanding)
+    : undefined
+  const releaseThroughput = useThroughput(workflowKey, releaseDelivered, outstanding)
+
   // Discovery and Remediation have their own persistent live cards, fed by the same App-owned
   // state as their full processing panels. Stacking this generic continuity banner above either
   // card repeats the status with less useful data and gives the user two competing ways back to
@@ -31,6 +50,13 @@ export default function WorkflowContinuityBanner({ workflow, currentView, onRetu
       <div>
         <strong>{label} is still running</strong>
         <span>{workflowRevisionLabel(workflow)} · {workflow.source} · {active} active{queued ? ` · ${queued} waiting` : ''}</span>
+        {workflow.stage === 'publish' && (
+          <div style={{ marginTop: 9 }}>
+            <LiveThroughput compact points={releaseThroughput.points}
+                            ratePerMin={releaseThroughput.ratePerMin}
+                            label="Release throughput" unitLabel="delivered" />
+          </div>
+        )}
       </div>
       <div className="workflow-continuity-actions">
         <button className="secondary" onClick={() => onReturn(workflow.stage)}>Continue current {label}</button>

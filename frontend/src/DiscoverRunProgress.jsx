@@ -4,6 +4,8 @@ import LiveCounter from './LiveCounter.jsx'
 import { nextMilestone } from './discoveryMilestone.js'
 import { deriveRunAge, submittedText, elapsedText, startedText } from './queueAge.js'
 import SourceVisibility from './SourceVisibility.jsx'
+import LiveThroughput from './LiveThroughput.jsx'
+import { useThroughput } from './useThroughput.js'
 
 // The Discover RUNNING screen: a per-step checklist showing what the discovery agent is doing.
 // This replaces the generic scan-progress banner on the Discover tab so the screen stays scoped
@@ -232,6 +234,11 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, s
   const lastTickRef = useRef(Date.now())
   const milestoneRef = useRef(0)
   const [milestoneAnnouncement, setMilestoneAnnouncement] = useState(null)
+  const discoveryThroughput = useThroughput(
+    progress?.run_id || progress?.scan_id || 'discover',
+    typeof progress?.files_found === 'number' ? progress.files_found : undefined,
+    undefined,
+  )
 
   // Reset stall counter whenever a new progress payload arrives.
   useEffect(() => {
@@ -938,6 +945,13 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, s
           </p>
         )}
         <StopAcknowledgment />
+        {busy && (
+          <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 10, marginTop: 12 }}>
+            <LiveThroughput compact points={discoveryThroughput.points}
+                            ratePerMin={discoveryThroughput.ratePerMin}
+                            label="Discovery throughput" unitLabel="found" />
+          </div>
+        )}
         {showReadingExceptions && (
           <p className="muted" style={{ fontSize: 12.5, margin: '12px 0 0', lineHeight: 1.5 }}>
             {[
