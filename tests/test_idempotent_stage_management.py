@@ -170,8 +170,55 @@ def test_worker_attempts_are_append_only_across_retry(isolated_store):
     assert snapshot["attempts"]["terminal"] == 2
     event_types = [event["event_type"] for event in
                    isolated_store.stage_execution_events(execution["batch_id"], owner=OWNER)]
-    assert "work_item.processing" in event_types
-    assert "work_item.queued" in event_types
+    assert "attempt.started" in event_types
+    assert "attempt.retrying" in event_types
+
+
+def test_workers_publish_direct_replay_safe_lifecycle_events(isolated_store):
+    sid = _scan(isolated_store)
+    execution = _submit(isolated_store, sid)
+    job = isolated_store.claim_job("worker-1", job_types=("remediate_file",))
+    events = isolated_store.stage_execution_events(execution["batch_id"], owner=OWNER)
+    started = [event for event in events if event["event_type"] == "attempt.started"]
+    assert len(started) == 1
+    assert not [event for event in events if event["event_type"] == "work_item.processing"]
+
+    replay = isolated_store.publish_worker_stage_event(
+        job["id"], "worker-1", job["attempts"], "attempt.started",
+        occurred_at=job["claimed_at"])
+    assert replay["duplicate"] is True
+    assert isolated_store.complete_job(
+        job["id"], worker_id="worker-1", attempt=job["attempts"])
+    types = [event["event_type"] for event in
+             isolated_store.stage_execution_events(execution["batch_id"], owner=OWNER)]
+    assert types.count("attempt.started") == 1
+    assert types.count("attempt.completed") == 1
+    assert "work_item.completed" not in types
+
+
+def test_stale_attempt_cannot_publish_for_replacement(isolated_store):
+    sid = _scan(isolated_store)
+    execution = _submit(isolated_store, sid)
+    old = isolated_store.claim_job("worker-old", job_types=("remediate_file",))
+    assert isolated_store.fail_job(
+        old["id"], "retry", worker_id="worker-old", attempt=old["attempts"]) == "queued"
+    isolated_store.claim_job("worker-other", job_types=("remediate_file",))
+    replacement = isolated_store.claim_job("worker-new", job_types=("remediate_file",))
+    assert replacement["id"] == old["id"]
+
+    refused = isolated_store.publish_worker_stage_event(
+        old["id"], "worker-old", old["attempts"], "attempt.completed")
+    assert refused == {"applied": False, "duplicate": False, "stale": True}
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "SELECT state,attempt,lease_owner FROM stage_work_items WHERE job_id=%s", (old["id"],))
+        item = isolated_store._db.fetchone(cur)
+    assert item == {"state": "processing", "attempt": replacement["attempts"],
+                    "lease_owner": "worker-new"}
+    assert not [event for event in isolated_store.stage_execution_events(
+        execution["batch_id"], owner=OWNER)
+        if event["event_type"] == "attempt.completed"
+        and event["payload"]["worker_id"] == "worker-old"]
 
 
 def test_cancellation_deadline_escalates_without_claiming_worker_stopped(

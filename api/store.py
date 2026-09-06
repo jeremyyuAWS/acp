@@ -11260,8 +11260,12 @@ class Store:
             "violations": violations},
         }
 
-    def _sync_stage_execution_for_job(self, job_id: str) -> None:
-        """Project queue delivery state into the canonical execution stage authority."""
+    def _sync_stage_execution_for_job(self, job_id: str, *, emit_projection: bool = True) -> None:
+        """Compatibility projection for legacy/system queue mutations.
+
+        Worker-owned lifecycle paths publish directly.  ``emit_projection=False`` only folds
+        already-canonical item partitions into their execution and cannot create a second fact.
+        """
         job = self.get_job(job_id)
         if not job or not job.get("batch_id"):
             return
@@ -11291,12 +11295,13 @@ class Store:
                        "worker_id": job.get("locked_by"), "state": item_state,
                        "reason": job.get("error_class") or None}
             raw = _json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
-            self._db.execute(cur,
-                "INSERT INTO stage_events(event_id,execution_id,work_item_id,event_type,"
-                "expected_revision,resulting_revision,payload_digest,payload,occurred_at,recorded_at) "
-                "VALUES(%s,%s,%s,%s,NULL,%s,%s,%s,%s,%s) ON CONFLICT(event_id) DO NOTHING",
-                (event_id, job["batch_id"], work_item.get("work_item_id"), event_type,
-                 work_item.get("revision"), _hashlib.sha256(raw.encode()).hexdigest(), raw, now, now))
+            if emit_projection:
+                self._db.execute(cur,
+                    "INSERT INTO stage_events(event_id,execution_id,work_item_id,event_type,"
+                    "expected_revision,resulting_revision,payload_digest,payload,occurred_at,recorded_at) "
+                    "VALUES(%s,%s,%s,%s,NULL,%s,%s,%s,%s,%s) ON CONFLICT(event_id) DO NOTHING",
+                    (event_id, job["batch_id"], work_item.get("work_item_id"), event_type,
+                     work_item.get("revision"), _hashlib.sha256(raw.encode()).hexdigest(), raw, now, now))
             self._db.execute(cur,
                 "SELECT COUNT(*) AS total,"
                 "SUM(CASE WHEN state IN ('completed','failed','cancelled','skipped') THEN 1 ELSE 0 END) AS terminal,"
@@ -11338,15 +11343,103 @@ class Store:
                 (attempt_id, job["batch_id"], item["work_item_id"], job["id"],
                  int(job["attempts"]), job["locked_by"], started, job.get("locked_at") or started))
 
-    def _finish_stage_attempt(self, job_id: str, worker_id: str, attempt: int,
-                              outcome: str, reason: str | None = None) -> None:
-        now = self._now()
+    def publish_worker_stage_event(self, job_id: str, worker_id: str, attempt: int,
+                                   event_type: str, *, occurred_at: str | None = None,
+                                   result_digest: str | None = None,
+                                   reason: str | None = None) -> dict:
+        """Publish a worker lifecycle fact directly into the canonical stage ledger.
+
+        Queue rows are delivery compatibility state, not the source of this event.  The claim
+        identity fences every mutation: an older worker/attempt can neither move the work item
+        nor append a fact that appears to belong to its replacement.  Lifecycle identities are
+        deterministic, so a worker retrying publication after an uncertain response is a no-op.
+        """
+        import hashlib as _hashlib
+        import json as _json
+        state_for = {
+            "attempt.started": "processing", "attempt.heartbeat": "processing",
+            "attempt.retrying": "queued", "attempt.completed": "completed",
+            "attempt.failed": "failed", "attempt.cancelled": "cancelled",
+        }
+        if event_type not in state_for:
+            raise ValueError(f"unsupported worker stage event: {event_type}")
+        now = occurred_at or self._now()
+        payload = {"job_id": job_id, "worker_id": worker_id, "attempt": int(attempt),
+                   "event_type": event_type, "result_digest": result_digest, "reason": reason}
+        raw = _json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        digest = _hashlib.sha256(raw.encode()).hexdigest()
+        # Heartbeats are individual durable observations; lifecycle transitions are single facts.
+        identity = now if event_type == "attempt.heartbeat" else event_type
+        event_id = _hashlib.sha256(
+            f"worker-stage\0{job_id}\0{int(attempt)}\0{identity}".encode()).hexdigest()
         with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT payload_digest FROM stage_events WHERE event_id=%s",
+                             (event_id,))
+            prior = self._db.fetchone(cur)
+            if prior:
+                if prior["payload_digest"] != digest:
+                    raise ValueError("worker event identity was replayed with different content")
+                return {"applied": False, "duplicate": True, "event_id": event_id}
             self._db.execute(cur,
-                "UPDATE stage_attempts SET state='terminal',outcome=%s,terminal_reason=%s,ended_at=%s,"
-                "cancel_acknowledged_at=CASE WHEN %s='cancelled' THEN %s ELSE cancel_acknowledged_at END "
-                "WHERE job_id=%s AND worker_id=%s AND attempt=%s AND state<>'terminal'",
-                (outcome, reason, now, outcome, now, job_id, worker_id, attempt))
+                "SELECT a.*,w.revision AS work_revision,w.attempt AS work_attempt,"
+                "w.lease_owner AS work_owner FROM stage_attempts a JOIN stage_work_items w "
+                "ON w.work_item_id=a.work_item_id WHERE a.job_id=%s AND a.worker_id=%s "
+                "AND a.attempt=%s", (job_id, worker_id, attempt))
+            row = self._db.fetchone(cur)
+            is_start = event_type == "attempt.started"
+            if not row or (not is_start and (
+                    int(row.get("work_attempt") or 0) != int(attempt)
+                    or row.get("work_owner") != worker_id)):
+                return {"applied": False, "duplicate": False, "stale": True}
+            target = state_for[event_type]
+            terminal = event_type in ("attempt.completed", "attempt.failed", "attempt.cancelled")
+            if terminal and row.get("state") == "terminal":
+                return {"applied": False, "duplicate": False, "stale": True}
+            next_revision = int(row["work_revision"]) + (event_type != "attempt.heartbeat")
+            if event_type == "attempt.heartbeat":
+                self._db.execute(cur,
+                    "UPDATE stage_attempts SET heartbeat_at=%s WHERE attempt_id=%s "
+                    "AND state IN ('processing','cancel_requested')", (now, row["attempt_id"]))
+                self._db.execute(cur,
+                    "UPDATE stage_work_items SET lease_expires_at=(SELECT lease_expires_at FROM jobs "
+                    "WHERE id=%s),updated_at=%s WHERE work_item_id=%s AND attempt=%s AND lease_owner=%s",
+                    (job_id, now, row["work_item_id"], attempt, worker_id))
+            else:
+                if is_start:
+                    self._db.execute(cur,
+                        "UPDATE stage_work_items SET state='processing',revision=revision+1,attempt=%s,"
+                        "lease_owner=%s,lease_expires_at=(SELECT lease_expires_at FROM jobs WHERE id=%s),"
+                        "terminal_reason=NULL,updated_at=%s WHERE work_item_id=%s AND revision=%s "
+                        "AND attempt<%s",
+                        (attempt, worker_id, job_id, now, row["work_item_id"], row["work_revision"],
+                         attempt))
+                else:
+                    self._db.execute(cur,
+                        "UPDATE stage_work_items SET state=%s,revision=revision+1,result_digest=%s,"
+                        "terminal_reason=%s,updated_at=%s WHERE work_item_id=%s AND revision=%s "
+                        "AND attempt=%s AND lease_owner=%s",
+                        (target, result_digest, reason, now, row["work_item_id"],
+                         row["work_revision"], attempt, worker_id))
+                if not (getattr(cur, "rowcount", 0) or 0):
+                    return {"applied": False, "duplicate": False, "stale": True}
+                if terminal or event_type == "attempt.retrying":
+                    outcome = event_type.removeprefix("attempt.")
+                    self._db.execute(cur,
+                        "UPDATE stage_attempts SET state='terminal',outcome=%s,terminal_reason=%s,"
+                        "ended_at=%s,cancel_acknowledged_at=CASE WHEN %s='cancelled' THEN %s "
+                        "ELSE cancel_acknowledged_at END WHERE attempt_id=%s AND state<>'terminal'",
+                        (outcome, reason, now, outcome, now, row["attempt_id"]))
+            self._db.execute(cur,
+                "INSERT INTO stage_events(event_id,execution_id,work_item_id,event_type,"
+                "expected_revision,resulting_revision,payload_digest,payload,occurred_at,recorded_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (event_id, row["execution_id"], row["work_item_id"], event_type,
+                 row["work_revision"], next_revision, digest, raw, now, self._now()))
+        # This only folds canonical item partitions into the execution.  Since the item already
+        # holds the direct event's state, the compatibility projector cannot overwrite it.
+        self._sync_stage_execution_for_job(job_id, emit_projection=False)
+        return {"applied": True, "duplicate": False, "event_id": event_id,
+                "resulting_revision": next_revision}
 
     def escalate_overdue_stage_cancellations(self, *, now: str | None = None) -> list[dict]:
         """Mark missed acknowledgement deadlines once; never infer worker termination."""
@@ -11945,9 +12038,11 @@ class Store:
                     self._db.execute(cur, record_claim, (lane_key, now, row["id"]))
             if not row:
                 return None
-            self._sync_stage_execution_for_job(row["id"])
             claimed_job = self.get_job(row["id"])
             self._start_stage_attempt(claimed_job)
+            self.publish_worker_stage_event(row["id"], worker_id, int(claimed_job["attempts"]),
+                                            "attempt.started",
+                                            occurred_at=claimed_job.get("claimed_at"))
             return claimed_job
         else:
             # SQLite path: optimistic two-step CAS.
@@ -11971,9 +12066,11 @@ class Store:
                 if claimed:
                     self._db.execute(cur, record_claim, (lane_key, now, jid))
             if claimed:
-                self._sync_stage_execution_for_job(jid)
                 claimed_job = self.get_job(jid)
                 self._start_stage_attempt(claimed_job)
+                self.publish_worker_stage_event(jid, worker_id, int(claimed_job["attempts"]),
+                                                "attempt.started",
+                                                occurred_at=claimed_job.get("claimed_at"))
                 return claimed_job
             return None
 
@@ -12075,8 +12172,7 @@ class Store:
         if not won:
             print(f"[acp] complete_job: job {job_id} already terminal — zombie-worker no-op", flush=True)
         else:
-            self._finish_stage_attempt(job_id, worker_id, attempt, "completed")
-            self._sync_stage_execution_for_job(job_id)
+            self.publish_worker_stage_event(job_id, worker_id, attempt, "attempt.completed")
             self._record_stage_completed_if_ready(job)
         return won
 
@@ -12123,8 +12219,8 @@ class Store:
         if not won:
             print(f"[acp] mark_job_cancelled: job {job_id} already terminal — zombie-worker no-op", flush=True)
         else:
-            self._finish_stage_attempt(job_id, worker_id, attempt, "cancelled", "worker_acknowledged")
-            self._sync_stage_execution_for_job(job_id)
+            self.publish_worker_stage_event(job_id, worker_id, attempt, "attempt.cancelled",
+                                            reason="worker_acknowledged")
             self._record_stage_terminal_if_ready(job)
         return won
 
@@ -12314,11 +12410,8 @@ class Store:
                 (now, now, expires, job_id, worker_id, attempt))
             renewed = (getattr(cur, "rowcount", 0) or 0) > 0
         if renewed:
-            with self._db.cursor() as cur:
-                self._db.execute(cur,
-                    "UPDATE stage_attempts SET heartbeat_at=%s WHERE job_id=%s AND worker_id=%s "
-                    "AND attempt=%s AND state IN ('processing','cancel_requested')",
-                    (now, job_id, worker_id, attempt))
+            self.publish_worker_stage_event(job_id, worker_id, attempt, "attempt.heartbeat",
+                                            occurred_at=now)
 
     # Job types whose payload names documents that COUNT toward a scan's finalize total.
     # A dead-letter on one of these has to leave a file_records row behind — see
@@ -12555,8 +12648,8 @@ class Store:
                 except Exception:
                     # best-effort — the dead-letter itself must still be recorded
                     swallowed("store.fail_job: rolling back the fail_job transaction failed")
-            self._sync_stage_execution_for_job(job_id)
-            self._finish_stage_attempt(job_id, worker_id, attempt, "failed", error_class or error[:200])
+            self.publish_worker_stage_event(job_id, worker_id, attempt, "attempt.failed",
+                                            reason=error_class or error[:200])
             self._record_stage_terminal_if_ready({**job, "error_class": error_class})
             return "dead"
         run_after = (now + timedelta(seconds=backoff_seconds)).isoformat()
@@ -12574,8 +12667,8 @@ class Store:
             print(f"[acp] fail_job: job {job_id} already terminal — zombie-worker "
                   "no-op (requeue suppressed)", flush=True)
         else:
-            self._finish_stage_attempt(job_id, worker_id, attempt, "retrying", error_class or error[:200])
-            self._sync_stage_execution_for_job(job_id)
+            self.publish_worker_stage_event(job_id, worker_id, attempt, "attempt.retrying",
+                                            reason=error_class or error[:200])
         return "queued"
 
     DEPLOYMENT_REQUEUE_PHASE = "deployment_requeue"
