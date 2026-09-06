@@ -306,7 +306,7 @@ Parsed from the deployment scripts, not from a live subscription.
 | Container app | Tier | CPU | Memory | Replicas | DB pool | Scales? | Ingress | Scale rules | Read from |
 |---|---|---:|---:|---|---:|---|---|---|---|
 | `acp-app` | `api` | 1.0 | 2Gi | 1–3 | — | yes | external | none in this repo | rightsize-production.sh + deploy.sh |
-| `acp-assess` | `assess` | 2.0 | 4Gi | 5–5 | 2 | **no** | none | none in this repo | rightsize-production.sh |
+| `acp-assess` | `assess` | 2.0 | 4Gi | 5–5 | 2 | **no** | none | `assess-queue` (inert: tier pinned) | rightsize-production.sh |
 | `acp-discovery` | `discover` | 1.0 | 2Gi | 4–6 | 2 | yes | none | none in this repo | rightsize-production.sh |
 | `acp-grafana` | — | 0.5 | 1.0Gi | 1–1 | — | **no** | external | none in this repo | deploy.sh |
 | `acp-ollama` | — | 4.0 | 8Gi | 0–1 | — | yes | none | none in this repo | rightsize-production.sh |

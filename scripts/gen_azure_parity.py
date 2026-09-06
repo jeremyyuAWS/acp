@@ -57,7 +57,21 @@ def build() -> str:
         tier = f"`{app.tier}`" if app.tier else "—"
         replicas = (f"{app.min_replicas}–{app.max_replicas}"
                     if app.min_replicas is not None else "—")
-        rules = ", ".join(f"`{r}`" for r in app.scale_rules) or "none in this repo"
+        # A RULE ON A PINNED TIER IS REPORTED AS INERT, not as a rule the tier has.
+        # KEDA can compute any replica count it likes; Azure cannot act on it when the floor
+        # equals the ceiling. rightsize-production.sh's own guard skips applying such a rule for
+        # that reason (it would cost a revision — a worker restart — for something that provably
+        # cannot fire), so a table that listed the rule plainly would say production has an
+        # autoscaler it does not have.
+        #
+        # DERIVED FROM min == max, not from reading the script's guard. The two agree today, but
+        # the replica range is a fact this table already carries and shows in the next column,
+        # while parsing shell control flow to find a guard is a second thing to keep true. Raise
+        # the ceiling and this row starts reporting the rule as live, which is correct, because
+        # that is exactly when the script starts applying it.
+        pinned = (app.min_replicas is not None and app.min_replicas == app.max_replicas)
+        rules = ", ".join(f"`{r}`" + (" (inert: tier pinned)" if pinned else "")
+                          for r in app.scale_rules) or "none in this repo"
         # ACP_DB_MAX_CONN, where one is pinned. Shown beside the replica range because the two
         # are one fact: a 5-10 replica ceiling is a 20-connection budget once the pool is 2.
         pool = app.db_pool if app.db_pool is not None else "—"
