@@ -48,6 +48,10 @@ export function remediationEventLine(event) {
       return `Manual review requested for ${file(event)}${detail.criterion ? ` · WCAG ${detail.criterion}` : ''}`
     case 'remediate.document_completed':
       return `${file(event)} remediation finished`
+    case 'scan.interrupted':
+      return `A worker stopped without reporting · attempt ${event?.attempt || 'unknown'} safely queued to resume`
+    case 'scan.retrying':
+      return `A processing attempt failed and was scheduled to retry${event?.attempt ? ` · attempt ${event.attempt}` : ''}`
     // ── human actions on the run ──────────────────────────────────────────────
     // The ACTOR is deliberately absent from these lines, and from the events behind them: the
     // feed is replayed to every authorised viewer of the run, and naming who pressed the button
@@ -71,7 +75,8 @@ export function remediationEventLine(event) {
 export function eventTone(kind) {
   if (kind === 'remediate.verification_failed' || kind === 'remediate.delivery_failed') return 'error'
   if (kind === 'remediate.review_requested' || kind === 'remediate.delivery_retry_refused'
-      || kind === 'remediate.cancel_requested' || kind === 'remediate.paused') return 'attention'
+      || kind === 'remediate.cancel_requested' || kind === 'remediate.paused'
+      || kind === 'scan.interrupted' || kind === 'scan.retrying') return 'attention'
   if (kind === 'remediate.verified' || kind === 'remediate.delivered' || kind === 'remediate.document_completed') return 'success'
   return 'neutral'
 }

@@ -13,6 +13,8 @@ describe('remediation lifecycle event narration', () => {
       ['remediate.delivery_failed', { file: 'a.docx' }, /retained in ACP/],
       ['remediate.review_requested', { file: 'a.docx', criterion: '1.1.1' }, /WCAG 1.1.1/],
       ['remediate.document_completed', { file: 'a.docx' }, /remediation finished/],
+      ['scan.interrupted', {}, /worker stopped without reporting/],
+      ['scan.retrying', {}, /processing attempt failed and was scheduled to retry/],
     ]
     for (const [kind, detail, expected] of cases) {
       expect(remediationEventLine({ kind, detail })).toMatch(expected)
@@ -40,5 +42,7 @@ describe('remediation lifecycle event narration', () => {
     expect(eventTone('remediate.delivery_failed')).toBe('error')
     expect(eventTone('remediate.verified')).toBe('success')
     expect(eventTone('remediate.fix_applied')).toBe('neutral')
+    expect(eventTone('scan.interrupted')).toBe('attention')
+    expect(eventTone('scan.retrying')).toBe('attention')
   })
 })

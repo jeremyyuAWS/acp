@@ -258,6 +258,11 @@ def classify_document(job: dict, *, now: _dt.datetime, review_pending: bool = Fa
         return "waiting", "lease_expired"
 
     if status == "queued":
+        # The sweeper leaves a reclaimed row in a distinct phase until another worker claims it.
+        # Preserve that reason in the reconciled account: it is safe waiting work, but it is not
+        # an ordinary document that has never started and it is not a handler failure/retry.
+        if job.get("phase") == "reclaimed":
+            return "waiting", "worker_reclaimed"
         run_after = _parse(job.get("run_after"))
         if run_after is not None and run_after > now:
             return "waiting", "retry_scheduled"
@@ -684,6 +689,13 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
     applied = max(int(facts.get("fixes_applied") or 0), verified)
     remaining = counters["processing"] + counters["waiting"]
     throughput, estimate = derive_throughput(completed_at, remaining=remaining, now=now)
+    recovery = {
+        "worker_reclaimed": int(reasons.get("worker_reclaimed") or 0),
+        "retry_scheduled": int(reasons.get("retry_scheduled") or 0),
+        "attempts_exhausted": int(reasons.get("attempts_exhausted") or 0),
+        "multi_attempt_active": sum(1 for attempt in active
+                                    if int(attempt.get("attempt") or 0) > 1),
+    }
 
     snapshot = {
         "run_id": facts.get("run_id"),
@@ -730,6 +742,9 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
                                 corrected_pending_delivery=pending_delivery,
                                 corrected_pending_release=pending_release),
         "active_attempts": active,
+        # Recovery is narration derived from the same job rows as the partition. These counts
+        # explain WHY work is waiting or on a later attempt without inventing another run state.
+        "recovery": recovery,
         "retry_at": retry_at.isoformat() if retry_at else None,
         "latest_progress_at": facts.get("latest_progress_at") or None,
         # PROGRESS AND LIVENESS ARE DIFFERENT FACTS AND ARE NAMED APART (PRD §22, ADR 0052).

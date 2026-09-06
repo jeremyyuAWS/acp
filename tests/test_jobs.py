@@ -84,6 +84,24 @@ def test_reclaim_stuck(store):
     assert store.get_job(jid)["status"] == "queued"
 
 
+def test_a_reclaimed_job_at_its_attempt_limit_cannot_be_claimed_again(store):
+    """The exhausted-job sweep follows reclaim in the normal loop, but another worker may claim
+    between those two statements. Eligibility itself must enforce the attempt ceiling."""
+    jid = store.enqueue_job("t", {}, max_attempts=1)
+    store.claim_job("w1")
+    assert store.reclaim_stuck_jobs(lease_seconds=0) == 1
+    assert store.get_job(jid)["status"] == "queued"
+    assert store.claim_job("w2") is None
+    assert store.get_job(jid)["attempts"] == 1
+
+
+def test_an_exhausted_queued_job_is_not_reported_as_claimable_capacity_work(store):
+    jid = store.enqueue_job("t", {}, max_attempts=1)
+    store.claim_job("w1")
+    store.reclaim_stuck_jobs(lease_seconds=0)
+    assert store.oldest_queued_job() is None
+
+
 def test_job_stats(store):
     a = store.enqueue_job("t", {})
     store.enqueue_job("t", {})
