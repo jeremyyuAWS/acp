@@ -314,6 +314,25 @@ def test_workflow_contract_uses_the_durable_stage_execution_and_completion_time(
     assert stage["completion_recorded"] is True
 
 
+def test_workflow_contract_carries_only_safe_durable_stage_events():
+    run = {"scan_id": "scan-1", "owner": "owner@example.org", "source": "sharepoint",
+           "stage": "assess", "status": "active", "running": 1, "queued": 0,
+           "completed": 0, "total": 2}
+    events = [{"event_id": "start", "kind": "job.stage_started", "scan_id": "scan-1",
+               "stage": "assess", "correlation_id": "batch-42",
+               "occurred_at": "2026-09-05T10:01:00+00:00", "attempt": 1,
+               "detail": {"documents": 2, "filename": "patient-name.docx", "secret": "no"}},
+              {"event_id": "unknown", "kind": "job.internal_debug", "scan_id": "scan-1",
+               "stage": "assess", "occurred_at": "2026-09-05T10:02:00+00:00"}]
+
+    workflow = system._workflow_rows([run], events)[0]
+    assert workflow["events"] == [{
+        "event_id": "start", "kind": "job.stage_started", "stage": "assess",
+        "occurred_at": "2026-09-05T10:01:00+00:00", "correlation_id": "batch-42",
+        "attempt": 1, "error_class": None, "detail": {"documents": 2},
+    }]
+
+
 def test_workflow_contract_keeps_completed_stage_after_queue_tail_expires():
     events = [
         {"event_id": "start", "kind": "job.stage_started", "scan_id": "scan-old",

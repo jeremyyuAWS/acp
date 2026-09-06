@@ -68,6 +68,26 @@ describe('Missing measurements stay missing', () => {
 })
 
 describe('Durable remediation events join the Live Operations timeline', () => {
+  it('projects durable workflow transitions for Discover, Assess, and Release', () => {
+    const events = durableRunEvents({ workflows: [{
+      workflow_id: 'scan-1', scan_id: 'scan-1', events: [
+        { event_id: 'd1', occurred_at: iso(-30), kind: 'job.stage_completed', stage: 'discover',
+          correlation_id: 'discover-batch', detail: { documents: 12 } },
+        { event_id: 'a1', occurred_at: iso(-20), kind: 'job.stage_started', stage: 'assess',
+          correlation_id: 'assess-batch', detail: { documents: 12 } },
+        { event_id: 'r1', occurred_at: iso(-10), kind: 'job.stage_failed', stage: 'release',
+          correlation_id: 'release-batch', detail: { failed: 2 } },
+      ],
+    }] })
+    expect(events.map((event) => event.id)).toEqual(['stage:d1', 'stage:a1', 'stage:r1'])
+    expect(events.map((event) => event.text)).toEqual([
+      'Discover completed for 12 documents', 'Assess started for 12 documents',
+      'Release failed for 2 documents',
+    ])
+    expect(events.map((event) => event.kind)).toEqual(['activity', 'activity', 'error'])
+    expect(events.every((event) => event.durable)).toBe(true)
+  })
+
   it('projects the safe event vocabulary and keeps stable stream identities', () => {
     const events = durableRunEvents({ runs: [{
       scan_id: 'scan-1', stage: 'remediate', recent_events: [

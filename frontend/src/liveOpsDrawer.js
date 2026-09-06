@@ -1275,11 +1275,42 @@ const REMEDIATION_EVENT_TEXT = {
   'remediate.document_completed': () => 'Document remediation completed',
 }
 
+const STAGE_EVENT_TEXT = {
+  'job.stage_started': (stage, d) => `${stage} started${d.documents == null ? '' : ` for ${d.documents} documents`}`,
+  'job.stage_completed': (stage, d) => `${stage} completed${d.documents == null ? '' : ` for ${d.documents} documents`}`,
+  'job.stage_failed': (stage, d) => `${stage} failed${d.failed == null ? '' : ` for ${d.failed} documents`}`,
+  'job.stage_cancelled': (stage) => `${stage} cancelled`,
+  'workflow.stage_cancel_requested': (stage) => `Stop requested for ${stage}`,
+  'workflow.stage_resumed': (stage) => `${stage} resumed`,
+}
+
 /** Durable lifecycle events already retained by the remediation run, projected into the same
  * timeline shape as browser-observed infrastructure changes. No filename or free-text detail is
  * accepted here: the admin endpoint sends only the safe detail allow-list. */
 export function durableRunEvents(snapshot = {}) {
   const events = []
+  for (const workflow of snapshot?.workflows || []) {
+    for (const event of workflow?.events || []) {
+      const line = STAGE_EVENT_TEXT[event.kind]
+      if (!line || !event.event_id || !event.occurred_at || !event.stage) continue
+      const failure = event.kind === 'job.stage_failed'
+      const warning = event.kind === 'job.stage_cancelled'
+        || event.kind === 'workflow.stage_cancel_requested'
+      const node = `${workflow.scan_id}:${event.stage}`
+      events.push({
+        id: `stage:${event.event_id}`,
+        at: event.occurred_at,
+        key: `${node}:${event.event_id}`,
+        kind: failure ? 'error' : warning ? 'warning' : 'activity',
+        stage: event.stage,
+        nodes: [node, `stage:${event.stage}`, 'infra:queue', 'infra:intake'],
+        text: line(event.stage[0].toUpperCase() + event.stage.slice(1), event.detail || {}),
+        outcome: failure ? 'Attention required' : warning ? 'Operator action' : 'Recorded',
+        correlation: event.correlation_id || workflow.workflow_id || workflow.scan_id,
+        durable: true,
+      })
+    }
+  }
   for (const run of snapshot?.runs || []) {
     if (run.stage !== 'remediate') continue
     const node = `${run.scan_id}:${run.stage}`
