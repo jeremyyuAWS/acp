@@ -728,11 +728,47 @@ argued.
   The registry was nearly left out on a measurement taken from ONE all-REVIEW fixture; swept across
   the corpus, 1.1.1 and 2.4.4 return FAIL on three of them — and alt text surviving a
   re-serialisation is the most valuable thing here, so it is in.
-- [?] **P5.4 — Mutation testing on the detector modules.** BLOCKED on tooling. No mutation library
-  is installed in the venv (`mutmut` / `cosmic-ray` absent), and adding one plus running a campaign
-  is a dev-dependency + CI-time decision, not a quiet addition. Unblock: decide whether to vendor a
-  mutation runner and where it runs (it is slow), then point it at `office_structure` / the docx
-  detectors. The reasoning stands: F1 1.00 bounds only the fixtures we thought to write.
+- [x] **P5.4 — Mutation testing on the detector modules.** Done, with `mutmut`, **on demand only**
+  — the decision the item was blocked on, taken 2026-09-06. Run it with
+  `pip install mutmut && python scripts/mutation_test.py`; `--report` re-reads the last campaign
+  without re-running it. `mutmut` is deliberately absent from both requirements files (nothing ACP
+  ships imports it) and nothing in CI runs it, which
+  `test_mutation_harness.test_mutation_testing_is_not_wired_into_ci` keeps true by construction.
+
+  **The measurement, 2026-09-06, on `api/office_structure.py` graded by all 58 test modules that
+  import it: 4574 mutants, 3449 killed, 1125 survived, 0 unreached, 75.4%, 35m01s.** Read the score
+  as a floor rather than a grade — some survivors are equivalent mutants that no test could kill,
+  and there is no automatic way to tell those from real gaps. The useful output is the survivor
+  list, grouped by function, read one entry at a time. Largest groups: `docx_checks` 87,
+  `_pdf_link_has_underline` 68, `pdf_text_spacing_checks` 56, `xlsx_contrast_checks` 49,
+  `office_text_spacing_checks` 48.
+
+  **A narrow run is misleadingly quick, and that is the methodology finding.** The first campaign
+  selected only the `test_docx_*` modules and finished the same 4574 mutants in 2m35s at 32.1% —
+  but 2977 of them were never reached, and most of its survivors sat in the shared `office_*`
+  helpers that pptx and xlsx own, reached by the docx tests without being asserted by them. That
+  number measured the SELECTION, not the suite. Fast means "did not look": a campaign that returns
+  in minutes is a configuration to check, not good news. The shipped selection reaches every
+  mutant (0 unreached), which is what makes 75.4% a statement about the tests.
+
+  **The harness's own failure mode was the thing worth engineering against.** mutmut names mutants
+  after the file path (`api.office_structure`) while this repo imports the module bare
+  (`office_structure`, because `conftest` puts `api/` on `sys.path`). Unreconciled, mutmut stops
+  with "no mutant key matched" — it fails closed, which is why `mutmut_module_alias.py` is a
+  bookkeeping correction rather than a way past a warning. Had it reported every mutant killed
+  instead, the campaign would have read as a clean bill of health for a suite it never measured.
+  The alias registers ONE module object under both names, so the existing tests are unchanged:
+  mutation testing has to grade the real suite, not a rewritten one.
+
+  Three configuration traps are guarded in `tests/test_mutation_harness.py` (9 tests, milliseconds,
+  safe in CI because the expensive part is not there): a mutated-but-unaliased module silently
+  dropping out of the score, a test selection naming a deleted file (which makes the score go UP),
+  and `also_copy` losing a directory the suite needs. That last one is the loud failure — it cost
+  three runs to discover `config/`, `scripts/` and `engine/` one at a time, each by a campaign that
+  refused to score rather than grading whatever survived collection.
+
+  The original reasoning stands and is now quantified: F1 1.00 bounds only the fixtures we thought
+  to write, and 1125 survivors is the size of that bound on this module.
 - [x] **P5.5 — v2 capability table synced to the backend, and guarded.** Done (#216), and it was
   bigger than filed. The item said "no docx 4.1.2 row"; measuring found FIVE drifted cells —
   docx 1.4.1/1.4.11/2.1.2/4.1.2 missing on both axes, and xlsx 3.1.2 carrying a WRONG value
