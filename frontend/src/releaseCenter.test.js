@@ -79,6 +79,31 @@ describe('Release Center: confirmation before a release', () => {
     expect(s).toMatch(/row\.status === 'queued' \|\| row\.status === 'running'/)
     expect(s).toMatch(/still running safely in the background/)
   })
+
+  it('resumes polling a durable release after navigation or reload', () => {
+    const s = pub()
+    expect(s).toMatch(/const refresh = async \(\) =>/)
+    expect(s).toMatch(/\(status\.documents \|\| \[\]\)\.some\(\(row\) => row\.status === 'queued' \|\| row\.status === 'running'\)/)
+    expect(s).toMatch(/window\.setTimeout\(refresh, 2000\)/)
+    expect(s).toMatch(/window\.clearTimeout\(timer\)/)
+  })
+
+  it('shows actionable recovery controls instead of hiding release errors', () => {
+    const s = pub()
+    expect(s).toMatch(/className="release-recovery" role="alert"/)
+    expect(s).toMatch(/>Retry<\/button>/)
+    expect(s).toMatch(/<summary>View details<\/summary>/)
+    expect(s).toMatch(/Open Live Operations/)
+    expect(s).toMatch(/workflow-tab-liveops/)
+  })
+
+  it('uses the real source provider in freshness and released-file actions', () => {
+    const s = pub()
+    expect(s).toMatch(/sourceProduct = releaseProvider === 'sharepoint' \? 'SharePoint'/)
+    expect(s).toMatch(/changed at the source in \{sourceProduct\}/)
+    expect(s).toMatch(/Open in \{sourceProduct\}/)
+    expect(s).not.toMatch(/changed at the source in Drive/)
+  })
 })
 
 describe('Release builder', () => {
