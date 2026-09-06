@@ -48,6 +48,26 @@ function age(iso) {
   return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
 }
 
+export const JOB_STATE_FILTERS = [
+  { key: 'all', label: 'All' },
+  { key: 'active', label: 'Active' },
+  { key: 'attention', label: 'Needs attention' },
+  { key: 'stalled', label: 'Stalled' },
+  { key: 'paused', label: 'Paused' },
+  { key: 'cancelled', label: 'Cancelled' },
+  { key: 'recent', label: 'Recently completed' },
+]
+
+/** One stable vocabulary for card labels, filtering and assistive text. */
+export function runOperationalState(run = {}) {
+  if (run.paused === true) return 'paused'
+  if (run.stalled === true) return 'stalled'
+  if (run.status === 'failed' || Number(run.failed || 0) > 0) return 'attention'
+  if (run.status === 'cancelled') return 'cancelled'
+  if (run.status === 'recent') return 'recent'
+  return 'active'
+}
+
 export function queueConcentration(runs = []) {
   const byOwner = new Map()
   let total = 0
@@ -274,10 +294,12 @@ function RunNode({ data }) {
   const cfg = STAGE[data.run.stage] || { label: data.run.stage, color: '#6B7280' }
   const accent = data.workflowColor || cfg.color
   const pct = data.run.total ? Math.round((data.run.completed / data.run.total) * 100) : 0
-  const statusLabel = data.run.status === 'recent' ? 'Complete'
-    : data.run.status === 'failed' ? 'Failed'
-      : data.run.status === 'cancelled' ? 'Cancelled'
-        : data.run.stalled ? 'Stalled' : `${pct}%`
+  const operationalState = runOperationalState(data.run)
+  const statusLabel = operationalState === 'recent' ? 'Complete'
+    : operationalState === 'attention' ? 'Needs attention'
+      : operationalState === 'cancelled' ? 'Cancelled'
+        : operationalState === 'stalled' ? 'Stalled'
+          : operationalState === 'paused' ? 'Paused' : `${pct}%`
   return <div title="Select for live run details; double-click to open charts"
     style={{ width: 225, padding: 12,
       ...tileStyle('run', accent),
@@ -288,7 +310,7 @@ function RunNode({ data }) {
     <div style={{ color: cfg.color, fontSize: 9.5, fontWeight: 800, letterSpacing: '.09em',
       marginBottom: 4 }}>{TILE_KINDS.job.label}</div>
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-      <b>{cfg.label}</b><span style={{ color: data.run.status === 'failed' ? 'var(--error-fg)' : cfg.color,
+      <b>{cfg.label}</b><span style={{ color: ['attention', 'stalled'].includes(operationalState) ? 'var(--error-fg)' : cfg.color,
         fontWeight: 700 }}>{statusLabel}</span>
     </div>
     <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{data.run.owner}</div>
@@ -303,6 +325,9 @@ function RunNode({ data }) {
     </div>
     {!!data.run.queued && <div style={{ fontSize: 11, marginTop: 5, color: 'var(--muted)' }}>
       {data.run.queued} waiting{data.run.queue_position ? ` · queue position ${data.run.queue_position}` : ''}
+    </div>}
+    {operationalState !== 'active' && data.run.updated_at && <div style={{ fontSize: 10.5, marginTop: 5, color: 'var(--muted)' }}>
+      {statusLabel} · last changed {age(data.run.updated_at)} ago
     </div>}
     <Handle type="source" position={Position.Right} />
   </div>
@@ -714,7 +739,9 @@ export function trafficGraphForTab(graph = { nodes: [], edges: [] }, tab = 'infr
     const allRuns = graph.nodes.filter((node) => node.type === 'run')
     const matchingIds = new Set(allRuns.filter((node) =>
       (!filter?.stage || node.data?.run?.stage === filter.stage)
-      && (!filter?.source || node.data?.run?.source === filter.source))
+      && (!filter?.source || node.data?.run?.source === filter.source)
+      && (!filter?.state || filter.state === 'all'
+        || runOperationalState(node.data?.run) === filter.state))
       .map((node) => node.data?.run?.scan_id))
     const runs = filter ? allRuns.filter((node) => matchingIds.has(node.data?.run?.scan_id)) : allRuns
     const byWorkflow = new Map()
@@ -768,6 +795,7 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
   const [capacityState, setCapacityState] = useState('loading')
   const [flowTab, setFlowTab] = useState('infrastructure')
   const [flowFilter, setFlowFilter] = useState(null)
+  const [jobState, setJobState] = useState('all')
   const history = useRef(new Map())
   // Per-node metric samples over the drawer's 15-minute window, and the operational events derived
   // from the differences between consecutive live snapshots. Both are session state: there is no
@@ -815,8 +843,9 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
   // is no second keydown listener here to fight it.
 
   const graph = useMemo(() => buildTrafficGraph(snapshot, history.current, capacity, connection), [snapshot, capacity, connection])
-  const visibleGraph = useMemo(() => trafficGraphForTab(graph, flowTab, flowFilter),
-    [graph, flowTab, flowFilter])
+  const visibleGraph = useMemo(() => trafficGraphForTab(graph, flowTab,
+    flowTab === 'jobs' ? { ...flowFilter, state: jobState } : flowFilter),
+    [graph, flowTab, flowFilter, jobState])
 
   // One pass per live snapshot: sample every node for the trend strip, and diff this snapshot
   // against the previous one for the timeline. Both write into refs the same way the sparkline
@@ -910,6 +939,13 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
       Showing workflows for {flowFilter.stage ? `${STAGE[flowFilter.stage]?.label || flowFilter.stage} activity` : flowFilter.source}
       <button type="button" className="ghost" onClick={() => setFlowFilter(null)} style={{ marginLeft: 8 }}>Clear filter</button>
     </div>}
+    {flowTab === 'jobs' && <div aria-label="Filter workflows by state" style={{ display: 'flex', gap: 6,
+      flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
+      <span className="muted" style={{ fontSize: 11, marginRight: 2 }}>SHOW</span>
+      {JOB_STATE_FILTERS.map(({ key, label }) => <button key={key} type="button"
+        className={jobState === key ? '' : 'ghost'} aria-pressed={jobState === key}
+        onClick={() => setJobState(key)} style={{ padding: '5px 9px', fontSize: 11 }}>{label}</button>)}
+    </div>}
     <div style={{ height: flowTab === 'infrastructure' ? 590
       : Math.max(360, 100 + visibleGraph.nodes.filter((node) => node.type === 'workflow').length * 185), maxHeight: 760,
       border: '1px solid var(--line)', borderRadius: 10, overflow: 'hidden', background: 'var(--bg)' }}>
@@ -935,11 +971,19 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
           <span><b style={{ color: 'var(--ink)' }}>SERVICE</b> · capacity</span>
           <span><b style={{ color: 'var(--ink)' }}>DATA</b> · sources and outputs</span>
         </div>}
+        {flowTab === 'jobs' && <div aria-label="Workflow map key" style={{ position: 'absolute', zIndex: 3,
+          right: 12, top: 12, display: 'grid', gap: 4, padding: '7px 9px', border: '1px solid var(--line)',
+          borderRadius: 7, background: 'var(--surface)', boxShadow: '0 2px 7px rgba(24,20,28,.07)',
+          color: 'var(--muted)', fontSize: 10.5 }}>
+          <span><b style={{ color: 'var(--ink)' }}>COLOR</b> · one workflow and owner</span>
+          <span><b style={{ color: 'var(--ink)' }}>MOVING LINE</b> · work active or waiting</span>
+          <span><b style={{ color: 'var(--ink)' }}>SOLID LINE</b> · recorded stage transition</span>
+        </div>}
         {flowTab === 'infrastructure' && <div className="chip" style={{ position: 'absolute', zIndex: 3, left: 12, bottom: 12 }}>
           Idle · select any tile to inspect the ready processing path
         </div>}
         {flowTab === 'jobs' && !visibleGraph.nodes.length && <div className="chip" style={{ position: 'absolute', zIndex: 3, left: 12, top: 12 }}>
-          No active or recently completed workflows match this view
+          No workflows match this view
         </div>}
         {flowTab === 'jobs' && !!visibleGraph.nodes.length && <div className="chip" style={{ position: 'absolute', zIndex: 3, left: 12, bottom: 12 }}>
           Select a stage to inspect progress; connected cards belong to one workflow
