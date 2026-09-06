@@ -2976,10 +2976,11 @@ html[data-wcag="on"] .wcag-toggle--on {
    --success-fg-strong left rule). A second toast at different coordinates on a different surface
    does not read as the same product, and there is no reason for these two to differ.
 
-   ONE PROPERTY DELIBERATELY DIFFERS. That file sets `color: var(--text)`. `--text` is used twice
-   in this codebase and DEFINED NOWHERE, so it resolves to nothing and the colour is inherited —
-   which happens to look right and is why it has survived. `--ink` is the token that exists. This
-   rule uses it rather than propagating an undefined custom property to a third site.
+   `color` NOW AGREES, and the history is worth keeping. That component asked for `--text`, a
+   property used in three places and DECLARED NOWHERE, so it resolved to nothing and the colour
+   was inherited — which happened to look right, which is why it survived. This rule was written
+   against `--ink` rather than copying it; the three uses have since been corrected, and
+   cssCustomProperties.test.jsx fails if a bare undeclared property appears again.
 
    The positioning is only half the job: the element must also be PORTALLED out of Settings'
    `.setoverlay`, whose backdrop-filter would otherwise make it the containing block and pin this

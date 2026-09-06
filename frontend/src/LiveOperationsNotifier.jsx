@@ -37,7 +37,7 @@ export function LiveOperationsToast({ run, onOpen, onDismiss }) {
       // --panel is not a defined application token and therefore resolved to transparent.
       // --surface is the shared, explicitly opaque card token (with a defensive white fallback).
       background: 'var(--surface, #fff)', opacity: 1, isolation: 'isolate',
-      color: 'var(--text)', boxShadow: '0 12px 32px rgba(20,16,24,.28)' }}>
+      color: 'var(--ink)', boxShadow: '0 12px 32px rgba(20,16,24,.28)' }}>
     <span style={{ display: 'flex', justifyContent: 'space-between', gap: 12 }}><b>{label} started</b>
       <button type="button" className="ghost small" aria-label="Dismiss notification" onClick={() => onDismiss?.()}>×</button></span>
     <button type="button" className="ghost" onClick={() => onOpen?.(run)}

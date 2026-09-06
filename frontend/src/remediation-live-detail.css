@@ -1,7 +1,7 @@
 /* Optional live detail follows ACP's existing semantic tokens and stays visually subordinate. */
 .remops-segments{overflow:visible}.remops-segment{position:relative}
 .remops-segment:focus{outline:2px solid var(--focus,#2563eb);outline-offset:2px;z-index:2}
-.remops-segment:hover:after,.remops-segment:focus:after{content:attr(data-detail);position:absolute;left:50%;bottom:18px;z-index:4;transform:translateX(-50%);padding:4px 7px;border:1px solid var(--line);border-radius:5px;color:var(--text);background:var(--surface);box-shadow:0 2px 8px rgba(0,0,0,.12);font-size:10.5px;white-space:nowrap}
+.remops-segment:hover:after,.remops-segment:focus:after{content:attr(data-detail);position:absolute;left:50%;bottom:18px;z-index:4;transform:translateX(-50%);padding:4px 7px;border:1px solid var(--line);border-radius:5px;color:var(--ink);background:var(--surface);box-shadow:0 2px 8px rgba(0,0,0,.12);font-size:10.5px;white-space:nowrap}
 .remops-flow{color:var(--muted);animation:none}.remops-pipeline-moving .remops-flow{color:var(--info-fg);animation:remops-flow 1.6s ease-in-out infinite}
 .remops-phase-docs{display:flex;flex-direction:column;gap:3px;margin-top:7px}.remops-phase-docs>span{overflow:hidden;padding:2px 5px;border:1px solid var(--line);border-radius:4px;background:var(--surface);font-size:9.5px;text-overflow:ellipsis;white-space:nowrap;animation:remops-doc-enter .3s ease both}
 .remops-trail-step{display:contents}
@@ -12,5 +12,5 @@
 .remops-pulse-bars{display:flex;align-items:flex-end;gap:2px;height:12px}.remops-pulse-bars i{width:4px;border-radius:1px;background:var(--info-fg)}
 @keyframes remops-doc-enter{from{transform:translateX(-4px);opacity:.35}}
 
-.remops-disclosure{min-width:0}.remops-disclosure>summary{display:none}.remops-disclosure-body{min-width:0}.remops-disclosure-body>.remops-pipeline,.remops-disclosure-body>.remops-secondary{width:auto}.remops-disclosure-compact>summary{display:list-item;padding:11px 18px;border-bottom:1px solid var(--line);color:var(--text);font-size:12px;font-weight:650;cursor:pointer}.remops-disclosure-compact>summary::marker{color:var(--muted)}
+.remops-disclosure{min-width:0}.remops-disclosure>summary{display:none}.remops-disclosure-body{min-width:0}.remops-disclosure-body>.remops-pipeline,.remops-disclosure-body>.remops-secondary{width:auto}.remops-disclosure-compact>summary{display:list-item;padding:11px 18px;border-bottom:1px solid var(--line);color:var(--ink);font-size:12px;font-weight:650;cursor:pointer}.remops-disclosure-compact>summary::marker{color:var(--muted)}
 @media(max-width:760px){.remops-disclosure-compact>.remops-disclosure-body{border-bottom:1px solid var(--line)}.remops-disclosure-compact .remops-secondary{border-bottom:0}.remops-work .fname{overflow-wrap:anywhere;word-break:break-word}.remops-bottom>.remops-disclosure{border-bottom:0}.remops-bottom>.remops-disclosure .remops-activity{border-bottom:0}.remops-bottom>.remops-disclosure .remops-exceptions{border-bottom:0}}

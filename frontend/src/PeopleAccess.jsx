@@ -268,9 +268,10 @@ export default function PeopleAccess() {
 
         Geometry and tokens match LiveOperationsToast deliberately: the application already has
         one top-right toast, and a second at different coordinates on a different surface reads
-        as a different product. The one property that does NOT match is `color` — that file asks
-        for `var(--text)`, which is defined nowhere in this codebase (it is used twice and set
-        never), so it silently resolves to nothing and inherits. `--ink` is the real token. */}
+        as a different product, `color` included: both use `--ink`. That agreement is recent —
+        LiveOperationsToast asked for an undefined `--text` until it was corrected, so this rule
+        was written against `--ink` on purpose rather than by copying. See
+        cssCustomProperties.test.jsx, which now fails if a bare undefined property reappears. */}
     {roleToast && <Overlay>
       <div role="status" aria-live="polite" aria-atomic="true" className="people-toast">
         <div className="people-toast-head">
