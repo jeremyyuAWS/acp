@@ -3028,6 +3028,19 @@ html[data-wcag="on"] .wcag-toggle--on {
 .people-row.has-role-column { grid-template-columns: minmax(150px, 1.2fr) 104px minmax(112px, 0.8fr)
               minmax(124px, 0.9fr) 178px; }
 .people-row + .people-row { border-top: 1px solid var(--line); }
+
+/* The column headings. SAME GRID DECLARATION AS `.people-row`, inherited by sharing the class —
+   a header on its own track sizes labels the wrong columns, which is worse than no header at all.
+   Quieter than the rows it labels (smaller, --muted, uppercase) so it reads as a key rather than
+   as a first row of data. */
+.people-head { display: grid; grid-template-columns: minmax(210px, 1.5fr) 110px 140px
+              minmax(160px, 1fr); gap: 12px; align-items: end; padding: 9px 14px 7px;
+              background: var(--bg); border-bottom: 1px solid var(--line);
+              font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+              text-transform: uppercase; color: var(--muted); }
+.people-head.has-role-column { grid-template-columns: minmax(150px, 1.2fr) 104px minmax(112px, 0.8fr)
+              minmax(124px, 0.9fr) 178px; }
+.people-head > * { min-width: 0; }
 .people-row-actions { display: flex; justify-content: flex-end; align-items: center; gap: 8px;
               flex-wrap: wrap; }
 
