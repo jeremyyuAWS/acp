@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { JOB_STATE_FILTERS, TILE_KINDS, azureBytes, azureLatest, buildTrafficGraph, capacityValue, flowEdge, infrastructureDetail, nodeGauge, queueConcentration, runOperationalState, sizeScopeNote, tileKind, tileStyle, trafficEdgeStyle, trafficGraphForTab, trendToggleLabel, workerServiceRows, workflowColor } from './AdminLiveTraffic.jsx'
+import { JOB_STATE_FILTERS, TILE_KINDS, azureBytes, azureLatest, buildTrafficGraph, capacityValue, flowEdge, infrastructureDetail, nodeGauge, queueConcentration, runFacts, runOperationalState, sizeScopeNote, tileKind, tileStyle, trafficEdgeStyle, trafficGraphForTab, trendToggleLabel, workerServiceRows, workflowColor } from './AdminLiveTraffic.jsx'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(join(here, 'AdminLiveTraffic.jsx'), 'utf8')
@@ -103,6 +103,34 @@ describe('Admin live traffic graph', () => {
     expect(jobs.edges).toHaveLength(3)
     expect(jobs.nodes.find((node) => node.id === 'one:discover').position.x)
       .toBeLessThan(jobs.nodes.find((node) => node.id === 'one:assess').position.x)
+  })
+
+  it('keeps revisions in one workflow lane and orders every stage without overlap', () => {
+    const graph = buildTrafficGraph({ summary: {}, runs: [
+      { scan_id: 'scan-v1', workflow_id: 'workflow-one', workflow_revision: 1, stage: 'discover',
+        owner: 'a', source: 'sharepoint', status: 'recent', completed: 1, total: 1 },
+      { scan_id: 'scan-v2', workflow_id: 'workflow-one', workflow_revision: 2, stage: 'discover',
+        owner: 'a', source: 'sharepoint', status: 'recent', completed: 1, total: 1 },
+      { scan_id: 'scan-v2', workflow_id: 'workflow-one', workflow_revision: 2, stage: 'assess',
+        owner: 'a', source: 'sharepoint', status: 'active', running: 1, completed: 0, total: 1 },
+    ] })
+    const jobs = trafficGraphForTab(graph, 'jobs')
+    expect(jobs.nodes.filter((node) => node.type === 'workflow')).toHaveLength(1)
+    expect(jobs.nodes.find((node) => node.type === 'workflow').data.workflowRevision).toBe(2)
+    const stages = jobs.nodes.filter((node) => node.type === 'run')
+    expect(stages.map((node) => node.position.x)).toEqual([310, 580, 850])
+    expect(new Set(stages.map((node) => `${node.position.x}:${node.position.y}`)).size).toBe(3)
+    expect(infrastructureDetail(jobs.nodes.find((node) => node.type === 'workflow').data, {}, null).facts)
+      .toContainEqual(['Stable workflow ID', 'workflow-one'])
+  })
+
+  it('includes lineage identifiers in stage operational facts', () => {
+    expect(runFacts({ scan_id: 'scan-v2', workflow_id: 'workflow-one', workflow_revision: 2 }))
+      .toEqual(expect.arrayContaining([
+        ['Workflow revision', '2'],
+        ['Workflow lineage', 'workflow-one'],
+        ['Revision scan', 'scan-v2'],
+      ]))
   })
 
   it('keeps a durable completed stage connected after its queue rows age out', () => {

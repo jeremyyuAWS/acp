@@ -31,7 +31,7 @@ it('requires a separately labelled replacement action', () => {
     choice={{ scanId: 'scan-456' }} onContinue={() => {}}
     onReplace={onReplace} onDismiss={() => {}} />))
   const replace = [...container.querySelectorAll('button')]
-    .find((button) => button.textContent === 'Replace with new Discovery')
+    .find((button) => button.textContent === 'Start revised Discovery')
   act(() => replace.click())
   expect(onReplace).toHaveBeenCalledOnce()
 })

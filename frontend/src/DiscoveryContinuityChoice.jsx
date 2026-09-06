@@ -19,7 +19,7 @@ export default function DiscoveryContinuityChoice({ choice, onContinue, onReplac
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button type="button" onClick={onContinue}>Continue current Discovery</button>
-          <button type="button" className="secondary" onClick={onReplace}>Replace with new Discovery</button>
+          <button type="button" className="secondary" onClick={onReplace}>Start revised Discovery</button>
           <button type="button" className="ghost small" onClick={onDismiss}>Keep current screen</button>
         </div>
       </div>
