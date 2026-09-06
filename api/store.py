@@ -185,6 +185,15 @@ _SCHEMA = [
       files INT, certifiable INT, uncertain INT, error INT, avg_score INT,
       status TEXT, files_done INT, owner_email TEXT, assessed_at TEXT, finalized_at TEXT
     )""",
+    """CREATE TABLE IF NOT EXISTS workflow_executions (
+      id TEXT PRIMARY KEY, scan_id TEXT UNIQUE NOT NULL, owner_email TEXT NOT NULL,
+      source TEXT, revision INT NOT NULL DEFAULT 1, state TEXT NOT NULL,
+      current_stage TEXT NOT NULL, scope_fingerprint TEXT,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    )""",
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS workflow_id TEXT",
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS workflow_revision INT",
+    "CREATE INDEX IF NOT EXISTS idx_workflow_owner_updated ON workflow_executions(owner_email,updated_at)",
     """CREATE TABLE IF NOT EXISTS file_records (
       scan_id TEXT, file TEXT, engine TEXT, status TEXT, score INT,
       compliant INT, skipped_rules INT,
@@ -2072,8 +2081,11 @@ class _PgAdapter:
     # v23 adds the optional ACP build version to release executions so an exported manifest can
     # identify the exact application build that performed the publication. Older replicas ignore
     # the nullable column and newer replicas safely read NULL for releases created before v23.
-    _SCHEMA_VERSION = 23
-    _SCHEMA_CHECKSUM_AT_VERSION = "228edf1454263b69f9b8dfee892f4b34"
+    # v24 introduces a first-class workflow execution and attaches each scan to its revision.
+    # The relationship is additive: older replicas ignore both the table and nullable scan
+    # columns, while newer replicas fall back to the scan id for pre-v24 rows.
+    _SCHEMA_VERSION = 24
+    _SCHEMA_CHECKSUM_AT_VERSION = "ff58b8694b3aa72c1d7d192606977240"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -2500,18 +2512,31 @@ class Store:
         # and each cursor opens its own connection, so a read here would see nothing yet. Threaded
         # into `_rule_outcome` explicitly — `in_scope`'s storeless fallback cannot see any scope.
         scope = scope_from_json((report.get("scope") or {}).get("scan_scope"))
+        import hashlib as _hashlib
         import json as _json
         catalog = _CATALOG_JSON
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO scan_runs(id,started_at,completed_at,source,rubric_name,rubric_hash,"
-                "files,certifiable,uncertain,error,avg_score,status,files_done,owner_email,scope) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'done',%s,%s,%s)",
+                "files,certifiable,uncertain,error,avg_score,status,files_done,owner_email,scope,"
+                "workflow_id,workflow_revision) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'done',%s,%s,%s,%s,1)",
                 (sid, report["started_at"], report["completed_at"], report["source"],
                  report["rubric"]["name"], report["rubric"]["hash"],
                  s["files"], s["certifiable"], s["uncertain"], s["error"], s["avg_score"], s["files"],
                  report.get("owner"),
-                 _json.dumps(report["scope"]) if report.get("scope") else None))
+                 _json.dumps(report["scope"]) if report.get("scope") else None, sid))
+            scope_fingerprint = _hashlib.sha256(_json.dumps(
+                report.get("scope") or {"source": report["source"]}, sort_keys=True,
+                separators=(",", ":"), default=str).encode()).hexdigest()
+            workflow_updated_at = report.get("completed_at") or report["started_at"] or self._now()
+            self._db.execute(cur,
+                "INSERT INTO workflow_executions(id,scan_id,owner_email,source,revision,state,"
+                "current_stage,scope_fingerprint,created_at,updated_at) "
+                "VALUES(%s,%s,%s,%s,1,'completed','assess',%s,%s,%s) "
+                "ON CONFLICT(id) DO NOTHING",
+                (sid, sid, report.get("owner") or "demo", report["source"], scope_fingerprint,
+                 report["started_at"] or workflow_updated_at, workflow_updated_at))
             for f in report["files"]:
                 self._db.execute(cur,
                     "INSERT INTO file_records(scan_id,file,engine,status,score,compliant,skipped_rules,drive_file_id,acp_stamped,checksum,size_kb,pages,sheets,source_modified) "
@@ -2633,9 +2658,16 @@ class Store:
         start time, and scope once it claims and begins the job."""
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "INSERT INTO scan_runs(id,source,status,owner_email,started_at) "
-                "VALUES(%s,%s,'queued',%s,%s) ON CONFLICT(id) DO NOTHING",
-                (scan_id, source, owner, self._now()))
+                "INSERT INTO scan_runs(id,source,status,owner_email,started_at,workflow_id,"
+                "workflow_revision) VALUES(%s,%s,'queued',%s,%s,%s,1) "
+                "ON CONFLICT(id) DO NOTHING",
+                (scan_id, source, owner, self._now(), scan_id))
+            now = self._now()
+            self._db.execute(cur,
+                "INSERT INTO workflow_executions(id,scan_id,owner_email,source,revision,state,"
+                "current_stage,created_at,updated_at) VALUES(%s,%s,%s,%s,1,'waiting',"
+                "'discover',%s,%s) ON CONFLICT(id) DO NOTHING",
+                (scan_id, scan_id, owner, source, now, now))
 
     def enqueue_scan(self, scan_id: str, source: str, owner: str,
                      job_type: str, payload: dict, *,
@@ -2659,8 +2691,13 @@ class Store:
         link is present from the very first (queued) row — never an orphan stub without it,
         the same guarantee this method already gives idempotency_key."""
         import json as _json
+        import hashlib as _hashlib
         now = self._now()
         job_id = uuid.uuid4().hex[:16]
+        workflow_id = scan_id
+        scope_fingerprint = _hashlib.sha256(_json.dumps(
+            inputs or {"source": source}, sort_keys=True, separators=(",", ":"),
+            default=str).encode()).hexdigest()
         if priority is None:
             priority = job_priority(job_type)
         with self._db.cursor() as cur:
@@ -2678,9 +2715,16 @@ class Store:
                     return existing_scan_id, (existing_job["id"] if existing_job else job_id)
             self._db.execute(cur,
                 "INSERT INTO scan_runs(id,source,status,owner_email,started_at,idempotency_key,"
-                "content_workspace_version_id) "
-                "VALUES(%s,%s,'queued',%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING",
-                (scan_id, source, owner, now, idempotency_key, content_workspace_version_id))
+                "content_workspace_version_id,workflow_id,workflow_revision) "
+                "VALUES(%s,%s,'queued',%s,%s,%s,%s,%s,1) ON CONFLICT(id) DO NOTHING",
+                (scan_id, source, owner, now, idempotency_key, content_workspace_version_id,
+                 workflow_id))
+            self._db.execute(cur,
+                "INSERT INTO workflow_executions(id,scan_id,owner_email,source,revision,state,"
+                "current_stage,scope_fingerprint,created_at,updated_at) "
+                "VALUES(%s,%s,%s,%s,1,'waiting','discover',%s,%s,%s) "
+                "ON CONFLICT(id) DO NOTHING",
+                (workflow_id, scan_id, owner, source, scope_fingerprint, now, now))
             self._db.execute(cur,
                 "INSERT INTO jobs(id,type,payload,status,priority,attempts,max_attempts,"
                 "run_after,scan_id,created_at,updated_at) "
@@ -2706,6 +2750,38 @@ class Store:
                      inputs.get("app_version"),
                      now))
         return scan_id, job_id
+
+    def workflow_for_scan(self, scan_id: str, owner: str | None = None) -> dict | None:
+        """Return the first-class workflow identity for a scan, with legacy fallback.
+
+        Pre-v24 scans have no workflow row. They remain addressable as revision 1 under their
+        scan id so a rolling deployment never makes an in-flight workflow disappear.
+        """
+        with self._db.cursor() as cur:
+            params: tuple = (scan_id, owner) if owner is not None else (scan_id,)
+            owner_clause = " AND sr.owner_email=%s" if owner is not None else ""
+            self._db.execute(cur,
+                "SELECT we.*,sr.id AS legacy_scan_id,sr.owner_email AS scan_owner,"
+                "sr.source AS scan_source FROM scan_runs sr LEFT JOIN workflow_executions we "
+                "ON we.id=COALESCE(sr.workflow_id,sr.id) WHERE sr.id=%s" + owner_clause,
+                params)
+            row = self._db.fetchone(cur)
+        if not row:
+            return None
+        if row.get("id"):
+            return row
+        return {"id": row["legacy_scan_id"], "scan_id": row["legacy_scan_id"],
+                "owner_email": row.get("scan_owner"), "source": row.get("scan_source"),
+                "revision": 1, "state": None, "current_stage": None,
+                "scope_fingerprint": None, "legacy": True}
+
+    def _update_workflow_stage(self, scan_id: str, stage: str, state: str) -> None:
+        """Advance the workflow projection without making it a prerequisite for old scans."""
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE workflow_executions SET current_stage=%s,state=%s,updated_at=%s "
+                "WHERE scan_id=%s", (stage, state, now, scan_id))
 
     def get_scan_inputs(self, scan_id: str) -> dict | None:
         """Return the immutable input snapshot for a scan, or None if none was captured."""
@@ -2756,6 +2832,8 @@ class Store:
                 "WHERE scan_runs.status NOT IN ('superseded','cancelled')",
                 (scan_id, started_at, source, rubric_name, rubric_hash, total, status, owner,
                  _json.dumps(scope) if scope else None))
+        self._update_workflow_stage(
+            scan_id, "discover", "completed" if status == "discovered" else "running")
 
     def set_scan_status(self, scan_id: str, status: str) -> None:
         """Move a scan between phases — e.g. 'discovered' → 'running' when Assess begins.
@@ -2773,6 +2851,8 @@ class Store:
                     (status, self._now(), scan_id))
             else:
                 self._db.execute(cur, "UPDATE scan_runs SET status=%s WHERE id=%s", (status, scan_id))
+        if status == "discovered":
+            self._update_workflow_stage(scan_id, "discover", "completed")
 
     def set_scan_files(self, scan_id: str, files: int) -> None:
         """Re-point a run's `files` total at the population THIS phase actually enqueued.
@@ -4090,7 +4170,7 @@ class Store:
     # preserved" promise. If you add a table that stores scan/review output, ADD IT HERE — the
     # reset-completeness test (test_reset_leaves_no_customer_data) fails closed if a data table
     # is left out.
-    _ANALYTICS_TABLES = ["scan_runs", "file_records", "issue_records", "scan_rule_traces",
+    _ANALYTICS_TABLES = ["scan_runs", "workflow_executions", "file_records", "issue_records", "scan_rule_traces",
                          "file_stage_timings", "scan_file_manifests", "scan_inventory", "file_tags",
                          "scan_decisions", "pii_findings", "hitl_queue", "hitl_events",
                          "disposition_audit", "decision_log", "inventory", "jobs", "documents",
@@ -4177,6 +4257,7 @@ class Store:
                                "remediation_diff", "applied_fixes", "ai_calls",
                                "second_opinion_reservations", "finding_comments",
                                "jobs", "overview_snapshots", "scan_events", "orchestration_events",
+                               "workflow_executions",
                                "scan_folder_completions",
                                # Both are scan_id-keyed, so the standard subquery scopes them to
                                # this owner's runs exactly as it does the rest.
@@ -4769,7 +4850,8 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "SELECT j.id,j.scan_id,j.type,j.status,j.created_at,j.updated_at,"
-                "sr.source,sr.files,sr.files_done "
+                "sr.source,sr.files,sr.files_done,COALESCE(sr.workflow_id,sr.id) AS workflow_id,"
+                "COALESCE(sr.workflow_revision,1) AS workflow_revision "
                 "FROM jobs j JOIN scan_runs sr ON sr.id=j.scan_id "
                 "WHERE sr.owner_email=%s AND j.status IN ('queued','running') "
                 "ORDER BY j.updated_at DESC LIMIT 5000", (owner,))
@@ -4783,6 +4865,8 @@ class Store:
             key = (row["scan_id"], stage)
             item = grouped.setdefault(key, {
                 "scan_id": row["scan_id"], "stage": stage,
+                "workflow_id": row.get("workflow_id") or row["scan_id"],
+                "workflow_revision": int(row.get("workflow_revision") or 1),
                 "source": row.get("source") or "unknown",
                 "queued": 0, "running": 0, "total": 0,
                 "files": int(row.get("files") or 0),
@@ -10448,6 +10532,7 @@ class Store:
     def _record_stage_started(self, scan_id: str, stage: str, batch_id: str,
                               job_type: str, documents: int) -> None:
         """Best-effort durable start marker, idempotent for one stage execution."""
+        self._update_workflow_stage(scan_id, stage, "running")
         owner = self._stage_owner(scan_id)
         if not owner:
             return
@@ -10497,6 +10582,7 @@ class Store:
             job_id=job.get("id"), job_type=job.get("type"), attempt=job.get("attempts"),
             workflow=job["scan_id"], stage=stage, correlation_id=job["batch_id"],
             detail={"documents": total, "stage_execution_id": job["batch_id"]})
+        self._update_workflow_stage(job["scan_id"], stage, "completed")
 
     def _record_stage_terminal_if_ready(self, job: dict | None) -> None:
         """Record a failed/cancelled batch once every document has reached a terminal state."""
@@ -10533,6 +10619,7 @@ class Store:
                          else "unknown") if outcome == "failed" else "cancelled",
             detail={"documents": int(counts.get("total") or 0), "completed": int(counts.get("done") or 0),
                     "failed": dead, "cancelled": cancelled, "stage_execution_id": job["batch_id"]})
+        self._update_workflow_stage(job["scan_id"], stage, outcome)
 
     def request_stage_cancel(self, scan_id: str, stage: str) -> dict:
         """Cancel the newest durable execution of one stage without touching sibling stages."""
@@ -11593,7 +11680,9 @@ class Store:
                 # filename, while a vocabulary term cannot.
                 "SELECT j.scan_id,j.type,j.status,j.created_at,j.updated_at,j.payload,"
                 "j.locked_at,j.claimed_at,j.error_class,j.attempts,rh.paused_at,"
-                "sr.owner_email,sr.source,sr.files,sr.files_done,sr.live_checkpoint "
+                "sr.owner_email,sr.source,sr.files,sr.files_done,sr.live_checkpoint,"
+                "COALESCE(sr.workflow_id,sr.id) AS workflow_id,"
+                "COALESCE(sr.workflow_revision,1) AS workflow_revision "
                 "FROM jobs j JOIN scan_runs sr ON sr.id=j.scan_id "
                 "LEFT JOIN remediation_run_hold rh ON rh.scan_id=j.scan_id "
                 "WHERE j.scan_id IN (SELECT DISTINCT scan_id FROM jobs "
@@ -11612,6 +11701,8 @@ class Store:
             key = (row["scan_id"], stage)
             item = grouped.setdefault(key, {
                 "scan_id": row["scan_id"], "owner": row.get("owner_email") or "unknown",
+                "workflow_id": row.get("workflow_id") or row["scan_id"],
+                "workflow_revision": int(row.get("workflow_revision") or 1),
                 "source": row.get("source") or "unknown", "stage": stage,
                 "queued": 0, "running": 0, "completed": 0, "failed": 0, "total": 0,
                 "started_at": row.get("created_at"), "updated_at": row.get("updated_at"),
