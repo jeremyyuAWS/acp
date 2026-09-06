@@ -38,10 +38,22 @@ def estate(*counts, pending=0, sweep=None):
 def test_a_one_file_scan_landing_on_a_258_file_estate_fires(monkeypatch, rep):
     """The exact shape of the bug: a fallback sweep of the bundled corpus saved and finalized on
     top of the real estate, so every 'latest' view showed 1 document instead of 258."""
-    _stub(monkeypatch, estate(1, 258, 258, 257))
+    _stub(monkeypatch, estate(1, 258, 258, 257, sweep={"enabled": True,
+        "interval_minutes": 30, "last_ok": True, "last_at": "2026-09-06T12:00:00Z",
+        "last_files": 1}))
     M.check_estate("https://x", "k", rep)
     assert rep.failed == 1
     assert any("newest has 1 documents but a recent scan had 258" in r[2] for r in rep.rows)
+
+
+def test_a_narrow_manual_scan_warns_but_does_not_fail(monkeypatch, rep):
+    """A user may intentionally scan one folder after a full-estate run. The scan belongs in
+    history, while workspace bootstrap keeps the full-size scan as the default."""
+    _stub(monkeypatch, estate(4, 986, 986))
+    M.check_estate("https://x", "k", rep)
+    assert rep.failed == 0
+    assert rep.warned == 1
+    assert any(r[0] == "WARN" and "workspace defaults remain" in r[2] for r in rep.rows)
 
 
 def test_a_full_size_newest_scan_passes(monkeypatch, rep):
