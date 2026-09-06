@@ -1215,6 +1215,13 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .release-name-field input { width: 100%; }
 .release-name-existing { border: 1px solid var(--line); border-radius: 8px; background: var(--bg); padding: 10px 12px; font-weight: 650; }
 .release-name-error { color: var(--error-fg-strong); font-size: 12px; font-weight: 650; }
+.release-preview { margin-top: 12px; border: 1px solid var(--line); border-radius: 9px; padding: 12px; display: grid; gap: 7px; }
+.release-preview__heading { display: flex; justify-content: space-between; gap: 12px; }
+.release-preview__heading span, .release-preview small { color: var(--muted); font-size: 12px; }
+.release-preview__path { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 8px; align-items: baseline; font-size: 12px; }
+.release-preview__path span { color: var(--success-fg); font-weight: 700; }
+.release-preview__path code { overflow-wrap: anywhere; white-space: normal; }
+.release-preview p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
 .release-methods label span, .release-methods__resting span { grid-column: 2; color: var(--muted); font-size: 12.5px; line-height: 1.45; }
 .release-methods__resting { grid-column: 1 / -1; cursor: default; background: var(--bg); }
 .release-plan { margin-top: 16px; border-radius: 11px; padding: 15px; background: var(--bg); border: 1px solid var(--line); align-items: flex-end; }

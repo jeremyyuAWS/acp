@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import ScopeBanner from './ScopeBanner.jsx'
 import { documentSelection, documentScopeSentence } from './remediableScope.js'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
-import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseManifest, listHitlQueue, getSettings, getSourceStatus, rescoreFile, downloadReleasePackage } from './api.js'
+import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseManifest, previewReleaseDestination, listHitlQueue, getSettings, getSourceStatus, rescoreFile, downloadReleasePackage } from './api.js'
 import { releaseDestination, releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
 import { SET_STATUS, certificationUniverse, releaseSetStatus } from './graduation.js'
 import { mirrorState, MIRROR } from './deliveryPolicy.js'
@@ -37,6 +37,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [deliveryMethod, setDeliveryMethod] = useState('publish')
   const [packageName, setPackageName] = useState('')
   const [releaseFolderName, setReleaseFolderName] = useState('')
+  const [releasePreview, setReleasePreview] = useState(null)
+  const [previewingRelease, setPreviewingRelease] = useState(false)
   const [selectedFiles, setSelectedFiles] = useState(() => new Set())
   const builderRef = useRef(null)
   const [sel, setSel] = useState(null)
@@ -340,6 +342,22 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const deliveryNameError = deliveryMethod === 'download'
     ? validateDeliveryName(packageName, 'ZIP filename')
     : releaseFolder ? '' : validateDeliveryName(releaseFolderName, 'Release folder name')
+  const reviewDelivery = async () => {
+    if (deliveryMethod === 'download') { setReleasePreview(null); setBuilderStep(3); return }
+    setPreviewingRelease(true)
+    setReleaseAnnouncement('')
+    try {
+      const preview = await previewReleaseDestination(
+        run?.id, selectedPublishable.map((file) => file.file),
+        releaseFolder?.name || releaseFolderName)
+      setReleasePreview(preview)
+      if (!releaseFolder && !releaseFolderName.trim()) setReleaseFolderName(preview.folder_name || '')
+      setBuilderStep(3)
+    } catch (error) {
+      setReleaseAnnouncement(error?.message || 'The release destination could not be previewed.')
+    }
+    setPreviewingRelease(false)
+  }
   const reviewFailedRelease = () => {
     setSelectedFiles(new Set(failedReady.map((f) => f.file)))
     setDeliveryMethod('publish')
@@ -617,7 +635,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
               </div>
               <div className="release-builder__continue release-builder__navigation">
                 <button className="ghost" onClick={() => setBuilderStep(1)}>Back to files</button>
-                <button className="qbtn approve" disabled={Boolean(deliveryNameError)} onClick={() => setBuilderStep(3)}>Review release</button>
+                <button className="qbtn approve" disabled={Boolean(deliveryNameError) || previewingRelease} onClick={reviewDelivery}>{previewingRelease ? 'Checking destination…' : 'Review release'}</button>
               </div>
             </> : <>
               <div className="release-plan">
@@ -626,11 +644,18 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                   <p>{deliveryMethod === 'publish'
                     ? `${selectedPublishable.length} unreleased corrected ${selectedPublishable.length === 1 ? 'copy' : 'copies'} will be published to ${(releaseFolder?.name || releaseFolderName.trim()) ? `the “${releaseFolder?.name || releaseFolderName.trim()}” release folder` : releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}. Already released files are excluded. Original files will not be changed.`
                     : `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file' : 'files'} will be packaged in “${packageName.trim().replace(/\.zip$/i, '') || `acp-release-${run?.id || 'scan'}`}.zip” with folder structure and a manifest. Original files will not be changed.`}</p>
+                  {deliveryMethod === 'publish' && releasePreview && <div className="release-preview">
+                    <div className="release-preview__heading"><b>Exact destination preview</b><span>{releasePreview.documents?.length || 0} files · {releasePreview.folder_state === 'existing' ? 'existing release folder' : 'new release folder'}</span></div>
+                    {(releasePreview.documents || []).slice(0, 5).map((item) => <div className="release-preview__path" key={item.file}><span>{item.action === 'reuse' ? '↻ Reuse' : '+ Create'}</span><code>{item.destination_path}</code></div>)}
+                    {(releasePreview.documents || []).length > 5 && <small>+{releasePreview.documents.length - 5} more paths</small>}
+                    <p>{releasePreview.collision_policy}</p>
+                    {(releasePreview.blockers || []).map((item) => <div className="release-name-error" role="alert" key={item.file}>{item.file}: {item.reason}</div>)}
+                  </div>}
                 </div>
                 <div className="release-plan__actions">
                   <button className="ghost" onClick={() => setBuilderStep(2)}>Back to delivery</button>
                   {deliveryMethod === 'publish'
-                    ? <button className="qbtn approve" disabled={readOnly || publishing || !selectedPublishable.length} onClick={() => setConfirm({ kind: 'selected', files: selectedPublishable.map((f) => f.file), folderName: releaseFolder?.name || releaseFolderName.trim() })}>{publishing ? 'Publishing…' : `Publish ${selectedPublishable.length} ${selectedPublishable.length === 1 ? 'copy' : 'copies'}`}</button>
+                    ? <button className="qbtn approve" disabled={readOnly || publishing || !selectedPublishable.length || !releasePreview?.can_release} onClick={() => setConfirm({ kind: 'selected', files: selectedPublishable.map((f) => f.file), folderName: releasePreview?.folder_name || releaseFolder?.name || releaseFolderName.trim() })}>{publishing ? 'Publishing…' : `Publish ${selectedPublishable.length} ${selectedPublishable.length === 1 ? 'copy' : 'copies'}`}</button>
                     : <button className="qbtn approve" disabled={downloading || !selectedReady.length} onClick={downloadSelected}>{downloading ? 'Building package…' : `Download ZIP (${selectedReady.length})`}</button>}
                 </div>
               </div>

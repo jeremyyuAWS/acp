@@ -3414,6 +3414,84 @@ def get_release_status(sid: str, request: Request):
             "roots": status["roots"], "documents": status["documents"]}
 
 
+class ReleasePreviewRequest(BaseModel):
+    files: list[str]
+    release_folder_name: str | None = None
+
+
+@router.post("/scans/{sid}/release/preview")
+def preview_release_destination(sid: str, request: Request, body: ReleasePreviewRequest):
+    """Resolve the destination plan without creating folders, files, or release records."""
+    scan = core.store.get_scan(sid, owner=_owner(request))
+    if scan is None:
+        raise HTTPException(404, "scan not found")
+    selected = list(dict.fromkeys(name for name in body.files if name))
+    if not selected:
+        raise HTTPException(422, "select at least one corrected file")
+    import publish as _publish
+    try:
+        requested_name = _publish.normalize_release_name(
+            body.release_folder_name, field="Release folder name")
+    except _publish.UnsafeReleasePath as exc:
+        raise HTTPException(422, str(exc)) from exc
+    owner = _owner(request)
+    status = core.store.release_for_scan(sid, owner)
+    if status:
+        folder_name = status["folder_name"]
+        folder_state = "existing"
+    else:
+        if requested_name:
+            folder_name = requested_name
+        else:
+            from datetime import datetime, timezone
+            folder_name = datetime.now(timezone.utc).strftime("%Y-%m-%d %H-%M UTC")
+        folder_state = "proposed"
+    source = (scan.get("run") or {}).get("source") or "local"
+    rows = {row.get("file"): row for row in scan.get("files", [])}
+    existing = {row.get("file"): row for row in (status or {}).get("documents", [])}
+    planned_paths: set[tuple[str, str]] = set()
+    documents, blockers = [], []
+    for name in selected:
+        record = rows.get(name)
+        if not record or not record.get("compliant") or not record.get("remediated_at"):
+            blockers.append({"file": name, "reason": "Only approved corrected copies can be released."})
+            continue
+        source_path = record.get("source_relative_path") or record.get("parent_folder") or name
+        try:
+            if source == "sharepoint":
+                folders, safe_name = _publish.sharepoint_relative_path(source_path, name)
+                location = f"graph:{record.get('drive_id') or 'me'}"
+            else:
+                folders, safe_name = _publish.normalize_relative_path(source_path, name)
+                location = "google:me" if source == "drive" else "azure:blob"
+        except _publish.UnsafeReleasePath as exc:
+            blockers.append({"file": name, "reason": str(exc)})
+            continue
+        relative = "/".join([*folders, safe_name])
+        destination = "/".join(["Remediated", folder_name, relative])
+        key = (location, destination.casefold())
+        if key in planned_paths:
+            blockers.append({"file": name, "reason": f"Another selected file resolves to {destination}."})
+            continue
+        planned_paths.add(key)
+        saved = existing.get(name)
+        action = "reuse" if saved and saved.get("status") == "published" else "create"
+        documents.append({"file": name, "provider_location": location,
+                          "destination_path": destination, "action": action})
+    return {
+        "scan_id": sid,
+        "folder_name": folder_name,
+        "folder_state": folder_state,
+        "provider": source,
+        "documents": documents,
+        "blockers": blockers,
+        "can_release": not blockers,
+        "collision_policy": ("Existing ACP copies are reused. Unrelated provider files are not "
+                             "overwritten; ACP creates a stable suffixed copy and verifies it."),
+        "original_files_unchanged": True,
+    }
+
+
 def _release_manifest_payload(status: dict, *, scan_id: str, owner: str,
                               snapshot_id: str | None) -> dict:
     """Build the authoritative, stable release record from persisted server evidence.
