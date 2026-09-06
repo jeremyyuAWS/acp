@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { JOB_STATE_FILTERS, TILE_KINDS, azureBytes, azureLatest, buildTrafficGraph, capacityValue, flowEdge, infrastructureDetail, nodeGauge, queueConcentration, runFacts, runOperationalState, sizeScopeNote, tileKind, tileStyle, trafficEdgeStyle, trafficGraphForTab, trendToggleLabel, workerServiceRows, workflowColor } from './AdminLiveTraffic.jsx'
+import { JOB_STATE_FILTERS, TILE_KINDS, azureBytes, azureLatest, buildTrafficGraph, capacityValue, flowEdge, infrastructureDetail, nodeGauge, queueConcentration, runFacts, jobStateCounts, runOperationalState, sizeScopeNote, tileKind, tileStyle, trafficEdgeStyle, trafficGraphForTab, trendToggleLabel, workerServiceRows, workflowColor, workflowOperationalState } from './AdminLiveTraffic.jsx'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(join(here, 'AdminLiveTraffic.jsx'), 'utf8')
@@ -186,6 +186,63 @@ describe('Admin live traffic graph', () => {
       .toEqual(['workflow:four', 'four:release'])
   })
 
+  // A lane whose discover has finished while its remediate is still running answered to
+  // "Recently completed" and rendered a 93%-complete active card under that chip, because the
+  // predicate matched a RUN and then admitted every run sharing its workflow id.
+  it('files a workflow under its own state, not any one run\'s', () => {
+    const graph = buildTrafficGraph({ summary: {}, runs: [
+      { scan_id: 'one', stage: 'discover', owner: 'a', source: 'drive', status: 'recent' },
+      { scan_id: 'one', stage: 'remediate', owner: 'a', source: 'drive', status: 'active', running: 14 },
+      { scan_id: 'two', stage: 'discover', owner: 'b', source: 'drive', status: 'recent' },
+    ] })
+
+    expect(trafficGraphForTab(graph, 'jobs', { state: 'recent' }).nodes.map((node) => node.id))
+      .toEqual(['workflow:two', 'two:discover'])
+    expect(trafficGraphForTab(graph, 'jobs', { state: 'active' }).nodes.map((node) => node.id))
+      .toEqual(['workflow:one', 'one:discover', 'one:remediate'])
+    expect(workflowOperationalState([{ status: 'recent' }, { status: 'active' }])).toBe('active')
+    expect(workflowOperationalState([{ status: 'recent' }, { status: 'recent' }])).toBe('recent')
+    expect(workflowOperationalState([])).toBe('recent')
+  })
+
+  it('gives the workflow card the headline its chip claims', () => {
+    const graph = buildTrafficGraph({ summary: {}, runs: [
+      { scan_id: 'one', stage: 'discover', owner: 'a', source: 'drive', status: 'recent' },
+      { scan_id: 'one', stage: 'remediate', owner: 'a', source: 'drive', status: 'active' },
+      { scan_id: 'two', stage: 'assess', owner: 'b', source: 'drive', status: 'active', failed: 3 },
+      { scan_id: 'three', stage: 'discover', owner: 'c', source: 'drive', status: 'recent' },
+    ] })
+    const card = (id) => trafficGraphForTab(graph, 'jobs').nodes
+      .find((node) => node.id === `workflow:${id}`).data
+
+    expect(card('one').status).toBe('remediate in progress')
+    expect(card('one').workflowState).toBe('active')
+    // Trouble outranks live work: a lane with a failed run is not filed under its running stage,
+    // or the "Needs attention" chip would hide the workflows it exists to surface.
+    expect(card('two').status).toBe('Needs attention')
+    expect(card('two').workflowState).toBe('attention')
+    expect(card('three').status).toBe('Recently completed')
+    expect(trafficGraphForTab(graph, 'jobs').nodes
+      .find((node) => node.id === 'workflow:two').ariaLabel).toContain('Needs attention')
+  })
+
+  it('counts what each state chip would show, before it is clicked', () => {
+    const graph = buildTrafficGraph({ summary: {}, runs: [
+      { scan_id: 'one', stage: 'discover', owner: 'a', source: 'drive', status: 'recent' },
+      { scan_id: 'one', stage: 'remediate', owner: 'a', source: 'drive', status: 'active' },
+      { scan_id: 'two', stage: 'assess', owner: 'b', source: 'sharepoint', status: 'active', failed: 1 },
+      { scan_id: 'three', stage: 'discover', owner: 'c', source: 'drive', status: 'recent' },
+      { scan_id: 'four', stage: 'discover', owner: 'd', source: 'drive', status: 'recent' },
+    ] })
+
+    expect(jobStateCounts(trafficGraphForTab(graph, 'jobs')))
+      .toEqual({ all: 4, active: 1, attention: 1, recent: 2 })
+    // Counted on the lanes the stage/source filter leaves in place, not on the whole estate.
+    expect(jobStateCounts(trafficGraphForTab(graph, 'jobs', { source: 'sharepoint' })))
+      .toEqual({ all: 1, attention: 1 })
+    expect(jobStateCounts({ nodes: [] })).toEqual({ all: 0 })
+  })
+
   it('uses the same state vocabulary for cards and workflow filters', () => {
     expect(runOperationalState({ cancel_requested: true, paused: true })).toBe('stopping')
     expect(runOperationalState({ paused: true, stalled: true, status: 'failed' })).toBe('paused')
@@ -197,6 +254,13 @@ describe('Admin live traffic graph', () => {
     expect(JOB_STATE_FILTERS.map((item) => item.key)).toEqual([
       'all', 'active', 'stopping', 'attention', 'stalled', 'paused', 'cancelled', 'recent',
     ])
+    // Every chip except `all` must be reachable as a workflow state, or it is a control that can
+    // never match anything.
+    for (const { key } of JOB_STATE_FILTERS.filter((item) => item.key !== 'all')) {
+      expect(workflowOperationalState([{ status: key === 'attention' ? 'failed' : key,
+        cancel_requested: key === 'stopping', paused: key === 'paused', stalled: key === 'stalled' }]))
+        .toBe(key)
+    }
   })
 
   it('explains job line and color semantics and exposes state controls', () => {

@@ -70,6 +70,36 @@ export function runOperationalState(run = {}) {
   return 'active'
 }
 
+// Worst-first, so a lane that needs an operator's eye is never filed under a calmer stage, and so
+// `active` outranks the terminal states.
+const WORKFLOW_STATE_PRECEDENCE = [
+  'stopping', 'stalled', 'attention', 'paused', 'active', 'cancelled', 'recent',
+]
+
+const WORKFLOW_STATE_LABEL = Object.fromEntries(
+  JOB_STATE_FILTERS.filter(({ key }) => key !== 'all').map(({ key, label }) => [key, label]))
+
+/** A workflow's own state, derived from every run in its lane rather than from any one of them.
+ * Matched per run, a lane whose discover had finished answered to "Recently completed" while its
+ * remediate was still running — the card read "remediate in progress" under the completed chip. */
+export function workflowOperationalState(runs = []) {
+  const states = new Set(runs.map((run) => runOperationalState(run)))
+  return WORKFLOW_STATE_PRECEDENCE.find((state) => states.has(state)) || 'recent'
+}
+
+/** How many workflows each chip would show, counted on the lanes the stage/source filter leaves in
+ * place. A chip that would empty the map reads zero before it is clicked rather than after. */
+export function jobStateCounts(laneGraph = { nodes: [] }) {
+  const counts = { all: 0 }
+  for (const node of laneGraph.nodes) {
+    if (node.type !== 'workflow') continue
+    counts.all += 1
+    const state = node.data?.workflowState
+    counts[state] = (counts[state] || 0) + 1
+  }
+  return counts
+}
+
 export function queueConcentration(runs = []) {
   const byOwner = new Map()
   let total = 0
@@ -751,21 +781,21 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
  * the full live drawer. */
 export function trafficGraphForTab(graph = { nodes: [], edges: [] }, tab = 'infrastructure', filter = null) {
   if (tab === 'jobs') {
-    const allRuns = graph.nodes.filter((node) => node.type === 'run')
-    const matchingIds = new Set(allRuns.filter((node) =>
-      (!filter?.stage || node.data?.run?.stage === filter.stage)
-      && (!filter?.source || node.data?.run?.source === filter.source)
-      && (!filter?.state || filter.state === 'all'
-        || runOperationalState(node.data?.run) === filter.state))
-      .map((node) => node.data?.run?.workflow_id || node.data?.run?.scan_id))
-    const runs = filter ? allRuns.filter((node) => matchingIds.has(
-      node.data?.run?.workflow_id || node.data?.run?.scan_id)) : allRuns
-    const byWorkflow = new Map()
-    for (const node of runs) {
+    const lanes = new Map()
+    for (const node of graph.nodes.filter((node) => node.type === 'run')) {
       const id = node.data?.run?.workflow_id || node.data?.run?.scan_id
-      if (!byWorkflow.has(id)) byWorkflow.set(id, [])
-      byWorkflow.get(id).push(node)
+      if (!lanes.has(id)) lanes.set(id, [])
+      lanes.get(id).push(node)
     }
+    // Group first, then filter whole lanes. `stage` and `source` come from clicking an
+    // infrastructure edge and ask "which workflows touch this?", so any run matching admits the
+    // lane. `state` is the operator's own chip and asks "which workflows are in this state?" — a
+    // fact about the lane, not about any one run in it.
+    const byWorkflow = new Map([...lanes].filter(([, workflowRuns]) =>
+      (!filter?.stage || workflowRuns.some((node) => node.data?.run?.stage === filter.stage))
+      && (!filter?.source || workflowRuns.some((node) => node.data?.run?.source === filter.source))
+      && (!filter?.state || filter.state === 'all'
+        || workflowOperationalState(workflowRuns.map((node) => node.data?.run)) === filter.state)))
     const ordered = [...byWorkflow.entries()].sort(([, a], [, b]) => {
       const aActive = a.some((node) => node.data.run.status !== 'recent')
       const bActive = b.some((node) => node.data.run.status !== 'recent')
@@ -779,15 +809,18 @@ export function trafficGraphForTab(graph = { nodes: [], edges: [] }, tab = 'infr
       const color = workflowColor(workflowId)
       const first = workflowRuns[0]?.data.run || {}
       const active = workflowRuns.filter((node) => node.data.run.status === 'active')
-      const failed = workflowRuns.some((node) => node.data.run.status === 'failed')
+      // The card's headline and the state chips read the same derivation, so the two cannot
+      // disagree the way they did when the card was computed inline from `status` alone.
+      const workflowState = workflowOperationalState(workflowRuns.map((node) => node.data.run))
+      const status = workflowState === 'active' && active.length
+        ? `${active.at(-1).data.run.stage} in progress`
+        : WORKFLOW_STATE_LABEL[workflowState] || 'Recently completed'
       const workflowRevision = Math.max(...workflowRuns.map((node) =>
         Math.max(1, Number(node.data.run.workflow_revision || 1))))
       nodes.push({ id: `workflow:${workflowId}`, type: 'workflow', position: { x: 25, y },
-        ariaLabel: `Workflow ${workflowId}, revision ${workflowRevision}, ${first.owner || 'owner not reported'}, ${active.length ? 'active' : 'recently completed'}.`,
+        ariaLabel: `Workflow ${workflowId}, revision ${workflowRevision}, ${first.owner || 'owner not reported'}, ${status}.`,
         data: { kind: 'workflow', workflowId, owner: first.owner || 'Owner not reported', source: first.source || 'Source not reported',
-          workflowRevision,
-          status: active.length ? `${active.at(-1).data.run.stage} in progress`
-            : failed ? 'Needs attention' : 'Recently completed', color } })
+          workflowRevision, workflowState, status, color } })
       const stageOrder = { discover: 0, assess: 1, remediate: 2, release: 3 }
       const stages = workflowRuns.sort((a, b) =>
         Number(a.data.run.workflow_revision || 1) - Number(b.data.run.workflow_revision || 1)
@@ -864,6 +897,11 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
   // is no second keydown listener here to fight it.
 
   const graph = useMemo(() => buildTrafficGraph(snapshot, history.current, capacity, connection), [snapshot, capacity, connection])
+  // The lanes before the state chips are applied, so the chip counts describe what each chip would
+  // show rather than what the current one already did.
+  const laneGraph = useMemo(() => flowTab === 'jobs'
+    ? trafficGraphForTab(graph, 'jobs', flowFilter) : { nodes: [], edges: [] }, [graph, flowTab, flowFilter])
+  const stateCounts = useMemo(() => jobStateCounts(laneGraph), [laneGraph])
   const visibleGraph = useMemo(() => trafficGraphForTab(graph, flowTab,
     flowTab === 'jobs' ? { ...flowFilter, state: jobState } : flowFilter),
     [graph, flowTab, flowFilter, jobState])
@@ -998,7 +1036,11 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
       <span className="muted" style={{ fontSize: 11, marginRight: 2 }}>SHOW</span>
       {JOB_STATE_FILTERS.map(({ key, label }) => <button key={key} type="button"
         className={jobState === key ? '' : 'ghost'} aria-pressed={jobState === key}
-        onClick={() => setJobState(key)} style={{ padding: '5px 9px', fontSize: 11 }}>{label}</button>)}
+        aria-label={`${label}, ${stateCounts[key] || 0} workflows`}
+        onClick={() => setJobState(key)} style={{ padding: '5px 9px', fontSize: 11,
+          opacity: (stateCounts[key] || 0) || jobState === key ? 1 : 0.55 }}>
+        {label} <span className="muted" style={{ fontVariantNumeric: 'tabular-nums' }}>{stateCounts[key] || 0}</span>
+      </button>)}
     </div>}
     <div style={{ height: flowTab === 'infrastructure' ? 590
       : Math.max(360, 100 + visibleGraph.nodes.filter((node) => node.type === 'workflow').length * 185), maxHeight: 760,
@@ -1036,8 +1078,10 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
         {flowTab === 'infrastructure' && <div className="chip" style={{ position: 'absolute', zIndex: 3, left: 12, bottom: 12 }}>
           Idle · select any tile to inspect the ready processing path
         </div>}
-        {flowTab === 'jobs' && !visibleGraph.nodes.length && <div className="chip" style={{ position: 'absolute', zIndex: 3, left: 12, top: 12 }}>
+        {flowTab === 'jobs' && !visibleGraph.nodes.length && <div className="chip" role="status" style={{ position: 'absolute', zIndex: 3, left: 12, top: 12 }}>
           No workflows match this view
+          {jobState !== 'all' && <button type="button" className="ghost" onClick={() => setJobState('all')}
+            style={{ marginLeft: 8 }}>Show all</button>}
         </div>}
         {flowTab === 'jobs' && !!visibleGraph.nodes.length && <div className="chip" style={{ position: 'absolute', zIndex: 3, left: 12, bottom: 12 }}>
           Select a stage to inspect progress; connected cards belong to one workflow
