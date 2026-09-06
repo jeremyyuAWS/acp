@@ -1168,4 +1168,12 @@ def active_vision_provider() -> VisionProvider:
         except Exception:
             swallowed("providers.active_vision_provider: resolving the vision provider's adapter "
                       "config failed")
+    # Auto-select Anthropic vision when ANTHROPIC_API_KEY is set and no explicit vision
+    # provider was configured via ACP_VISION_PROVIDER or the admin store. The key rides only
+    # in the x-api-key header — same contract as AnthropicVisionProvider.generate().
+    if not choice:
+        _anth_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        if _anth_key:
+            _anth_model = os.environ.get("CLAUDE_TEXT_MODEL", "claude-haiku-4-5")
+            return AnthropicVisionProvider(_anth_key, model=_anth_model)
     return OllamaVisionProvider(base_url, model)
