@@ -1448,6 +1448,14 @@ export const publishAllFiles = (scanId, files, releaseFolderName = '') => (SIM
 export const getReleaseStatus = (scanId) => (SIM
   ? sim({ release_id: null, roots: [], documents: [], documents_total: 0, published: 0, failed: 0, remaining: 0 }, 50)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release`, { headers: headers() }).then(j))
+export const previewReleaseDestination = (scanId, files, releaseFolderName = '') => (SIM
+  ? sim({ folder_name: releaseFolderName || '2026-09-06 12-00 UTC', folder_state: 'proposed', provider: 'drive',
+      documents: files.map((file) => ({ file, provider_location: 'google:me', destination_path: `Remediated/${releaseFolderName || '2026-09-06 12-00 UTC'}/${file}`, action: 'create' })),
+      blockers: [], can_release: true, collision_policy: 'Existing files are not overwritten.', original_files_unchanged: true }, 80)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/preview`, {
+      method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ files, ...(releaseFolderName.trim() ? { release_folder_name: releaseFolderName.trim() } : {}) }),
+    }).then(j))
 export const getReleaseManifest = (scanId) => (SIM
   ? sim({ manifest: { schema_version: 1, scan_id: scanId, documents: [] },
       content_digest: { algorithm: 'SHA-256', value: 'simulation' },

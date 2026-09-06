@@ -207,6 +207,7 @@ _map_many([("POST", "/scans/{sid}/publish")], {"release.publish"})
 _map_many([
     ("GET", "/scans/{sid}/release"),
     ("GET", "/scans/{sid}/release/manifest"),
+    ("POST", "/scans/{sid}/release/preview"),
     ("POST", "/scans/{sid}/release/package"),
 ], {"release.view"})
 _map_many([("GET", "/scans/{sid}/report.pdf")], {"release.view", "reports.export"})
