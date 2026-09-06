@@ -1442,6 +1442,11 @@ export const publishAllFiles = (scanId, files) => (SIM
 export const getReleaseStatus = (scanId) => (SIM
   ? sim({ release_id: null, roots: [], documents: [], documents_total: 0, published: 0, failed: 0, remaining: 0 }, 50)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release`, { headers: headers() }).then(j))
+export const getReleaseManifest = (scanId) => (SIM
+  ? sim({ manifest: { schema_version: 1, scan_id: scanId, documents: [] },
+      content_digest: { algorithm: 'SHA-256', value: 'simulation' },
+      digest_note: 'Simulation manifest.' }, 50)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/manifest`, { headers: headers() }).then(j))
 
 // Queue state: depth by status + recent jobs (drives the in-app queue panel).
 export const getJobs = (status = null) => (SIM
