@@ -4566,6 +4566,11 @@ _PDF_APPLY_EXTS = ("pdf",)
 # so their 4.1.2 signal stays the ActiveX/OLE advisory no static write can resolve.
 _FIELD_NAME_EXTS = ("pdf", "docx")
 
+# 1.4.5/1.4.9 image-of-text alt text: the approved OCR text is written as the picture's
+# <p:cNvPr descr="..."> by apply_pptx_image_of_text. Currently pptx-only; docx and xlsx carry
+# a broken chain at a different layer (no approved-value applier exists for those formats yet).
+_IMAGE_OF_TEXT_EXTS = ("pptx",)
+
 # Every format an approved value can actually be WRITTEN into — the format scope
 # _apply_approved_values gates on, derived from the per-lane constants rather than restated, so
 # the two can never disagree. scripts/gen_matrix_coverage.py reads it to derive the matrix's
@@ -4693,8 +4698,11 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
                        if ext in _LANGUAGE_EXTS else {})
     structure_label_values = (core.store.approved_structure_label_values(scan_id, filename)
                               if ext in _STRUCTURE_LABEL_EXTS else {})
+    image_of_text_values = (core.store.approved_images_of_text_values(scan_id, filename)
+                            if ext in _IMAGE_OF_TEXT_EXTS else {})
     if not (alt_values or deco_locators or link_values or field_values
-            or sensory_values or language_values or structure_label_values):
+            or sensory_values or language_values or structure_label_values
+            or image_of_text_values):
         return                                   # nothing approved awaiting a write
 
     import blob as _blob
@@ -4793,8 +4801,24 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
             diff_rule_id="2.4.6", credit_rule_ids=("2.4.6",),
             noun="structure label", job=job)
 
+    # 1.4.5/1.4.9 image-of-text alt text. The approved OCR transcript is set as the picture's
+    # descriptive alt (<p:cNvPr descr="...">) so every tool reading the file sees a description
+    # without relying on the human to paste it in manually (the HUMAN lane status before this).
+    # Two criteria, one lane: the proposer emits both against the same embedded images, the
+    # applier writes the same attribute either way, and the re-scan clears whichever it observes.
+    image_of_text_uploaded = False
+    if image_of_text_values:
+        from apply_pptx_image_of_text import apply_pptx_image_of_text
+        working, image_of_text_uploaded = _apply_one_value_kind(
+            scan_id=scan_id, filename=filename, working=working,
+            values=image_of_text_values, scs_to_clear={"1.4.5", "1.4.9"},
+            write_fn=apply_pptx_image_of_text,
+            diff_rule_id="1.4.5", credit_rule_ids=("1.4.5", "1.4.9"),
+            noun="image-of-text alt text", job=job)
+
     if not (alt_uploaded or link_uploaded or field_uploaded
-            or sensory_uploaded or language_uploaded or structure_label_uploaded):
+            or sensory_uploaded or language_uploaded or structure_label_uploaded
+            or image_of_text_uploaded):
         return
 
     _phase(job, "storing the corrected copy")

@@ -248,11 +248,9 @@ REMEDIATION: dict[str, dict[str, str]] = {
         "1.4.1": HUMAN,      # colour-only hyperlink — no pptx write-back restores the suppressed underline
         "1.4.3": AUTO,       # low-contrast run recolour
         "1.4.4": HUMAN,      # resize text — fixed text box that may clip at 200%; reviewer verifies rendered output
-        "1.4.5": HUMAN,      # images-of-text — OCR proposer exists but no getter in
-                             # has_approved_values_to_write reads rule_id "1.4.5"; no write-back.
+        "1.4.5": ASSISTED,   # images-of-text — OCR text → reviewer approves → apply_pptx_image_of_text writes descr
         "1.4.6": AUTO,       # same recolour reaches the AAA threshold
-        "1.4.9": HUMAN,      # images-of-text (AAA) — same broken chain as 1.4.5; no getter
-                             # reads rule_id "1.4.9" in has_approved_values_to_write.
+        "1.4.9": ASSISTED,   # images-of-text (AAA) — same OCR proposer and applier as 1.4.5
         "1.4.10": HUMAN,     # reflow — wide table; whether it two-dim scrolls at 320px is a rendered call
         "1.4.11": HUMAN,     # non-text contrast — shape outline vs fill; no write-back applier for pptx shapes
         "1.4.12": HUMAN,     # text spacing — exact (fixed) line spacing; clip outcome is rendered, not in the file

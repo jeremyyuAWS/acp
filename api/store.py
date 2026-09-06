@@ -8956,6 +8956,20 @@ class Store:
                 out.update(self._row_approved_values(row))
         return out
 
+    def approved_images_of_text_values(self, scan_id: str, file: str) -> dict[str, str]:
+        """{locator: OCR'd text} awaiting a write into `file`, from approved 1.4.5/1.4.9 rows.
+
+        Locators are 'image N' (1-based, matching ocr._ooxml_images enumeration order).
+        Written by apply_pptx_image_of_text as the picture's <p:cNvPr descr="...">.
+        Both criteria share one map because the proposer emits them for the same embedded
+        images and the applier writes alt text regardless of which band raised the finding.
+        """
+        out: dict[str, str] = {}
+        for row in self._approved_unapplied_rows(scan_id, file):
+            if str(row.get("rule_id") or "").strip() in ("1.4.5", "1.4.9"):
+                out.update(self._row_approved_values(row))
+        return out
+
     def has_approved_values_to_write(self, scan_id: str, file: str) -> bool:
         """True when `file` holds approved content some applier can write into the document.
 
@@ -8975,7 +8989,8 @@ class Store:
                     or self.approved_field_values(scan_id, file)
                     or self.approved_sensory_values(scan_id, file)
                     or self.approved_language_values(scan_id, file)
-                    or self.approved_structure_label_values(scan_id, file))
+                    or self.approved_structure_label_values(scan_id, file)
+                    or self.approved_images_of_text_values(scan_id, file))
 
     def approve_proposal_values(self, item_id: str, values: list[str | None]) -> int:
         """Record the reviewer's final text per instance, positionally.
