@@ -291,14 +291,33 @@ function AzureCapacity({ capacity, state }) {
  * A DURABLE SERVICE is permanent infrastructure. It is backfilled with the flat surface tone, so a
  * row of services reads as the fixed pipeline the jobs travel along.
  *
- * Colour is never the only cue (WCAG 1.4.1): every tile also carries a typed label — ACTIVE JOB,
- * SERVICE, or DATA — and the map key spells the three out. The fill makes the grouping visible at
- * a glance; the label is what actually says which is which.
+ * Colour is never the only cue (WCAG 1.4.1): every tile also carries a typed label — JOB, SERVICE
+ * or DATA — and the map key spells the three out. The fill makes the grouping visible at a glance;
+ * the label is what actually says which is which.
  */
 export const TILE_KINDS = {
-  job: { label: 'ACTIVE JOB', tint: 16, accent: 5, radius: 6 },
+  job: { label: 'JOB', tint: 16, accent: 5, radius: 6 },
   service: { label: 'SERVICE', tint: 0, accent: 0, radius: 10 },
   data: { label: 'DATA', tint: 0, accent: 0, radius: 10 },
+}
+
+/** The run card's header.
+ *
+ * It was the constant above, so every job card was headed ACTIVE JOB — including one whose own
+ * status line two rows down said "Complete". The header is the tile's TYPE cue, which is what
+ * 1.4.1 needs it for, so the word JOB stays on every variant; the qualifier in front of it now
+ * comes from the same state the status line reads, and so cannot contradict it. */
+export function runTileLabel(run = {}) {
+  const state = runOperationalState(run)
+  if (state === 'recent') return 'COMPLETED JOB'
+  if (state === 'cancelled') return 'CANCELLED JOB'
+  if (state === 'stopping') return 'STOPPING JOB'
+  if (state === 'stalled') return 'STALLED JOB'
+  if (state === 'paused') return 'PAUSED JOB'
+  // `attention` covers both a run that ended in failure and a live one that has failed documents
+  // under it. Only the first is over, and only the first should stop reading as active.
+  if (state === 'attention' && run.status === 'failed') return 'FAILED JOB'
+  return 'ACTIVE JOB'
 }
 
 /** Which of the three a node is. Sources and outputs are where documents come from and go to —
@@ -341,7 +360,7 @@ function RunNode({ data }) {
       boxShadow: `0 4px 12px color-mix(in srgb, ${accent} 18%, transparent)` }}>
     <Handle type="target" position={Position.Left} />
     <div style={{ color: cfg.color, fontSize: 9.5, fontWeight: 800, letterSpacing: '.09em',
-      marginBottom: 4 }}>{TILE_KINDS.job.label}</div>
+      marginBottom: 4 }}>{runTileLabel(data.run)}</div>
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
       <b>{cfg.label}</b><span style={{ color: ['attention', 'stalled'].includes(operationalState) ? 'var(--error-fg)' : cfg.color,
         fontWeight: 700 }}>{statusLabel}</span>
