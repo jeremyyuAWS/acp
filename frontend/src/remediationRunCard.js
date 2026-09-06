@@ -82,15 +82,22 @@ export const MIN_DOCUMENTS_FOR_ETA = 5
  */
 export function etaGate(snapshot, throughput) {
   const documents = snapshot?.documents || {}
-  const processed = ['completed', 'review', 'failed', 'skipped']
+  // The same four outcomes the card's headline counts, and identical to its
+  // `total - processing - waiting` because the six counters partition the scope. Named the same
+  // way for the same reason: a document routed to review consumed the capacity an estimate is
+  // calibrated from, but it is not a document that came out fixed, and the basis line is read by
+  // someone deciding whether to trust the estimate.
+  const throughAutomatic = ['completed', 'review', 'failed', 'skipped']
     .reduce((sum, key) => sum + (num(documents[key]) ?? 0), 0)
-  if (processed < MIN_DOCUMENTS_FOR_ETA) {
+  if (throughAutomatic < MIN_DOCUMENTS_FOR_ETA) {
     return { show: false, note: 'Estimating after the first results' }
   }
   if (!throughput || throughput.calibrating || !throughput.etaText) {
     return { show: false, note: 'Estimating after the first results' }
   }
-  return { show: true, text: throughput.etaText, basis: `based on ${processed} processed documents` }
+  return { show: true,
+           text: throughput.etaText,
+           basis: `based on ${throughAutomatic} documents through automatic processing` }
 }
 
 // ── what the card says the run is doing ──────────────────────────────────────

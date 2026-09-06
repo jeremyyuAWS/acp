@@ -234,7 +234,7 @@ describe('corrected copies and verified documents stay distinct', () => {
     const root = createRoot(host)
     const props = { receivedAt: Date.now(), connected: true }
     await act(async () => { root.render(createElement(RemediationRunCard, { ...props, snapshot: SNAP })) })
-    expect(host.textContent).toContain('12 of 20 documents processed')
+    expect(host.textContent).toContain('12 of 20 documents through automatic processing')
     expect(host.querySelectorAll('.livecounter-delta')).toHaveLength(0)
 
     const next = {
