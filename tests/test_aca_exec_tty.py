@@ -16,11 +16,23 @@ def test_aca_exec_gets_a_tty_and_preserves_the_space_free_python_program(tmp_pat
         """#!/usr/bin/env bash
 set -eu
 [ -t 0 ] || { echo 'stdin is not a tty' >&2; exit 71; }
+# The Actions runner's stdin is EOF. A script(1) PTY forwards it and read returns 1 immediately;
+# the dedicated runner keeps its master open, so this read waits and returns a timeout (>128).
+set +e
+started=$SECONDS
+read -r -t 1
+read_status=$?
+elapsed=$((SECONDS - started))
+set -e
+[ "$read_status" -ne 0 ] && [ "$elapsed" -ge 1 ] \
+  || { echo "pty input closed immediately: status=$read_status elapsed=$elapsed" >&2; exit 72; }
 [ "$1 $2" = 'containerapp exec' ]
 while [ "$#" -gt 0 ] && [ "$1" != '--command' ]; do shift; done
 [ "$1" = '--command' ] && shift
 [ "$1" = \"python -c exec(__import__('base64').b64decode('YWJj'))\" ]
+printf 'INFO: Successfully connected to container\\n'
 printf 'ACP_LEGACY_BOOTSTRAP={"redis_write_read":true,"queued":0,"retrying":0,"running":0}\\n'
+printf 'INFO: received success status from cluster\\n'
 """
     )
     fake_az.chmod(0o755)
@@ -35,14 +47,15 @@ _aca_exec_tty az containerapp exec -g test-rg -n test-app \\
     result = subprocess.run(
         ["bash", "-c", command],
         stdin=subprocess.DEVNULL,
-        text=True,
         capture_output=True,
         env=env,
         timeout=10,
     )
 
-    assert result.returncode == 0, result.stderr
-    assert "ACP_LEGACY_BOOTSTRAP=" in result.stdout
+    assert result.returncode == 0, result.stderr.decode()
+    assert b"ACP_LEGACY_BOOTSTRAP=" in result.stdout
+    assert b"Successfully connected" in result.stdout
+    assert b"\r\n" in result.stdout, "fixture must preserve the util-linux PTY transcript framing"
 
 
 def test_redeploy_sends_no_quoted_python_c_program_to_aca():
