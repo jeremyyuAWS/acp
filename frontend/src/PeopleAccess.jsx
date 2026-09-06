@@ -264,6 +264,13 @@ export default function PeopleAccess() {
   }
   const change = useCallback((person, patch) => {
     setError('')
+    // THE ROLE TOAST IS ABOUT THE PREVIOUS ACTION, so acting again retires it. Two reasons, and
+    // the second is the one that shows: its Undo reverts the role change it names, and leaving
+    // that offered after the operator has moved on invites undoing something they have stopped
+    // looking at. And on a narrow window it is sitting over the rows (see the measurements on
+    // `.people-toast` in styles.css) — it no longer swallows their clicks, but a card that
+    // vanishes the moment you carry on is better than one that merely lets you work around it.
+    setRoleToast(null)
     // PAINT FIRST, exactly as showRole does for the workspace-role select beside this one.
     //
     // This select is CONTROLLED by `person.role`, so without this the chosen value is discarded
@@ -281,6 +288,9 @@ export default function PeopleAccess() {
   }, [showPerson, load])
   const remove = useCallback((person) => {
     if (!window.confirm(`Remove ${person.email} from ACP? They will lose access on their next request.`)) return
+    // Same reasoning as `change`, with a sharper edge: the toast's Undo re-assigns a role BY
+    // EMAIL, and the person it names may be the one just removed.
+    setRoleToast(null)
     removePerson(person.email).then((d) => { setData((old) => ({ ...old, ...d })); setMessage(`${person.email} was removed.`) })
       .catch((e) => setError(e.message || 'Could not remove this person.'))
   }, [])
