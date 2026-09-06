@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -37,6 +39,23 @@ def _normalized(value: Any) -> Any:
     return value
 
 
+def _timestamp(value: Any) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
+
+
+def _graph_parent_path(item: dict) -> str:
+    """Return the provider-relative parent path from a Graph driveItem snapshot."""
+    raw = str((item.get("parentReference") or {}).get("path") or "")
+    # Graph uses `/drives/{id}/root:/Folder/Subfolder`; retain only the path after `root:`.
+    return raw.split("root:", 1)[-1].strip("/") if "root:" in raw else ""
+
+
 def verify(bundle: dict, *, base: Path) -> dict:
     """Return a machine-readable report; every required claim must pass."""
     checks: list[dict] = []
@@ -47,11 +66,26 @@ def verify(bundle: dict, *, base: Path) -> dict:
     response = bundle.get("manifest_response") or {}
     manifest = response.get("manifest") or {}
     recorded = ((response.get("content_digest") or {}).get("value") or "").lower()
+    algorithm = (response.get("content_digest") or {}).get("algorithm")
     actual = _canonical_digest(manifest)
+    check("manifest digest algorithm", algorithm == "SHA-256", f"algorithm={algorithm!r}")
     check("manifest digest", recorded == actual,
           f"recorded={recorded or 'missing'} computed={actual}")
     check("SharePoint source", manifest.get("source") == "sharepoint",
           f"source={manifest.get('source')!r}")
+    check("manifest schema", manifest.get("schema_version") == 1,
+          f"schema_version={manifest.get('schema_version')!r}")
+    check("completed release", manifest.get("status") == "completed",
+          f"status={manifest.get('status')!r}")
+    provenance = manifest.get("manifest_generated_by") or {}
+    release_version = provenance.get("release_version")
+    check("recorded ACP version", bool(release_version and release_version not in {"dev", "not recorded"}),
+          f"release_version={release_version!r}")
+    identity_fields = {name: manifest.get(name) for name in ("release_id", "scan_id", "snapshot_id", "actor")}
+    check("release provenance identities", all(identity_fields.values()), f"values={identity_fields}")
+    timestamp_fields = {name: manifest.get(name) for name in ("created_at", "updated_at")}
+    check("release provenance timestamps", all(_timestamp(value) for value in timestamp_fields.values()),
+          f"values={timestamp_fields}")
     check("non-destructive release claim", manifest.get("original_files_unchanged") is True,
           f"original_files_unchanged={manifest.get('original_files_unchanged')!r}")
     counts = manifest.get("counts") or {}
@@ -83,14 +117,42 @@ def verify(bundle: dict, *, base: Path) -> dict:
     roots = manifest.get("roots") or []
     check("release folder identity",
           bool(release_folder and len(roots) == 1 and
+               re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}-\d{2} UTC(?: · [a-f0-9]{8,16})?", release_folder) and
+               roots[0].get("provider") == "sharepoint" and
                roots[0].get("folder_name") == release_folder and roots[0].get("folder_id") and
-               str(roots[0].get("folder_url") or "").startswith("https://")),
+               str(roots[0].get("folder_url") or "").startswith("https://") and
+               _timestamp(roots[0].get("created_at"))),
           f"release_folder={release_folder!r} roots={len(roots)}")
     expected_provider_path = "/".join(filter(None, [
         "Remediated", release_folder, document.get("destination_relative_path")]))
     observed_provider_path = str(expected.get("provider_destination_path") or "").strip("/")
     check("provider folder placement", observed_provider_path == expected_provider_path,
           f"observed={observed_provider_path!r} expected={expected_provider_path!r}")
+
+    observations = bundle.get("provider_observations") or {}
+    try:
+        source_before_item = _json(base / observations["source_before"])
+        source_after_item = _json(base / observations["source_after"])
+        destination_item = _json(base / observations["destination"])
+        source_observation_ok = (
+            source_before_item.get("id") == source_id == source_after_item.get("id") and
+            source_before_item.get("name") == source_after_item.get("name") and
+            _graph_parent_path(source_before_item) == _graph_parent_path(source_after_item)
+        )
+        check("provider source identity", source_observation_ok,
+              f"before={source_before_item.get('id')!r} after={source_after_item.get('id')!r}")
+        destination_parent = _graph_parent_path(destination_item)
+        expected_parent = "/".join(expected_provider_path.split("/")[:-1])
+        destination_observation_ok = (
+            destination_item.get("id") == released_id and
+            destination_item.get("name") == expected_provider_path.split("/")[-1] and
+            destination_parent == expected_parent and
+            destination_item.get("webUrl") == document.get("released_document_url")
+        )
+        check("provider destination identity and placement", destination_observation_ok,
+              f"id={destination_item.get('id')!r} parent={destination_parent!r} name={destination_item.get('name')!r}")
+    except (KeyError, OSError, json.JSONDecodeError, AttributeError) as exc:
+        check("provider observation evidence", False, str(exc))
 
     artifacts = bundle.get("artifacts") or {}
     try:
