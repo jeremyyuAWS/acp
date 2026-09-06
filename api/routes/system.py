@@ -1632,10 +1632,11 @@ def _admin_activity_snapshot() -> dict:
 def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None) -> list[dict]:
     """Turn stage aggregates into the durable workflow contract used by Live Ops.
 
-    ``scan_id`` is already the parent identity stamped on every queue record in the pipeline.
-    Calling it ``workflow_id`` here makes that relationship explicit without creating a second
-    identity that could drift.  Stage ids are deterministic because the current queue model has
-    one aggregate stage per scan; individual attempts remain inspectable in the stage detail.
+    New scans carry a persisted workflow execution and revision. Its external id deliberately
+    equals the first scan id in revision 1, preserving every existing deep link while making the
+    relationship first-class; legacy rows use that same fallback. Stage ids are deterministic
+    because the current queue model has one aggregate stage per scan; individual attempts remain
+    inspectable in the stage detail.
     """
     # Event-only stages are projection inputs, not queue rows. Work on a copy so returning the
     # canonical workflow history cannot silently widen the endpoint's separate `runs` contract.
@@ -1684,7 +1685,8 @@ def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None)
         if not scan_id or not stage:
             continue
         workflow = grouped.setdefault(scan_id, {
-            "workflow_id": scan_id,
+            "workflow_id": run.get("workflow_id") or scan_id,
+            "workflow_revision": int(run.get("workflow_revision") or 1),
             "scan_id": scan_id,
             "owner_display_name": run.get("owner") or "unknown",
             "source": run.get("source") or "unknown",
