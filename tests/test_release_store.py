@@ -7,14 +7,14 @@ def _scan(store, scan_id, owner):
                         "rubric", "hash", owner=owner, status="completed")
 
 
-def test_release_execution_and_roots_are_stable_across_retries(isolated_store):
+def test_release_identity_and_roots_stay_stable_while_total_expands(isolated_store):
     _scan(isolated_store, "scan-1", "owner@example.com")
     first = isolated_store.ensure_release_execution(
         "scan-1", "owner@example.com", "sharepoint", 2)
     again = isolated_store.ensure_release_execution(
         "scan-1", "owner@example.com", "sharepoint", 99)
     assert first["id"] == again["id"]
-    assert again["documents_total"] == 2
+    assert again["documents_total"] == 99
     assert again["acp_version"] == (os.environ.get("ACP_BUILD_VERSION") or
                                     os.environ.get("ACP_VERSION") or "dev")
 
@@ -24,6 +24,26 @@ def test_release_execution_and_roots_are_stable_across_retries(isolated_store):
     root = isolated_store.get_release_root(
         first["id"], "graph:drive-a", "owner@example.com")
     assert root["folder_id"] == "folder-a"
+
+
+def test_later_approvals_expand_and_reopen_a_completed_release(isolated_store):
+    owner = "owner@example.com"
+    _scan(isolated_store, "scan-expand", owner)
+    release = isolated_store.ensure_release_execution("scan-expand", owner, "sharepoint", 2)
+    for name in ("one.pdf", "two.pdf"):
+        isolated_store.record_release_document(release["id"], owner, {
+            "file": name, "status": "published", "created": True,
+        })
+    assert isolated_store.release_status(release["id"], owner)["status"] == "completed"
+
+    expanded = isolated_store.ensure_release_execution("scan-expand", owner, "sharepoint", 3)
+    status = isolated_store.release_status(release["id"], owner)
+    assert expanded["id"] == release["id"]
+    assert expanded["status"] == "running"
+    assert (status["documents_total"], status["published"], status["remaining"]) == (3, 2, 1)
+
+    stale_retry = isolated_store.ensure_release_execution("scan-expand", owner, "sharepoint", 1)
+    assert stale_retry["documents_total"] == 3
 
 
 def test_release_root_name_claim_survives_retries_and_separates_concurrent_releases(isolated_store):

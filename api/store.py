@@ -7728,8 +7728,14 @@ class Store:
 
     def ensure_release_execution(self, scan_id: str, owner: str, source: str,
                                  documents_total: int) -> dict:
-        """Return the one durable Release execution for a scan, creating it atomically."""
+        """Create/reconcile the one durable Release execution for a scan atomically.
+
+        The total is grow-only: later approvals expand the same release, while a stale retry can
+        never erase already-published scope. Expanding a completed release reopens it until the
+        newly approved documents settle.
+        """
         now = self._now()
+        requested_total = max(0, int(documents_total))
         release_id = uuid.uuid4().hex[:16]
         from datetime import datetime, timezone
         folder_name = datetime.fromisoformat(now).astimezone(timezone.utc).strftime(
@@ -7739,9 +7745,15 @@ class Store:
                 "INSERT INTO release_executions(id,scan_id,owner_email,source,folder_name,"
                 "documents_total,status,created_at,updated_at,acp_version) "
                 "VALUES(%s,%s,%s,%s,%s,%s,'running',%s,%s,%s) "
-                "ON CONFLICT(scan_id,owner_email) DO NOTHING",
+                "ON CONFLICT(scan_id,owner_email) DO UPDATE SET "
+                "documents_total=CASE WHEN release_executions.documents_total < EXCLUDED.documents_total "
+                "THEN EXCLUDED.documents_total ELSE release_executions.documents_total END,"
+                "status=CASE WHEN release_executions.documents_total < EXCLUDED.documents_total "
+                "THEN 'running' ELSE release_executions.status END,"
+                "updated_at=CASE WHEN release_executions.documents_total < EXCLUDED.documents_total "
+                "THEN EXCLUDED.updated_at ELSE release_executions.updated_at END",
                 (release_id, scan_id, owner, source, folder_name,
-                 max(0, int(documents_total)), now, now,
+                 requested_total, now, now,
                  os.environ.get("ACP_BUILD_VERSION") or os.environ.get("ACP_VERSION") or "dev"))
             self._db.execute(cur,
                 "SELECT * FROM release_executions WHERE scan_id=%s AND owner_email=%s",
