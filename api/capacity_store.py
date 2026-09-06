@@ -35,6 +35,7 @@ from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 
 import capacity_schedule as sched
+from swallowed import swallowed
 
 SCHEDULE_KEY = "capacity_schedule"
 OVERRIDE_KEY = "capacity_schedule_override"
@@ -87,6 +88,11 @@ def load_schedule(store) -> sched.Schedule:
     try:
         raw = store.get_setting(SCHEDULE_KEY)
     except Exception:  # noqa: BLE001 — the tab must render something truthful either way
+        # Reported, not merely absorbed. This degradation is CORRECT (§12) and also invisible:
+        # the tab renders a schedule that reads as not-in-force, which is exactly what it shows
+        # on a deployment that has never saved one. Without a line here, "nobody has configured a
+        # schedule" and "the database is unreachable" look identical from the outside.
+        swallowed("capacity_store.load_schedule: reading the stored schedule failed")
         return sched.PROPOSED
     if not raw:
         return sched.PROPOSED
@@ -152,6 +158,9 @@ def get_override(store, now: datetime | None = None) -> dict | None:
     try:
         raw = store.get_setting(OVERRIDE_KEY)
     except Exception:  # noqa: BLE001
+        # Same reasoning as load_schedule: "there is no override" and "we could not look" are the
+        # same answer to a caller and very different answers to an operator.
+        swallowed("capacity_store.get_override: reading the stored override failed")
         return None
     if not raw:
         return None
@@ -251,5 +260,10 @@ def _audit(store, actor: str, action: str, *, reason: str, correlation_id: str,
                            detail=f"[{correlation_id}] {detail} · reason: {reason}"[:2000])
     except Exception:  # noqa: BLE001 — an audit failure must not lose the write it describes;
         # the caller has already persisted, and losing the row is better than losing the change.
-        # Deliberately swallowed rather than raised: see the module docstring's separation note.
-        pass
+        #
+        # REPORTED, NOT DISCARDED. A `pass` here would be the worst possible place for one: the
+        # whole point of §11 is that a capacity change leaves a trace, so an audit path that
+        # fails silently defeats the requirement it implements while every write still appears to
+        # succeed. `swallowed` logs it with a traceback and escalates a persistent failure at
+        # powers of two, which is what turns "the log is empty" into a question somebody asks.
+        swallowed(f"capacity_store._audit: writing the {action} audit row failed")
