@@ -9,6 +9,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 ACP = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ACP / "api"))
 
@@ -84,16 +86,68 @@ def test_every_acr_route_is_behind_the_auth_gate():
 
 
 def test_the_acr_schema_is_purely_additive():
-    """No ALTER, no DROP, no rename of an existing table. A migration that modified an existing
-    table would break a replica still running the previous image (ADR 0045)."""
+    """Only statements ADR 0045 calls Class A — the ones safe to run in an automatic deploy.
+
+    This test used to reject every ALTER, on the reasoning that "a migration that modified an
+    existing table would break a replica still running the previous image". That is true of a
+    DROP, a rename, or a retype, and NOT true of an added column: an older replica selecting *
+    receives a key it ignores, and its INSERTs name their columns explicitly, so the new one takes
+    its default. ADR 0045 says so in as many words — its Class A table reads "`ADD COLUMN`
+    nullable (PG11+ with a non-volatile default too)", and its expand/contract rule licenses
+    exactly this shape: "add the new column/table/index, nullable and unused".
+
+    So the ban narrows to what the ADR actually forbids in an unattended deploy, and the rest of
+    the file's guards are unchanged. What stays banned is the whole of Class C (retypes, SET NOT
+    NULL on a populated column, DROP COLUMN) and any DROP at all — a contract is a later,
+    deliberate deploy, never this one.
+
+    Phase 6 is why this came up: `requirement_set` and `chapter` on acr_criterion, both nullable,
+    one with a constant default, added so a 508 requirement row cannot be mistaken for a WCAG one.
+    """
     schema = [s for s in store_mod._SCHEMA if isinstance(s, str)]
     acr_statements = [s for s in schema if "acr_" in s]
     assert acr_statements, "the ACR schema is missing entirely"
     for stmt in acr_statements:
-        head = stmt.strip().upper()
-        assert head.startswith("CREATE TABLE IF NOT EXISTS") or \
-               head.startswith("CREATE INDEX IF NOT EXISTS"), stmt[:90]
-        assert "DROP " not in head, stmt[:90]
+        assert _is_class_a(stmt), stmt[:90]
+
+
+def _is_class_a(stmt: str) -> bool:
+    """ADR 0045's Class A: safe to run unattended, brief lock or none, no rewrite."""
+    head = f" {stmt.strip().upper()} "
+    additive = (head.lstrip().startswith("CREATE TABLE IF NOT EXISTS")
+                or head.lstrip().startswith("CREATE INDEX IF NOT EXISTS")
+                or (head.lstrip().startswith("ALTER TABLE")
+                    and "ADD COLUMN IF NOT EXISTS" in head))
+    if not additive or "DROP " in head:
+        return False
+    # Class C: a rewrite behind an innocuous-looking ALTER.
+    return not any(b in head for b in (" ALTER COLUMN ", " RENAME ", " SET NOT NULL", " TYPE "))
+
+
+@pytest.mark.parametrize("stmt,allowed", [
+    ("CREATE TABLE IF NOT EXISTS acr_report (id TEXT)", True),
+    ("CREATE INDEX IF NOT EXISTS idx_acr ON acr_report(id)", True),
+    ("ALTER TABLE acr_criterion ADD COLUMN IF NOT EXISTS requirement_set TEXT "
+     "DEFAULT 'wcag-2.2-aa'", True),
+    ("ALTER TABLE acr_criterion DROP COLUMN requirement_set", False),
+    ("ALTER TABLE acr_criterion RENAME COLUMN chapter TO section", False),
+    ("ALTER TABLE acr_criterion ALTER COLUMN chapter TYPE INT", False),
+    ("ALTER TABLE acr_criterion ALTER COLUMN chapter SET NOT NULL", False),
+    ("DROP TABLE acr_criterion", False),
+    ("ALTER TABLE acr_criterion ADD COLUMN chapter TEXT", False),  # no IF NOT EXISTS: replay dies
+    # The one shape the Class C ban exists for, and the only one that reaches it: Postgres allows
+    # several actions in one ALTER, so a rewrite can ride along behind a legitimate add. Every
+    # other rewrite is already rejected for not being an ADD COLUMN at all — which a bite check
+    # established by deleting the ban and finding nothing turned red.
+    ("ALTER TABLE acr_criterion ADD COLUMN IF NOT EXISTS a TEXT, "
+     "ALTER COLUMN chapter TYPE INT", False),
+])
+def test_the_class_a_predicate_admits_and_rejects_the_right_statements(stmt, allowed):
+    """The sweep above can only fail on a statement somebody wrote. This is what proves the
+    predicate would catch one — written after a bite check found that deleting the Class C ban
+    turned nothing red, because `_SCHEMA` rightly contains no rewrite to catch.
+    """
+    assert _is_class_a(stmt) is allowed
 
 
 def test_the_acr_tables_do_not_join_to_scan_data():
