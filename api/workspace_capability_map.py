@@ -234,6 +234,15 @@ _map_many([("GET", "/control/capacity-schedule")], {"operations.view", "settings
 # capability that manages capacity rather than with the ones that only read it. The handler
 # additionally enforces _require_admin — this map narrows who may reach it, not who may act.
 _map_many([("POST", "/control/capacity-schedule/validate")], {"workers.manage"})
+# Phase 3's writes. All three change durable state and two can reach Azure, so they sit with the
+# capability that manages capacity — and each handler additionally enforces _require_admin, which
+# is the authoritative gate; this map narrows who may reach them.
+_map_many([("PUT", "/control/capacity-schedule"),
+           ("POST", "/control/capacity-schedule/override"),
+           ("DELETE", "/control/capacity-schedule/override")], {"workers.manage"})
+# The rendered policy is a READ — what ACP would apply, inspectable before anyone applies it,
+# which is the whole argument for showing it. Same grant as the schedule it derives from.
+_map_many([("GET", "/control/capacity-schedule/policy")], {"operations.view", "settings.view"})
 
 # ── Scan Analytics ────────────────────────────────────────────────────────────
 _map_many([("GET", "/admin/analytics/overview"), ("GET", "/ai/costs")], {"analytics.view"})

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import os
 import threading
+import uuid
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -2112,10 +2113,20 @@ def get_capacity_schedule():
     """
     import capacity_schedule as sched_mod
 
+    import capacity_store as store_mod
+
     now = datetime.now(timezone.utc)
-    schedule = sched_mod.PROPOSED
+    schedule = store_mod.load_schedule(core.store)
+    override = store_mod.get_override(core.store, now)
     observed, configured = _observed_apps()
     payload = _schedule_payload(schedule, now)
+    # An override outranks the schedule while it lasts, and says so in the mode rather than
+    # borrowing the name of the mode it copied — nothing downstream may report an overridden
+    # fleet as though the schedule produced it.
+    floors, authority = store_mod.effective_floors(schedule, override, now)
+    payload["effective_floors"] = floors
+    payload["effective_mode"] = authority
+    payload["override"] = override
     payload["validation"] = sched_mod.validate(
         schedule, sched_mod.baseline_tiers(schedule),
         server_max_connections=sched_mod.SERVER_MAX_CONNECTIONS,
@@ -2133,7 +2144,10 @@ def get_capacity_schedule():
     # DRIFT IS ONLY MEANINGFUL ONCE A SCHEDULE IS APPLIED. Reporting the proposal's distance from
     # production as "configuration drift" would be true arithmetic and a false statement: nothing
     # has drifted from a schedule nobody has put into force. Phase 3 turns this on with the PUT.
-    payload["drift"] = (sched_mod.drift(schedule, payload["effective_mode"], observed)
+    # Drift compares INTENT to Azure, so it uses the mode the schedule is in, not an override's
+    # name — an override is a deliberate, audited divergence and reporting it as drift would bury
+    # the real thing among the expected ones.
+    payload["drift"] = (sched_mod.drift(schedule, sched_mod.effective_mode(schedule, now), observed)
                         if schedule.applied else [])
     payload["drift_evaluated"] = bool(schedule.applied)
     payload["azure_configured"] = configured
@@ -2157,7 +2171,9 @@ def validate_capacity_schedule(body: ScheduleProposal, request: Request):
     from .system import _require_admin
     _require_admin(request)
 
-    current = sched_mod.PROPOSED
+    import capacity_store as store_mod
+
+    current = store_mod.load_schedule(core.store)
     supplied = {k: v for k, v in body.model_dump().items() if v is not None}
     if "days" in supplied:
         supplied["days"] = tuple(supplied["days"])
@@ -2180,3 +2196,179 @@ def validate_capacity_schedule(body: ScheduleProposal, request: Request):
         # already name it; refusing to answer at all would hide them behind a 500.
         result["proposed"] = None
     return result
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 — administrator writes. Everything below changes durable state; two
+# of the three can also change Azure. All of it is admin-gated and audited.
+#
+# PERSISTENCE AND APPLICATION ARE SEPARATE STEPS, and §9 turns on that: the
+# durable record is what ACP intends, Azure is where it runs, and the two
+# disagreeing is drift rather than a write that half-succeeded. A PUT that
+# saved and then failed to reach Azure has still recorded the intention — the
+# tab says so, and the operator can reapply — which is the honest outcome and
+# not the one a single combined step could express.
+# ---------------------------------------------------------------------------
+
+class ScheduleWrite(ScheduleProposal):
+    """A schedule to save. `version` is the one the caller read; `reason` goes in the audit."""
+
+    version: int
+    reason: str = ""
+
+
+class OverrideRequest(BaseModel):
+    """§5.4's four requirements, as a body that cannot omit any of them."""
+
+    mode: str                                   # business_hours | off_hours | custom
+    duration: str                               # 30m | 1h | 2h | 4h | until_next_transition
+    reason: str
+    floors: Optional[dict[str, int]] = None     # required for `custom`
+
+
+def _validate_schedule(schedule) -> dict:
+    import capacity_schedule as sched_mod
+    return sched_mod.validate(
+        schedule, sched_mod.baseline_tiers(schedule),
+        server_max_connections=sched_mod.SERVER_MAX_CONNECTIONS,
+        reserve=sched_mod.OPERATIONAL_RESERVE,
+        vcpu_quota=sched_mod.vcpu_quota())
+
+
+def _actor(request: Request) -> str:
+    return (getattr(request.state, "user_email", None) or "admin").lower()
+
+
+@router.put("/control/capacity-schedule")
+def put_capacity_schedule(body: ScheduleWrite, request: Request):
+    """Save a schedule. Admin-only, validated before it is stored, audited either way.
+
+    THE DRY RUN IS NOT ADVISORY. §7 says saving is BLOCKED when the fleet would exceed the
+    database ceiling or the CPU quota, and this is where that is enforced — a schedule that fails
+    validation is refused with 422 and the findings, and nothing is written. The PRD's own §5.3
+    table is one of the schedules this refuses, which is the point: the validation exists because
+    the shape somebody would naturally type is over budget.
+
+    Optimistic concurrency through `version`: two administrators editing warm capacity in
+    different tabs is not a merge conflict, it is one of them silently undoing the other's floor
+    and discovering it during a deploy.
+
+    APPLYING TO AZURE IS A SEPARATE CALL. This saves the intention; POST …/apply pushes it. A
+    combined step could not express "saved but not yet applied", which is the state §9's drift
+    reporting is built on.
+    """
+    from dataclasses import replace
+
+    import capacity_schedule as sched_mod
+    import capacity_store as store_mod
+    from .system import _require_admin
+    _require_admin(request)
+
+    actor, correlation_id = _actor(request), uuid.uuid4().hex[:12]
+    current = store_mod.load_schedule(core.store)
+    supplied = {k: v for k, v in body.model_dump(exclude={"version", "reason"}).items()
+                if v is not None}
+    if "days" in supplied:
+        supplied["days"] = tuple(supplied["days"])
+    try:
+        proposed = replace(current, **supplied)
+    except TypeError as e:  # noqa: BLE001
+        raise HTTPException(422, f"not a schedule field: {e}") from e
+
+    result = _validate_schedule(proposed)
+    if result["blocked"]:
+        # Audited, because §11 lists "validation rejection" among the things to record — a
+        # schedule somebody tried to save and could not is exactly the evidence that says the
+        # capacity table needs a decision rather than another attempt.
+        store_mod._audit(core.store, actor, "settings.capacity_schedule.rejected",
+                         reason=body.reason, correlation_id=correlation_id,
+                         detail="; ".join(f["code"] for f in result["findings"] if f["blocking"]))
+        raise HTTPException(422, {"message": "this schedule cannot be applied",
+                                  "correlation_id": correlation_id, **result})
+    try:
+        saved = store_mod.save_schedule(core.store, proposed, actor=actor,
+                                        expected_version=body.version, reason=body.reason,
+                                        correlation_id=correlation_id)
+    except store_mod.ConcurrentEdit as e:
+        raise HTTPException(409, {"message": str(e), "your_version": e.expected,
+                                  "current_version": e.actual}) from e
+
+    payload = _schedule_payload(saved, datetime.now(timezone.utc))
+    payload["validation"] = result
+    payload["correlation_id"] = correlation_id
+    # SAVED IS NOT APPLIED, and the payload says which. Anything that read this as live would be
+    # reporting an intention as a fact — the exact confusion `applied` was added to prevent.
+    payload["azure_applied"] = False
+    return payload
+
+
+@router.post("/control/capacity-schedule/override")
+def create_capacity_override(body: OverrideRequest, request: Request):
+    """Temporarily override the schedule's warm floors. Expires by itself; never permanent.
+
+    Expiry is enforced on READ (capacity_store.get_override), not by a sweeper. A background job
+    that clears expired overrides fails in the one direction §5.4 forbids: stop the job and the
+    override outlives its expiry with nothing reporting it. There is no component here whose
+    failure can extend an override.
+    """
+    import capacity_store as store_mod
+    from .system import _require_admin
+    _require_admin(request)
+
+    actor, correlation_id = _actor(request), uuid.uuid4().hex[:12]
+    schedule = store_mod.load_schedule(core.store)
+    try:
+        override = store_mod.set_override(
+            core.store, mode=body.mode, floors=body.floors, duration=body.duration,
+            reason=body.reason, actor=actor, schedule=schedule, correlation_id=correlation_id)
+    except store_mod.OverrideError as e:
+        raise HTTPException(422, str(e)) from e
+    return {"override": override, "correlation_id": correlation_id,
+            "resumes": {"version": schedule.version, "enabled": schedule.enabled}}
+
+
+@router.delete("/control/capacity-schedule/override")
+def delete_capacity_override(request: Request):
+    """Cancel an override early. Idempotent — cancelling nothing is not an error, because the
+    override may simply have expired between the tab rendering it and the click landing."""
+    import capacity_store as store_mod
+    from .system import _require_admin
+    _require_admin(request)
+
+    actor = _actor(request)
+    existing = store_mod.get_override(core.store)
+    store_mod.clear_override(core.store, actor=actor)
+    return {"cleared": bool(existing)}
+
+
+@router.get("/control/capacity-schedule/policy")
+def get_capacity_policy():
+    """The Azure scale policy this schedule implies — rendered, never applied.
+
+    THE ANSWER TO §6.4, made inspectable before anybody runs it. Each app gets its off-hours
+    floor as minReplicas, its ceiling as maxReplicas, a `cron` rule holding the business-hours
+    floor during the window, and its existing queue rule. KEDA takes the maximum across triggers,
+    so the schedule is a floor and the queue can still scale above it at any hour (§6.1, AC 8) —
+    and the transition at 06:00 changes nothing about the app, so it creates no revision.
+
+    Open to any authenticated user for the same reason the other reads here are: this is the
+    configuration ACP would apply, and being able to see it before it is applied is the whole
+    argument for a read-only phase.
+    """
+    import capacity_policy as policy_mod
+    import capacity_store as store_mod
+    import queue_scaler
+
+    schedule = store_mod.load_schedule(core.store)
+    policy = policy_mod.policy_for(schedule, queue_scaler.lane_job_types())
+    return {
+        "schedule_version": schedule.version,
+        "applied": schedule.applied,
+        "apps": [p.as_dict() for p in policy],
+        # Rendered as argv lists, and only when the subscription is actually configured — a
+        # command naming a placeholder subscription is the kind of thing that gets pasted.
+        "az_commands": (policy_mod.az_commands(policy, resource_group=_AZ_RG,
+                                               subscription=_AZ_SUB)
+                        if _AZ_CONFIGURED and _AZ_SUB else []),
+        "transitions_create_no_revision": True,
+    }
