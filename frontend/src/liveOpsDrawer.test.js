@@ -2471,3 +2471,111 @@ describe('workerJobHealth, per in-flight job', () => {
     expect(idle.jobs).toEqual([])
   })
 })
+
+describe('gaugeModel: running work no live slot accounts for', () => {
+  // Reported 2026-09-06 from production: the Assess drawer read "Idle — capacity available,
+  // 0 of 20 worker slots active (0%)" directly above "Current work · 8 documents in flight",
+  // listing real files with healthy leases. 0 of 20 CLAIMED was true; idle was not, and the
+  // headline is what a reader takes away.
+  const base = { alive: true, slots: 20, active: 0 }
+
+  it('does not call a service idle while it is running jobs', () => {
+    const gauge = gaugeModel({ ...base, jobs_in_flight: 13, unattributed_running: 13 })
+    expect(gauge.state).toBe('unclaimed')
+    expect(gauge.stateLabel).toBe('Running work not claimed by live slots')
+    expect(gauge.stateLabel).not.toMatch(/idle/i)
+  })
+
+  it('keeps the percentage, because zero claimed slots is a true measurement', () => {
+    // The fix is the LABEL, not the number: hiding 0% would remove a fact that is correct.
+    const gauge = gaugeModel({ ...base, jobs_in_flight: 13, unattributed_running: 13 })
+    expect(gauge.pct).toBe(0)
+    expect(gauge.active).toBe(0)
+    expect(gauge.availableSlots).toBe(20)
+    expect(gauge.busyText).toBe('0 of 20 slots busy (0%)')
+  })
+
+  it('explains the disagreement rather than only labelling it', () => {
+    const gauge = gaugeModel({ ...base, jobs_in_flight: 13, unattributed_running: 13 })
+    expect(gauge.unclaimedNote).toContain('13 running job records')
+    // Says the jobs are REAL. A reader who concludes the work is phantom would go looking for a
+    // bug in the queue rather than in the telemetry.
+    expect(gauge.unclaimedNote).toContain('The jobs are real')
+    expect(gauge.unclaimedNote).toMatch(/fresh/)
+  })
+
+  it('is still idle when the service is genuinely doing nothing', () => {
+    const quiet = gaugeModel({ ...base, jobs_in_flight: 0, unattributed_running: 0 })
+    expect(quiet.state).toBe('idle')
+    expect(quiet.stateLabel).toBe('Idle — capacity available')
+    expect(quiet.unclaimedNote).toBe(null)
+  })
+
+  it('is idle, not unclaimed, when nothing is reported either way', () => {
+    // Absent counts are not evidence of hidden work. Treating "not reported" as "unattributed"
+    // would put a warning on every service that does not publish the field.
+    const older = gaugeModel(base)
+    expect(older.state).toBe('idle')
+    expect(older.unclaimedNote).toBe(null)
+  })
+
+  it('catches the case where slots are busy but fewer than the jobs held', () => {
+    // 2 slots claimed, 13 jobs running: not idle, and not over-committed either, because 2 < 20.
+    // Without unattributed_running this reads as a comfortable 10%.
+    const gauge = gaugeModel({ ...base, active: 2, jobs_in_flight: 13, unattributed_running: 11 })
+    expect(gauge.state).toBe('unclaimed')
+    expect(gauge.pct).toBe(10)
+    expect(gauge.unclaimedNote).toContain('13 running job records')
+  })
+
+  it('leaves saturation and over-commitment alone', () => {
+    // The new state sits BELOW those in precedence: a service at capacity is at capacity, and
+    // burying that under a telemetry caveat would be a worse headline than the one being fixed.
+    const full = gaugeModel({ ...base, active: 20, jobs_in_flight: 20, unattributed_running: 0 })
+    expect(full.state).toBe('saturated')
+    const over = gaugeModel({ ...base, active: 51, slots: 2, jobs_in_flight: 51, unattributed_running: 49 })
+    expect(over.state).toBe('saturated')
+    expect(over.stateLabel).toBe('Over committed')
+    expect(over.pct).toBe(100)
+  })
+
+  it('a service that is not reporting at all stays unavailable', () => {
+    const dead = gaugeModel({ alive: false, slots: 20, active: 0, jobs_in_flight: 13,
+      unattributed_running: 13 })
+    expect(dead.state).toBe('unavailable')
+  })
+})
+
+describe('componentState: "healthy, not stalled" is a claim, not a default', () => {
+  const alive = { alive: true, age_s: 2, slots: 20, active: 0 }
+
+  it('does not call a service healthy while it holds unclaimed running jobs', () => {
+    const state = componentState({ kind: 'worker',
+      service: { ...alive, jobs_in_flight: 13, unattributed_running: 13 } }, {})
+    expect(state.key).toBe('degraded')
+    expect(state.label).toBe('Work unclaimed')
+    expect(state.detail).toContain('13 running job records')
+    expect(state.detail).not.toContain('healthy, not stalled')
+  })
+
+  it('still says idle and healthy when the service really is quiet', () => {
+    const state = componentState({ kind: 'worker',
+      service: { ...alive, jobs_in_flight: 0, unattributed_running: 0 } }, {})
+    expect(state.key).toBe('idle')
+    expect(state.detail).toContain('healthy, not stalled')
+  })
+
+  it('does not invent unclaimed work from an absent count', () => {
+    expect(componentState({ kind: 'worker', service: alive }, {}).key).toBe('idle')
+  })
+
+  it('leaves offline and stale-heartbeat ahead of it', () => {
+    // Those are stronger statements about the same service and must not be masked by this one.
+    expect(componentState({ kind: 'worker',
+      service: { ...alive, alive: false, unattributed_running: 13 } }, {}).key).toBe('offline')
+    expect(componentState({ kind: 'worker',
+      service: { ...alive, age_s: 99999, unattributed_running: 13 } }, {}).key).toBe('degraded')
+    expect(componentState({ kind: 'worker',
+      service: { ...alive, age_s: 99999, unattributed_running: 13 } }, {}).label).toBe('Degraded')
+  })
+})
