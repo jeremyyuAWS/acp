@@ -433,7 +433,7 @@ describe('the v2 live operations hierarchy', () => {
     }))
     const html = render({ snapshot: { ...SNAP, active_attempts: attempts }, connected: true,
       receivedAt: Date.now(), compactLayout: true })
-    expect(html).toContain('5 of 10 documents processed')
+    expect(html.replace(/<[^>]*>/g, '')).toContain('5 of 10 documents processed')
     expect(html).toContain('Throughput')
     for (const title of ['Phases', 'Fix and delivery totals', 'Live activity', 'Needs attention']) {
       expect(html).toContain(`<summary>${title}</summary>`)
@@ -456,8 +456,10 @@ describe('the v2 live operations hierarchy', () => {
       ...noFixesYet,
       documents: { completed: 0, processing: 10, waiting: 145, review: 0, failed: 0, skipped: 4 },
     }
-    expect(render({ snapshot: noFixesYet })).toContain('0 of 159 documents processed')
-    expect(render({ snapshot: fourInspected })).toContain('4 of 159 documents processed')
+    expect(render({ snapshot: noFixesYet }).replace(/<[^>]*>/g, ''))
+      .toContain('0 of 159 documents processed')
+    expect(render({ snapshot: fourInspected }).replace(/<[^>]*>/g, ''))
+      .toContain('4 of 159 documents processed')
     // The outcome remains explicit; "processed" must not relabel a no-fix document as corrected.
     expect(render({ snapshot: fourInspected })).toContain('data-testid="rem-count-completed"')
     expect(render({ snapshot: fourInspected })).toContain('data-testid="rem-count-skipped"')
@@ -481,6 +483,38 @@ describe('the v2 live operations hierarchy', () => {
         documents: { ...SNAP.documents, completed: 5, waiting: 2 } },
     })) })
     expect(phases.open).toBe(true)
+    await act(async () => { root.unmount() })
+    host.remove()
+  })
+
+  it('shows positive deltas when processed work and outcome totals advance', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const props = { connected: true, receivedAt: Date.now() }
+    await act(async () => {
+      root.render(createElement(RemediationOpsPanel, { ...props, snapshot: SNAP }))
+    })
+    expect(host.querySelectorAll('.livecounter-delta')).toHaveLength(0)
+
+    await act(async () => {
+      root.render(createElement(RemediationOpsPanel, {
+        ...props,
+        snapshot: {
+          ...SNAP,
+          revision: SNAP.revision + 1,
+          documents: { ...SNAP.documents, completed: 6, processing: 1, waiting: 2 },
+          fixes: { ...SNAP.fixes, applied: 30, verified: 24, documents_verified: 5 },
+          delivery: { ...SNAP.delivery, stored: 5, delivered: 4 },
+        },
+      }))
+    })
+
+    const deltas = [...host.querySelectorAll('.livecounter-delta')].map((node) => node.textContent)
+    expect(deltas).toContain('+2')
+    expect(deltas).toContain('+4')
+    expect(deltas).toContain('+3')
+    expect(deltas).toContain('+1')
     await act(async () => { root.unmount() })
     host.remove()
   })
