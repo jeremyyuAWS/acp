@@ -121,6 +121,78 @@ def test_output_manifest_is_sealed_from_deterministic_effect_receipts(isolated_s
     assert final["output_manifest_id"] == manifest["manifest_id"]
 
 
+def test_sealed_manifest_is_required_and_carried_across_stage_handoff(isolated_store):
+    sid = _scan(isolated_store)
+    upstream = _submit(isolated_store, sid)
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "SELECT work_item_id,revision FROM stage_work_items WHERE execution_id=%s ORDER BY input_id",
+            (upstream["batch_id"],))
+        items = isolated_store._db.fetchall(cur)
+    for index, item in enumerate(items):
+        isolated_store.apply_stage_event(
+            event_id=f"handoff-complete-{index}", execution_id=upstream["batch_id"],
+            work_item_id=item["work_item_id"], event_type="work_item.completed",
+            expected_revision=item["revision"], payload={"result_digest": f"result:{index}"})
+    current = isolated_store.get_stage_execution(upstream["batch_id"], owner=OWNER)
+    manifest = isolated_store.seal_stage_output_manifest(
+        upstream["batch_id"], [{"document": "a.docx"}, {"document": "b.docx"}],
+        expected_revision=current["revision"], owner=OWNER)
+
+    downstream = isolated_store.enqueue_stage_batch(
+        sid, "assess", "scan_assess", [{"file": "a.docx"}, {"file": "b.docx"}],
+        snapshot_id=manifest["manifest_id"], input_manifest_id=manifest["manifest_id"],
+        request_fingerprint=isolated_store.canonical_request_fingerprint({"policy": "wcag22"}))
+    execution = isolated_store.get_stage_execution(downstream["batch_id"], owner=OWNER)
+    assert execution["input_manifest_id"] == manifest["manifest_id"]
+    assert execution["provenance"] == "observed"
+
+    with pytest.raises(ValueError, match="input snapshot"):
+        isolated_store.enqueue_stage_batch(
+            sid, "release", "publish_file", [{"file": "a.docx"}],
+            snapshot_id="mutable-alias", input_manifest_id=manifest["manifest_id"],
+            request_fingerprint=isolated_store.canonical_request_fingerprint({"target": "drive"}))
+
+
+def test_stage_snapshot_publishes_one_intuitive_reconciliation_equation(isolated_store):
+    sid = _scan(isolated_store)
+    execution = _submit(isolated_store, sid)
+    snapshot = isolated_store.stage_execution_snapshot(execution["batch_id"], owner=OWNER)
+    assert snapshot["reconciliation"] == {
+        "unit": "work items", "scope": "this execution",
+        "equation": "total = queued + processing + completed + failed + cancelled + skipped",
+        "total": 2, "accounted": 2, "unaccounted": 0, "exact": True,
+    }
+
+
+def test_historical_backfill_is_idempotent_and_never_invents_evidence(isolated_store):
+    sid = _scan(isolated_store, "historical-stage")
+    batch = "historical-batch"
+    first_job = isolated_store.enqueue_job(
+        "scan_file", {"file": "first.docx"}, scan_id=sid, batch_id=batch)
+    second_job = isolated_store.enqueue_job(
+        "scan_file", {"file": "second.docx"}, scan_id=sid, batch_id=batch)
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "UPDATE jobs SET status='done',attempts=1 WHERE id=%s", (first_job,))
+        isolated_store._db.execute(cur,
+            "UPDATE jobs SET status='dead',attempts=3,error_class='provider' WHERE id=%s",
+            (second_job,))
+
+    first = isolated_store.backfill_stage_executions()
+    replay = isolated_store.backfill_stage_executions()
+    assert first["executions_created"] == 1 and first["work_items_created"] == 2
+    assert replay["executions_created"] == 0 and replay["work_items_created"] == 0
+    execution = isolated_store.get_stage_execution(batch, owner=OWNER)
+    assert execution["provenance"] == "inferred"
+    assert execution["state"] == "failed"
+    snapshot = isolated_store.stage_execution_snapshot(batch, owner=OWNER)
+    assert snapshot["reconciliation"]["exact"] is True
+    assert snapshot["counts"]["work_items"]["completed"] == 1
+    assert snapshot["counts"]["work_items"]["failed"] == 1
+    assert snapshot["attempts"]["total"] == 0
+
+
 def test_stop_is_requested_then_acknowledged_not_instantly_claimed(isolated_store):
     sid = _scan(isolated_store)
     execution = _submit(isolated_store, sid)

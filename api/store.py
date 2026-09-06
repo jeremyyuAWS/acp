@@ -577,13 +577,15 @@ _SCHEMA = [
       input_snapshot_id TEXT NOT NULL, request_fingerprint TEXT NOT NULL,
       state TEXT NOT NULL, revision INT NOT NULL DEFAULT 1, is_current INT NOT NULL DEFAULT 1,
       expected_items INT, terminal_items INT NOT NULL DEFAULT 0, output_manifest_id TEXT,
-      cancel_requested_at TEXT,
+      cancel_requested_at TEXT, input_manifest_id TEXT, provenance TEXT NOT NULL DEFAULT 'observed',
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
       UNIQUE(workflow_id,stage,input_snapshot_id,request_fingerprint)
     )""",
     "CREATE INDEX IF NOT EXISTS idx_stage_execution_current ON stage_executions(workflow_id,stage,is_current)",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_stage_execution_one_current ON stage_executions(workflow_id,stage) WHERE is_current=1",
     "ALTER TABLE stage_executions ADD COLUMN IF NOT EXISTS cancel_requested_at TEXT",
+    "ALTER TABLE stage_executions ADD COLUMN IF NOT EXISTS input_manifest_id TEXT",
+    "ALTER TABLE stage_executions ADD COLUMN IF NOT EXISTS provenance TEXT NOT NULL DEFAULT 'observed'",
     """CREATE TABLE IF NOT EXISTS stage_work_items (
       work_item_id TEXT PRIMARY KEY, execution_id TEXT NOT NULL, input_id TEXT NOT NULL,
       job_id TEXT, state TEXT NOT NULL, revision INT NOT NULL DEFAULT 1, attempt INT NOT NULL DEFAULT 0,
@@ -626,8 +628,11 @@ _SCHEMA = [
     "CREATE INDEX IF NOT EXISTS idx_stage_outbox_delivery ON stage_outbox(status,available_at,created_at)",
     """CREATE TABLE IF NOT EXISTS stage_output_manifests (
       manifest_id TEXT PRIMARY KEY, execution_id TEXT NOT NULL UNIQUE, digest TEXT NOT NULL,
-      item_count INT NOT NULL, entries TEXT NOT NULL, sealed_at TEXT NOT NULL
+      item_count INT NOT NULL, entries TEXT NOT NULL, sealed_at TEXT NOT NULL,
+      upstream_manifest_id TEXT, contract_version INT NOT NULL DEFAULT 1
     )""",
+    "ALTER TABLE stage_output_manifests ADD COLUMN IF NOT EXISTS upstream_manifest_id TEXT",
+    "ALTER TABLE stage_output_manifests ADD COLUMN IF NOT EXISTS contract_version INT NOT NULL DEFAULT 1",
     """CREATE TABLE IF NOT EXISTS side_effect_receipts (
       effect_id TEXT PRIMARY KEY, execution_id TEXT NOT NULL, work_item_id TEXT,
       effect_type TEXT NOT NULL, destination TEXT NOT NULL, content_digest TEXT NOT NULL,
@@ -10961,6 +10966,37 @@ class Store:
             self._db.execute(cur, "SELECT * FROM stage_work_items WHERE job_id=%s", (job_id,))
             return self._db.fetchone(cur)
 
+    def get_stage_output_manifest(self, manifest_id: str, *, owner: str | None = None) -> dict | None:
+        """Return a sealed manifest only when its execution belongs to the requested owner."""
+        with self._db.cursor() as cur:
+            sql = ("SELECT m.*,e.workflow_id,e.stage,e.owner_email FROM stage_output_manifests m "
+                   "JOIN stage_executions e ON e.execution_id=m.execution_id "
+                   "WHERE m.manifest_id=%s")
+            params = [manifest_id]
+            if owner is not None:
+                sql += " AND e.owner_email=%s"
+                params.append(owner)
+            self._db.execute(cur, sql, tuple(params))
+            row = self._db.fetchone(cur)
+        if row and isinstance(row.get("entries"), str):
+            try:
+                row["entries"] = json.loads(row["entries"])
+            except Exception:
+                row["entries"] = None
+        return row
+
+    def _validate_input_manifest(self, workflow_id: str, input_manifest_id: str | None,
+                                 snapshot_id: str) -> None:
+        if not input_manifest_id:
+            return
+        manifest = self.get_stage_output_manifest(input_manifest_id)
+        if not manifest:
+            raise ValueError("input manifest is not sealed or does not exist")
+        if manifest["workflow_id"] != workflow_id:
+            raise ValueError("input manifest belongs to a different workflow")
+        if snapshot_id != input_manifest_id:
+            raise ValueError("input snapshot must identify the sealed upstream manifest")
+
     def current_stage_execution(self, workflow_id: str, stage: str, *,
                                 owner: str | None = None) -> dict | None:
         with self._db.cursor() as cur:
@@ -11186,9 +11222,11 @@ class Store:
             if not (getattr(cur, "rowcount", 0) or 0):
                 raise RuntimeError("stage execution revision conflict")
             self._db.execute(cur,
-                "INSERT INTO stage_output_manifests(manifest_id,execution_id,digest,item_count,entries,sealed_at) "
-                "VALUES(%s,%s,%s,%s,%s,%s) ON CONFLICT(execution_id) DO NOTHING",
-                (manifest_id, execution_id, digest, len(ordered), raw, now))
+                "INSERT INTO stage_output_manifests(manifest_id,execution_id,digest,item_count,entries,sealed_at,"
+                "upstream_manifest_id,contract_version) VALUES(%s,%s,%s,%s,%s,%s,%s,1) "
+                "ON CONFLICT(execution_id) DO NOTHING",
+                (manifest_id, execution_id, digest, len(ordered), raw, now,
+                 execution.get("input_manifest_id")))
             self._db.execute(cur,
                 "UPDATE stage_executions SET state='succeeded',output_manifest_id=%s,"
                 "revision=revision+1,updated_at=%s WHERE execution_id=%s AND revision=%s "
@@ -11197,7 +11235,8 @@ class Store:
             if not (getattr(cur, "rowcount", 0) or 0):
                 raise RuntimeError("stage execution revision conflict")
         return {"manifest_id": manifest_id, "execution_id": execution_id, "digest": digest,
-                "item_count": len(ordered), "entries": ordered, "sealed_at": now}
+                "item_count": len(ordered), "entries": ordered, "sealed_at": now,
+                "upstream_manifest_id": execution.get("input_manifest_id"), "contract_version": 1}
 
     def stage_execution_snapshot(self, execution_id: str, *, owner: str | None = None) -> dict | None:
         execution = self.get_stage_execution(execution_id, owner=owner)
@@ -11225,16 +11264,25 @@ class Store:
         expected = execution.get("expected_items")
         observed = sum(partitions.values())
         terminal = sum(partitions.get(s, 0) for s in ("completed", "failed", "cancelled", "skipped"))
+        accounted = sum(partitions.get(s, 0) for s in
+                        ("queued", "processing", "completed", "failed", "cancelled", "skipped"))
         violations = []
         if expected is not None and int(expected) != observed:
             violations.append({"code": "work_item_partition", "expected": int(expected),
                                "observed": observed})
+        unknown_states = sorted(set(partitions) - {
+            "queued", "processing", "completed", "failed", "cancelled", "skipped"})
+        if unknown_states:
+            violations.append({"code": "unknown_work_item_state", "states": unknown_states})
         return {
             "workflow_id": execution["workflow_id"],
             "workflow_revision": int(execution["workflow_revision"]),
             "stage": execution["stage"], "execution_id": execution_id,
             "input_snapshot_id": execution["input_snapshot_id"],
             "request_fingerprint": execution["request_fingerprint"],
+            "input_manifest_id": execution.get("input_manifest_id"),
+            "output_manifest_id": execution.get("output_manifest_id"),
+            "provenance": execution.get("provenance") or "observed",
             "revision": int(execution["revision"]), "state": execution["state"],
             "generated_at": self._now(), "last_durable_update_at": execution["updated_at"],
             "control": {"cancel_requested": bool(execution.get("cancel_requested_at")),
@@ -11255,6 +11303,13 @@ class Store:
                          "retrying": outbox_partitions.get("retry", 0),
                          "delivered": outbox_partitions.get("delivered", 0),
                          "dead_lettered": outbox_partitions.get("dead", 0)},
+            "reconciliation": {
+                "unit": "work items", "scope": "this execution",
+                "equation": "total = queued + processing + completed + failed + cancelled + skipped",
+                "total": expected, "accounted": accounted,
+                "unaccounted": None if expected is None else int(expected) - accounted,
+                "exact": expected is not None and int(expected) == accounted and not unknown_states,
+            },
             "integrity": {"ok": not violations,
                           "affected": ["work_item_partition"] if violations else [],
             "violations": violations},
@@ -11618,7 +11673,8 @@ class Store:
 
     def enqueue_stage_batch(self, scan_id: str, stage: str, job_type: str,
                             payloads: list[dict], *, snapshot_id: str,
-                            request_fingerprint: str) -> dict:
+                            request_fingerprint: str,
+                            input_manifest_id: str | None = None) -> dict:
         """Atomically enqueue or reuse equivalent queued, running or completed stage work.
 
         A FAILED EXECUTION IS NOT REUSED — it is re-queued in place. `batch_id` is derived from
@@ -11655,6 +11711,7 @@ class Store:
         workflow_id = workflow.get("id") or scan_id
         workflow_revision = int(workflow.get("revision") or 1)
         owner = workflow.get("owner_email") or self._stage_owner(scan_id)
+        self._validate_input_manifest(workflow_id, input_manifest_id, snapshot_id)
         execution_hash = self._stage_identity(
             workflow_id, stage, snapshot_id, request_fingerprint)
         # Keep the historical 24-character batch shape for existing queue consumers while the
@@ -11674,11 +11731,11 @@ class Store:
                 self._db.execute(cur,
                     "INSERT INTO stage_executions(execution_id,workflow_id,workflow_revision,scan_id,"
                     "owner_email,stage,input_snapshot_id,request_fingerprint,state,revision,is_current,"
-                    "expected_items,terminal_items,created_at,updated_at) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,'processing',1,1,%s,0,%s,%s) "
+                    "expected_items,terminal_items,input_manifest_id,created_at,updated_at) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,'processing',1,1,%s,0,%s,%s,%s) "
                     "ON CONFLICT(execution_id) DO NOTHING",
                     (batch_id, workflow_id, workflow_revision, scan_id, owner, stage, snapshot_id,
-                     request_fingerprint, len(existing), now, now))
+                     request_fingerprint, len(existing), input_manifest_id, now, now))
                 by_file = {}
                 for original in payloads:
                     if original.get("file"):
@@ -11759,10 +11816,10 @@ class Store:
             self._db.execute(cur,
                 "INSERT INTO stage_executions(execution_id,workflow_id,workflow_revision,scan_id,"
                 "owner_email,stage,input_snapshot_id,request_fingerprint,state,revision,is_current,"
-                "expected_items,terminal_items,created_at,updated_at) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,'queued',1,1,%s,0,%s,%s)",
+                "expected_items,terminal_items,input_manifest_id,created_at,updated_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,'queued',1,1,%s,0,%s,%s,%s)",
                 (batch_id, workflow_id, workflow_revision, scan_id, owner, stage, snapshot_id,
-                 request_fingerprint, len(payloads), now, now))
+                 request_fingerprint, len(payloads), input_manifest_id, now, now))
             job_ids = []
             seen_inputs = set()
             for ordinal, original in enumerate(payloads):
@@ -11797,6 +11854,110 @@ class Store:
                 # Uniform shape with the reuse/revive path above, so a caller can read `requeued`
                 # without knowing which branch answered it.
                 "requeued": 0, "statuses": ["queued"] * len(job_ids)}
+
+    def backfill_stage_executions(self, *, limit: int | None = None) -> dict:
+        """Idempotently project historical queue batches into the canonical model.
+
+        Historical queue rows prove item outcomes, but they do not prove worker-attempt history or
+        a sealed upstream manifest.  The execution is therefore labelled ``inferred`` and those
+        absent facts remain absent instead of being fabricated.  Re-running this migration only
+        fills missing rows and returns an unchanged report.
+        """
+        import json as _json
+        with self._db.cursor() as cur:
+            sql = ("SELECT * FROM jobs WHERE batch_id IS NOT NULL "
+                   "ORDER BY created_at,id")
+            if limit is not None:
+                sql += " LIMIT %s"
+                self._db.execute(cur, sql, (int(limit),))
+            else:
+                self._db.execute(cur, sql)
+            jobs = self._db.fetchall(cur)
+        grouped = {}
+        historical_stages = {
+            **self._BATCH_JOB_STAGES,
+            "scan_discover": "discover", "scan_folder": "discover",
+            "scan_batch": "discover", "scan_file": "discover",
+            "scan_finalize": "discover", "publish_batch": "release",
+        }
+        for job in jobs:
+            stage = historical_stages.get(job.get("type"))
+            if stage:
+                grouped.setdefault((job["scan_id"], job["batch_id"], stage), []).append(job)
+        created_executions = created_items = 0
+        state_map = {"queued": "queued", "running": "processing", "done": "completed",
+                     "dead": "failed", "cancelled": "cancelled"}
+        for (scan_id, batch_id, stage), rows in grouped.items():
+            workflow = self.workflow_for_scan(scan_id) or {}
+            workflow_id = workflow.get("id") or scan_id
+            owner = workflow.get("owner_email") or self._stage_owner(scan_id)
+            decoded = []
+            for row in rows:
+                payload = row.get("payload") or {}
+                if isinstance(payload, str):
+                    try:
+                        payload = _json.loads(payload)
+                    except Exception:
+                        payload = {}
+                decoded.append((row, payload))
+            snapshot_ids = {p.get("snapshot_id") for _, p in decoded if p.get("snapshot_id")}
+            snapshot_id = next(iter(snapshot_ids)) if len(snapshot_ids) == 1 else (
+                f"legacy:{scan_id}:{batch_id}")
+            fingerprint = self.canonical_request_fingerprint({
+                "backfill": "queue-observation-v1", "batch_id": batch_id,
+                "job_ids": sorted(row["id"] for row in rows)})
+            states = [state_map.get(row.get("status"), "queued") for row in rows]
+            terminal = sum(state in ("completed", "failed", "cancelled", "skipped")
+                           for state in states)
+            execution_state = "processing"
+            if terminal == len(rows):
+                execution_state = "failed" if "failed" in states else (
+                    "cancelled" if "cancelled" in states else "processing_complete")
+            elif not any(state == "processing" for state in states):
+                execution_state = "queued"
+            created_at = min(str(row.get("created_at") or self._now()) for row in rows)
+            updated_at = max(str(row.get("updated_at") or created_at) for row in rows)
+            with self._db.cursor() as cur:
+                self._db.execute(cur, "SELECT execution_id FROM stage_executions WHERE execution_id=%s",
+                                 (batch_id,))
+                existed = bool(self._db.fetchone(cur))
+                self._db.execute(cur,
+                    "INSERT INTO stage_executions(execution_id,workflow_id,workflow_revision,scan_id,"
+                    "owner_email,stage,input_snapshot_id,request_fingerprint,state,revision,is_current,"
+                    "expected_items,terminal_items,provenance,created_at,updated_at) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,1,0,%s,%s,'inferred',%s,%s) "
+                    "ON CONFLICT(execution_id) DO NOTHING",
+                    (batch_id, workflow_id, int(workflow.get("revision") or 1), scan_id, owner,
+                     stage, snapshot_id, fingerprint, execution_state, len(rows), terminal,
+                     created_at, updated_at))
+                if not existed:
+                    created_executions += 1
+                seen_inputs = set()
+                for ordinal, (row, payload) in enumerate(decoded):
+                    input_id = str(payload.get("input_id") or payload.get("file") or
+                                   payload.get("document_id") or row["id"] or f"item-{ordinal}")
+                    if input_id in seen_inputs:
+                        input_id = f"{input_id}#legacy-job:{row['id']}"
+                    seen_inputs.add(input_id)
+                    work_item_id = self._work_item_identity(batch_id, input_id)
+                    self._db.execute(cur, "SELECT work_item_id FROM stage_work_items WHERE work_item_id=%s",
+                                     (work_item_id,))
+                    item_existed = bool(self._db.fetchone(cur))
+                    self._db.execute(cur,
+                        "INSERT INTO stage_work_items(work_item_id,execution_id,input_id,job_id,state,"
+                        "revision,attempt,terminal_reason,created_at,updated_at) "
+                        "VALUES(%s,%s,%s,%s,%s,1,%s,%s,%s,%s) ON CONFLICT(work_item_id) DO NOTHING",
+                        (work_item_id, batch_id, input_id, row["id"], state_map.get(row.get("status"), "queued"),
+                         int(row.get("attempts") or 0), row.get("error_class") or row.get("last_error"),
+                         row.get("created_at") or created_at, row.get("updated_at") or updated_at))
+                    if not item_existed:
+                        created_items += 1
+                self._db.execute(cur,
+                    "UPDATE stage_executions SET is_current=1 WHERE execution_id=%s AND NOT EXISTS ("
+                    "SELECT 1 FROM stage_executions WHERE workflow_id=%s AND stage=%s AND is_current=1)",
+                    (batch_id, workflow_id, stage))
+        return {"batches_seen": len(grouped), "executions_created": created_executions,
+                "work_items_created": created_items, "provenance": "inferred"}
 
     @staticmethod
     def _stage_event_id(scan_id: str, stage: str, batch_id: str, transition: str) -> str:
