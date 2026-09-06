@@ -69,6 +69,26 @@ def _owner(request: Request) -> str:
     return getattr(request.state, "user_email", None) or "demo"
 
 
+def _register_scan_tokens(scan_id: str, *, drive: str | None = None,
+                          sp: str | None = None) -> None:
+    """Require cross-replica credential admission before accepting durable work."""
+    if not (drive or sp):
+        return
+    try:
+        tokens = {"require_shared": True}
+        if drive:
+            tokens["drive"] = drive
+        if sp:
+            tokens["sp"] = sp
+        core.register_scan_tokens(scan_id, **tokens)
+    except core.SharedTokenStoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail={
+            "code": "credential_store_unavailable",
+            "message": ("The shared credential store is temporarily unavailable. "
+                        "No processing was started; retry in a moment."),
+        }) from exc
+
+
 logger = logging.getLogger(__name__)
 
 
@@ -343,6 +363,10 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
             if recent:
                 prior_scan_id = recent["scan_id"]
                 prior_workflow = core.store.workflow_for_scan(prior_scan_id, user)
+        # Workers fan out across replicas and deliberately do not persist delegated credentials
+        # in Postgres. Prove the shared ephemeral credential exists before creating hundreds of
+        # jobs; accepting first turned one Redis outage into thousands of auth dead-letters.
+        _register_scan_tokens(scan_id, drive=token, sp=sp_token)
         scan_id, job_id = core.store.enqueue_scan(
             scan_id, source, user, jtype,
             {"source": source, "scan_id": scan_id, "folder": folder, "folders": folders,
@@ -366,7 +390,6 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
             if prior_scan_id and not (_prior_active or {}).get("id"):
                 core.store.cancel_queued_job(prior_scan_id)
             _supersede_replaced_run(_prior_active, scan_id, user)
-        core.register_scan_tokens(scan_id, drive=token, sp=sp_token)  # in-memory only
         # ADR 0042 — the run's first event, and the only one emitted from a request thread rather
         # than from the worker. After enqueue_scan, because that is the durable write that makes
         # the scan real: before it there is no job row and no scan_id worth anchoring to. This is
@@ -397,7 +420,7 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
             # identical. Set ACP_DEFER_ANALYSIS_TO_ASSESS=0 to force a full download+analyse scan.
             from handlers import _scan_discover
             scan_id = uuid.uuid4().hex[:12]
-            core.register_scan_tokens(scan_id, drive=token, sp=sp_token)  # in-memory only
+            _register_scan_tokens(scan_id, drive=token, sp=sp_token)
             # `folders`/`exclude_folders` MUST come along. Deferred discovery is the default
             # since #436, so this is the primary path — and a payload that carries only `folder`
             # drops a chosen scope silently: the card says "Scans: HR" and the scan covers the
@@ -438,7 +461,7 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
     if pre_scan_id:
         # Before the thread starts, not inside it: a caller handed a scan_id in the response may
         # act on it immediately, and the tokens have to be resolvable by then.
-        core.register_scan_tokens(pre_scan_id, drive=token, sp=sp_token)  # in-memory only
+        _register_scan_tokens(pre_scan_id, drive=token, sp=sp_token)
     # Written through core.set_job/update_job so the poll can be served by ANY replica. Writing
     # straight into the dict is what made ingress session affinity load-bearing, and affinity is
     # what blocks multi-revision mode and therefore blue-green.
@@ -477,7 +500,7 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                 # one — the id has to exist before _scan_discover is called either way.
                 sid = pre_scan_id or uuid.uuid4().hex[:12]
                 if sid != pre_scan_id:
-                    core.register_scan_tokens(sid, drive=token, sp=sp_token)  # in-memory only
+                    _register_scan_tokens(sid, drive=token, sp=sp_token)
                 # Same as the sync branch above: the chosen scope has to travel with the
                 # payload or the default scan silently widens to the whole source.
                 _scan_discover({"source": source, "scan_id": sid, "folder": folder,
@@ -594,7 +617,7 @@ async def remediate_scan(sid: str, request: Request):
     # worker's source dispatch (handlers._remediation_source_bytes) never asks for one either.
     token = request.headers.get("x-drive-token") if source == "drive" else None
     if source == "drive":
-        core.register_scan_tokens(sid, drive=token)  # in-memory only
+        _register_scan_tokens(sid, drive=token)
 
     # Parse optional scope list from request body.
     scope_set = None
@@ -3120,7 +3143,7 @@ def refresh_scan_drive_token(sid: str, request: Request):
     token = request.headers.get("x-drive-token")
     if not token:
         raise HTTPException(422, "x-drive-token header required")
-    core.register_scan_tokens(sid, drive=token)
+    _register_scan_tokens(sid, drive=token)
     return {"scan_id": sid, "refreshed": True}
 
 
@@ -3134,7 +3157,7 @@ def refresh_scan_sp_token(sid: str, request: Request):
     token = request.headers.get("x-sp-token")
     if not token:
         raise HTTPException(422, "x-sp-token header required")
-    core.register_scan_tokens(sid, sp=token)
+    _register_scan_tokens(sid, sp=token)
     return {"scan_id": sid, "refreshed": True}
 
 
@@ -3178,7 +3201,7 @@ def publish_files(sid: str, request: Request, body: dict):
     # SharePoint Release is worker-backed: make the short-lived delegated credential available
     # to any remediation replica without ever persisting it in Postgres or a job payload.
     if source == "sharepoint" and sp_token:
-        core.register_scan_tokens(sid, sp=sp_token)
+        _register_scan_tokens(sid, sp=sp_token)
     drive_svc = None
     if source == "drive" and drive_token:
         try:

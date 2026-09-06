@@ -78,7 +78,8 @@ def test_sharepoint_submission_queues_token_free_per_document_work(monkeypatch):
     assert store.jobs[2] == [{"scan_id": SID, "release_id": "release-1",
                               "file": FILE, "owner": OWNER}]
     assert "delegated-secret" not in repr(store.jobs)
-    assert registered == {"scan_id": SID, "sp": "delegated-secret"}
+    assert registered == {"scan_id": SID, "sp": "delegated-secret",
+                          "require_shared": True}
 
 
 def test_sharepoint_worker_publishes_and_records_verified_copy(monkeypatch):
