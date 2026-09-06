@@ -118,6 +118,22 @@ describe('the Worker Configuration tab', () => {
   })
 })
 
+describe('the Scheduling tab', () => {
+  it('separates capacity scheduling from scan scheduling and says Azure is not yet changed', async () => {
+    const { container, root } = createTestRoot()
+    await act(async () => { root.render(createElement(Settings, { onClose: () => {}, me: { is_admin: true } })) })
+    await settle()
+    const tab = [...container.querySelectorAll('button[role="tab"]')]
+      .find((b) => b.textContent.trim() === 'Scheduling')
+    await act(async () => { tab.click() })
+    await settle()
+    expect(container.textContent).toMatch(/Capacity scheduling/)
+    expect(container.textContent).toMatch(/scheduled re-scans remain in Monitor/i)
+    expect(container.textContent).toMatch(/do not change live Azure replicas yet/i)
+    expect(container.querySelector('button')?.disabled).toBe(false)
+  })
+})
+
 // ReviewMemory is fully self-contained (its own fetch, its own state) — this only proves Settings
 // mounts it on the new tab and threads `me` through; the panel's own behaviour is covered in
 // reviewMemory.test.jsx. The second assertion is the one worth having: SIM's /org-memory reports

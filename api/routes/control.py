@@ -19,8 +19,8 @@ from __future__ import annotations
 
 import os
 import threading
-import uuid
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -141,6 +141,24 @@ class ReplicaBody(BaseModel):
     min_replicas: int = Field(..., ge=1, le=5,
         description="Minimum warm replicas for the acp-worker Container App (1–5).")
 
+
+# The capacity-schedule endpoints that #1538 added here have MOVED, not been dropped: they live
+# with the rest of the feature at the bottom of this file, backed by api/capacity_schedule.py,
+# api/capacity_store.py and api/capacity_policy.py. Two independent implementations of this PRD
+# landed within hours of each other; consolidating them is why this block is gone.
+#
+# WHAT CHANGED IN THE MERGE, AND WHY IT MATTERED. #1538's fleet check was
+# `worker_max * db_pool * 2 + reserve`, which omits the API tier entirely. `acp-app` carries a
+# 16-connection pool (store.db_max_conn with ACP_WORKERS=0), so at the PRD's own §5.3 maximums it
+# contributes 80 connections that check could not see: 3 replicas x 16, plus 2 x 16 of overlap.
+# The consequence was not academic — that validator scored §5.3 at 126 against a 150-connection
+# server and ACCEPTED it, where this repository's own pre-existing model
+# (tests/test_db_connection_budget.py, written after the 2026-08-30 pool-exhaustion incident)
+# scores the same table at 167 and refuses it. A validator whose job is to block unsafe schedules
+# was passing the one shape the PRD actually proposes.
+#
+# The replacement derives every pool from store.db_max_conn rather than restating a formula, and
+# prices the deployment overlap as min-of-old plus max-of-new rather than double-the-maximum.
 
 @router.get("/control/workers/replicas")
 def get_replicas():
@@ -619,7 +637,13 @@ def _capacity_for_app(app_name: str) -> dict:
 
     try:
         revision = app.properties.latest_ready_revision_name
-        replicas = client.container_apps_revision_replicas.list_replicas(_AZ_RG, _AZ_APP, revision)
+        # `app_name`, NOT the module-level _AZ_APP. This function is called once per entry in
+        # WORKER_APP_NAMES, and every other call in it is already scoped to the app being read.
+        # With _AZ_APP here, production (which sets WORKER_APP_NAMES and no WORKER_APP_NAME) got
+        # None and every app's current_replicas degraded to "couldn't measure"; with both set,
+        # all three apps reported ONE app's replica count as their own — the same class of quiet
+        # wrongness the WORKER_APP_NAME comment at the top of this module was written about.
+        replicas = client.container_apps_revision_replicas.list_replicas(_AZ_RG, app_name, revision)
         # Defensive about the exact collection shape: an OData-style `.value` list is the norm
         # for this SDK generation, but falling back to treating the result as directly iterable
         # costs nothing and avoids a shape mismatch turning into a silent None where a real count

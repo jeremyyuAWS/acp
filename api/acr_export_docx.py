@@ -276,6 +276,8 @@ def render(projection: dict, *, language: str = DOCUMENT_LANGUAGE,
                        f"for audit history").strip()
         row.cells[3].text = remarks
 
+    _add_section_508(document, projection)
+
     for paragraph in document.paragraphs:
         for run in paragraph.runs:
             if run.font.size is None:
@@ -284,6 +286,51 @@ def render(projection: dict, *, language: str = DOCUMENT_LANGUAGE,
     buffer = io.BytesIO()
     document.save(buffer)
     return buffer.getvalue()
+
+
+def _add_section_508(document, projection: dict) -> None:
+    """The Revised Section 508 Report — one table per chapter, or nothing at all.
+
+    Three columns, not four: a 508 requirement has no WCAG level, and an empty Level column would
+    read as a missing value rather than as a category that does not apply. Each chapter is its own
+    table with its own heading, matching how the standard is organised and how a screen-reader user
+    navigates a long Word document — by heading, not by scrolling one 120-row table.
+
+    The accessibility gate in `check()` runs over whatever this produces, unchanged: heading
+    structure, table header rows and repeat-header are the very things it inspects, so the tables
+    below are built the same way the WCAG one is rather than by a shortcut.
+    """
+    section = projection.get("section_508")
+    if not section:
+        return
+
+    document.add_heading("Revised Section 508 Report", level=2)
+    document.add_paragraph(f"Requirements from {section['citation']}.")
+    document.add_paragraph(", ".join(f"{k}: {v}" for k, v in section["totals"].items()))
+
+    for chapter in section["chapters"]:
+        document.add_heading(f"Chapter {chapter['num']}: {chapter['name']}", level=3)
+        document.add_paragraph(", ".join(f"{k}: {v}" for k, v in chapter["totals"].items()))
+        table = document.add_table(rows=1, cols=3)
+        table.style = "Table Grid"
+        header = table.rows[0]
+        for index, label in enumerate(
+                ("Criteria", "Conformance Level", "Remarks and Explanations")):
+            header.cells[index].text = label
+        _repeat_header_row(header)
+
+        for req in chapter["rows"]:
+            row = table.add_row()
+            row.cells[0].text = f"{req['criterion_num']} {req.get('criterion_name') or ''}".strip()
+            cell = req["conformance_level"]
+            if not req["decided"] and req.get("draft_status"):
+                cell = f"{cell}\nACP draft suggestion (not a decision): {req['draft_status']}"
+            row.cells[1].text = cell
+            remarks = req.get("remarks") or ""
+            if req.get("evidence_stale"):
+                remarks = (f"{remarks}\n{req['evidence_stale']} stale evidence record(s), retained "
+                           f"for audit history").strip()
+            row.cells[2].text = remarks
 
 
 def check(docx_bytes: bytes, *, tmp_dir: Path | None = None) -> dict:
@@ -317,6 +364,39 @@ def check(docx_bytes: bytes, *, tmp_dir: Path | None = None) -> dict:
         return _check_in(docx_bytes, Path(scratch))
 
 
+def _unreadable_reason(path: Path) -> str | None:
+    """Why this file is not a Word document ACP can inspect, or None when it is one.
+
+    THE HOLE THIS CLOSES. `office_structure.docx_checks` catches every exception, logs it through
+    `swallowed()`, and returns the findings it had accumulated — which for a file it could not open
+    is none at all. `_check_in` then read "no findings" as "no failures" and the gate answered
+    ok=True. So the one document state the export gate must never wave through — one nobody can
+    open — was the state it was least able to see.
+
+    Measured on 2026-09-06 before the fix, with `check(b"PK\\x03\\x04 not a docx at all")`:
+
+        BadZipFile logged by swallowed(), findings == [], ok == True
+
+    Two conditions, and both are needed. A file that is not a zip fails the first. A file that IS a
+    zip — which `PK\\x03\\x04` alone is enough to start looking like — but carries no
+    `word/document.xml` fails the second, and that is the shape a truncated or half-written render
+    takes. `docx_checks` itself returns `[]` early for exactly that second case, so it too reads as
+    a pass.
+    """
+    import zipfile
+
+    try:
+        with zipfile.ZipFile(path) as zf:
+            if "word/document.xml" not in zf.namelist():
+                return ("the file is a zip archive but carries no word/document.xml, so it is not "
+                        "a Word document")
+    except zipfile.BadZipFile:
+        return "the file is not a valid Word document (it is not a readable zip archive)"
+    except OSError as exc:                                   # pragma: no cover — unreadable path
+        return f"the file could not be read: {exc}"
+    return None
+
+
 def _check_in(docx_bytes: bytes, directory: Path) -> dict:
     """The analyser pass itself, against a directory whose lifetime the caller owns."""
     import office_structure
@@ -324,6 +404,16 @@ def _check_in(docx_bytes: bytes, directory: Path) -> dict:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "acr-export.docx"
     path.write_bytes(docx_bytes)
+
+    unreadable = _unreadable_reason(path)
+    if unreadable:
+        # A FAILURE, not an empty pass. The route refuses to serve a document that fails this gate,
+        # and a document nobody can open is the clearest case there is for refusing — PRD §16 asks
+        # whether the export is accessible, and an unopenable file answers no.
+        return {"ok": False,
+                "failures": [{"ruleId": "acr.export.unreadable", "severity": "FAIL",
+                              "wcag": "", "detail": unreadable}],
+                "reviews": []}
 
     findings = office_structure.docx_checks(path) or []
     failures = [f for f in findings if str(f.get("severity", "")).upper() != "REVIEW"]

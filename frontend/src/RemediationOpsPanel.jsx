@@ -61,13 +61,18 @@ function Progress({ snapshot, suspect }) {
   // numerator for the large RUN-COMPLETENESS headline: a healthy SharePoint batch can inspect
   // dozens of documents, place each in Skipped because there was no approved automatic fix, and
   // leave that headline frozen at 0. Count every terminal outcome here; the six buckets below
-  // still say exactly how those processed documents ended.
-  const processed = known
+  // still say exactly how those documents ended.
+  //
+  // WHAT IT IS CALLED MATTERS AS MUCH AS WHAT IT COUNTS. This read "N documents processed" and a
+  // real run rendered "12 of 70 documents processed" with `completed` at ZERO — all twelve routed
+  // to review or skipped. The reasoning above is why the numerator stays; "processed" is what a
+  // reader takes for "done", which is the one thing this number does not promise.
+  const throughAutomatic = known
     ? rows.filter((row) => !['processing', 'waiting'].includes(row.key))
       .reduce((sum, row) => sum + row.value, 0)
     : null
   return <section className="remops-progress" aria-labelledby="remops-progress-title">
-    <div className="remops-progress-head"><strong id="remops-progress-title">{processed == null ? 'Document progress unavailable' : <><LiveCounter value={processed} /> of {total.toLocaleString()} documents processed</>}</strong><span className="muted">{snapshot.estimate?.available ? `Estimated ${snapshot.estimate.label || 'range available'}` : 'Estimating after the first results'}</span></div>
+    <div className="remops-progress-head"><strong id="remops-progress-title">{throughAutomatic == null ? 'Document progress unavailable' : <><LiveCounter value={throughAutomatic} /> of {total.toLocaleString()} documents through automatic processing</>}</strong><span className="muted">{snapshot.estimate?.available ? `Estimated ${snapshot.estimate.label || 'range available'}` : 'Estimating after the first results'}</span></div>
     {known && <div className="remops-segments" aria-label={`${total} documents: ${rows.map((r) => `${r.value} ${r.label.toLowerCase()}`).join(', ')}`}>{rows.filter((r) => r.value > 0).map((row) => <span key={row.key} tabIndex="0" role="img" aria-label={`${row.label}: ${row.value}`} className={`remops-segment remops-segment-${row.key}`} style={{ width: `${row.value / total * 100}%` }} data-detail={`${row.label}: ${row.value.toLocaleString()}`} />)}</div>}
     <dl className={`remops-counts${suspect ? ' remops-suspect' : ''}`}>{rows.map((row) => <div key={row.key} title={row.definition}><dt>{row.label}</dt><dd data-testid={`rem-count-${row.key}`}>{row.value == null ? '—' : row.key === 'completed' ? <LiveCounter value={row.value} /> : row.value.toLocaleString()}</dd></div>)}</dl>
     {partitionSums(snapshot) === false && <p className="remops-error">These counters do not add up to the documents in scope. ACP is reconciling them.</p>}

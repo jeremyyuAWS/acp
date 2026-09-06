@@ -235,10 +235,18 @@ export default function CapacitySchedule({ me = null } = {}) {
         )}
       </div>
 
+      {/* AC 15 and §13's non-goal, stated where somebody would otherwise assume the opposite.
+          A tab called "Scheduling" in a product that already has scheduled re-scans is exactly
+          the place that confusion starts, and the two are different features with different
+          controls in different screens. Saying so is cheaper than the support ticket. */}
       <div className="muted" style={{ fontSize: 11 }}>
-        Live replica counts, queue depth and scale events are in Monitor → Workers &amp; Queue.
-        Immediate warm capacity is adjusted in Settings → Worker Configuration; this tab sets when
-        ACP should hold more of it.{!isAdmin && ' You have view-only access, so the schedule is shown but cannot be changed.'}
+        <b>Capacity scheduling</b> decides how much warm processing capacity ACP holds and when.
+        It does not schedule scans: scheduled re-scans remain in Monitor and are unchanged by
+        anything here. Saving a schedule records what ACP intends — schedules saved here do not
+        change live Azure replicas yet; applying a published policy is a separate, deliberate
+        step. Live replica counts, queue depth and scale events are in Monitor → Workers &amp;
+        Queue, and immediate warm capacity is adjusted in Settings → Worker
+        Configuration.{!isAdmin && ' You have view-only access, so the schedule is shown but cannot be changed.'}
       </div>
     </div>
   )

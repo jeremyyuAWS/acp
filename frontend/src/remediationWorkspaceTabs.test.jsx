@@ -37,11 +37,27 @@ describe('the two-mode remediation workspace', () => {
     expect(host.querySelector('[data-testid="review-state"]')).toBeTruthy()
     expect(host.querySelector('[data-testid="live-state"]')).toBeTruthy()
     expect(host.querySelector('#rem-panel-live').hidden).toBe(true)
+    expect(host.querySelector('[data-testid="rem-compact-card-slot"]').hidden).toBe(false)
+    expect(host.querySelector('[data-testid="rem-run-card"]')).toBeTruthy()
   })
 
   it('defaults to live when automated work is active and review is empty', async () => {
     const { host } = await mount({ reviewCount: 0 })
     expect(host.querySelector('#rem-mode-live').getAttribute('aria-selected')).toBe('true')
+    expect(host.querySelector('[data-testid="rem-compact-card-slot"]').hidden).toBe(true)
+    expect(host.querySelector('[data-testid="live-state"]')).toBeTruthy()
+  })
+
+  it('keeps the compact card mounted while hiding it behind the full Live Processing panel', async () => {
+    const { host } = await mount()
+    const slot = host.querySelector('[data-testid="rem-compact-card-slot"]')
+    expect(slot.hidden).toBe(false)
+    await act(async () => host.querySelector('#rem-mode-live').click())
+    expect(slot.hidden).toBe(true)
+    expect(slot.querySelector('[data-testid="rem-run-card"]')).toBeTruthy()
+    expect(host.querySelector('#rem-panel-live').hidden).toBe(false)
+    await act(async () => host.querySelector('#rem-mode-review').click())
+    expect(slot.hidden).toBe(false)
   })
 
   it('switches with arrow keys without focusing the panel heading', async () => {

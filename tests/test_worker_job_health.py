@@ -93,8 +93,13 @@ def test_a_healthy_run_reports_no_failure_class_rather_than_a_placeholder(isolat
 
 
 def test_the_snapshot_states_that_per_replica_attribution_is_not_available(monkeypatch):
-    """The worker_instances registry has no writer. Reading it would return [] and render as "no
-    workers running" — so the gap is named instead."""
+    """A store that reports no worker instances says so, rather than rendering as "no workers".
+
+    The registry DOES have a writer now (worker_telemetry.WorkerInstanceReporter, started from
+    both entry points), so this is about a store that has not reported YET — a fresh deployment,
+    a mixed-version rollout, or a fake store like the one below — not about a permanently empty
+    table. Per-replica JOB placement is a separate question with a separate answer; see
+    `job_attribution` and tests/test_replica_job_attribution.py."""
     class ActivityStore:
         def worker_tier_status(self):
             return {"alive": True, "pool_size": 4}

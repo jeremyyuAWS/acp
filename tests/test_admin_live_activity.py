@@ -465,12 +465,19 @@ def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(mo
         # a link to traces that do not exist.
         "tracing": {"enabled": False, "reason": "not configured", "sampling_ratio": None,
                     "correlation": "off", "configured_at": None},
-        # Stated, not omitted: ACP records which SERVICE ran a job, never which replica, because
-        # the worker_instances registry that would carry that has no writer yet. Reading the empty
-        # table instead would render as "no workers running".
+        # Stated, not omitted: a store that has not reported per-replica CAPACITY says so, rather
+        # than rendering as "no workers running" from an empty read.
         "worker_instance_attribution": {
             "available": False,
             "reason": "Per-replica capacity is not yet reporting. Jobs in flight are available, but slot utilization cannot be calculated honestly.",
+        },
+        # Per-replica JOB PLACEMENT is a separate question with a separate answer — `locked_by`
+        # carries the Container Apps replica name, so it needs no Azure call. This stub is an
+        # older store shape without the method, which reads as unavailable rather than as an idle
+        # fleet. See tests/test_replica_job_attribution.py.
+        "job_attribution": {
+            "available": False, "replicas": [], "attributed": None, "unattributed": None,
+            "reason": "This deployment's job store does not report per-replica attribution.",
         },
     }
 

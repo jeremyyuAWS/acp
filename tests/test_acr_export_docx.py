@@ -269,3 +269,51 @@ def test_is_available_reports_what_render_would_do(monkeypatch):
     assert acr_export_docx.is_available() is True
     monkeypatch.setitem(sys.modules, "docx", None)
     assert acr_export_docx.is_available() is False
+
+
+# ── a document nobody can open ────────────────────────────────────────────────────────────────
+#
+# The gate's blind spot, found by a vacuity probe while building the Section 508 export and fixed
+# here. `office_structure.docx_checks` catches every exception, logs it through `swallowed()` and
+# returns the findings it had — none, for a file it could not open. `check()` read "no findings"
+# as "no failures", so the one document state that must never be waved through was the state it
+# was least able to see.
+#
+# Measured before the fix:  check(b"PK\x03\x04 not a docx at all")  ->  ok=True, failures=[]
+
+@pytest.mark.parametrize("blob,why", [
+    (b"PK\x03\x04 not a docx at all", "starts like a zip and is not one"),
+    (b"", "empty"),
+    (b"hello world", "not a zip in any sense"),
+])
+def test_an_unopenable_file_fails_the_gate_rather_than_passing_it(blob, why):
+    verdict = acr_export_docx.check(blob)
+    assert verdict["ok"] is False, why
+    assert [f["ruleId"] for f in verdict["failures"]] == ["acr.export.unreadable"]
+    assert verdict["failures"][0]["detail"], "the refusal has to say what is wrong with the file"
+
+
+def test_a_zip_with_no_document_part_fails_too(tmp_path):
+    """The second condition, and the one a truncated or half-written render actually takes.
+
+    A zip carrying no `word/document.xml` is readable as an archive, so the BadZipFile branch never
+    fires — and `docx_checks` returns `[]` early for exactly this case, which read as a pass.
+    """
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zf:
+        zf.writestr("hello.txt", "hi")
+
+    verdict = acr_export_docx.check(buffer.getvalue(), tmp_dir=tmp_path)
+    assert verdict["ok"] is False
+    assert "word/document.xml" in verdict["failures"][0]["detail"]
+
+
+def test_a_real_document_is_not_caught_by_the_new_refusal(rendered):
+    """The other half: a fix that failed everything would be a gate nobody can pass, which is the
+    failure mode this module's docstring warns about in the opposite direction."""
+    verdict = acr_export_docx.check(rendered)
+    assert verdict["ok"] is True, verdict["failures"]
+    assert not [f for f in verdict["failures"] if f.get("ruleId") == "acr.export.unreadable"]

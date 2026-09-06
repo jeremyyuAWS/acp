@@ -26,6 +26,7 @@ import { RuleBreakdown } from './Transparency.jsx'
 import Logo from './Logo.jsx'
 import ChatWidget from './ChatWidget.jsx'
 import VersionToast from './VersionToast.jsx'
+import RealtimeShadowPanel from './RealtimeShadowPanel.jsx'
 import WorkflowContinuityBanner, { primaryActiveWorkflow } from './WorkflowContinuityBanner.jsx'
 import DiscoveryContinuityChoice from './DiscoveryContinuityChoice.jsx'
 // Lazy: KnowledgeGraph statically imports all of d3 (~250 kB min) — the only heavy
@@ -2506,6 +2507,12 @@ export default function App() {
         <LiveOperationsNotifier onOpen={() => { setView('liveops'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
       </Suspense>}
       <VersionToast currentVersion={platformVersion} />
+      <RealtimeShadowPanel currentSnapshot={{
+        scan_id: run?.id ?? null,
+        scan_status: run?.status ?? null,
+        progress_phase: progress?.phase ?? null,
+        active_workflows: activeWorkflows.length,
+      }} />
     </div>
     </>
   )

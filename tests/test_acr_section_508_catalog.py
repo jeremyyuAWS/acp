@@ -11,10 +11,11 @@ Documentation Alternate Formats"; the regulation calls it "Alternate Formats for
 Support Documentation", and the guard caught it on the first run. They are pinned so that a
 regeneration producing a different set has to be looked at by a person.
 
-WHAT THIS DELIBERATELY DOES NOT ASSERT: that the 508 edition is now offerable. It is not. A
-matrix builder and a projection that render these rows in their own chapters come next; until
-then `requirement_sets_available()` still returns WCAG alone, and the test at the bottom holds it
-there so the gate cannot open on a catalog the rest of the pipeline cannot render.
+THE GATE IS OPEN NOW, and the two tests at the bottom used to assert the opposite. They were held
+that way through 6.1 and 6.2 on purpose: offering an edition takes the requirements, a matrix
+builder that emits their rows, and a projection every export renders them from, and opening it on
+the catalog alone would have produced a document naming Section 508 and printing none of it. 6.3
+landed the third, so the assertions flipped with it rather than ahead of it.
 """
 from __future__ import annotations
 
@@ -164,24 +165,29 @@ def test_check_mode_catches_a_renamed_requirement():
     assert any("302.1" in p for p in problems)
 
 
-def test_the_508_edition_is_still_not_offerable():
-    """The catalog exists; the pipeline that renders it does not. PRD §19: never claim conformance
-    to a standard the document does not contain — which is what offering the edition now would do,
-    since build_matrix reads the WCAG catalog alone.
+def test_the_508_edition_is_offerable_now_that_the_whole_chain_exists():
+    """This test used to assert the opposite, and the change is the record of what it took.
 
-    When the matrix builder and the projection land, this test changes with them. Until then it is
-    what stops the gate opening on content nothing can render.
+    Offering an edition takes three things, not one: the requirements (this catalog, 6.1), a
+    matrix builder that emits their rows (6.2), and a projection every export renders them from
+    (6.3). It was held shut through 6.1 and 6.2 precisely so the gate could not open on content
+    nothing could print — PRD §19, never claim conformance to a standard the document does not
+    contain.
     """
     assert acr_catalog.section_508_available() is True
-    assert acr_catalog.requirement_sets_available() == frozenset({acr_catalog.REQ_WCAG})
-    assert acr_catalog.missing_requirement_sets(acr_catalog.EDITION_508) == frozenset(
-        {acr_catalog.REQ_SECTION_508})
-    assert acr_catalog.offerable_editions() == [acr_catalog.EDITION_WCAG]
+    assert acr_catalog.requirement_sets_available() == frozenset(
+        {acr_catalog.REQ_WCAG, acr_catalog.REQ_SECTION_508})
+    assert acr_catalog.missing_requirement_sets(acr_catalog.EDITION_508) == frozenset()
+    assert acr_catalog.offerable_editions() == [acr_catalog.EDITION_WCAG, acr_catalog.EDITION_508]
+    # EN 301 549 has no catalog, so the editions that oblige it stay refused.
+    assert acr_catalog.missing_requirement_sets(acr_catalog.EDITION_EU) == frozenset(
+        {acr_catalog.REQ_EN_301_549})
 
 
-def test_a_508_report_matrix_would_still_be_wcag_only():
-    """The concrete form of the claim above, measured rather than asserted — this is the shape
-    #1532 found in production code, and it is still true, which is why the edition stays refused."""
-    matrix = acr_catalog.build_matrix("rep-508")
+def test_the_wcag_edition_carries_no_508_rows():
+    """The default edition is unchanged by any of this: a WCAG report is 55 WCAG rows and nothing
+    else, which is what stops the 508 requirements leaking into a document that never claimed
+    them."""
+    matrix = acr_catalog.build_matrix("rep-wcag")
     assert len(matrix) == 55
     assert not any(r["criterion_num"].startswith(("30", "40", "50", "60")) for r in matrix)

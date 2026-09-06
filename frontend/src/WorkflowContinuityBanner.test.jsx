@@ -42,7 +42,7 @@ describe('workflow continuity', () => {
   it('opens the exact previous revision without interrupting current work', () => {
     const onViewPrevious = vi.fn()
     const container = render({ currentView: 'overview', onReturn: () => {}, onLiveOps: () => {},
-      onViewPrevious, workflow: { stage: 'remediate', workflow_revision: 2,
+      onViewPrevious, workflow: { stage: 'assess', workflow_revision: 2,
         previous_scan_id: 'scan-revision-one', source: 'sharepoint' } })
     const button = [...container.querySelectorAll('button')]
       .find((item) => item.textContent === 'View previous revision')
@@ -60,6 +60,13 @@ describe('workflow continuity', () => {
   it('does not duplicate the status inside its own stage', () => {
     const container = render({ currentView: 'discover', workflow: { stage: 'discover' },
       onReturn: () => {}, onLiveOps: () => {} })
+    expect(container.innerHTML).toBe('')
+  })
+
+  it('does not stack a generic banner above the persistent remediation card', () => {
+    const container = render({ currentView: 'overview', workflow: {
+      stage: 'remediate', source: 'sharepoint', running: 8, queued: 62,
+    }, onReturn: () => {}, onLiveOps: () => {} })
     expect(container.innerHTML).toBe('')
   })
 

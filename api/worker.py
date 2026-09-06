@@ -26,6 +26,7 @@ import time
 import uuid
 
 import joblog
+import realtime_shadow
 from swallowed import swallowed
 
 
@@ -43,6 +44,14 @@ def _log(event, **fields):
         joblog.emit(event, **fields)
     except Exception:                              # noqa: BLE001 — never fail a job to log it
         swallowed("worker._log: emitting a worker job-log record failed")
+
+
+def _shadow(job, transition, **fields):
+    """Observe a transition without ever making realtime part of queue correctness."""
+    try:
+        realtime_shadow.observe_job(job, transition, **fields)
+    except Exception:  # noqa: BLE001 — an observer can never change a job outcome
+        swallowed("worker._shadow: emitting a realtime shadow event failed")
 
 # Registry: job type -> handler(payload: dict, job: dict) -> None
 HANDLERS: dict[str, callable] = {}
@@ -292,6 +301,7 @@ class JobWorker:
                 "job_type": job.get("type"), "attempt": job.get("attempts"),
                 "worker_id": self.worker_id}
         _log("job.claim", max_attempts=job.get("max_attempts"), **_logf)
+        _shadow(job, "started", worker_id=self.worker_id, status="running")
         # The identity of THIS claim, captured once at claim time and passed to every write that
         # publishes an outcome for the job. If the sweeper reclaims the job while the handler is
         # wedged and another worker takes it over, these stop matching the row and this process's
@@ -321,11 +331,15 @@ class JobWorker:
             except Exception:                       # noqa: BLE001 — never fail a job to log it
                 status = "unread"
             _log(event, status=status, **extra, **_logf)
+            _shadow(job, event.removeprefix("job."), worker_id=self.worker_id,
+                    status=status, detail=extra)
         fn = HANDLERS.get(job["type"])
         if fn is None:
             _log("job.no_handler", **_logf)
             self.store.fail_job(job["id"], f"no handler for job type '{job['type']}'",
                                 backoff_seconds=_backoff_seconds(job["attempts"]), **_claim)
+            _shadow(job, "failed", worker_id=self.worker_id, status="unread",
+                    detail={"reason": "no_handler"})
             self.active_job_id = None
             return True
         # Heartbeat: extend the lease every 2 min while the handler runs, so a

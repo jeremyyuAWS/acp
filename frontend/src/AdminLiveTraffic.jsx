@@ -8,6 +8,7 @@ import LiveOpsDrawer from './LiveOpsDrawer.jsx'
 import LiveOpsCostSummary from './LiveOpsCostSummary.jsx'
 import LiveOpsAiSummary from './LiveOpsAiSummary.jsx'
 import CapacityModeStrip from './CapacityModeStrip.jsx'
+import CollapsibleSection from './CollapsibleSection.jsx'
 import { appendSample, deriveEvents, formatDuration, mergeEvents, queueCapacityGauge,
   durableRunEvents, sampleForNode, secondsSince, workflowStageRuns } from './liveOpsDrawer.js'
 
@@ -39,6 +40,9 @@ const EDGE_ROUTING = { type: 'bezier', pathOptions: { curvature: 0.42 } }
 // gutter after the tallest supported card. Active-run cards start below the whole service stack.
 const WORKER_LANE_TOP = 20
 const WORKER_LANE_GAP = 170
+// The tallest a worker service card gets — a saturated service carries an extra wrapped line —
+// plus the map's own padding below it. Used to size the infrastructure view to its content.
+const WORKER_CARD_MAX = 250
 const RUN_LANE_TOP = 535
 
 function age(iso) {
@@ -264,19 +268,20 @@ function AzureCapacity({ capacity, state }) {
     ['REPLICA RESTARTS', azureLatest(capacity, 'restarts'), 'Azure metric RestartCount · cumulative'],
     ['NETWORK', `${azureBytes(capacity, 'network_in_bytes')} in`, `${azureBytes(capacity, 'network_out_bytes')} out · RxBytes / TxBytes`],
   ]
-  return <section className="panel" aria-label="Azure worker infrastructure" style={{ padding: 12, marginBottom: 12 }}>
-    <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap', marginBottom: 9 }}>
-      <div><b>Azure worker infrastructure</b><div className="muted" style={{ fontSize: 11 }}>Configured size and live Azure measurements</div></div>
+  return <CollapsibleSection id="azure" label="Azure worker infrastructure"
+    summary={<span style={{ display: 'inline-flex', alignItems: 'baseline', justifyContent: 'space-between',
+      gap: 10, flexWrap: 'wrap', width: 'calc(100% - 18px)' }}>
+      <span><b>Azure worker infrastructure</b><span className="muted" style={{ display: 'block', fontSize: 11 }}>Configured size and live Azure measurements</span></span>
       <span className="muted" style={{ fontSize: 11 }}>{capacity.measured_at ? `Measured ${age(capacity.measured_at)} ago` : 'Measurement time unavailable'}</span>
-    </div>
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 8 }}>
+    </span>}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 8, marginTop: 9 }}>
       {tiles.map(([label, value, detail]) => <div key={label} style={{ minWidth: 0, padding: 10, border: '1px solid var(--line)', borderRadius: 9 }}>
         <div className="muted" style={{ fontSize: 10.5 }}>{label}</div>
         <b style={{ display: 'block', fontSize: 17, overflowWrap: 'anywhere' }}>{value}</b>
         <div className="muted" style={{ fontSize: 11, overflowWrap: 'anywhere' }}>{detail}</div>
       </div>)}
     </div>
-  </section>
+  </CollapsibleSection>
 }
 
 /**
@@ -922,6 +927,11 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
   const laneGraph = useMemo(() => flowTab === 'jobs'
     ? trafficGraphForTab(graph, 'jobs', flowFilter) : { nodes: [], edges: [] }, [graph, flowTab, flowFilter])
   const stateCounts = useMemo(() => jobStateCounts(laneGraph), [laneGraph])
+  // How many worker lanes the infrastructure map actually draws. Derived rather than hardcoded
+  // to three, so a new worker service grows the box instead of being drawn past its bottom edge.
+  const infrastructureLanes = useMemo(() => Math.max(1,
+    graph.nodes.filter((node) => node.type === 'infra' && node.data?.kind === 'worker').length),
+    [graph])
   const visibleGraph = useMemo(() => trafficGraphForTab(graph, flowTab,
     flowTab === 'jobs' ? { ...flowFilter, state: jobState } : flowFilter),
     [graph, flowTab, flowFilter, jobState])
@@ -1014,6 +1024,11 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
         </div>
       </div>
     </div>
+    {/* Each of these three folds itself away, and starts folded. They answer questions a reader
+        comes to deliberately — how big is the fleet, what does it cost, how much AI did it use —
+        while the tiles above and the map below answer "is anything wrong right now", which is
+        what the screen is opened for. Nothing is removed: every figure is one click away, and
+        the reader's choice is remembered. */}
     <AzureCapacity capacity={capacity} state={capacityState} />
     <LiveOpsCostSummary />
     <LiveOpsAiSummary />
@@ -1063,8 +1078,17 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
         {label} <span className="muted" style={{ fontVariantNumeric: 'tabular-nums' }}>{stateCounts[key] || 0}</span>
       </button>)}
     </div>}
-    <div style={{ height: flowTab === 'infrastructure' ? 590
-      : Math.max(360, 100 + visibleGraph.nodes.filter((node) => node.type === 'workflow').length * 185), maxHeight: 760,
+    {/* Sized from the content, not fixed. The worker column is the tallest thing on the
+        infrastructure map — one lane per service, WORKER_LANE_GAP apart — and a service card
+        grows with its own text: a saturated one adds a "N running job records are not attributed
+        to live worker slots" line and runs to about 200px. At a fixed 590 the third card was
+        clipped at exactly the moment it had most to say. WORKER_CARD_MAX is that tallest card
+        plus the map's own breathing room, so a fourth worker service widens the box rather than
+        cutting one off. */}
+    <div style={{ height: flowTab === 'infrastructure'
+      ? Math.max(590, WORKER_LANE_TOP + Math.max(0, infrastructureLanes - 1) * WORKER_LANE_GAP + WORKER_CARD_MAX)
+      : Math.max(360, 100 + visibleGraph.nodes.filter((node) => node.type === 'workflow').length * 185),
+      maxHeight: flowTab === 'infrastructure' ? 900 : 760,
       border: '1px solid var(--line)', borderRadius: 10, overflow: 'hidden', background: 'var(--bg)' }}>
       <ReactFlow key={flowTab} nodes={visibleGraph.nodes} edges={visibleGraph.edges} nodeTypes={nodeTypes}
         defaultEdgeOptions={EDGE_ROUTING}

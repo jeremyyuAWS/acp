@@ -98,7 +98,7 @@ describe('the persistent card carries the same pulse', () => {
     // every screen in the product.
     const html = card({ events: [] })
     expect(html).not.toContain('Last 60 seconds')
-    expect(html).toContain('documents processed')      // the rest of the card is unaffected
+    expect(html).toContain('documents through automatic processing')      // the rest of the card is unaffected
   })
 
   it('renders without events at all, because two of its mount sites are older than this prop', () => {

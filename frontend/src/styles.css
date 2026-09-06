@@ -1203,8 +1203,12 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .release-methods__resting { grid-column: 1 / -1; cursor: default; background: var(--bg); }
 .release-plan { margin-top: 16px; border-radius: 11px; padding: 15px; background: var(--bg); border: 1px solid var(--line); align-items: flex-end; }
 .release-plan p { margin: 6px 0 0; max-width: 720px; font-size: 13px; line-height: 1.55; }
+.release-outcome { margin-top: 16px; border: 1px solid var(--line); border-radius: 11px; padding: 14px 16px; display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.release-outcome--partial { border-color: var(--warn-fg); background: var(--warn-bg); }
+.release-outcome p { margin: 5px 0 0; font-size: 12.5px; line-height: 1.5; }
+.release-outcome__blocked { color: var(--warn-fg); font-weight: 600; }
 @media (max-width: 720px) {
-  .release-overview__heading, .release-builder__continue, .release-plan { align-items: stretch; flex-direction: column; }
+  .release-overview__heading, .release-builder__continue, .release-plan, .release-outcome { align-items: stretch; flex-direction: column; }
   .release-overview__actions, .release-plan__actions { justify-content: flex-end; }
   .release-metrics { grid-template-columns: repeat(2, minmax(100px, 1fr)); }
   .release-methods { grid-template-columns: 1fr; }

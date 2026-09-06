@@ -300,6 +300,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   }, {})
   const selectedResult = sel ? releaseResults[sel.file] : null
   const failedCount = Object.values(releaseResults).filter((row) => row.status === 'failed').length
+  const failedReady = ready.filter((f) => !done[f.file] && releaseResults[f.file]?.status === 'failed' && srcOf(f) !== 'stale')
   const downloadReleaseManifest = async () => {
     setManifestError('')
     try {
@@ -314,6 +315,15 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   }
   const startRelease = () => {
     setBuilderStep(1)
+    window.requestAnimationFrame(() => {
+      builderRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      builderRef.current?.focus({ preventScroll: true })
+    })
+  }
+  const reviewFailedRelease = () => {
+    setSelectedFiles(new Set(failedReady.map((f) => f.file)))
+    setDeliveryMethod('publish')
+    setBuilderStep(3)
     window.requestAnimationFrame(() => {
       builderRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
       builderRef.current?.focus({ preventScroll: true })
@@ -585,6 +595,18 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                 </div>
               </div>
             </>}
+          </div>
+        )}
+        {failedCount > 0 && (
+          <div className="release-outcome release-outcome--partial" role="alert">
+            <div>
+              <b>{failedCount} corrected {failedCount === 1 ? 'copy needs' : 'copies need'} attention</b>
+              <p>Successful files remain published. Retrying sends only the failed copies, so completed work is not duplicated.</p>
+              {failedCount > failedReady.length && <p className="release-outcome__blocked">{failedCount - failedReady.length} failed {failedCount - failedReady.length === 1 ? 'file is' : 'files are'} no longer retryable until the changed source is rescanned.</p>}
+            </div>
+            <button className="qbtn approve" disabled={!failedReady.length || publishing} onClick={reviewFailedRelease}>
+              Review and retry failed ({failedReady.length})
+            </button>
           </div>
         )}
         {publishedList.length > 0 ? (

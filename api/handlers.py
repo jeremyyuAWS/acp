@@ -4551,8 +4551,9 @@ _OFFICE_LINK_EXTS = tuple(_LINK_SCS_BY_EXT)
 # approval it accepted. xlsx is therefore absent from _LANGUAGE_EXTS on purpose.
 _SENSORY_EXTS = ("docx", "pptx", "xlsx")
 _LANGUAGE_EXTS = ("docx", "pptx")
-# 2.4.6 structure labels: sheet tab and table column renames (xlsx only).
-_STRUCTURE_LABEL_EXTS = ("xlsx",)
+# 2.4.6 structure labels: sheet tab and table column renames (xlsx); slide title
+# fill-in (pptx — title placeholder exists but was left empty).
+_STRUCTURE_LABEL_EXTS = ("xlsx", "pptx")
 
 # The lanes that exist only for PDF: figure alt (`pdf:fig:…` → /Alt) and form-field accessible
 # names (`pdf:field:…` → /TU), both written by remediate_pdf.apply_pdf_approved.
@@ -4779,11 +4780,16 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
 
     structure_label_uploaded = False
     if structure_label_values:
-        from apply_xlsx_labels import apply_xlsx_labels
+        if ext == "pptx":
+            from apply_pptx_slide_titles import apply_pptx_slide_titles
+            _struct_write_fn = apply_pptx_slide_titles
+        else:
+            from apply_xlsx_labels import apply_xlsx_labels
+            _struct_write_fn = apply_xlsx_labels
         working, structure_label_uploaded = _apply_one_value_kind(
             scan_id=scan_id, filename=filename, working=working,
             values=structure_label_values, scs_to_clear={"2.4.6"},
-            write_fn=apply_xlsx_labels,
+            write_fn=_struct_write_fn,
             diff_rule_id="2.4.6", credit_rule_ids=("2.4.6",),
             noun="structure label", job=job)
 

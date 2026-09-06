@@ -85,7 +85,17 @@ export default function RemediationRunCard({ snapshot = null, receivedAt = null,
   const delivery = snapshot.delivery || {}
   const source = snapshot.source || {}
   const documents = snapshot.documents || {}
-  const processed = typeof snapshot.total_documents === 'number'
+  // Everything that is neither in flight nor queued: completed, review, failed, skipped. It is
+  // queue progress, NOT success — and the word for it matters, because only one of those four
+  // members is a document that came out fixed.
+  //
+  // IT USED TO READ "N documents processed". On a real run — 70 documents, 18 active, 12 blocked,
+  // 40 waiting — that rendered "12 of 70 documents processed" with `completed` at ZERO: every one
+  // of the twelve was routed to review or skipped, and nothing had been successfully remediated.
+  // "Processed" is what a reader takes for "done", so the card overstated the run to exactly the
+  // person PRD §6C is written for. The count is useful and stays; the claim attached to it does
+  // not. See the segment legend directly below for what the twelve actually are.
+  const throughAutomatic = typeof snapshot.total_documents === 'number'
     && ['processing', 'waiting'].every((key) => typeof documents[key] === 'number')
     ? snapshot.total_documents - documents.processing - documents.waiting
     : null
@@ -123,9 +133,9 @@ export default function RemediationRunCard({ snapshot = null, receivedAt = null,
       </div>
 
       <div style={{ marginTop: 10 }}>
-        {processed != null && (
+        {throughAutomatic != null && (
           <p style={{ margin: '0 0 7px', fontSize: 12.5, fontWeight: 650 }}>
-            <LiveCounter value={processed} /> of {snapshot.total_documents.toLocaleString()} documents processed
+            <LiveCounter value={throughAutomatic} /> of {snapshot.total_documents.toLocaleString()} documents through automatic processing
           </p>
         )}
         <ProgressBar bar={bar} />

@@ -64,24 +64,28 @@ def test_each_edition_obliges_a_different_requirement_set():
     assert all(acr_catalog.REQ_WCAG in s for s in req.values())
 
 
-def test_only_the_wcag_edition_is_offerable_while_wcag_is_the_only_catalog():
+def test_only_the_editions_whose_catalogs_exist_are_offerable():
     """Pinned to what the repo CONTAINS, so adding a catalog without wiring it fails here.
 
-    config/wcag-2.2-aa.json is the only requirement catalog in this repo — verified by listing
-    config/, not assumed. The other three editions are unbuilt, not broken, and the distinction is
-    the whole point of `missing_requirement_sets` being separate from `edition_known`.
+    Two requirement catalogs exist now: config/wcag-2.2-aa.json and config/section-508.json, the
+    latter landed in Phase 6.1 and rendered by every export in 6.3. The EU and INT editions remain
+    unbuilt — not broken, which is the distinction that keeps `missing_requirement_sets` separate
+    from `edition_known`, and EN 301 549's source is not a US federal regulation that can simply be
+    vendored the way 36 CFR was.
     """
-    assert acr_catalog.requirement_sets_available() == {acr_catalog.REQ_WCAG}
-    assert acr_catalog.offerable_editions() == [acr_catalog.EDITION_WCAG]
-    for edition in (acr_catalog.EDITION_508, acr_catalog.EDITION_EU, acr_catalog.EDITION_INT):
-        assert acr_catalog.missing_requirement_sets(edition), edition
+    assert acr_catalog.requirement_sets_available() == {
+        acr_catalog.REQ_WCAG, acr_catalog.REQ_SECTION_508}
+    assert acr_catalog.offerable_editions() == [acr_catalog.EDITION_WCAG, acr_catalog.EDITION_508]
+    for edition in (acr_catalog.EDITION_EU, acr_catalog.EDITION_INT):
+        assert acr_catalog.missing_requirement_sets(edition) == frozenset(
+            {acr_catalog.REQ_EN_301_549}), edition
 
 
 def test_a_typo_and_an_unbuilt_edition_are_different_questions():
     """Conflating them tells an author to hunt for a spelling mistake in a correct spelling."""
-    assert not acr_catalog.edition_known("VPAT 2.5Rev Section 508")   # not ITI's name
-    assert acr_catalog.edition_known(acr_catalog.EDITION_508)         # real name, unbuilt content
-    assert acr_catalog.missing_requirement_sets(acr_catalog.EDITION_508)
+    assert not acr_catalog.edition_known("VPAT 2.5Rev EN 301 549")   # not ITI's name for it
+    assert acr_catalog.edition_known(acr_catalog.EDITION_EU)         # real name, unbuilt content
+    assert acr_catalog.missing_requirement_sets(acr_catalog.EDITION_EU)
     # An unknown edition has no requirement sets to be missing — it is answered by the other check.
     assert acr_catalog.missing_requirement_sets("nonsense") == frozenset()
 
@@ -93,25 +97,40 @@ def test_the_wcag_edition_publishes_with_no_edition_blocker():
     assert [b for b in blockers if b.category == acr_validation.CATEGORY_EDITION_MISMATCH] == []
 
 
-def test_a_508_report_cannot_publish_while_508_requirements_are_absent():
-    """The regression. Before the fix this produced a publishable, exportable, false document."""
+def test_the_508_edition_publishes_with_no_edition_blocker_now_that_it_is_built():
+    """The regression #1532 fixed, seen from the other side.
+
+    Its test asserted that a 508 report was BLOCKED, because the rows did not exist. They exist
+    now — the catalog (6.1), the matrix builder (6.2) and the projection that renders them in
+    their own chapters (6.3) — so the blocker must be gone. If this ever fails again, the gate has
+    closed because a piece of that chain went missing, which is exactly when it should close.
+    """
     blockers = acr_validation.validate(
         _clean_report(vpat_edition=acr_catalog.EDITION_508), [], {})
+    assert [b for b in blockers if b.category == acr_validation.CATEGORY_EDITION_MISMATCH] == []
+
+
+def test_an_eu_report_cannot_publish_while_en_301_549_is_absent():
+    """The same guard, now on the edition that is still unbuilt. Before #1532 this shape produced
+    a publishable, exportable, false document."""
+    blockers = acr_validation.validate(
+        _clean_report(vpat_edition=acr_catalog.EDITION_EU), [], {})
     rows = [b for b in blockers if b.category == acr_validation.CATEGORY_EDITION_MISMATCH]
     assert len(rows) == 1
     assert rows[0].blocking is True
-    assert rows[0].detail["missing_requirement_sets"] == [acr_catalog.REQ_SECTION_508]
+    assert rows[0].detail["missing_requirement_sets"] == [acr_catalog.REQ_EN_301_549]
     # The message must name the standard, not just say "invalid" — the author has to know what is
-    # absent in order to decide between waiting and picking the WCAG edition.
-    assert "Section 508" in rows[0].message
+    # absent in order to decide between waiting and picking an edition that is built.
+    assert "EN 301 549" in rows[0].message
 
 
 def test_the_int_edition_names_both_absent_standards_not_just_the_first():
     blockers = acr_validation.validate(
         _clean_report(vpat_edition=acr_catalog.EDITION_INT), [], {})
     row = [b for b in blockers if b.category == acr_validation.CATEGORY_EDITION_MISMATCH][0]
-    assert row.detail["missing_requirement_sets"] == [
-        acr_catalog.REQ_EN_301_549, acr_catalog.REQ_SECTION_508]
+    # Only EN 301 549 now: the INT edition obliges all three sets and Section 508 has landed, so
+    # what is named is what is genuinely absent rather than everything the edition requires.
+    assert row.detail["missing_requirement_sets"] == [acr_catalog.REQ_EN_301_549]
 
 
 def test_an_unknown_edition_is_blocked_as_a_typo_and_lists_the_real_ones():
