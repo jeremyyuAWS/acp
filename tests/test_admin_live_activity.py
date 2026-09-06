@@ -240,6 +240,29 @@ def test_workflow_contract_keeps_completed_stage_after_queue_tail_expires():
     assert workflow["stages"][0]["completion_recorded"] is True
 
 
+def test_workflow_contract_keeps_a_durable_failed_stage_after_queue_tail_expires():
+    events = [{"event_id": "failed", "kind": "job.stage_failed", "scan_id": "scan-failed",
+               "stage": "assess", "correlation_id": "batch-failed",
+               "owner_email": "a@example.org", "source": "sharepoint", "error_class": "timeout",
+               "occurred_at": "2026-09-05T08:02:00+00:00", "attempt": 5,
+               "detail": {"documents": 12, "completed": 9, "failed": 3}}]
+    stage = system._workflow_rows([], events)[0]["stages"][0]
+    assert stage["status"] == "failed"
+    assert stage["terminal_outcome"] == "failed"
+    assert stage["error_class"] == "timeout"
+    assert stage["completion_recorded"] is False
+
+
+def test_workflow_contract_flags_a_running_stage_with_a_stale_worker_heartbeat():
+    run = {"scan_id": "scan-stalled", "stage": "assess", "owner": "a@example.org",
+           "source": "sharepoint", "running": 1, "queued": 0, "completed": 3, "total": 12,
+           "started_at": "2020-01-01T00:00:00+00:00", "updated_at": "2020-01-01T00:01:00+00:00",
+           "current_job_heartbeat_at": "2020-01-01T00:01:00+00:00"}
+    stage = system._workflow_rows([run])[0]["stages"][0]
+    assert stage["stalled"] is True
+    assert stage["waiting_reason"] == "worker_heartbeat_stale"
+
+
 def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(monkeypatch):
     class ActivityStore:
         def worker_tier_status(self):

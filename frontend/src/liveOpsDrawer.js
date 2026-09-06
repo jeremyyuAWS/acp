@@ -2227,7 +2227,8 @@ export function workflowStageRuns(snapshot = {}) {
         stage: stage.stage,
         stage_run_id: stage.stage_run_id,
         status: stage.status === 'completed' ? 'recent'
-          : stage.status === 'failed' ? 'failed' : 'active',
+          : stage.status === 'failed' ? 'failed'
+            : stage.status === 'cancelled' ? 'cancelled' : 'active',
         total: num(stage.total) ?? 0,
         completed: num(stage.completed) ?? 0,
         running: num(stage.active) ?? 0,
@@ -2237,7 +2238,11 @@ export function workflowStageRuns(snapshot = {}) {
         updated_at: stage.latest_progress_at || stage.completed_at || workflow.updated_at || null,
         completed_at: stage.completed_at || null,
         completion_recorded: stage.completion_recorded === true,
+        terminal_outcome: stage.terminal_outcome || null,
+        last_error_class: stage.error_class || null,
         max_attempts_seen: num(stage.attempt),
+        stalled: stage.stalled === true,
+        waiting_reason: stage.waiting_reason || null,
       }
       // Never replace live-only operational facts such as current_file, worker heartbeat, queue
       // position or classified error. The durable fields enrich that row; they replace absence.
@@ -2276,7 +2281,9 @@ export function runStagePipeline(scanId, snapshot = {}) {
     return {
       ...stage,
       present: true,
-      state: row.status === 'recent' ? 'complete' : 'active',
+      state: row.status === 'recent' ? 'complete'
+        : row.status === 'failed' ? 'failed'
+          : row.status === 'cancelled' ? 'cancelled' : 'active',
       completed,
       total,
       running: num(row.running) ?? 0,
@@ -2358,9 +2365,12 @@ export function runTrouble(run = {}) {
     attempts,
     retrying: (attempts ?? 0) > 1,
     kind,
+    stalled: run.stalled === true,
     label: kind ? (ERROR_CLASS_LABELS[kind] || kind) : null,
     // A classified failure with no retry left is a different situation from one being retried.
-    note: kind && (attempts ?? 0) > 1
+    note: run.stalled === true
+      ? 'Worker heartbeat is stale. This stage may be wedged and needs operator attention.'
+      : kind && (attempts ?? 0) > 1
       ? 'Retried after a classified failure. The class is a vocabulary term, never the error text.'
       : kind ? 'A classified failure was recorded for this stage.' : null,
   }

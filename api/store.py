@@ -9892,6 +9892,7 @@ class Store:
     # display. Extend by design amendment, not in passing.
     ORCHESTRATION_EVENT_KINDS = frozenset({
         "job.submitted", "job.eligible", "job.claimed", "job.stage_started", "job.stage_completed",
+        "job.stage_failed", "job.stage_cancelled",
         "job.completed", "job.cancel_requested", "job.cancelled", "job.failed",
         "job.retry_scheduled", "job.retry_started", "job.lease_expired", "job.reclaimed",
         "job.dead_lettered", "job.zombie_write_suppressed",
@@ -10088,7 +10089,8 @@ class Store:
                 self._db.execute(cur,
                     "SELECT e.*,s.source FROM orchestration_events e "
                     "LEFT JOIN scan_runs s ON s.id=e.scan_id "
-                    "WHERE e.kind IN ('job.stage_started','job.stage_completed') "
+                    "WHERE e.kind IN ('job.stage_started','job.stage_completed',"
+                    "'job.stage_failed','job.stage_cancelled') "
                     "AND e.occurred_at>=%s "
                     "ORDER BY e.occurred_at DESC,e.event_id DESC LIMIT %s", (cutoff, int(limit)))
                 rows = self._db.fetchall(cur)
@@ -10490,6 +10492,42 @@ class Store:
             workflow=job["scan_id"], stage=stage, correlation_id=job["batch_id"],
             detail={"documents": total, "stage_execution_id": job["batch_id"]})
 
+    def _record_stage_terminal_if_ready(self, job: dict | None) -> None:
+        """Record a failed/cancelled batch once every document has reached a terminal state."""
+        if not job or not job.get("scan_id") or not job.get("batch_id"):
+            return
+        stage = self._BATCH_JOB_STAGES.get(job.get("type"))
+        if not stage:
+            return
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS total,"
+                "SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done,"
+                "SUM(CASE WHEN status='dead' THEN 1 ELSE 0 END) AS dead,"
+                "SUM(CASE WHEN status='cancelled' THEN 1 ELSE 0 END) AS cancelled,"
+                "SUM(CASE WHEN status IN ('queued','running') THEN 1 ELSE 0 END) AS active "
+                "FROM jobs WHERE scan_id=%s AND batch_id=%s", (job["scan_id"], job["batch_id"]))
+            counts = self._db.fetchone(cur) or {}
+        if int(counts.get("active") or 0) or not int(counts.get("total") or 0):
+            return
+        dead, cancelled = int(counts.get("dead") or 0), int(counts.get("cancelled") or 0)
+        if not dead and not cancelled:
+            return
+        outcome = "failed" if dead else "cancelled"
+        owner = self._stage_owner(job["scan_id"])
+        if not owner:
+            return
+        self.append_orchestration_event(
+            event_id=self._stage_event_id(job["scan_id"], stage, job["batch_id"], outcome),
+            owner_email=owner, kind=f"job.stage_{outcome}", scan_id=job["scan_id"],
+            job_id=job.get("id"), job_type=job.get("type"), attempt=job.get("attempts"),
+            workflow=job["scan_id"], stage=stage, correlation_id=job["batch_id"],
+            error_class=(job.get("error_class")
+                         if job.get("error_class") in self.ERROR_CLASS_VOCABULARY
+                         else "unknown") if outcome == "failed" else "cancelled",
+            detail={"documents": int(counts.get("total") or 0), "completed": int(counts.get("done") or 0),
+                    "failed": dead, "cancelled": cancelled, "stage_execution_id": job["batch_id"]})
+
     def get_job(self, job_id: str) -> dict | None:
         with self._db.cursor() as cur:
             self._db.execute(cur, "SELECT * FROM jobs WHERE id=%s", (job_id,))
@@ -10735,6 +10773,7 @@ class Store:
         matters more since #1079 — cancellation now reaches the pool threads, so more attempts
         can raise it and arrive here.
         Returns True if this call's write applied, False if it did not."""
+        job = self.get_job(job_id)
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "UPDATE jobs SET status='cancelled', updated_at=%s "
@@ -10743,6 +10782,8 @@ class Store:
             won = (getattr(cur, "rowcount", 0) or 0) > 0
         if not won:
             print(f"[acp] mark_job_cancelled: job {job_id} already terminal — zombie-worker no-op", flush=True)
+        else:
+            self._record_stage_terminal_if_ready(job)
         return won
 
     # A job that reached a terminal state because someone STOPPED it, not because it failed.
@@ -11165,6 +11206,7 @@ class Store:
                 except Exception:
                     # best-effort — the dead-letter itself must still be recorded
                     swallowed("store.fail_job: rolling back the fail_job transaction failed")
+            self._record_stage_terminal_if_ready({**job, "error_class": error_class})
             return "dead"
         run_after = (now + timedelta(seconds=backoff_seconds)).isoformat()
         # Same reclaimed-job guard as the dead-letter branch above: a zombie's late transient
