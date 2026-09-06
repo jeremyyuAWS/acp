@@ -110,10 +110,11 @@ export default function PeopleAccess() {
   // `person.workspace_role_id`, so without this it snaps back to the old value for the length of
   // the round trip — which, on the screen whose whole reported bug was "the dropdown does not
   // do anything", is the one thing it must not do.
-  const showRole = (email, roleId) => setData((old) => ({
+  const showPerson = (email, patch) => setData((old) => ({
     ...old,
-    people: old.people.map((p) => (p.email === email ? { ...p, workspace_role_id: roleId || null } : p)),
+    people: old.people.map((p) => (p.email === email ? { ...p, ...patch } : p)),
   }))
+  const showRole = (email, roleId) => showPerson(email, { workspace_role_id: roleId || null })
 
   const changeRole = (person, roleId) => {
     const previousRoleId = person.workspace_role_id || ''
@@ -182,10 +183,20 @@ export default function PeopleAccess() {
   }
   const change = (person, patch) => {
     setError('')
+    // PAINT FIRST, exactly as showRole does for the workspace-role select beside this one.
+    //
+    // This select is CONTROLLED by `person.role`, so without this the chosen value is discarded
+    // on the next render and the control springs back under the cursor until the response lands.
+    // That is the same "the dropdown does not do anything" report that produced showRole; the
+    // workspace-role select was fixed and this one was not, which is why BOTH looked broken.
+    //
+    // On failure the row is reloaded rather than left as painted: an optimistic update that
+    // survives a refusal is a lie that looks like a success.
+    showPerson(person.email, patch)
     updatePerson(person.email, patch).then((d) => {
       setData((old) => ({ ...old, ...d, people: d.people || old.people.map((p) => p.email === person.email ? d.person : p) }))
       setMessage(`${person.email} was updated.`)
-    }).catch((e) => setError(e.message || 'Could not update this person.'))
+    }).catch((e) => { setError(e.message || 'Could not update this person.'); load() })
   }
   const remove = (person) => {
     if (!window.confirm(`Remove ${person.email} from ACP? They will lose access on their next request.`)) return
@@ -226,6 +237,29 @@ export default function PeopleAccess() {
     )}
     <div role="status" aria-live="polite" style={{ minHeight: 22, marginTop: 10, color: error ? 'var(--error-fg-strong)' : '#287D3C', fontSize: 13 }}>{error || message}</div>
     <div style={{ border: '1px solid var(--line)', borderRadius: 10, overflow: 'hidden' }}>
+      {/* COLUMN HEADINGS, because two adjacent selects with no visible labels are indisting-
+          uishable — which is what was reported. The row carries an ACCESS LEVEL (may they touch
+          platform settings) and a WORKSPACE ROLE (which tabs they see); they are different
+          decisions with different consequences, and styles.css deliberately unified their
+          appearance so they would stop looking like two unrelated widgets. That worked, and left
+          two identical controls side by side. When a workspace role is itself named "Platform
+          Admin" both even read the same words.
+
+          `aria-hidden` because each select already carries an aria-label naming its column AND
+          the person — strictly more useful than a heading a screen reader cannot associate with
+          a cell, since these rows are divs and carry no table semantics to associate it with.
+          The headings are the SIGHTED half of the same information (3.3.2), not a second source.
+
+          Only when there are people: headings over an empty state label nothing. */}
+      {data.people.length > 0 && (
+        <div className={roles.length > 0 ? 'people-head has-role-column' : 'people-head'} aria-hidden="true">
+          <span>Person</span>
+          <span>Status</span>
+          <span>Access level</span>
+          {roles.length > 0 && <span>Workspace role</span>}
+          <span />
+        </div>
+      )}
       {data.people.length === 0 ? <p className="muted" style={{ padding: 18, margin: 0 }}>No people have been added yet.</p> : data.people.map((person) => <div key={person.email} className={roles.length > 0 ? 'people-row has-role-column' : 'people-row'}>
         <div><b className="people-email">{person.email}</b><div className="muted" style={{ fontSize: 12, marginTop: 3 }}>{person.provider === 'microsoft' ? 'Microsoft · SharePoint / OneDrive' : person.provider === 'google' ? 'Google · Drive' : person.role === 'owner' ? 'Workspace owner' : 'Provider not recorded'}</div></div>
         <Badge status={person.status} />
