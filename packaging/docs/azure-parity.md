@@ -165,6 +165,61 @@ them — inside a 150-connection server with 35 to spare. So the contract does n
 700-connection server; it needs to say that it pins pools. That is a larger decision than these
 three ranges and is left for the owner rather than folded in here.
 
+## The caveat below has now been hit: acp-remediate (measured 2026-09-06)
+
+The generated section closes with *"live estate drift — Everything here is what the SCRIPTS
+configure. An app resized or rescaled by hand in the portal is invisible to this comparison."*
+That is an accurate statement of a limit, and this is the first recorded instance of it biting.
+It is written down because an abstract caveat and a measured instance are different things: the
+first tells a reader to be careful, the second tells them what to go and fix.
+
+**What the repository declares**, in two places that agree:
+
+  * `rightsize-production.sh` — `update_app acp-remediate 2.0 4Gi 5 10 2`, then
+    `apply_remediation_autoscale`, a KEDA `postgresql` rule named `remediation-queue` counting
+    queued `remediate_file` / `rescore_file` / `apply_approved_values` jobs at 4 per replica.
+  * `standard-production.acp-deployment.yaml` — `replicas: { min: 5, max: 10 }` with the
+    `autoscale` block deliberately RETAINED, and the reasoning recorded above: *"Production really
+    does autoscale this tier — 5-10 with a scale rule is what production runs, and min == max would
+    be the wrong shape here."*
+
+**What production ran on 2026-09-06**, from `az containerapp show -n acp-remediate`:
+
+```json
+"scale": { "minReplicas": 5, "maxReplicas": 5, "pollingInterval": 30,
+           "cooldownPeriod": 300, "rules": null }
+```
+
+`min == max`, and `rules: null` — no scale rule of any kind. So the sentence above, which reads as
+an observation about production, does not describe production. Both halves are wrong: the ceiling
+is 5 rather than 10, and the rule the ceiling exists for is absent.
+
+**This is not a defect in `gen_azure_parity.py`.** That generator derives from `deploy/public/*.sh`
+and the contract, says so in its docstring, and names this exact blind spot in its own output. It
+compares SCRIPTS to CONTRACT. Nothing in this repository compares either to the LIVE estate, and
+no `--check` run could have caught this. Recording it as a checker bug would be the same error the
+document warns against elsewhere: reading a clean row as a statement about the running system.
+
+**Why it is worth an operator's attention rather than a docs fix.** acp-remediate is the tier
+observed saturated during the 2026-09-05 stuck-queue investigation — 132 jobs waiting on a role
+that, in this configuration, has no headroom to grow into and no trigger that could ask for any.
+Whether that caused the backlog is not established here and should not be inferred from this
+paragraph; what IS established is narrower and checkable: **no autoscale relief was available to
+that tier by configuration**, so any reading of that incident has to account for it.
+
+**The decision is not this document's to make.** Two coherent options, and they diverge on cost:
+
+  * Bring production to the declaration — re-run `rightsize-production.sh`, which applies both the
+    5-10 range and the `remediation-queue` rule. At the rates production carries
+    (`ACP_COST_VCPU_HOUR=0.0864`, `ACP_COST_GIB_HOUR=0.009`), the FLOOR is unchanged — five
+    replicas are already paid for — and the ceiling moves from about $762 to about $1,524 a month,
+    payable only under load.
+  * Bring the declaration to production — pin 5-5 and drop the `autoscale` block, exactly as the
+    assess tier was settled above, and record why remediate should not scale.
+
+Either is defensible. What is not defensible is leaving a contract that asserts, in production's
+own voice, a shape production does not have.
+
 ## On ADR 0048's Container Apps claims
 
 ADR 0048 rejected per-cloud native runtimes partly because *"ACA specifically has no
