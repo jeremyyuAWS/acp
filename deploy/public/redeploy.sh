@@ -213,6 +213,18 @@ BUILD_VERSION="${BUILD_DATE}.$(( SEQ + 1 ))"
 [ -n "$REV_TIMES" ] || BUILD_VERSION="${BUILD_DATE}.${DAY_SECS}"
 say "CalVer $BUILD_VERSION  (built $BUILD_TIME)"
 
+# The COMMIT this image is built from. `$PIN` rather than `git rev-parse HEAD`: it is the sha
+# step 2 resolved and checked out, so it states the intent rather than re-deriving it from a cwd
+# — and it is already a full 40-char sha, resolved precisely so a pin could not be taken verbatim
+# and mean something else later.
+#
+# WHY IT IS WORTH A BUILD ARG. `version` answers "which build" and `built_at` answers "when";
+# neither answers "which COMMIT", which is the question every deploy verification actually asks.
+# Establishing that a merge reached production took a CalVer stamp, two workflow-run timestamps
+# and a cancelled run to disambiguate on 2026-09-06 — and the answer was still an inference. One
+# sha makes it a read.
+BUILD_SHA="$PIN"
+
 # ── 5. bases, rebuilt only when their inputs change ────────────────────────────────────────
 # The hash covers exactly what the base images are built FROM. Source files are deliberately
 # absent: if a source change moved this hash, the cache would never hit and the whole exercise
@@ -245,7 +257,8 @@ if [ "$DRY" = 1 ]; then
 else
   az acr build "${AZ[@]}" -r "$ACR" -t "${IMG#*/}" -f deploy/public/Dockerfile \
     --build-arg "BASE_WEB=$BASE_WEB" --build-arg "BASE_API=$BASE_API" \
-    --build-arg "BUILD_VERSION=$BUILD_VERSION" --build-arg "BUILD_TIME=$BUILD_TIME" . >/dev/null
+    --build-arg "BUILD_VERSION=$BUILD_VERSION" --build-arg "BUILD_TIME=$BUILD_TIME" \
+    --build-arg "BUILD_SHA=$BUILD_SHA" . >/dev/null
 fi
 
 # ── 7. health BEFORE ───────────────────────────────────────────────────────────────────────

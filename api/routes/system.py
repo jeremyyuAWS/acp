@@ -466,11 +466,24 @@ def _build_info() -> dict:
     deploy.sh. Such an image must not pass for a release: /healthz reports ok=false, so
     an operator sees it immediately instead of the app quietly serving "dev". ACA runs no
     health probe on this route, so this signal is advisory, not a rollout gate.
+
+    `commit` IS THE COMMIT THIS IMAGE WAS BUILT FROM, and it is here because `version` and
+    `built_at` cannot answer the question anybody actually asks after a merge: is THIS change
+    live? On 2026-09-06 establishing that took a CalVer stamp, two workflow-run timestamps and a
+    cancelled deploy run to disambiguate, and the answer was still an inference from when the
+    build happened rather than from what it contained. One sha turns that into a read.
+
+    It is a REPORT, never a gate. `ok` and `version_stamped` deliberately do not consider it: an
+    older image predating this field, or one built by a bare `docker build`, is not unhealthy —
+    it simply cannot name its commit, and says so with null rather than with a plausible string.
+    deploy.sh appends `-dirty` when it builds from a working directory with uncommitted changes,
+    because a sha that silently omits them names a tree that never shipped.
     """
     import os
     v = (os.environ.get("ACP_BUILD_VERSION") or "").strip()
     return {"version": v or "dev",
             "built_at": os.environ.get("ACP_BUILD_TIME") or None,
+            "commit": (os.environ.get("ACP_BUILD_SHA") or "").strip() or None,
             "version_stamped": v.lower() not in ("", "dev")}
 
 
@@ -1688,6 +1701,28 @@ def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None)
     # canonical workflow history cannot silently widen the endpoint's separate `runs` contract.
     runs = list(runs)
     grouped: dict[str, dict] = {}
+    event_rows: dict[str, list[dict]] = {}
+    safe_kinds = {"job.stage_started", "job.stage_completed", "job.stage_failed",
+                  "job.stage_cancelled", "workflow.stage_cancel_requested",
+                  "workflow.stage_resumed"}
+    # This is a cross-user operations endpoint, so project only the closed lifecycle vocabulary
+    # and counted detail. Free-text messages, filenames and raw payloads never cross this boundary.
+    for event in lifecycle_events or []:
+        scan_id = str(event.get("scan_id") or "")
+        if not scan_id or event.get("kind") not in safe_kinds:
+            continue
+        detail = event.get("detail") or {}
+        event_rows.setdefault(scan_id, []).append({
+            "event_id": event.get("event_id"), "kind": event.get("kind"),
+            "stage": event.get("stage"), "occurred_at": event.get("occurred_at"),
+            "correlation_id": event.get("correlation_id"), "attempt": event.get("attempt"),
+            "error_class": event.get("error_class"),
+            "detail": {key: detail[key] for key in ("documents", "completed", "failed")
+                       if key in detail},
+        })
+    for rows_for_scan in event_rows.values():
+        rows_for_scan.sort(key=lambda row: (str(row.get("occurred_at") or ""),
+                                            str(row.get("event_id") or "")))
     durable_stages: dict[tuple[str, str], dict] = {}
     for event in lifecycle_events or []:
         if event.get("kind") not in ("job.stage_started", "job.stage_completed",
@@ -1741,6 +1776,7 @@ def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None)
             "status": "completed",
             "current_stage": None,
             "available_next_actions": [],
+            "events": event_rows.get(scan_id, []),
             "stages": [],
         })
         if str(run.get("started_at") or "") < str(workflow.get("created_at") or run.get("started_at") or ""):
