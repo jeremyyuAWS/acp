@@ -909,6 +909,7 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
   const stageRows = Object.entries(summary.by_stage || {})
   const services = workerServiceRows(summary)
   const recovery = summary.recovery || {}
+  const correlation = summary.workflow_correlation || {}
   return <section className="panel" style={{ padding: 16, marginBottom: 20 }} aria-label="Live Azure processing traffic">
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
       <div><b>Live Azure traffic</b><div className="muted" style={{ fontSize: 12 }}>Active worker flow plus the last 15 minutes</div></div>
@@ -935,6 +936,24 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
         {recovery.latest_action_at && <div className="muted" style={{ fontSize: 10.5, marginTop: 3 }}>
           Latest action {age(recovery.latest_action_at)} ago
         </div>}
+      </div>
+      <div className="panel" style={{ padding: 12 }} aria-label="Workflow data linkage">
+        <div className="muted" style={{ fontSize: 11 }}>WORKFLOW WIRING</div>
+        <b style={{ fontSize: 20 }}>
+          {correlation.complete == null ? 'Not reported'
+            : correlation.complete ? 'Complete' : `${correlation.unlinked_active_jobs || 0} unlinked`}
+        </b>
+        <div className="muted">
+          {correlation.attributed_stage_runs == null ? 'Stage-run linkage unavailable'
+            : `${correlation.attributed_stage_runs} stage run${correlation.attributed_stage_runs === 1 ? '' : 's'} linked`}
+        </div>
+        <div className="muted" style={{ fontSize: 10.5, marginTop: 3 }}>
+          {correlation.complete == null
+            ? 'ACP cannot verify whether every active job appears in a workflow.'
+            : correlation.complete
+              ? 'Every active job is represented in the workflow view.'
+              : 'Some active jobs are omitted from the workflow view; queue totals remain authoritative.'}
+        </div>
       </div>
     </div>
     <AzureCapacity capacity={capacity} state={capacityState} />

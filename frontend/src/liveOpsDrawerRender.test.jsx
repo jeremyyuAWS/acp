@@ -48,6 +48,7 @@ const snapshot = {
     active_runs: 1, recent_runs: 0, active_users: 1, waiting_users: 2, queued: 10, running: 2,
     completed_jobs: 140, worker_slots: 7, available_slots: 5, utilization_pct: 28,
     pressure: 'busy', scheduling_policy: 'tenant_fair_least_loaded', worker_tier_alive: true,
+    workflow_correlation: { attributed_stage_runs: 1, unlinked_active_jobs: 2, complete: false },
     by_stage: { assess: { running: 2, queued: 10, completed: 8, total: 20 },
       remediate: { completed: 12, running: 1 }, release: { completed: 9, running: 0 } },
     worker_roles: { assess: { alive: true, pool_size: 3, age_s: 4, version: 'v25' } },
@@ -1521,6 +1522,15 @@ describe('The seven-section drawer', () => {
     const container = await mount({ nodeId: 'stage:assess', node: NODES[0][1] })
     expect(container.querySelector('[aria-label="5. Alerts and platform health"]')).not.toBeNull()
     expect(container.querySelector('[aria-label="6. Configuration and limits"]')).not.toBeNull()
+  })
+
+  it('warns when active jobs are missing from the workflow view', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: NODES[0][1] })
+    const linkage = container.querySelector('[aria-label="Workflow data linkage"]')
+    expect(linkage).not.toBeNull()
+    expect(linkage.textContent).toContain('Workflow view is incomplete')
+    expect(linkage.textContent).toContain('2 active jobs cannot be attributed to a workflow')
+    expect(linkage.textContent).toContain('Queue totals remain authoritative')
   })
 
   it('says why a section is thin rather than dropping it', async () => {
