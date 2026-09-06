@@ -35,3 +35,14 @@ it('requires a separately labelled replacement action', () => {
   act(() => replace.click())
   expect(onReplace).toHaveBeenCalledOnce()
 })
+
+it('explains why an exact recent workflow should be continued', () => {
+  const { container, root } = createTestRoot()
+  act(() => root.render(<DiscoveryContinuityChoice
+    choice={{ scanId: 'scan-one', workflowRevision: 2, recentCompatible: true }}
+    onContinue={() => {}} onReplace={() => {}} onDismiss={() => {}} />))
+  expect(container.textContent).toContain('A matching workflow just ran')
+  expect(container.textContent).toContain('source, folders, settings, and lifecycle policy match')
+  expect(container.textContent).toContain('Workflow revision 2')
+  expect(container.textContent).toContain('Start revised Discovery')
+})

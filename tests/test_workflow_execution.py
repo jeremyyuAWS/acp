@@ -124,3 +124,22 @@ def test_replacement_is_a_new_addressable_revision_of_the_same_workflow(isolated
     assert old["current_scan_id"] == current["current_scan_id"] == second
     assert old["current_revision"] == current["current_revision"] == 2
     assert current["supersedes_scan_id"] == first
+
+
+def test_recent_compatible_workflow_requires_the_exact_frozen_inputs(isolated_store):
+    inputs = {"source": "sharepoint", "folder_ids": ["site-a"],
+              "lifecycle_rules": [{"policy_id": "archive", "version": 2}]}
+    sid, _ = isolated_store.enqueue_scan(
+        "scan-compatible", "sharepoint", OWNER, "scan_discover", {}, inputs=inputs)
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(
+            cur, "UPDATE scan_runs SET status='done',completed_at=%s WHERE id=%s",
+            (isolated_store._now(), sid))
+
+    candidate = isolated_store.recent_compatible_workflow(OWNER, "sharepoint", inputs)
+    assert candidate["scan_id"] == sid
+    assert candidate["workflow_id"] == sid
+    assert isolated_store.recent_compatible_workflow(
+        OWNER, "sharepoint", {**inputs, "folder_ids": ["site-b"]}) is None
+    assert isolated_store.recent_compatible_workflow(
+        OWNER, "sharepoint", {**inputs, "lifecycle_rules": []}) is None

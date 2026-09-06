@@ -2,19 +2,21 @@ import React from 'react'
 
 export default function DiscoveryContinuityChoice({ choice, onContinue, onReplace, onDismiss }) {
   if (!choice) return null
+  const recent = choice.recentCompatible === true
   return (
     <section className="panel" role="alertdialog" aria-labelledby="discovery-continuity-title"
              aria-describedby="discovery-continuity-copy"
              style={{ marginBottom: 12, borderLeft: '4px solid var(--accent, #6D28D9)', background: 'var(--surface)' }}>
       <div style={{ display: 'flex', gap: 16, alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ flex: '1 1 420px' }}>
-          <strong id="discovery-continuity-title">Discovery is already running</strong>
+          <strong id="discovery-continuity-title">{recent ? 'A matching workflow just ran' : 'Discovery is already running'}</strong>
           <div id="discovery-continuity-copy" className="muted" style={{ marginTop: 3, fontSize: 12.5 }}>
-            Continue the current workflow to keep its progress. Start a new revision only if you
-            intend to stop and replace it with a separate Discovery.
+            {recent
+              ? 'The source, folders, settings, and lifecycle policy match. Continue that workflow to avoid repeating Discovery, or intentionally create a new revision.'
+              : 'Continue the current workflow to keep its progress. Start a new revision only if you intend to stop and replace it with a separate Discovery.'}
           </div>
           <div className="muted" style={{ marginTop: 5, fontSize: 11.5, fontFamily: 'monospace' }}>
-            Scan {choice.scanId}
+            Workflow revision {choice.workflowRevision || 1} · Scan {choice.scanId}
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

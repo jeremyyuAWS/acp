@@ -1349,7 +1349,7 @@ export default function App() {
         const submitKey = beginOrResumeIntent('scan')
         let accepted
         try {
-          accepted = await startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded, submitKey, replaceActive)
+          accepted = await startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded, submitKey, replaceActive, true)
         } catch (err) {
           // Hold the key when we cannot tell whether the scan was created; drop it when the
           // server proved it was not, so the user's next, corrected attempt is a fresh intent
@@ -1491,9 +1491,11 @@ export default function App() {
       // both rendered at once and directly contradicted each other. The failure is the newer,
       // harder signal; it wins.
       setPreflightCapacityState(null)
-      if (e?.status === 409 && e?.detail?.code === 'discovery_workflow_active') {
+      if (e?.status === 409 && ['discovery_workflow_active', 'recent_compatible_workflow'].includes(e?.detail?.code)) {
         setDiscoveryChoice({
           scanId: e.detail.active_scan_id,
+          workflowRevision: e.detail.workflow_revision,
+          recentCompatible: e.detail.code === 'recent_compatible_workflow',
           source,
           folder,
           runScope,

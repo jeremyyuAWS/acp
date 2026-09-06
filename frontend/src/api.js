@@ -883,9 +883,9 @@ getJob.openStream = openJobStream
 // (scan_id, job_id) rather than inserting, so a response lost after the commit resolves to the
 // job that already exists instead of creating a second scan. Optional so every existing caller
 // and test keeps working unchanged; without it the server behaves exactly as before.
-export const startScanQueued = (source = 'local', folder = null, aiEnabled = true, pii = false, excludeRemediated = false, incremental = true, folders = null, exclude = null, idempotencyKey = null, replaceActive = false) => (SIM
+export const startScanQueued = (source = 'local', folder = null, aiEnabled = true, pii = false, excludeRemediated = false, incremental = true, folders = null, exclude = null, idempotencyKey = null, replaceActive = false, preferRecent = false) => (SIM
   ? sim({ scan_id: 'sim-scan', job_id: 'sim-job', queued: true, workers: 4 })
-  : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${foldersQ(folders)}${excludeQ(exclude)}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}&queue=true&fanout=true&replace_active=${replaceActive ? 'true' : 'false'}`, { method: 'POST', headers: headers(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}), signal: AbortSignal.timeout(SCAN_ENQUEUE_TIMEOUT_MS) }).then(j))
+  : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${foldersQ(folders)}${excludeQ(exclude)}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}&queue=true&fanout=true&replace_active=${replaceActive ? 'true' : 'false'}&prefer_recent=${preferRecent ? 'true' : 'false'}`, { method: 'POST', headers: headers(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}), signal: AbortSignal.timeout(SCAN_ENQUEUE_TIMEOUT_MS) }).then(j))
 // Read-only check on the SPECIFIC source + folders about to be scanned — run right before
 // doScan actually starts one, so a bad credential, a deleted folder, or a dead worker tier is
 // caught before a scan row exists rather than surfacing as "0 documents" after the fact.

@@ -141,6 +141,33 @@ def test_same_idempotency_key_rejoins_the_active_discovery(gated_client, isolate
     assert s2 == s1
 
 
+def test_ui_can_continue_an_exact_recent_workflow_instead_of_rescanning(
+        gated_client, isolated_store):
+    first = _start_queued(gated_client, OWNER)
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(
+            cur, "UPDATE jobs SET status='done' WHERE scan_id=%s", (first,))
+        isolated_store._db.execute(
+            cur, "UPDATE scan_runs SET status='done',completed_at=%s WHERE id=%s",
+            (isolated_store._now(), first))
+
+    response = gated_client(OWNER).post(
+        "/scans?source=local&queue=true&fanout=true&prefer_recent=true")
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "recent_compatible_workflow"
+    assert detail["active_scan_id"] == first
+    assert detail["workflow_revision"] == 1
+
+    revised = gated_client(OWNER).post(
+        "/scans?source=local&queue=true&fanout=true&prefer_recent=true&replace_active=true")
+    assert revised.status_code == 200, revised.text
+    body = revised.json()
+    assert body["workflow_id"] == first
+    assert body["workflow_revision"] == 2
+    assert body["supersedes_scan_id"] == first
+
+
 def test_no_prior_scan_is_a_no_op(gated_client, isolated_store):
     """The common case — no active scan at all — must not raise or behave differently."""
     s1 = _start_queued(gated_client, OWNER)
