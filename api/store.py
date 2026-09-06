@@ -1321,6 +1321,24 @@ _SCHEMA = [
       PRIMARY KEY (report_id, criterion_num)
     )""",
 
+    # PHASE 6 — a row says which requirement set it came from, and 508 rows say which chapter.
+    #
+    # A matrix used to hold one kind of row, so nothing had to say so. A VPAT's 508 edition adds
+    # rows from 36 CFR 1194 Appendix C, and those are a different SHAPE: a WCAG criterion has a
+    # level and a principle, a 508 requirement has a chapter and a section. Without
+    # `requirement_set` the two are distinguishable only by guessing at the number format, and a
+    # renderer that guesses wrong prints a Section 508 requirement in a WCAG table with a blank
+    # conformance level — which is the false-claim failure #1532 fixed, arriving by another route.
+    #
+    # DEFAULT backfills every existing row, which is correct rather than convenient: every matrix
+    # built before this migration was WCAG-only, because build_matrix could not read another
+    # catalog. `chapter` is deliberately NULL for WCAG rows — a nullable column that means
+    # something only for 508 rows is honest, where reusing `principle` to hold a chapter name
+    # would be one field away from rendering a 508 row as a WCAG one.
+    "ALTER TABLE acr_criterion ADD COLUMN IF NOT EXISTS requirement_set TEXT "
+    "DEFAULT 'wcag-2.2-aa'",
+    "ALTER TABLE acr_criterion ADD COLUMN IF NOT EXISTS chapter TEXT",
+
     # APPEND-ONLY (PRD §12 "remains visible for audit history", §17 additions AND removals are
     # audited). Nothing here is ever UPDATEd or DELETEd except `stale_reason`, which is a DISPLAY
     # CACHE of what api/acr_freshness.py derives — never the input to a publication decision. A
@@ -2116,8 +2134,8 @@ class _PgAdapter:
     # v27 is the union of main's v26 workflow-lineage migration and release_root_claims, the
     # pre-provider name reservation that closes the
     # SharePoint-folder creation crash window.
-    _SCHEMA_VERSION = 27
-    _SCHEMA_CHECKSUM_AT_VERSION = "97a24ec0c197f75099ef4df62a89fe92"
+    _SCHEMA_VERSION = 28
+    _SCHEMA_CHECKSUM_AT_VERSION = "584d38ac5dcabbf948a7055ea1137d1e"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -13431,13 +13449,18 @@ class Store:
                 self._db.execute(cur,
                     "INSERT INTO acr_criterion(report_id,criterion_num,owner_email,criterion_name,"
                     "level,principle,guideline,applicable,workflow_state,draft_status,final_status,"
-                    "remarks,evaluator,reviewer,approval_state,decided_at,approved_at,updated_at) "
-                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    "remarks,evaluator,reviewer,approval_state,decided_at,approved_at,updated_at,"
+                    "requirement_set,chapter) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                     (report_id, row["criterion_num"], owner_email, row.get("criterion_name"),
                      row.get("level"), row.get("principle"), row.get("guideline"),
                      1 if row.get("applicable", True) else 0,
                      row.get("workflow_state", "not_evaluated"), None, None, None, None, None,
-                     "unapproved", None, None, now))
+                     "unapproved", None, None, now,
+                     # Defaulted rather than required: a caller that predates Phase 6 passes rows
+                     # with neither key, and those rows ARE WCAG rows. The column's own DEFAULT
+                     # covers rows already in the table; this covers rows arriving from old code.
+                     row.get("requirement_set", "wcag-2.2-aa"), row.get("chapter")))
 
     def list_acr_reports(self, owner_email: str) -> list[dict]:
         with self._db.cursor() as cur:
