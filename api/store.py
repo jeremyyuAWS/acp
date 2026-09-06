@@ -10938,6 +10938,13 @@ class Store:
             self._db.execute(cur, sql, tuple(params))
             return self._db.fetchone(cur)
 
+    def stage_work_item_for_job(self, job_id: str | None) -> dict | None:
+        if not job_id:
+            return None
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT * FROM stage_work_items WHERE job_id=%s", (job_id,))
+            return self._db.fetchone(cur)
+
     def current_stage_execution(self, workflow_id: str, stage: str, *,
                                 owner: str | None = None) -> dict | None:
         with self._db.cursor() as cur:
