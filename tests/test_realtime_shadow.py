@@ -8,6 +8,8 @@ sys.path.insert(0, str(ACP / "api"))
 
 import realtime_shadow as shadow
 import worker
+from realtime_events import Priority, RealtimeEvent, owner_scope, stream_key
+from realtime_gateway.store import _with_stream_id
 
 
 class Transport:
@@ -16,15 +18,10 @@ class Transport:
         self.sequences = {}
         self.fail = fail
 
-    def next_sequence(self, tenant, correlation):
-        key = (tenant, correlation)
-        self.sequences[key] = self.sequences.get(key, 0) + 1
-        return self.sequences[key]
-
-    def write(self, envelope):
+    def write(self, event):
         if self.fail:
             raise TimeoutError("injected Redis timeout")
-        self.events.append(envelope)
+        self.events.append(event)
         return "1-0"
 
 
@@ -43,52 +40,42 @@ def test_versioned_contract_and_adapter_domain(monkeypatch):
                        "started", worker_id="w1", status="running")
     publisher.publish_one()
     event = transport.events[0]
-    assert set(event) == {"event_id", "event_version", "event_type", "occurred_at",
-                          "tenant_id", "correlation_id", "source", "priority", "sequence",
-                          "payload"}
-    assert event["event_version"] == 1
-    assert event["event_type"] == "discover.started"
-    assert event["correlation_id"] == "s1"
-    assert event["sequence"] == 1
-    publisher.publish_one()
-    publisher.publish_one()
-    assert [e["event_type"] for e in transport.events] == [
-        "discover.started", "queue.started", "worker.job.started"]
+    assert isinstance(event, RealtimeEvent)
+    assert event.kind == "discover.started"
+    assert event.owner_scope == owner_scope("t1")
+    assert event.correlation_id == "s1"
+    assert event.source_seq == 1
+    assert event.effective_priority == Priority.NORMAL
+    assert event.payload["status"] == "running"
 
 
 def test_submit_does_not_wait_for_transport_sequence():
-    class SequenceMustStayOffCaller(Transport):
-        def next_sequence(self, tenant, correlation):
-            raise AssertionError("sequence I/O ran during submit")
-
-    publisher = shadow.ShadowPublisher(SequenceMustStayOffCaller(), start_worker=False)
-    assert publisher.submit(event_type="assess.started", tenant_id="t", correlation_id="c",
-                            source="test", priority="high", payload={})
+    publisher = shadow.ShadowPublisher(Transport(), start_worker=False)
+    assert publisher.submit(kind="assess.started", owner="t", correlation_id="c", payload={})
 
 
 def test_lifecycle_is_lossless_while_low_priority_progress_coalesces():
     transport = Transport()
     publisher = shadow.ShadowPublisher(transport, max_progress=2, start_worker=False)
-    base = dict(tenant_id="t", correlation_id="c", source="test")
-    publisher.submit(event_type="assess.progress", priority="low", payload={"n": 1}, **base)
-    publisher.submit(event_type="assess.progress", priority="low", payload={"n": 2}, **base)
-    publisher.submit(event_type="assess.completed", priority="high", payload={}, **base)
-    publisher.submit(event_type="remediate.started", priority="high", payload={}, **base)
+    base = dict(owner="t", correlation_id="c")
+    publisher.submit(kind="assess.progressed", payload={"n": 1}, coalesce_key="scan-1", **base)
+    publisher.submit(kind="assess.progressed", payload={"n": 2}, coalesce_key="scan-1", **base)
+    publisher.submit(kind="assess.completed", payload={}, **base)
+    publisher.submit(kind="remediate.started", payload={}, **base)
     assert len(publisher._progress) == 1
     assert len(publisher._lifecycle) == 2
     publisher.publish_one()
     publisher.publish_one()
     publisher.publish_one()
-    assert [e["event_type"] for e in transport.events] == [
-        "assess.completed", "remediate.started", "assess.progress"]
-    assert transport.events[-1]["payload"] == {"n": 2}
+    assert [e.kind for e in transport.events] == [
+        "assess.completed", "remediate.started", "assess.progressed"]
+    assert transport.events[-1].payload == {"n": 2}
 
 
 def test_publish_failure_is_swallowed_and_counted(monkeypatch):
     monkeypatch.setattr(shadow, "METRICS", shadow.Metrics())
     publisher = shadow.ShadowPublisher(Transport(fail=True), start_worker=False)
-    assert publisher.submit(event_type="worker.failed", tenant_id="t", correlation_id="c",
-                            source="test", priority="high", payload={})
+    assert publisher.submit(kind="worker.unhealthy", owner="t", correlation_id="c", payload={})
     publisher.publish_one()  # must not raise
     assert shadow.metrics_snapshot()["publish_drop_total"] == 1
 
@@ -119,21 +106,40 @@ def test_redis_transport_uses_isolated_namespace_retention_and_last_event_id():
     class FakeRedis:
         def __init__(self):
             self.xadd_args = None
-            self.xread_args = None
         def xadd(self, *args, **kwargs):
             self.xadd_args = (args, kwargs)
             return "2-0"
-        def xread(self, streams, **kwargs):
-            self.xread_args = (streams, kwargs)
-            return [("stream", [("2-0", {"event": '{"event_id":"e2"}'})])]
 
     transport = object.__new__(shadow.RedisStreamTransport)
     transport.redis = FakeRedis()
     transport.retention = 77
-    transport.write({"tenant_id": "tenant-a", "event_id": "e1"})
+    publisher = shadow.ShadowPublisher(transport, start_worker=False)
+    publisher.submit(kind="assess.started", owner="owner@example.com", correlation_id="scan-1",
+                     payload={"status": "running"}, scan_id="scan-1", job_id="job-1")
+    publisher.publish_one()
     args, kwargs = transport.redis.xadd_args
-    assert args[0] == "realtime:v1:tenant:tenant-a:events"
+    assert args[0] == stream_key(owner_scope("owner@example.com"))
     assert kwargs == {"maxlen": 77, "approximate": True}
-    assert transport.replay("tenant-a", "1-0") == [{"event_id": "e2", "stream_id": "2-0"}]
-    assert transport.redis.xread_args == (
-        {"realtime:v1:tenant:tenant-a:events": "1-0"}, {"count": 100, "block": 0})
+    fields = args[1]
+    assert set(fields) == {"event", "event_id"}
+    stream_id, restored = _with_stream_id("2-0", fields)
+    assert stream_id == "2-0"
+    assert restored.stream_id == "2-0"
+    assert restored.kind == "assess.started"
+    assert restored.event_id == fields["event_id"]
+    assert restored.effective_priority == Priority.NORMAL
+
+
+def test_worker_outcomes_emit_only_truthful_registered_events(monkeypatch):
+    transport = Transport()
+    publisher = shadow.ShadowPublisher(transport, start_worker=False)
+    monkeypatch.setattr(shadow, "_configured_publisher", lambda: publisher)
+    job = {"id": "j1", "type": "scan_file", "scan_id": "s1",
+           "payload": {"owner": "owner@example.com"}}
+    shadow.observe_job(job, "retry", worker_id="w1", status="pending", detail={"attempt": 2})
+    shadow.observe_job(job, "dead", worker_id="w1", status="failed")
+    for _ in range(3):
+        publisher.publish_one()
+    assert [item.kind for item in transport.events] == [
+        "queue.job_delayed", "assess.failed", "queue.job_dead_lettered"]
+    assert all(item.kind in shadow.KIND_SPECS for item in transport.events)

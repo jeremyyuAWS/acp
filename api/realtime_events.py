@@ -52,12 +52,14 @@ KIND_SPECS: Mapping[str, KindSpec] = MappingProxyType({
     "discover.started": KindSpec(Priority.NORMAL),
     "discover.progressed": KindSpec(Priority.LOW, coalesce_window_ms=10_000),
     "discover.completed": KindSpec(Priority.HIGH, terminal=True),
+    "discover.cancelled": KindSpec(Priority.HIGH, terminal=True),
     "discover.failed": KindSpec(Priority.CRITICAL, terminal=True),
     # Assess
     "assess.queued": KindSpec(Priority.NORMAL, coalesce_window_ms=2_000),
     "assess.started": KindSpec(Priority.NORMAL),
     "assess.progressed": KindSpec(Priority.LOW, coalesce_window_ms=10_000),
     "assess.completed": KindSpec(Priority.HIGH, terminal=True),
+    "assess.cancelled": KindSpec(Priority.HIGH, terminal=True),
     "assess.failed": KindSpec(Priority.CRITICAL, terminal=True),
     # Remediate
     "remediate.queued": KindSpec(Priority.NORMAL, coalesce_window_ms=2_000),
@@ -65,6 +67,7 @@ KIND_SPECS: Mapping[str, KindSpec] = MappingProxyType({
     "remediate.progressed": KindSpec(Priority.LOW, coalesce_window_ms=10_000),
     "remediate.review_requested": KindSpec(Priority.HIGH),
     "remediate.completed": KindSpec(Priority.HIGH, terminal=True),
+    "remediate.cancelled": KindSpec(Priority.HIGH, terminal=True),
     "remediate.failed": KindSpec(Priority.CRITICAL, terminal=True),
     # Queue and worker lifecycle
     "queue.depth_changed": KindSpec(Priority.LOW, coalesce_window_ms=10_000),

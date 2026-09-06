@@ -9,16 +9,13 @@ from __future__ import annotations
 from collections import Counter, OrderedDict, deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import json
 import os
 import threading
 import time
-import uuid
 
+from realtime_events import KIND_SPECS, RealtimeEvent, coalescing_bucket, owner_scope, stream_key
 from swallowed import swallowed
 
-NAMESPACE = "realtime:v1"
-EVENT_VERSION = 1
 _TRUE = frozenset({"1", "true", "yes", "on"})
 
 
@@ -72,32 +69,19 @@ class RedisStreamTransport:
         )
         self.retention = retention
 
-    @staticmethod
-    def stream(tenant_id: str) -> str:
-        return f"{NAMESPACE}:tenant:{tenant_id}:events"
-
-    def next_sequence(self, tenant_id: str, correlation_id: str) -> int:
-        return int(self.redis.incr(f"{NAMESPACE}:tenant:{tenant_id}:sequence:{correlation_id}"))
-
-    def write(self, envelope: dict) -> str:
+    def write(self, event: RealtimeEvent) -> str:
         return self.redis.xadd(
-            self.stream(envelope["tenant_id"]),
-            {"event": json.dumps(envelope, separators=(",", ":"), sort_keys=True)},
+            stream_key(event.owner_scope),
+            {"event": event.to_json(), "event_id": event.event_id},
             maxlen=self.retention,
             approximate=True,
         )
 
-    def replay(self, tenant_id: str, last_event_id: str, *, count: int = 100) -> list[dict]:
-        """Return events strictly after a Redis/Last-Event-ID cursor."""
-        rows = self.redis.xread({self.stream(tenant_id): last_event_id}, count=count, block=0)
-        return [{**json.loads(fields["event"]), "stream_id": stream_id}
-                for _stream, entries in rows for stream_id, fields in entries]
-
 
 @dataclass(frozen=True)
 class Pending:
-    envelope: dict
-    coalesce_key: str | None
+    event: RealtimeEvent
+    bucket: tuple[str, str] | None
 
 
 class ShadowPublisher:
@@ -108,47 +92,36 @@ class ShadowPublisher:
         self._progress = OrderedDict()
         self._cv = threading.Condition()
         self._local_sequences = Counter()
+        self._sequence_lock = threading.Lock()
         if start_worker:
             threading.Thread(target=self._run, daemon=True,
                              name="realtime-shadow-publisher").start()
 
-    def _sequence(self, tenant_id: str, correlation_id: str) -> int:
+    def submit(self, *, kind: str, owner: str, correlation_id: str,
+               payload: dict, scan_id: str | None = None, job_id: str | None = None,
+               worker_id: str | None = None, coalesce_key: str | None = None) -> bool:
         try:
-            return self.transport.next_sequence(tenant_id, correlation_id)
-        except Exception:
-            key = (tenant_id, correlation_id)
-            self._local_sequences[key] += 1
-            return self._local_sequences[key]
-
-    def submit(self, *, event_type: str, tenant_id: str, correlation_id: str,
-               source: str, priority: str, payload: dict) -> bool:
-        try:
-            envelope = {
-                "event_id": uuid.uuid4().hex,
-                "event_version": EVENT_VERSION,
-                "event_type": event_type,
-                "occurred_at": datetime.now(timezone.utc).isoformat(),
-                "tenant_id": tenant_id,
-                "correlation_id": correlation_id,
-                "source": source,
-                "priority": priority,
-                # Assigned by the publisher thread so even a slow/broken Redis sequence call
-                # can never delay the authoritative worker path.
-                "sequence": None,
-                "payload": dict(payload),
-            }
-            # Only low-priority progress is replaceable. Lifecycle transitions retain order
-            # and identity; they are never folded into one another.
-            coalesce_key = (f"{tenant_id}:{correlation_id}:{event_type}"
-                            if priority == "low" else None)
+            scope = owner_scope(owner)
+            sequence_key = (scope, correlation_id)
+            with self._sequence_lock:
+                self._local_sequences[sequence_key] += 1
+                source_seq = self._local_sequences[sequence_key]
+            event = RealtimeEvent(
+                kind=kind, owner_scope=scope, payload=dict(payload),
+                occurred_at=datetime.now(timezone.utc),
+                source_seq=source_seq, scan_id=scan_id,
+                job_id=job_id, worker_id=worker_id, correlation_id=correlation_id,
+                coalesce_key=coalesce_key,
+            )
+            bucket = coalescing_bucket(event)
             with self._cv:
-                if coalesce_key:
-                    if coalesce_key not in self._progress and len(self._progress) >= self.max_progress:
+                if bucket:
+                    if bucket not in self._progress and len(self._progress) >= self.max_progress:
                         self._progress.popitem(last=False)
                         METRICS.record("drop")
-                    self._progress[coalesce_key] = Pending(envelope, coalesce_key)
+                    self._progress[bucket] = Pending(event, bucket)
                 else:
-                    self._lifecycle.append(Pending(envelope, None))
+                    self._lifecycle.append(Pending(event, None))
                 self._cv.notify()
             return True
         except Exception:
@@ -169,9 +142,7 @@ class ShadowPublisher:
         item = self._take()
         started = time.monotonic()
         try:
-            item.envelope["sequence"] = self._sequence(
-                item.envelope["tenant_id"], item.envelope["correlation_id"])
-            self.transport.write(item.envelope)
+            self.transport.write(item.event)
             METRICS.record("success", (time.monotonic() - started) * 1000.0)
         except Exception:
             METRICS.record("drop")
@@ -228,21 +199,25 @@ def observe_job(job: dict, transition: str, *, worker_id: str, status: str | Non
         return
     try:
         payload = job.get("payload") or {}
-        tenant = str(payload.get("tenant_id") or payload.get("owner") or
+        owner = str(payload.get("tenant_id") or payload.get("owner") or
                      payload.get("user") or "system")
         correlation = str(job.get("scan_id") or payload.get("scan_id") or job["id"])
         domain = _domain(str(job.get("type") or ""))
-        common = {
-            "tenant_id": tenant, "correlation_id": correlation,
-            "source": "acp.worker.shadow", "priority": "high",
-            "payload": {"job_id": job["id"], "job_type": job.get("type"),
-                        "worker_id": worker_id, "status": status, **(detail or {})},
-        }
-        # Separate facts let consumers follow the product lane, queue transition, or worker
-        # execution without teaching worker.py about any downstream consumer.
-        publisher.submit(event_type=f"{domain}.{transition}", **common)
-        publisher.submit(event_type=f"queue.{transition}", **common)
-        publisher.submit(event_type=f"worker.job.{transition}", **common)
+        payload_out = {"job_type": job.get("type"), "status": status,
+                       "transition": transition, **(detail or {})}
+        common = {"owner": owner, "correlation_id": correlation, "payload": payload_out,
+                  "scan_id": job.get("scan_id") or payload.get("scan_id"),
+                  "job_id": str(job["id"]), "worker_id": worker_id}
+        transition_kind = {
+            "started": f"{domain}.started", "complete": f"{domain}.completed",
+            "cancelled": f"{domain}.cancelled", "failed": f"{domain}.failed",
+            "fail": f"{domain}.failed", "dead": f"{domain}.failed",
+            "retry": "queue.job_delayed", "deployment_requeue": "queue.job_delayed",
+        }.get(transition)
+        if transition_kind in KIND_SPECS:
+            publisher.submit(kind=transition_kind, **common)
+        if transition == "dead":
+            publisher.submit(kind="queue.job_dead_lettered", **common)
     except Exception:
         METRICS.record("drop")
         swallowed("realtime_shadow.observe_job: shadow observer failed")
