@@ -1609,6 +1609,24 @@ export const putSchedule = (body) => (SIM
   ? sim({ ...body, next_at: null, last_at: null })
   : fetch(`${BASE}/schedule`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) }).then(j))
 
+const SIM_CAPACITY_SCHEDULE = {
+  enabled: false, timezone: 'America/Los_Angeles', days: ['mon', 'tue', 'wed', 'thu', 'fri'],
+  start: '06:00', end: '20:00', version: 0, applied: false,
+  application_status: 'SIM — no backend policy was changed',
+  business_hours: { web: 2, discovery: 2, assess: 5, remediate: 5, gpu: 1 },
+  off_hours: { web: 1, discovery: 1, assess: 1, remediate: 1, gpu: 0 },
+  maximums: { web: 3, discovery: 4, assess: 10, remediate: 10, gpu: 1 },
+}
+export const getCapacitySchedule = () => (SIM
+  ? sim({ ...SIM_CAPACITY_SCHEDULE, simulated: true })
+  : fetch(`${BASE}/control/capacity-schedule`, { headers: headers() }).then(j))
+export const validateCapacitySchedule = (body) => (SIM
+  ? sim({ valid: true, errors: [], warnings: [], projection: {}, simulated: true })
+  : fetch(`${BASE}/control/capacity-schedule/validate`, { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) }).then(j))
+export const putCapacitySchedule = (body) => (SIM
+  ? sim({ ...body, version: body.version + 1, applied: false, application_status: SIM_CAPACITY_SCHEDULE.application_status, simulated: true })
+  : fetch(`${BASE}/control/capacity-schedule`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify(body) }).then(j))
+
 export const markRemediated = (scanId, file) => (SIM
   ? sim({ remediated_at: new Date().toISOString() })
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/remediate`, { method: 'POST', headers: headers() }).then(j))
