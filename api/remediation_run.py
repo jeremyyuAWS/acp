@@ -410,7 +410,8 @@ def derive_run_state(counters: dict, *, total: int, claimed_any: bool = False,
 
 def derive_phases(counters: dict, *, total: int, state: str, applied_fixes: int,
                   verified_fixes: int, corrected_stored: int,
-                  corrected_pending_delivery: int) -> list[dict]:
+                  corrected_pending_delivery: int,
+                  corrected_pending_release: int = 0) -> list[dict]:
     """The phase rail, derived from durable facts rather than optimistic client transitions.
 
     Every phase carries exactly one of: pending / active / completed / completed_with_exceptions
@@ -463,6 +464,10 @@ def derive_phases(counters: dict, *, total: int, state: str, applied_fixes: int,
         rail.append(_phase("saving", "active",
                            f"{corrected_pending_delivery} corrected cop"
                            f"{'y' if corrected_pending_delivery == 1 else 'ies'} pending delivery"))
+    elif corrected_pending_release > 0:
+        rail.append(_phase("saving", "completed",
+                           f"{corrected_pending_release} corrected cop"
+                           f"{'y' if corrected_pending_release == 1 else 'ies'} awaiting Release"))
     else:
         rail.append(_phase("saving", "completed",
                            f"{corrected_stored} corrected cop"
@@ -616,7 +621,11 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
             has_correction=file in corrected, has_verified_fix=file in verified_docs,
             lease_grace_s=lease_grace_s)
         counters[outcome] += 1
-        if outcome == "completed":
+        # Throughput measures work leaving remediation, not only the narrow successful-copy
+        # bucket. A document routed to Review or legitimately Skipped consumed worker capacity
+        # and advanced the batch just as surely as a corrected document did. Counting only
+        # `completed` made a healthy review-heavy run report zero throughput and no ETA.
+        if outcome not in ("processing", "waiting"):
             completed_at.append(job.get("updated_at"))
         reasons[reason] = reasons.get(reason, 0) + 1
         if int(job.get("attempts") or 0) > 0 or job.get("locked_at"):
@@ -644,7 +653,13 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
     total = len(jobs)
     corrected_stored = int(facts.get("corrected_stored") or 0)
     delivered = int(facts.get("corrected_delivered") or 0)
-    pending_delivery = max(0, corrected_stored - delivered)
+    undelivered = max(0, corrected_stored - delivered)
+    # SharePoint and OneDrive publish corrected copies in the explicit Release stage. Merely
+    # storing the verified artifact during Remediation is therefore "awaiting Release", not a
+    # failed delivery and not work that should hold this run open indefinitely.
+    release_staged = str(facts.get("source") or "").lower() in ("sharepoint", "onedrive")
+    pending_release = undelivered if release_staged else 0
+    pending_delivery = 0 if release_staged else undelivered
     retry_at = min(retry_candidates) if retry_candidates else None
     progress_age = _age_s(facts.get("latest_progress_at"), now)
 
@@ -661,8 +676,12 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
         lease_healthy=lease_healthy)
     state = resolved["state"]
 
-    applied = int(facts.get("fixes_applied") or 0)
     verified = int(facts.get("fixes_verified") or 0)
+    # `applied_fixes` is detailed evidence for fixes whose authored value is retained. The
+    # independent remediation_diff table covers every verified deterministic change. Every
+    # verified fix was necessarily applied, so it is a truthful lower bound when the narrower
+    # evidence table has no row for that fixer.
+    applied = max(int(facts.get("fixes_applied") or 0), verified)
     remaining = counters["processing"] + counters["waiting"]
     throughput, estimate = derive_throughput(completed_at, remaining=remaining, now=now)
 
@@ -699,7 +718,8 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
                   "verification_failures": max(0, applied - verified),
                   "documents_verified": len(verified_docs)},
         "delivery": {"stored": corrected_stored, "delivered": delivered,
-                     "pending": pending_delivery, "eligible": len(corrected),
+                     "pending": pending_delivery, "awaiting_release": pending_release,
+                     "eligible": len(corrected),
                      "latest_at": facts.get("latest_delivery_at") or None},
         "review": {"documents": counters["review"],
                    "items": int(facts.get("review_items") or 0)},
@@ -707,7 +727,8 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
         "estimate": estimate,
         "phases": derive_phases(counters, total=total, state=state, applied_fixes=applied,
                                 verified_fixes=verified, corrected_stored=corrected_stored,
-                                corrected_pending_delivery=pending_delivery),
+                                corrected_pending_delivery=pending_delivery,
+                                corrected_pending_release=pending_release),
         "active_attempts": active,
         "retry_at": retry_at.isoformat() if retry_at else None,
         "latest_progress_at": facts.get("latest_progress_at") or None,

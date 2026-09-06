@@ -54,6 +54,11 @@ def test_a_healthy_document_is_not_an_exception():
     assert exceptions.classify_exception(_record()) is None
 
 
+def test_a_sharepoint_copy_awaiting_release_is_not_a_delivery_failure():
+    record = _record(delivered_url=None, awaiting_release=True)
+    assert exceptions.classify_exception(record) is None
+
+
 @pytest.mark.parametrize("record,group", [
     (_record(outcome="failed", reason="attempts_exhausted"), "document_failure"),
     (_record(delivered_url=None), "delivery_failure"),

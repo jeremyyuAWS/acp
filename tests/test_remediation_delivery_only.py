@@ -49,7 +49,7 @@ def store(monkeypatch):
     return store_mod.Store()
 
 
-def _seed(store, *, files=(DOC,), provider="sharepoint", delivered=False, digest=DIGEST,
+def _seed(store, *, files=(DOC,), provider="drive", delivered=False, digest=DIGEST,
           verified=True, owner=OWNER):
     """A finished run whose corrected copies were stored but never reached the provider."""
     store.init_scan_run(SID, provider, len(files), "2026-09-01T00:00:00Z", "rubric", "hash",
@@ -123,7 +123,7 @@ def gated_client(monkeypatch, store):
 
 # ── a delivery failure costs the run no applied or verified fixes ─────────────
 
-def test_a_delivery_failure_does_not_reduce_the_applied_or_verified_counts(store):
+def test_a_drive_delivery_failure_does_not_reduce_the_applied_or_verified_counts(store):
     """The premise of the whole class. The corrected copy exists and the fixes are verified; only
     the provider write is missing, and the counters must say so."""
     import remediation_run
@@ -141,6 +141,16 @@ def test_a_delivery_failure_does_not_reduce_the_applied_or_verified_counts(store
               __import__("remediation_exceptions").build_exception_groups(_records(store))}
     assert set(groups) == {"delivery_failure"}
     assert groups["delivery_failure"]["documents"] == 1
+
+
+def test_sharepoint_storage_waiting_for_release_is_not_a_delivery_failure(store):
+    import remediation_run
+    import remediation_exceptions
+    _seed(store, provider="sharepoint")
+    snapshot = remediation_run.build_snapshot(store.remediation_run_facts(SID))
+    assert snapshot["delivery"]["awaiting_release"] == 1
+    assert snapshot["delivery"]["pending"] == 0
+    assert remediation_exceptions.build_exception_groups(_records(store)) == []
 
 
 def test_a_delivered_document_raises_no_exception_at_all(store):
@@ -283,7 +293,8 @@ def test_two_identical_retry_requests_enqueue_one_delivery_job(gated_client, sto
     (lambda r: r.update({"fixes_verified": 0}), "artifact_not_verified"),
     (lambda r: r.update({"delivered_url": "http://sp/already"}), "already_delivered"),
     (lambda r: r.update({"provider": "blob"}), "provider_unsupported"),
-    (lambda r: r.update({"destination_drive_id": None}), "destination_unknown"),
+    (lambda r: r.update({"destination_folder_id": None, "destination_folder": None}),
+     "destination_unknown"),
 ])
 def test_an_undeliverable_artifact_is_refused_with_a_named_reason(store, mutate, code):
     import remediation_exceptions as exceptions
@@ -440,7 +451,7 @@ def test_an_audited_action_names_actor_run_document_destination_and_outcome(gate
     assert rows, "a delivery retry left no audit row"
     detail = rows[0]["detail"]
     assert rows[0]["actor"] == OWNER
-    for expected in (SID, DOC, "retry_delivery", "requested", "sharepoint"):
+    for expected in (SID, DOC, "retry_delivery", "requested", "drive"):
         assert expected in detail, expected
 
 

@@ -31,6 +31,7 @@ import { TraceChip } from './Transparency.jsx'
 import QueuePanel from './QueuePanel.jsx'
 import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
 import RemediationOpsPanel from './RemediationOpsPanel.jsx'
+import RemediationWorkspaceTabs from './RemediationWorkspaceTabs.jsx'
 import './remediation-prior-results.css'
 import { deriveRemediateProcessingState } from './remediateProcessingState.js'
 import { groupFixesByRule, summarizeImpact, totalFixes, scOf } from './fixSummary.js'
@@ -1608,22 +1609,24 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         primary={primary}
         readOnly={readOnly}
         onOpenRunDetails={() => setRunDetailsOpen((v) => !v)} />
-      {/* Region A/B/C of the operations panel. It sits above the progress bar because it is the
-          authoritative account of the run and the bar is one number from it: when the two would
-          ever disagree, the one with the server's revision and integrity verdict is the one to
-          read first. `connected` is the transport's own answer, not an inference from data age. */}
-      <RemediationOpsPanel snapshot={runStream?.snapshot || null}
-                           connected={!!runStream?.connected}
-                           receivedAt={runStream?.receivedAt || null}
-                           events={runStream?.events || []}
-                           updateMode={remUpdates} />
-      {/* THE WORK. Second on the page, not eleventh — the review workspace is the only part of this
-          screen that needs a person, so nothing but the run header and a blocking warning precedes
-          it. It is also the ONLY finding-level approval surface: the standalone approvals panel that
-          used to sit above it is gone, so there is no second place a decision can be made from. */}
-      {reviewWorkspace}
-      <RemediationRunDetails sections={runDetailSections}
-                             open={runDetailsOpen} onToggle={setRunDetailsOpen} />
+      <RemediationWorkspaceTabs
+        runId={runId}
+        reviewCount={reviewCount}
+        snapshot={runStream?.snapshot || null}
+        connected={!!runStream?.connected}
+        receivedAt={runStream?.receivedAt || null}
+        review={reviewWorkspace}
+        live={<>
+          {/* The large panel consumes the App-owned controller. Mounting this view opens no
+              stream of its own, so the compact card, global card and panel stay on one cursor. */}
+          <RemediationOpsPanel snapshot={runStream?.snapshot || null}
+                               connected={!!runStream?.connected}
+                               receivedAt={runStream?.receivedAt || null}
+                               events={runStream?.events || []}
+                               updateMode={remUpdates} />
+          <RemediationRunDetails sections={runDetailSections}
+                                 open={runDetailsOpen} onToggle={setRunDetailsOpen} />
+        </>} />
       {seg && <SegmentDrawer title={seg.title} subtitle={seg.subtitle} files={seg.files} onClose={() => setSeg(null)} onPickFile={(f) => { setSeg(null); setSel(f) }} />}
       {sel && <FileDrawer file={sel} context="remediate" aiEnabled={aiEnabled} scanId={run?.id} readOnly={readOnly} onClose={() => setSel(null)} />}
       {selItem && <ReviewDrawer item={selItem} onClose={() => setSelItem(null)} onAct={act} onDraft={selItem.aiDraftable ? draftAi : null} />}

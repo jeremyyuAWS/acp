@@ -2260,6 +2260,15 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .reviewpill { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px;
   padding: 0 7px; border-radius: 999px; background: var(--warn-fg); color: #fff; font-size: 13px; font-weight: 700; vertical-align: middle; }
 .rem-review-panel { border-color: #E6C461; box-shadow: 0 0 0 1px #F3E2B4 inset; }
+.rem-workspace-tabs { display: flex; gap: 4px; margin: 14px 0 10px; border-bottom: 1px solid var(--line); }
+.rem-workspace-tabs [role="tab"] { appearance: none; border: 0; border-bottom: 3px solid transparent; border-radius: 7px 7px 0 0; background: transparent; color: var(--muted); padding: 10px 14px 9px; font: inherit; font-weight: 650; cursor: pointer; }
+.rem-workspace-tabs [role="tab"]:hover { background: var(--surface-subtle, #F7F5F7); color: var(--ink); }
+.rem-workspace-tabs [role="tab"][aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent, #563647); background: var(--surface-subtle, #F7F5F7); }
+.rem-workspace-tabs [role="tab"] > span { margin-left: 6px; font-size: 12px; }
+.rem-mode-live-dot { color: var(--success-fg); }
+@media (max-width: 760px) {
+  .rem-workspace-tabs [role="tab"] { flex: 1; padding-inline: 8px; }
+}
 
 /* Scope banner (ScopeBanner) — what the numbers below it are counting.
    Quiet by default and louder only when the scan itself was narrowed: a caveat that shouts

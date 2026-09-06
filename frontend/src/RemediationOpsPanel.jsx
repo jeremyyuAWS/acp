@@ -81,9 +81,15 @@ function Pipeline({ phases = [], attempts = [], moving = false }) {
 function ProgressCue({ snapshot, onViewMonitor }) {
   const age = snapshot.progress?.material_age_s
   const delayedAfter = snapshot.thresholds?.delayed_after_s ?? 60
+  const stallAfter = snapshot.thresholds?.stall_after_s ?? 900
   const processing = snapshot.documents?.processing || 0
   if (snapshot.state === 'stalled') return <div className="remops-progress-cue remops-progress-cue-stalled" role="alert"><b>No durable progress is being recorded.</b>{age != null ? ` Last progress was ${ago(age)} ago.` : ''}{onViewMonitor && <button type="button" className="linklike" onClick={onViewMonitor}>Inspect workers and retries →</button>}</div>
-  if (processing > 0 && typeof age === 'number' && age > delayedAfter) return <div className="remops-progress-cue" role="status"><b>{processing} worker attempt{processing === 1 ? '' : 's'} active; checkpoint delayed.</b> No durable progress for {ago(age)}. ACP continues watching and will flag a stall after {ago(snapshot.thresholds?.stall_after_s ?? 900)}.{onViewMonitor && <button type="button" className="linklike" onClick={onViewMonitor}>Check Live Operations →</button>}</div>
+  // A current lease/heartbeat is positive evidence that a large document is still running.
+  // Give healthy work a five-minute checkpoint window; the one-minute transport threshold is
+  // for a quiet or unhealthy run and produced noisy amber warnings during normal PDF work.
+  const healthyLease = snapshot.progress?.lease_healthy === true
+  const warnAfter = healthyLease ? Math.max(delayedAfter, Math.min(300, stallAfter / 3)) : delayedAfter
+  if (processing > 0 && typeof age === 'number' && age > warnAfter) return <div className="remops-progress-cue" role="status"><b>{processing} worker attempt{processing === 1 ? '' : 's'} active; checkpoint delayed.</b> No durable progress for {ago(age)}. ACP continues watching and will flag a stall after {ago(stallAfter)}.{onViewMonitor && <button type="button" className="linklike" onClick={onViewMonitor}>Check Live Operations →</button>}</div>
   return null
 }
 
@@ -92,7 +98,7 @@ function Workstream({ attempts = [], generatedAt, compact = false }) {
   const now = generatedAt ? Date.parse(generatedAt) : null
   const shown = attempts.slice(0, compact ? 2 : 3)
   const hiddenCount = attempts.length - shown.length
-  return <section className="remops-work"><h3>In flight now <span>· {attempts.length} document{attempts.length === 1 ? '' : 's'}</span></h3><ul>{shown.map((a) => { const signal = now && a.progress_at ? (now - Date.parse(a.progress_at)) / 1000 : null; const trail = Array.isArray(a.trail) ? a.trail : []; return <li key={`${a.file}-${a.started_at || ''}`}><div className="remops-doc-head"><strong><span aria-hidden="true">●</span> <span className="fname">{a.file}</span></strong><span>{ago(a.elapsed_s) ? `in flight ${ago(a.elapsed_s)}` : ''}</span></div><div className="remops-trail"><span className="remops-done">✓ Opened</span>{trail.map((step, index) => <span className="remops-trail-step" key={`${step.label || step}-${index}`}><span aria-hidden="true">→</span><span className="remops-done">✓ {step.label || step}</span></span>)}<span aria-hidden="true">→</span><span className="remops-active">● {a.phase || 'Processing'}</span>{a.attempt > 1 && <span>attempt {a.attempt}</span>}{ago(signal) && <span>last signal {ago(signal)} ago</span>}</div></li> })}</ul>{hiddenCount > 0 && <p className="muted">and {hiddenCount} more document{hiddenCount === 1 ? '' : 's'} in flight</p>}</section>
+  return <section className="remops-work"><h3>In flight now <span>· {attempts.length} document{attempts.length === 1 ? '' : 's'}</span></h3><ul>{shown.map((a) => { const signal = now && a.progress_at ? (now - Date.parse(a.progress_at)) / 1000 : null; const trail = Array.isArray(a.trail) ? a.trail : []; return <li key={`${a.file}-${a.started_at || ''}`}><div className="remops-doc-head"><strong><span aria-hidden="true">●</span> <span className="fname">{a.file}</span></strong><span>{ago(a.elapsed_s) ? `in flight ${ago(a.elapsed_s)}` : ''}</span></div><div className="remops-trail"><span className="remops-done">✓ Opened</span>{trail.map((step, index) => <span className="remops-trail-step" key={`${step.label || step}-${index}`}><span aria-hidden="true">→</span><span className="remops-done">✓ {step.label || step}</span></span>)}<span aria-hidden="true">→</span><span className="remops-active">● {a.phase || 'Processing'}</span>{a.attempt > 1 && <span>resumed attempt {a.attempt}</span>}{ago(signal) && <span>last signal {ago(signal)} ago</span>}</div></li> })}</ul>{hiddenCount > 0 && <p className="muted">and {hiddenCount} more document{hiddenCount === 1 ? '' : 's'} in flight</p>}</section>
 }
 
 function RetryNotice({ retryAt, now }) {
@@ -126,7 +132,7 @@ function Throughput({ snapshot, frozen = false }) {
   const bars = Array.isArray(data.buckets) ? data.buckets.slice(-10) : []
   const max = Math.max(1, ...bars.map((v) => Number(v) || 0))
   const processing = snapshot.documents?.processing || 0
-  return <section className="remops-throughput"><h3>Throughput <span>· last 5 minutes</span></h3>{typeof data.documents_per_minute === 'number' ? <>{bars.length > 0 && <div className="remops-bars" aria-label={`${data.documents_per_minute} documents per minute`}>{bars.map((v, i) => <span key={i} style={{ height: `${Math.max(8, Number(v) / max * 100)}%` }} />)}</div>}<p><strong>{data.documents_per_minute.toLocaleString()} documents/min</strong>{data.change_percent != null && data.sample_documents >= 5 && <span className="remops-rate"> {data.change_percent >= 0 ? '↑' : '↓'} {Math.abs(data.change_percent)}% over previous 5 minutes</span>}</p></> : <p className="muted">No document has completed in the last five minutes.{processing ? ` ${processing} ${processing === 1 ? 'is' : 'are'} actively processing; rate and ETA will appear after completions.` : ' Rate and ETA will appear after completions.'}</p>}</section>
+  return <section className="remops-throughput"><h3>Throughput <span>· last 5 minutes</span></h3>{typeof data.documents_per_minute === 'number' ? <>{bars.length > 0 && <div className="remops-bars" aria-label={`${data.documents_per_minute} documents per minute`}>{bars.map((v, i) => <span key={i} style={{ height: `${Math.max(8, Number(v) / max * 100)}%` }} />)}</div>}<p><strong>{data.documents_per_minute.toLocaleString()} documents/min</strong>{data.change_percent != null && data.sample_documents >= 5 && <span className="remops-rate"> {data.change_percent >= 0 ? '↑' : '↓'} {Math.abs(data.change_percent)}% over previous 5 minutes</span>}</p></> : <p className="muted">No document was processed in the last five minutes.{processing ? ` ${processing} ${processing === 1 ? 'is' : 'are'} actively processing; rate and ETA will appear after terminal outcomes.` : ' Rate and ETA will appear after terminal outcomes.'}</p>}</section>
 }
 
 function Secondary({ snapshot }) {
