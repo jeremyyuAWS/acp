@@ -36,6 +36,10 @@ PPTX_PDF_APPLIER_REGISTRY = frozenset({
     # pptx in _SENSORY_EXTS → apply_text_values writes sensory rewrites.
     # pdf is NOT in _SENSORY_EXTS → downgraded to HUMAN.
     ("pptx", "1.3.3"),
+    # ── slide titles (2.4.6) ──────────────────────────────────────────────────
+    # approved_structure_label_values reads rule_id "2.4.6".
+    # pptx in _STRUCTURE_LABEL_EXTS → apply_pptx_slide_titles writes back.
+    ("pptx", "2.4.6"),
     # ── link text (2.4.4 / 2.4.9) ─────────────────────────────────────────────
     # approved_link_values reads rule_ids "2.4.4" and "2.4.9".
     # pptx in _OFFICE_LINK_EXTS → apply_link_text writes back.
