@@ -2248,8 +2248,8 @@ class _PgAdapter:
     # v30 makes the stage outbox an operational delivery queue. All columns are additive and
     # existing unpublished rows default to pending; older replicas continue inserting their
     # original column set and therefore safely produce pending messages for the new dispatcher.
-    _SCHEMA_VERSION = 30
-    _SCHEMA_CHECKSUM_AT_VERSION = "85d15e116c9d16a8a9b4469a94de37b9"
+    _SCHEMA_VERSION = 31
+    _SCHEMA_CHECKSUM_AT_VERSION = "8ee782def4bfee4337e895baec6b7b1f"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
