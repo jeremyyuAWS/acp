@@ -105,3 +105,22 @@ def test_pre_v24_scan_has_a_compatible_workflow_identity(isolated_store):
     assert workflow["id"] == "legacy-scan"
     assert workflow["revision"] == 1
     assert workflow["legacy"] is True
+
+
+def test_replacement_is_a_new_addressable_revision_of_the_same_workflow(isolated_store):
+    first, _ = isolated_store.enqueue_scan(
+        "scan-revision-1", "sharepoint", OWNER, "scan_discover", {},
+        inputs={"source": "sharepoint", "folder_ids": ["site-a"]})
+    second, _ = isolated_store.enqueue_scan(
+        "scan-revision-2", "sharepoint", OWNER, "scan_discover", {},
+        inputs={"source": "sharepoint", "folder_ids": ["site-b"]},
+        workflow_id=first, workflow_revision=2, supersedes_scan_id=first)
+
+    old = isolated_store.workflow_for_scan(first, OWNER)
+    current = isolated_store.workflow_for_scan(second, OWNER)
+    assert old["id"] == current["id"] == first
+    assert (old["scan_id"], old["revision"]) == (first, 1)
+    assert (current["scan_id"], current["revision"]) == (second, 2)
+    assert old["current_scan_id"] == current["current_scan_id"] == second
+    assert old["current_revision"] == current["current_revision"] == 2
+    assert current["supersedes_scan_id"] == first

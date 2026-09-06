@@ -208,6 +208,7 @@ _SCHEMA = [
     )""",
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS workflow_id TEXT",
     "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS workflow_revision INT",
+    "ALTER TABLE scan_runs ADD COLUMN IF NOT EXISTS supersedes_scan_id TEXT",
     "CREATE INDEX IF NOT EXISTS idx_workflow_owner_updated ON workflow_executions(owner_email,updated_at)",
     """CREATE TABLE IF NOT EXISTS file_records (
       scan_id TEXT, file TEXT, engine TEXT, status TEXT, score INT,
@@ -2696,7 +2697,10 @@ class Store:
                      inputs: dict | None = None,
                      priority: int | None = None, max_attempts: int = 5,
                      run_after: str | None = None,
-                     content_workspace_version_id: str | None = None) -> tuple[str, str]:
+                     content_workspace_version_id: str | None = None,
+                     workflow_id: str | None = None,
+                     workflow_revision: int = 1,
+                     supersedes_scan_id: str | None = None) -> tuple[str, str]:
         """Create a scan_runs stub and its initial job in a single atomic transaction.
 
         Returns (scan_id, job_id). All rows are committed together; a failure at any point
@@ -2715,7 +2719,8 @@ class Store:
         import hashlib as _hashlib
         now = self._now()
         job_id = uuid.uuid4().hex[:16]
-        workflow_id = scan_id
+        workflow_id = workflow_id or scan_id
+        workflow_revision = max(1, int(workflow_revision or 1))
         scope_fingerprint = _hashlib.sha256(_json.dumps(
             inputs or {"source": source}, sort_keys=True, separators=(",", ":"),
             default=str).encode()).hexdigest()
@@ -2736,16 +2741,19 @@ class Store:
                     return existing_scan_id, (existing_job["id"] if existing_job else job_id)
             self._db.execute(cur,
                 "INSERT INTO scan_runs(id,source,status,owner_email,started_at,idempotency_key,"
-                "content_workspace_version_id,workflow_id,workflow_revision) "
-                "VALUES(%s,%s,'queued',%s,%s,%s,%s,%s,1) ON CONFLICT(id) DO NOTHING",
+                "content_workspace_version_id,workflow_id,workflow_revision,supersedes_scan_id) "
+                "VALUES(%s,%s,'queued',%s,%s,%s,%s,%s,%s,%s) ON CONFLICT(id) DO NOTHING",
                 (scan_id, source, owner, now, idempotency_key, content_workspace_version_id,
-                 workflow_id))
+                 workflow_id, workflow_revision, supersedes_scan_id))
             self._db.execute(cur,
                 "INSERT INTO workflow_executions(id,scan_id,owner_email,source,revision,state,"
                 "current_stage,scope_fingerprint,created_at,updated_at) "
-                "VALUES(%s,%s,%s,%s,1,'waiting','discover',%s,%s,%s) "
-                "ON CONFLICT(id) DO NOTHING",
-                (workflow_id, scan_id, owner, source, scope_fingerprint, now, now))
+                "VALUES(%s,%s,%s,%s,%s,'waiting','discover',%s,%s,%s) "
+                "ON CONFLICT(id) DO UPDATE SET scan_id=EXCLUDED.scan_id,"
+                "revision=EXCLUDED.revision,state='waiting',current_stage='discover',"
+                "scope_fingerprint=EXCLUDED.scope_fingerprint,updated_at=EXCLUDED.updated_at",
+                (workflow_id, scan_id, owner, source, workflow_revision, scope_fingerprint,
+                 now, now))
             self._db.execute(cur,
                 "INSERT INTO jobs(id,type,payload,status,priority,attempts,max_attempts,"
                 "run_after,scan_id,created_at,updated_at) "
@@ -2782,17 +2790,22 @@ class Store:
             params: tuple = (scan_id, owner) if owner is not None else (scan_id,)
             owner_clause = " AND sr.owner_email=%s" if owner is not None else ""
             self._db.execute(cur,
-                "SELECT we.*,sr.id AS legacy_scan_id,sr.owner_email AS scan_owner,"
-                "sr.source AS scan_source FROM scan_runs sr LEFT JOIN workflow_executions we "
+                "SELECT we.*,sr.id AS requested_scan_id,sr.owner_email AS scan_owner,"
+                "sr.source AS scan_source,sr.workflow_revision AS requested_revision,"
+                "sr.supersedes_scan_id FROM scan_runs sr LEFT JOIN workflow_executions we "
                 "ON we.id=COALESCE(sr.workflow_id,sr.id) WHERE sr.id=%s" + owner_clause,
                 params)
             row = self._db.fetchone(cur)
         if not row:
             return None
         if row.get("id"):
-            workflow = row
+            workflow = {**row,
+                        "current_scan_id": row.get("scan_id"),
+                        "current_revision": int(row.get("revision") or 1),
+                        "scan_id": row["requested_scan_id"],
+                        "revision": int(row.get("requested_revision") or 1)}
         else:
-            workflow = {"id": row["legacy_scan_id"], "scan_id": row["legacy_scan_id"],
+            workflow = {"id": row["requested_scan_id"], "scan_id": row["requested_scan_id"],
                         "owner_email": row.get("scan_owner"), "source": row.get("scan_source"),
                         "revision": 1, "state": None, "current_stage": None,
                         "scope_fingerprint": None, "legacy": True}

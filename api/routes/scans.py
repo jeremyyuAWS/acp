@@ -261,6 +261,8 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                          or (_prior_active or {}).get("id"))
         prior_run = ((core.store.get_scan(prior_scan_id, owner=user) or {}).get("run")
                      if prior_scan_id else {}) or {}
+        prior_workflow = (core.store.workflow_for_scan(prior_scan_id, user)
+                          if prior_scan_id else None)
         replaying_same_intent = bool(
             idempotency_key and prior_run.get("idempotency_key") == idempotency_key)
         if prior_scan_id and not replaying_same_intent and not replace_active:
@@ -329,7 +331,11 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
              # without sharing the API's in-memory token store (split topology, no Redis).
              "drive_token": token, "sp_token": sp_token},
             idempotency_key=idempotency_key,
-            inputs=_scan_inputs)
+            inputs=_scan_inputs,
+            workflow_id=(prior_workflow or {}).get("id") if replace_active else None,
+            workflow_revision=((prior_workflow or {}).get("current_revision", 0) + 1
+                               if replace_active and prior_workflow else 1),
+            supersedes_scan_id=prior_scan_id if replace_active else None)
         # Acceptance is durable from here on: scan_runs + jobs + scan_inputs are committed and
         # GET /scans/{scan_id} resolves. Only NOW is it safe to stop the run this one replaces.
         if replace_active:
@@ -348,7 +354,11 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
         scan_event(scan_id, "scan.queued", phase="queued", job_id=job_id, owner_email=user,
                    detail={"source": source, "job_type": jtype, "batch": batch,
                            "fanout": fanout})
+        accepted_workflow = core.store.workflow_for_scan(scan_id, user) or {}
         return {"scan_id": scan_id, "job_id": job_id, "queued": True,
+                "workflow_id": accepted_workflow.get("id", scan_id),
+                "workflow_revision": accepted_workflow.get("revision", 1),
+                "supersedes_scan_id": accepted_workflow.get("supersedes_scan_id"),
                 "fanout": fanout, "batch": batch, "workers": core.WORKERS,
                 # Split topology (#113): the API runs ACP_WORKERS=0 and a standalone worker
                 # container carries the pool — report its heartbeat so the client's

@@ -94,11 +94,23 @@ def test_confirmed_replacement_supersedes_the_running_scan(gated_client, isolate
     s1 = _start_queued(gated_client, OWNER)
     _mark_running(isolated_store, s1, OWNER)
 
-    s2 = _start_queued(gated_client, OWNER, replace=True)
+    response = _start_response(gated_client, OWNER, replace=True)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    s2 = body["scan_id"]
 
     assert s2 != s1
     assert isolated_store.get_scan(s1, owner=OWNER)["run"]["status"] == "superseded"
     assert isolated_store.get_scan(s2, owner=OWNER)["run"]["status"] == "queued"
+    prior = isolated_store.get_scan(s1, owner=OWNER)["run"]
+    replacement = isolated_store.get_scan(s2, owner=OWNER)["run"]
+    assert replacement["workflow_id"] == prior["workflow_id"] == s1
+    assert replacement["workflow_revision"] == 2
+    assert replacement["supersedes_scan_id"] == s1
+    assert isolated_store.workflow_for_scan(s1, OWNER)["current_scan_id"] == s2
+    assert body["workflow_id"] == s1
+    assert body["workflow_revision"] == 2
+    assert body["supersedes_scan_id"] == s1
 
 
 def test_a_queued_scan_is_also_protected_from_an_accidental_second_start(
@@ -158,3 +170,4 @@ def test_only_the_most_recent_prior_scan_is_cancelled(gated_client, isolated_sto
 
     assert isolated_store.get_scan(s2, owner=OWNER)["run"]["status"] == "superseded"
     assert isolated_store.get_scan(s3, owner=OWNER)["run"]["status"] == "queued"
+    assert isolated_store.get_scan(s3, owner=OWNER)["run"]["workflow_revision"] == 3
