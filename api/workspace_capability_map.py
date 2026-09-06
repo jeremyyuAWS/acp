@@ -224,6 +224,17 @@ _map_many([("GET", "/admin/activity"), ("GET", "/jobs"), ("GET", "/jobs/{job_id}
 _map_many([("POST", "/admin/jobs/clear-dead"), ("PATCH", "/control/workers/replicas")],
           {"workers.manage"})
 
+# ── Capacity scheduling (Settings -> Scheduling, and the Live Operations mode strip) ──────────
+# The GET is granted by EITHER capability because the same payload feeds two surfaces: the
+# read-only Scheduling tab in Settings (PRD §4 gives a view-only Settings user the right to
+# inspect the schedule and, per §10, its validation result) and the capacity-mode strip in Live
+# Operations. Mapping it to one of them would blank the other for exactly the users it is for.
+_map_many([("GET", "/control/capacity-schedule")], {"operations.view", "settings.view"})
+# Pricing a proposed schedule is the dry run that precedes Phase 3's write, so it sits with the
+# capability that manages capacity rather than with the ones that only read it. The handler
+# additionally enforces _require_admin — this map narrows who may reach it, not who may act.
+_map_many([("POST", "/control/capacity-schedule/validate")], {"workers.manage"})
+
 # ── Scan Analytics ────────────────────────────────────────────────────────────
 _map_many([("GET", "/admin/analytics/overview"), ("GET", "/ai/costs")], {"analytics.view"})
 

@@ -2028,3 +2028,155 @@ def get_revisions():
         })
     out.sort(key=lambda r: r["created_time"] or "", reverse=True)
     return {"configured": True, "revisions": out}
+
+
+# ---------------------------------------------------------------------------
+# Capacity schedule — Phase 2 of docs/prd-capacity-scheduling.md, READ-ONLY.
+#
+# Neither endpoint below writes anything, to Azure or to a database. That is the
+# phase, not an omission: the tab has to be able to show the proposed schedule,
+# what Azure actually runs, and the validation result BEFORE anything is allowed
+# to change infrastructure. PUT and the override endpoints are Phase 3, and the
+# PRD's own §5.3 table is refused by the validator below, which is the finding
+# the read-only phase exists to surface.
+# ---------------------------------------------------------------------------
+
+class ScheduleProposal(BaseModel):
+    """A schedule to price without saving it. Every field optional: an administrator asking
+    "what would raising the assess ceiling cost?" should not have to restate the whole shape."""
+
+    enabled: Optional[bool] = None
+    timezone: Optional[str] = None
+    days: Optional[list[str]] = None
+    start: Optional[str] = None
+    end: Optional[str] = None
+    business_hours: Optional[dict[str, int]] = None
+    off_hours: Optional[dict[str, int]] = None
+    maximums: Optional[dict[str, int]] = None
+
+
+def _schedule_payload(schedule, now: datetime) -> dict:
+    """The schedule as the API states it, with the two derived time facts."""
+    import capacity_schedule as sched_mod
+
+    mode = sched_mod.effective_mode(schedule, now)
+    upcoming = sched_mod.next_transition(schedule, now)
+    return {
+        "enabled": schedule.enabled,
+        "timezone": schedule.timezone,
+        "days": list(schedule.days),
+        "start": schedule.start,
+        "end": schedule.end,
+        "business_hours": dict(schedule.business_hours),
+        "off_hours": dict(schedule.off_hours),
+        "maximums": dict(schedule.maximums),
+        "effective_mode": mode,
+        "next_transition_at": upcoming[0].isoformat() if upcoming else None,
+        "next_transition_to": upcoming[1] if upcoming else None,
+        "version": schedule.version,
+        # THE FIELD THAT STOPS THIS BEING READ AS LIVE. Phase 2 serves the PRD's proposal, which
+        # nothing has applied and which the validator below refuses. A payload that looked
+        # identical to an applied schedule would be the same class of quiet wrongness as a panel
+        # of dashes that reports `configured: true`.
+        "applied": schedule.applied,
+    }
+
+
+def _observed_apps() -> tuple[dict, bool]:
+    """Azure's own view of each worker app, and whether Azure is configured at all.
+
+    Reuses get_capacity rather than making its own calls: that endpoint already returns each
+    app's `scale` block (min, max, polling interval, cooldown and every rule's metadata), which
+    is exactly what desired-versus-observed needs. §9 of the PRD gets its data source for free.
+    """
+    if not _AZ_CONFIGURED:
+        return {}, False
+    try:
+        capacity = get_capacity()
+    except Exception:  # noqa: BLE001 — drift is a comparison; with nothing to compare it is
+        # simply unknown, and an exception here must not take the schedule payload down with it.
+        swallowed("routes.control.capacity_schedule: reading observed capacity failed")
+        return {}, True
+    return capacity.get("apps") or {}, bool(capacity.get("configured"))
+
+
+@router.get("/control/capacity-schedule")
+def get_capacity_schedule():
+    """The desired schedule, what Azure runs, and whether the two agree.
+
+    OPEN TO ANY AUTHENTICATED USER, matching GET /control/workers/replicas and
+    GET /control/workers/capacity. PRD §4 gives view-only Settings users the right to inspect the
+    schedule, and §10 puts the validation result on the same surface — so the validation of the
+    CURRENT schedule is included here rather than being locked behind the admin-only POST below.
+    Reading a schedule costs nothing; only Phase 3's PUT will spend Azure money.
+    """
+    import capacity_schedule as sched_mod
+
+    now = datetime.now(timezone.utc)
+    schedule = sched_mod.PROPOSED
+    observed, configured = _observed_apps()
+    payload = _schedule_payload(schedule, now)
+    payload["validation"] = sched_mod.validate(
+        schedule, sched_mod.baseline_tiers(schedule),
+        server_max_connections=sched_mod.SERVER_MAX_CONNECTIONS,
+        reserve=sched_mod.OPERATIONAL_RESERVE,
+        vcpu_quota=sched_mod.vcpu_quota())
+    payload["scalers"] = sched_mod.scaler_health(observed, configured=configured)
+    payload["observed"] = {
+        name: {"min_replicas": block.get("min_replicas"),
+               "max_replicas": block.get("max_replicas"),
+               "current_replicas": block.get("current_replicas"),
+               "scale_rules": [r.get("name") for r in ((block.get("scale") or {}).get("rules") or [])
+                               if isinstance(r, dict)]}
+        for name, block in observed.items() if isinstance(block, dict)
+    }
+    # DRIFT IS ONLY MEANINGFUL ONCE A SCHEDULE IS APPLIED. Reporting the proposal's distance from
+    # production as "configuration drift" would be true arithmetic and a false statement: nothing
+    # has drifted from a schedule nobody has put into force. Phase 3 turns this on with the PUT.
+    payload["drift"] = (sched_mod.drift(schedule, payload["effective_mode"], observed)
+                        if schedule.applied else [])
+    payload["drift_evaluated"] = bool(schedule.applied)
+    payload["azure_configured"] = configured
+    return payload
+
+
+@router.post("/control/capacity-schedule/validate")
+def validate_capacity_schedule(body: ScheduleProposal, request: Request):
+    """Price a proposed schedule without saving it. Admin-only, and it still saves nothing.
+
+    Admin-gated where the GET above is not, because this accepts a body: it is the dry run that
+    precedes Phase 3's PUT, and the PRD gives modification rights to administrators. A view-only
+    user still sees the validation of the CURRENT schedule, which the GET carries.
+
+    Fields absent from the body keep the current schedule's value, so "what would raising the
+    assess ceiling cost?" is one field rather than a restatement of the whole shape.
+    """
+    from dataclasses import replace
+
+    import capacity_schedule as sched_mod
+    from .system import _require_admin
+    _require_admin(request)
+
+    current = sched_mod.PROPOSED
+    supplied = {k: v for k, v in body.model_dump().items() if v is not None}
+    if "days" in supplied:
+        supplied["days"] = tuple(supplied["days"])
+    try:
+        proposed = replace(current, **supplied)
+    except TypeError as e:  # noqa: BLE001 — a field name the schedule does not have
+        raise HTTPException(422, f"not a schedule field: {e}") from e
+
+    result = sched_mod.validate(
+        proposed, sched_mod.baseline_tiers(proposed),
+        server_max_connections=sched_mod.SERVER_MAX_CONNECTIONS,
+        reserve=sched_mod.OPERATIONAL_RESERVE,
+        vcpu_quota=sched_mod.vcpu_quota())
+    # The proposal echoed back, so a caller can see WHICH shape produced this verdict rather than
+    # assuming their patch applied the way they meant it to.
+    try:
+        result["proposed"] = _schedule_payload(proposed, datetime.now(timezone.utc))
+    except sched_mod.ScheduleError:
+        # An unparseable window or unknown zone has no next transition to report. The findings
+        # already name it; refusing to answer at all would hide them behind a 500.
+        result["proposed"] = None
+    return result
