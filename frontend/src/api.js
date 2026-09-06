@@ -36,6 +36,15 @@ const headers = (extra = {}) => ({
   ...(spToken ? { 'X-SP-Token': spToken } : {}),
 })
 
+// Shadow-only transport wiring. It deliberately reuses the normal ACP bearer/provider headers:
+// the browser never receives the gateway's internal credential and never chooses owner_scope.
+export const getRealtimeStreamRequest = () => ({
+  endpoint: `${BASE}/api/realtime/v1/stream`,
+  headers: headers(),
+})
+export const getRealtimeAuthoritativeSnapshot = () =>
+  fetch(`${BASE}/api/realtime/v1/status`, { headers: headers() }).then(j)
+
 // Why the user was bounced to the sign-in screen. Carried on the event so that screen can SAY
 // it. Being silently returned to sign-in, mid-task, with no explanation is indistinguishable
 // from the app having lost your work: the token lives only in this module, so a reload or an
