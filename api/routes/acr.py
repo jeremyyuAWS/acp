@@ -267,7 +267,7 @@ def create_report(body: CreateReport, request: Request):
     report_id = f"acr_{uuid.uuid4().hex[:12]}"
     core.store.create_acr_report(
         report_id, owner_email=owner, catalog_hash=acr_catalog.catalog_hash(),
-        criteria=acr_catalog.build_matrix(report_id), metadata=meta)
+        criteria=acr_catalog.build_matrix(report_id, meta.get("vpat_edition")), metadata=meta)
     core.store.append_acr_decision_log(
         report_id, owner_email=owner, actor=who, action="report.created",
         detail=f"catalog={acr_catalog.meta()['version']} "
@@ -1369,7 +1369,11 @@ def revise(report_id: str, request: Request):
 
     core.store.create_acr_report(new_id, owner_email=owner,
                                  catalog_hash=acr_catalog.catalog_hash(),
-                                 criteria=acr_catalog.build_matrix(new_id), metadata=meta,
+                                 # A revision is the same report (see the role note below), so
+                                 # its edition — and therefore its row set — carries too.
+                                 criteria=acr_catalog.build_matrix(new_id,
+                                                                   meta.get("vpat_edition")),
+                                 metadata=meta,
                                  supersedes_id=report_id, revision=new_revision)
     written = core.store.carry_acr_decisions(new_id, carried, owner_email=owner)
     # Roles carry; approvals do not. A role authorizes someone to act on this report, and a

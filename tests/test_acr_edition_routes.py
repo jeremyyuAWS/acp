@@ -56,9 +56,10 @@ def test_the_editions_route_says_which_are_offered_and_what_is_missing(client):
     by_name = {e["edition"]: e for e in client.get("/acr/editions").json()["editions"]}
     assert by_name["VPAT 2.5Rev WCAG"]["offered"] is True
     assert by_name["VPAT 2.5Rev WCAG"]["missing"] == []
-    assert by_name["VPAT 2.5Rev 508"]["offered"] is False
-    assert by_name["VPAT 2.5Rev 508"]["missing"] == ["section-508"]
-    assert by_name["VPAT 2.5Rev INT"]["missing"] == ["en-301-549", "section-508"]
+    assert by_name["VPAT 2.5Rev 508"]["offered"] is True      # config/section-508.json landed
+    assert by_name["VPAT 2.5Rev 508"]["missing"] == []
+    assert by_name["VPAT 2.5Rev EU"]["offered"] is False
+    assert by_name["VPAT 2.5Rev INT"]["missing"] == ["en-301-549"]
 
 
 def test_a_new_report_defaults_to_the_wcag_edition(client):
@@ -66,12 +67,40 @@ def test_a_new_report_defaults_to_the_wcag_edition(client):
     assert client.get(f"/acr/{rid}").json()["report"]["vpat_edition"] == "VPAT 2.5Rev WCAG"
 
 
-def test_creating_a_508_report_is_refused_and_says_what_is_absent(client):
+def test_creating_an_eu_report_is_refused_and_says_what_is_absent(client):
     r = client.post("/acr", json={"product_version": "1.4.0",
-                                  "metadata": {"vpat_edition": "VPAT 2.5Rev 508"}})
+                                  "metadata": {"vpat_edition": "VPAT 2.5Rev EU"}})
     assert r.status_code == 400, r.text
-    assert "Section 508" in r.json()["detail"]
-    assert "VPAT 2.5Rev WCAG" in r.json()["detail"]   # what they CAN pick
+    assert "EN 301 549" in r.json()["detail"]
+    assert "VPAT 2.5Rev 508" in r.json()["detail"]    # what they CAN pick, now including 508
+
+
+def test_a_508_report_is_created_and_carries_the_508_provisions(client):
+    """The end-to-end proof that the gate opened: not just permitted, but populated.
+
+    Permitting the edition without emitting its rows would be #1532's defect wearing a different
+    hat — a report that claims Section 508 and contains none of it.
+    """
+    rid = client.post("/acr", json={"product_version": "1.4.0",
+                                    "metadata": {"vpat_edition": "VPAT 2.5Rev 508"}}
+                      ).json()["report_id"]
+    nums = {c["criterion_num"] for c in client.get(f"/acr/{rid}/criteria").json()["criteria"]}
+    # Derived from the catalog, not hardcoded: the count is the catalog's fact to state, and a
+    # literal here would have to be chased every time the regulation is re-read.
+    import acr_catalog
+    expected = 55 + len([r for r in acr_catalog.section_508_requirements()
+                         if r["kind"] == "requirement"])
+    assert len(nums) == expected
+    assert "1.4.3" in nums                                  # WCAG
+    assert {"302.1", "502.3.14", "603.3"} <= nums           # chapters 3, 5, 6
+    assert "501.1" not in nums                              # a scope statement is not a claim
+
+
+def test_a_wcag_report_is_not_re_scoped_by_any_of_this(client):
+    rid = client.post("/acr", json={"product_version": "1.4.0"}).json()["report_id"]
+    nums = {c["criterion_num"] for c in client.get(f"/acr/{rid}/criteria").json()["criteria"]}
+    assert len(nums) == 55
+    assert not any(n.startswith(("30", "40", "50", "60")) for n in nums)
 
 
 def test_the_metadata_form_cannot_patch_an_unoffered_edition(client):

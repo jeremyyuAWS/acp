@@ -252,6 +252,33 @@ def render(projection: dict, *, language: str = DOCUMENT_LANGUAGE,
     # conformance report is the exact thing the feature exists not to produce.
     document.add_paragraph(totals)
 
+    # ONE TABLE PER SECTION, under its own heading, rather than one table of everything.
+    #
+    # A 508-edition report carries the WCAG success criteria AND the Revised 508 chapters — 170
+    # rows. Printed as a single table, nothing marks where WCAG ends and Chapter 3 begins except
+    # the numbering, and "402.1" tells a reader nothing unless they already know the standard's
+    # shape. A conformance document whose scope has to be inferred is what this workspace exists
+    # to stop.
+    #
+    # Headings rather than a full-width divider ROW: a merged row inside a data table breaks the
+    # grid a screen reader navigates by (1.3.1), which is the one thing this document is gated on
+    # not doing. Separate tables also let each keep its own repeated header row.
+    for section in projection["sections"]:
+        document.add_heading(section["label"], level=2)
+        _criteria_table(document, section["criteria"])
+
+    for paragraph in document.paragraphs:
+        for run in paragraph.runs:
+            if run.font.size is None:
+                run.font.size = Pt(11)
+
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
+
+
+def _criteria_table(document, criteria: list[dict]) -> None:
+    """The four-column conformance table for one section's rows."""
     table = document.add_table(rows=1, cols=4)
     table.style = "Table Grid"
     header = table.rows[0]
@@ -260,7 +287,7 @@ def render(projection: dict, *, language: str = DOCUMENT_LANGUAGE,
         header.cells[index].text = label
     _repeat_header_row(header)
 
-    for crit in projection["criteria"]:
+    for crit in criteria:
         row = table.add_row()
         row.cells[0].text = f"{crit['criterion_num']} {crit.get('criterion_name') or ''}".strip()
         row.cells[1].text = crit.get("level") or ""
@@ -275,15 +302,6 @@ def render(projection: dict, *, language: str = DOCUMENT_LANGUAGE,
             remarks = (f"{remarks}\n{crit['evidence_stale']} stale evidence record(s), retained "
                        f"for audit history").strip()
         row.cells[3].text = remarks
-
-    for paragraph in document.paragraphs:
-        for run in paragraph.runs:
-            if run.font.size is None:
-                run.font.size = Pt(11)
-
-    buffer = io.BytesIO()
-    document.save(buffer)
-    return buffer.getvalue()
 
 
 def check(docx_bytes: bytes, *, tmp_dir: Path | None = None) -> dict:

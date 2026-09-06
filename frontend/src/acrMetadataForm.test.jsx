@@ -29,17 +29,22 @@ vi.mock('./acrApi', () => ({
   getAcrEditions: (...a) => getAcrEditions(...a),
 }))
 
-// The four ITI editions as the server reports them: only WCAG is producible while
-// config/wcag-2.2-aa.json is the only requirement catalog in the repo.
+// The four ITI editions AS THE SERVER REPORTS THEM. Kept in step with
+// acr_catalog.requirement_sets_available() on purpose: a mock is a claim about what the other
+// side sends, and this file has already been bitten once by inventing that shape (#1510).
+//
+// config/section-508.json landed, so the 508 edition is offered now. EN 301 549 has no catalog
+// (etsi.org 403s the build environment), so EU and INT are still refused — which is what keeps a
+// disabled option in this fixture to render.
 const EDITIONS = [
   { edition: 'VPAT 2.5Rev WCAG', offered: true, requires: ['wcag-2.2-aa'], missing: [] },
-  { edition: 'VPAT 2.5Rev 508', offered: false, requires: ['section-508', 'wcag-2.2-aa'],
-    missing: ['section-508'] },
+  { edition: 'VPAT 2.5Rev 508', offered: true, requires: ['section-508', 'wcag-2.2-aa'],
+    missing: [] },
   { edition: 'VPAT 2.5Rev EU', offered: false, requires: ['en-301-549', 'wcag-2.2-aa'],
     missing: ['en-301-549'] },
   { edition: 'VPAT 2.5Rev INT', offered: false,
     requires: ['en-301-549', 'section-508', 'wcag-2.2-aa'],
-    missing: ['en-301-549', 'section-508'] },
+    missing: ['en-301-549'] },
 ]
 
 const { default: AcrMetadataForm } = await import('./AcrMetadataForm.jsx')
@@ -185,8 +190,9 @@ describe('VPAT edition', () => {
     const opts = [...container.querySelector('#acr-meta-vpat_edition').options]
     const byValue = Object.fromEntries(opts.map((o) => [o.value, o]))
     expect(byValue['VPAT 2.5Rev WCAG'].disabled).toBe(false)
-    expect(byValue['VPAT 2.5Rev 508'].disabled).toBe(true)
-    expect(byValue['VPAT 2.5Rev 508'].textContent).toMatch(/not available in this build/i)
+    expect(byValue['VPAT 2.5Rev 508'].disabled).toBe(false)   // its catalog landed
+    expect(byValue['VPAT 2.5Rev EU'].disabled).toBe(true)     // EN 301 549 could not be sourced
+    expect(byValue['VPAT 2.5Rev EU'].textContent).toMatch(/not available in this build/i)
   })
 
   it('keeps an unavailable edition VISIBLE rather than omitting it', async () => {

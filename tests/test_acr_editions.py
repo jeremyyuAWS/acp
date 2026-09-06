@@ -64,24 +64,28 @@ def test_each_edition_obliges_a_different_requirement_set():
     assert all(acr_catalog.REQ_WCAG in s for s in req.values())
 
 
-def test_only_the_wcag_edition_is_offerable_while_wcag_is_the_only_catalog():
+def test_offerable_editions_track_the_catalogs_that_exist():
     """Pinned to what the repo CONTAINS, so adding a catalog without wiring it fails here.
 
-    config/wcag-2.2-aa.json is the only requirement catalog in this repo — verified by listing
-    config/, not assumed. The other three editions are unbuilt, not broken, and the distinction is
-    the whole point of `missing_requirement_sets` being separate from `edition_known`.
+    This test used to read "only the WCAG edition is offerable". config/section-508.json landed
+    and it changed — which is the gate behaving as designed: it opens because content arrived,
+    not because somebody edited a list. EN 301 549 has no catalog (etsi.org 403s this
+    environment; see requirement_sets_available), so the EU and INT editions are still refused —
+    unbuilt, not broken, which is why `missing_requirement_sets` is separate from `edition_known`.
     """
-    assert acr_catalog.requirement_sets_available() == {acr_catalog.REQ_WCAG}
-    assert acr_catalog.offerable_editions() == [acr_catalog.EDITION_WCAG]
-    for edition in (acr_catalog.EDITION_508, acr_catalog.EDITION_EU, acr_catalog.EDITION_INT):
-        assert acr_catalog.missing_requirement_sets(edition), edition
+    assert acr_catalog.requirement_sets_available() == {acr_catalog.REQ_WCAG,
+                                                       acr_catalog.REQ_SECTION_508}
+    assert acr_catalog.offerable_editions() == [acr_catalog.EDITION_WCAG, acr_catalog.EDITION_508]
+    assert acr_catalog.missing_requirement_sets(acr_catalog.EDITION_508) == frozenset()
+    for edition in (acr_catalog.EDITION_EU, acr_catalog.EDITION_INT):
+        assert acr_catalog.missing_requirement_sets(edition) == {acr_catalog.REQ_EN_301_549}
 
 
 def test_a_typo_and_an_unbuilt_edition_are_different_questions():
     """Conflating them tells an author to hunt for a spelling mistake in a correct spelling."""
     assert not acr_catalog.edition_known("VPAT 2.5Rev Section 508")   # not ITI's name
-    assert acr_catalog.edition_known(acr_catalog.EDITION_508)         # real name, unbuilt content
-    assert acr_catalog.missing_requirement_sets(acr_catalog.EDITION_508)
+    assert acr_catalog.edition_known(acr_catalog.EDITION_EU)          # real name, unbuilt content
+    assert acr_catalog.missing_requirement_sets(acr_catalog.EDITION_EU)
     # An unknown edition has no requirement sets to be missing — it is answered by the other check.
     assert acr_catalog.missing_requirement_sets("nonsense") == frozenset()
 
@@ -93,25 +97,43 @@ def test_the_wcag_edition_publishes_with_no_edition_blocker():
     assert [b for b in blockers if b.category == acr_validation.CATEGORY_EDITION_MISMATCH] == []
 
 
-def test_a_508_report_cannot_publish_while_508_requirements_are_absent():
-    """The regression. Before the fix this produced a publishable, exportable, false document."""
+def test_a_508_report_publishes_now_that_the_508_provisions_exist():
+    """This test used to assert the opposite, and the inversion is the point.
+
+    Before config/section-508.json existed, a 508 report was blocked because its requirements
+    were absent from every table. They are present now — 115 provisions from chapters 3-6 — so
+    the blocker must be GONE. A gate that stayed shut after its condition was met would be just
+    as wrong as one that never closed, and harder to notice.
+    """
     blockers = acr_validation.validate(
         _clean_report(vpat_edition=acr_catalog.EDITION_508), [], {})
+    assert [b for b in blockers if b.category == acr_validation.CATEGORY_EDITION_MISMATCH] == []
+
+
+def test_an_eu_report_still_cannot_publish_while_en_301_549_is_absent():
+    """The regression #1532 exists for, on the edition whose text could not be sourced."""
+    blockers = acr_validation.validate(
+        _clean_report(vpat_edition=acr_catalog.EDITION_EU), [], {})
     rows = [b for b in blockers if b.category == acr_validation.CATEGORY_EDITION_MISMATCH]
     assert len(rows) == 1
     assert rows[0].blocking is True
-    assert rows[0].detail["missing_requirement_sets"] == [acr_catalog.REQ_SECTION_508]
+    assert rows[0].detail["missing_requirement_sets"] == [acr_catalog.REQ_EN_301_549]
     # The message must name the standard, not just say "invalid" — the author has to know what is
-    # absent in order to decide between waiting and picking the WCAG edition.
-    assert "Section 508" in rows[0].message
+    # absent in order to decide between waiting and picking an edition that is offered.
+    assert "EN 301 549" in rows[0].message
 
 
-def test_the_int_edition_names_both_absent_standards_not_just_the_first():
+def test_the_int_edition_names_only_what_is_still_absent():
+    """It used to name two missing sets; 508 arrived, so it must now name one.
+
+    A blocker that kept listing a standard the report DOES carry would send an author looking for
+    content that is already there.
+    """
     blockers = acr_validation.validate(
         _clean_report(vpat_edition=acr_catalog.EDITION_INT), [], {})
     row = [b for b in blockers if b.category == acr_validation.CATEGORY_EDITION_MISMATCH][0]
-    assert row.detail["missing_requirement_sets"] == [
-        acr_catalog.REQ_EN_301_549, acr_catalog.REQ_SECTION_508]
+    assert row.detail["missing_requirement_sets"] == [acr_catalog.REQ_EN_301_549]
+    assert "Section 508" not in row.message
 
 
 def test_an_unknown_edition_is_blocked_as_a_typo_and_lists_the_real_ones():

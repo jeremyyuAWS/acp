@@ -119,8 +119,42 @@ def project(report: dict, criteria: list[dict], *, evidence_by_criterion: dict[s
             "testing_period_end", "evaluators", "approver", "general_notes",
             "known_dependencies", "status", "published_at", "catalog_hash", "revision")},
         "criteria": rows,
+        # The same rows, grouped for renderers that need a heading per standard section. ADDED
+        # rather than replacing `criteria`, so every existing consumer keeps the flat list it
+        # reads today and nothing has to change to ignore this.
+        "sections": _sections(rows),
         "totals": _totals(rows),
     }
+
+
+def _sections(rows: list[dict]) -> list[dict]:
+    """Rows grouped under a heading, in the order they already appear.
+
+    WHY THIS EXISTS. A 508-edition report carries the WCAG success criteria AND the Revised 508
+    chapters, and printing 170 rows as one undifferentiated table leaves a reader unable to see
+    where WCAG ends and Chapter 3 begins — the numbering is the only clue, and "402.1" means
+    nothing to somebody who does not already know the standard's shape. A conformance document
+    whose scope has to be inferred is the kind of document this workspace exists to stop.
+
+    The heading is the row's `principle`, which is what the matrix builder puts there: WCAG's four
+    principles for WCAG rows, and the 508 chapter name for 508 rows. Grouping therefore needs no
+    new column and no knowledge of which standard a row came from — a property worth keeping when
+    EN 301 549 eventually adds a third vocabulary.
+
+    Order is preserved rather than re-derived: `rows` is already sorted (WCAG principles first,
+    then unknown ones, each numerically), so first-appearance order is the document's order.
+    """
+    out: list[dict] = []
+    index: dict[str, dict] = {}
+    for row in rows:
+        label = row.get("principle") or "Other"
+        section = index.get(label)
+        if section is None:
+            section = {"label": label, "criteria": []}
+            index[label] = section
+            out.append(section)
+        section["criteria"].append(row)
+    return out
 
 
 def _sortkey(num: str) -> tuple:

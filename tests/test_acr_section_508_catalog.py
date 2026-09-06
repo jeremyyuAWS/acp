@@ -164,24 +164,92 @@ def test_check_mode_catches_a_renamed_requirement():
     assert any("302.1" in p for p in problems)
 
 
-def test_the_508_edition_is_still_not_offerable():
-    """The catalog exists; the pipeline that renders it does not. PRD §19: never claim conformance
-    to a standard the document does not contain — which is what offering the edition now would do,
-    since build_matrix reads the WCAG catalog alone.
+def test_the_508_edition_is_offerable_now_that_the_matrix_and_projection_landed():
+    """This test used to assert the opposite, exactly as its predecessor said it would.
 
-    When the matrix builder and the projection land, this test changes with them. Until then it is
-    what stops the gate opening on content nothing can render.
+    It read: "When the matrix builder and the projection land, this test changes with them."
+    They landed — `build_matrix` takes an edition and appends the 508 requirement rows, and
+    `acr_export_preview` groups rows into sections so the chapters print under their own
+    headings. So the gate opens, and it opens because the content arrived rather than because a
+    list was edited.
+
+    A gate that stayed shut after its condition was met would be as wrong as one that never
+    closed, and much harder to notice.
     """
     assert acr_catalog.section_508_available() is True
-    assert acr_catalog.requirement_sets_available() == frozenset({acr_catalog.REQ_WCAG})
-    assert acr_catalog.missing_requirement_sets(acr_catalog.EDITION_508) == frozenset(
-        {acr_catalog.REQ_SECTION_508})
-    assert acr_catalog.offerable_editions() == [acr_catalog.EDITION_WCAG]
+    assert acr_catalog.requirement_sets_available() == frozenset(
+        {acr_catalog.REQ_WCAG, acr_catalog.REQ_SECTION_508})
+    assert acr_catalog.missing_requirement_sets(acr_catalog.EDITION_508) == frozenset()
+    assert acr_catalog.offerable_editions() == [acr_catalog.EDITION_WCAG, acr_catalog.EDITION_508]
+    # EN 301 549 was never sourced (etsi.org 403s the build environment), so these stay refused.
+    for edition in (acr_catalog.EDITION_EU, acr_catalog.EDITION_INT):
+        assert acr_catalog.missing_requirement_sets(edition) == {acr_catalog.REQ_EN_301_549}
 
 
-def test_a_508_report_matrix_would_still_be_wcag_only():
-    """The concrete form of the claim above, measured rather than asserted — this is the shape
-    #1532 found in production code, and it is still true, which is why the edition stays refused."""
+def test_a_matrix_built_without_an_edition_is_still_wcag_only():
+    """Unchanged on purpose: no existing caller and no existing report may be silently re-scoped
+    by the edition parameter arriving. The default stays exactly what it always produced."""
     matrix = acr_catalog.build_matrix("rep-508")
     assert len(matrix) == 55
     assert not any(r["criterion_num"].startswith(("30", "40", "50", "60")) for r in matrix)
+
+
+def test_a_508_matrix_carries_the_requirement_rows_and_not_the_scope_rows():
+    """The concrete form of the claim above — measured, which is how #1532's defect was found.
+
+    Only `kind == "requirement"` becomes a row. "502.1 General. Software shall interoperate with
+    assistive technology AND SHALL CONFORM TO 502" is a pointer to the sub-provisions below it;
+    asking a human to decide it separately would demand a status and remarks for a sentence that
+    says nothing the leaves do not.
+    """
+    matrix = acr_catalog.build_matrix("rep-508", acr_catalog.EDITION_508)
+    nums = {r["criterion_num"] for r in matrix}
+    reqs = [r for r in acr_catalog.section_508_requirements() if r["kind"] == "requirement"]
+    assert len(matrix) == 55 + len(reqs)
+    assert "1.4.3" in nums                                   # the WCAG rows are still there
+    assert {"302.1", "502.3.14", "603.3"} <= nums            # chapters 3, 5 and 6
+    assert "501.1" not in nums and "502.1" not in nums       # scope/General rows are not claims
+
+
+def test_a_508_row_has_no_wcag_level_and_carries_its_chapter_for_grouping():
+    rows = {r["criterion_num"]: r for r in
+            acr_catalog.build_matrix("rep-508", acr_catalog.EDITION_508)}
+    assert rows["502.3.14"]["level"] is None                 # there is no "AA" in Section 508
+    assert rows["502.3.14"]["principle"] == "Software"       # the chapter, used as the heading
+    assert rows["1.4.3"]["level"] == "AA"                    # and WCAG rows are untouched
+    assert rows["1.4.3"]["principle"] == "Perceivable"
+
+
+def test_chapter_four_starts_applicable_rather_than_assumed_not_applicable():
+    """Hardware will be Not Applicable for most software — but that is a human decision with
+    required remarks (PRD §10), never one the catalog makes quietly on somebody's behalf."""
+    rows = {r["criterion_num"]: r for r in
+            acr_catalog.build_matrix("rep-508", acr_catalog.EDITION_508)}
+    hardware = [r for r in rows.values() if r["principle"] == "Hardware"]
+    assert hardware, "chapter 4 produced no rows"
+    assert all(r["applicable"] is True for r in hardware)
+    assert all(r["workflow_state"] == acr_catalog.NOT_EVALUATED for r in hardware)
+
+
+def test_the_projection_groups_the_chapters_under_their_own_headings():
+    """The third prerequisite the gate waited on: a reader must see where WCAG ends."""
+    import acr_export_preview
+    proj = acr_export_preview.project(
+        {"vpat_edition": acr_catalog.EDITION_508},
+        acr_catalog.build_matrix("rep-508", acr_catalog.EDITION_508))
+    labels = [s["label"] for s in proj["sections"]]
+    assert labels[:4] == ["Perceivable", "Operable", "Understandable", "Robust"]
+    assert "Functional Performance Criteria" in labels
+    assert "Software" in labels
+    assert labels.index("Robust") < labels.index("Functional Performance Criteria")
+    # Every row lands in exactly one section, and none is lost in the grouping.
+    assert sum(len(s["criteria"]) for s in proj["sections"]) == len(proj["criteria"])
+
+
+def test_the_projection_orders_dotted_numbers_numerically_not_as_text():
+    import acr_export_preview
+    proj = acr_export_preview.project(
+        {"vpat_edition": acr_catalog.EDITION_508},
+        acr_catalog.build_matrix("rep-508", acr_catalog.EDITION_508))
+    order = [c["criterion_num"] for c in proj["criteria"]]
+    assert order.index("502.3.2") < order.index("502.3.10"), "text sort would invert these"

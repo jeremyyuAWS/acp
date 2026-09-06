@@ -89,8 +89,33 @@ def test_the_table_header_row_repeats_across_pages(rendered, tmp_path):
     PDF. Without `<w:tblHeader/>` the column meanings appear on page one only, and a reader on
     page four is holding four headings in their head."""
     doc = _parts(rendered, tmp_path)["word/document.xml"]
-    # Both tables — report metadata and the conformance table.
-    assert doc.count("<w:tblHeader/>") == 2, doc.count("<w:tblHeader/>")
+    # EVERY table, expressed as such rather than as a count.
+    #
+    # This asserted exactly 2 — report metadata plus one conformance table — which was the
+    # document's shape when the conformance rows were a single table. They are now one table per
+    # section, so the count moves with the fixture's principles and, for a 508-edition report,
+    # with its chapters. The invariant was never the number; it is that no table is missing a
+    # repeating header, and that is what a reader on page four depends on.
+    assert doc.count("<w:tbl>") >= 2
+    assert doc.count("<w:tblHeader/>") == doc.count("<w:tbl>"), (
+        f'{doc.count("<w:tblHeader/>")} repeating headers for {doc.count("<w:tbl>")} tables')
+
+
+def test_each_section_gets_its_own_heading_and_table(rendered, tmp_path, projection):
+    """The renderer must consume `sections`, not the flat `criteria` list.
+
+    Collapsing back to one table is a SILENT change: the repeating-header test above compares
+    headers to tables, so one table with one header stays balanced and stays green. Nothing else
+    would notice that a 508 report's chapters had lost their headings — which is the whole reason
+    the projection groups them.
+    """
+    doc = _parts(rendered, tmp_path)["word/document.xml"]
+    labels = [s["label"] for s in projection["sections"]]
+    assert len(labels) >= 2, "fixture spans only one section; this test cannot bite"
+    for label in labels:
+        assert label in doc, f"no heading rendered for section {label!r}"
+    # One conformance table per section, plus the report-metadata table.
+    assert doc.count("<w:tbl>") == len(labels) + 1
 
 
 def test_the_document_declares_its_language(projection, tmp_path):

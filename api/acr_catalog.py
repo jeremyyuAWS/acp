@@ -112,11 +112,19 @@ def requirement_sets_available() -> frozenset[str]:
     now claiming a catalog backed it.
 
     Populating a matrix takes three things, and the catalog is one: the requirements, a matrix
-    builder that emits their rows, and a projection that renders them in their own chapters. This
-    returns REQ_SECTION_508 when the other two land, not before. `section_508_requirements()` is
-    reachable meanwhile, so the catalog is testable rather than inert.
+    builder that emits their rows, and a projection that renders them in their own chapters.
+
+    ALL THREE ARE HERE NOW. `build_matrix` takes an edition and appends the 508 requirement rows;
+    `acr_export_preview` groups rows into `sections` by their `principle`, which carries the 508
+    chapter name, so the chapters print under their own headings instead of running together with
+    the WCAG table. The condition below is deliberately the CONTENT and not a flag: it asks the
+    catalog for requirement rows and opens only if it gets some, so a catalog file that is present
+    but empty still does not unlock the edition.
     """
-    return frozenset({REQ_WCAG})
+    available = {REQ_WCAG}
+    if any(r.get("kind") == "requirement" for r in section_508_requirements()):
+        available.add(REQ_SECTION_508)
+    return frozenset(available)
 
 
 def missing_requirement_sets(edition: str | None) -> frozenset[str]:
@@ -243,8 +251,27 @@ def section_508_hash() -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def build_matrix(report_id: str) -> list[dict]:
-    """The initial criteria matrix for a new report — one row per applicable criterion.
+def build_matrix(report_id: str, edition: str | None = None) -> list[dict]:
+    """The initial criteria matrix for a new report — one row per requirement it must account for.
+
+    EDITION DECIDES THE ROW SET. The default is None, meaning the WCAG rows alone, so no existing
+    caller and no existing report is silently re-scoped; both route call sites pass the report's
+    own edition. Building the matrix without it would create a 508 report holding only the WCAG
+    criteria — #1532's defect reintroduced one layer down.
+
+    ONLY `kind == "requirement"` ROWS BECOME MATRIX ROWS. The catalog also carries `scope` rows,
+    and they are not claims anyone can make: "502.1 General. Software shall interoperate with
+    assistive technology AND SHALL CONFORM TO 502" is a pointer to the sub-provisions that follow,
+    so asking a human to decide it separately would demand a status and remarks for a sentence
+    that adds nothing the leaves do not already say. The catalog deliberately keeps those rows and
+    marks them rather than dropping them, leaving this call to the consumer; this is the consumer
+    making it.
+
+    508 ROWS BORROW THE WCAG COLUMNS rather than adding new ones. A provision has no WCAG level,
+    so `level` is None; `principle` carries its chapter name and `guideline` its section number.
+    That is what lets acr_export_preview both ORDER them (unknown principles sort after WCAG's
+    four; _sortkey is numeric per dotted part, so 302.1 precedes 502.3.2 precedes 502.3.10) and
+    GROUP them under their own headings, with no per-standard special-casing anywhere.
 
     Every row starts at NOT_EVALUATED with no final status. PRD §10 is explicit that this is an
     internal draft state and that a report containing applicable criteria in it cannot be
@@ -252,24 +279,37 @@ def build_matrix(report_id: str) -> list[dict]:
 
     `applicable` starts True for every criterion in the catalog. Marking one Not Applicable is a
     human DECISION (with required remarks, PRD §10), not a default the system picks — so there is
-    no applicability heuristic here, deliberately.
+    no applicability heuristic here, deliberately. That matters more now than it did: Chapter 4
+    (Hardware) will be Not Applicable for most software, and it is a claim a person makes and
+    explains, not one the catalog makes quietly on their behalf.
     """
-    return [
-        {
-            "report_id": report_id,
-            "criterion_num": row["num"],
-            "criterion_name": row["name"],
-            "level": row["level"],
-            "principle": row["principle"],
-            "guideline": row["guideline"],
-            "applicable": True,
-            "workflow_state": NOT_EVALUATED,
-            "draft_status": None,
-            "final_status": None,
-            "remarks": None,
-            "evaluator": None,
-            "reviewer": None,
-            "approval_state": "unapproved",
-        }
-        for row in _load()["criteria"]
-    ]
+    rows = [_blank_row(report_id, num=row["num"], name=row["name"], level=row["level"],
+                       principle=row["principle"], guideline=row["guideline"])
+            for row in _load()["criteria"]]
+
+    if REQ_SECTION_508 in EDITION_REQUIREMENT_SETS.get(edition or "", frozenset()):
+        rows += [_blank_row(report_id, num=p["num"], name=p["name"], level=None,
+                            principle=p["chapter_name"], guideline=p["section"])
+                 for p in section_508_requirements() if p.get("kind") == "requirement"]
+    return rows
+
+
+def _blank_row(report_id: str, *, num: str, name: str, level: str | None,
+               principle: str | None, guideline: str | None) -> dict:
+    """One matrix row, undecided. The shape acr_criterion stores and the projection reads."""
+    return {
+        "report_id": report_id,
+        "criterion_num": num,
+        "criterion_name": name,
+        "level": level,
+        "principle": principle,
+        "guideline": guideline,
+        "applicable": True,
+        "workflow_state": NOT_EVALUATED,
+        "draft_status": None,
+        "final_status": None,
+        "remarks": None,
+        "evaluator": None,
+        "reviewer": None,
+        "approval_state": "unapproved",
+    }

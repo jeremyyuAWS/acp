@@ -239,6 +239,19 @@ jobs:
         # docs/TODO.md carries generated coverage facts beside its authored backlog. They went
         # 387 commits stale because nothing checked them, and read as current the whole time.
 
+      - name: Standards guard — the Section 508 catalog matches the regulation
+        if: ${{ matrix.group == 1 }}
+        run: python scripts/gen_section_508_catalog.py --check
+        # config/section-508.json is the denominator of a 508-edition report: every provision in
+        # it is one a human must decide and one that prints in the exported table. A row lost in
+        # a hand-edit is invisible — the matrix renders, the report publishes, and the omission
+        # surfaces in a customer's procurement review. The generator shipped with --check in
+        # #1539 and nothing ran it; a guard that runs nowhere is a guard nobody has.
+        #
+        # Does NOT fetch eCFR: CI must not depend on it being up, and a regulation republished
+        # upstream must not turn a green build red without a human looking at it. The committed
+        # source XML is what --check re-parses.
+
       - name: Corpus guard — ground-truth fixture coverage has not regressed
         if: ${{ matrix.group == 1 }}
         run: python scripts/gen_fixture_coverage.py --check
