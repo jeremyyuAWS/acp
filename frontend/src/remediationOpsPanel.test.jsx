@@ -400,7 +400,7 @@ describe('the v2 live operations hierarchy', () => {
       { key: '17', kind: 'remediate.delivered', tone: 'success',
         occurredAt: '2026-09-05T12:00:00Z', line: 'Corrected copy delivered for guide.docx' },
     ] })
-    const labels = ['documents processed', 'Active document pipeline', 'In flight now',
+    const labels = ['documents through automatic processing', 'Active document pipeline', 'In flight now',
       'Throughput', 'Live activity', 'Needs attention']
     const positions = labels.map((label) => html.indexOf(label))
     expect(positions.every((position) => position >= 0)).toBe(true)
@@ -433,7 +433,7 @@ describe('the v2 live operations hierarchy', () => {
     }))
     const html = render({ snapshot: { ...SNAP, active_attempts: attempts }, connected: true,
       receivedAt: Date.now(), compactLayout: true })
-    expect(html.replace(/<[^>]*>/g, '')).toContain('5 of 10 documents processed')
+    expect(html.replace(/<[^>]*>/g, '')).toContain('5 of 10 documents through automatic processing')
     expect(html).toContain('Throughput')
     for (const title of ['Phases', 'Fix and delivery totals', 'Live activity', 'Needs attention']) {
       expect(html).toContain(`<summary>${title}</summary>`)
@@ -457,9 +457,9 @@ describe('the v2 live operations hierarchy', () => {
       documents: { completed: 0, processing: 10, waiting: 145, review: 0, failed: 0, skipped: 4 },
     }
     expect(render({ snapshot: noFixesYet }).replace(/<[^>]*>/g, ''))
-      .toContain('0 of 159 documents processed')
+      .toContain('0 of 159 documents through automatic processing')
     expect(render({ snapshot: fourInspected }).replace(/<[^>]*>/g, ''))
-      .toContain('4 of 159 documents processed')
+      .toContain('4 of 159 documents through automatic processing')
     // The outcome remains explicit; "processed" must not relabel a no-fix document as corrected.
     expect(render({ snapshot: fourInspected })).toContain('data-testid="rem-count-completed"')
     expect(render({ snapshot: fourInspected })).toContain('data-testid="rem-count-skipped"')
