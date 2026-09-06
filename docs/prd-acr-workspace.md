@@ -1,6 +1,6 @@
 # PRD — ACP Accessibility Conformance Report Workspace
 
-Status: Phases 1–4 delivered · Phases 5–6 planned
+Status: see *Delivery phases* below · one thing outstanding — ADR 0053, for counsel
 Design decisions: [ADR 0047](adr/0047-acr-workspace-data-model.md)
 
 ## Purpose
@@ -336,7 +336,7 @@ function, and both leave the criterion at `needs_review` rather than `decided`, 
 evidence-driven path to a decision at all. Phase 2's axe ingestion writes *evidence*, not
 judgement; a drafted `Supports` is a suggestion awaiting a person.
 
-## Acceptance criteria — status after Phase 4
+## Acceptance criteria
 
 Re-checked against the code on 2026-09-05, not carried forward from the previous revision. Three
 rows had gone stale: 11 and 12 still deferred to Phase 4 *after* Phase 4 shipped, and 16 still
@@ -348,6 +348,12 @@ is given, and the reason is this line's own history: its first draft said "373 t
 answered 381, so it was rewritten to give a file count instead — and by 2026-09-06 that had gone
 from 18 to 21 as the Word export landed. The lesson took two attempts. A number in a document is a
 claim that decays; the command is one that cannot.
+
+**The heading was the third instance.** It read *status after Phase 4* until 2026-09-06, by which
+point Phases 5 and 6 had landed and rows 13 and 14 already described Phase 5's export. The rows
+were current; only the heading lagged — which is the worse way round, because a heading is what a
+reader trusts *instead of* reading the rows. It no longer names a phase, and the status line at the
+top of this document no longer names one either, for the same reason this paragraph gives no count.
 
 Rows 4, 6–11 and the digest behind 12 were additionally confirmed by mutation on 2026-09-05: the
 rule enforcing each was broken in turn and the whole ACR suite run against it, and every one
