@@ -161,8 +161,8 @@ def test_importing_the_plugin_does_not_alias_anything_by_itself():
 
 
 def test_mutation_testing_is_not_wired_into_ci():
-    """P5.4 was accepted as ON DEMAND ONLY. A campaign takes tens of minutes; adding it to CI is a
-    budget decision, not something a later edit should be able to make by accident."""
+    """P5.4 was accepted as ON DEMAND ONLY. A campaign is 35 minutes measured; adding it to CI is
+    a budget decision, not something a later edit should be able to make by accident."""
     workflows = list((ACP / ".github/workflows").glob("*.yml"))
     assert workflows, "no workflows found — this guard is not looking where it thinks it is"
     offenders = [w.name for w in workflows if "mutmut" in w.read_text()]

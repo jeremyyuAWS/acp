@@ -2,9 +2,16 @@
 """Run a mutation campaign against ACP's detector modules, and report only the findings.
 
 P5.4. ON DEMAND ONLY — this is never run in CI, and the reason is the same one that kept the
-LibreOffice round-trip out (P5.3): a campaign takes tens of minutes, and spending that on every PR
-is a budget decision rather than something to slip in with a script. Run it when you have changed
-a detector, or periodically to see whether the suite has drifted.
+LibreOffice round-trip out (P5.3): MEASURED AT 35 MINUTES for the shipped configuration (4574
+mutants over api/office_structure.py, graded by the 58 test modules that import it), and spending
+that on every PR is a budget decision rather than something to slip in with a script. Run it when
+you have changed a detector, or periodically to see whether the suite has drifted.
+
+The 35 minutes is worth stating precisely because a narrower run is misleadingly quick. A
+docx-only test selection finishes the same 4574 mutants in 2m35s — but only because 2977 of them
+are never reached, and it scored 32.1% against the full selection's 75.4%. Fast here means "did
+not look", so treat a campaign that returns in minutes as a configuration to check rather than
+good news.
 
     python scripts/mutation_test.py            # run a campaign, then summarise
     python scripts/mutation_test.py --report   # summarise the last campaign, no re-run
@@ -187,7 +194,8 @@ def main() -> int:
     _require_mutmut()
 
     if not args.report:
-        print("Running the campaign. This takes tens of minutes; --report re-reads it later.\n",
+        print("Running the campaign — about 35 minutes for the shipped config. "
+              "--report re-reads it later.\n",
               file=sys.stderr)
         run = _run(["run"])
         # mutmut exits non-zero when mutants survive, which is its normal reporting outcome and
