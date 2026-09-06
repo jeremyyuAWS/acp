@@ -52,6 +52,12 @@ function fmtElapsedSecs(s) {
   return r ? `${m}m ${r}s` : `${m}m`
 }
 
+export function refreshedSeconds(measuredAt, now = Date.now()) {
+  const at = Number(measuredAt)
+  if (!Number.isFinite(at) || at <= 0) return null
+  return Math.max(0, Math.floor((now - at) / 1000))
+}
+
 function workerDetail(queue) {
   const workers = queue?.workers
   if (!workers || workers.max == null) return 'Worker status unavailable for this run'
@@ -187,6 +193,7 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
   const pct = total ? Math.min(100, Math.round((completed / total) * 100)) : 0
   const isPreparing = m.available && pct === 0
   const isFinished = total > 0 && completed >= total
+  const measuredAt = snapshot?._live?.measuredAt
 
   // Elapsed seconds since this screen first appeared — stops ticking once real progress begins.
   const [startedAt] = useState(() => Date.now())
@@ -197,6 +204,14 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
     const t = setInterval(() => setElapsed(Math.round((Date.now() - startedAt) / 1000)), 1000)
     return () => clearInterval(t)
   }, [isPreparing, startedAt])
+
+  const [refreshAge, setRefreshAge] = useState(() => refreshedSeconds(measuredAt))
+  useEffect(() => {
+    setRefreshAge(refreshedSeconds(measuredAt))
+    if (isFinished || !measuredAt) return
+    const timer = setInterval(() => setRefreshAge(refreshedSeconds(measuredAt)), 1000)
+    return () => clearInterval(timer)
+  }, [isFinished, measuredAt])
 
   if (!m.available) return null
 
@@ -220,6 +235,11 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                           gap: 10, marginBottom: 12, flexWrap: 'wrap' }}>
               <strong style={{ fontSize: 14.5 }}>{isFinished ? 'Assessment complete' : 'Assessing documents'}</strong>
+              <div style={{ display: 'grid', justifyItems: 'end', gap: 3 }}>
+                {!isFinished && (
+                  <LiveThroughput mini points={throughput?.points || []} ratePerMin={throughput?.ratePerMin}
+                                  label="Assessment throughput" />
+                )}
               <span role="status" style={{ fontSize: 11.5, padding: '2px 7px', borderRadius: 4,
                                             display: 'inline-flex', alignItems: 'center', gap: 5,
                                             background: updateMode === 'reconnecting' ? 'var(--amber-bg,#fff8e6)' : 'var(--green-bg,#f0f7e6)',
@@ -227,7 +247,9 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
                                             border: `1px solid ${updateMode === 'reconnecting' ? 'var(--amber-line,#e7c46a)' : 'var(--green-line,#a8cf7a)'}` }}>
                 {!isFinished && updateMode === 'live' && <span className="pulsedot" aria-hidden="true" />}
                 {isFinished ? 'Updates complete' : updateMode === 'reconnecting' ? 'Reconnecting · last update kept' : 'Live updates'}
+                {!isFinished && refreshAge != null && <> · refreshed {refreshAge}s ago</>}
               </span>
+              </div>
             </div>
 
             {opinion && (
@@ -283,10 +305,6 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
                 </div>
               )}
 
-              <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 10, marginTop: 12 }}>
-                <LiveThroughput compact points={throughput?.points || []} ratePerMin={throughput?.ratePerMin}
-                                label="Assessment throughput" />
-              </div>
             </details>
 
             {isFinished && (

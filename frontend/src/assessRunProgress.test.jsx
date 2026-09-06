@@ -10,6 +10,7 @@ import AssessRunProgress from './AssessRunProgress.jsx'
 
 const SNAP = {
   available: true, active: true, phase: 'assessing', run_id: 's1',
+  _live: { mode: 'live', measuredAt: Date.now() },
   totals: { discovered: 22, eligible: 22 },
   kpis: { completed: 8, need_attention: 3, unable_to_assess: 1, processing: 1 },
   queue: {
@@ -60,6 +61,8 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).toContain('12 documents/min')
     expect(html).toContain('about 1 min 50s left')
     expect(html).toMatch(/Results appear when the run finishes/)
+    expect(html).toContain('Live updates · refreshed 0s ago')
+    expect(html.indexOf('Assessment throughput')).toBeLessThan(html.indexOf('Live updates · refreshed'))
   })
 
   it('shows truthful cloud second-opinion use and remaining budgets', () => {
@@ -83,12 +86,13 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).not.toContain('Worker status unavailable')
   })
 
-  it('groups current processing and throughput in a collapsible section that starts expanded', () => {
+  it('keeps current processing in the disclosure but moves throughput to the status corner', () => {
     const html = render(SNAP, { ratePerMin: 12, points: [1, 3, 5, 8] })
     expect(html).toMatch(/<details open="" class="assess-live-details"/)
     expect(html).toContain('Live processing details')
     expect(html).toContain('Processing now')
-    expect(html).toContain('Assessment throughput')
+    expect(html.match(/Assessment throughput/g)).toHaveLength(1)
+    expect(html).toContain('width="92"')
   })
 
   it('never renders a mid-run verdict scoreboard', () => {
