@@ -72,6 +72,21 @@ const SCORED = [
 ]
 
 describe('AssessRunner names the file it is reading', () => {
+  it('says when the backend reconnects to equivalent existing work', async () => {
+    assessScan.mockResolvedValue({ deferred: true, reused: true, job_id: 'existing-job' })
+    getScan.mockResolvedValue({
+      run: { files: 1 },
+      files: [{ file: 'benefits-guide.docx', score: null }],
+    })
+    await mount([{ file: 'benefits-guide.docx', type: 'docx', status: 'discovered' }])
+    await clickText('Assess')
+    await settle()
+
+    expect(text()).toContain('Existing work found.')
+    expect(text()).toContain('nothing was queued twice')
+    expect(realErrors()).toEqual([])
+  })
+
   it('deferred path: renders the first unscored file by its `file` field', async () => {
     assessScan.mockResolvedValue({ deferred: true })
     getScan.mockResolvedValue({
