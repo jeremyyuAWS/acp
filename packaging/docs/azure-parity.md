@@ -252,11 +252,34 @@ applied outside these scripts"*. What is new is the RANGE: `1 2` in `update_app 
 against a live `4–8`. The two facts compound — a tier whose rule this repository cannot see, and
 whose replica range it states wrongly.
 
-**The practical consequence, today.** `rightsize-production.sh` is the script that fixes the
-remediate drift, and it cannot be run as-is without shrinking discovery. Either scope the remediate
-correction to its own two `az` calls, or settle discovery's range first and update `update_app
-acp-discovery 1.0 2Gi 1 2 2` to match. The first was done on 2026-09-06 as the immediate fix; the
-second is the durable one and is still open.
+**Both are now settled, and the second answer was not the one anybody expected.** The remediate
+correction was applied on 2026-09-06 as its own two `az` calls — production is 5-10 with the
+`remediation-queue` rule attached and its query verified. Discovery's range was then decided, and
+that is where a third fact appeared: the owner chose to keep production's shape, and production's
+shape did not fit.
+
+`tests/test_db_connection_budget.py` recomputes the fleet against the script on every run, and it
+refused 4-8:
+
+| discovery | steady | during revision overlap | + reserve | fits 150? |
+|---|---|---|---|---|
+| 1-2 *(the old script)* | 82 | 120 | 135 | yes |
+| **4-6** *(decided)* | **90** | **134** | **149** | **yes** |
+| 4-7 | 92 | 136 | 151 | no |
+| 4-8 *(what production ran)* | 94 | 138 | 153 | no |
+
+ACA runs the old and new revisions together during a rollout, so the OVERLAP column is the one a
+Postgres ceiling has to survive — not the steady one. The floor stands at 4 as chosen; the ceiling
+is 6 because that is the largest the connection budget allows, with one connection to spare.
+
+**The finding underneath the finding.** Production was running 4-8 when this was written, so the
+fleet already wanted 153 connections against 150 on every deploy. That exposure was not created by
+correcting the script — it was HIDDEN by the old 1-2, which understated the estate and let the
+budget test pass on a fleet nobody was running. It is the sharpest argument in this document for
+why script-to-contract parity is not the same as knowing what production does: the guard was
+working perfectly, against the wrong numbers.
+
+Azure still needs bringing down from 8 to 6. Until it is, production is the side that diverges.
 
 ## On ADR 0048's Container Apps claims
 
@@ -284,7 +307,7 @@ Parsed from the deployment scripts, not from a live subscription.
 |---|---|---:|---:|---|---:|---|---|---|---|
 | `acp-app` | `api` | 1.0 | 2Gi | 1–3 | — | yes | external | none in this repo | rightsize-production.sh + deploy.sh |
 | `acp-assess` | `assess` | 2.0 | 4Gi | 5–5 | 2 | **no** | none | none in this repo | rightsize-production.sh |
-| `acp-discovery` | `discover` | 1.0 | 2Gi | 4–8 | 2 | yes | none | none in this repo | rightsize-production.sh |
+| `acp-discovery` | `discover` | 1.0 | 2Gi | 4–6 | 2 | yes | none | none in this repo | rightsize-production.sh |
 | `acp-grafana` | — | 0.5 | 1.0Gi | 1–1 | — | **no** | external | none in this repo | deploy.sh |
 | `acp-ollama` | — | 4.0 | 8Gi | 0–1 | — | yes | none | none in this repo | rightsize-production.sh |
 | `acp-remediate` | `remediate` | 2.0 | 4Gi | 5–10 | 2 | yes | none | `remediation-queue` | rightsize-production.sh |
@@ -310,7 +333,7 @@ Every difference now carries a recorded decision. Production still differs from 
 | `api` | `replicas.min` | `1` | `2` | acknowledged | The example raises the API floor from 1 to 2 because the standard profile requires two API replicas (PRD S8), and the example's own header says so. Azure runs 1 — so today's production would FAIL its own profile's floor, which is a finding about the deployment rather than about the contract. |
 | `api` | `replicas.max` | `3` | `4` | acknowledged | Production's ceiling of 3 was chosen against a floor of 1 — rightsize-production.sh says 'The web tier retains burst headroom', which is a statement about the RANGE. The contract corrects that floor to 2 for the profile, so holding the ceiling at 3 would silently halve the burst range production says it wants (3x down to 1.5x); 2-4 keeps it at 2x. Priced: the extra replica is 16 Postgres connections against 267 of headroom. The contract stands and Azure's ceiling is the override to correct alongside its floor. |
 | `discover` | `replicas.min` | `4` | `1` | acknowledged | Production runs a floor of 4 against the contract's 1. Decided 2026-09-06: discovery was found scaled up by hand, the owner confirmed the live shape is the intended one, and the script was corrected to match rather than the estate shrunk to meet a range nobody had argued for. A floor costs what it always costs — it is paid continuously — but the worst case is set by the ceiling below, so this row adds nothing to the budget. |
-| `discover` | `replicas.max` | `8` | `3` | acknowledged | Production runs a ceiling of 8 against the contract's 3, and unlike the previous 2 this one is explained: the owner chose the live shape on 2026-09-06 after the drift was found (packaging/docs/azure-parity.md). Priced: the five extra replicas are 90 Postgres connections, taking the fleet worst case from 418 to 508 against a 700 server maximum and leaving 192 of headroom. The contract's 3 is now the value with no argument behind it; raising it is the open question, and this row is where that is recorded. |
+| `discover` | `replicas.max` | `6` | `3` | acknowledged | The script runs a ceiling of 6 against the contract's 3, and unlike the previous 2 this one is explained — by arithmetic rather than preference. Production was found at 8 on 2026-09-06 and 8 does not survive a deploy: ACA runs the old and new revisions together, and at 4-8 the fleet wants 153 Postgres connections during that overlap against a server that has 150. 6 is the largest ceiling that fits, with one connection to spare. The owner kept the floor and took the ceiling the budget allows. Azure is to be brought down to 6 to match; until it is, production is the side that diverges. |
 
 ## Deployed, and not modelled by the contract
 

@@ -70,12 +70,13 @@ ACKNOWLEDGED_DIFFERENCES: dict[tuple[str, str], str] = {
         "argued for. A floor costs what it always costs — it is paid continuously — but the "
         "worst case is set by the ceiling below, so this row adds nothing to the budget."),
     ("discover", "replicas.max"): (
-        "Production runs a ceiling of 8 against the contract's 3, and unlike the previous 2 this "
-        "one is explained: the owner chose the live shape on 2026-09-06 after the drift was found "
-        "(packaging/docs/azure-parity.md). Priced: the five extra replicas are 90 Postgres "
-        "connections, taking the fleet worst case from 418 to 508 against a 700 server maximum "
-        "and leaving 192 of headroom. The contract's 3 is now the value with no argument behind "
-        "it; raising it is the open question, and this row is where that is recorded."),
+        "The script runs a ceiling of 6 against the contract's 3, and unlike the previous 2 this "
+        "one is explained — by arithmetic rather than preference. Production was found at 8 on "
+        "2026-09-06 and 8 does not survive a deploy: ACA runs the old and new revisions together, "
+        "and at 4-8 the fleet wants 153 Postgres connections during that overlap against a server "
+        "that has 150. 6 is the largest ceiling that fits, with one connection to spare. The "
+        "owner kept the floor and took the ceiling the budget allows. Azure is to be brought down "
+        "to 6 to match; until it is, production is the side that diverges."),
 }
 
 # Configuration this repo cannot see, and why. Named so that a clean report is not read as a
