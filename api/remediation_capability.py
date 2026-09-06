@@ -293,10 +293,12 @@ REMEDIATION: dict[str, dict[str, str]] = {
         "1.4.1": HUMAN,      # colour-only link — no PDF write-back adds a non-colour cue; a human re-styles
         "1.4.3": AUTO,       # text fill colours recoloured in content streams vs the resolved
                              # background (text-scoped; abstains where it can't resolve one)
-        "1.4.5": HUMAN,      # images-of-text — OCR proposer exists but no getter reads rule_id
-                             # "1.4.5" in has_approved_values_to_write; no write-back.
+        "1.4.5": HUMAN,      # images-of-text — writing /Alt to the /Figure struct element makes
+                             # the image accessible (1.1.1) but does NOT remove it; the raster
+                             # image persists, so the OCR detector re-fires on re-scan. Genuine
+                             # remediation requires replacing the image with selectable text.
         "1.4.6": AUTO,       # cleared incidentally by the 1.4.3 recolour (it targets 7:1 first)
-        "1.4.9": HUMAN,      # images-of-text (AAA) — same broken chain as 1.4.5.
+        "1.4.9": HUMAN,      # images-of-text (AAA) — same constraint as 1.4.5.
         "1.4.11": HUMAN,     # non-text contrast — solid-colour shape; no write-back recolours PDF shapes
         "1.4.12": HUMAN,     # text spacing — line-pitch measurement; clip outcome is rendered, not in the file
         "2.4.1": AUTO,       # bookmark outline built from the document's headings

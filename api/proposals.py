@@ -769,6 +769,171 @@ def propose_reading_level(text: str, *, filename: str = "", ai_enabled: bool = T
 
 
 # ── 1.4.5 Images of Text (OCR the text back out — reviewer pastes it as real text) ─
+
+def _figure_objr_xobj(fig, pdf, page_map: dict):
+    """Find the (page_1based, xobj_name) for a /Figure struct element via its OBJR /K child.
+
+    A /Figure whose /K list contains an OBJR dictionary has a direct XObject reference — this
+    is Tier 1: the image can be cross-referenced to a page resource by objgen comparison.
+    Returns (None, None) when the figure has no OBJR child, or when the referenced XObject
+    cannot be found in the page's resource dictionary.
+
+    page_map: {obj_num -> page_1based}, built once from pdf.pages so the per-page lookup is O(1).
+    """
+    import pikepdf
+    try:
+        k = fig.get("/K")
+        if k is None:
+            return None, None
+        kids = k if isinstance(k, pikepdf.Array) else [k]
+        for kid in kids:
+            try:
+                d = kid if isinstance(kid, pikepdf.Dictionary) else None
+                if d is None:
+                    continue
+                if str(d.get("/Type", "")) != "/OBJR":
+                    continue
+                obj_ref = d.get("/Obj")
+                if obj_ref is None:
+                    continue
+                # Find which page this OBJR sits on (via /Pg in the OBJR or in the figure itself)
+                pg_ref = d.get("/Pg") or fig.get("/Pg")
+                if pg_ref is None:
+                    continue
+                try:
+                    page_num = page_map.get(pg_ref.objgen[0])
+                except Exception:
+                    continue
+                if page_num is None:
+                    continue
+                # Look for the XObject name on that page
+                page = pdf.pages[page_num - 1]
+                resources = page.get("/Resources") or pikepdf.Dictionary()
+                xobjects = resources.get("/XObject") or pikepdf.Dictionary()
+                target_objgen = obj_ref.objgen
+                for xname in xobjects.keys():
+                    try:
+                        if xobjects[xname].objgen == target_objgen:
+                            return page_num, str(xname)
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None, None
+
+
+def _pdf_struct_image_map(pdf) -> dict:
+    """Build {(page_1based, xobj_name): 'pdf:fig:P:S'} for every tagged /Figure with an OBJR.
+
+    Mirrors _figure_locators in remediate_pdf.py exactly (same figures, same ordering) so the
+    locator a proposal emits is the locator apply_pdf_figure_alt can resolve at write time.
+    """
+    from formats.pdf.structure import collect_figures
+    try:
+        struct_root = pdf.Root.get("/StructTreeRoot")
+        if struct_root is None:
+            return {}
+        figures = collect_figures(struct_root)
+    except Exception:
+        return {}
+
+    # page_map: {obj_num -> page_1based}, built once
+    page_map = {}
+    try:
+        for idx, page in enumerate(pdf.pages):
+            try:
+                page_map[page.objgen[0]] = idx + 1
+            except Exception:
+                pass
+    except Exception:
+        return {}
+
+    # Assign locators in collection order per page (mirrors _figure_locators)
+    per_page: dict[int | None, int] = {}
+    out: dict[tuple, str] = {}
+    for fig in figures:
+        import pikepdf
+        try:
+            pg_ref = fig.get("/Pg")
+            pg = page_map.get(pg_ref.objgen[0]) if pg_ref is not None else None
+        except Exception:
+            pg = None
+        seq = per_page.get(pg, 0)
+        per_page[pg] = seq + 1
+        loc = f"pdf:fig:{pg if pg is not None else '?'}:{seq}"
+        page_num, xobj_name = _figure_objr_xobj(fig, pdf, page_map)
+        if page_num is not None and xobj_name is not None:
+            out[(page_num, xobj_name)] = loc
+    return out
+
+
+def _propose_pdf_images_of_text(path) -> list[dict]:
+    """1.4.5/1.4.9 proposals for PDF: OCR each raster XObject that maps to a tagged /Figure.
+
+    Uses pdf:fig:P:S locators (not "image N") so apply_pdf_figure_alt can resolve and write
+    /Alt on the correct struct element. Images not matched to a /Figure via OBJR are skipped —
+    they have no Tier-1 write path.
+    """
+    import ocr as _ocr
+    if not _ocr.is_available():
+        return []
+    try:
+        import pikepdf
+        from pathlib import Path as _Path
+        with pikepdf.open(str(path)) as pdf:
+            struct_map = _pdf_struct_image_map(pdf)
+            if not struct_map:
+                return []
+            out: list[dict] = []
+            seen_locators: set[str] = set()
+            for page_1, xobj_name, img_bytes in _ocr._pdf_images_with_names(_Path(str(path))):
+                loc = struct_map.get((page_1, xobj_name))
+                if loc is None:
+                    continue                   # not a tagged figure with an OBJR — no write path
+                if loc in seen_locators:
+                    continue                   # duplicate XObject reference — take the first
+                seen_locators.add(loc)
+                try:
+                    aa_band = _ocr._ocr_words(img_bytes, _ocr._MIN_PIXELS) >= _ocr._MIN_WORDS
+                    words = _ocr._ocr_words(img_bytes, _ocr._MIN_PIXELS_STRICT)
+                    if not aa_band and words < _ocr._MIN_WORDS_STRICT:
+                        continue
+                    text = " ".join(_ocr.ocr_text(img_bytes).split())
+                    if not text:
+                        continue
+                    if aa_band:
+                        rationale = ("WCAG 1.4.5: text presented as an image should be real, "
+                                     "selectable text. Paste this back into the document (or "
+                                     "mark the image decorative if the text is duplicated nearby).")
+                    else:
+                        rationale = (f"WCAG 1.4.9 (AAA): a short text block ({words} words) is "
+                                     "baked into this image. If it is a logotype/brand mark, WCAG "
+                                     "treats it as essential — record the logotype exception. "
+                                     "Otherwise paste the text back as real, selectable text.")
+                        try:
+                            import ai as _ai
+                            if _ai.looks_like_logotype(img_bytes):
+                                rationale = ("The vision model reads this image as a logotype/brand "
+                                             "mark. " + rationale)
+                        except Exception:
+                            swallowed("proposals._propose_pdf_images_of_text: logotype vision check failed")
+                    out.append(proposal(
+                        locator=loc,
+                        before="text baked into an image — assistive technology cannot read it",
+                        proposed_value=text,
+                        rationale=rationale,
+                        source="OCR (tesseract) — human confirmation required",
+                        thumb=thumb_b64(img_bytes),
+                    ))
+                except Exception:
+                    continue
+            return out
+    except Exception:
+        return []
+
+
 def propose_images_of_text(path, ext: str) -> list[dict]:
     """One WCAG 1.4.5 proposal per embedded image that bakes in substantial text: the text is
     OCR'd out and surfaced so the reviewer can paste it back as real, selectable text (or
