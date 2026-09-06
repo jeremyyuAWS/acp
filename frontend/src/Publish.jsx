@@ -6,6 +6,7 @@ import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseM
 import { releaseDestination, releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
 import { SET_STATUS, certificationUniverse, releaseSetStatus } from './graduation.js'
 import { mirrorState, MIRROR } from './deliveryPolicy.js'
+import ReleaseHistory from './ReleaseHistory.jsx'
 
 // Step 9 · Publish. Marks re-validated documents as published: the conformance status
 // is recorded in the audit trail and the fixed copy (already in Blob + the Drive
@@ -805,6 +806,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           <p className="muted" style={{ marginTop: 12 }}>Releasing writes the fixed copy to {releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })} and records each release in the audit trail here.</p>
         )}
       </section>
+
+      <ReleaseHistory refreshKey={`${run?.id || ''}:${publishedCount}:${failedCount}`} />
 
       {/* Confirmation before a release runs. States, in checkable terms, exactly what will happen —
           destination, that the original is untouched, the audit entry, and that this is not a
