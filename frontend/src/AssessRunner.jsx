@@ -13,6 +13,7 @@ import { assessResume } from './resumeInFlight.js'
 // loosening someone else's assertion to accommodate this change.
 import { scOfWcag } from './coreStats.js'
 import { SCOPE_SCS, SCOPE_LABEL } from './activeScope.js'
+import { stageExecutionNotice } from './stageExecutionNotice.js'
 
 // Worker-tier health, as THREE states plus the local case — not the boolean the strip used to
 // render.
@@ -183,6 +184,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
   // fabrication. Found live 2026-07-29 as "Assess produces no score": the catch below computed
   // a result from an empty `files` and rendered a completed 0/100.
   const [scanGone, setScanGone] = useState(null)
+  const [executionNotice, setExecutionNotice] = useState('')
   // Real-time queue visibility for the deferred model (2026-08-22). Before this, "Opening &
   // assessing 0 of 148…" looked IDENTICAL whether a worker was about to pick the job up or the
   // worker tier was down entirely — the live incident this answers: a user watching a stuck 0%
@@ -495,6 +497,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     // The effect below remains the durable source for running/done and reload resume.
     onPhase?.('starting')
     setPhase('running'); setResult(null); setProgress(0); setAccessFailed(false); setScanGone(null)
+    setExecutionNotice('')
     setWorkersDown(false); setJobInfo(null); setLiveQueue(null)
     // ADR 0020: in the deferred model the DOWNLOAD happens now, at Assess — but GIS Drive tokens
     // live ~1h and are held in-memory per scan, so a scan discovered a while ago (or after a
@@ -502,6 +505,7 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
     // token from the live session first (best-effort; the endpoint 422s harmlessly for a local /
     // SharePoint scan with no token). Then kick off the assessment.
     Promise.resolve(refreshScanDriveToken(runId)).catch(() => {}).then(() => assessScan(runId, opts?.level || level, opts ? !!opts.includeLifecycleFlagged : !ignoreLifecycle)).then((resp) => {
+      setExecutionNotice(stageExecutionNotice('Assessment', resp))
       if (resp && resp.deferred) {
         // Same "no workers available" guard doScan (App.jsx) already applies to a fresh scan
         // start — a queue with nobody to drain it is worth saying plainly rather than leaving
@@ -646,6 +650,11 @@ export default function AssessRunner({ files = [], runId, scanBusy = false, onAs
       </>)}
 
       <div role="status" aria-live="polite">
+        {executionNotice && (
+          <div className="callout info" style={{ margin: '8px 0' }}>
+            <b>Existing work found.</b> {executionNotice}
+          </div>
+        )}
         {phase === 'running' && (
           <div className="assessrun">
             {workersDown && !progressIsConfirmed({ completed: progress, inFlight: liveQueue?.workersBusy }) && (
