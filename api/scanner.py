@@ -3419,21 +3419,22 @@ def _sp_archive_original(token: str, drive_id: str, item_id: str, today: str) ->
 
 
 def _sp_write(token: str, *, put_url: str, session_url: str, content: bytes,
-              content_type: str) -> dict:
+              content_type: str, conflict_behavior: str = "replace",
+              force_session: bool = False) -> dict:
     """One Graph write, simple or resumable depending on size.
 
     Graph rejects a simple PUT past 4 MiB with a 413 that says nothing about chunking, so the
     large path opens an upload session instead. Shared by the mirror upload and the in-place
     replace, which differ only in the URLs they aim at.
     """
-    if len(content) <= _SP_SIMPLE_MAX:
+    if len(content) <= _SP_SIMPLE_MAX and not force_session:
         return _sp_put(token, put_url, content, content_type)
 
     import httpx
     r = httpx.post(session_url,
                    headers={"Authorization": f"Bearer {token}",
                             "Content-Type": "application/json"},
-                   json={"item": {"@microsoft.graph.conflictBehavior": "replace"}},
+                   json={"item": {"@microsoft.graph.conflictBehavior": conflict_behavior}},
                    timeout=30, follow_redirects=True)
     if r.status_code in (401, 403):
         raise PermissionError(

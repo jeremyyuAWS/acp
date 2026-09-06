@@ -295,6 +295,28 @@ def test_a_large_replace_uses_a_resumable_session(monkeypatch):
         assert (hi - lo + 1) % (320 * 1024) == 0, f"chunk {r} is not a 320 KiB multiple"
 
 
+def test_a_forced_create_session_carries_fail_on_conflict_for_small_content(monkeypatch):
+    """Release creation deliberately uses the session path below 4 MiB too, because Graph's
+    simple path PUT can replace a sibling created after the preceding existence check."""
+    import httpx
+    posts = []
+    monkeypatch.setattr(httpx, "post", lambda url, **kw:
+                        posts.append((url, kw["json"])) or
+                        _Resp({"uploadUrl": "https://up/atomic"}))
+    monkeypatch.setattr(httpx, "put", lambda url, **kw:
+                        _Resp({"id": "new", "webUrl": "https://x/new"}, content=b"{}"))
+
+    out = scanner._sp_write(
+        "tok", put_url="https://graph/simple", session_url="https://graph/session",
+        content=b"small", content_type="application/pdf",
+        conflict_behavior="fail", force_session=True)
+
+    assert out["id"] == "new"
+    assert posts == [("https://graph/session", {
+        "item": {"@microsoft.graph.conflictBehavior": "fail"},
+    })]
+
+
 def test_a_description_failure_never_fails_a_successful_write(monkeypatch):
     """The bytes are the deliverable. A label is not worth turning a completed replace into an
     error the user reads as "it did not save"."""
