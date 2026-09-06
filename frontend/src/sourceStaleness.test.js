@@ -31,7 +31,7 @@ describe('Release Center: source-staleness UI', () => {
   it('warns only when a source actually changed, and offers a scoped re-scan', () => {
     const s = pub()
     expect(s).toMatch(/\{staleReady\.length > 0 && \(/)
-    expect(s).toMatch(/changed at the source in Drive since this scan/)
+    expect(s).toMatch(/changed at the source in \{sourceProduct\} since this scan/)
     expect(s).toMatch(/Re-scan changed sources \(\$\{staleReady\.length\}\)/)
   })
 
