@@ -198,6 +198,27 @@ def test_workflow_contract_groups_stages_under_the_scan_identity():
     assert workflow["stages"][1]["attempt"] == 2
 
 
+def test_workflow_contract_uses_the_durable_stage_execution_and_completion_time():
+    run = {"scan_id": "scan-1", "owner": "owner@example.org", "source": "sharepoint",
+           "stage": "assess", "status": "recent", "running": 0, "queued": 0,
+           "completed": 2, "total": 2, "started_at": "2026-09-05T10:00:00+00:00",
+           "updated_at": "2026-09-05T10:10:00+00:00", "max_attempts_seen": 1}
+    events = [
+        {"event_id": "start", "kind": "job.stage_started", "scan_id": "scan-1",
+         "stage": "assess", "correlation_id": "batch-42",
+         "occurred_at": "2026-09-05T10:01:00+00:00"},
+        {"event_id": "done", "kind": "job.stage_completed", "scan_id": "scan-1",
+         "stage": "assess", "correlation_id": "batch-42",
+         "occurred_at": "2026-09-05T10:09:00+00:00"},
+    ]
+
+    stage = system._workflow_rows([run], events)[0]["stages"][0]
+    assert stage["stage_run_id"] == "batch-42"
+    assert stage["started_at"] == "2026-09-05T10:01:00+00:00"
+    assert stage["completed_at"] == "2026-09-05T10:09:00+00:00"
+    assert stage["completion_recorded"] is True
+
+
 def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(monkeypatch):
     class ActivityStore:
         def worker_tier_status(self):

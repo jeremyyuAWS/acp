@@ -9852,6 +9852,7 @@ class Store:
     _ORCH_DETAIL_MAX_BYTES = 2048
 
     def append_orchestration_event(self, *, owner_email: str, kind: str,
+                                   event_id: str | None = None,
                                    occurred_at: str | None = None, scan_id: str | None = None,
                                    job_id: str | None = None, job_type: str | None = None,
                                    attempt: int | None = None, workflow: str | None = None,
@@ -9912,12 +9913,13 @@ class Store:
                 if len(raw.encode("utf-8")) > self._ORCH_DETAIL_MAX_BYTES:
                     raw = _json.dumps({"truncated": True, "original_size": len(raw.encode("utf-8"))})
                 payload = raw
-        event_id = uuid.uuid4().hex
+        event_id = event_id or uuid.uuid4().hex
         sql = ("INSERT INTO orchestration_events "
                "(event_id,occurred_at,owner_email,scan_id,job_id,job_type,attempt,workflow,stage,"
                "kind,severity,worker_id,replica_id,revision_name,correlation_id,provider,"
                "error_class,duration_ms,detail_json,schema_version) "
-               "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)")
+               "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+               "ON CONFLICT(event_id) DO NOTHING")
         try:
             with self._db.cursor() as cur:
                 self._db.execute(cur, sql, (
@@ -9925,7 +9927,7 @@ class Store:
                     stage, kind, severity, worker_id, replica_id, revision_name, correlation_id,
                     provider, error_class, duration_ms, payload,
                     self._ORCH_EVENT_SCHEMA_VERSION))
-            return event_id
+            return event_id if (getattr(cur, "rowcount", 0) or 0) > 0 else None
         except Exception:
             return None
 
@@ -10276,10 +10278,78 @@ class Store:
                     (job_id, job_type, _json.dumps(payload), priority, now, batch_id,
                      scan_id, now, now))
                 job_ids.append(job_id)
+        self._record_stage_started(scan_id, stage, batch_id, job_type, len(job_ids))
         return {"batch_id": batch_id, "job_ids": job_ids, "reused": False,
                 # Uniform shape with the reuse/revive path above, so a caller can read `requeued`
                 # without knowing which branch answered it.
                 "requeued": 0, "statuses": ["queued"] * len(job_ids)}
+
+    @staticmethod
+    def _stage_event_id(scan_id: str, stage: str, batch_id: str, transition: str) -> str:
+        """Stable event identity: replaying a stage transition cannot append it twice."""
+        import hashlib as _hashlib
+        return _hashlib.sha256(
+            f"workflow-stage:{scan_id}:{stage}:{batch_id}:{transition}".encode()
+        ).hexdigest()[:32]
+
+    def _stage_owner(self, scan_id: str) -> str | None:
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT owner_email FROM scan_runs WHERE id=%s", (scan_id,))
+            row = self._db.fetchone(cur)
+        return (row or {}).get("owner_email")
+
+    def _record_stage_started(self, scan_id: str, stage: str, batch_id: str,
+                              job_type: str, documents: int) -> None:
+        """Best-effort durable start marker, idempotent for one stage execution."""
+        owner = self._stage_owner(scan_id)
+        if not owner:
+            return
+        self.append_orchestration_event(
+            event_id=self._stage_event_id(scan_id, stage, batch_id, "started"),
+            owner_email=owner, kind="job.stage_started", scan_id=scan_id,
+            job_type=job_type, workflow=scan_id, stage=stage, correlation_id=batch_id,
+            detail={"documents": documents, "stage_execution_id": batch_id})
+
+    _BATCH_JOB_STAGES = {
+        "scan_assess": "assess", "assess_trace": "assess",
+        "remediate_file": "remediate", "rescore_file": "remediate",
+        "apply_approved_values": "remediate", "publish_file": "release",
+    }
+
+    def _record_stage_completed_if_ready(self, job: dict | None) -> None:
+        """Emit one completion after every job in a durable stage batch succeeded.
+
+        The event id is deterministic and the events table primary key is the concurrency
+        fence. Two workers finishing the last documents can both observe readiness, but only
+        one row can land. Dead/cancelled batches deliberately do not claim completion; if their
+        rows are revived by enqueue_stage_batch, the eventual successful retry completes the
+        same stage execution exactly once.
+        """
+        if not job or not job.get("scan_id") or not job.get("batch_id"):
+            return
+        stage = self._BATCH_JOB_STAGES.get(job.get("type"))
+        if not stage:
+            return
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS total, "
+                "SUM(CASE WHEN status='done' THEN 1 ELSE 0 END) AS done "
+                "FROM jobs WHERE scan_id=%s AND batch_id=%s",
+                (job["scan_id"], job["batch_id"]))
+            counts = self._db.fetchone(cur) or {}
+        total = int(counts.get("total") or 0)
+        done = int(counts.get("done") or 0)
+        if not total or done != total:
+            return
+        owner = self._stage_owner(job["scan_id"])
+        if not owner:
+            return
+        self.append_orchestration_event(
+            event_id=self._stage_event_id(job["scan_id"], stage, job["batch_id"], "completed"),
+            owner_email=owner, kind="job.stage_completed", scan_id=job["scan_id"],
+            job_id=job.get("id"), job_type=job.get("type"), attempt=job.get("attempts"),
+            workflow=job["scan_id"], stage=stage, correlation_id=job["batch_id"],
+            detail={"documents": total, "stage_execution_id": job["batch_id"]})
 
     def get_job(self, job_id: str) -> dict | None:
         with self._db.cursor() as cur:
@@ -10473,6 +10543,7 @@ class Store:
         for the later one. Both are REQUIRED keyword arguments, deliberately — an optional
         guard is one a future caller forgets, silently. Pinned by
         tests/test_outcome_claim_ownership.py."""
+        job = self.get_job(job_id)
         scrubbed = self._scrub_payload_secrets(job_id)
         with self._db.cursor() as cur:
             if scrubbed is not None:
@@ -10488,6 +10559,8 @@ class Store:
             won = (getattr(cur, "rowcount", 0) or 0) > 0
         if not won:
             print(f"[acp] complete_job: job {job_id} already terminal — zombie-worker no-op", flush=True)
+        else:
+            self._record_stage_completed_if_ready(job)
         return won
 
     def request_job_cancellation(self, job_id: str) -> bool:

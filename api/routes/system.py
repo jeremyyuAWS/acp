@@ -1580,7 +1580,7 @@ def _admin_activity_snapshot() -> dict:
         pressure = "busy"
     else:
         pressure = "healthy"
-    workflows = _workflow_rows(runs)
+    workflows = _workflow_rows(runs, lifecycle_events)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "runs": runs,
@@ -1627,7 +1627,7 @@ def _admin_activity_snapshot() -> dict:
     }
 
 
-def _workflow_rows(runs: list[dict]) -> list[dict]:
+def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None) -> list[dict]:
     """Turn stage aggregates into the durable workflow contract used by Live Ops.
 
     ``scan_id`` is already the parent identity stamped on every queue record in the pipeline.
@@ -1636,6 +1636,19 @@ def _workflow_rows(runs: list[dict]) -> list[dict]:
     one aggregate stage per scan; individual attempts remain inspectable in the stage detail.
     """
     grouped: dict[str, dict] = {}
+    durable_stages: dict[tuple[str, str], dict] = {}
+    for event in lifecycle_events or []:
+        if event.get("kind") not in ("job.stage_started", "job.stage_completed"):
+            continue
+        key = (str(event.get("scan_id") or ""), str(event.get("stage") or ""))
+        if not all(key):
+            continue
+        state = durable_stages.setdefault(key, {})
+        transition = "completed" if event["kind"] == "job.stage_completed" else "started"
+        previous = state.get(transition)
+        if not previous or (str(event.get("occurred_at") or ""), str(event.get("event_id") or "")) > \
+                (str(previous.get("occurred_at") or ""), str(previous.get("event_id") or "")):
+            state[transition] = event
     stage_order = {"discover": 0, "assess": 1, "remediate": 2, "release": 3}
     for run in runs:
         scan_id = str(run.get("scan_id") or "").strip()
@@ -1661,9 +1674,21 @@ def _workflow_rows(runs: list[dict]) -> list[dict]:
         stage_status = ("running" if int(run.get("running") or 0) else
                         "waiting" if int(run.get("queued") or 0) else
                         "failed" if int(run.get("failed") or 0) else "completed")
+        durable = durable_stages.get((scan_id, stage), {})
+        durable_start = durable.get("started") or {}
+        durable_completion = durable.get("completed") or {}
+        # A stage-completed event is the authoritative once-only transition for new executions.
+        # Queue aggregation remains the rolling-deploy fallback for jobs completed before the
+        # emitter existed, and continues to provide live document counts.
+        if durable_completion and stage_status == "completed":
+            completed_at = durable_completion.get("occurred_at")
+        else:
+            completed_at = run.get("updated_at") if stage_status == "completed" else None
         workflow["stages"].append({
             "stage": stage,
-            "stage_run_id": f"{scan_id}:{stage}",
+            "stage_run_id": (durable_completion.get("correlation_id")
+                             or durable_start.get("correlation_id")
+                             or f"{scan_id}:{stage}"),
             "attempt": max(1, int(run.get("max_attempts_seen") or 0)),
             "status": stage_status,
             "total": int(run.get("total") or 0),
@@ -1671,8 +1696,9 @@ def _workflow_rows(runs: list[dict]) -> list[dict]:
             "active": int(run.get("running") or 0),
             "waiting": int(run.get("queued") or 0),
             "failed": int(run.get("failed") or 0),
-            "started_at": run.get("started_at"),
-            "completed_at": run.get("updated_at") if stage_status == "completed" else None,
+            "started_at": durable_start.get("occurred_at") or run.get("started_at"),
+            "completed_at": completed_at,
+            "completion_recorded": bool(durable_completion),
             "latest_progress_at": run.get("updated_at"),
             "waiting_reason": None,
             "next_retry_at": None,
