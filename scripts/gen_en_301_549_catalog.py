@@ -40,9 +40,10 @@ voice and") and stray glyphs, because headings wrap and tables repeat their numb
 
 That the body extraction is sound was MEASURED rather than assumed, against a source already in
 this repo. EN clause 9.x.y.z is WCAG x.y.z, so the titles can be compared with
-config/wcag-2.2-aa.json: 44 match exactly, 5 differ only in this standard's house style ("Use of
-colour", "(pre-recorded)", sentence case), and 6 are WCAG 2.1 criteria WCAG 2.2 no longer carries.
-No truncation. tests/test_acr_en_301_549_catalog.py pins that comparison.
+config/wcag-2.2-aa.json, with case folded because this standard writes sentence case throughout
+where WCAG writes title case: 44 match, 5 differ by a real word ("Use of colour", "(pre-recorded)"),
+and 6 are WCAG 2.1 criteria WCAG 2.2 no longer carries. No truncation.
+tests/test_acr_en_301_549_catalog.py pins that comparison, and names the five.
 
   python scripts/gen_en_301_549_catalog.py            # regenerate (fetches)
   python scripts/gen_en_301_549_catalog.py --check    # CI: verify the committed catalog; no fetch
