@@ -31,7 +31,20 @@ describe('automationForecast', () => {
       finding({ hasProposal: false, proposals: [] }),
       finding({ rule_id: 'WCAG_1_3_3' }),
     ]
-    expect(automationForecast(rows, 5)).toEqual({ total: 3, candidates: 0, protected: 3, review: 0 })
+    expect(automationForecast(rows, 5)).toMatchObject({ total: 3, candidates: 0, protected: 3, review: 0 })
+  })
+
+  it('recalculates unique file impact for every routing bucket', () => {
+    const result = automationForecast([
+      finding({ file: 'a.docx' }),
+      finding({ file: 'a.docx' }),
+      finding({ file: 'b.docx', hasProposal: false, proposals: [] }),
+    ], 4)
+    expect(result).toMatchObject({
+      candidates: 2, candidateFiles: 1,
+      review: 0, reviewFiles: 0,
+      protected: 1, protectedFiles: 1,
+    })
   })
 
   it('partitions every finding into exactly one visible forecast tile', () => {

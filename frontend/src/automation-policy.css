@@ -17,14 +17,14 @@
 .automation-policy__selection span { display: block; color: var(--muted); font-size: 12px; }
 .automation-policy__slider { margin: 20px 4px 14px; }
 .automation-policy__slider input { width: 100%; accent-color: var(--focus-ring); cursor: pointer; }
-.automation-policy__ticks { display: grid; grid-template-columns: repeat(5, 1fr); margin-top: 5px; color: var(--muted); font-size: 11px; }
-.automation-policy__ticks span { text-align: center; }
-.automation-policy__ticks span:first-child { text-align: left; }
-.automation-policy__ticks span:last-child { text-align: right; }
+.automation-policy__ticks { position: relative; height: 14px; margin-top: 5px; color: var(--muted); font-size: 11px; }
+.automation-policy__ticks span { position: absolute; top: 0; white-space: nowrap; transform: translateX(-50%); }
+.automation-policy__ticks span:first-child { transform: none; }
+.automation-policy__ticks span:last-child { transform: translateX(-100%); }
 .automation-policy__forecast { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
 .automation-policy__forecast > div { padding: 11px 14px; border-right: 1px solid var(--line); }
 .automation-policy__forecast > div:last-child { border-right: 0; }
-.automation-policy__forecast b { display: block; font-size: 20px; }
+.automation-policy__forecast b { display: block; font-size: 16px; line-height: 1.25; }
 .automation-policy__forecast span { color: var(--muted); font-size: 12px; }
 .automation-policy__empty { margin: 12px 0 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); }
 .automation-policy__guardrail { margin: 10px 0 0; color: var(--muted); font-size: 12px; }

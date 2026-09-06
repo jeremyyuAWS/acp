@@ -3,6 +3,7 @@ import { AUTOMATION_LEVELS, DEFAULT_AUTOMATION_LEVEL, automationForecast, automa
 import './automation-policy.css'
 
 const storageKey = (runId) => `acp.remediation.automation-preview.${runId || 'current'}`
+const impact = (findings, files) => `${findings} ${findings === 1 ? 'finding' : 'findings'} across ${files} ${files === 1 ? 'file' : 'files'}`
 
 export default function AutomationPolicyControl({ findings = [], runId = null }) {
   const [level, setLevel] = useState(() => {
@@ -45,15 +46,16 @@ export default function AutomationPolicyControl({ findings = [], runId = null })
           aria-valuetext={`${selected.name}: ${selected.description}`}
         />
         <div className="automation-policy__ticks" aria-hidden="true">
-          {AUTOMATION_LEVELS.map((option) => <span key={option.value}>{option.name}</span>)}
+          {AUTOMATION_LEVELS.map((option, index) =>
+            <span key={option.value} style={{ left: `${index * 25}%` }}>{option.name}</span>)}
         </div>
       </div>
 
       {forecast.total > 0 ? (
         <div className="automation-policy__forecast" aria-live="polite">
-          <div><b>{forecast.candidates}</b><span>automation candidates</span></div>
-          <div><b>{forecast.review}</b><span>retained by this setting</span></div>
-          <div><b>{forecast.protected}</b><span>protected by safety rules</span></div>
+          <div><b>{impact(forecast.candidates, forecast.candidateFiles)}</b><span>eligible for automation</span></div>
+          <div><b>{impact(forecast.review, forecast.reviewFiles)}</b><span>kept for review by this setting</span></div>
+          <div><b>{impact(forecast.protected, forecast.protectedFiles)}</b><span>always protected by safety rules</span></div>
         </div>
       ) : (
         <p className="automation-policy__empty">No open review findings are available to preview for this run.</p>
