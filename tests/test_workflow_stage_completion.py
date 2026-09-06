@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 
 def _scan(store, sid="stage-scan", owner="owner@example.com"):
     store.init_scan_run(sid, "sharepoint", 2, "2026-09-05T12:00:00+00:00",
@@ -96,15 +98,16 @@ def test_release_jobs_use_the_release_stage(isolated_store):
 
 def test_discover_completion_projects_its_existing_finalize_once_fact(isolated_store):
     _scan(isolated_store)
+    completed_at = datetime.now(timezone.utc).isoformat()
     with isolated_store._db.cursor() as cur:
         isolated_store._db.execute(cur,
             "UPDATE scan_runs SET discovered_at=%s WHERE id=%s",
-            ("2026-09-05T12:03:00+00:00", "stage-scan"))
+            (completed_at, "stage-scan"))
 
     events = isolated_store.list_workflow_stage_events()
     discover = [event for event in events if event.get("stage") == "discover"]
     assert [event["kind"] for event in discover] == ["job.stage_started", "job.stage_completed"]
-    assert discover[1]["occurred_at"] == "2026-09-05T12:03:00+00:00"
+    assert discover[1]["occurred_at"] == completed_at
     assert discover[1]["detail"] == {"documents": 2}
 
 
