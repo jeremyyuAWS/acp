@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import CollapsibleSection from './CollapsibleSection.jsx'
 import { getLiveOpsCosts } from './api.js'
 
 export function money(value, digits = 2) {
@@ -31,12 +32,13 @@ export default function LiveOpsCostSummary() {
   if (!costs) return <section className="panel muted" style={{ padding: 12, marginBottom: 12 }}>Loading cost transparency…</section>
 
   const estimated = costs.estimated_hourly_usd != null
-  return <section className="panel" aria-label="Azure cost transparency" style={{ padding: 12, marginBottom: 12 }}>
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', gap: 12, flexWrap: 'wrap' }}>
-      <div><b>Cost transparency</b>
-        <div className="muted" style={{ fontSize: 12 }}>{estimated ? costs.estimate_label : 'No infrastructure cost has been calculated'}</div></div>
+  return <CollapsibleSection id="cost" label="Azure cost transparency"
+    summary={<span style={{ display: 'inline-flex', justifyContent: 'space-between', alignItems: 'start',
+      gap: 12, flexWrap: 'wrap', width: 'calc(100% - 18px)' }}>
+      <span><b>Cost transparency</b>
+        <span className="muted" style={{ display: 'block', fontSize: 12 }}>{estimated ? costs.estimate_label : 'No infrastructure cost has been calculated'}</span></span>
       <span className="chip">{estimated ? 'Estimated' : 'Not reported'} · {age(costs.measured_at)}</span>
-    </div>
+    </span>}>
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 10, marginTop: 10 }}>
       <div><span className="muted" style={{ fontSize: 11 }}>CURRENT CAPACITY / HOUR</span><br /><b style={{ fontSize: 20 }}>{money(costs.estimated_hourly_usd, 4)}</b></div>
       <div><span className="muted" style={{ fontSize: 11 }}>PROJECTED / DAY</span><br /><b style={{ fontSize: 20 }}>{money(costs.estimated_daily_usd)}</b></div>
@@ -55,5 +57,5 @@ export default function LiveOpsCostSummary() {
     <div className="muted" style={{ fontSize: 11, marginTop: 9 }}>
       Estimates use running replica allocation and an explicit rate card. They are not invoices; billing actuals are shown separately because Azure Cost Management is delayed.
     </div>
-  </section>
+  </CollapsibleSection>
 }

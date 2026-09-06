@@ -15,7 +15,7 @@ import {
   formatDuration, secondsSince,
   REPLICA_STATES, gaugeModel, metricGroups, nodeTypeLabel, outputModel, provenance, queueModel,
   THROUGHPUT_SERIES, replicaLifecycle, reported, requestHealth, saturationModel, scaleEvents,
-  scaleExplanation, throughputModel, tracingModel, workerJobHealth,
+  replicaJobLoad, scaleExplanation, throughputModel, tracingModel, workerJobHealth,
   revisionLabel, runModel, seriesForMetric, sourceModel, tenantConcentration, trendMarkers,
   updatedAgo,
 } from './liveOpsDrawer.js'
@@ -110,7 +110,7 @@ function LiveHeader({ name, kind, state, connection, generatedAt, revision, nowM
 
 /* ─────────────── B. Primary operational visualization ─────────────── */
 
-function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queueDepth }) {
+function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queueDepth, placement }) {
   if (!gauge.available) {
     return <div style={{ ...PANEL, padding: 14 }} role="status">
       <b>Worker utilization unavailable</b>
@@ -171,6 +171,7 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queu
     <ScalingActivity capacity={capacity} saturation={saturation} queueDepth={queueDepth}
       lifecycle={replicaLifecycle(capacity, service)} nowMs={nowMs} />
     <JobHealth health={health} />
+    <ReplicaJobLoad load={placement} />
     <ProvisioningTimeline timeline={provisioningTimeline(replicaLifecycle(capacity, service))} />
     <ReplicaLifecycle lifecycle={replicaLifecycle(capacity, service)} nowMs={nowMs}
       measuredAt={capacity?.measured_at} />
@@ -900,6 +901,64 @@ function JobHealth({ health }) {
     </ul>}
     {health.attributionReason && <p className="muted" style={{ fontSize: 11, margin: '8px 0 0' }}>
       {health.attributionReason}
+    </p>}
+  </section>
+}
+
+/**
+ * Which replica is holding which jobs — from ACP's own claim rows, at stream freshness.
+ *
+ * Azure's replica list and ACP's claims are shown against each other rather than merged, because
+ * the disagreements are the point: a listed replica with no claim is genuinely idle, and a
+ * replica holding claims that Azure no longer lists is draining with work still on it.
+ *
+ * No filename, owner or payload — replica, count, job type and claim age. `Current work` above
+ * carries the per-file detail; this answers "where", not "what document".
+ */
+function ReplicaJobLoad({ load }) {
+  if (!load) return null
+  if (!load.available) {
+    return <section aria-label="Per-replica job placement" style={{ marginTop: 12 }}>
+      <b style={{ fontSize: 13 }}>Job placement</b>
+      <p className="muted" style={{ fontSize: 12, margin: '6px 0 0' }}>{load.reason}</p>
+    </section>
+  }
+  return <section aria-label="Per-replica job placement" style={{ marginTop: 12 }}>
+    <b style={{ fontSize: 13 }}>Job placement</b>
+    {load.rows.length === 0
+      ? <p className="muted" style={{ fontSize: 12, margin: '6px 0 0' }}>
+        No replica of this service is holding a job right now.
+      </p>
+      : <ul style={{ listStyle: 'none', margin: '7px 0 0', padding: 0, display: 'grid', gap: 6 }}>
+        {load.rows.map((row) => <li key={row.replicaId} style={{ ...PANEL, padding: 9, fontSize: 12 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+            <code style={{ overflowWrap: 'anywhere' }}>{row.replicaId}</code>
+            <span style={{ whiteSpace: 'nowrap' }}>
+              {row.running} job{row.running === 1 ? '' : 's'}
+            </span>
+          </div>
+          <div className="muted" style={{ fontSize: 11, marginTop: 3, overflowWrap: 'anywhere' }}>
+            {row.jobTypes.map(([kind, count]) => `${String(kind).replaceAll('_', ' ')} ${count}`).join(' · ')
+              || 'job type not reported'}
+            {' · '}
+            {row.processes == null ? 'processes not reported'
+              : `${row.processes} process${row.processes === 1 ? '' : 'es'}`}
+            {' · '}
+            {row.oldestClaimS == null ? 'oldest claim not reported'
+              : `oldest claim ${formatDuration(row.oldestClaimS)}`}
+          </div>
+          {row.listedByAzure === false && <div style={{ fontSize: 11, marginTop: 3, color: TONE.warn }}>
+            <span aria-hidden="true">▲</span> Holding work but not in the Azure replica list — draining, or read mid-rollout
+          </div>}
+        </li>)}
+      </ul>}
+    {!!load.idle.length && <p className="muted" style={{ fontSize: 11, margin: '8px 0 0', overflowWrap: 'anywhere' }}>
+      Idle, no job claimed: {load.idle.join(', ')}
+    </p>}
+    {!!load.unattributed && <p className="muted" style={{ fontSize: 11, margin: '6px 0 0' }}>
+      {load.unattributed} running job{load.unattributed === 1 ? '' : 's'} fleet-wide
+      {' '}carr{load.unattributed === 1 ? 'ies' : 'y'} a worker id from before replica
+      {' '}attribution and cannot be placed.
     </p>}
   </section>
 }
@@ -1884,6 +1943,7 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
       saturation={saturationModel(node.service, serviceCapacity, { samples: shown.samples,
         queueDepth: snapshot?.summary?.by_stage?.[node.service?.stage]?.queued })}
       health={workerJobHealth(snapshot, node.service?.stage, { nowMs })}
+      placement={replicaJobLoad(snapshot, node.service, serviceCapacity)}
       queueDepth={snapshot?.summary?.by_stage?.[node.service?.stage]?.queued} />
   } else if (node?.kind === 'queue') {
     primary = <><QueueBar queue={queueModel(snapshot?.summary, { nowMs })} nowMs={nowMs}

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import * as api from './api.js'
+import CollapsibleSection from './CollapsibleSection.jsx'
 
 export default function LiveOpsAiSummary() {
   const [data, setData] = useState(null)
@@ -25,13 +26,13 @@ export default function LiveOpsAiSummary() {
   const second = (today.by_surface || []).find((x) => x.key === 'assessment_second_opinion')
   const providers = Object.values(data.health?.providers || {})
   const errors = providers.reduce((n, p) => n + Number(p.errors || 0), 0)
-  return <section className="panel" aria-label="Live AI operations" style={{ padding: 12, marginBottom: 12 }}>
-    <div><b>AI operations</b><div className="muted" style={{ fontSize: 12 }}>Measured provider activity from the shared AI call ledger</div></div>
+  return <CollapsibleSection id="ai" label="Live AI operations"
+    summary={<span><b>AI operations</b><span className="muted" style={{ display: 'block', fontSize: 12 }}>Measured provider activity from the shared AI call ledger</span></span>}>
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 10, marginTop: 10 }}>
       <div><span className="muted" style={{ fontSize: 11 }}>TODAY</span><br /><b>{today.calls || 0} calls</b></div>
       <div><span className="muted" style={{ fontSize: 11 }}>SECOND OPINIONS</span><br /><b>{second?.calls || 0} calls</b></div>
       <div><span className="muted" style={{ fontSize: 11 }}>MEASURED AI COST</span><br /><b>${Number(today.cost_usd || 0).toFixed(4)}</b></div>
       <div><span className="muted" style={{ fontSize: 11 }}>PROVIDER HEALTH</span><br /><b>{providers.length ? `${errors} errors / 24h` : 'Not reported'}</b></div>
     </div>
-  </section>
+  </CollapsibleSection>
 }

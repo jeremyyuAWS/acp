@@ -505,10 +505,10 @@ export const PRODUCED_ERROR_CLASSES = ['rate_limit', 'auth', 'corrupt', 'transie
  * and one claimed at boot are both "running", and only the claim instant separates them. A queued
  * job has no runtime and is given none.
  *
- * ATTRIBUTION IS TO A SERVICE, NEVER TO A REPLICA. ACP does not record which replica ran a job —
- * the registry that would carry it has no writer — so this cannot say "replica r2 is working on
- * X", and the snapshot's own `worker_instance_attribution` block says so rather than leaving a
- * reader to assume the join exists.
+ * ATTRIBUTION HERE IS TO A SERVICE, NOT TO A REPLICA — but that is now a property of THIS model,
+ * not a limit of the data. `locked_by` carries the replica (see replicaJobLoad); what this
+ * function reads is the per-run `current_*` fields, which name a file and are therefore kept to
+ * the service level. Per-replica placement lives in replicaJobLoad, which carries no filenames.
  */
 export function workerJobHealth(snapshot = {}, stage, { nowMs = Date.now() } = {}) {
   const runs = (snapshot?.runs || []).filter((run) => run.stage === stage)
@@ -533,6 +533,63 @@ export function workerJobHealth(snapshot = {}, stage, { nowMs = Date.now() } = {
     retrying: runs.some((run) => (num(run.max_attempts_seen) || 0) > 0),
     perReplica: attribution?.available === true,
     attributionReason: attribution?.available === false ? attribution.reason : null,
+  }
+}
+
+/** Service stage names and worker role names differ by one word; this is the only mapping. */
+const STAGE_ROLE = { discover: 'discovery', assess: 'assess', remediate: 'remediate' }
+
+/**
+ * Which replica of this service is holding which jobs, right now.
+ *
+ * THIS USED TO BE DECLARED IMPOSSIBLE, and the declaration outlived the reason. `locked_by` now
+ * carries the Container Apps replica name — `<role>:<replica>:<proc>:w<n>`, minted by
+ * core.worker_process_instance_id — so the attribution comes from ACP's own claim rows and
+ * arrives on the 2s activity stream, not from Azure and not on the 30s capacity cache.
+ *
+ * The two sides are CROSS-REFERENCED rather than merged, because their disagreements are the
+ * interesting part:
+ *
+ *   * a replica Azure lists that holds no claim is IDLE — real spare capacity, and the thing to
+ *     look at before scaling out;
+ *   * a replica holding claims that Azure does not list is UNLISTED — either terminating with
+ *     work still on it, or a reading taken across a rollout. Either way it is worth seeing, and
+ *     silently dropping it would hide a job that has nowhere to finish.
+ *
+ * Jobs whose `locked_by` predates the replica prefix are counted, never placed: `unattributed`
+ * is a number on the panel, not a replica row with a made-up name.
+ */
+export function replicaJobLoad(snapshot = {}, service = {}, capacity = null) {
+  const block = snapshot?.summary?.job_attribution || null
+  if (!block || block.available !== true) {
+    return { available: false, rows: [], idle: [], unlisted: [], unattributed: null,
+      reason: block?.reason
+        || 'This deployment does not report which replica is running each job.' }
+  }
+  const role = STAGE_ROLE[service?.stage] || service?.stage || service?.role
+  const mine = (block.replicas || []).filter((row) => (row.roles || []).includes(role))
+  const azureNames = capacityMatchesService(capacity, service)
+    ? (capacity?.replicas || []).map((replica) => replica?.name).filter(Boolean)
+    : []
+  const holding = new Set(mine.map((row) => row.replica_id))
+  return {
+    available: true,
+    reason: null,
+    rows: mine.map((row) => ({
+      replicaId: row.replica_id,
+      running: num(row.running),
+      processes: num(row.processes),
+      oldestClaimS: row.oldest_claim_age_s == null ? null : num(row.oldest_claim_age_s),
+      // Sorted by count so the panel's first line is what this replica is mostly doing.
+      jobTypes: Object.entries(row.job_types || {}).sort((a, b) => b[1] - a[1]),
+      listedByAzure: azureNames.length ? azureNames.includes(row.replica_id) : null,
+    })),
+    idle: azureNames.filter((name) => !holding.has(name)),
+    unlisted: azureNames.length
+      ? mine.filter((row) => !azureNames.includes(row.replica_id)).map((row) => row.replica_id)
+      : [],
+    // Fleet-wide, not per role: a job nobody can place is not any one service's to own.
+    unattributed: block.unattributed == null ? null : num(block.unattributed),
   }
 }
 

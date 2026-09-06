@@ -13,8 +13,7 @@ import {
   LATENCY_PERCENTILES_NOTE, replicaLifecycle, reported, requestHealth, revisionLabel, runModel,
   sampleForNode, saturationModel, scaleEvents, tracingModel,
   scaleExplanation, secondsSince, seriesForMetric, sourceModel, tenantConcentration, throughputModel,
-  trendMarkers, updatedAgo, workerJobHealth,
-} from './liveOpsDrawer.js'
+  replicaJobLoad, trendMarkers, updatedAgo, workerJobHealth } from './liveOpsDrawer.js'
 
 const NOW = Date.parse('2026-09-04T14:32:00Z')
 const iso = (offsetS) => new Date(NOW + offsetS * 1000).toISOString()
@@ -2289,5 +2288,90 @@ describe('outputPipeline', () => {
 
   it('keeps the stages in production order', () => {
     expect(OUTPUT_STAGES.map((s) => s.key)).toEqual(['remediate', 'release'])
+  })
+})
+
+describe('replicaJobLoad', () => {
+  // Live Operations declared this impossible — "ACP does not record which replica ran a job".
+  // `locked_by` now carries the Container Apps replica name, so the backend can answer it from
+  // ACP's own claim rows at stream freshness. These pin what the drawer is allowed to say.
+  const SERVICE = { stage: 'assess', role: 'assess' }
+  const CAPACITY = {
+    worker_app_name: 'acp-assess',
+    replicas: [{ name: 'rep-a' }, { name: 'rep-b' }, { name: 'rep-idle' }],
+  }
+  const snap = (block) => ({ summary: { job_attribution: block } })
+
+  const BLOCK = {
+    available: true, attributed: 4, unattributed: 2,
+    replicas: [
+      { replica_id: 'rep-a', roles: ['assess'], running: 3, processes: 2,
+        oldest_claim_age_s: 900, job_types: { extract_text: 1, assess_file: 2 } },
+      { replica_id: 'rep-b', roles: ['assess'], running: 1, processes: 1,
+        oldest_claim_age_s: 12, job_types: { assess_file: 1 } },
+      { replica_id: 'rep-disc', roles: ['discovery'], running: 5, processes: 1,
+        oldest_claim_age_s: 4, job_types: { discover_folder: 5 } },
+    ],
+  }
+
+  it('places this service\'s jobs on named replicas', () => {
+    const load = replicaJobLoad(snap(BLOCK), SERVICE, CAPACITY)
+    expect(load.available).toBe(true)
+    expect(load.rows.map((row) => row.replicaId)).toEqual(['rep-a', 'rep-b'])
+    expect(load.rows[0].running).toBe(3)
+    expect(load.rows[0].processes).toBe(2)
+    expect(load.rows[0].oldestClaimS).toBe(900)
+    // Sorted by count, so the first line says what the replica is mostly doing.
+    expect(load.rows[0].jobTypes).toEqual([['assess_file', 2], ['extract_text', 1]])
+  })
+
+  it('filters to this service, mapping the discover stage onto the discovery role', () => {
+    // The stage is `discover` and the worker role is `discovery`; getting that mapping wrong
+    // shows an empty panel on a service that is plainly busy.
+    const discovery = replicaJobLoad(snap(BLOCK), { stage: 'discover', role: 'discovery' },
+      { worker_app_name: 'acp-discovery', replicas: [{ name: 'rep-disc' }] })
+    expect(discovery.rows.map((row) => row.replicaId)).toEqual(['rep-disc'])
+    expect(replicaJobLoad(snap(BLOCK), SERVICE, CAPACITY).rows
+      .some((row) => row.replicaId === 'rep-disc')).toBe(false)
+  })
+
+  it('names the replicas Azure lists that hold no claim', () => {
+    // This is the number that decides whether scaling out would help, so it is not inferred
+    // from a count — it is the set difference of two lists.
+    expect(replicaJobLoad(snap(BLOCK), SERVICE, CAPACITY).idle).toEqual(['rep-idle'])
+  })
+
+  it('flags a replica holding work that Azure no longer lists', () => {
+    const load = replicaJobLoad(snap(BLOCK), SERVICE,
+      { worker_app_name: 'acp-assess', replicas: [{ name: 'rep-a' }] })
+    expect(load.unlisted).toEqual(['rep-b'])
+    expect(load.rows.find((row) => row.replicaId === 'rep-b').listedByAzure).toBe(false)
+    expect(load.rows.find((row) => row.replicaId === 'rep-a').listedByAzure).toBe(true)
+  })
+
+  it('does not claim a replica is unlisted when Azure listed nothing', () => {
+    // No Azure reading is not the same as Azure saying the replica is gone. null, not false.
+    const load = replicaJobLoad(snap(BLOCK), SERVICE, null)
+    expect(load.unlisted).toEqual([])
+    expect(load.idle).toEqual([])
+    expect(load.rows.every((row) => row.listedByAzure === null)).toBe(true)
+  })
+
+  it('carries the unplaceable count without inventing a replica for it', () => {
+    const load = replicaJobLoad(snap(BLOCK), SERVICE, CAPACITY)
+    expect(load.unattributed).toBe(2)
+    expect(load.rows.map((row) => row.replicaId)).not.toContain('w0')
+  })
+
+  it('is unavailable, with a reason, when the deployment does not report it', () => {
+    const off = replicaJobLoad(snap({ available: false, reason: 'Store unreadable.' }), SERVICE, CAPACITY)
+    expect(off.available).toBe(false)
+    expect(off.reason).toBe('Store unreadable.')
+    expect(off.rows).toEqual([])
+    expect(off.unattributed).toBe(null)
+
+    const absent = replicaJobLoad({}, SERVICE, CAPACITY)
+    expect(absent.available).toBe(false)
+    expect(absent.reason).toMatch(/does not report/i)
   })
 })

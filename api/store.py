@@ -90,6 +90,48 @@ def _parse_worker_tier_heartbeat(raw: str) -> tuple[str, int | None, str | None]
     return iso, pool_size, version
 
 
+def parse_worker_id(worker_id) -> tuple[str, str, str] | None:
+    """Split a `locked_by` value into (role, replica, proc), or None if it does not name one.
+
+    The format is minted by core.worker_process_instance_id as `<role>:<replica>:<proc>:w<n>`,
+    where `<replica>` is the Container Apps replica name (joblog.REPLICA). Only that exact shape
+    is parsed. Two other shapes exist in the wild and are deliberately REFUSED rather than
+    coerced:
+
+      * `w0` / `w1` — the pre-2026-09-05 per-process sequence. Every replica minted the same
+        handful, so reading one as a replica name would report ten replicas as one.
+      * `worker-<hex>` — JobWorker's own default, used by tests and any embedded caller that
+        does not pass a worker_id. It is unique but says nothing about where it runs.
+
+    Returning None for both is what lets the caller COUNT them as unattributed instead of
+    naming a replica that does not exist.
+    """
+    if not isinstance(worker_id, str):
+        return None
+    parts = worker_id.split(":")
+    if len(parts) != 4:
+        return None
+    role, replica, proc, slot = (part.strip() for part in parts)
+    if not (role and replica and proc and slot):
+        return None
+    return role, replica, proc
+
+
+def _iso_age_seconds(value, now) -> int | None:
+    """Seconds between an ISO-8601 timestamp and `now`, or None. Never raises, and never
+    returns a fabricated 0 for a value it could not read."""
+    if not value:
+        return None
+    try:
+        from datetime import datetime as _dt, timezone as _tz  # noqa: PLC0415
+        stamp = _dt.fromisoformat(str(value).replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=_tz.utc)
+        return max(0, int((now - stamp).total_seconds()))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _issue_location(i: dict) -> str | None:
     """Where a finding is, from either of the two keys detectors use for it.
 
@@ -12101,6 +12143,72 @@ class Store:
                 "WHERE j.status IN ('queued','running') AND sr.id IS NULL")
             row = self._db.fetchone(cur) or {}
         return int(row.get("n") or 0)
+
+    def running_jobs_by_replica(self, *, now=None) -> dict:
+        """Which replica is running each in-flight job, read from `locked_by`.
+
+        WHY THIS IS ANSWERABLE WITHOUT AZURE. `locked_by` is `<role>:<replica>:<proc>:w<n>`
+        (core.worker_process_instance_id), and `<replica>` resolves through joblog.REPLICA to
+        CONTAINER_APP_REPLICA_NAME — the same string Azure returns as a replica's `name` from
+        list_replicas. The join Live Operations wanted is therefore already written on every
+        claim, at claim time, in this database: no Azure call, no inference, and fresh at the
+        2s cadence of the activity stream rather than the 30s Azure cache.
+
+        WHAT IS NOT ATTRIBUTED, AND WHY IT IS COUNTED RATHER THAN GUESSED. Ids minted before the
+        replica prefix landed are bare `w0`/`w1`, and JobWorker's own default is `worker-<hex>`.
+        Neither names a replica. Splitting them anyway would produce a replica called "w0" on
+        every host — exactly the collision the prefix was added to remove — so they are counted
+        as `unattributed` and named nowhere.
+
+        Claim age is from `claimed_at`, not `locked_at`: touch_job rewrites `locked_at` on every
+        heartbeat, so a job claimed an hour ago and one claimed a second ago have the same
+        `locked_at`. Rows written before v16 have no `claimed_at` and contribute no age rather
+        than a fabricated one.
+
+        NO PAYLOAD, FILENAME, OWNER OR ERROR TEXT — job type and claim age only. This lands on a
+        live operations screen, and a running job's payload names a customer document.
+        """
+        try:
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "SELECT locked_by, type, claimed_at FROM jobs WHERE status='running'")
+                rows = self._db.fetchall(cur)
+        except Exception:
+            # An unavailable store is unavailable, never an empty fleet: `available` False is
+            # what the drawer renders as "not measured", and 0 replicas would render as idle.
+            return {"available": False, "replicas": [], "attributed": None, "unattributed": None,
+                    "reason": "The job store could not be read, so replica attribution is unavailable."}
+        from datetime import datetime, timezone  # noqa: PLC0415
+        # Injectable so a test can pin claim ages against fixed timestamps; wall clock otherwise.
+        now = now or datetime.now(timezone.utc)
+        by_replica: dict[str, dict] = {}
+        attributed = unattributed = 0
+        for row in rows:
+            parsed = parse_worker_id(row.get("locked_by"))
+            if parsed is None:
+                unattributed += 1
+                continue
+            attributed += 1
+            role, replica, proc = parsed
+            entry = by_replica.setdefault(replica, {
+                "replica_id": replica, "roles": set(), "processes": set(),
+                "running": 0, "job_types": {}, "oldest_claim_age_s": None})
+            entry["roles"].add(role)
+            entry["processes"].add(proc)
+            entry["running"] += 1
+            kind = (row.get("type") or "unknown")
+            entry["job_types"][kind] = entry["job_types"].get(kind, 0) + 1
+            age = _iso_age_seconds(row.get("claimed_at"), now)
+            if age is not None and (entry["oldest_claim_age_s"] is None
+                                    or age > entry["oldest_claim_age_s"]):
+                entry["oldest_claim_age_s"] = age
+        replicas = [{**entry, "roles": sorted(entry["roles"]),
+                     "processes": len(entry["processes"])}
+                    for entry in by_replica.values()]
+        replicas.sort(key=lambda r: (-r["running"], r["replica_id"]))
+        return {"available": True, "replicas": replicas,
+                "attributed": attributed, "unattributed": unattributed,
+                "reason": None}
 
     def list_scan_jobs_of_type(self, scan_id: str, job_type: str) -> list[dict]:
         """Every job of one type already enqueued for one scan, whatever its status.
