@@ -660,8 +660,10 @@ export default function RemediationInbox({
   const filterKey = `acp.remediate.filters.${scanId || 'current'}`
   const [priorityFilter, setPriorityFilter] = useState(() => readSession(`${filterKey}.priority`, 'all'))
   const [formatFilter, setFormatFilter] = useState(() => readSession(`${filterKey}.format`, 'all'))
+  const [sourceFilter, setSourceFilter] = useState(() => readSession(`${filterKey}.source`, 'all'))
   useEffect(() => { writeSession(`${filterKey}.priority`, priorityFilter) }, [filterKey, priorityFilter])
   useEffect(() => { writeSession(`${filterKey}.format`, formatFilter) }, [filterKey, formatFilter])
+  useEffect(() => { writeSession(`${filterKey}.source`, sourceFilter) }, [filterKey, sourceFilter])
   const [collapsed, setCollapsed] = useState({}) // file -> true when a document group is collapsed
   const [drafts, setDrafts] = useState({}) // finding id -> reviewer-edited proposed value (null until edited)
   const [assignedOnly, setAssignedOnly] = useState(false) // "Assigned to me" filter — files whose assignee is myEmail
@@ -721,9 +723,10 @@ export default function RemediationInbox({
       (!assignedOnly || assignedToMe(f)) &&
       (priorityFilter === 'all' || String(f.severity || 'unrated').toLowerCase() === priorityFilter) &&
       (formatFilter === 'all' || fmtOf(f.file) === formatFilter) &&
+      (sourceFilter === 'all' || (sourceFilter === 'ai' ? !!f.hasProposal : !f.hasProposal)) &&
       (!q || rowModel(f, decisions).issue.toLowerCase().includes(q) || String(f.file).toLowerCase().includes(q)))
     return sortQueue(filtered, sort)
-  }, [queue, tab, sort, search, decisions, assignedOnly, assignees, myEmail, priorityFilter, formatFilter]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [queue, tab, sort, search, decisions, assignedOnly, assignees, myEmail, priorityFilter, formatFilter, sourceFilter]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Bold bulk work is scoped to what the reviewer can currently see and explain. It never reaches
   // manual, blocked, handed-off or already-decided findings, and every target keeps its own proposal.
@@ -1024,8 +1027,13 @@ export default function RemediationInbox({
               <option value="all">All formats</option><option value="docx">DOCX</option><option value="pdf">PDF</option>
               <option value="pptx">PPTX</option><option value="xlsx">XLSX</option>
             </select>
-            {(priorityFilter !== 'all' || formatFilter !== 'all') && (
-              <button className="linklike" onClick={() => { setPriorityFilter('all'); setFormatFilter('all') }}>Clear filters</button>
+            <select value={sourceFilter} onChange={(e) => setSourceFilter(e.target.value)} aria-label="Filter by fix source">
+              <option value="all">All fix sources</option>
+              <option value="ai">AI-assisted drafts</option>
+              <option value="other">Automatic &amp; manual</option>
+            </select>
+            {(priorityFilter !== 'all' || formatFilter !== 'all' || sourceFilter !== 'all') && (
+              <button className="linklike" onClick={() => { setPriorityFilter('all'); setFormatFilter('all'); setSourceFilter('all') }}>Clear filters</button>
             )}
             <details className="remediation-shortcuts">
               <summary>Keyboard help</summary>
@@ -1082,8 +1090,8 @@ export default function RemediationInbox({
                 ? <><b style={{ color: 'var(--ink)' }}>All review items are complete.</b><p style={{ margin: '6px 0 0' }}>{prog.resolved} resolved · {counts.completed || 0} completed</p></>
                 : search.trim()
                 ? <>No findings match “{displayText(search.trim())}”. <button className="linklike" onClick={() => setSearch('')}>Clear search</button></>
-                : priorityFilter !== 'all' || formatFilter !== 'all'
-                ? <>No findings match these filters. <button className="linklike" onClick={() => { setPriorityFilter('all'); setFormatFilter('all') }}>Clear filters</button></>
+                : priorityFilter !== 'all' || formatFilter !== 'all' || sourceFilter !== 'all'
+                ? <>No findings match these filters. <button className="linklike" onClick={() => { setPriorityFilter('all'); setFormatFilter('all'); setSourceFilter('all') }}>Clear filters</button></>
                 : assignedOnly
                 ? <>Nothing in this view is assigned to you. <button className="linklike" onClick={() => setAssignedOnly(false)}>Show all</button></>
                 : <>No items in {WORKFLOW_LABELS[tab]}. {tab !== 'needs-review' && <button className="linklike" onClick={() => setTab('needs-review')}>Review AI suggestions</button>}</>}

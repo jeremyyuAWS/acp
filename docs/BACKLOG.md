@@ -662,6 +662,21 @@ thing the PRD does not mention.
   ceiling. Assessment calls feed the existing `ai_calls` ledger and therefore the shipped provider
   health, latency, failure and measured-spend views. No provider response text is persisted.
 
+- [ ] **P4.11 — Evidence-gated stronger-model rollout for Remediate.** Keep stronger LLMs inside
+  the existing Remediate workflow rather than adding another top-level stage. The Review & Approve
+  inbox can isolate AI-assisted drafts; provider credentials, routing, residency and budgets remain
+  owner-only controls in Settings → AI Governance. Before any broader enablement, run each candidate
+  in shadow mode against production-like documents and publish criterion-level acceptance, reviewer
+  edit rate, post-write validation, regression, refusal, latency and measured-cost results. Enable a
+  model only for criteria where it beats the current lane, and retain human approval until the
+  autonomous-action precision and critical-safety gates pass.
+
+  Add an administrator model-quality view (acceptance/edit/fallback/failure/latency/spend), carry
+  provider/model/zone/evidence into Release and Conformance provenance, and reconcile ADR 0019 plus
+  provider-module comments with the now-shipped Claude text path and six vision adapters. Production
+  stays local-only by default; an environment credential must not silently override an explicit
+  stored governance choice.
+
 ### From the PRD, deliberately not scheduled
 
 - **North-star framing.** "Maximise AVRR while minimising HER" puts autonomy in the numerator and

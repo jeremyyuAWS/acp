@@ -454,6 +454,29 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(btnByText('Show all')).toBeTruthy()
   })
 
+  it('isolates AI-assisted drafts without creating another workflow tab', async () => {
+    await render({ queue: QUEUE, decisions: {} })
+    const select = container.querySelector('select[aria-label="Filter by fix source"]')
+    expect(select).toBeTruthy()
+    const setValue = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set
+    await act(async () => { setValue.call(select, 'ai'); select.dispatchEvent(new Event('change', { bubbles: true })) })
+    const rows = [...container.querySelectorAll('.rinbox-row')]
+    expect(rows).toHaveLength(1)
+    expect(rows[0].textContent).toContain('Image needs alt text')
+    expect(rows[0].textContent).not.toContain('Heading contrast is too low')
+    expect(sessionStorage.getItem('acp.remediate.filters.current.source')).toBe('ai')
+  })
+
+  it('keeps automatic and manual work available as the complementary fix-source view', async () => {
+    await render({ queue: QUEUE, decisions: {} })
+    const select = container.querySelector('select[aria-label="Filter by fix source"]')
+    const setValue = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set
+    await act(async () => { setValue.call(select, 'other'); select.dispatchEvent(new Event('change', { bubbles: true })) })
+    const text = [...container.querySelectorAll('.rinbox-row')].map((row) => row.textContent).join(' ')
+    expect(text).toContain('Heading contrast is too low')
+    expect(text).not.toContain('Image needs alt text')
+  })
+
   // ── Keyboard + screen-reader accessibility of the review queue ──
   const liveRegion = () => container.querySelector('[aria-live="polite"]')
   const queueList = () => container.querySelector('[aria-label^="Findings"]')
