@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import ScopeBanner from './ScopeBanner.jsx'
 import { documentSelection, documentScopeSentence } from './remediableScope.js'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
@@ -36,6 +36,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [builderOpen, setBuilderOpen] = useState(false)
   const [deliveryMethod, setDeliveryMethod] = useState('publish')
   const [selectedFiles, setSelectedFiles] = useState(() => new Set())
+  const builderRef = useRef(null)
   const [sel, setSel] = useState(null)
   // Why is the publish queue empty? A remediated file only becomes certifiable once its
   // human-review findings are approved. Fetch the pending HITL queue so the empty state can
@@ -311,6 +312,13 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       setManifestError(e?.message || 'The release manifest could not be downloaded.')
     }
   }
+  const startRelease = () => {
+    setBuilderOpen(false)
+    window.requestAnimationFrame(() => {
+      builderRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      builderRef.current?.focus({ preventScroll: true })
+    })
+  }
 
   return (
     <>
@@ -330,7 +338,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           </div>
           <div className="release-overview__actions">
             <button className="ghost" onClick={() => run?.id && openReport(run.id)}>Download report</button>
-            <button className="qbtn approve" disabled={!selectableReady.length} onClick={() => setBuilderOpen(true)}>Start a release</button>
+            <button className="qbtn approve" disabled={!selectableReady.length} onClick={startRelease}>Start a release</button>
           </div>
         </div>
         <div className="release-metrics" aria-label="Release status overview">
@@ -345,7 +353,12 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           automated checks verify WITHIN the selected scope; they cannot certify overall WCAG
           conformance. The estate score and "certifiable/conformant" language are gone for exactly
           that reason, and the PDF is a secondary evidence artifact, not the headline. */}
-      <section className="panel" style={{ borderLeft: '4px solid var(--success-fg)' }}>
+      <details className="panel release-record" style={{ borderLeft: '4px solid var(--success-fg)' }}>
+        <summary className="release-record__summary">
+          <span><b>Release details and evidence</b><small>{orgLabel} · WCAG 2.1 Level AA · {reportDate}</small></span>
+          <span>{ready.length} ready · {pubStarted ? publishedCount : 0} released</span>
+        </summary>
+        <div className="release-record__body">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 18, flexWrap: 'wrap' }}>
           <div style={{ flex: '1 1 340px' }}>
             <h2 style={{ margin: 0 }}>🚀 Release Center</h2>
@@ -378,7 +391,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           </div>}
         </div>
         <div className="sr-only" aria-live="polite">{releaseAnnouncement}</div>
-      </section>
+        </div>
+      </details>
 
       {/* W5 — conditional-release → full-certification graduation. Shown only once a release has
           started (setStatus is NONE before that, and this renders nothing). */}
@@ -456,9 +470,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         </div>
       </details>
 
-      <section className="panel">
+      <section className="panel release-workspace" ref={builderRef} tabIndex={-1} aria-labelledby="release-workspace-title">
         <div className="rubrichdr">
-          <h2 style={{ margin: 0 }}>Choose files <span className="muted">· {selectedReady.length} of {selectableReady.length} selected</span></h2>
+          <h2 id="release-workspace-title" style={{ margin: 0 }}>Choose files <span className="muted">· {selectedReady.length} of {selectableReady.length} selected</span></h2>
           <div style={{ display: 'flex', gap: 8 }}>
             <button className="ghost small" disabled={!selectableReady.length} onClick={() => setSelectedFiles(new Set(selectableReady.map((f) => f.file)))}>Select all</button>
             <button className="ghost small" disabled={!selectedReady.length} onClick={() => setSelectedFiles(new Set())}>Clear</button>
@@ -525,7 +539,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         {ready.length > 0 && (
           <div className="release-builder" aria-label="Release builder">
             <div className="release-builder__steps" aria-label="Release steps">
-              <span className="active">1 <b>Choose files</b></span><span className={builderOpen ? 'active' : ''}>2 <b>Choose delivery</b></span><span>3 <b>Review</b></span>
+              <span className={!builderOpen ? 'active' : 'complete'}>1 <b>Choose files</b></span><span className={builderOpen ? 'active' : ''}>2 <b>Choose delivery</b></span><span className={builderOpen ? 'active' : ''}>3 <b>Review</b></span>
             </div>
             {!builderOpen ? (
               <div className="release-builder__continue">
