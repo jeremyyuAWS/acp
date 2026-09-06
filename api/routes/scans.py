@@ -166,7 +166,8 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                # want sensitive-data detection must pass pii=true.
                pii: bool = Query(False), fanout: bool = Query(False),
                batch: bool = Query(False), exclude_remediated: bool = Query(False),
-               incremental: bool = Query(True)):
+               incremental: bool = Query(True),
+               replace_active: bool = Query(False)):
     token = request.headers.get("x-drive-token")      # per-user Drive token (GIS)
     sp_token = request.headers.get("x-sp-token")      # per-user MS Graph token (MSAL)
     # ACP_DEMO_DRIVE_KEY lets the E2E test and demo scripts trigger a server-side
@@ -248,9 +249,29 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
         # 500'd, so the UI reported failure, and the run it had silently destroyed was gone.
         # Losing work on the failure path is strictly worse than the concurrency the guard exists
         # to prevent, so acceptance now comes first and the stop follows it.
-        _prior_active = core.store.active_scan(owner=user)
-        scan_id = uuid.uuid4().hex[:12]
         idempotency_key = request.headers.get("idempotency-key") or None
+        # Starting revised Discovery work must never silently destroy an accepted run. Include
+        # queued work as well as a worker-claimed scan: the former is exactly where a second click
+        # can otherwise create two jobs before active_scan() has a running row to report.
+        _active_discovery = next(
+            (item for item in core.store.active_workflows(user)
+             if item.get("stage") == "discover"), None)
+        _prior_active = core.store.active_scan(owner=user)
+        prior_scan_id = ((_active_discovery or {}).get("scan_id")
+                         or (_prior_active or {}).get("id"))
+        prior_run = ((core.store.get_scan(prior_scan_id, owner=user) or {}).get("run")
+                     if prior_scan_id else {}) or {}
+        replaying_same_intent = bool(
+            idempotency_key and prior_run.get("idempotency_key") == idempotency_key)
+        if prior_scan_id and not replaying_same_intent and not replace_active:
+            raise HTTPException(status_code=409, detail={
+                "code": "discovery_workflow_active",
+                "active_scan_id": prior_scan_id,
+                "active_stage": "discover",
+                "message": ("Discovery is already active. Continue that workflow, or confirm "
+                            "that it should be replaced before starting a new revision."),
+            })
+        scan_id = uuid.uuid4().hex[:12]
         # fanout=true → decompose into per-file jobs (ADR 0007); else the monolithic
         # 'scan' job (default, proven). Both are durable and resume across replicas.
         jtype = "scan_discover" if fanout else "scan"
@@ -311,7 +332,12 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
             inputs=_scan_inputs)
         # Acceptance is durable from here on: scan_runs + jobs + scan_inputs are committed and
         # GET /scans/{scan_id} resolves. Only NOW is it safe to stop the run this one replaces.
-        _supersede_replaced_run(_prior_active, scan_id, user)
+        if replace_active:
+            # Prefer the job-backed continuity result because it sees queued work. A queued scan
+            # has no running scan row for supersede_scan(), so cancel its durable job explicitly.
+            if prior_scan_id and not (_prior_active or {}).get("id"):
+                core.store.cancel_queued_job(prior_scan_id)
+            _supersede_replaced_run(_prior_active, scan_id, user)
         core.register_scan_tokens(scan_id, drive=token, sp=sp_token)  # in-memory only
         # ADR 0042 — the run's first event, and the only one emitted from a request thread rather
         # than from the worker. After enqueue_scan, because that is the durable write that makes
