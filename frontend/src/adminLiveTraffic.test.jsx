@@ -10,6 +10,7 @@ const source = readFileSync(join(here, 'AdminLiveTraffic.jsx'), 'utf8')
 // markup they were written to protect rather than the file it used to live in.
 const drawer = readFileSync(join(here, 'LiveOpsDrawer.jsx'), 'utf8')
 const a11y = readFileSync(join(here, 'a11y.js'), 'utf8')
+const app = readFileSync(join(here, 'App.jsx'), 'utf8')
 
 const run = {
   scan_id: 's1', owner: 'operator@example.org', source: 'drive', stage: 'assess',
@@ -17,6 +18,11 @@ const run = {
 }
 
 describe('Admin live traffic graph', () => {
+  it('supplies mutating recovery handlers only for the server-confirmed platform admin', () => {
+    expect(source).toMatch(/onCancelStage=\{me\?\.is_admin\s*\?/)
+    expect(source).toMatch(/onResumeStage=\{me\?\.is_admin\s*\?/)
+    expect(app).toMatch(/<AdminLiveTraffic me=\{me\}/)
+  })
   it('keeps the complete processing topology visible while idle', () => {
     const graph = buildTrafficGraph({ runs: [], summary: {} })
     expect(graph.nodes.map((node) => node.id)).toEqual([

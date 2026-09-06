@@ -166,7 +166,7 @@ _map_many([
 # request as far as the stricter admin boundary; Resume is remediation only.
 _map_many([
     ("POST", "/admin/activity/workflows/{scan_id}/stages/{stage}/cancel"),
-], {"assess.cancel", "remediate.run", "release.publish"})
+], {"discover.run", "assess.cancel", "remediate.run", "release.publish"})
 _map_many([
     ("POST", "/admin/activity/workflows/{scan_id}/stages/remediate/resume"),
 ], {"remediate.run"})

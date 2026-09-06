@@ -7491,6 +7491,7 @@ class Store:
                 "AND status='queued' AND run_after=%s",
                 (now, scan_id, _PAUSE_RUN_AFTER))
             released = cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0
+        self._update_workflow_stage(scan_id, "remediate", "running")
         return {"resumed_at": now, "released": released}
 
     def remediation_run_paused(self, scan_id: str) -> bool:
@@ -9983,6 +9984,7 @@ class Store:
     ORCHESTRATION_EVENT_KINDS = frozenset({
         "job.submitted", "job.eligible", "job.claimed", "job.stage_started", "job.stage_completed",
         "job.stage_failed", "job.stage_cancelled",
+        "workflow.stage_cancel_requested", "workflow.stage_resumed",
         "job.completed", "job.cancel_requested", "job.cancelled", "job.failed",
         "job.retry_scheduled", "job.retry_started", "job.lease_expired", "job.reclaimed",
         "job.dead_lettered", "job.zombie_write_suppressed",
@@ -10180,7 +10182,8 @@ class Store:
                     "SELECT e.*,s.source FROM orchestration_events e "
                     "LEFT JOIN scan_runs s ON s.id=e.scan_id "
                     "WHERE e.kind IN ('job.stage_started','job.stage_completed',"
-                    "'job.stage_failed','job.stage_cancelled') "
+                    "'job.stage_failed','job.stage_cancelled','workflow.stage_cancel_requested',"
+                    "'workflow.stage_resumed') "
                     "AND e.occurred_at>=%s "
                     "ORDER BY e.occurred_at DESC,e.event_id DESC LIMIT %s", (cutoff, int(limit)))
                 rows = self._db.fetchall(cur)
@@ -10621,7 +10624,7 @@ class Store:
                     "failed": dead, "cancelled": cancelled, "stage_execution_id": job["batch_id"]})
         self._update_workflow_stage(job["scan_id"], stage, outcome)
 
-    def request_stage_cancel(self, scan_id: str, stage: str) -> dict:
+    def request_stage_cancel(self, scan_id: str, stage: str, *, actor: str | None = None) -> dict:
         """Cancel the newest durable execution of one stage without touching sibling stages."""
         types = tuple(kind for kind, mapped in self._BATCH_JOB_STAGES.items() if mapped == stage)
         if not types:
@@ -10651,6 +10654,13 @@ class Store:
                              (scan_id, batch_id))
             representative = self._db.fetchone(cur)
         self._record_stage_terminal_if_ready(representative)
+        owner = self._stage_owner(scan_id)
+        if owner:
+            self.append_orchestration_event(
+                owner_email=owner, kind="workflow.stage_cancel_requested", scan_id=scan_id,
+                workflow=scan_id, stage=stage, correlation_id=batch_id,
+                detail={"requested_by": actor or "unknown", "waiting_cancelled": cancelled,
+                        "running_requested": requested, "stage_execution_id": batch_id})
         return {"found": True, "batch_id": batch_id, "cancelled": cancelled, "requested": requested}
 
     def get_job(self, job_id: str) -> dict | None:
