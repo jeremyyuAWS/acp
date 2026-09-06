@@ -89,3 +89,26 @@ export function outcomeTone(outcome) {
   if (outcome === 'duplicate') return 'neutral'
   return outcome === 'refused' ? 'attention' : 'error'
 }
+
+
+// A completed document's corrected copy is fetched with an Authorization header (see
+// api.downloadRemediated), so it is a BUTTON and never an <a href>: a bare link drops the header
+// and the browser lands on a 401 that reads like the file is gone. The server's `links` are
+// durable references — what exists, and where — not hrefs to hand the address bar.
+export function completedRows(view, expanded = false) {
+  const rows = Array.isArray(view?.completed) ? view.completed : []
+  return expanded ? rows : rows.slice(0, 3)
+}
+
+export function completedLabel(view) {
+  const total = Number(view?.completed_documents)
+  if (!Number.isFinite(total) || total <= 0) return null
+  return `${total.toLocaleString()} corrected cop${total === 1 ? 'y' : 'ies'}`
+}
+
+// What a completed row can say about itself, in words rather than by colour or an icon alone.
+export function deliveryNote(row) {
+  if (!row) return ''
+  if (row.delivered) return 'delivered to the source provider'
+  return 'held in ACP — not yet delivered'
+}

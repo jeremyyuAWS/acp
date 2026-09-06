@@ -3,8 +3,8 @@ import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
 import {
-  eligibleFiles, groupSummary, outcomeDetails, outcomeMessage, reconcileSelection, visibleItems,
-  VISIBLE_PER_GROUP,
+  completedLabel, completedRows, deliveryNote, eligibleFiles, groupSummary, outcomeDetails,
+  outcomeMessage, reconcileSelection, visibleItems, VISIBLE_PER_GROUP,
 } from './remediationExceptions.js'
 
 // Region E — actionable exceptions (PRD §6E, §11).
@@ -22,6 +22,7 @@ import {
 const api = vi.hoisted(() => ({
   retryDelivery: vi.fn(), retryDocuments: vi.fn(),
   cancel: vi.fn(), pause: vi.fn(), resume: vi.fn(),
+  download: vi.fn(), diffs: vi.fn(),
 }))
 vi.mock('./api.js', () => ({
   getRemediationExceptions: vi.fn(() => Promise.resolve({ groups: [], controls: [] })),
@@ -30,6 +31,8 @@ vi.mock('./api.js', () => ({
   cancelRemediationRun: api.cancel,
   pauseRemediationRun: api.pause,
   resumeRemediationRun: api.resume,
+  downloadRemediated: api.download,
+  getFileRemediationDiffs: api.diffs,
 }))
 
 const { default: RemediationExceptions } = await import('./RemediationExceptions.jsx')
@@ -44,6 +47,8 @@ beforeEach(() => {
     summary: '1 delivery started', results: [{ file: 'a.docx', outcome: 'started' }],
   })
   api.pause.mockResolvedValue({ paused: true, held: 5, in_flight: 3 })
+  api.download.mockResolvedValue(undefined)
+  api.diffs.mockResolvedValue([{ rule_id: '1.1.1', before: '(none)', after: 'A chart' }])
 })
 
 const render = async (props) => {
@@ -290,5 +295,72 @@ describe('the exceptions region', () => {
                    runId: 'scan-1' })
     await click(el('remops-x-action-delivery_failure'))
     expect(el('remops-x-outcomes-delivery_failure').textContent).toContain('Refused')
+  })
+})
+
+
+// ── completed outcomes ────────────────────────────────────────────────────────
+
+describe('linking a completed outcome to what it produced', () => {
+  const done = (file, over = {}) => ({
+    file, completed_at: '2026-09-05T12:00:00Z', fixes_verified: 2, delivered: true,
+    links: { corrected_copy: `/scans/scan-1/files/${file}/remediated`,
+             evidence: `/scans/scan-1/files/${file}/remediation-diffs`,
+             delivered: 'https://sharepoint.example/sites/Legal/a.docx' },
+    ...over,
+  })
+
+  it('says in words whether each copy reached the provider', () => {
+    expect(deliveryNote(done('a.docx'))).toContain('delivered to the source provider')
+    expect(deliveryNote(done('b.docx', { delivered: false })))
+      .toContain('not yet delivered')
+  })
+
+  it('counts the whole run, and lists only a few of it', () => {
+    const view = { completed: Array.from({ length: 8 }, (_, i) => done(`doc-${i}.docx`)),
+                   completed_documents: 140 }
+    expect(completedLabel(view)).toBe('140 corrected copies')
+    expect(completedRows(view)).toHaveLength(3)
+    expect(completedRows(view, true)).toHaveLength(8)
+  })
+
+  it('says nothing at all when the run has produced nothing', () => {
+    expect(completedLabel({ completed: [], completed_documents: 0 })).toBeNull()
+  })
+
+  it('fetches the corrected copy through the authenticated client, not a bare link', async () => {
+    // A bare <a href> drops the Authorization header and the browser lands on a 401 that reads
+    // like the file is gone — which is why the server sends a REFERENCE and the client calls.
+    await render({ view: { ...view([]), completed: [done('a.docx')], completed_documents: 1 },
+                   runId: 'scan-1' })
+    const button = el('remops-x-copy-a.docx')
+    expect(button.tagName).toBe('BUTTON')
+    await click(button)
+    expect(api.download).toHaveBeenCalledWith('scan-1', 'a.docx')
+    expect(el('remops-x-done-a.docx').textContent).toContain('delivered to the source provider')
+  })
+
+  it('offers the provider page as a real link, because that one needs no ACP header', async () => {
+    await render({ view: { ...view([]), completed: [done('a.docx')], completed_documents: 1 },
+                   runId: 'scan-1' })
+    const link = el('remops-x-delivered-a.docx')
+    expect(link.tagName).toBe('A')
+    expect(link.getAttribute('rel')).toContain('noreferrer')
+  })
+
+  it('offers no corrected-copy control for a document that has none', async () => {
+    await render({ view: { ...view([]), completed_documents: 1,
+                           completed: [done('a.docx', { links: {} })] }, runId: 'scan-1' })
+    expect(el('remops-x-copy-a.docx')).toBeNull()
+    expect(el('remops-x-evidence-a.docx')).toBeNull()
+  })
+
+  it('reports a copy that could not be opened rather than failing silently', async () => {
+    api.download.mockRejectedValue(new Error('404'))
+    const announced = []
+    await render({ view: { ...view([]), completed: [done('a.docx')], completed_documents: 1 },
+                   runId: 'scan-1', onAnnounce: (t) => announced.push(t) })
+    await click(el('remops-x-copy-a.docx'))
+    expect(announced.at(-1)).toContain('could not be opened')
   })
 })

@@ -1625,6 +1625,11 @@ def _exception_view(sid: str) -> dict:
         "state": snapshot.get("state"),
         "provider": facts.get("provider"),
         "groups": exceptions.build_exception_groups(records, cancelled=cancelled),
+        # The counterpart to the groups. Region E's question is "does anyone need to act?", and
+        # "no, and here are the corrected copies it produced" is one of its two honest answers.
+        "completed": exceptions.completed_outcomes(records),
+        "completed_documents": sum(1 for r in records if r.get("outcome") == "completed"
+                                   and r.get("artifact_stored_at")),
         "controls": exceptions.run_controls(
             state=snapshot.get("state"), counters=snapshot.get("documents"),
             paused=bool(run_facts.get("paused")),

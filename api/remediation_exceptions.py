@@ -343,6 +343,73 @@ def delivery_retry_decision(record: dict, *, cancelled: bool = False,
     }
 
 
+# ── linking an outcome to what it produced ───────────────────────────────────
+
+#: How many completed documents the view carries. A run can complete thousands, and the panel's
+#: job is to make the recent ones reachable, not to be a file browser — the Release surface is
+#: where a whole run's output is listed.
+COMPLETED_LIMIT = 8
+
+
+def outcome_links(record: dict) -> dict:
+    """Where this document's corrected copy and its audit evidence can be reached.
+
+    RELATIVE API PATHS, NOT SIGNED URLS, and the difference is the whole design. Both paths are
+    owner-scoped routes that already exist (`/remediated` streams the corrected bytes,
+    `/remediation-diffs` returns the verified before→after pairs), so a path here is a REFERENCE
+    and never an access grant: handing it to someone unauthorised gets them a 404, exactly as
+    pasting the run's own id would. A pre-signed blob URL would be the opposite — a link that IS
+    the permission — which is why PRD §13 rules those out of anything recorded, and why they are
+    not built here even though the store holds one.
+
+    `delivered` is the exception, and deliberately: it is the provider's own page for the document
+    (a SharePoint webUrl, a Drive webViewLink), which requires the viewer's own sign-in and is the
+    single most useful thing a compliance officer can be handed — "here is the corrected file,
+    where it now lives". `remediation-status` has returned the same value as `latest_url` since
+    long before this module existed.
+
+    A key is ABSENT rather than null when the thing does not exist. A `corrected_copy` link on a
+    document ACP never corrected would 404, and a UI cannot tell an empty string from a broken
+    one until somebody clicks it.
+    """
+    file, run = record.get("file"), record.get("run_id")
+    if not (file and run):
+        return {}
+    out: dict = {}
+    if record.get("artifact_stored_at"):
+        out["corrected_copy"] = f"/scans/{run}/files/{file}/remediated"
+    if int(record.get("fixes_verified") or 0) > 0:
+        out["evidence"] = f"/scans/{run}/files/{file}/remediation-diffs"
+    if record.get("delivered_url"):
+        out["delivered"] = record["delivered_url"]
+    return out
+
+
+def completed_outcomes(records, *, limit: int = COMPLETED_LIMIT) -> list[dict]:
+    """The documents this run finished, newest first, each linked to what it produced.
+
+    THE COUNTERPART TO THE EXCEPTIONS, and the region is incomplete without it. "Nothing needs a
+    decision or a retry" is true and unsatisfying on a run that just delivered 140 corrected
+    documents: the next question is "show me one", and an operator who cannot answer it from the
+    panel goes looking for the file in SharePoint to check ACP did what it said.
+
+    A document counts as completed here only when a corrected copy EXISTS — `artifact_stored_at`
+    is the proof — so this list cannot include a document that reached a terminal state with
+    nothing to show, which is what `skipped` is for. Delivery is reported alongside rather than
+    required: a stored-but-undelivered copy is real and downloadable, and it is simultaneously in
+    the delivery-failure group, which is the honest reading of both facts.
+    """
+    rows = [record for record in (records or ())
+            if record.get("outcome") == "completed" and record.get("artifact_stored_at")]
+    rows.sort(key=lambda record: str(record.get("artifact_stored_at") or ""), reverse=True)
+    return [{"file": record.get("file"),
+             "completed_at": record.get("artifact_stored_at"),
+             "fixes_verified": int(record.get("fixes_verified") or 0),
+             "delivered": bool(record.get("delivered_url")),
+             "links": outcome_links(record)}
+            for record in rows[:max(0, int(limit))]]
+
+
 # ── the grouped payload the panel renders ────────────────────────────────────
 
 #: Fields of an exception row that may cross the API boundary. A WHITELIST, for the reason
@@ -353,8 +420,7 @@ def delivery_retry_decision(record: dict, *, cancelled: bool = False,
 _ROW_FIELDS: tuple[str, ...] = (
     "file", "group", "reason", "outcome", "review_items", "review_kind",
     "fixes_applied", "fixes_verified", "attempts", "max_attempts",
-    "artifact_stored_at", "artifact_digest", "artifact_bytes",
-    "delivered_url", "evidence_url", "corrected_copy_url",
+    "artifact_stored_at", "artifact_digest", "artifact_bytes", "delivered_url",
 )
 
 
@@ -375,6 +441,7 @@ def exception_row(record: dict, *, cancelled: bool = False) -> dict | None:
     row["file"] = record.get("file")
     row["group"] = group
     row["reason"] = reason
+    row["links"] = outcome_links(record)
     row["action"] = spec["action"]
     row["action_label"] = spec["action_label"]
     row["capability"] = spec["capability"]

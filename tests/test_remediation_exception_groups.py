@@ -264,3 +264,68 @@ def test_cancel_stops_outstanding_work_and_keeps_finished_corrections(store):
     facts = store.remediation_run_facts(SID)
     assert facts["cancel_requested"] is True
     assert facts["corrected_stored"] == 1, "a cancel must not retract a finished correction"
+
+
+# ── linking an outcome to what it produced ────────────────────────────────────
+
+def test_a_completed_outcome_links_to_its_corrected_copy_and_its_evidence():
+    """PRD §13 requires every automatic decision to record before/after artifacts. A panel that
+    reports "140 documents complete" and offers no way to see one of them makes the operator go
+    and check in SharePoint whether ACP did what it said."""
+    rows = exceptions.completed_outcomes([_record(file="a.docx")])
+    assert rows[0]["links"] == {
+        "corrected_copy": f"/scans/{SID}/files/a.docx/remediated",
+        "evidence": f"/scans/{SID}/files/a.docx/remediation-diffs",
+        "delivered": "http://sp/ok"}
+
+
+def test_a_link_is_a_reference_and_never_an_access_grant():
+    """Both paths are owner-scoped routes that already exist, so handing one to somebody
+    unauthorised gets them a 404. A pre-signed blob URL would be the opposite — a link that IS
+    the permission — and the store holds one; it is deliberately not built here."""
+    links = exceptions.outcome_links(_record())
+    assert not any("sig=" in value or "token" in value.lower() for value in links.values())
+    assert links["corrected_copy"].startswith("/scans/")
+
+
+def test_a_document_with_no_corrected_copy_gets_no_link_to_one():
+    """Absent, not null: a `corrected_copy` link on a document ACP never corrected would 404, and
+    nothing can tell an empty string from a broken one until somebody clicks it."""
+    assert "corrected_copy" not in exceptions.outcome_links(
+        _record(artifact_stored_at=None))
+    assert "evidence" not in exceptions.outcome_links(_record(fixes_verified=0))
+    assert "delivered" not in exceptions.outcome_links(_record(delivered_url=None))
+
+
+def test_a_terminal_document_with_nothing_to_show_is_not_reported_as_completed():
+    """`skipped` is the partition's slot for "in scope, no eligible fix applied". Listing one
+    here would offer a corrected copy that does not exist."""
+    assert exceptions.completed_outcomes([_record(outcome="skipped")]) == []
+    assert exceptions.completed_outcomes([_record(artifact_stored_at=None)]) == []
+
+
+def test_a_stored_but_undelivered_copy_is_both_completed_and_a_delivery_exception():
+    """Both facts are true of the document and the panel says both: the copy is real and
+    downloadable, and it has not reached the provider."""
+    record = _record(file="b.docx", delivered_url=None)
+    assert exceptions.classify_exception(record)[0] == "delivery_failure"
+    completed = exceptions.completed_outcomes([record])
+    assert completed[0]["delivered"] is False
+    assert "corrected_copy" in completed[0]["links"] and "delivered" not in completed[0]["links"]
+
+
+def test_the_completed_list_is_bounded_and_newest_first():
+    records = [_record(file=f"doc-{i}.docx", artifact_stored_at=f"2026-09-0{i}T00:00:00Z")
+               for i in range(1, 10)]
+    rows = exceptions.completed_outcomes(records)
+    assert len(rows) == exceptions.COMPLETED_LIMIT
+    assert rows[0]["file"] == "doc-9.docx"
+    assert [row["file"] for row in rows] == sorted(
+        (r["file"] for r in rows), key=lambda f: f, reverse=True)
+
+
+def test_every_exception_row_carries_the_same_links():
+    """The delivery-failure row is where an operator asks "what would you re-send?" — and the
+    answer is a file they can open before authorising the write."""
+    row = exceptions.exception_row(_record(delivered_url=None))
+    assert row["links"]["corrected_copy"].endswith("/remediated")

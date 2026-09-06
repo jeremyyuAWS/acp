@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   getRemediationExceptions, retryRemediationDelivery, retryRemediationDocuments,
-  cancelRemediationRun, pauseRemediationRun, resumeRemediationRun,
+  cancelRemediationRun, pauseRemediationRun, resumeRemediationRun, downloadRemediated,
+  getFileRemediationDiffs,
 } from './api.js'
 import {
-  eligibleFiles, groupSummary, outcomeDetails, outcomeMessage, outcomeTone, reconcileSelection,
-  visibleItems, OUTCOME_LABELS, VISIBLE_PER_GROUP,
+  completedLabel, completedRows, deliveryNote, eligibleFiles, groupSummary, outcomeDetails,
+  outcomeMessage, outcomeTone, reconcileSelection, visibleItems, OUTCOME_LABELS,
+  VISIBLE_PER_GROUP,
 } from './remediationExceptions.js'
 
 // Region E — "does anyone need to act?" (PRD §6E).
@@ -59,6 +61,46 @@ export function useRemediationExceptions(runId, revision) {
   }, [runId, revision, load])
 
   return { view, error, reload: load }
+}
+
+// The corrected copies this run produced, and the evidence behind each. The counterpart to the
+// exception groups: "does anyone need to act?" has two honest answers, and on a run that just
+// delivered 140 documents the second one is "no — here is one of them".
+function Completed({ view, runId, onAnnounce }) {
+  const [expanded, setExpanded] = useState(false)
+  const rows = completedRows(view, expanded)
+  const label = completedLabel(view)
+  if (!rows.length || !label) return null
+  const hidden = (view.completed || []).length - rows.length
+  const open = (file, kind) => {
+    const call = kind === 'evidence'
+      ? getFileRemediationDiffs(runId, file).then((diffs) => {
+        const count = Array.isArray(diffs) ? diffs.length : (diffs?.diffs || []).length
+        onAnnounce?.(`${file}: ${count} recorded before-and-after change${count === 1 ? '' : 's'}.`)
+      })
+      : downloadRemediated(runId, file)
+    return call.catch(() => onAnnounce?.(`${file} could not be opened.`))
+  }
+  return <section className="remops-x-completed" aria-labelledby="remops-x-done">
+    <h4 id="remops-x-done">Completed <span>· {label}</span></h4>
+    <ul>{rows.map((row) => <li key={row.file} data-testid={`remops-x-done-${row.file}`}>
+      <span className="remops-x-file">{row.file}</span>
+      <span className="remops-x-note">{deliveryNote(row)}</span>
+      {row.links?.corrected_copy && <button type="button" className="linklike"
+        data-testid={`remops-x-copy-${row.file}`}
+        onClick={() => open(row.file, 'copy')}>Corrected copy</button>}
+      {row.links?.evidence && <button type="button" className="linklike"
+        data-testid={`remops-x-evidence-${row.file}`}
+        onClick={() => open(row.file, 'evidence')}>Evidence</button>}
+      {row.links?.delivered && <a href={row.links.delivered} target="_blank" rel="noreferrer"
+        data-testid={`remops-x-delivered-${row.file}`}>Open at source</a>}
+    </li>)}</ul>
+    {hidden > 0 && <button type="button" className="linklike" aria-expanded={expanded}
+                           data-testid="remops-x-completed-expand"
+                           onClick={() => setExpanded((value) => !value)}>
+      {expanded ? 'Show fewer' : `Show ${hidden} more`}
+    </button>}
+  </section>
 }
 
 function Control({ control, busy, onRun }) {
@@ -227,6 +269,7 @@ export default function RemediationExceptions({ view, error = false, onReload = 
     {groups.map((group) => <Group key={group.key} group={group} selection={selection}
                                   onToggle={toggle} onRun={runGroup} busy={busy}
                                   result={results[group.key]} />)}
+    <Completed view={view} runId={runId} onAnnounce={announce} />
     {controls.length > 0 && <div className="remops-x-controls">
       {controls.map((control) => <Control key={control.action} control={control} busy={busy}
                                           onRun={runControl} />)}
