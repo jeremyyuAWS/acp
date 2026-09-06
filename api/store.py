@@ -9000,8 +9000,11 @@ class Store:
     def approved_images_of_text_values(self, scan_id: str, file: str) -> dict[str, str]:
         """{locator: OCR'd text} awaiting a write into `file`, from approved 1.4.5/1.4.9 rows.
 
-        Locators are 'image N' (1-based, matching ocr._ooxml_images enumeration order).
-        Written by apply_pptx_image_of_text as the picture's <p:cNvPr descr="...">.
+        Locator format depends on the source format:
+          pptx  — 'image N' (1-based, matching ocr._ooxml_images enumeration order).
+                  Written by apply_pptx_image_of_text as <p:cNvPr descr="...">.
+          pdf   — 'pdf:fig:P:S' (page + per-page sequence, matching _figure_locators in
+                  remediate_pdf). Written by apply_pdf_figure_alt via apply_pdf_approved.
         Both criteria share one map because the proposer emits them for the same embedded
         images and the applier writes alt text regardless of which band raised the finding.
         """
