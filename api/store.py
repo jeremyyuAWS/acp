@@ -2784,11 +2784,14 @@ class Store:
         if not row:
             return None
         if row.get("id"):
-            return row
-        return {"id": row["legacy_scan_id"], "scan_id": row["legacy_scan_id"],
-                "owner_email": row.get("scan_owner"), "source": row.get("scan_source"),
-                "revision": 1, "state": None, "current_stage": None,
-                "scope_fingerprint": None, "legacy": True}
+            workflow = row
+        else:
+            workflow = {"id": row["legacy_scan_id"], "scan_id": row["legacy_scan_id"],
+                        "owner_email": row.get("scan_owner"), "source": row.get("scan_source"),
+                        "revision": 1, "state": None, "current_stage": None,
+                        "scope_fingerprint": None, "legacy": True}
+        workflow.update(self.lifecycle_policy_snapshot(scan_id))
+        return workflow
 
     def _update_workflow_stage(self, scan_id: str, stage: str, state: str) -> None:
         """Advance the workflow projection without making it a prerequisite for old scans."""
@@ -2814,6 +2817,36 @@ class Store:
                 except (TypeError, ValueError):
                     pass
         return row
+
+    @staticmethod
+    def _lifecycle_policy_summary(raw) -> dict:
+        """Public provenance for a frozen rule set, without exposing its conditions."""
+        import hashlib as _hashlib
+        import json as _json
+        if isinstance(raw, str):
+            try:
+                raw = _json.loads(raw)
+            except (TypeError, ValueError):
+                raw = []
+        rules = raw if isinstance(raw, list) else []
+        canonical = sorted(
+            (rule for rule in rules if isinstance(rule, dict)),
+            key=lambda rule: (str(rule.get("policy_id") or ""), int(rule.get("version") or 1)))
+        encoded = _json.dumps(canonical, sort_keys=True, separators=(",", ":"),
+                              ensure_ascii=False, default=str).encode("utf-8")
+        versions = [{"policy_id": rule.get("policy_id"),
+                     "version": int(rule.get("version") or 1)}
+                    for rule in canonical if rule.get("policy_id")]
+        return {
+            "lifecycle_policy_digest": _hashlib.sha256(encoded).hexdigest(),
+            "lifecycle_policy_count": len(canonical),
+            "lifecycle_policy_versions": versions,
+        }
+
+    def lifecycle_policy_snapshot(self, scan_id: str) -> dict:
+        """Digest and version ledger for the immutable lifecycle rules captured at acceptance."""
+        inputs = self.get_scan_inputs(scan_id)
+        return self._lifecycle_policy_summary((inputs or {}).get("lifecycle_rules"))
 
     def init_scan_run(self, scan_id: str, source: str, total: int, started_at: str,
                       rubric_name: str, rubric_hash: str, owner: str | None = None,
@@ -4929,8 +4962,9 @@ class Store:
             self._db.execute(cur,
                 "SELECT j.id,j.scan_id,j.type,j.status,j.created_at,j.updated_at,"
                 "sr.source,sr.files,sr.files_done,COALESCE(sr.workflow_id,sr.id) AS workflow_id,"
-                "COALESCE(sr.workflow_revision,1) AS workflow_revision "
+                "COALESCE(sr.workflow_revision,1) AS workflow_revision,si.lifecycle_rules "
                 "FROM jobs j JOIN scan_runs sr ON sr.id=j.scan_id "
+                "LEFT JOIN scan_inputs si ON si.scan_id=sr.id "
                 "WHERE sr.owner_email=%s AND j.status IN ('queued','running') "
                 "ORDER BY j.updated_at DESC LIMIT 5000", (owner,))
             rows = self._db.fetchall(cur)
@@ -4951,6 +4985,7 @@ class Store:
                 "files_done": int(row.get("files_done") or 0),
                 "started_at": row.get("created_at"),
                 "updated_at": row.get("updated_at"), "job_id": None,
+                **self._lifecycle_policy_summary(row.get("lifecycle_rules")),
             })
             item["total"] += 1
             item[row["status"]] += 1
@@ -10475,7 +10510,13 @@ class Store:
         return job_id
 
     def stage_snapshot_id(self, scan_id: str) -> str:
-        """Stable identity of the immutable Discover/Assess input consumed downstream."""
+        """Stable identity of the immutable Discover/Assess input consumed downstream.
+
+        Includes the acceptance-time input record, not only the resulting inventory. This binds
+        every downstream batch to the exact lifecycle rules and provider/feature configuration
+        under which Discovery ran; changing a live setting later cannot silently describe the
+        same stage snapshot.
+        """
         import hashlib as _hashlib
         import json as _json
         with self._db.cursor() as cur:
@@ -10489,7 +10530,8 @@ class Store:
                 "SELECT file,checksum,size_kb,source_modified FROM scan_inventory "
                 "WHERE scan_id=%s ORDER BY file", (scan_id,))
             inventory = self._db.fetchall(cur)
-        encoded = _json.dumps({"run": run, "inventory": inventory}, sort_keys=True,
+        inputs = self.get_scan_inputs(scan_id)
+        encoded = _json.dumps({"run": run, "inventory": inventory, "inputs": inputs}, sort_keys=True,
                               separators=(",", ":"), default=str)
         return _hashlib.sha256(encoded.encode()).hexdigest()
 
