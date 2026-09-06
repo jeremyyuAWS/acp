@@ -30,6 +30,73 @@ from swallowed import swallowed
 # built-in local default and needs no key, so it is not in this table.
 CLOUD_PROVIDERS = ("azure_openai", "openai", "anthropic", "gemini", "bedrock", "huggingface")
 
+# Claude text provider — module-level config so both the text seam below and the
+# vision auto-select in active_vision_provider() share the same source of truth.
+# The key rides only in the x-api-key request header: never logged, stored, or returned.
+CLAUDE_TEXT_MODEL = os.environ.get("CLAUDE_TEXT_MODEL", "claude-haiku-4-5")
+_ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+_ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
+_ANTHROPIC_API_VERSION = "2023-06-01"
+
+
+def claude_text_generate(prompt: str, *, temperature: float = 0.4,
+                         max_tokens: int = 800, timeout: float = 30.0) -> dict | None:
+    """Single-turn text completion via the Anthropic Messages API.
+
+    Returns {text, prompt_tokens, completion_tokens, cost_usd, model, provider, zone, host}
+    or None when the key is absent or the call fails. Never raises."""
+    if not _ANTHROPIC_KEY:
+        return None
+    import httpx
+    try:
+        r = httpx.post(
+            _ANTHROPIC_MESSAGES_URL,
+            json={
+                "model": CLAUDE_TEXT_MODEL,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            headers={"x-api-key": _ANTHROPIC_KEY, "anthropic-version": _ANTHROPIC_API_VERSION},
+            timeout=timeout,
+        )
+        r.raise_for_status()
+        data = r.json()
+        text = "".join(b.get("text", "") for b in (data.get("content") or [])
+                       if isinstance(b, dict) and b.get("type") == "text").strip()
+        if not text:
+            return None
+        usage = data.get("usage") or {}
+        input_tok = usage.get("input_tokens", 0)
+        output_tok = usage.get("output_tokens", 0)
+        # claude-haiku-4-5: $1.00/$5.00 per 1M input/output tokens
+        cost_usd = round(input_tok / 1e6 * 1.00 + output_tok / 1e6 * 5.00, 6)
+        return {
+            "text": text,
+            "prompt_tokens": input_tok,
+            "completion_tokens": output_tok,
+            "cost_usd": cost_usd,
+            "model": CLAUDE_TEXT_MODEL,
+            "provider": "anthropic",
+            "zone": "cloud",
+            "host": "api.anthropic.com",
+        }
+    except Exception:
+        return None
+
+
+def text_provider_provenance() -> dict | None:
+    """Return governance provenance for the configured cloud text provider, or None when
+    keyless (Ollama). ai.provenance() calls this so the zone/host are a single source of truth."""
+    if not _ANTHROPIC_KEY:
+        return None
+    return {
+        "provider": "anthropic",
+        "model": CLAUDE_TEXT_MODEL,
+        "zone": "cloud",
+        "host": "api.anthropic.com",
+    }
+
 
 def zone_for_url(base_url: str) -> str:
     """'local' when the endpoint is on your own infrastructure (localhost / private ranges /
@@ -1171,9 +1238,6 @@ def active_vision_provider() -> VisionProvider:
     # Auto-select Anthropic vision when ANTHROPIC_API_KEY is set and no explicit vision
     # provider was configured via ACP_VISION_PROVIDER or the admin store. The key rides only
     # in the x-api-key header — same contract as AnthropicVisionProvider.generate().
-    if not choice:
-        _anth_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if _anth_key:
-            _anth_model = os.environ.get("CLAUDE_TEXT_MODEL", "claude-haiku-4-5")
-            return AnthropicVisionProvider(_anth_key, model=_anth_model)
+    if not choice and _ANTHROPIC_KEY:
+        return AnthropicVisionProvider(_ANTHROPIC_KEY, model=CLAUDE_TEXT_MODEL)
     return OllamaVisionProvider(base_url, model)

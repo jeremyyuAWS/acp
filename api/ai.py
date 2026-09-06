@@ -1,24 +1,22 @@
 """AI layer for ACP.
 
-Primary text backend: Claude claude-haiku-4-5 (Anthropic Messages API) when
-ANTHROPIC_API_KEY is set in the environment. Falls back to the locally-running
-Ollama instance on any failure or when the key is absent — callers never break and
-never need a key for the keyless Ollama path.
+Text backend: delegates to providers.claude_text_generate() (cloud path, when a key is
+configured) then falls back to the locally-running Ollama instance on any failure or
+when no key is set — callers never break and never need a key for the keyless local path.
 
-Vision backend: uses providers.active_vision_provider(), which auto-selects
-AnthropicVisionProvider when ANTHROPIC_API_KEY is set and no explicit
-ACP_VISION_PROVIDER override is configured, otherwise falls back to Ollama.
+Vision backend: uses providers.active_vision_provider(), which selects a cloud vision
+adapter when one is configured, otherwise falls back to Ollama.
 
-Config (env vars):
-  ANTHROPIC_API_KEY    — enables Claude as the primary text+vision provider
+Config (env vars — cloud key and model name are consumed by providers.py):
   CLAUDE_TEXT_MODEL    — default claude-haiku-4-5 (text: suggest / simplify)
   OLLAMA_BASE_URL      — default http://localhost:11434 (Ollama fallback)
   OLLAMA_MODEL         — default llama3.2 (text fallback)
   OLLAMA_VISION_MODEL  — default moondream (vision fallback)
   OLLAMA_VISION_TIMEOUT— default 120s (CPU vision inference is heavier than text)
 
-The ANTHROPIC_API_KEY rides only in the x-api-key request header; it is never
-stored, logged, returned in a response, or written to any database row.
+The cloud provider key rides only in the x-api-key request header (managed by
+providers.py); it is never stored, logged, returned in a response, or written to any
+database row.
 """
 from __future__ import annotations
 import os
@@ -36,12 +34,6 @@ OLLAMA_MODEL    = os.environ.get("OLLAMA_MODEL", "llama3.2")
 # deployment's own auth-checking proxy (deploy/ollama/Dockerfile.gpu) is in front of Ollama.
 _OLLAMA_SECRET = os.environ.get("ACP_OLLAMA_SHARED_SECRET", "")
 _OLLAMA_HEADERS = {"X-ACP-Ollama-Secret": _OLLAMA_SECRET} if _OLLAMA_SECRET else {}
-# Claude text provider — primary when ANTHROPIC_API_KEY is set; Ollama is the fallback.
-# The key rides only in the x-api-key header and is never logged, stored, or returned.
-_ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-CLAUDE_TEXT_MODEL = os.environ.get("CLAUDE_TEXT_MODEL", "claude-haiku-4-5")
-_ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
-_ANTHROPIC_API_VERSION = "2023-06-01"
 # A separate vision model — the text model cannot see images, so genuine alt text needs this.
 # Same local-Ollama backend, so the "no third-party AI" claim holds. Default is moondream (a
 # compact ~1.7GB captioner) rather than llava:7b (~4.5GB): with llama3.1:8b it fits the 8Gi
@@ -98,14 +90,9 @@ def provenance() -> dict:
     """
     from urllib.parse import urlparse
     import providers as _providers  # lazy, like _vision_generate — no import-time cycle
-    if _ANTHROPIC_KEY:
-        return {
-            "provider": "anthropic",
-            "model": CLAUDE_TEXT_MODEL,
-            "vision_model": OLLAMA_VISION_MODEL,
-            "zone": "cloud",
-            "host": "api.anthropic.com",
-        }
+    _tp = _providers.text_provider_provenance()
+    if _tp is not None:
+        return {**_tp, "vision_model": OLLAMA_VISION_MODEL}
     host = (urlparse(OLLAMA_BASE_URL).hostname or "").lower()
     return {
         "provider": "ollama",
@@ -1179,49 +1166,6 @@ def _suggest_prompt(rule_id: str, rule_name: str, filename: str, detail: str, gu
     )
 
 
-def _claude_text_generate(prompt: str, *, temperature: float = 0.4,
-                          max_tokens: int = 800, timeout: float = 30.0) -> dict | None:
-    """Single-turn text completion via the Anthropic Messages API.
-
-    Returns {text, prompt_tokens, completion_tokens, cost_usd} or None when
-    ANTHROPIC_API_KEY is absent or the call fails. Never raises.
-    The key rides only in the x-api-key header — not logged, not returned."""
-    if not _ANTHROPIC_KEY:
-        return None
-    import httpx
-    try:
-        r = httpx.post(
-            _ANTHROPIC_MESSAGES_URL,
-            json={
-                "model": CLAUDE_TEXT_MODEL,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-            headers={"x-api-key": _ANTHROPIC_KEY, "anthropic-version": _ANTHROPIC_API_VERSION},
-            timeout=timeout,
-        )
-        r.raise_for_status()
-        data = r.json()
-        text = "".join(b.get("text", "") for b in (data.get("content") or [])
-                       if isinstance(b, dict) and b.get("type") == "text").strip()
-        if not text:
-            return None
-        usage = data.get("usage") or {}
-        input_tok = usage.get("input_tokens", 0)
-        output_tok = usage.get("output_tokens", 0)
-        # claude-haiku-4-5: $1.00/$5.00 per 1M input/output tokens (providers._PRICE_TABLE)
-        cost_usd = round(input_tok / 1e6 * 1.00 + output_tok / 1e6 * 5.00, 6)
-        return {
-            "text": text,
-            "prompt_tokens": input_tok,
-            "completion_tokens": output_tok,
-            "cost_usd": cost_usd,
-        }
-    except Exception:
-        return None
-
-
 def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
                 detail: str = "", image_bytes: bytes | None = None, style: str = "",
                 guidance: str = "") -> dict | None:
@@ -1254,21 +1198,22 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
     prompt = _suggest_prompt(rule_id, rule_name, filename, detail, guidance)
     import time as _t
     _t0 = _t.monotonic()
-    # Try Claude when configured — zero-configuration fallback to Ollama on any failure.
-    _cr = _claude_text_generate(prompt, temperature=0.4, max_tokens=800)
+    # Try the cloud text provider when configured — zero-configuration fallback to Ollama.
+    import providers as _prov
+    _cr = _prov.claude_text_generate(prompt, temperature=0.4, max_tokens=800)
     if _cr is not None:
         text = _cr["text"].strip().strip('"').strip()
         if text:
             _trace_ai("suggest", prompt, text, _t0, ok=True,
-                      provider="anthropic", zone="cloud", model=CLAUDE_TEXT_MODEL,
+                      provider=_cr["provider"], zone=_cr["zone"], model=_cr["model"],
                       prompt_tokens=_cr["prompt_tokens"],
                       completion_tokens=_cr["completion_tokens"],
                       cost_usd=_cr["cost_usd"], temperature=0.4,
                       prompt_version="suggest-v1")
             kind = _SUGGEST_KIND.get(rule_id, ("fix", ""))[0]
             out = {"suggestion": text, "kind": kind,
-                   "is_template": rule_id == "1.1.1", "model": CLAUDE_TEXT_MODEL,
-                   "provider": "anthropic", "processing_zone": "cloud",
+                   "is_template": rule_id == "1.1.1", "model": _cr["model"],
+                   "provider": _cr["provider"], "processing_zone": _cr["zone"],
                    "cost_usd": _cr["cost_usd"]}
             if out["is_template"]:
                 out["reason"] = (
@@ -1279,7 +1224,7 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
                     "filename. Pick the image above and draft again, or write the value yourself."
                 )
             return out
-    # Claude unavailable or ANTHROPIC_API_KEY not set — fall back to Ollama.
+    # Cloud provider unavailable or not configured — fall back to Ollama.
     try:
         import httpx
         r = httpx.post(
