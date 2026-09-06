@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getCapacitySchedule } from './api.js'
+import CapacityScheduleEditor from './CapacityScheduleEditor.jsx'
 
 /**
  * Settings → Scheduling, READ-ONLY (Phase 2 of docs/prd-capacity-scheduling.md).
@@ -59,17 +60,23 @@ function Findings({ findings }) {
   )
 }
 
-export default function CapacitySchedule() {
+export default function CapacitySchedule({ me = null } = {}) {
   const [snap, setSnap] = useState(null)
   const [failed, setFailed] = useState(false)
+  const [reloads, setReloads] = useState(0)
+  // `me?.is_admin` is the exact value the backend's _require_admin checks, so the SPA and the API
+  // cannot disagree about who sees the editor. It is not the gate — every write endpoint runs
+  // that check itself — but a view-only user seeing controls that 403 is its own kind of wrong
+  // (WorkerReplicaControl.jsx records what that cost when it happened for real).
+  const isAdmin = !!me?.is_admin
 
   useEffect(() => {
     let on = true
     getCapacitySchedule()
-      .then((d) => { if (on) setSnap(d) })
+      .then((d) => { if (on) { setSnap(d); setFailed(false) } })
       .catch(() => { if (on) setFailed(true) })
     return () => { on = false }
-  }, [])
+  }, [reloads])
 
   if (failed) {
     return <div className="panel" style={{ padding: 12, fontSize: 13 }}>
@@ -141,6 +148,11 @@ export default function CapacitySchedule() {
           <Findings findings={validation.findings} />
         </div>
       )}
+
+      {/* The editor, for administrators only. It re-reads through `onSaved` rather than patching
+          state locally: warm capacity is real money and a real restart, and an optimistic floor
+          that silently reverts is indistinguishable from one that saved. */}
+      {isAdmin && <CapacityScheduleEditor snap={snap} onSaved={() => setReloads((n) => n + 1)} />}
 
       {/* §5.3's table, with the observed column beside it so the two are read together. */}
       <div className="panel" style={{ padding: 0, overflow: 'hidden' }}>
@@ -225,7 +237,8 @@ export default function CapacitySchedule() {
 
       <div className="muted" style={{ fontSize: 11 }}>
         Live replica counts, queue depth and scale events are in Monitor → Workers &amp; Queue.
-        Warm capacity is adjusted in Settings → Worker Configuration. This tab is read-only.
+        Immediate warm capacity is adjusted in Settings → Worker Configuration; this tab sets when
+        ACP should hold more of it.{!isAdmin && ' You have view-only access, so the schedule is shown but cannot be changed.'}
       </div>
     </div>
   )

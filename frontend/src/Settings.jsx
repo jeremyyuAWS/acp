@@ -1066,7 +1066,7 @@ export default function Settings({ onClose, files = [], onDelegationChange, me =
           {tab === 'mydata' && <><ResetMyData /><CopyToken /></>}
           {tab === 'myscope' && <MyScanScope />}
           {tab === 'workers' && <WorkerConfiguration me={me} />}
-          {tab === 'scheduling' && <CapacitySchedule />}
+          {tab === 'scheduling' && <CapacitySchedule me={me} />}
           {tab === 'ai' && <AIProvidersPanel />}
           {tab === 'memory' && <ReviewMemory me={me} />}
         </div>

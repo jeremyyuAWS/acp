@@ -177,6 +177,47 @@ az containerapp show -g mdk-accessibility -n acp-remediate \
 Expected: `grace: 600`, `drain: ["540"]`. The application drain must stay comfortably below the
 platform grace — `tests/test_worker_deploy_drain.py` is the static half of that guarantee.
 
+## 8. Apply a published schedule, and prove a transition costs no revision
+
+This is Phase 3b, and it is the one claim in this feature that cannot be established from a
+repository: that a scheduled transition creates no new revision (AC 5, and the staging exercise
+AC 17 asks for).
+
+Read what would be applied first — it is rendered, not run:
+
+```
+curl -fsS "https://$FQDN/control/capacity-schedule/policy" -H "$AUTH" | python3 -m json.tool
+```
+
+Each app should show its off-hours floor as `min_replicas`, its ceiling as `max_replicas`, a
+`cron` rule carrying an IANA `timezone` and the business-hours window, and its existing queue
+rule under the name it already has in Azure. **A queue rule under a name Azure does not already
+carry means a second rule would be created rather than the first replaced** — stop and reconcile
+the names before applying.
+
+Apply the `az_commands` the same response renders, then record the revision count:
+
+```
+az containerapp revision list -g mdk-accessibility -n acp-assess \
+  --subscription "$AZURE_SUBSCRIPTION_ID" --query "length(@)" -o tsv
+```
+
+**Then wait through one transition and read it again.** The count must be unchanged. That is the
+whole of §6.4: publishing may cost one revision per app, and 06:00 must cost none. If the count
+moved, something is still editing the template on a timer and the cron rule is not doing the work.
+
+While waiting, confirm the composition behaves as designed:
+
+| Time | Expected | What it proves |
+|---|---|---|
+| just before the window opens | replicas at the off-hours floor | `minReplicas` is the overnight floor |
+| just after it opens | replicas at the business-hours floor, no new revision | the cron rule holds the floor without a deploy |
+| a queue burst inside the window | replicas above the business-hours floor | the cron rule is a floor, not a cap |
+| a queue burst **overnight** | replicas above the off-hours floor | AC 8, and the reason `maxReplicas` is the only ceiling |
+
+The overnight burst is the row worth being careful about: if it does not rise, the cron rule is
+being read as a ceiling somewhere and AC 8 has regressed silently.
+
 ## What this runbook does not establish
 
 * **The environment's vCPU quota.** No artifact in this repository records it, so
@@ -185,4 +226,7 @@ platform grace — `tests/test_worker_deploy_drain.py` is the static half of tha
   subscription's quota for the region) and record it in `docs/db-connection-budget.md`.
 * **Whether `acp-discovery` has a CPU scale rule.** §1 answers it; this repository cannot.
 * **That the fleet fits at business-hours floors.** It does not, at the capacity table
-  `docs/prd-capacity-scheduling.md` §5.3 proposes — see that document's review section.
+  `docs/prd-capacity-scheduling.md` §5.3 proposes — see that document's review section. The
+  `PUT` endpoint refuses that shape, so this is enforced rather than only documented.
+* **That a transition creates no revision.** §8 above is the procedure; nothing in this
+  repository can observe it.

@@ -486,6 +486,33 @@ configuration change at the transition, which is exactly what §6.1 and §6.4 jo
 Phase 3 should say so explicitly, because the obvious implementation — a cron job calling
 `az containerapp update` — is the one §6.4 forbids.
 
+## R7 — the mechanism, now that it is built
+
+§6.4 forbids a script that changes the Container App template twice a day and does not say what
+replaces it. `api/capacity_policy.py` builds the answer: **two KEDA rules on one app, and KEDA
+takes the maximum of what they ask for.**
+
+| | Value | Why |
+|---|---|---|
+| `minReplicas` | the off-hours floor | overnight capacity never drops below it |
+| `maxReplicas` | the service ceiling | the only cap; the cron rule is not one |
+| `cron` rule | asks for the business-hours floor, during the window | §6.1's floor, held without a deploy |
+| `postgresql` rule | asks for whatever the claimable backlog needs, any hour | AC 8's overnight burst |
+
+Nothing about the app changes at 06:00 — KEDA simply computes a different number — so the
+transition creates no revision. Publishing costs one update per app, which is what §6.4 permits.
+
+Two things this turned up that the PRD could not have known:
+
+* **The queue rule's name is not derivable from the service.** Production's remediate rule is
+  `remediation-queue`; the service is `remediate`. Generating the name would have added a second
+  rule rather than replacing the first — invisible outside the scale block, and surviving every
+  later edit.
+* **Discovery gets no generated rule at all.** No discovery scale rule exists in this repository,
+  and `--scale-rule-name` *replaces* the rules array, so emitting one could silently delete a
+  hand-applied rule. §1 of the runbook is the read that settles it; until then, guessing is worse
+  than abstaining.
+
 ## R8 — Smaller notes
 
 - **§5.3's GPU row is not a Postgres client** and does not appear in the connection budget. It
@@ -506,5 +533,6 @@ Phase 3 should say so explicitly, because the obvious implementation — a cron 
 | 1 | **Delivered except the Assess ceiling**, which is blocked on the R3 decision. Adds: predicate fix across four scalers, generator + `--check` guard, importable fleet budget, scale-in drain settings, verification runbook. |
 | 1b | **New, and now the critical path.** Owner decides R3 — after #1533 the headroom is one connection, so assess cannot gain any ceiling at all. Then: raise the ceiling, apply the rule, run the runbook against staging. |
 | 2 | **Delivered.** Read-only Scheduling tab in Settings, `GET /control/capacity-schedule` and the admin-only `POST …/validate`, scaler health (with the `pinned` state AC 10 was missing), the Live Operations capacity-mode strip (R1), and the DST tests moved forward (R8). No infrastructure changes, no persistence, no writes. |
-| 3 | Unchanged, plus: name the cron+queue rule mechanism explicitly (R7); validate against the worst mode, not the current one (R2). |
+| 3 | **Delivered, except applying to Azure.** `PUT /control/capacity-schedule` (validated, version-checked, audited), audited overrides that expire on read, `GET …/policy` rendering the cron+queue mechanism (R7), and the administrator editor. Persistence and application are separate steps: a saved schedule reports `azure_applied: false` until somebody pushes it. |
+| 3b | **New.** Apply a published policy to Azure and verify a real transition creates no revision (AC 5, AC 17). Needs a subscription; `docs/runbooks/verify-capacity-scalers.md` §8 is the procedure. |
 | 4 | Unchanged. |

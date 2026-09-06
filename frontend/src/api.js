@@ -1564,6 +1564,45 @@ export const getCapacitySchedule = () => (SIM
           validation: null, scalers: {}, observed: {}, drift: [], drift_evaluated: false,
           azure_configured: false })
   : fetch(`${BASE}/control/capacity-schedule`, { headers: headers() }).then(j))
+// Phase 3's writes. All admin-only at the API (each handler runs _require_admin); the SPA hides
+// the controls too, which is convenience, not the gate.
+//
+// SIM RESOLVES RATHER THAN REJECTS, returning the shape the caller expects with nothing changed.
+// A demo that threw here would render an error the demo cannot explain; one that pretended to
+// save would be worse — see SIM_NOT_WRITTEN in Settings.jsx for the same reasoning.
+export const putCapacitySchedule = (body) => (SIM
+  ? sim({ ...body, version: body.version, applied: false, azure_applied: false })
+  : fetch(`${BASE}/control/capacity-schedule`, {
+      method: 'PUT',
+      headers: { ...headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j))
+// The dry run. Returns findings and the projected fleet cost; saves nothing, on any path.
+export const validateCapacitySchedule = (body) => (SIM
+  ? sim({ blocked: false, findings: [], capacity: null, proposed: null })
+  : fetch(`${BASE}/control/capacity-schedule/validate`, {
+      method: 'POST',
+      headers: { ...headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j))
+export const createCapacityOverride = (body) => (SIM
+  ? sim({ override: null, correlation_id: null })
+  : fetch(`${BASE}/control/capacity-schedule/override`, {
+      method: 'POST',
+      headers: { ...headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then(j))
+export const deleteCapacityOverride = () => (SIM
+  ? sim({ cleared: false })
+  : fetch(`${BASE}/control/capacity-schedule/override`, {
+      method: 'DELETE', headers: headers(),
+    }).then(j))
+// What ACP would apply to Azure under the current schedule — rendered, never applied. Read-only,
+// same grant as the schedule it derives from.
+export const getCapacityPolicy = () => (SIM
+  ? sim({ schedule_version: 0, applied: false, apps: [], az_commands: [],
+          transitions_create_no_revision: true })
+  : fetch(`${BASE}/control/capacity-schedule/policy`, { headers: headers() }).then(j))
 // Azure-side capacity EVIDENCE — how many replicas are actually running right now and recent
 // CPU/memory utilization — distinct from getWorkerReplicas' CONFIGURED min/max. Read-only, open
 // to any signed-in user (same reasoning as getWorkerReplicas). Individual fields (current_replicas,
