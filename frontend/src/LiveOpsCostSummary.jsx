@@ -65,6 +65,11 @@ export default function LiveOpsCostSummary() {
     billing_actuals: { configured: !!costs.billing?.configured },
   }
   const missing = Object.values(setup).filter((item) => !item?.configured).length
+  // Actuals and the estimate are DIFFERENT KINDS OF NUMBER and are never summed or blended: one
+  // is what Azure billed, the other is what this capacity would cost at a rate card ACP was told.
+  const billed = costs.billing?.actual_month_to_date_usd ?? null
+  const forecast = costs.billing?.forecast_month_usd ?? null
+  const currency = costs.billing?.currency || null
   return <CollapsibleSection id="cost" label="Azure cost transparency"
     summary={<span style={{ display: 'inline-flex', justifyContent: 'space-between', alignItems: 'start',
       gap: 12, flexWrap: 'wrap', width: 'calc(100% - 18px)' }}>
@@ -82,8 +87,34 @@ export default function LiveOpsCostSummary() {
       <div><span className="muted" style={{ fontSize: 11 }}>CURRENT CAPACITY / HOUR</span><br /><b style={{ fontSize: 20 }}>{money(costs.estimated_hourly_usd, 4)}</b></div>
       <div><span className="muted" style={{ fontSize: 11 }}>PROJECTED / DAY</span><br /><b style={{ fontSize: 20 }}>{money(costs.estimated_daily_usd)}</b></div>
       <div><span className="muted" style={{ fontSize: 11 }}>RATE SOURCE</span><br /><b>{costs.rate_source || 'Not configured'}</b></div>
-      <div><span className="muted" style={{ fontSize: 11 }}>AZURE BILLING ACTUALS</span><br /><b>{costs.billing?.freshness_label || 'Not reported'}</b></div>
+      {/* ACTUALS, NOT AN ESTIMATE — and never labelled live. Cost Management refreshes roughly
+          every four hours, so this is a real measurement of a stale window: the figure gets the
+          date it was read, and the note next to it says how far behind Azure's own feed runs.
+          When it cannot be read the tile carries the REASON, because "Not reported" beside a
+          missing permission sends an operator looking in the wrong place. */}
+      <div>
+        <span className="muted" style={{ fontSize: 11 }}>AZURE BILLING ACTUALS · MONTH TO DATE</span><br />
+        {billed == null
+          ? <b>{costs.billing?.freshness_label || 'Not reported'}</b>
+          : <>
+            <b style={{ fontSize: 20 }}>{money(billed)}{currency && currency !== 'USD' ? ` ${currency}` : ''}</b>
+            <span className="muted" style={{ display: 'block', fontSize: 11 }}>
+              {costs.billing?.freshness_label || 'Azure billing data last updated'} {age(costs.billing?.updated_at)}
+            </span>
+          </>}
+      </div>
+      <div>
+        <span className="muted" style={{ fontSize: 11 }}>FORECAST · REST OF MONTH</span><br />
+        {forecast == null
+          ? <b>{costs.billing?.forecast_unavailable_reason === 'permission'
+            ? 'Cost Management Reader role needed'
+            : costs.billing?.configured ? 'Forecast not returned' : 'Not reported'}</b>
+          : <b style={{ fontSize: 20 }}>{money(forecast)}</b>}
+      </div>
     </div>
+    {!!costs.billing?.refresh_note && <p className="muted" style={{ fontSize: 11, margin: '9px 0 0' }}>
+      {costs.billing.refresh_note}
+    </p>}
     {!!costs.services?.length && <details style={{ marginTop: 10 }} open={!estimated}>
       <summary><b>Capacity and cost by worker service</b></summary>
       <div style={{ display: 'grid', gap: 6, marginTop: 8 }}>
@@ -101,7 +132,7 @@ export default function LiveOpsCostSummary() {
       Billing freshness: {costs.billing.delay_note}
     </div>}
     <div className="muted" style={{ fontSize: 11, marginTop: 9 }}>
-      Estimates use running replica allocation and an explicit rate card. They are not invoices; billing actuals are shown separately because Azure Cost Management is delayed.
+      Estimates use running replica allocation and an explicit rate card. They are not invoices; billing actuals are read from Azure Cost Management and shown separately because that feed is delayed.
     </div>
   </CollapsibleSection>
 }
