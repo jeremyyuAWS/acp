@@ -64,6 +64,28 @@ function ProgressBar({ bar }) {
   )
 }
 
+function CompactThroughput({ snapshot }) {
+  if (snapshot?.terminal) return null
+  const throughput = snapshot?.throughput || {}
+  const bars = Array.isArray(throughput.buckets) ? throughput.buckets.slice(-10) : []
+  if (!bars.length && typeof throughput.documents_per_minute !== 'number') return null
+  const max = Math.max(1, ...bars.map((value) => Number(value) || 0))
+  return (
+    <section className="rem-card-throughput" aria-label="Live remediation throughput">
+      <div><b>Throughput</b><span> · last 5 minutes</span></div>
+      {bars.length > 0 && (
+        <div className="rem-card-throughput__bars" role="img"
+             aria-label={`${throughput.documents_per_minute ?? 0} documents per minute over the last 5 minutes`}>
+          {bars.map((value, index) => <span key={index} style={{ height: `${Math.max(8, (Number(value) || 0) / max * 100)}%` }} />)}
+        </div>
+      )}
+      <strong>{typeof throughput.documents_per_minute === 'number'
+        ? `${throughput.documents_per_minute.toLocaleString()} documents/min`
+        : 'Calibrating…'}</strong>
+    </section>
+  )
+}
+
 /**
  * @param snapshot    GET /scans/{id}/remediation/snapshot, or null.
  * @param receivedAt  epoch ms when it arrived.
@@ -140,6 +162,8 @@ export default function RemediationRunCard({ snapshot = null, receivedAt = null,
         )}
         <ProgressBar bar={bar} />
       </div>
+
+      <CompactThroughput snapshot={snapshot} />
 
       {/* Secondary facts, each naming its unit. `Corrected copies` and `Documents verified` are
           deliberately separate numbers: a corrected copy that was stored but not delivered, or

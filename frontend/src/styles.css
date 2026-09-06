@@ -314,6 +314,11 @@ button.small { padding: 6px 12px; font-size: 13px; }
 .workflow-continuity-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .workflow-continuity-actions button { white-space: nowrap; }
 @media (max-width: 640px) { .workflow-continuity { align-items: stretch; flex-direction: column; } .workflow-continuity-actions { flex-wrap: wrap; } }
+.rem-card-throughput { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); display: grid; grid-template-columns: minmax(150px, auto) minmax(180px, 1fr) auto; align-items: end; gap: 12px; color: var(--muted); font-size: 11.5px; }
+.rem-card-throughput b, .rem-card-throughput strong { color: var(--ink); font-size: 12px; }
+.rem-card-throughput__bars { height: 34px; display: flex; align-items: end; gap: 4px; overflow: hidden; }
+.rem-card-throughput__bars span { flex: 1 1 0; min-width: 3px; max-width: 28px; border-radius: 2px 2px 0 0; background: var(--info-fg, #1f5fa8); }
+@media (max-width: 640px) { .rem-card-throughput { grid-template-columns: 1fr; align-items: start; } .rem-card-throughput__bars { width: 100%; } }
 
 /* keyboard focus — this is an accessibility product; it should be accessible */
 button:focus-visible, a:focus-visible, .tab:focus-visible, .fchip:focus-visible,

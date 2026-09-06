@@ -24,6 +24,8 @@ const SNAP = {
   documents: { completed: 8, processing: 3, waiting: 5, review: 2, failed: 1, skipped: 1 },
   fixes: { applied: 26, verified: 21, verification_failures: 5, documents_verified: 8 },
   delivery: { stored: 8, delivered: 7, pending: 1, eligible: 8, latest_at: null },
+  throughput: { documents_per_minute: 1.8, sample_documents: 9,
+                buckets: [0, 1, 0, 0, 0, 1, 1, 1, 2, 2] },
   review: { documents: 2, items: 3 },
   phases: [
     { key: 'preparing', label: 'Preparing', status: 'completed', detail: null },
@@ -149,6 +151,20 @@ describe('freshness is reported honestly while polling', () => {
 })
 
 describe('the card outlives a tab change', () => {
+  it('keeps a compact live five-minute throughput view on every tab', () => {
+    const html = render({ snapshot: SNAP, receivedAt: Date.now() })
+    expect(html).toContain('rem-card-throughput')
+    expect(html).toContain('Throughput')
+    expect(html).toContain('last 5 minutes')
+    expect(html).toContain('1.8 documents/min')
+    expect(html).toMatch(/aria-label="1.8 documents per minute over the last 5 minutes"/)
+  })
+
+  it('removes the live throughput strip after the run becomes terminal', () => {
+    const html = render({ snapshot: { ...SNAP, terminal: true, state: 'completed' }, receivedAt: Date.now() })
+    expect(html).not.toContain('rem-card-throughput')
+  })
+
   it('is mounted outside the tab panel, so a tab change cannot unmount it', () => {
     // THE WHOLE POINT OF THE COMPONENT. `<Remediate/>` renders only while view === 'remediate',
     // so a card inside the panel — or state owned by that component — dies on every tab change.
