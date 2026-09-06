@@ -364,6 +364,39 @@ def check(docx_bytes: bytes, *, tmp_dir: Path | None = None) -> dict:
         return _check_in(docx_bytes, Path(scratch))
 
 
+def _unreadable_reason(path: Path) -> str | None:
+    """Why this file is not a Word document ACP can inspect, or None when it is one.
+
+    THE HOLE THIS CLOSES. `office_structure.docx_checks` catches every exception, logs it through
+    `swallowed()`, and returns the findings it had accumulated — which for a file it could not open
+    is none at all. `_check_in` then read "no findings" as "no failures" and the gate answered
+    ok=True. So the one document state the export gate must never wave through — one nobody can
+    open — was the state it was least able to see.
+
+    Measured on 2026-09-06 before the fix, with `check(b"PK\\x03\\x04 not a docx at all")`:
+
+        BadZipFile logged by swallowed(), findings == [], ok == True
+
+    Two conditions, and both are needed. A file that is not a zip fails the first. A file that IS a
+    zip — which `PK\\x03\\x04` alone is enough to start looking like — but carries no
+    `word/document.xml` fails the second, and that is the shape a truncated or half-written render
+    takes. `docx_checks` itself returns `[]` early for exactly that second case, so it too reads as
+    a pass.
+    """
+    import zipfile
+
+    try:
+        with zipfile.ZipFile(path) as zf:
+            if "word/document.xml" not in zf.namelist():
+                return ("the file is a zip archive but carries no word/document.xml, so it is not "
+                        "a Word document")
+    except zipfile.BadZipFile:
+        return "the file is not a valid Word document (it is not a readable zip archive)"
+    except OSError as exc:                                   # pragma: no cover — unreadable path
+        return f"the file could not be read: {exc}"
+    return None
+
+
 def _check_in(docx_bytes: bytes, directory: Path) -> dict:
     """The analyser pass itself, against a directory whose lifetime the caller owns."""
     import office_structure
@@ -371,6 +404,16 @@ def _check_in(docx_bytes: bytes, directory: Path) -> dict:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "acr-export.docx"
     path.write_bytes(docx_bytes)
+
+    unreadable = _unreadable_reason(path)
+    if unreadable:
+        # A FAILURE, not an empty pass. The route refuses to serve a document that fails this gate,
+        # and a document nobody can open is the clearest case there is for refusing — PRD §16 asks
+        # whether the export is accessible, and an unopenable file answers no.
+        return {"ok": False,
+                "failures": [{"ruleId": "acr.export.unreadable", "severity": "FAIL",
+                              "wcag": "", "detail": unreadable}],
+                "reviews": []}
 
     findings = office_structure.docx_checks(path) or []
     failures = [f for f in findings if str(f.get("severity", "")).upper() != "REVIEW"]
