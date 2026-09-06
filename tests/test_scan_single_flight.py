@@ -1,5 +1,5 @@
-"""Single-flight scans per owner: starting a new durable scan while one is already running for
-the same user must cancel the old one first, not let both discover concurrently.
+"""Single-flight scans per owner: starting revised durable work while Discovery is active must
+be refused until the caller explicitly confirms replacement.
 
 Found live 2026-08-26: nothing stopped a second "Re-scan all sources" click (or a stray duplicate
 request) from enqueuing a second durable scan while the first was still running — both then
@@ -54,8 +54,15 @@ def gated_client(monkeypatch, isolated_store):
     return as_user
 
 
-def _start_queued(client_fn, owner, source="local"):
-    r = client_fn(owner).post(f"/scans?source={source}&queue=true&fanout=true")
+def _start_response(client_fn, owner, source="local", *, replace=False, intent=None):
+    headers = {"Idempotency-Key": intent} if intent else None
+    return client_fn(owner).post(
+        f"/scans?source={source}&queue=true&fanout=true"
+        f"&replace_active={'true' if replace else 'false'}", headers=headers)
+
+
+def _start_queued(client_fn, owner, source="local", *, replace=False, intent=None):
+    r = _start_response(client_fn, owner, source, replace=replace, intent=intent)
     assert r.status_code == 200, r.text
     return r.json()["scan_id"]
 
@@ -69,29 +76,57 @@ def _mark_running(store, scan_id, owner):
                         owner=owner, status="running")
 
 
-def test_a_second_scan_cancels_the_first_for_the_same_owner(gated_client, isolated_store):
+def test_a_second_scan_requires_explicit_replacement_for_the_same_owner(
+        gated_client, isolated_store):
     s1 = _start_queued(gated_client, OWNER)
     _mark_running(isolated_store, s1, OWNER)
     assert isolated_store.get_scan(s1, owner=OWNER)["run"]["status"] == "running"
 
-    s2 = _start_queued(gated_client, OWNER)
+    response = _start_response(gated_client, OWNER)
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["active_scan_id"] == s1
+    assert response.json()["detail"]["code"] == "discovery_workflow_active"
+    assert isolated_store.get_scan(s1, owner=OWNER)["run"]["status"] == "running"
+
+
+def test_confirmed_replacement_supersedes_the_running_scan(gated_client, isolated_store):
+    s1 = _start_queued(gated_client, OWNER)
+    _mark_running(isolated_store, s1, OWNER)
+
+    s2 = _start_queued(gated_client, OWNER, replace=True)
 
     assert s2 != s1
     assert isolated_store.get_scan(s1, owner=OWNER)["run"]["status"] == "superseded"
-    # The new scan is untouched — it starts at 'queued' like any fresh enqueue.
     assert isolated_store.get_scan(s2, owner=OWNER)["run"]["status"] == "queued"
 
 
-def test_a_second_scan_is_unaffected_when_the_first_is_not_yet_claimed(gated_client, isolated_store):
-    """A scan still sitting at status='queued' (no worker has claimed it) is not what
-    active_scan() reports as active — starting another one must not touch it or error."""
+def test_a_queued_scan_is_also_protected_from_an_accidental_second_start(
+        gated_client, isolated_store):
     s1 = _start_queued(gated_client, OWNER)
     assert isolated_store.get_scan(s1, owner=OWNER)["run"]["status"] == "queued"
 
-    s2 = _start_queued(gated_client, OWNER)
+    response = _start_response(gated_client, OWNER)
 
+    assert response.status_code == 409
     assert isolated_store.get_scan(s1, owner=OWNER)["run"]["status"] == "queued"
+
+
+def test_confirmed_replacement_cancels_a_queued_scan(gated_client, isolated_store):
+    s1 = _start_queued(gated_client, OWNER)
+    s2 = _start_queued(gated_client, OWNER, replace=True)
+
+    assert s2 != s1
     assert isolated_store.get_scan(s2, owner=OWNER)["run"]["status"] == "queued"
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur, "SELECT status FROM jobs WHERE scan_id=%s", (s1,))
+        assert {row["status"] for row in isolated_store._db.fetchall(cur)} == {"dead"}
+
+
+def test_same_idempotency_key_rejoins_the_active_discovery(gated_client, isolated_store):
+    s1 = _start_queued(gated_client, OWNER, intent="one-click")
+    s2 = _start_queued(gated_client, OWNER, intent="one-click")
+    assert s2 == s1
 
 
 def test_no_prior_scan_is_a_no_op(gated_client, isolated_store):
@@ -116,10 +151,10 @@ def test_only_the_most_recent_prior_scan_is_cancelled(gated_client, isolated_sto
     "most recent in-flight scan" semantics rather than trying to sweep every old row."""
     s1 = _start_queued(gated_client, OWNER)
     _mark_running(isolated_store, s1, OWNER)
-    s2 = _start_queued(gated_client, OWNER)
+    s2 = _start_queued(gated_client, OWNER, replace=True)
     _mark_running(isolated_store, s2, OWNER)
 
-    s3 = _start_queued(gated_client, OWNER)
+    s3 = _start_queued(gated_client, OWNER, replace=True)
 
     assert isolated_store.get_scan(s2, owner=OWNER)["run"]["status"] == "superseded"
     assert isolated_store.get_scan(s3, owner=OWNER)["run"]["status"] == "queued"
