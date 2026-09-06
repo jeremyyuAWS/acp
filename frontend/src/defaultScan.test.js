@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { narrowScanDefaultContext, pickDefaultScan } from './defaultScan.js'
+import { isHistoricalScan, narrowScanDefaultContext, pickDefaultScan } from './defaultScan.js'
 
 // scans arrive newest-first (list_scans ORDER BY completed_at DESC).
 const scan = (id, files, published_at = null) => ({ id, files, published_at })
@@ -69,5 +69,19 @@ describe('narrowScanDefaultContext', () => {
     const list = [scan('new', 900), scan('old', 986), scan('older', 980)]
     expect(narrowScanDefaultContext(list, 'old')).toBeNull()
     expect(narrowScanDefaultContext([scan('tiny', 4), scan('full', 986)], 'tiny')).toBeNull()
+  })
+})
+
+describe('isHistoricalScan', () => {
+  it('treats the starred newest scan as current even when another scan is the preferred default', () => {
+    const list = [scan('new-unpublished', 20), scan('preferred-published', 22, '2026-08-01T00:00:00Z')]
+    expect(pickDefaultScan(list).id).toBe('preferred-published')
+    expect(isHistoricalScan(list, 'new-unpublished')).toBe(false)
+    expect(isHistoricalScan(list, 'preferred-published')).toBe(true)
+  })
+
+  it('does not call an unknown or missing selection a history replay', () => {
+    expect(isHistoricalScan([scan('latest', 22)], null)).toBe(false)
+    expect(isHistoricalScan([scan('latest', 22)], 'active-not-listed')).toBe(false)
   })
 })

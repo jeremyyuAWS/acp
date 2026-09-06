@@ -29,6 +29,17 @@ export function pickDefaultScan(scans, { ratio = COLLAPSE_RATIO, window = COLLAP
 }
 
 /**
+ * Whether a selected scan is chronologically older than the newest completed scan.
+ *
+ * This deliberately does not use pickDefaultScan(): the preferred workspace default may be an
+ * older verified/full-size scan, but that does not make a newer scan a history replay.
+ */
+export function isHistoricalScan(scans, selectedId) {
+  if (!Array.isArray(scans) || scans.length === 0 || !selectedId) return false
+  return scans.some((scan) => scan?.id === selectedId) && scans[0]?.id !== selectedId
+}
+
+/**
  * Explain the otherwise surprising case where the raw newest scan is not the workspace default.
  * Returns null for ordinary history replay and published-scan preference; this notice is only for
  * a newest run whose file population is below the same collapse threshold used by both pickers.

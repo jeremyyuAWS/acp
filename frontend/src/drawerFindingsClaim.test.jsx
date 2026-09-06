@@ -233,8 +233,8 @@ describe('time-travel means a past scan, and always has a date', () => {
   })
 
   it('keeps a fallback so a null stamp can never render as a bare period', () => {
-    expect(appSrc).toMatch(/fmtStamp\(run\.completed_at\) \?\? 'an earlier scan'/)
-    expect(appSrc).toMatch(/scanList\.some\(\(s\) => s\.id === run\.id\)/)
+    expect(appSrc).toMatch(/fmtStamp\(run\.completed_at\) \?\? 'an earlier date'/)
+    expect(appSrc).toContain('const isTimeTravel = isHistoricalScan(scanList, run?.id)')
   })
 })
 
