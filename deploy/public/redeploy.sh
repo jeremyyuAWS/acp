@@ -312,11 +312,47 @@ except Exception:
  print("false", "", "false", "false", "false", "unknown")' <<<"$READY_BEFORE")
 EOF
 if [ "$REDIS_REPORTED" != true ]; then
-  # One-release compatibility bridge: the revision immediately before this safeguard cannot
-  # report a field it does not implement. Once this version is live, absence/unavailability no
-  # longer passes. The queue gate below stays fail-closed and requires its explicit emergency
-  # override for that same bootstrap release, so this does not silently bless an active cutover.
-  echo "  ⚠ current revision predates Redis readiness reporting; this bootstrap deploy cannot verify it"
+  # The one release before #1576 cannot report either Redis health or aggregate queue activity.
+  # Admit ONLY that old->new transition: /healthz must identify a real commit at or before the
+  # parent of the gate commit, while the requested target must contain the gate. A later revision
+  # that drops the fields is a regression, not "legacy", and stays blocked.
+  LEGACY_GATE_COMMIT="e3689c2ce4d801e0ea08482bbc72ba9076ad4f18"
+  HEALTH_BEFORE="$(curl -s --max-time 20 "https://$FQDN/healthz" || echo '{}')"
+  LIVE_SHA="$(python3 -c 'import json,sys
+try: print((json.load(sys.stdin).get("commit") or "").strip())
+except Exception: print("")' <<<"$HEALTH_BEFORE")"
+  [[ "$LIVE_SHA" =~ ^[0-9a-f]{40}$ ]] \
+    || die "current revision lacks verifiable commit provenance; refusing legacy worker bootstrap"
+  git merge-base --is-ancestor "$LIVE_SHA" "${LEGACY_GATE_COMMIT}^" \
+    || die "current revision is not eligible for the one-release legacy bootstrap; missing Redis readiness is a deployment blocker"
+  git merge-base --is-ancestor "$LEGACY_GATE_COMMIT" "$PIN" \
+    || die "target does not contain the Redis readiness safeguard; refusing legacy worker bootstrap"
+
+  # Execute the independent probe in the CURRENT app revision, where secret-backed REDIS_URL and
+  # DATABASE_URL already resolve to the same shared services used by the workers. The source is
+  # transmitted because, by definition, this old image does not contain the new probe yet.
+  LEGACY_PROBE_B64="$(python3 -c 'import base64,pathlib; print(base64.b64encode(pathlib.Path("deploy/public/legacy_bootstrap_probe.py").read_bytes()).decode())')"
+  LEGACY_PROBE_RAW="$(az containerapp exec "${AZ[@]}" -g "$RG" -n "$APP" \
+    --command "python -c \"import base64;exec(base64.b64decode('$LEGACY_PROBE_B64'))\"" 2>&1)" \
+    || die "legacy bootstrap could not independently verify shared Redis and queue state"
+  LEGACY_PROBE_JSON="$(printf '%s\n' "$LEGACY_PROBE_RAW" | sed -n 's/^ACP_LEGACY_BOOTSTRAP=//p' | tail -1)"
+  read -r BOOTSTRAP_REDIS BOOTSTRAP_QUEUED BOOTSTRAP_RETRYING BOOTSTRAP_RUNNING <<EOF
+$(python3 -c 'import json,sys
+try:
+ d=json.load(sys.stdin); values=(d["redis_write_read"],d["queued"],d["retrying"],d["running"])
+ assert values[0] is True and all(type(v) is int and v >= 0 for v in values[1:])
+ print("true", values[1], values[2], values[3])
+except Exception: print("false", "", "", "")' <<<"$LEGACY_PROBE_JSON")
+EOF
+  [ "$BOOTSTRAP_REDIS" = true ] \
+    || die "legacy bootstrap returned no valid Redis and queue verification; refusing worker cutover"
+  REDIS_CONFIGURED=true
+  REDIS_REACHABLE=true
+  QUEUE_AVAILABLE=true
+  ACTIVE_JOBS=$((BOOTSTRAP_QUEUED + BOOTSTRAP_RETRYING + BOOTSTRAP_RUNNING))
+  [ "$ACTIVE_JOBS" = 0 ] \
+    || die "legacy bootstrap found $BOOTSTRAP_QUEUED queued, $BOOTSTRAP_RETRYING retrying, and $BOOTSTRAP_RUNNING running job(s); its one-time cutover requires a globally empty queue"
+  echo "  ✓ legacy bootstrap independently verified shared Redis and global queue state"
 else
   [ "$REDIS_CONFIGURED" = true ] || die "Redis is not configured; split worker services cannot preserve live scan state"
   [ "$REDIS_REACHABLE" = true ] || die "Redis is unavailable before deployment; refusing to replace workers while shared live state is unhealthy"

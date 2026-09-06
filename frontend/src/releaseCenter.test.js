@@ -88,8 +88,9 @@ describe('Release builder', () => {
     expect(s).toMatch(/Choose files/)
     expect(s).toMatch(/Choose delivery/)
     expect(s).toMatch(/Publish copies/)
-    expect(s).toMatch(/Download corrected files/)
-    expect(s).toMatch(/downloadRemediated\(run\?\.id, file\.file\)/)
+    expect(s).toMatch(/Download ZIP package/)
+    expect(s).toMatch(/downloadReleasePackage\(run\?\.id, selectedReady\.map/)
+    expect(s).toMatch(/source folder structure and a release manifest/)
   })
 
   it('publishes only the selected files and states the consequence before writing', () => {

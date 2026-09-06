@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import ScopeBanner from './ScopeBanner.jsx'
 import { documentSelection, documentScopeSentence } from './remediableScope.js'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
-import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseManifest, listHitlQueue, getSettings, getSourceStatus, rescoreFile, downloadRemediated } from './api.js'
+import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseManifest, listHitlQueue, getSettings, getSourceStatus, rescoreFile, downloadReleasePackage } from './api.js'
 import { releaseDestination, releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
 import { SET_STATUS, certificationUniverse, releaseSetStatus } from './graduation.js'
 import { mirrorState, MIRROR } from './deliveryPolicy.js'
@@ -239,13 +239,12 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const downloadSelected = async () => {
     if (downloading || !selectedReady.length) return
     setDownloading(true)
-    let failed = 0
-    for (const file of selectedReady) {
-      try { await downloadRemediated(run?.id, file.file) } catch { failed += 1 }
+    try {
+      await downloadReleasePackage(run?.id, selectedReady.map((file) => file.file))
+      setReleaseAnnouncement(`Package downloaded with ${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file' : 'files'} and a release manifest.`)
+    } catch (error) {
+      setReleaseAnnouncement(error?.message || 'The corrected files could not be packaged for download.')
     }
-    setReleaseAnnouncement(failed
-      ? `${selectedReady.length - failed} corrected files downloaded; ${failed} could not be downloaded.`
-      : `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file' : 'files'} downloaded.`)
     setDownloading(false)
   }
   // W5 — set-level certification status (graduation.js). A release can go out CONDITIONALLY while
@@ -578,8 +577,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                 </label>
                 <label className={deliveryMethod === 'download' ? 'selected' : ''}>
                   <input type="radio" name="delivery-method" value="download" checked={deliveryMethod === 'download'} onChange={() => setDeliveryMethod('download')} />
-                  <b>Download corrected files</b>
-                  <span>Download the selected files to this device. Copies remain available in ACP.</span>
+                  <b>Download ZIP package</b>
+                  <span>One ZIP with the source folder structure and a release manifest.</span>
                 </label>
                 <div className="release-methods__resting">
                   <b>Not ready to deliver?</b><span>Do nothing—corrected copies remain safely stored in ACP.</span>
@@ -595,13 +594,13 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                   <b>Review your release plan</b>
                   <p>{deliveryMethod === 'publish'
                     ? `${selectedPublishable.length} unreleased corrected ${selectedPublishable.length === 1 ? 'copy' : 'copies'} will be published to ${releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}. Already released files are excluded. Original files will not be changed.`
-                    : `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file' : 'files'} will be downloaded to this device. Original files will not be changed.`}</p>
+                    : `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file' : 'files'} will be packaged in one ZIP with folder structure and a manifest. Original files will not be changed.`}</p>
                 </div>
                 <div className="release-plan__actions">
                   <button className="ghost" onClick={() => setBuilderStep(2)}>Back to delivery</button>
                   {deliveryMethod === 'publish'
                     ? <button className="qbtn approve" disabled={readOnly || publishing || !selectedPublishable.length} onClick={() => setConfirm({ kind: 'selected', files: selectedPublishable.map((f) => f.file) })}>{publishing ? 'Publishing…' : `Publish ${selectedPublishable.length} ${selectedPublishable.length === 1 ? 'copy' : 'copies'}`}</button>
-                    : <button className="qbtn approve" disabled={downloading || !selectedReady.length} onClick={downloadSelected}>{downloading ? 'Downloading…' : `Download ${selectedReady.length} ${selectedReady.length === 1 ? 'file' : 'files'}`}</button>}
+                    : <button className="qbtn approve" disabled={downloading || !selectedReady.length} onClick={downloadSelected}>{downloading ? 'Building package…' : `Download ZIP (${selectedReady.length})`}</button>}
                 </div>
               </div>
             </>}

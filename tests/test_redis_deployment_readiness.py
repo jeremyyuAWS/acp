@@ -55,4 +55,12 @@ def test_redeploy_requires_reachable_redis_and_reports_topology():
     assert "REDIS_REPORTED" in gate and "REDIS_CONFIGURED" in gate and "REDIS_REACHABLE" in gate
     assert "Azure Managed Redis" in gate
     assert 'die "Redis is unavailable before deployment' in gate
-    assert "predates Redis readiness reporting" in gate
+    # A revision old enough not to report Redis can cross the gate only through the independent
+    # one-release probe. A later revision losing the field must not inherit a permanent bypass.
+    assert 'LEGACY_GATE_COMMIT="e3689c2ce4d801e0ea08482bbc72ba9076ad4f18"' in gate
+    assert 'git merge-base --is-ancestor "$LIVE_SHA" "${LEGACY_GATE_COMMIT}^"' in gate
+    assert 'git merge-base --is-ancestor "$LEGACY_GATE_COMMIT" "$PIN"' in gate
+    assert "legacy_bootstrap_probe.py" in gate
+    assert '[ "$BOOTSTRAP_REDIS" = true ]' in gate
+    assert "BOOTSTRAP_QUEUED + BOOTSTRAP_RETRYING + BOOTSTRAP_RUNNING" in gate
+    assert '[ "$ACTIVE_JOBS" = 0 ]' in gate
