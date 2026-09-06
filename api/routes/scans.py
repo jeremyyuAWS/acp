@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 import core
 import scanner
+from store import ActiveStageExecutionError
 from scanner import run_scan
 from report import build_report
 from report_tagged import build_tagged_report
@@ -69,6 +70,20 @@ def _owner(request: Request) -> str:
 
 
 logger = logging.getLogger(__name__)
+
+
+def _enqueue_stage_batch(*args, **kwargs) -> dict:
+    """Enqueue one stage execution, presenting the store's single-flight fence as API state."""
+    try:
+        return core.store.enqueue_stage_batch(*args, **kwargs)
+    except ActiveStageExecutionError as exc:
+        raise HTTPException(status_code=409, detail={
+            "code": "stage_execution_active",
+            "stage": exc.stage,
+            "active_batch_id": exc.batch_id,
+            "message": (f"A different {exc.stage} run is already active. Wait for it to finish "
+                        "or stop it before starting revised work."),
+        }) from exc
 
 
 def _inv_capability(row: dict) -> dict:
@@ -604,7 +619,7 @@ async def remediate_scan(sid: str, request: Request):
     for payload in payloads:
         # Provenance only; no decision content enters the queue payload.
         payload["decision_digest"] = decision_digest
-    execution = core.store.enqueue_stage_batch(
+    execution = _enqueue_stage_batch(
         sid, "remediate", "remediate_file", payloads, snapshot_id=snapshot_id,
         request_fingerprint=request_fingerprint)
     # AFTER the jobs exist, never before: the run is "accepted" precisely when durable work has
@@ -1245,7 +1260,7 @@ def assess(sid: str, request: Request, level: str = Query("AA"),
         request_fingerprint = _json.dumps(
             {"level": level, "include_lifecycle_flagged": include_lifecycle_flagged},
             sort_keys=True)
-        execution = core.store.enqueue_stage_batch(
+        execution = _enqueue_stage_batch(
             sid, "assess", "scan_assess",
             [{"scan_id": sid, "user": _owner(request),
               "include_lifecycle_flagged": include_lifecycle_flagged}],
@@ -1261,7 +1276,7 @@ def assess(sid: str, request: Request, level: str = Query("AA"),
     request_fingerprint = _json.dumps(
         {"level": level, "include_lifecycle_flagged": include_lifecycle_flagged},
         sort_keys=True)
-    execution = core.store.enqueue_stage_batch(
+    execution = _enqueue_stage_batch(
         sid, "assess", "assess_trace", [{"scan_id": sid, "level": level}],
         snapshot_id=snapshot_id, request_fingerprint=request_fingerprint)
     return {"scan_id": sid, "level": level, "job_id": execution["job_ids"][0],
@@ -3134,7 +3149,7 @@ def publish_files(sid: str, request: Request, body: dict):
             import hashlib, json
             requested = sorted(p["file"] for p in payloads)
             fingerprint = hashlib.sha256(json.dumps(requested).encode()).hexdigest()
-            execution = core.store.enqueue_stage_batch(
+            execution = _enqueue_stage_batch(
                 sid, "release", "publish_file", payloads,
                 snapshot_id=release_id, request_fingerprint=fingerprint)
         status = core.store.release_status(release_id, owner)

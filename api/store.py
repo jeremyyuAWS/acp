@@ -177,6 +177,21 @@ def _decode_provenance(raw) -> dict | None:
 # in a jobs table — which matters when the question is "why is this queued row not being claimed".
 _PAUSE_RUN_AFTER = "9999-12-31T00:00:00+00:00"
 
+
+class ActiveStageExecutionError(RuntimeError):
+    """A different execution already owns this scan's stage.
+
+    Kept as a store-level error so the invariant is enforced for every caller, not only the
+    HTTP routes.  The route translates it to a structured 409 that can drive the existing
+    cancel/recovery control.
+    """
+
+    def __init__(self, scan_id: str, stage: str, batch_id: str):
+        self.scan_id = scan_id
+        self.stage = stage
+        self.batch_id = batch_id
+        super().__init__(f"{stage} execution {batch_id} is already active for scan {scan_id}")
+
 # Schema is identical between SQLite and Postgres (UPSERT syntax is the same).
 _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS scan_runs (
@@ -10563,6 +10578,25 @@ class Store:
                         # dead work did queue something, and a caller that reads it to decide
                         # whether to watch a run has to be told so.
                         "reused": requeued == 0, "statuses": statuses, "requeued": requeued}
+
+            # Same scan + same stage is single-flight even when the requested scope or approved
+            # decisions changed.  The deterministic lookup above deliberately runs first so an
+            # idempotent replay still returns its own live execution.  A DIFFERENT batch must wait
+            # or be explicitly cancelled through request_stage_cancel before it can be accepted;
+            # otherwise two worker generations can write progress and outputs for one stage at
+            # once, making both the workflow projection and the user's counters ambiguous.
+            stage_types = tuple(kind for kind, mapped in self._BATCH_JOB_STAGES.items()
+                                if mapped == stage)
+            if stage_types:
+                placeholders = ",".join(["%s"] * len(stage_types))
+                self._db.execute(cur,
+                    f"SELECT batch_id FROM jobs WHERE scan_id=%s "
+                    f"AND type IN ({placeholders}) AND batch_id IS NOT NULL "
+                    "AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1",
+                    (scan_id, *stage_types))
+                active = self._db.fetchone(cur)
+                if active:
+                    raise ActiveStageExecutionError(scan_id, stage, active["batch_id"])
             priority = job_priority(job_type)
             job_ids = []
             for original in payloads:

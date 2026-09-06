@@ -87,12 +87,34 @@ def test_completed_submission_is_reused_for_the_same_snapshot(client, isolated_s
     assert set(second["job_ids"]) == set(first["job_ids"])
 
 
-def test_a_different_exact_scope_creates_a_distinct_execution(client, isolated_store):
+def test_a_different_exact_scope_is_refused_while_the_first_execution_is_active(
+        client, isolated_store):
     _save(isolated_store, "sp-scope", "sharepoint")
     first = client.post("/scans/sp-scope/remediate", json={"scope": ["a.docx"]}).json()
-    second = client.post("/scans/sp-scope/remediate", json={"scope": ["b.pptx"]}).json()
-    assert second["reused"] is False
-    assert second["batch_id"] != first["batch_id"]
+    response = client.post("/scans/sp-scope/remediate", json={"scope": ["b.pptx"]})
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "stage_execution_active",
+        "stage": "remediate",
+        "active_batch_id": first["batch_id"],
+        "message": ("A different remediate run is already active. Wait for it to finish or "
+                    "stop it before starting revised work."),
+    }
+
+
+def test_a_different_exact_scope_creates_a_distinct_execution_after_completion(
+        client, isolated_store):
+    _save(isolated_store, "sp-scope-done", "sharepoint")
+    first = client.post(
+        "/scans/sp-scope-done/remediate", json={"scope": ["a.docx"]}).json()
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(
+            cur, "UPDATE jobs SET status='done' WHERE id=%s", (first["job_ids"][0],))
+
+    second = client.post(
+        "/scans/sp-scope-done/remediate", json={"scope": ["b.pptx"]}).json()
+    assert second["reused"] is False and second["batch_id"] != first["batch_id"]
 
 
 def test_changed_approved_fix_creates_a_new_execution(client, isolated_store):
@@ -108,6 +130,10 @@ def test_changed_approved_fix_creates_a_new_execution(client, isolated_store):
     assert equivalent["batch_id"] == first["batch_id"]
     assert equivalent["decision_digest"] == first["decision_digest"]
     assert equivalent["reused"] is True
+
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(
+            cur, "UPDATE jobs SET status='done' WHERE id=%s", (first["job_ids"][0],))
 
     isolated_store.update_hitl_item(item_id, "approved", approved_value="Corrected description")
     revised = client.post("/scans/sp-decision/remediate", json={}).json()

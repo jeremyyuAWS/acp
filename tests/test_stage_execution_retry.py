@@ -125,6 +125,32 @@ def test_in_flight_work_is_never_disturbed(store):
     assert sorted(r["status"] for r in _rows(store)) == ["running", "running"]
 
 
+def test_changed_work_cannot_start_beside_an_active_stage_execution(store):
+    """A new fingerprint is new intent, but it must not become a concurrent generation."""
+    import store as store_mod
+
+    first = _submit(store)
+    _set_status(store, first["job_ids"], "running")
+
+    with pytest.raises(store_mod.ActiveStageExecutionError) as caught:
+        _submit(store, files=("policy.docx",))
+
+    assert caught.value.stage == "remediate"
+    assert caught.value.batch_id == first["batch_id"]
+    assert len(_rows(store)) == len(FILES), "the refused generation must leave no rows behind"
+
+
+def test_changed_work_can_start_after_the_prior_execution_is_cancelled(store):
+    first = _submit(store)
+    result = store.request_stage_cancel(SID, "remediate")
+    assert result["batch_id"] == first["batch_id"]
+
+    second = _submit(store, files=("policy.docx",))
+
+    assert second["batch_id"] != first["batch_id"]
+    assert second["reused"] is False
+
+
 def test_a_mixed_execution_revives_only_what_failed(store):
     first = _submit(store)
     _set_status(store, first["job_ids"][:1], "done")
