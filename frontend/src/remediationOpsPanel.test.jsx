@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import RemediationOpsPanel from './RemediationOpsPanel.jsx'
-import { freshness, partitionSums, headline, isNewer, counterRows, secondaryRows }
+import { freshness, integrityAffects, partitionSums, headline, isNewer, counterRows, secondaryRows }
   from './remediationSnapshot.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -54,6 +54,7 @@ describe('the panel renders the server snapshot and never assembles its own', ()
     const html = render({ snapshot: SNAP, connected: true, receivedAt: Date.now() })
     expect(html).toContain('Remediation in progress')
     expect(html).toContain('Applying approved fixes')
+    expect(html).toContain('Scope ready · 10 documents in scope')
     expect(html).toContain('10 documents in scope')
     for (const label of ['Completed', 'Processing', 'Waiting', 'Review', 'Failed', 'Skipped']) {
       expect(html).toContain(label)
@@ -138,9 +139,9 @@ describe('unknown and inconsistent are shown as themselves, never as zero or hea
                    violations: [{ invariant: 'verified_within_applied', metric: 'fixes',
                                   detail: '30 verified fixes against 26 applied' }] } }
     const html = render({ snapshot: broken, connected: true, receivedAt: Date.now() })
-    expect(html).toContain('Status temporarily inconsistent')
+    expect(html).toContain('Some supporting totals are catching up')
     expect(html).toContain('fixes')
-    expect(html).toContain('last ACP confirmed')
+    expect(html).toContain('Live document progress remains available')
     expect(html).toContain('26')          // the measured value survives the violation
   })
 
@@ -177,10 +178,16 @@ describe('freshness is the transport\'s answer, not an inference from the number
                        receivedAt: now, now }).level).toBe('stalled')
   })
 
-  it('is unknown — never zero, never healthy — with no snapshot or an unreconciled one', () => {
+  it('is unknown with no snapshot or when freshness itself cannot be reconciled', () => {
     expect(freshness({ snapshot: null, connected: true, now }).level).toBe('unknown')
-    expect(freshness({ snapshot: { ...SNAP, integrity: { ok: false, violations: [], affected: [] } },
+    expect(freshness({ snapshot: { ...SNAP, integrity: { ok: false, violations: [], affected: ['freshness'] } },
                        connected: true, receivedAt: now, now }).level).toBe('unknown')
+  })
+
+  it('keeps transport live when only supporting fix totals are catching up', () => {
+    const snapshot = { ...SNAP, integrity: { ok: false, violations: [], affected: ['fixes'] } }
+    expect(integrityAffects(snapshot, 'documents')).toBe(false)
+    expect(freshness({ snapshot, connected: true, receivedAt: now, now }).level).toBe('live')
   })
 })
 
@@ -342,6 +349,30 @@ describe('the v2 live operations hierarchy', () => {
     expect(html).toContain('remops-pipeline-moving')
     expect(html).toContain('Patient Guide.docx')
     expect(html).toContain('4 fixes applied')
+  })
+
+  it('turns delayed progress into an actionable cue without declaring a stall early', () => {
+    const snapshot = { ...SNAP, progress: { material_age_s: 116 },
+      thresholds: { delayed_after_s: 60, stall_after_s: 900 } }
+    const html = render({ snapshot, connected: true, receivedAt: Date.now(), onViewMonitor: () => {} })
+    expect(html).toContain('checkpoint delayed')
+    expect(html).toContain('No durable progress for 1m 56s')
+    expect(html).toContain('Check Live Operations')
+    expect(html).not.toContain('No durable progress is being recorded')
+  })
+
+  it('gives a stalled run a direct worker and retry action', () => {
+    const snapshot = { ...SNAP, state: 'stalled', progress: { material_age_s: 901 } }
+    const html = render({ snapshot, connected: true, receivedAt: Date.now(), onViewMonitor: () => {} })
+    expect(html).toContain('No durable progress is being recorded')
+    expect(html).toContain('Inspect workers and retries')
+  })
+
+  it('explains an empty throughput graph while documents are active', () => {
+    const html = render({ snapshot: { ...SNAP, throughput: null }, connected: true,
+      receivedAt: Date.now() })
+    expect(html).toContain('No document has completed in the last five minutes')
+    expect(html).toContain('2 are actively processing')
   })
 
   it('renders reconciled progress before pipeline, active work, throughput, activity, and exceptions', () => {

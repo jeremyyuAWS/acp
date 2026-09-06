@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import LiveCounter from './LiveCounter.jsx'
-import { counterRows, secondaryRows, freshness, headline, partitionSums } from './remediationSnapshot.js'
+import { counterRows, secondaryRows, freshness, headline, integrityAffects, partitionSums } from './remediationSnapshot.js'
 import { activityBuckets, attemptStage, milestoneCrossings, retrySeconds } from './remediationLivePanel.js'
 import RemediationExceptions, { useRemediationExceptions, exceptionCount } from './RemediationExceptions.jsx'
 import './remediation-ops-panel.css'
@@ -75,7 +75,16 @@ function Progress({ snapshot, suspect }) {
 
 function Pipeline({ phases = [], attempts = [], moving = false }) {
   if (!phases.length) return null
-  return <section className={`remops-pipeline${moving ? ' remops-pipeline-moving' : ''}`}><h3>Active document pipeline</h3><ol aria-label="Remediation phases">{phases.map((phase, index) => { const documents = attempts.filter((attempt) => attemptStage(attempt.phase) === phase.key).slice(0, 2); return <li key={phase.key} className={`remops-phase remops-phase-${phase.status}`}><span className="remops-phase-mark" aria-hidden="true">{phase.status === 'active' ? '●' : phase.status === 'failed' ? '×' : phase.status.startsWith('completed') ? '✓' : '○'}</span><span className="remops-phase-name">{phase.label}</span><span className="remops-phase-state">{PHASE_TEXT[phase.status] || phase.status}{phase.detail ? ` · ${phase.detail}` : ''}</span>{documents.length > 0 && <span className="remops-phase-docs">{documents.map((document) => <span key={`${document.file}-${phase.key}`} title={document.file}>{document.file}</span>)}</span>}{index < phases.length - 1 && <span className="remops-flow" aria-hidden="true">···►</span>}</li> })}</ol></section>
+  return <section className={`remops-pipeline${moving ? ' remops-pipeline-moving' : ''}`}><h3>Active document pipeline</h3><ol aria-label="Remediation phases">{phases.map((phase, index) => { const documents = attempts.filter((attempt) => attemptStage(attempt.phase) === phase.key).slice(0, 2); const phaseState = phase.key === 'preparing' && phase.status === 'completed' ? 'Scope ready' : (PHASE_TEXT[phase.status] || phase.status); return <li key={phase.key} className={`remops-phase remops-phase-${phase.status}`}><span className="remops-phase-mark" aria-hidden="true">{phase.status === 'active' ? '●' : phase.status === 'failed' ? '×' : phase.status.startsWith('completed') ? '✓' : '○'}</span><span className="remops-phase-name">{phase.label}</span><span className="remops-phase-state">{phaseState}{phase.detail ? ` · ${phase.detail}` : ''}</span>{documents.length > 0 && <span className="remops-phase-docs">{documents.map((document) => <span key={`${document.file}-${phase.key}`} title={document.file}>{document.file}</span>)}</span>}{index < phases.length - 1 && <span className="remops-flow" aria-hidden="true">···►</span>}</li> })}</ol></section>
+}
+
+function ProgressCue({ snapshot, onViewMonitor }) {
+  const age = snapshot.progress?.material_age_s
+  const delayedAfter = snapshot.thresholds?.delayed_after_s ?? 60
+  const processing = snapshot.documents?.processing || 0
+  if (snapshot.state === 'stalled') return <div className="remops-progress-cue remops-progress-cue-stalled" role="alert"><b>No durable progress is being recorded.</b>{age != null ? ` Last progress was ${ago(age)} ago.` : ''}{onViewMonitor && <button type="button" className="linklike" onClick={onViewMonitor}>Inspect workers and retries →</button>}</div>
+  if (processing > 0 && typeof age === 'number' && age > delayedAfter) return <div className="remops-progress-cue" role="status"><b>{processing} worker attempt{processing === 1 ? '' : 's'} active; checkpoint delayed.</b> No durable progress for {ago(age)}. ACP continues watching and will flag a stall after {ago(snapshot.thresholds?.stall_after_s ?? 900)}.{onViewMonitor && <button type="button" className="linklike" onClick={onViewMonitor}>Check Live Operations →</button>}</div>
+  return null
 }
 
 function Workstream({ attempts = [], generatedAt, compact = false }) {
@@ -116,7 +125,8 @@ function Throughput({ snapshot, frozen = false }) {
   }, [frozen])
   const bars = Array.isArray(data.buckets) ? data.buckets.slice(-10) : []
   const max = Math.max(1, ...bars.map((v) => Number(v) || 0))
-  return <section className="remops-throughput"><h3>Throughput <span>· last 5 minutes</span></h3>{typeof data.documents_per_minute === 'number' ? <>{bars.length > 0 && <div className="remops-bars" aria-label={`${data.documents_per_minute} documents per minute`}>{bars.map((v, i) => <span key={i} style={{ height: `${Math.max(8, Number(v) / max * 100)}%` }} />)}</div>}<p><strong>{data.documents_per_minute.toLocaleString()} documents/min</strong>{data.change_percent != null && data.sample_documents >= 5 && <span className="remops-rate"> {data.change_percent >= 0 ? '↑' : '↓'} {Math.abs(data.change_percent)}% over previous 5 minutes</span>}</p></> : <p className="muted">Server-observed throughput will appear after the first comparable documents finish.</p>}</section>
+  const processing = snapshot.documents?.processing || 0
+  return <section className="remops-throughput"><h3>Throughput <span>· last 5 minutes</span></h3>{typeof data.documents_per_minute === 'number' ? <>{bars.length > 0 && <div className="remops-bars" aria-label={`${data.documents_per_minute} documents per minute`}>{bars.map((v, i) => <span key={i} style={{ height: `${Math.max(8, Number(v) / max * 100)}%` }} />)}</div>}<p><strong>{data.documents_per_minute.toLocaleString()} documents/min</strong>{data.change_percent != null && data.sample_documents >= 5 && <span className="remops-rate"> {data.change_percent >= 0 ? '↑' : '↓'} {Math.abs(data.change_percent)}% over previous 5 minutes</span>}</p></> : <p className="muted">No document has completed in the last five minutes.{processing ? ` ${processing} ${processing === 1 ? 'is' : 'are'} actively processing; rate and ETA will appear after completions.` : ' Rate and ETA will appear after completions.'}</p>}</section>
 }
 
 function Secondary({ snapshot }) {
@@ -165,17 +175,19 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
   if (!snapshot || snapshot.state === 'draft') return null
   const fresh = freshness({ snapshot, connected, receivedAt })
   const suspect = snapshot.integrity?.ok === false
+  const documentCountsSuspect = integrityAffects(snapshot, 'documents')
   // The count comes from the exception ENDPOINT, which groups by response and knows which rows
   // are actionable. The predicate this replaces read `snapshot.delivery.failures` — a field the
   // snapshot has never carried — so its delivery term was always false.
   const exceptionTotal = exceptionCount(exceptionState.view)
   return <section className={`panel remops${paused || hidden ? ' remops-motion-paused' : ''}`} aria-label="Remediation run status">
     <header className="remops-header"><div><span className="remops-eyebrow">Remediation {snapshot.terminal ? 'complete' : 'in progress'}</span><h2>{line}</h2>{snapshot.source?.breadcrumb && <p>{snapshot.source.breadcrumb}</p>}<p className="muted">{snapshot.source?.locked_at ? `Snapshot locked ${new Date(snapshot.source.locked_at).toLocaleString()} · ` : ''}{snapshot.run_id}</p></div><div className="remops-actions"><FreshnessBadge state={fresh} updateMode={updateMode} /><button type="button" className="ghost" aria-pressed={paused} onClick={() => setPaused((value) => !value)}>{paused ? 'Resume visual updates' : 'Pause visual updates'}</button>{onViewMonitor && <button type="button" className="linklike" onClick={onViewMonitor}>View in Monitor →</button>}</div></header>
-    {suspect && <div className="remops-integrity" role="status"><b>Status temporarily inconsistent.</b> ACP cannot currently reconcile {(snapshot.integrity.affected || []).join(', ') || 'one or more values'}. The values below are the last ACP confirmed.</div>}
+    {suspect && <div className="remops-integrity" role="status"><b>{documentCountsSuspect ? 'Document status is temporarily inconsistent.' : 'Some supporting totals are catching up.'}</b> ACP cannot currently reconcile {(snapshot.integrity.affected || []).join(', ') || 'one or more values'}. {documentCountsSuspect ? 'Document counts below are the last ACP confirmed.' : 'Live document progress remains available.'}</div>}
     <ActivityPulse events={events} generatedAt={snapshot.generated_at} />
     <Milestones notices={milestones} onDismiss={(key) => setMilestones((current) => current.filter((notice) => notice.key !== key))} />
     <RetryNotice retryAt={snapshot.retry_at} now={clock} />
-    <Progress snapshot={snapshot} suspect={suspect} />
+    <ProgressCue snapshot={snapshot} onViewMonitor={onViewMonitor} />
+    <Progress snapshot={snapshot} suspect={documentCountsSuspect} />
     {snapshot.phases?.length > 0 && <Disclosure title="Phases" compact={compact}><Pipeline phases={snapshot.phases} attempts={snapshot.active_attempts || []} moving={connected && snapshot.state !== 'stalled' && (snapshot.active_attempts || []).length > 0} /></Disclosure>}
     <div className="remops-two"><Workstream attempts={snapshot.active_attempts || []} generatedAt={snapshot.generated_at} compact={compact} /><Throughput snapshot={snapshot} frozen={paused || hidden} /></div>
     <Disclosure title="Fix and delivery totals" compact={compact}><Secondary snapshot={snapshot} /></Disclosure>

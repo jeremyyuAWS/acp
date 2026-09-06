@@ -64,6 +64,15 @@ export function partitionSums(snapshot) {
   return rows.reduce((sum, r) => sum + r.value, 0) === total
 }
 
+/** Whether an integrity violation invalidates one named surface. A fix-total mismatch must not
+ * turn a healthy live transport into "Unknown" or cast doubt on the document partition. */
+export function integrityAffects(snapshot, metric) {
+  if (snapshot?.integrity?.ok !== false) return false
+  const affected = snapshot.integrity.affected
+  // Older snapshots did not name the affected fields, so fail closed for those only.
+  return !Array.isArray(affected) || affected.length === 0 || affected.includes(metric)
+}
+
 /**
  * How much this panel's numbers can currently be trusted (PRD §9).
  *
@@ -92,7 +101,7 @@ export function freshness({ snapshot, connected = false, receivedAt = null, now 
     return { level: 'stalled', label: 'Stalled', ageS,
              detail: `Progress has stopped. ${ageDetail}` }
   }
-  if (snapshot.integrity && snapshot.integrity.ok === false) {
+  if (integrityAffects(snapshot, 'freshness')) {
     return { level: 'unknown', label: 'Unknown', ageS,
              detail: `Some values could not be reconciled. ${ageDetail}` }
   }
