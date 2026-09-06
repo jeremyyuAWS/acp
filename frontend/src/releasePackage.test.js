@@ -17,7 +17,7 @@ describe('Release ZIP package', () => {
   })
 
   it('explains the package contents before download', () => {
-    expect(publish).toMatch(/One ZIP with the source folder structure and a release manifest/)
+    expect(publish).toMatch(/one ZIP package with the source folder structure and a release manifest/i)
     expect(publish).toMatch(/\.zip” with folder structure and a manifest/)
     expect(publish).toMatch(/Download ZIP \(\$\{selectedReady\.length\}\)/)
   })
