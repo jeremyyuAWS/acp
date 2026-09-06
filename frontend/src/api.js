@@ -1457,6 +1457,9 @@ export const publishAllFiles = (scanId, files, releaseFolderName = '') => (SIM
 export const getReleaseStatus = (scanId) => (SIM
   ? sim({ release_id: null, roots: [], documents: [], documents_total: 0, published: 0, failed: 0, remaining: 0 }, 50)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release`, { headers: headers() }).then(j))
+export const listReleaseHistory = (limit = 50) => (SIM
+  ? sim({ releases: [] }, 50)
+  : fetch(`${BASE}/releases?limit=${encodeURIComponent(limit)}`, { headers: headers() }).then(j))
 export const previewReleaseDestination = (scanId, files, releaseFolderName = '') => (SIM
   ? sim({ folder_name: releaseFolderName || '2026-09-06 12-00 UTC', folder_state: 'proposed', provider: 'drive',
       documents: files.map((file) => ({ file, provider_location: 'google:me', destination_path: `Remediated/${releaseFolderName || '2026-09-06 12-00 UTC'}/${file}`, action: 'create' })),
