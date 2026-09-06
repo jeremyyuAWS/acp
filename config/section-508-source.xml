@@ -1,0 +1,847 @@
+<?xml version="1.0"?>
+<DIV5 N="1194" TYPE="PART" VOLUME="3" hierarchy_metadata="{&amp;quot;path&amp;quot;:&amp;quot;/on/_SUBSTITUTE_DATE_/title-36/part-1194&amp;quot;,&amp;quot;citation&amp;quot;:&amp;quot;36 CFR Part 1194&amp;quot;}">
+<HEAD>PART 1194&#x2014;INFORMATION AND COMMUNICATION TECHNOLOGY STANDARDS AND GUIDELINES
+</HEAD>
+<AUTH>
+<HED>Authority:</HED><PSPACE>29 U.S.C. 794d, 47 U.S.C. 255.
+</PSPACE></AUTH>
+<SOURCE>
+<HED>Source:</HED><PSPACE>65 FR 80523, Dec. 21, 2000, unless otherwise noted.
+</PSPACE></SOURCE>
+<DIV8 N="1194.1" TYPE="SECTION" hierarchy_metadata="{&quot;path&quot;:&quot;/on/_SUBSTITUTE_DATE_/title-36/section-1194.1&quot;,&quot;citation&quot;:&quot;36 CFR 1194.1&quot;}">
+<HEAD>&#xA7; 1194.1 Standards for Section 508 of the Rehabilitation Act.</HEAD>
+<P>The standards for information and communication technology developed, procured, maintained, or used by Federal agencies covered by Section 508 of the Rehabilitation Act are set forth in Appendices A, C and D to this part.</P>
+<CITA TYPE="N">[82 FR 5832, Jan. 18, 2017]
+</CITA>
+</DIV8>
+
+<DIV8 N="1194.2" TYPE="SECTION" hierarchy_metadata="{&quot;path&quot;:&quot;/on/_SUBSTITUTE_DATE_/title-36/section-1194.2&quot;,&quot;citation&quot;:&quot;36 CFR 1194.2&quot;}">
+<HEAD>&#xA7; 1194.2 Guidelines for Section 255 of the Communications Act.</HEAD>
+<P>The guidelines for telecommunications equipment and customer premises equipment covered by Section 255 of the Communications Act are set forth in Appendices B and C to this part.</P>
+<CITA TYPE="N">[82 FR 5832, Jan. 18, 2017]
+</CITA>
+</DIV8>
+
+<DIV9 N="Appendix A to Part 1194" TYPE="APPENDIX" hierarchy_metadata="{&quot;path&quot;:&quot;/on/_SUBSTITUTE_DATE_/title-36/part-1194/appendix-Appendix A to Part 1194&quot;,&quot;citation&quot;:&quot;Appendix A to Part 1194, Title 36&quot;}">
+<HEAD>Appendix A to Part 1194&#x2014;Section 508 of the Rehabilitation Act: Application and Scoping Requirements
+</HEAD>
+<HD1>Table of Contents
+</HD1>
+<HD1>508 Chapter 1: Application and Administration
+</HD1>
+<FP-2>E101 General
+</FP-2>
+<FP-2>E102 Referenced Standards
+</FP-2>
+<FP-2>E103 Definitions
+</FP-2>
+<HD1>508 Chapter 2: Scoping Requirements
+</HD1>
+<FP-2>E201 Application
+</FP-2>
+<FP-2>E202 General Exceptions
+</FP-2>
+<FP-2>E203 Access to Functionality
+</FP-2>
+<FP-2>E204 Functional Performance Criteria
+</FP-2>
+<FP-2>E205 Electric Content
+</FP-2>
+<FP-2>E206 Hardware
+</FP-2>
+<FP-2>E207 Software
+</FP-2>
+<FP-2>E208 Support Documentation and Services
+</FP-2>
+<HD1>508 Chapter 1: Application and Administration
+</HD1>
+<HD1>E101 General
+</HD1>
+<P>E101.1 <I>Purpose.</I>These Revised 508 Standards, which consist of 508 Chapters 1 and 2 (Appendix A), along with Chapters 3 through 7 (Appendix C), contain scoping and technical requirements for information and communication technology (ICT) to ensure accessibility and usability by individuals with disabilities. Compliance with these standards is mandatory for Federal agencies subject to Section 508 of the Rehabilitation Act of 1973, as amended (29 U.S.C. 794d).</P>
+<P>E101.2 <I>Equivalent Facilitation.</I> The use of an alternative design or technology that results in substantially equivalent or greater accessibility and usability by individuals with disabilities than would be provided by conformance to one or more of the requirements in Chapters 4 and 5 of the Revised 508 Standards is permitted. The functional performance criteria in Chapter 3 shall be used to determine whether substantially equivalent or greater accessibility and usability is provided to individuals with disabilities.</P>
+<P>E101.3 <I>Conventional Industry Tolerances.</I> Dimensions are subject to conventional industry tolerances except where dimensions are stated as a range with specific minimum or maximum end points.</P>
+<P>E101.4 <I>Units of Measurement.</I> Measurements are stated in metric and U.S. customary units. The values stated in each system (metric and U.S. customary units) may not be exact equivalents, and each system shall be used independently of the other.</P>
+<HD1>E102 Referenced Standards
+</HD1>
+<P>E102.1 <I>Application.</I> The specific editions of the standards listed in Chapter 7 are incorporated by reference into 508 Chapter 2 (Scoping Requirements) and Chapters 3 through 6 to the prescribed extent of each such reference. Where conflicts occur between the Revised 508 Standards and the referenced standards, these Revised 508 Standards apply.</P>
+<HD1>E103 Definitions
+</HD1>
+<P>E103.1 <I>Terms Defined in Referenced Standards.</I> Terms defined in referenced standards and not defined in E103.4 shall have the meaning as defined in the referenced standards.</P>
+<P>E103.2 <I>Undefined Terms.</I> Any term not defined in E103.4 or in referenced standards shall be given its ordinarily accepted meaning in the sense that the context implies.</P>
+<P>E103.3 <I>Interchangeability.</I> Words, terms, and phrases used in the singular include the plural and those used in the plural include the singular.</P>
+<P>E103.4 <I>Defined Terms.</I> For the purpose of the Revised 508 Standards, the terms defined in E103.4 have the indicated meaning.</P>
+<P><I>Agency.</I> Any agency or department of the United States as defined in 44 U.S.C. 3502, and the United States Postal Service.</P>
+<P><I>Alteration.</I> A change to <I>existing ICT</I> that affects interoperability, the user interface, or access to information or data.</P>
+<P><I>Application.</I> Software designed to perform, or to help the user to perform, a specific task or tasks.</P>
+<P><I>Assistive Technology (AT).</I> Any item, piece of equipment, or product system, whether acquired commercially, modified, or customized, that is used to increase, maintain, or improve functional capabilities of individuals with disabilities.</P>
+<P><I>Audio Description.</I> Narration added to the soundtrack to describe important visual details that cannot be understood from the main soundtrack alone. Audio description is a means to inform individuals who are blind or who have low vision about visual content essential for comprehension. Audio description of video provides information about actions, characters, scene changes, on-screen text, and other visual content. Audio description supplements the regular audio track of a program. Audio description is usually added during existing pauses in dialogue. Audio description is also called &#x201C;video description&#x201D; and &#x201C;descriptive narration&#x201D;.</P>
+<P><I>Authoring Tool.</I> Any software, or collection of software components, that can be used by authors, alone or collaboratively, to create or modify content for use by others, including other authors.</P>
+<P><I>Closed Functionality.</I> Characteristics that limit functionality or prevent a user from attaching or installing assistive technology. Examples of ICT with closed functionality are self-service machines, information kiosks, set-top boxes, fax machines, calculators, and computers that are locked down so that users may not adjust settings due to a policy such as Desktop Core Configuration.</P>
+<P><I>Content.</I> Electronic information and data, as well as the encoding that defines its structure, presentation, and interactions.</P>
+<P><I>Document.</I> Logically distinct assembly of content (such as a file, set of files, or streamed media) that: Functions as a single entity rather than a collection; is not part of software; and does not include its own software to retrieve and present content for users. Examples of documents include, but are not limited to, letters, email messages, spreadsheets, presentations, podcasts, images, and movies.</P>
+<P><I>Existing ICT.</I> ICT that has been procured, maintained or used on or before January 18, 2018.</P>
+<P><I>Hardware.</I> A tangible device, equipment, or physical component of ICT, such as telephones, computers, multifunction copy machines, and keyboards.</P>
+<P><I>Information Technology.</I> Shall have the same meaning as the term &#x201C;information technology&#x201D; set forth in 40 U.S.C. 11101(6).</P>
+<P><I>Information and Communication Technology (ICT).</I> Information technology and other equipment, systems, technologies, or processes, for which the principal function is the creation, manipulation, storage, display, receipt, or transmission of electronic data and information, as well as any associated content. Examples of ICT include, but are not limited to: Computers and peripheral equipment; information kiosks and transaction machines; telecommunications equipment; customer premises equipment; multifunction office machines; software; applications; Web sites; videos; and, electronic documents.</P>
+<P><I>Keyboard.</I> A set of systematically arranged alphanumeric keys or a control that generates alphanumeric input by which a machine or device is operated. A keyboard includes tactilely discernible keys used in conjunction with the alphanumeric keys if their function maps to keys on the keyboard interfaces.</P>
+<P><I>Label.</I> Text, or a component with a text alternative, that is presented to a user to identify content. A label is presented to all users, whereas a name may be hidden and only exposed by assistive technology. In many cases, the name and the label are the same.</P>
+<P><I>Menu.</I> A set of selectable options.</P>
+<P><I>Name.</I> Text by which software can identify a component to the user. A name may be hidden and only exposed by assistive technology, whereas a label is presented to all users. In many cases, the label and the name are the same. Name is unrelated to the name attribute in HTML.</P>
+<P><I>Non-Web Document.</I> A document that is not: A Web page, embedded in a Web page, or used in the rendering or functioning of Web pages.</P>
+<P><I>Non-Web Software.</I> Software that is not: A Web page, not embedded in a Web page, and not used in the rendering or functioning of Web pages.</P>
+<P><I>Operable Part.</I> Hardware-based user controls for activating, deactivating, or adjusting ICT.</P>
+<P><I>Platform Accessibility Services.</I> Services provided by a platform enabling interoperability with assistive technology. Examples are Application Programming Interfaces (API) and the Document Object Model (DOM).</P>
+<P><I>Platform Software.</I> Software that interacts with hardware or provides services for other software. Platform software may run or host other software, and may isolate them from underlying software or hardware layers. A single software component may have both platform and non-platform aspects. Examples of platforms are: Desktop operating systems; embedded operating systems, including mobile systems; Web browsers; plug-ins to Web browsers that render a particular media or format; and sets of components that allow other applications to execute, such as applications which support macros or scripting.</P>
+<P><I>Programmatically Determinable.</I> Ability to be determined by software from author-supplied data that is provided in a way that different user agents, including assistive technologies, can extract and present the information to users in different modalities.</P>
+<P><I>Public Facing.</I> Content made available by an agency to members of the general public. Examples include, but are not limited to, an agency Web site, blog post, or social media pages.</P>
+<P><I>Real-Time Text (RTT).</I> Communications using the transmission of text by which characters are transmitted by a terminal as they are typed. Real-time text is used for conversational purposes. Real-time text also may be used in voicemail, interactive voice response systems, and other similar application.</P>
+<P><I>Revised 508 Standards.</I> The standards for ICT developed, procured, maintained, or used by agencies subject to Section 508 of the Rehabilitation Act as set forth in 508 Chapters 1 and 2 (36 CFR part 1194, Appendix A), and Chapters 3 through 7 (36 CFR part 1194, Appendix C).</P>
+<P><I>Software.</I> Programs, procedures, rules, and related data and documentation that direct the use and operation of ICT and instruct it to perform a given task or function. Software includes, but is not limited to, applications, non-Web software, and platform software.</P>
+<P><I>Software Tools.</I> Software for which the primary function is the development of other software. Software tools usually come in the form of an Integrated Development Environment (IDE) and are a suite of related products and utilities. Examples of IDEs include Microsoft&#xAE; Visual Studio&#xAE;, Apple&#xAE; Xcode&#xAE;, and Eclipse Foundation Eclipse&#xAE;.</P>
+<P><I>Telecommunications.</I> The signal transmission, between or among points specified by the user, of information of the user's choosing, without change in the form or content of the information as sent and received.</P>
+<P><I>Terminal.</I> Device or software with which the end user directly interacts and that provides the user interface. For some systems, the software that provides the user interface may reside on more than one device such as a telephone and a server.</P>
+<P><I>Text.</I> A sequence of characters that can be programmatically determined and that expresses something in human language.</P>
+<P><I>TTY.</I> Equipment that enables interactive text based communications through the transmission of frequency-shift-keying audio tones across the public switched telephone network. TTYs include devices for real-time text communications and voice and text intermixed communications. Examples of intermixed communications are voice carry over and hearing carry over. One example of a TTY is a computer with TTY emulating software and modem.</P>
+<P><I>Variable Message Signs (VMS).</I> Non-interactive electronic signs with scrolling, streaming, or paging-down capability. An example of a VMS is an electronic message board at a transit station that displays the gate and time information associated with the next train arrival.</P>
+<P><I>Voice over Internet Protocol (VoIP).</I> A technology that provides real-time voice communications. VoIP requires a broadband connection from the user's location and customer premises equipment compatible with Internet protocol.</P>
+<P><I>Web page.</I> A non-embedded resource obtained from a single Universal Resource Identifier (URI) using HyperText Transfer Protocol (HTTP) plus any other resources that are provided for the rendering, retrieval, and presentation of content.</P>
+<HD1>508 Chapter 2: Scoping Requirements
+</HD1>
+<HD1>E201 Application
+</HD1>
+<P>E201.1 <I>Scope.</I> ICT that is procured, developed, maintained, or used by agencies shall conform to the Revised 508 Standards.</P>
+<HD1>E202 General Exceptions
+</HD1>
+<P>E202.1 <I>General.</I> ICT shall be exempt from compliance with the Revised 508 Standards to the extent specified by E202.</P>
+<P>E202.2 <I>Legacy ICT.</I> Any component or portion of existing ICT that complies with an earlier standard issued pursuant to Section 508 of the Rehabilitation Act of 1973, as amended (as republished in Appendix D), and that has not been altered on or after January 18, 2018, shall not be required to be modified to conform to the Revised 508 Standards.</P>
+<P>E202.3 <I>National Security Systems.</I> The Revised 508 Standards do not apply to ICT operated by agencies as part of a national security system, as defined by 40 U.S.C. 11103(a).</P>
+<P>E202.4 <I>Federal Contracts.</I> ICT acquired by a contractor incidental to a contract shall not be required to conform to the Revised 508 Standards.</P>
+<P>E202.5 <I>ICT Functions Located in Maintenance or Monitoring Spaces.</I> Where status indicators and operable parts for ICT functions are located in spaces that are frequented only by service personnel for maintenance, repair, or occasional monitoring of equipment, such status indicators and operable parts shall not be required to conform to the Revised 508 Standards.</P>
+<P>E202.6 <I>Undue Burden or Fundamental Alteration.</I> Where an agency determines in accordance with E202.6 that conformance to requirements in the Revised 508 Standards would impose an undue burden or would result in a fundamental alteration in the nature of the ICT, conformance shall be required only to the extent that it does not impose an undue burden, or result in a fundamental alteration in the nature of the ICT.</P>
+<P>E202.6.1 <I>Basis for a Determination of Undue Burden.</I> In determining whether conformance to requirements in the Revised 508 Standards would impose an undue burden on the agency, the agency shall consider the extent to which conformance would impose significant difficulty or expense considering the agency resources available to the program or component for which the ICT is to be procured, developed, maintained, or used.</P>
+<P>E202.6.2 <I>Required Documentation.</I> The responsible agency official shall document in writing the basis for determining that conformance to requirements in the Revised 508 Standards constitute an undue burden on the agency, or would result in a fundamental alteration in the nature of the ICT. The documentation shall include an explanation of why and to what extent compliance with applicable requirements would create an undue burden or result in a fundamental alteration in the nature of the ICT.</P>
+<P>E202.6.3 <I>Alternative Means.</I> Where conformance to one or more requirements in the Revised 508 Standards imposes an undue burden or a fundamental alteration in the nature of the ICT, the agency shall provide individuals with disabilities access to and use of information and data by an alternative means that meets identified needs.</P>
+<P>E202.7 <I>Best Meets.</I> Where ICT conforming to one or more requirements in the Revised 508 Standards is not commercially available, the agency shall procure the ICT that best meets the Revised 508 Standards consistent with the agency's business needs.</P>
+<P>E202.7.1 <I>Required Documentation.</I> The responsible agency official shall document in writing: (a) The non-availability of conforming ICT, including a description of market research performed and which provisions cannot be met, and (b) the basis for determining that the ICT to be procured best meets the requirements in the Revised 508 Standards consistent with the agency's business needs.</P>
+<P>E202.7.2 <I>Alternative Means.</I> Where ICT that fully conforms to the Revised 508 Standards is not commercially available, the agency shall provide individuals with disabilities access to and use of information and data by an alternative means that meets identified needs.</P>
+<HD1>E203 Access to Functionality
+</HD1>
+<P>E203.1 <I>General.</I> Agencies shall ensure that all functionality of ICT is accessible to and usable by individuals with disabilities, either directly or by supporting the use of assistive technology, and shall comply with E203. In providing access to all functionality of ICT, agencies shall ensure the following:</P>
+<P>A. That Federal employees with disabilities have access to and use of information and data that is comparable to the access and use by Federal employees who are not individuals with disabilities; and</P>
+<P>B. That members of the public with disabilities who are seeking information or data from a Federal agency have access to and use of information and data that is comparable to that provided to members of the public who are not individuals with disabilities.</P>
+<P>E203.2 <I>User Needs.</I> When agencies procure, develop, maintain or use ICT they shall identify the needs of users with disabilities to determine:</P>
+<P>A. How users with disabilities will perform the functions supported by the ICT; and</P>
+<P>B. How the ICT will be developed, installed, configured, and maintained to support users with disabilities.</P>
+<HD1>E204 Functional Performance Criteria
+</HD1>
+<P>E204.1 <I>General.</I> Where the requirements in Chapters 4 and 5 do not address one or more functions of ICT, the functions not addressed shall conform to the Functional Performance Criteria specified in Chapter 3.</P>
+<HD1>E205 Electronic Content
+</HD1>
+<P>E205.1 <I>General.</I> Electronic content shall comply with E205.</P>
+<P>E205.2 <I>Public Facing.</I> Electronic content that is public facing shall conform to the accessibility requirements specified in E205.4.</P>
+<P>E205.3 <I>Agency Official Communication.</I> Electronic content that is not public facing shall conform to the accessibility requirements specified in E205.4 when such content constitutes official business and is communicated by an agency through one or more of the following:</P>
+<P>A. An emergency notification;</P>
+<P>B. An initial or final decision adjudicating an administrative claim or proceeding;</P>
+<P>C. An internal or external program or policy announcement;</P>
+<P>D. A notice of benefits, program eligibility, employment opportunity, or personnel action;</P>
+<P>E. A formal acknowledgement of receipt;</P>
+<P>F. A survey questionnaire;</P>
+<P>G. A template or form;</P>
+<P>H. Educational or training materials; or</P>
+<P>I. Intranet content designed as a Web page.</P>
+<P>EXCEPTION: Records maintained by the National Archives and Records Administration (NARA) pursuant to Federal recordkeeping statutes shall not be required to conform to the Revised 508 Standards unless public facing.</P>
+<P>E205.4 <I>Accessibility Standard.</I> Electronic content shall conform to Level A and Level AA Success Criteria and Conformance Requirements in WCAG 2.0 (incorporated by reference, <I>see</I> 702.10.1).</P>
+<P>EXCEPTION: Non-Web documents shall not be required to conform to the following four WCAG 2.0 Success Criteria: 2.4.1 Bypass Blocks, 2.4.5 Multiple Ways, 3.2.3 Consistent Navigation, and 3.2.4 Consistent Identification.</P>
+<P>E205.4.1 <I>Word Substitution when Applying WCAG to Non-Web Documents.</I> For non-Web documents, wherever the term &#x201C;Web page&#x201D; or &#x201C;page&#x201D; appears in WCAG 2.0 Level A and AA Success Criteria and Conformance Requirements, the term &#x201C;document&#x201D; shall be substituted for the terms &#x201C;Web page&#x201D; and &#x201C;page&#x201D;. In addition, in Success Criterion in 1.4.2, the phrase &#x201C;in a document&#x201D; shall be substituted for the phrase &#x201C;on a Web page&#x201D;.</P>
+<HD1>E206 Hardware
+</HD1>
+<P>E206.1 <I>General.</I> Where components of ICT are hardware and transmit information or have a user interface, such components shall conform to the requirements in Chapter 4.</P>
+<HD1>E207 Software
+</HD1>
+<P>E207.1 <I>General.</I> Where components of ICT are software and transmit information or have a user interface, such components shall conform to E207 and the requirements in Chapter 5.</P>
+<P>EXCEPTION: Software that is assistive technology and that supports the accessibility services of the platform shall not be required to conform to the requirements in Chapter 5.</P>
+<P>E207.2 <I>WCAG Conformance.</I> User interface components, as well as the content of platforms and applications, shall conform to Level A and Level AA Success Criteria and Conformance Requirements in WCAG 2.0 (incorporated by reference, <I>see</I> 702.10.1).</P>
+<P>EXCEPTIONS: 1. Software that is assistive technology and that supports the accessibility services of the platform shall not be required to conform to E207.2.</P>
+<P>2. Non-Web software shall not be required to conform to the following four Success Criteria in WCAG 2.0: 2.4.1 Bypass Blocks; 2.4.5 Multiple Ways; 3.2.3 Consistent Navigation; and 3.2.4 Consistent Identification.</P>
+<P>3. Non-Web software shall not be required to conform to Conformance Requirement 3 Complete Processes in WCAG 2.0.</P>
+<P>E207.2.1 <I>Word Substitution when Applying WCAG to Non-Web Software.</I> For non-Web software, wherever the term &#x201C;Web page&#x201D; or &#x201C;page&#x201D; appears in WCAG 2.0 Level A and AA Success Criteria and Conformance Requirements, the term &#x201C;software&#x201D; shall be substituted for the terms &#x201C;Web page&#x201D; and &#x201C;page&#x201D;. In addition, in Success Criterion in 1.4.2, the phrase &#x201C;in software&#x201D; shall be substituted for the phrase &#x201C;on a Web page.&#x201D;</P>
+<P>E207.3 <I>Complete Processes for Non-Web Software.</I> Where non-Web software requires multiple steps to accomplish an activity, all software related to the activity to be accomplished shall conform to WCAG 2.0 as specified in E207.2.</P>
+<HD1>E208 Support Documentation and Services
+</HD1>
+<P>E208.1 <I>General.</I> Where an agency provides support documentation or services for ICT, such documentation and services shall conform to the requirements in Chapter 6.</P>
+<CITA TYPE="N">[82 FR 5832, Jan. 18, 2017, as amended at 83 FR 2915, Jan. 22, 2018]
+</CITA>
+</DIV9>
+
+<DIV9 N="Appendix B to Part 1194" TYPE="APPENDIX" hierarchy_metadata="{&quot;path&quot;:&quot;/on/_SUBSTITUTE_DATE_/title-36/part-1194/appendix-Appendix B to Part 1194&quot;,&quot;citation&quot;:&quot;Appendix B to Part 1194, Title 36&quot;}">
+<HEAD>Appendix B to Part 1194&#x2014;Section 255 of the Communications Act: Application and Scoping Requirements
+</HEAD>
+<HD1>Table of Contents
+</HD1>
+<HD1>255 Chapter 1: Application and Administration
+</HD1>
+<FP-2>C101 General
+</FP-2>
+<FP-2>C102 Referenced Standards
+</FP-2>
+<FP-2>C103 Definitions
+</FP-2>
+<HD1>255 Chapter 2: Scoping Requirements
+</HD1>
+<FP-2>C201 Application
+</FP-2>
+<FP-2>C202 Functional Performance Criteria
+</FP-2>
+<FP-2>C203 Electronic Content
+</FP-2>
+<FP-2>C204 Hardware
+</FP-2>
+<FP-2>C205 Software
+</FP-2>
+<FP-2>C206 Support Documentation and Services
+</FP-2>
+<HD1>255 Chapter 1: Application and Administration
+</HD1>
+<HD1>C101 General
+</HD1>
+<P>C101.1 <I>Purpose.</I> These Revised 255 Guidelines, which consist of 255 Chapters 1 and 2 (Appendix B), along with Chapters 3 through 7 (Appendix C), contain scoping and technical requirements for the design, development, and fabrication of telecommunications equipment and customer premises equipment, content, and support documentation and services, to ensure accessibility and usability by individuals with disabilities. These Revised 255 Guidelines are to be applied to the extent required by regulations issued by the Federal Communications Commission under Section 255 of the Communications Act of 1934, as amended (47 U.S.C. 255).</P>
+<P>C101.2 <I>Equivalent Facilitation.</I> The use of an alternative design or technology that results in substantially equivalent or greater accessibility and usability by individuals with disabilities than would be provided by conformance to one or more of the requirements in Chapters 4 and 5 of the Revised 255 Guidelines is permitted. The functional performance criteria in Chapter 3 shall be used to determine whether substantially equivalent or greater accessibility and usability is provided to individuals with disabilities.</P>
+<P>C101.3 <I>Conventional Industry Tolerances.</I> Dimensions are subject to conventional industry tolerances except where dimensions are stated as a range with specific minimum or maximum end points.</P>
+<P>C101.4 <I>Units of Measurement.</I> Measurements are stated in metric and U.S. customary units. The values stated in each system (metric and U.S. customary units) may not be exact equivalents, and each system shall be used independently of the other.</P>
+<HD1>C102 Referenced Standards
+</HD1>
+<P>C102.1 <I>Application.</I> The specific editions of the standards listed in Chapter 7 are incorporated by reference into 255 Chapter 2 (Scoping Requirements) and Chapters 3 through 6 to the prescribed extent of each such reference. Where conflicts occur between the Revised 255 Guidelines and the referenced standards, these Revised 255 Guidelines apply.</P>
+<HD1>C103 Definitions
+</HD1>
+<P>C103.1 <I>Terms Defined in Referenced Standards.</I> Terms defined in referenced standards and not defined in C103.4 shall have the meaning as defined in the referenced standards.</P>
+<P>C103.2 <I>Undefined Terms.</I> Any term not defined in C103.4 or in referenced standards shall be given its ordinarily accepted meaning in the sense that the context implies.</P>
+<P>C103.3 <I>Interchangeability.</I> Words, terms, and phrases used in the singular include the plural and those used in the plural include the singular.</P>
+<P>C103.4 <I>Defined Terms.</I> For the purpose of the Revised 255 Guidelines, the terms defined in C103.4 have the indicated meaning.</P>
+<P><I>Application.</I> Software designed to perform, or to help the user perform, a specific task or tasks.</P>
+<P><I>Assistive Technology (AT).</I> Any item, piece of equipment, or product system, whether acquired commercially, modified, or customized, that is used to increase, maintain, or improve functional capabilities of individuals with disabilities.</P>
+<P><I>Audio Description.</I> Narration added to the soundtrack to describe important visual details that cannot be understood from the main soundtrack alone. Audio description is a means to inform individuals who are blind or who have low vision about visual content essential for comprehension. Audio description of video provides information about actions, characters, scene changes, on-screen text, and other visual content. Audio description supplements the regular audio track of a program. Audio description is usually added during existing pauses in dialogue. Audio description is also called &#x201C;video description&#x201D; and &#x201C;descriptive narration.&#x201D;</P>
+<P><I>Authoring Tool.</I> Any software, or collection of software components, that can be used by authors, alone or collaboratively, to create or modify content for use by others, including other authors.</P>
+<P><I>Closed Functionality.</I> Characteristics that limit functionality or prevent a user from attaching or installing assistive technology.</P>
+<P><I>Content.</I> Electronic information and data, as well as the encoding that defines its structure, presentation, and interactions.</P>
+<P><I>Customer Premises Equipment (CPE).</I> Equipment used on the premises of a person (other than a carrier) to originate, route, or terminate telecommunications service or interconnected VoIP service, including software integral to the operation of telecommunications function of such equipment. Examples of CPE are telephones, routers, switches, residential gateways, set-top boxes, fixed mobile convergence products, home networking adaptors and Internet access gateways which enable consumers to access communications service providers' services and distribute them around their house via a Local Access Network (LAN).</P>
+<P><I>Document.</I> Logically distinct assembly of content (such as a file, set of files, or streamed media) that: Functions as a single entity rather than a collection; is not part of software; and does not include its own software to retrieve and present content for users. Examples of documents include, but are not limited to, letters, email messages, spreadsheets, presentations, podcasts, images, and movies.</P>
+<P><I>Hardware.</I> A tangible device, equipment, or physical component of ICT, such as telephones, computers, multifunction copy machines, and keyboards.</P>
+<P><I>Information and Communication Technology (ICT).</I> Information technology and other equipment, systems, technologies, or processes, for which the principal function is the creation, manipulation, storage, display, receipt, or transmission of electronic data and information, as well as any associated content.</P>
+<P><I>Keyboard.</I> A set of systematically arranged alphanumeric keys or a control that generates alphanumeric input by which a machine or device is operated. A keyboard includes tactilely discernible keys used in conjunction with the alphanumeric keys if their function maps to keys on the keyboard interfaces.</P>
+<P><I>Label.</I> Text, or a component with a text alternative, that is presented to a user to identify content. A label is presented to all users, whereas a name may be hidden and only exposed by assistive technology. In many cases, the name and the label are the same.</P>
+<P><I>Manufacturer.</I> A final assembler of telecommunications equipment or customer premises equipment that sells such equipment to the public or to vendors that sell to the public.</P>
+<P><I>Menu.</I> A set of selectable options.</P>
+<P><I>Name.</I> Text by which software can identify a component to the user. A name may be hidden and only exposed by assistive technology, whereas a label is presented to all users. In many cases, the label and the name are the same. Name is unrelated to the name attribute in HTML.</P>
+<P><I>Non-Web Document.</I> A document that is not: A Web page, embedded in a Web page, or used in the rendering or functioning of Web pages.</P>
+<P><I>Non-Web Software.</I> Software that is not: A Web page, not embedded in a Web page, and not used in the rendering or functioning of Web pages.</P>
+<P><I>Operable Part.</I> Hardware-based user controls for activating, deactivating, or adjusting ICT.</P>
+<P><I>Platform Accessibility Services.</I> Services provided by a platform enabling interoperability with assistive technology. Examples are Application Programming Interfaces (API) and the Document Object Model (DOM).</P>
+<P><I>Platform Software.</I> Software that interacts with hardware or provides services for other software. Platform software may run or host other software, and may isolate them from underlying software or hardware layers. A single software component may have both platform and non-platform aspects. Examples of platforms are: Desktop operating systems; embedded operating systems, including mobile systems; Web browsers; plug-ins to Web browsers that render a particular media or format; and sets of components that allow other applications to execute, such as applications which support macros or scripting.</P>
+<P><I>Programmatically Determinable.</I> Ability to be determined by software from author-supplied data that is provided in a way that different user agents, including assistive technologies, can extract and present the information to users in different modalities.</P>
+<P><I>Real-Time Text (RTT).</I> Communications using the transmission of text by which characters are transmitted by a terminal as they are typed. Real-time text is used for conversational purposes. Real-time text also may be used in voicemail, interactive voice response systems, and other similar application.</P>
+<P><I>Revised 255 Guidelines.</I> The guidelines for telecommunications equipment and customer premises equipment covered by Section 255 of the Communications Act as set forth in 255 Chapters 1 and 2 (36 CFR part 1194, Appendix B), and Chapters 3 through 7 (36 CFR part 1193, Appendix C).</P>
+<P><I>Software.</I> Programs, procedures, rules, and related data and documentation that direct the use and operation of ICT and instruct it to perform a given task or function. Software includes, but is not limited to, applications, non-Web software, and platform software.</P>
+<P><I>Software Tools.</I> Software for which the primary function is the development of other software. Software tools usually come in the form of an Integrated Development Environment (IDE) and are a suite of related products and utilities. Examples of IDEs include Microsoft&#xAE; Visual Studio&#xAE;, Apple&#xAE; Xcode&#xAE;, and Eclipse Foundation Eclipse&#xAE;.</P>
+<P><I>Specialized Customer Premises Equipment.</I> Assistive technology used by individuals with disabilities to originate, route, or terminate telecommunications or interconnected VoIP service. Examples are TTYs and amplified telephones.</P>
+<P><I>Telecommunications.</I> The signal transmission between or among points specified by the user of information and of the user's choosing without change in the form or content of the information as sent and received.</P>
+<P><I>Telecommunications Equipment.</I> Equipment, other than customer premises equipment, used by a carrier to provide telecommunications service or interconnected VoIP service and includes software integral to the operation of telecommunications function of such equipment.</P>
+<P><I>Terminal.</I> Device or software with which the end user directly interacts and that provides the user interface. For some systems, the software that provides the user interface may reside on more than one device such as a telephone and a server.</P>
+<P><I>Text.</I> A sequence of characters that can be programmatically determined and that expresses something in human language.</P>
+<P><I>TTY.</I> Equipment that enables interactive text based communications through the transmission of frequency-shift-keying audio tones across the public switched telephone network. TTYs include devices for real-time text communications and voice and text intermixed communications. Examples of intermixed communications are voice carry over and hearing carry over. One example of a TTY is a computer with TTY emulating software and modem.</P>
+<P><I>Variable Message Signs (VMS).</I> Non-interactive electronic signs with scrolling, streaming, or paging-down capability. An example of a VMS is an electronic message board at a transit station that displays the gate and time information associated with the next train arrival.</P>
+<P><I>Voice over Internet Protocol (VoIP).</I> A technology that provides real-time voice communications. VoIP requires a broadband connection from the user's location and customer premises equipment compatible with Internet protocol.</P>
+<P><I>Web page.</I> A non-embedded resource obtained from a single Universal Resource Identifier (URI) using HyperText Transfer Protocol (HTTP) plus any other resources that are provided for the rendering, retrieval, and presentation of content.</P>
+<HD1>Chapter 2: Scoping Requirements
+</HD1>
+<HD1>C201 Application
+</HD1>
+<P>C201.1 <I>Scope.</I> Manufacturers shall comply with the requirements in the Revised 255 Guidelines applicable to telecommunications equipment and customer premises equipment (and related software integral to the operation of telecommunications functions) when newly released, upgraded, or substantially changed from an earlier version or model. Manufacturers shall also conform to the requirements in the Revised 255 Guidelines for support documentation and services, including electronic documents and Web-based product support.</P>
+<P>C201.2. <I>Readily Achievable.</I> When a manufacturer determines that conformance to one or more requirements in Chapter 4 (Hardware) or Chapter 5 (Software) would not be readily achievable, it shall ensure that the equipment or software is compatible with existing peripheral devices or specialized customer premises equipment commonly used by individuals with disabilities to the extent readily achievable.</P>
+<P>C201.3 <I>Access to Functionality.</I> Manufacturers shall ensure that telecommunications equipment and customer premises equipment is accessible to and usable by individuals with disabilities by providing direct access to all telecommunications functionality. Where manufacturers can demonstrate that it is not readily achievable for such equipment to provide direct access to all functionality, the equipment shall support the use of assistive technology and specialized customer premises equipment where readily achievable.</P>
+<P>C201.4 <I>Prohibited Reduction of Accessibility, Usability, and Compatibility.</I> No change shall be undertaken that decreases, or has the effect of decreasing, the net accessibility, usability, or compatibility of telecommunications equipment or customer premises equipment.</P>
+<P>EXCEPTION: Discontinuation of a product shall not be prohibited.</P>
+<P>C201.5 <I>Design, Development, and Fabrication.</I> Manufacturers shall evaluate the accessibility, usability, and interoperability of telecommunications equipment and customer premises equipment during its product design, development, and fabrication.</P>
+<HD1>C202 Functional Performance Criteria
+</HD1>
+<P>C202.1 <I>General.</I> Where the requirements in Chapters 4 and 5 do not address one or more functions of telecommunications or customer premises equipment, the functions not addressed shall conform to the Functional Performance Criteria specified in Chapter 3.</P>
+<HD1>C203 Electronic Content
+</HD1>
+<P>C203.1 <I>General.</I> Electronic content that is integral to the use of telecommunications or customer premises equipment shall conform to Level A and Level AA Success Criteria and Conformance Requirements in WCAG 2.0 (incorporated by reference, <I>see</I> 702.10.1).</P>
+<P>EXCEPTION: Non-Web documents shall not be required to conform to the following four WCAG 2.0 Success Criteria: 2.4.1 Bypass Blocks, 2.4.5 Multiple Ways, 3.2.3 Consistent Navigation, and 3.2.4 Consistent Identification.</P>
+<P>C203.1.1 Word Substitution when Applying WCAG to Non-Web Documents. For non-Web documents, wherever the term &#x201C;Web page&#x201D; or &#x201C;page&#x201D; appears in WCAG 2.0 Level A and AA Success Criteria and Conformance Requirements, the term &#x201C;document' shall be substituted for the terms &#x201C;Web page&#x201D; and &#x201C;page.&#x201D; In addition, in Success Criterion in 1.4.2, the phrase &#x201C;in a document&#x201D; shall be substituted for the phrase &#x201C;on a Web page.&#x201D;</P>
+<HD1>C204 Hardware
+</HD1>
+<P>C204.1 <I>General.</I> Where components of telecommunications equipment and customer premises equipment are hardware, and transmit information or have a user interface, those components shall conform to applicable requirements in Chapter 4.</P>
+<P>EXCEPTION: Components of telecommunications equipment and customer premises equipment shall not be required to conform to 402, 407.7, 407.8, 408, 412.8.4, and 415.</P>
+<HD1>C205 Software
+</HD1>
+<P>C205.1 <I>General.</I> Where software is integral to the use of telecommunications functions of telecommunications equipment or customer premises equipment and has a user interface, such software shall conform to C205 and applicable requirements in Chapter 5.</P>
+<P>EXCEPTION: Software that is assistive technology and that supports the accessibility services of the platform shall not be required to conform to the requirements in Chapter 5.</P>
+<P>C205.2 <I>WCAG Conformance.</I> User interface components, as well as the content of platforms and applications shall conform to Level A and Level AA Success Criteria and Conformance Requirements in WCAG 2.0 (incorporated by reference, <I>see</I> 702.10.1).</P>
+<P>EXCEPTIONS: 1. Software that is assistive technology and that supports the accessibility services of the platform shall not be required to conform to C205.2.</P>
+<P>2. Non-Web software shall not be required to conform to the following four Success Criteria in WCAG 2.0: 2.4.1 Bypass Blocks; 2.4.5 Multiple Ways; 3.2.3 Consistent Navigation; and 3.2.4 Consistent Identification.</P>
+<P>3. Non-Web software shall not be required to conform to Conformance Requirement 3 Complete Processes in WCAG 2.0.</P>
+<P>C205.2.1 <I>Word Substitution when Applying WCAG to Non-Web Software.</I> For non-Web software, wherever the term &#x201C;Web page&#x201D; or &#x201C;page&#x201D; appears in WCAG 2.0 Level A and AA Success Criteria and Conformance Requirements, the term &#x201C;software&#x201D; shall be substituted for the terms &#x201C;Web page&#x201D; and &#x201C;page.&#x201D; In addition, in Success Criterion 1.4.2, the phrase &#x201C;in software&#x201D; shall be substituted for the phrase &#x201C;on a Web page.&#x201D;</P>
+<P>C205.3 <I>Complete Processes for Non-Web Software.</I> Where non-Web software requires multiple steps to accomplish an activity, all software related to the activity to be accomplished shall conform to WCAG 2.0 as specified in C205.2.</P>
+<HD1>C206 Support Documentation and Services
+</HD1>
+<P>C206.1 <I>General.</I> Where support documentation and services are provided for telecommunications equipment and customer premises equipment, manufacturers shall ensure that such documentation and services conform to Chapter 6 and are made available upon request at no additional charge.</P>
+<CITA TYPE="N">[82 FR 5832, Jan. 18, 2017, as amended at 83 FR 2915, Jan. 22, 2018]
+</CITA>
+</DIV9>
+
+<DIV9 N="Appendix C to Part 1194" TYPE="APPENDIX" hierarchy_metadata="{&quot;path&quot;:&quot;/on/_SUBSTITUTE_DATE_/title-36/part-1194/appendix-Appendix C to Part 1194&quot;,&quot;citation&quot;:&quot;Appendix C to Part 1194, Title 36&quot;}">
+<HEAD>Appendix C to Part 1194&#x2014;Functional Performance Criteria and Technical Requirements
+</HEAD>
+<HD1>Table of Contents
+</HD1>
+<HD1>Chapter 3: Functional Performance Criteria
+</HD1>
+<FP-2>301 General
+</FP-2>
+<FP-2>302 Functional Performance Criteria
+</FP-2>
+<HD1>Chapter 4: Hardware
+</HD1>
+<FP-2>401 General
+</FP-2>
+<FP-2>402 Closed Functionality
+</FP-2>
+<FP-2>403 Biometrics
+</FP-2>
+<FP-2>404 Preservation of Information Provided for Accessibility
+</FP-2>
+<FP-2>405 Privacy
+</FP-2>
+<FP-2>406 Standard Connections
+</FP-2>
+<FP-2>407 Operable Parts
+</FP-2>
+<FP-2>408 Display Screens
+</FP-2>
+<FP-2>409 Status Indicators
+</FP-2>
+<FP-2>410 Color Coding
+</FP-2>
+<FP-2>411 Audible Signals
+</FP-2>
+<FP-2>412 ICT with Two-Way Communication
+</FP-2>
+<FP-2>413 Closed Caption Processing Technologies
+</FP-2>
+<FP-2>414 Audio Description Processing Technologies
+</FP-2>
+<FP-2>415 User Controls for Captions and Audio Descriptions
+</FP-2>
+<HD1>Chapter 5: Software
+</HD1>
+<FP-2>501 General
+</FP-2>
+<FP-2>502 Interoperability with Assistive Technology
+</FP-2>
+<FP-2>503 Applications
+</FP-2>
+<FP-2>504 Authoring Tools
+</FP-2>
+<HD1>Chapter 6: Support Documentation and Services
+</HD1>
+<FP-2>601 General
+</FP-2>
+<FP-2>602 Support Documentation
+</FP-2>
+<FP-2>603 Support Services
+</FP-2>
+<HD1>Chapter 7: Referenced Standards
+</HD1>
+<FP-2>701 General
+</FP-2>
+<FP-2>702 Incorporation by Reference
+</FP-2>
+<HD1>Chapter 3: Functional Performance Criteria
+</HD1>
+<HD1>301&#x2014;General
+</HD1>
+<P>301.1 <I>Scope.</I> The requirements of Chapter 3 shall apply to ICT where required by 508 Chapter 2 (Scoping Requirements), 255 Chapter 2 (Scoping Requirements), and where otherwise referenced in any other chapter of the Revised 508 Standards or Revised 255 Guidelines.</P>
+<HD1>302 Functional Performance Criteria
+</HD1>
+<P>302.1 <I>Without Vision.</I> Where a visual mode of operation is provided, ICT shall provide at least one mode of operation that does not require user vision.</P>
+<P>302.2 <I>With Limited Vision.</I> Where a visual mode of operation is provided, ICT shall provide at least one mode of operation that enables users to make use of limited vision.</P>
+<P>302.3 <I>Without Perception of Color.</I> Where a visual mode of operation is provided, ICT shall provide at least one visual mode of operation that does not require user perception of color.</P>
+<P>302.4 <I>Without Hearing.</I> Where an audible mode of operation is provided, ICT shall provide at least one mode of operation that does not require user hearing.</P>
+<P>302.5 <I>With Limited Hearing.</I> Where an audible mode of operation is provided, ICT shall provide at least one mode of operation that enables users to make use of limited hearing.</P>
+<P>302.6 <I>Without Speech.</I> Where speech is used for input, control, or operation, ICT shall provide at least one mode of operation that does not require user speech.</P>
+<P>302.7 <I>With Limited Manipulation.</I> Where a manual mode of operation is provided, ICT shall provide at least one mode of operation that does not require fine motor control or simultaneous manual operations.</P>
+<P>302.8 <I>With Limited Reach and Strength.</I> Where a manual mode of operation is provided, ICT shall provide at least one mode of operation that is operable with limited reach and limited strength.</P>
+<P>302.9 <I>With Limited Language, Cognitive, and Learning Abilities.</I> ICT shall provide features making its use by individuals with limited cognitive, language, and learning abilities simpler and easier.</P>
+<HD1>Chapter 4: Hardware
+</HD1>
+<HD1>401 General
+</HD1>
+<P>401.1 <I>Scope.</I> The requirements of Chapter 4 shall apply to ICT that is hardware where required by 508 Chapter 2 (Scoping Requirements), 255 Chapter 2 (Scoping Requirements), and where otherwise referenced in any other chapter of the Revised 508 Standards or Revised 255 Guidelines.</P>
+<P>EXCEPTION: Hardware that is assistive technology shall not be required to conform to the requirements of this chapter.</P>
+<HD1>402 Closed Functionality
+</HD1>
+<P>402.1 <I>General.</I> ICT with closed functionality shall be operable without requiring the user to attach or install assistive technology other than personal headsets or other audio couplers, and shall conform to 402.</P>
+<P>402.2 <I>Speech-Output Enabled.</I> ICT with a display screen shall be speech-output enabled for full and independent use by individuals with vision impairments.</P>
+<P>EXCEPTIONS: 1. Variable message signs conforming to 402.5 shall not be required to be speech-output enabled.</P>
+<P>2. Speech output shall not be required where ICT display screens only provide status indicators and those indicators conform to 409.</P>
+<P>3. Where speech output cannot be supported due to constraints in available memory or processor capability, ICT shall be permitted to conform to 409 in lieu of 402.2.</P>
+<P>4. Audible tones shall be permitted instead of speech output where the content of user input is not displayed as entered for security purposes, including, but not limited to, asterisks representing personal identification numbers.</P>
+<P>5. Speech output shall not be required for: The machine location; date and time of transaction; customer account number; and the machine identifier or label.</P>
+<P>6. Speech output shall not be required for advertisements and other similar information unless they convey information that can be used for the transaction being conducted.</P>
+<P>402.2.1 <I>Information Displayed On-Screen.</I> Speech output shall be provided for all information displayed on-screen.</P>
+<P>402.2.2 <I>Transactional Outputs.</I> Where transactional outputs are provided, the speech output shall audibly provide all information necessary to verify a transaction.</P>
+<P>402.2.3 <I>Speech Delivery Type and Coordination.</I> Speech output shall be delivered through a mechanism that is readily available to all users, including, but not limited to, an industry standard connector or a telephone handset. Speech shall be recorded or digitized human, or synthesized. Speech output shall be coordinated with information displayed on the screen.</P>
+<P>402.2.4 <I>User Control.</I> Speech output for any single function shall be automatically interrupted when a transaction is selected. Speech output shall be capable of being repeated and paused.</P>
+<P>402.2.5 <I>Braille Instructions.</I> Where speech output is required by 402.2, braille instructions for initiating the speech mode of operation shall be provided. Braille shall be contracted and shall conform to 36 CFR part 1191, Appendix D, Section 703.3.1.</P>
+<P>EXCEPTION: Devices for personal use shall not be required to conform to 402.2.5.</P>
+<P>402.3 <I>Volume.</I> ICT that delivers sound, including speech output required by 402.2, shall provide volume control and output amplification conforming to 402.3.</P>
+<P>EXCEPTION: ICT conforming to 412.2 shall not be required to conform to 402.3.</P>
+<P>402.3.1 <I>Private Listening.</I> Where ICT provides private listening, it shall provide a mode of operation for controlling the volume. Where ICT delivers output by an audio transducer typically held up to the ear, a means for effective magnetic wireless coupling to hearing technologies shall be provided.</P>
+<P>402.3.2 <I>Non-private Listening.</I> Where ICT provides non-private listening, incremental volume control shall be provided with output amplification up to a level of at least 65 dB. A function shall be provided to automatically reset the volume to the default level after every use.</P>
+<P>402.4 <I>Characters on Display Screens.</I> At least one mode of characters displayed on the screen shall be in a sans serif font. Where ICT does not provide a screen enlargement feature, characters shall be 3/16 inch (4.8 mm) high minimum based on the uppercase letter &#x201C;I&#x201D;. Characters shall contrast with their background with either light characters on a dark background or dark characters on a light background.</P>
+<P>402.5 <I>Characters on Variable Message Signs.</I> Characters on variable message signs shall conform to section 703.7 Variable Message Signs of ICC A117.1-2009 (incorporated by reference, <I>see</I> 702.6.1).</P>
+<HD1>403 Biometrics
+</HD1>
+<P>403.1 <I>General.</I> Where provided, biometrics shall not be the only means for user identification or control.</P>
+<P>EXCEPTION: Where at least two biometric options that use different biological characteristics are provided, ICT shall be permitted to use biometrics as the only means for user identification or control.</P>
+<HD1>404 Preservation of Information Provided for Accessibility
+</HD1>
+<P>404.1 <I>General.</I> ICT that transmits or converts information or communication shall not remove non-proprietary information provided for accessibility or shall restore it upon delivery.</P>
+<HD1>405 Privacy
+</HD1>
+<P>405.1 <I>General.</I> The same degree of privacy of input and output shall be provided to all individuals. When speech output required by 402.2 is enabled, the screen shall not blank automatically.</P>
+<HD1>406 Standard Connections
+</HD1>
+<P>406.1 <I>General.</I> Where data connections used for input and output are provided, at least one of each type of connection shall conform to industry standard non-proprietary formats.</P>
+<HD1>407 Operable Parts
+</HD1>
+<P>407.1 <I>General.</I> Where provided, operable parts used in the normal operation of ICT shall conform to 407.</P>
+<P>407.2 <I>Contrast.</I> Where provided, keys and controls shall contrast visually from background surfaces. Characters and symbols shall contrast visually from background surfaces with either light characters or symbols on a dark background or dark characters or symbols on a light background.</P>
+<P>407.3 <I>Input Controls.</I> At least one input control conforming to 407.3 shall be provided for each function.</P>
+<P>EXCEPTION: Devices for personal use with input controls that are audibly discernable without activation and operable by touch shall not be required to conform to 407.3.</P>
+<P>407.3.1 <I>Tactilely Discernible.</I> Input controls shall be operable by touch and tactilely discernible without activation.</P>
+<P>407.3.2 <I>Alphabetic Keys.</I> Where provided, individual alphabetic keys shall be arranged in a QWERTY-based keyboard layout and the &#x201C;F&#x201D; and &#x201C;J&#x201D; keys shall be tactilely distinct from the other keys.</P>
+<P>407.3.3 <I>Numeric Keys.</I> Where provided, numeric keys shall be arranged in a 12-key ascending or descending keypad layout. The number five key shall be tactilely distinct from the other keys. Where the ICT provides an alphabetic overlay on numeric keys, the relationships between letters and digits shall conform to ITU-T Recommendation E.161 (incorporated by reference, <I>see</I> 702.7.1).</P>
+<P>407.4 <I>Key Repeat.</I> Where a keyboard with key repeat is provided, the delay before the key repeat feature is activated shall be fixed at, or adjustable to, 2 seconds minimum.</P>
+<P>407.5 <I>Timed Response.</I> Where a timed response is required, the user shall be alerted visually, as well as by touch or sound, and shall be given the opportunity to indicate that more time is needed.</P>
+<P>407.6 <I>Operation.</I> At least one mode of operation shall be operable with one hand and shall not require tight grasping, pinching, or twisting of the wrist. The force required to activate operable parts shall be 5 pounds (22.2 N) maximum.</P>
+<P>407.7 <I>Tickets, Fare Cards, and Keycards.</I> Where tickets, fare cards, or keycards are provided, they shall have an orientation that is tactilely discernible if orientation is important to further use of the ticket, fare card, or keycard.</P>
+<P>407.8 <I>Reach Height and Depth.</I> At least one of each type of operable part of stationary ICT shall be at a height conforming to 407.8.2 or 407.8.3 according to its position established by the vertical reference plane specified in 407.8.1 for a side reach or a forward reach. Operable parts used with speech output required by 402.2 shall not be the only type of operable part complying with 407.8 unless that part is the only operable part of its type.</P>
+<P>407.8.1 <I>Vertical Reference Plane.</I> Operable parts shall be positioned for a side reach or a forward reach determined with respect to a vertical reference plane. The vertical reference plane shall be located in conformance to 407.8.2 or 407.8.3.</P>
+<P>407.8.1.1 <I>Vertical Plane for Side Reach.</I> Where a side reach is provided, the vertical reference plane shall be 48 inches (1220 mm) long minimum.</P>
+<P>407.8.1.2 <I>Vertical Plane for Forward Reach.</I> Where a forward reach is provided, the vertical reference plane shall be 30 inches (760 mm) long minimum.</P>
+<P>407.8.2 <I>Side Reach.</I> Operable parts of ICT providing a side reach shall conform to 407.8.2.1 or 407.8.2.2. The vertical reference plane shall be centered on the operable part and placed at the leading edge of the maximum protrusion of the ICT within the length of the vertical reference plane. Where a side reach requires a reach over a portion of the ICT, the height of that portion of the ICT shall be 34 inches (865 mm) maximum.</P>
+<P>407.8.2.1 <I>Unobstructed Side Reach.</I> Where the operable part is located 10 inches (255 mm) or less beyond the vertical reference plane, the operable part shall be 48 inches (1220 mm) high maximum and 15 inches (380 mm) high minimum above the floor.</P>
+<P>407.8.2.2 <I>Obstructed Side Reach.</I> Where the operable part is located more than 10 inches (255 mm), but not more than 24 inches (610 mm), beyond the vertical reference plane, the height of the operable part shall be 46 inches (1170 mm) high maximum and 15 inches (380 mm) high minimum above the floor. The operable part shall not be located more than 24 inches (610 mm) beyond the vertical reference plane.</P>
+<P>407.8.3 <I>Forward Reach.</I> Operable parts of ICT providing a forward reach shall conform to 407.8.3.1 or 407.8.3.2. The vertical reference plane shall be centered, and intersect with, the operable part. Where a forward reach allows a reach over a portion of the ICT, the height of that portion of the ICT shall be 34 inches (865 mm) maximum.</P>
+<P>407.8.3.1 <I>Unobstructed Forward Reach.</I> Where the operable part is located at the leading edge of the maximum protrusion within the length of the vertical reference plane of the ICT, the operable part shall be 48 inches (1220 mm) high maximum and 15 inches (380 mm) high minimum above the floor.</P>
+<P>407.8.3.2 <I>Obstructed Forward Reach.</I> Where the operable part is located beyond the leading edge of the maximum protrusion within the length of the vertical reference plane, the operable part shall conform to 407.8.3.2. The maximum allowable forward reach to an operable part shall be 25 inches (635 mm).</P>
+<P>407.8.3.2.1 <I>Operable Part Height for ICT with Obstructed Forward Reach.</I> The height of the operable part shall conform to Table 407.8.3.2.1.</P>
+<DIV width="100%"><DIV class="gpotbl_div">
+<TABLE border="1" cellpadding="1" cellspacing="1" class="gpo_table" frame="void" width="100%">
+<CAPTION><P class="title">Table 407.8.3.2.1&#x2014;Operable Part Height for ICT With Obstructed Forward Reach</P></CAPTION>
+<THEAD>
+<TR>
+<TH class="center border-top-single border-bottom-single border-right-single">Reach depth</TH>
+<TH class="center border-top-single border-bottom-single">Operable part height</TH>
+</TR>
+</THEAD>
+<TBODY>
+<TR>
+<TD class="left border-right-single">Less than 20 inches (510 mm)</TD>
+<TD class="left">48 inches (1220 mm) maximum.</TD>
+</TR>
+<TR>
+<TD class="left border-bottom-single border-right-single">20 inches (510 mm) to 25 inches (635 mm)</TD>
+<TD class="left border-bottom-single">44 inches (1120 mm) maximum.</TD>
+</TR>
+</TBODY>
+</TABLE>
+</DIV></DIV>
+<P>407.8.3.2.2 <I>Knee and Toe Space under ICT with Obstructed Forward Reach.</I> Knee and toe space under ICT shall be 27 inches (685 mm) high minimum, 25 inches (635 mm) deep maximum, and 30 inches (760 mm) wide minimum and shall be clear of obstructions.</P>
+<P>EXCEPTIONS: 1. Toe space shall be permitted to provide a clear height of 9 inches (230 mm) minimum above the floor and a clear depth of 6 inches (150 mm) maximum from the vertical reference plane toward the leading edge of the ICT.</P>
+<P>2. At a depth of 6 inches (150 mm) maximum from the vertical reference plane toward the leading edge of the ICT, space between 9 inches (230 mm) and 27 inches (685 mm) minimum above the floor shall be permitted to reduce at a rate of 1 inch (25 mm) in depth for every 6 inches (150 mm) in height.</P>
+<HD1>408 Display Screens
+</HD1>
+<P>408.1 <I>General.</I> Where provided, display screens shall conform to 408.</P>
+<P>408.2 <I>Visibility.</I> Where stationary ICT provides one or more display screens, at least one of each type of display screen shall be visible from a point located 40 inches (1015 mm) above the floor space where the display screen is viewed.</P>
+<P>408.3 <I>Flashing.</I> Where ICT emits lights in flashes, there shall be no more than three flashes in any one-second period.</P>
+<P>EXCEPTION: Flashes that do not exceed the general flash and red flash thresholds defined in WCAG 2.0 (incorporated by reference, <I>see</I> 702.10.1) are not required to conform to 408.3.</P>
+<HD1>409 Status Indicators
+</HD1>
+<P>409.1 <I>General.</I> Where provided, status indicators shall be discernible visually and by touch or sound.</P>
+<HD1>410 Color Coding
+</HD1>
+<P>410.1 <I>General.</I> Where provided, color coding shall not be used as the only means of conveying information, indicating an action, prompting a response, or distinguishing a visual element.</P>
+<HD1>411 Audible Signals
+</HD1>
+<P>411.1 <I>General.</I> Where provided, audible signals or cues shall not be used as the only means of conveying information, indicating an action, or prompting a response.</P>
+<HD1>412 ICT With Two-Way Voice Communication
+</HD1>
+<P>412.1 <I>General.</I> ICT that provides two-way voice communication shall conform to 412.</P>
+<P>412.2 <I>Volume Gain.</I> ICT that provides two-way voice communication shall conform to 412.2.1 or 412.2.2.</P>
+<P>412.2.1 <I>Volume Gain for Wireline Telephones.</I> Volume gain conforming to 47 CFR 68.317 shall be provided on analog and digital wireline telephones.</P>
+<P>412.2.2 <I>Volume Gain for Non-Wireline ICT.</I> A method for increasing volume shall be provided for non-wireline ICT.</P>
+<P>412.3 <I>Interference Reduction and Magnetic Coupling.</I> Where ICT delivers output by a handset or other type of audio transducer that is typically held up to the ear, ICT shall reduce interference with hearing technologies and provide a means for effective magnetic wireless coupling in conformance with 412.3.1 or 412.3.2.</P>
+<P>412.3.1 <I>Wireless Handsets.</I> ICT in the form of wireless handsets shall conform to ANSI/IEEE C63.19-2011 (incorporated by reference, <I>see</I> 702.5.1).</P>
+<P>412.3.2 <I>Wireline Handsets.</I> ICT in the form of wireline handsets, including cordless handsets, shall conform to TIA-1083-B (incorporated by reference, <I>see</I> 702.9.1).</P>
+<P>412.4 <I>Digital Encoding of Speech.</I> ICT in IP-based networks shall transmit and receive speech that is digitally encoded in the manner specified by ITU-T Recommendation G.722.2 (incorporated by reference, <I>see</I> 702.7.2) or IETF RFC 6716 (incorporated by reference, <I>see</I> 702.8.1).</P>
+<P>412.5 <I>Real-Time Text Functionality.</I> [Reserved].</P>
+<P>412.6 <I>Caller ID.</I> Where provided, caller identification and similar telecommunications functions shall be visible and audible.</P>
+<P>412.7 <I>Video Communication.</I> Where ICT provides real-time video functionality, the quality of the video shall be sufficient to support communication using sign language.</P>
+<P>412.8 <I>Legacy TTY Support.</I>ICT equipment or systems with two-way voice
+communication that do not themselves provide TTY functionality shall conform to 412.8.</P>
+<P>412.8.1 <I>TTY Connectability.</I> ICT shall include a standard non-acoustic connection point for TTYs.</P>
+<P>412.8.2 <I>Voice and Hearing Carry Over.</I> ICT shall provide a microphone capable of being turned on and off to allow the user to intermix speech with TTY use.</P>
+<P>412.8.3 <I>Signal Compatibility.</I> ICT shall support all commonly used crossmanufacturer non-proprietary standard TTY signal protocols where the system interoperates with the Public Switched Telephone Network (PSTN).</P>
+<P>412.8.4 <I>Voice Mail and Other Messaging Systems.</I> Where provided, voice mail, autoattendant, interactive voice response, and caller identification systems shall be usable with a TTY.</P>
+<HD1>413 Closed Caption Processing Technologies
+</HD1>
+<P>413.1 <I>General.</I> Where ICT displays or processes video with synchronized audio, ICT shall provide closed caption processing technology that conforms to 413.1.1 or 413.1.2.</P>
+<P>413.1.1 <I>Decoding and Display of Closed Captions.</I> Players and displays shall decode closed caption data and support display of captions.</P>
+<P>413.1.2 <I>Pass-Through of Closed Caption Data.</I> Cabling and ancillary equipment shall pass through caption data.</P>
+<HD1>414 Audio Description Processing Technologies
+</HD1>
+<P>414.1 <I>General.</I> Where ICT displays or processes video with synchronized audio, ICT shall provide audio description processing technology conforming to 414.1.1 or 414.1.2.</P>
+<P>414.1.1 <I>Digital Television Tuners.</I> Digital television tuners shall provide audio description processing that conforms to ATSC A/53 Digital Television Standard, Part 5 (2014) (incorporated by reference, <I>see</I> 702.2.1). Digital television tuners shall provide processing of audio description when encoded as a Visually Impaired (VI) associated audio service that is provided as a complete program mix containing audio description according to the ATSC A/53 standard.</P>
+<P>414.1.2 <I>Other ICT.</I> ICT other than digital television tuners shall provide audio description processing.</P>
+<HD1>415 User Controls for Captions and Audio Descriptions
+</HD1>
+<P>415.1 <I>General.</I> Where ICT displays video with synchronized audio, ICT shall provide user controls for closed captions and audio descriptions conforming to 415.1.</P>
+<P>EXCEPTION: Devices for personal use shall not be required to conform to 415.1 provided that captions and audio descriptions can be enabled through system-wide platform settings.</P>
+<P>415.1.1 <I>Caption Controls.</I> Where ICT provides operable parts for volume control, ICT shall also provide operable parts for caption selection.</P>
+<P>415.1.2 <I>Audio Description Controls.</I> Where ICT provides operable parts for program selection, ICT shall also provide operable parts for the selection of audio description.</P>
+<HD1>Chapter 5: Software
+</HD1>
+<HD1>501 General
+</HD1>
+<P>501.1 <I>Scope.</I> The requirements of Chapter 5 shall apply to software where required by 508 Chapter 2 (Scoping Requirements), 255 Chapter 2 (Scoping Requirements), and where otherwise referenced in any other chapter of the Revised 508 Standards or Revised 255 Guidelines.</P>
+<P>EXCEPTION: Where Web applications do not have access to platform accessibility services and do not include components that have access to platform accessibility services, they shall not be required to conform to 502 or 503 provided that they conform to Level A and Level AA Success Criteria and Conformance Requirements in WCAG 2.0 (incorporated by reference, <I>see</I> 702.10.1).</P>
+<HD1>502 Interoperability With Assistive Technology
+</HD1>
+<P>502.1 <I>General.</I> Software shall interoperate with assistive technology and shall conform to 502.</P>
+<P>EXCEPTION: ICT conforming to 402 shall not be required to conform to 502.</P>
+<P>502.2 <I>Documented Accessibility Features.</I> Software with platform features defined in platform documentation as accessibility features shall conform to 502.2.</P>
+<P>502.2.1 <I>User Control of Accessibility Features.</I> Platform software shall provide user control over platform features that are defined in the platform documentation as accessibility features.</P>
+<P>502.2.2 <I>No Disruption of Accessibility Features.</I> Software shall not disrupt platform features that are defined in the platform documentation as accessibility features.</P>
+<P>502.3 <I>Accessibility Services.</I> Platform software and software tools that are provided by the platform developer shall provide a documented set of accessibility services that support applications running on the platform to interoperate with assistive technology and shall conform to 502.3. Applications that are also platforms shall expose the underlying platform accessibility services or implement other documented accessibility services.</P>
+<P>502.3.1 <I>Object Information.</I> The object role, state(s), properties, boundary, name, and description shall be programmatically determinable.</P>
+<P>502.3.2 <I>Modification of Object Information.</I> States and properties that can be set by the user shall be capable of being set programmatically, including through assistive technology.</P>
+<P>502.3.3 <I>Row, Column, and Headers.</I> If an object is in a data table, the occupied rows and columns, and any headers associated with those rows or columns, shall be programmatically determinable.</P>
+<P>502.3.4 <I>Values.</I> Any current value(s), and any set or range of allowable values associated with an object, shall be programmatically determinable.</P>
+<P>502.3.5 <I>Modification of Values.</I> Values that can be set by the user shall be capable of being set programmatically, including through assistive technology.</P>
+<P>502.3.6 <I>Label Relationships.</I> Any relationship that a component has as a label for another component, or of being labeled by another component, shall be programmatically determinable.</P>
+<P>502.3.7 <I>Hierarchical Relationships.</I> Any hierarchical (parent-child) relationship that a component has as a container for, or being contained by, another component shall be programmatically determinable.</P>
+<P>502.3.8 <I>Text.</I> The content of text objects, text attributes, and the boundary of text rendered to the screen, shall be programmatically determinable.</P>
+<P>502.3.9 <I>Modification of Text.</I> Text that can be set by the user shall be capable of being set programmatically, including through assistive technology.</P>
+<P>502.3.10 <I>List of Actions.</I> A list of all actions that can be executed on an object shall be programmatically determinable.</P>
+<P>502.3.11 <I>Actions on Objects.</I> Applications shall allow assistive technology to programmatically execute available actions on objects.</P>
+<P>502.3.12 <I>Focus Cursor.</I> Applications shall expose information and mechanisms necessary to track focus, text insertion point, and selection attributes of user interface components.</P>
+<P>502.3.13 <I>Modification of Focus Cursor.</I> Focus, text insertion point, and selection attributes that can be set by the user shall be capable of being set programmatically, including through the use of assistive technology.</P>
+<P>502.3.14 <I>Event Notification.</I> Notification of events relevant to user interactions, including but not limited to, changes in the component's state(s), value, name, description, or boundary, shall be available to assistive technology.</P>
+<P>502.4 <I>Platform Accessibility Features.</I> Platforms and platform software shall conform to the requirements in ANSI/HFES 200.2, Human Factors Engineering of Software User Interfaces&#x2014;Part 2: Accessibility (2008) (incorporated by reference, <I>see</I> 702.4.1) listed below:</P>
+<P>A. Section 9.3.3 Enable sequential entry of multiple (chorded) keystrokes;</P>
+<P>B. Section 9.3.4 Provide adjustment of delay before key acceptance;</P>
+<P>C. Section 9.3.5 Provide adjustment of same-key double-strike acceptance;</P>
+<P>D. Section 10.6.7 Allow users to choose visual alternative for audio output;</P>
+<P>E. Section 10.6.8 Synchronize audio equivalents for visual events;</P>
+<P>F. Section 10.6.9 Provide speech output services; and</P>
+<P>G. Section 10.7.1 Display any captions provided.</P>
+<HD1>503 Applications
+</HD1>
+<P>503.1 <I>General.</I> Applications shall conform to 503.</P>
+<P>503.2 <I>User Preferences.</I> Applications shall permit user preferences from platform settings for color, contrast, font type, font size, and focus cursor.</P>
+<P>EXCEPTION: Applications that are designed to be isolated from their underlying platform software, including Web applications, shall not be required to conform to 503.2.</P>
+<P>503.3 <I>Alternative User Interfaces.</I> Where an application provides an alternative user interface that functions as assistive technology, the application shall use platform and other industry standard accessibility services.</P>
+<P>503.4 <I>User Controls for Captions and Audio Description.</I> Where ICT displays video with synchronized audio, ICT shall provide user controls for closed captions and audio descriptions conforming to 503.4.</P>
+<P>503.4.1 <I>Caption Controls.</I> Where user controls are provided for volume adjustment, ICT shall provide user controls for the selection of captions at the same menu level as the user controls for volume or program selection.</P>
+<P>503.4.2 <I>Audio Description Controls.</I> Where user controls are provided for program selection, ICT shall provide user controls for the selection of audio descriptions at the same menu level as the user controls for volume or program selection.</P>
+<HD1>504 Authoring Tools
+</HD1>
+<P>504.1 <I>General.</I> Where an application is an authoring tool, the application shall conform to 504 to the extent that information required for accessibility is supported by the destination format.</P>
+<P>504.2 <I>Content Creation or Editing.</I> Authoring tools shall provide a mode of operation to create or edit content that conforms to Level A and Level AA Success Criteria and Conformance Requirements in WCAG 2.0 (incorporated by reference, <I>see</I> 702.10.1) for all supported features and, as applicable, to file formats supported by the authoring tool. Authoring tools shall permit authors the option of overriding information required for accessibility.</P>
+<P>EXCEPTION: Authoring tools shall not be required to conform to 504.2 when used to directly edit plain text source code.</P>
+<P>504.2.1 <I>Preservation of Information Provided for Accessibility in Format Conversion.</I> Authoring tools shall, when converting content from one format to another or saving content in multiple formats, preserve the information required for accessibility to the extent that the information is supported by the destination format.</P>
+<P>504.2.2 <I>PDF Export.</I> Authoring tools capable of exporting PDF files that conform to ISO 32000-1:2008 (PDF 1.7) shall also be capable of exporting PDF files that conform to ANSI/AIIM/ISO 14289-1:2016 (PDF/UA-1) (incorporated by reference, <I>see</I> 702.3.1).</P>
+<P>504.3 <I>Prompts.</I> Authoring tools shall provide a mode of operation that prompts authors to create content that conforms to Level A and Level AA Success Criteria and Conformance Requirements in WCAG 2.0 (incorporated by reference, <I>see</I> 702.10.1) for supported features and, as applicable, to file formats supported by the authoring tool.</P>
+<P>504.4 <I>Templates.</I> Where templates are provided, templates allowing content creation that conforms to Level A and Level AA Success Criteria and Conformance Requirements in WCAG 2.0 (incorporated by reference, <I>see</I> 702.10.1) shall be provided for a range of template uses for supported features and, as applicable, to file formats supported by the authoring tool.</P>
+<HD1>Chapter 6: Support Documentation and Services
+</HD1>
+<HD1>601 General
+</HD1>
+<P>601.1 <I>Scope.</I> The technical requirements in Chapter 6 shall apply to ICT support documentation and services where required by 508 Chapter 2 (Scoping Requirements), 255 Chapter 2 (Scoping Requirements), and where otherwise referenced in any other chapter of the Revised 508 Standards or Revised 255 Guidelines.</P>
+<HD1>602 Support Documentation
+</HD1>
+<P>602.1 <I>General.</I> Documentation that supports the use of ICT shall conform to 602.</P>
+<P>602.2 <I>Accessibility and Compatibility Features.</I> Documentation shall list and explain how to use the accessibility and compatibility features required by Chapters 4 and 5. Documentation shall include accessibility features that are built-in and accessibility features that provide compatibility with assistive technology.</P>
+<P>602.3 <I>Electronic Support Documentation.</I> Documentation in electronic format, including Web-based self-service support, shall conform to Level A and Level AA Success Criteria and Conformance Requirements in WCAG 2.0 (incorporated by reference, <I>see</I> 702.10.1).</P>
+<P>602.4 <I>Alternate Formats for Non-Electronic Support Documentation.</I> Where support documentation is only provided in non-electronic formats, alternate formats usable by individuals with disabilities shall be provided upon request.</P>
+<HD1>603 Support Services
+</HD1>
+<P>603.1 <I>General.</I> ICT support services including, but not limited to, help desks, call centers, training services, and automated self-service technical support, shall conform to 603.</P>
+<P>603.2 <I>Information on Accessibility and Compatibility Features.</I> ICT support services shall include information on the accessibility and compatibility features required by 602.2.</P>
+<P>603.3 <I>Accommodation of Communication Needs.</I> Support services shall be provided directly to the user or through a referral to a point of contact. Such ICT support services shall accommodate the communication needs of individuals with disabilities.</P>
+<HD1>Chapter 7: Referenced Standards
+</HD1>
+<HD1>701 General
+</HD1>
+<P>701.1 <I>Scope.</I> The standards referenced in Chapter 7 shall apply to ICT where required by 508 Chapter 2 (Scoping Requirements), 255 Chapter 2 (Scoping Requirements), and where referenced in any other chapter of the Revised 508 Standards or Revised 255 Guidelines.</P>
+<HD1>702 Incorporation by Reference
+</HD1>
+<P>702.1 <I>Approved IBR Standards.</I> The Director of the Office of the Federal Register has approved these standards for incorporation by reference into this part in accordance with 5 U.S.C. 552(a) and 1 CFR part 51. Copies of the referenced standards may be inspected at the U.S. Access Board, 1331 F Street, NW., Suite 1000, Washington, DC 20004, (202) 272-0080, and may also be obtained from the sources listed below. They are also available for inspection at the National Archives and Records Administration (NARA). For information on the availability of this material at NARA, call 202-741-6030 or go to <I>http://www.archives.gov/federal_register/code_of_federal_regulations/ibr_locations.html.</I></P>
+<P>702.2 <I>Advanced Television Systems Committee (ATSC).</I> Copies of the referenced standard may be obtained from the Advanced Television Systems Committee, 1776 K Street NW., Suite 200, Washington, DC 20006-2304 (<I>http://www.atsc.org</I>).</P>
+<P>702.2.1 <I>ATSC A/53 Part 5:2014, Digital Television Standard, Part 5</I>&#x2014;AC-3 Audio System Characteristics, August 28, 2014, IBR approved for Appendix C, Section 414.1.1.</P>
+<P>702.3 <I>Association for Information and Image Management (AIIM).</I> Copies of the referenced standard may be obtained from AIIM,1100 Wayne Ave., Ste. 1100, Silver Spring, Maryland 20910 (<I>http://www.aiim.org/Resources/Standards/AIIM_ISO_14289-1</I>).</P>
+<P>702.3.1 ANSI/AIIM/ISO 14289-1-2016, Document Management Applications&#x2014;Electronic Document File Format Enhancement for Accessibility&#x2014;Part 1: Use of ISO 32000-1 (PDF/UA-1), ANSI-approved February 8, 2016, IBR approved for Appendix C, Section 504.2.2.</P>
+<P>702.4 <I>Human Factors and Ergonomics Society (HFES).</I> Copies of the referenced standard may be obtained from the Human Factors and Ergonomics Society, P.O. Box 1369, Santa Monica, CA 90406-1369 (<I>http://www.hfes.org/Publications/ProductDetail.aspx?Id=76</I>).</P>
+<P>702.4.1 <I>ANSI/HFES 200.2, Human Factors Engineering of Software User Interfaces</I>&#x2014;Part 2: Accessibility, copyright 2008, IBR approved for Appendix C, Section 502.4.</P>
+<P>702.5 <I>Institute of Electrical and Electronics Engineers (IEEE).</I> Copies of the referenced standard may be obtained from the Institute of Electrical and Electronics Engineers, 10662 Los Vaqueros Circle, P.O. Box 3014, Los Alamitos, CA 90720-1264 (<I>http://www.ieee.org</I>).</P>
+<P>702.5.1 ANSI/IEEE C63.19-2011, American National Standard for Methods of Measurement of Compatibility between Wireless Communications Devices and Hearing Aids, May 27, 2011, IBR approved for Appendix C, Section 412.3.1.</P>
+<P>702.6 <I>International Code Council (ICC).</I> Copies of the referenced standard may be obtained from ICC Publications, 4051 W. Flossmoor Road, Country Club Hills, IL 60478-5795 (<I>http://www.iccsafe.org</I>).</P>
+<P>702.6.1 ICC A117.1-2009, Accessible and Usable Buildings and Facilities, approved October 20, 2010, IBR approved for Appendix C, Section 402.5.</P>
+<P>702.7 <I>International Telecommunications Union Telecommunications Standardization Sector (ITU-T).</I> Copies of the referenced standards may be obtained from the International Telecommunication Union, Telecommunications Standardization Sector, Place des Nations CH-1211, Geneva 20, Switzerland (<I>http://www.itu.int/en/ITU-T</I>).</P>
+<P>702.7.1 <I>ITU-T Recommendation E.161, Series E.</I> Overall Network Operation, Telephone Service, Service Operation and Human Factors&#x2014;International operation&#x2014;Numbering plan of the international telephone service, Arrangement of digits, letters and symbols on telephones and other devices that can be used for gaining access to a telephone network, February 2001, IBR approved for Appendix C, Section 407.3.3.</P>
+<P>702.7.2 <I>ITU-T Recommendation G.722.2, Series G.</I> Transmission Systems and Media, Digital Systems and Networks&#x2014;Digital terminal equipment&#x2014;Coding of analogue signals by methods other than PCM, Wideband coding of speech at around 16 kbit/s using Adaptive Multi-Rate Wideband (AMR-WB), July 2003, IBR approved for Appendix C, Section 412.4.</P>
+<P>702.8 <I>Internet Engineering Task Force (IETF).</I> Copies of the referenced standard may be obtained from the Internet Engineering Task Force (<I>http://www.ietf.org</I>).</P>
+<P>702.8.1 IETF RFC 6716, Definition of the Opus Codec, September 2012, J.M. Valin, Mozilla Corporation, K. Vos, Skype Technologies S.A., T. Terriberry, Mozilla Corporation, IBR approved for Appendix C, Section 412.4.</P>
+<P>702.9 <I>Telecommunications Industry Association (TIA).</I> Copies of the referenced standard, published by the Telecommunications Industry Association, may be obtained from IHS Markit, 15 Inverness Way East, Englewood, CO 80112 (<I>http://global.ihs.com</I>).</P>
+<P>702.9.1 TIA-1083-B, Telecommunications&#x2014;Communications Products&#x2014;Handset Magnetic Measurement Procedures and Performance Requirements, October 2015, IBR approved for Appendix C, Section 412.3.2.</P>
+<P>702.10 <I>Worldwide Web Consortium (W3C).</I> Copies of the referenced standard may be obtained from the W3C Web Accessibility Initiative, Massachusetts Institute of Technology, 32 Vassar Street, Room 32-G515, Cambridge, MA 02139 (<I>http://www.w3.org/TR/WCAG20</I>).</P>
+<P>702.10.1 WCAG 2.0, Web Content Accessibility Guidelines, W3C Recommendation, December 11, 2008, IBR approved for: Appendix A (Section 508 of the Rehabilitation Act: Application and Scoping Requirements), Sections E205.4, E205.4 Exception, E205.4.1, E207.2, E207.2 Exception 2, E207.2 Exception 3, E207.2.1, E207.3; Appendix B (Section 255 of the Communications Act: Application and Scoping Requirements), C203.1, C203.1 Exception, C203.1.1, C205.2, C205.2 Exception 2, C205.2 Exception 3, C205.2.1, C205.3; and Appendix C (Functional Performance Criteria and Technical Requirements), 408.3 Exception, 501.1 Exception, 504.2, 504.3, 504.4, and 602.3.</P>
+<CITA TYPE="N">[82 FR 5832, Jan. 18, 2017, as amended at 83 FR 2916, Jan. 22, 2018]
+</CITA>
+</DIV9>
+
+<DIV9 N="Appendix D to Part 1194" TYPE="APPENDIX" hierarchy_metadata="{&quot;path&quot;:&quot;/on/_SUBSTITUTE_DATE_/title-36/part-1194/appendix-Appendix D to Part 1194&quot;,&quot;citation&quot;:&quot;Appendix D to Part 1194, Title 36&quot;}">
+<HEAD>Appendix D to Part 1194&#x2014;Electronic and Information Technology Accessibility Standards as Originally Published on December 21, 2000
+</HEAD>
+<FP-2><B>&#xA7; D1194.1 Purpose.</B>
+</FP-2>
+<P>The purpose of this part is to implement section 508 of the Rehabilitation Act of 1973, as amended (29 U.S.C. 794d). Section 508 requires that when Federal agencies develop, procure, maintain, or use electronic and information technology, Federal employees with disabilities have access to and use of information and data that is comparable to the access and use by Federal employees who are not individuals with disabilities, unless an undue burden would be imposed on the agency. Section 508 also requires that individuals with disabilities, who are members of the public seeking information or services from a Federal agency, have access to and use of information and data that is comparable to that provided to the public who are not individuals with disabilities, unless an undue burden would be imposed on the agency.</P>
+<FP>[65 FR 80523, Dec. 21, 2000. Redesignated and amended at 82 FR 5832, Jan. 18, 2017]
+</FP>
+<FP-2><B>&#xA7; D1194.2 Application.</B>
+</FP-2>
+<P>(a) Products covered by this part shall comply with all applicable provisions of this part. When developing, procuring, maintaining, or using electronic and information technology, each agency shall ensure that the products comply with the applicable provisions of this part, unless an undue burden would be imposed on the agency.</P>
+<P>(1) When compliance with the provisions of this part imposes an undue burden, agencies shall provide individuals with disabilities with the information and data involved by an alternative means of access that allows the individual to use the information and data.</P>
+<P>(2) When procuring a product, if an agency determines that compliance with any provision of this part imposes an undue burden, the documentation by the agency supporting the procurement shall explain why, and to what extent, compliance with each such provision creates an undue burden.</P>
+<P>(b) When procuring a product, each agency shall procure products which comply with the provisions in this part when such products are available in the commercial marketplace or when such products are developed in response to a Government solicitation. Agencies cannot claim a product as a whole is nt commercially available because no product in the marketplace meets all the standards. If products are commercially available that meet some but not all of the standards, the agency must procure the product that best meets the standards.</P>
+<P>(c) Except as provided by &#xA7; 1194.3(b), this part applies to electronic and information technology developed, procured, maintained, or used by agencies directly or used by a contractor under a contract with an agency which requires the use of such product, or requires the use, to a significant extent, of such product in the performance of a service or the furnishing of a product.</P>
+<FP>[65 FR 80523, Dec. 21, 2000. Redesignated and amended at 82 FR 5832, Jan. 18, 2017]
+</FP>
+<FP-2><B>&#xA7; D1194.3 General exceptions.</B>
+</FP-2>
+<P>(a) This part does not apply to any electronic and information technology operated by agencies, the function, operation, or use of which involves intelligence activities, cryptologic activities related to national security, command and control of military forces, equipment that is an integral part of a weapon or weapons system, or systems which are critical to the direct fulfillment of military or intelligence missions. Systems which are critical to the direct fulfillment of military or intelligence missions do not include a system that is to be used for routine administrative and business applications (including payroll, finance, logistics, and personnel management applications).</P>
+<P>(b) This part does not apply to electronic and information technology that is acquired by a contractor incidental to a contract.</P>
+<P>(c) Except as required to comply with the provisions in this part, this part does not require the installation of specific accessibility-related software or the attachment of an assistive technology device at a workstation of a Federal employee who is not an individual with a disability.</P>
+<P>(d) When agencies provide access to the public to information or data through electronic and information technology, agencies are not required to make products owned by the agency available for access and use by individuals with disabilities at a location other than that where the electronic and information technology is provided to the public, or to purchase products for access and use by individuals with disabilities at a location other than that where the electronic and information technology is provided to the public.</P>
+<P>(e) This part shall not be construed to require a fundamental alteration in the nature of a product or its components.</P>
+<P>(f) Products located in spaces frequented only by service personnel for maintenance, repair, or occasional monitoring of equipment are not required to comply with this part.</P>
+<FP>[65 FR 80523, Dec. 21, 2000. Redesignated and amended at 82 FR 5832, Jan. 18, 2017]
+</FP>
+<FP-2><B>&#xA7; D1194.4 Definitions.</B>
+</FP-2>
+<P>The following definitions apply to this part:</P>
+<P><I>Agency.</I> Any Federal department or agency, including the United States Postal Service.</P>
+<P><I>Alternate formats.</I> Alternate formats usable by people with disabilities may include, but are not limited to, Braille, ASCII text, large print, recorded audio, and electronic formats that comply with this part.</P>
+<P><I>Alternate methods.</I> Different means of providing information, including product documentation, to people with disabilities. Alternate methods may include, but are not limited to, voice, fax, relay service, TTY, Internet posting, captioning, text-to-speech synthesis, and audio description.</P>
+<P><I>Assistive technology.</I> Any item, piece of equipment, or system, whether acquired commercially, modified, or customized, that is commonly used to increase, maintain, or improve functional capabilities of individuals with disabilities.</P>
+<P><I>Electronic and information technology.</I> Includes information technology and any equipment or interconnected system or subsystem of equipment, that is used in the creation, conversion, or duplication of data or information. The term electronic and information technology includes, but is not limited to, telecommunications products (such as telephones), information kiosks and transaction machines, World Wide Web sites, multimedia, and office equipment such as copiers and fax machines. The term does not include any equipment that contains embedded information technology that is used as an integral part of the product, but the principal function of which is not the acquisition, storage, manipulation, management, movement, control, display, switching, interchange, transmission, or reception of data or information. For example, HVAC (heating, ventilation, and air conditioning) equipment such as thermostats or temperature control devices, and medical equipment where information technology is integral to its operation, are not information technology.</P>
+<P><I>Information technology.</I> Any equipment or interconnected system or subsystem of equipment, that is used in the automatic acquisition, storage, manipulation, management, movement, control, display, switching, interchange, transmission, or reception of data or information. The term information technology includes computers, ancillary equipment, software, firmware and similar procedures, services (including support services), and related resources.</P>
+<P><I>Operable controls.</I> A component of a product that requires physical contact for normal operation. Operable controls include, but are not limited to, mechanically operated controls, input and output trays, card slots, keyboards, or keypads.</P>
+<P><I>Product.</I> Electronic and information technology.</P>
+<P><I>Self Contained, Closed Products.</I> Products that generally have embedded software and are commonly designed in such a fashion that a user cannot easily attach or install assistive technology. These products include, but are not limited to, information kiosks and information transaction machines, copiers, printers, calculators, fax machines, and other similar types of products.</P>
+<P><I>Telecommunications.</I> The transmission, between or among points specified by the user, of information of the user's choosing, without change in the form or content of the information as sent and received.</P>
+<P><I>TTY.</I> An abbreviation for teletypewriter. Machinery or equipment that employs interactive text based communications through the transmission of coded signals across the telephone network. TTYs may include, for example, devices known as TDDs (telecommunication display devices or telecommunication devices for deaf persons) or computers with special modems. TTYs are also called text telephones.</P>
+<P><I>Undue burden.</I> Undue burden means significant difficulty or expense. In determining whether an action would result in an undue burden, an agency shall consider all agency resources available to the program or component for which the product is being developed, procured, maintained, or used.</P>
+<FP>[65 FR 80523, Dec. 21, 2000. Redesignated and amended at 82 FR 5832, Jan. 18, 2017]
+</FP>
+<FP-2><B>&#xA7; D1194.5 Equivalent facilitation.</B>
+</FP-2>
+<P>Nothing in this part is intended to prevent the use of designs or technologies as alternatives to those prescribed in this part provided they result in substantially equivalent or greater access to and use of a product for people with disabilities.</P>
+<FP>[65 FR 80523, Dec. 21, 2000. Redesignated and amended at 82 FR 5832, Jan. 18, 2017]
+</FP>
+<FP-2><B>&#xA7;&#xA7; D1194.6-D1194.20 [Reserved]</B>
+</FP-2>
+<FP-2><B>&#xA7; D1194.21 Software applications and operating systems.</B>
+</FP-2>
+<P>(a) When software is designed to run on a system that has a keyboard, product functions shall be executable from a keyboard where the function itself or the result of performing a function can be discerned textually.</P>
+<P>(b) Applications shall not disrupt or disable activated features of other products that are identified as accessibility features, where those features are developed and documented according to industry standards. Applications also shall not disrupt or disable activated features of any operating system that are identified as accessibility features where the application programming interface for those accessibility features has been documented by the manufacturer of the operating system and is available to the product developer.</P>
+<P>(c) A well-defined on-screen indication of the current focus shall be provided that moves among interactive interface elements as the input focus changes. The focus shall be programmatically exposed so that assistive technology can track focus and focus changes.</P>
+<P>(d) Sufficient information about a user interface element including the identity, operation and state of the element shall be available to assistive technology. When an image represents a program element, the information conveyed by the image must also be available in text.</P>
+<P>(e) When bitmap images are used to identify controls, status indicators, or other programmatic elements, the meaning assigned to those images shall be consistent throughout an application's performance.</P>
+<P>(f) Textual information shall be provided through operating system functions for displaying text. The minimum information that shall be made available is text content, text input caret location, and text attributes.</P>
+<P>(g) Applications shall not override user selected contrast and color selections and other individual display attributes.</P>
+<P>(h) When animation is displayed, the information shall be displayable in at least one non-animated presentation mode at the option of the user.</P>
+<P>(i) Color coding shall not be used as the only means of conveying information, indicating an action, prompting a response, or distinguishing a visual element.</P>
+<P>(j) When a product permits a user to adjust color and contrast settings, a variety of color selections capable of producing a range of contrast levels shall be provided.</P>
+<P>(k) Software shall not use flashing or blinking text, objects, or other elements having a flash or blink frequency greater than 2 Hz and lower than 55 Hz.</P>
+<P>(l) When electronic forms are used, the form shall allow people using assistive technology to access the information, field elements, and functionality required for completion and submission of the form, including all directions and cues.</P>
+<FP>[65 FR 80523, Dec. 21, 2000. Redesignated and amended at 82 FR 5832, Jan. 18, 2017]
+</FP>
+<FP-2><B>&#xA7; D1194.22 Web-based intranet and internet information and applications.</B>
+</FP-2>
+<P>(a) A text equivalent for every non-text element shall be provided (e.g., via &#x201C;alt&#x201D;, &#x201C;longdesc&#x201D;, or in element content).</P>
+<P>(b) Equivalent alternatives for any multimedia presentation shall be synchronized with the presentation.</P>
+<P>(c) Web pages shall be designed so that all information conveyed with color is also available without color, for example from context or markup.</P>
+<P>(d) Documents shall be organized so they are readable without requiring an associated style sheet.</P>
+<P>(e) Redundant text links shall be provided for each active region of a server-side image map.</P>
+<P>(f) Client-side image maps shall be provided instead of server-side image maps except where the regions cannot be defined with an available geometric shape.</P>
+<P>(g) Row and column headers shall be identified for data tables.</P>
+<P>(h) Markup shall be used to associate data cells and header cells for data tables that have two or more logical levels of row or column headers.</P>
+<P>(i) Frames shall be titled with text that facilitates frame identification and navigation.</P>
+<P>(j) Pages shall be designed to avoid causing the screen to flicker with a frequency greater than 2 Hz and lower than 55 Hz.</P>
+<P>(k) A text-only page, with equivalent information or functionality, shall be provided to make a web site comply with the provisions of this part, when compliance cannot be accomplished in any other way. The content of the text-only page shall be updated whenever the primary page changes.</P>
+<P>(l) When pages utilize scripting languages to display content, or to create interface elements, the information provided by the script shall be identified with functional text that can be read by assistive technology.</P>
+<P>(m) When a web page requires that an applet, plug-in or other application be present on the client system to interpret page content, the page must provide a link to a plug-in or applet that complies with &#xA7; 1194.21(a) through (l).</P>
+<P>(n) When electronic forms are designed to be completed on-line, the form shall allow people using assistive technology to access the information, field elements, and functionality required for completion and submission of the form, including all directions and cues.</P>
+<P>(o) A method shall be provided that permits users to skip repetitive navigation links.</P>
+<P>(p) When a timed response is required, the user shall be alerted and given sufficient time to indicate more time is required.</P>
+<NOTE>
+<HED>Note to &#xA7; D1194.22:</HED>
+<P>1. The Board interprets paragraphs (a) through (k) of this section as consistent with the following priority 1 Checkpoints of the Web Content Accessibility Guidelines 1.0 (WCAG 1.0) (May 5, 1999) published by the Web Accessibility Initiative of the World Wide Web Consortium:</P></NOTE>
+<DIV width="100%"><DIV class="gpotbl_div">
+<TABLE border="1" cellpadding="1" cellspacing="1" class="gpo_table" frame="void" width="100%">
+<THEAD>
+<TR>
+<TH class="center border-top-single border-bottom-single border-right-single">Section 1194.22<br/>paragraph</TH>
+<TH class="center border-top-single border-bottom-single">WCAG 1.0 checkpoint</TH>
+</TR>
+</THEAD>
+<TBODY>
+<TR>
+<TD class="left border-right-single">(a)</TD>
+<TD class="right">1.1</TD>
+</TR>
+<TR>
+<TD class="left border-right-single">(b)</TD>
+<TD class="right">1.4</TD>
+</TR>
+<TR>
+<TD class="left border-right-single">(c)</TD>
+<TD class="right">2.1</TD>
+</TR>
+<TR>
+<TD class="left border-right-single">(d)</TD>
+<TD class="right">6.1</TD>
+</TR>
+<TR>
+<TD class="left border-right-single">(e)</TD>
+<TD class="right">1.2</TD>
+</TR>
+<TR>
+<TD class="left border-right-single">(f)</TD>
+<TD class="right">9.1</TD>
+</TR>
+<TR>
+<TD class="left border-right-single">(g)</TD>
+<TD class="right">5.1</TD>
+</TR>
+<TR>
+<TD class="left border-right-single">(h)</TD>
+<TD class="right">5.2</TD>
+</TR>
+<TR>
+<TD class="left border-right-single">(i)</TD>
+<TD class="right">12.1</TD>
+</TR>
+<TR>
+<TD class="left border-right-single">(j)</TD>
+<TD class="right">7.1</TD>
+</TR>
+<TR>
+<TD class="left border-bottom-single border-right-single">(k)</TD>
+<TD class="right border-bottom-single">11.4</TD>
+</TR>
+</TBODY>
+</TABLE>
+</DIV></DIV>
+<NOTE>
+<HED/>
+<P>2. Paragraphs (l), (m), (n), (o), and (p) of this section are different from WCAG 1.0. Web pages that conform to WCAG 1.0, level A (<I>i.e.,</I> all priority 1 checkpoints) must also meet paragraphs (l), (m), (n), (o), and (p) of this section to comply with this section. WCAG 1.0 is available at <I>http://www.w3.org/TR/1999/WAI-WEBCONTENT-19990505.</I></P></NOTE>
+<FP>[65 FR 80523, Dec. 21, 2000. Redesignated and amended at 82 FR 5832, Jan. 18, 2017]
+</FP>
+<FP-2><B>&#xA7; D1194.23 Telecommunications products.</B>
+</FP-2>
+<P>(a) Telecommunications products or systems which provide a function allowing voice communication and which do not themselves provide a TTY functionality shall provide a standard non-acoustic connection point for TTYs. Microphones shall be capable of being turned on and off to allow the user to intermix speech with TTY use.</P>
+<P>(b) Telecommunications products which include voice communication functionality shall support all commonly used cross-manufacturer non-proprietary standard TTY signal protocols.</P>
+<P>(c) Voice mail, auto-attendant, and interactive voice response telecommunications systems shall be usable by TTY users with their TTYs.</P>
+<P>(d) Voice mail, messaging, auto-attendant, and interactive voice response telecommunications systems that require a response from a user within a time interval, shall give an alert when the time interval is about to run out, and shall provide sufficient time for the user to indicate more time is required.</P>
+<P>(e) Where provided, caller identification and similar telecommunications functions shall also be available for users of TTYs, and for users who cannot see displays.</P>
+<P>(f) For transmitted voice signals, telecommunications products shall provide a gain adjustable up to a minimum of 20 dB. For incremental volume control, at least one intermediate step of 12 dB of gain shall be provided.</P>
+<P>(g) If the telecommunications product allows a user to adjust the receive volume, a function shall be provided to automatically reset the volume to the default level after every use.</P>
+<P>(h) Where a telecommunications product delivers output by an audio transducer which is normally held up to the ear, a means for effective magnetic wireless coupling to hearing technologies shall be provided.</P>
+<P>(i) Interference to hearing technologies (including hearing aids, cochlear implants, and assistive listening devices) shall be reduced to the lowest possible level that allows a user of hearing technologies to utilize the telecommunications product.</P>
+<P>(j) Products that transmit or conduct information or communication, shall pass through cross-manufacturer, non-proprietary, industry-standard codes, translation protocols, formats or other information necessary to provide the information or communication in a usable format. Technologies which use encoding, signal compression, format transformation, or similar techniques shall not remove information needed for access or shall restore it upon delivery.</P>
+<P>(k) Products which have mechanically operated controls or keys, shall comply with the following:</P>
+<P>(1) Controls and keys shall be tactilely discernible without activating the controls or keys.</P>
+<P>(2) Controls and keys shall be operable with one hand and shall not require tight grasping, pinching, or twisting of the wrist. The force required to activate controls and keys shall be 5 lbs. (22.2 N) maximum.</P>
+<P>(3) If key repeat is supported, the delay before repeat shall be adjustable to at least 2 seconds. Key repeat rate shall be adjustable to 2 seconds per character.</P>
+<P>(4) The status of all locking or toggle controls or keys shall be visually discernible, and discernible either through touch or sound.</P>
+<FP>[65 FR 80523, Dec. 21, 2000. Redesignated and amended at 82 FR 5832, Jan. 18, 2017]
+</FP>
+<FP-2><B>&#xA7; D1194.24 Video and multimedia products.</B>
+</FP-2>
+<P>(a) All analog television displays 13 inches and larger, and computer equipment that includes analog television receiver or display circuitry, shall be equipped with caption decoder circuitry which appropriately receives, decodes, and displays closed captions from broadcast, cable, videotape, and DVD signals. As soon as practicable, but not later than July 1, 2002, widescreen digital television (DTV) displays measuring at least 7.8 inches vertically, DTV sets with conventional displays measuring at least 13 inches vertically, and stand-alone DTV tuners, whether or not they are marketed with display screens, and computer equipment that includes DTV receiver or display circuitry, shall be equipped with caption decoder circuitry which appropriately receives, decodes, and displays closed captions from broadcast, cable, videotape, and DVD signals.</P>
+<P>(b) Television tuners, including tuner cards for use in computers, shall be equipped with secondary audio program playback circuitry.</P>
+<P>(c) All training and informational video and multimedia productions which support the agency's mission, regardless of format, that contain speech or other audio information necessary for the comprehension of the content, shall be open or closed captioned.</P>
+<P>(d) All training and informational video and multimedia productions which support the agency's mission, regardless of format, that contain visual information necessary for the comprehension of the content, shall be audio described.</P>
+<P>(e) Display or presentation of alternate text presentation or audio descriptions shall be user-selectable unless permanent.</P>
+<FP>[65 FR 80523, Dec. 21, 2000. Redesignated and amended at 82 FR 5832, Jan. 18, 2017]
+</FP>
+<FP-2><B>&#xA7; D1194.25 Self contained, closed products.</B>
+</FP-2>
+<P>(a) Self contained products shall be usable by people with disabilities without requiring an end-user to attach assistive technology to the product. Personal headsets for private listening are not assistive technology.</P>
+<P>(b) When a timed response is required, the user shall be alerted and given sufficient time to indicate more time is required.</P>
+<P>(c) Where a product utilizes touchscreens or contact-sensitive controls, an input method shall be provided that complies with &#xA7; 1194.23 (k) (1) through (4).</P>
+<P>(d) When biometric forms of user identification or control are used, an alternative form of identification or activation, which does not require the user to possess particular biological characteristics, shall also be provided.</P>
+<P>(e) When products provide auditory output, the audio signal shall be provided at a standard signal level through an industry standard connector that will allow for private listening. The product must provide the ability to interrupt, pause, and restart the audio at anytime.</P>
+<P>(f) When products deliver voice output in a public area, incremental volume control shall be provided with output amplification up to a level of at least 65 dB. Where the ambient noise level of the environment is above 45 dB, a volume gain of at least 20 dB above the ambient level shall be user selectable. A function shall be provided to automatically reset the volume to the default level after every use.</P>
+<P>(g) Color coding shall not be used as the only means of conveying information, indicating an action, prompting a response, or distinguishing a visual element.</P>
+<P>(h) When a product permits a user to adjust color and contrast settings, a range of color selections capable of producing a variety of contrast levels shall be provided.</P>
+<P>(i) Products shall be designed to avoid causing the screen to flicker with a frequency greater than 2 Hz and lower than 55 Hz.</P>
+<P>(j) Products which are freestanding, non-portable, and intended to be used in one location and which have operable controls shall comply with the following:</P>
+<P>(1) The position of any operable control shall be determined with respect to a vertical plane, which is 48 inches in length, centered on the operable control, and at the maximum protrusion of the product within the 48 inch length (see Figure 1 of this part).</P>
+<P>(2) Where any operable control is 10 inches or less behind the reference plane, the height shall be 54 inches maximum and 15 inches minimum above the floor.</P>
+<P>(3) Where any operable control is more than 10 inches and not more than 24 inches behind the reference plane, the height shall be 46 inches maximum and 15 inches minimum above the floor.</P>
+<P>(4) Operable controls shall not be more than 24 inches behind the reference plane (see Figure 2 of this part).</P>
+<FP>[65 FR 80523, Dec. 21, 2000. Redesignated and amended at 82 FR 5832, Jan. 18, 2017]
+</FP>
+<FP-2><B>&#xA7; D1194.26 Desktop and portable computers.</B>
+</FP-2>
+<P>(a) All mechanically operated controls and keys shall comply with &#xA7; 1194.23(k)(1) through (4).</P>
+<P>(b) If a product utilizes touchscreens or touch-operated controls, an input method shall be provided that complies with &#xA7; 1194.23 (k) (1) through (4).</P>
+<P>(c) When biometric forms of user identification or control are used, an alternative form of identification or activation, which does not require the user to possess particular biological characteristics, shall also be provided.</P>
+<P>(d) Where provided, at least one of each type of expansion slots, ports and connectors shall comply with publicly available industry standards.</P>
+<FP>[65 FR 80523, Dec. 21, 2000. Redesignated and amended at 82 FR 5832, Jan. 18, 2017]
+</FP>
+<FP-2><B>&#xA7;&#xA7; D1194.27-D1194.30 [Reserved]</B>
+</FP-2>
+<FP-2><B>&#xA7; D1194.31 Functional performance criteria.</B>
+</FP-2>
+<P>(a) At least one mode of operation and information retrieval that does not require user vision shall be provided, or support for assistive technology used by people who are blind or visually impaired shall be provided.</P>
+<P>(b) At least one mode of operation and information retrieval that does not require visual acuity greater than 20/70 shall be provided in audio and enlarged print output working together or independently, or support for assistive technology used by people who are visually impaired shall be provided.</P>
+<P>(c) At least one mode of operation and information retrieval that does not require user hearing shall be provided, or support for assistive technology used by people who are deaf or hard of hearing shall be provided.</P>
+<P>(d) Where audio information is important for the use of a product, at least one mode of operation and information retrieval shall be provided in an enhanced auditory fashion, or support for assistive hearing devices shall be provided.</P>
+<P>(e) At least one mode of operation and information retrieval that does not require user speech shall be provided, or support for assistive technology used by people with disabilities shall be provided.</P>
+<P>(f) At least one mode of operation and information retrieval that does not require fine motor control or simultaneous actions and that is operable with limited reach and strength shall be provided.</P>
+<FP>[65 FR 80523, Dec. 21, 2000. Redesignated and amended at 82 FR 5832, Jan. 18, 2017]
+</FP>
+<FP-2><B>&#xA7;&#xA7; D1194.32-D1194.40 [Reserved]</B>
+</FP-2>
+<FP-2><B>&#xA7; D1194.41 Information, documentation, and support.</B>
+</FP-2>
+<P>(a) Product support documentation provided to end-users shall be made available in alternate formats upon request, at no additional charge.</P>
+<P>(b) End-users shall have access to a description of the accessibility and compatibility features of products in alternate formats or alternate methods upon request, at no additional charge.</P>
+<P>(c) Support services for products shall accommodate the communication needs of end-users with disabilities.</P>
+<FP>[65 FR 80523, Dec. 21, 2000. Redesignated and amended at 82 FR 5832, Jan. 18, 2017]
+</FP>
+<FP-2><B>&#xA7;&#xA7; D1194.42-D1194.50 [Reserved]</B>
+</FP-2>
+<FP-2><B>&#xA7; D1194.51 Figures</B>
+</FP-2>
+<img src="/graphics/er21de00.000.gif"/>
+</DIV9>
+
+</DIV5>
