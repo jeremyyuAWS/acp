@@ -161,12 +161,11 @@ describe('the card outlives a tab change', () => {
     expect(card).toBeLessThan(panel)
   })
 
-  it('shows globally except on Remediation, where the detailed operations card is authoritative', () => {
+  it('shows on every tab, including above the Remediation workspace', () => {
     const app = readFileSync(join(here, 'App.jsx'), 'utf8')
-    const gate = app.slice(app.indexOf("{view !== 'remediate'"), app.indexOf('<main id="main-content"'))
-    expect(gate).toContain('<RemediationRunCard')
-    expect(gate).toContain('onOpen={() => { setView(\'remediate\')')
-    expect(gate).not.toContain("view === 'remediate' ? null")
+    const card = app.slice(app.indexOf('<RemediationRunCard'), app.indexOf('<main id="main-content"'))
+    expect(card).toContain("onOpen={view === 'remediate' ? null")
+    expect(card).not.toContain("{view !== 'remediate' &&")
 
     const remediate = readFileSync(join(here, 'Remediate.jsx'), 'utf8')
     expect(remediate).toContain('<RemediationOpsPanel')
