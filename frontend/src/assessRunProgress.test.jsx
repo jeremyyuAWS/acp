@@ -22,6 +22,12 @@ const render = (snapshot, throughput, onStop) =>
   renderToStaticMarkup(createElement(AssessRunProgress, { snapshot, throughput, onStop }))
 
 describe('the assessment running screen focuses on the document in flight', () => {
+  it('describes the no-write boundary without misnaming SharePoint as a drive', () => {
+    const html = render({ ...SNAP, source: 'sharepoint' })
+    expect(html).toContain('connected source during assessment')
+    expect(html).not.toContain('your drive at any point')
+  })
+
   it('keeps the SharePoint boundary visible while documents are assessed', () => {
     const html = render({ ...SNAP, source: 'sharepoint', scope: { kind: 'sharepoint', sites: [
       { id: 's1', name: 'Clinical', status: 'complete', libraries: [{ id: 'l1', name: 'Documents' }] },

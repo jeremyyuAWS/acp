@@ -175,9 +175,10 @@ describe('the card outlives a tab change', () => {
     //   · reading the `run` const (derived far below) is a temporal-dead-zone ReferenceError,
     //   · a hook placed after `if (!me) return <SignIn/>` runs on some renders and not others,
     //     which React rejects with "Rendered more hooks than during the previous render".
-    // So the call must read `scan?.run?.id` and must sit above that return.
+    // So the call must avoid the later `run` const and must sit above that return.
     const app = readFileSync(join(here, 'App.jsx'), 'utf8')
-    const call = app.indexOf('useRemediationRun(scan?.run?.id')
+    expect(app).toMatch(/const activeRemediationScanId = primaryWorkflow\?\.stage === 'remediate'[\s\S]{0,100}?primaryWorkflow\.scan_id/)
+    const call = app.indexOf('useRemediationRun(activeRemediationScanId || scan?.run?.id')
     expect(call).toBeGreaterThan(-1)
     // Match the RETURN STATEMENT, not the words — App.jsx discusses this early return in prose
     // above it, and an indexOf on the sentence finds the comment first. That mistake made an
