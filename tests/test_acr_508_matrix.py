@@ -93,17 +93,24 @@ def test_numbers_do_not_collide_between_the_two_catalogs():
     assert len(nums) == len(set(nums))
 
 
-def test_an_edition_this_build_cannot_supply_is_refused():
+def test_an_edition_this_build_cannot_supply_is_refused(monkeypatch):
     """The layer below the routes, for the reason #1532 gave: a report restored, imported or
-    migrated never passed them. EN 301 549 has no catalog, so the EU edition is that case now."""
+    migrated never passed them. Every edition is supplied in the committed tree now, so the
+    refusal is exercised against an arranged absence — the guard has to keep working for the next
+    standard, and for a deployment missing a catalog file."""
+    monkeypatch.setattr(acr_catalog, "requirement_sets_available",
+                        lambda: frozenset({acr_catalog.REQ_WCAG, acr_catalog.REQ_SECTION_508}))
     with pytest.raises(ValueError) as e:
         acr_catalog.build_matrix("repeu", acr_catalog.EDITION_EU)
     assert "EN 301 549" in str(e.value)
     assert "false claim" in str(e.value)
 
 
-def test_the_int_edition_is_refused_even_though_508_is_supplied():
-    """INT obliges all three sets. Supplying two must not open the gate on the third."""
+def test_a_refusal_names_only_what_is_actually_missing(monkeypatch):
+    """INT obliges all three sets. With two supplied, naming the supplied ones would send the
+    author looking for a catalog that is already there."""
+    monkeypatch.setattr(acr_catalog, "requirement_sets_available",
+                        lambda: frozenset({acr_catalog.REQ_WCAG, acr_catalog.REQ_SECTION_508}))
     with pytest.raises(ValueError) as e:
         acr_catalog.build_matrix("repint", acr_catalog.EDITION_INT)
     assert "EN 301 549" in str(e.value)
@@ -149,7 +156,9 @@ def test_a_row_from_pre_phase_6_code_is_stored_as_wcag(isolated_store):
 
 
 def test_the_508_edition_is_offerable_for_real():
-    """Held shut through 6.1 and 6.2, opened by 6.3 when the exports could print the rows."""
-    assert acr_catalog.requirement_sets_available() == frozenset(
-        {acr_catalog.REQ_WCAG, acr_catalog.REQ_SECTION_508})
-    assert acr_catalog.offerable_editions() == [acr_catalog.EDITION_WCAG, acr_catalog.EDITION_508]
+    """Held shut through 6.1 and 6.2, opened by 6.3 when the exports could print the rows. The EU
+    and INT editions joined it in 6.4; this test is about 508 keeping its place in the list."""
+    available = acr_catalog.requirement_sets_available()
+    assert {acr_catalog.REQ_WCAG, acr_catalog.REQ_SECTION_508} <= available
+    assert acr_catalog.offerable_editions()[:2] == [
+        acr_catalog.EDITION_WCAG, acr_catalog.EDITION_508]

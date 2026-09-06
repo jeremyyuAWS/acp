@@ -4,55 +4,1939 @@
     "version": "V3.2.1 (2021-03)",
     "citation": "EN 301 549 V3.2.1 — Accessibility requirements for ICT products and services",
     "publisher": "CEN, CENELEC and ETSI",
-    "status": "not-sourced",
-    "generated_by": null,
+    "status": "sourced",
+    "generated_by": "scripts/gen_en_301_549_catalog.py",
     "source_url": "https://www.etsi.org/deliver/etsi_en/301500_301599/301549/03.02.01_60/en_301549v030201p.pdf",
-    "source_reachable": "measured 2026-09-06 from this repo's network: HTTP 200, 2285361 bytes, application/pdf",
-    "blocked_on": [
-      "May the requirement text be reproduced in this repository? The standard is published free of charge by CEN/CENELEC/ETSI and is reachable (above), so this is a question about REDISTRIBUTION, not access — the same shape as ADR 0053's question about the ITI VPAT template, and a question for counsel rather than engineering.",
-      "If the text may not be reproduced, may the clause NUMBERS and TITLES alone be? A VPAT's EU report needs a row per reportable clause; it does not need the normative prose."
-    ],
-    "why_this_file_exists": "So the shape is agreed and the wiring is proven before the answer arrives. requirement_sets_available() reads this file and finds nothing to offer, which is the correct behaviour for a catalog with no requirements in it — see acr_catalog for why an empty catalog and an absent one are deliberately the same answer.",
-    "row_shape": {
-      "num": "the clause number as the standard writes it, e.g. \"9.1.1.1\" or \"11.7\"",
-      "name": "the clause title",
-      "clause": "the top-level clause this row belongs to, e.g. \"9\" — the EU report's tables are organised by clause the way the 508 report's are by chapter",
-      "kind": "\"requirement\" or \"scope\", matching config/section-508.json so one renderer can serve both"
-    },
-    "total": 0,
-    "clauses_note": "Recorded from the standard's own table of contents so the eventual parse has something to be checked against, NOT transcribed from its requirement text.",
+    "reproduction_scope": "Clause NUMBERS and TITLES only. The owner decided on 2026-09-06 that these may be reproduced in this repository and that the normative requirement text may not. No requirement text is present in this file, and neither the source PDF nor any extract of it is vendored — which is why --check verifies internal consistency rather than re-parsing a committed copy, as the WCAG and Section 508 generators do.",
     "clauses": {
       "4": {
-        "name": "Principles"
+        "name": "Principles",
+        "count": 12
       },
       "5": {
-        "name": "Generic requirements"
+        "name": "Generic requirements",
+        "count": 34
       },
       "6": {
-        "name": "ICT with two-way voice communication"
+        "name": "ICT with two-way voice communication",
+        "count": 18
       },
       "7": {
-        "name": "ICT with video capabilities"
+        "name": "ICT with video capabilities",
+        "count": 9
       },
       "8": {
-        "name": "Hardware"
+        "name": "Hardware",
+        "count": 28
       },
       "9": {
-        "name": "Web"
+        "name": "Web",
+        "count": 58
       },
       "10": {
-        "name": "Non-web documents"
+        "name": "Non-web documents",
+        "count": 58
       },
       "11": {
-        "name": "Software"
+        "name": "Software",
+        "count": 83
       },
       "12": {
-        "name": "Documentation and support services"
+        "name": "Documentation and support services",
+        "count": 6
       },
       "13": {
-        "name": "ICT providing relay or emergency service access"
+        "name": "ICT providing relay or emergency service access",
+        "count": 8
       }
-    }
+    },
+    "total": 314,
+    "derivation": "Every leaf clause in clauses 4-13 of the contents page, in standard order. Clauses 1-3 (scope, references, definitions) and 14 (conformance) are excluded: they state what the document is and how to claim against it, not what a product must do. A clause with sub-clauses is a heading and is excluded too, derived from the numbering rather than judged. Numbers and titles are paired by bounding box because the contents page is two columns and reading order pairs them wrongly."
   },
-  "requirements": []
+  "requirements": [
+    {
+      "num": "4.1",
+      "name": "Meeting functional performance statements",
+      "clause": "4",
+      "kind": "requirement"
+    },
+    {
+      "num": "4.2.1",
+      "name": "Usage without vision",
+      "clause": "4",
+      "kind": "requirement"
+    },
+    {
+      "num": "4.2.2",
+      "name": "Usage with limited vision",
+      "clause": "4",
+      "kind": "requirement"
+    },
+    {
+      "num": "4.2.3",
+      "name": "Usage without perception of colour",
+      "clause": "4",
+      "kind": "requirement"
+    },
+    {
+      "num": "4.2.4",
+      "name": "Usage without hearing",
+      "clause": "4",
+      "kind": "requirement"
+    },
+    {
+      "num": "4.2.5",
+      "name": "Usage with limited hearing",
+      "clause": "4",
+      "kind": "requirement"
+    },
+    {
+      "num": "4.2.6",
+      "name": "Usage with no or limited vocal capability",
+      "clause": "4",
+      "kind": "requirement"
+    },
+    {
+      "num": "4.2.7",
+      "name": "Usage with limited manipulation or strength",
+      "clause": "4",
+      "kind": "requirement"
+    },
+    {
+      "num": "4.2.8",
+      "name": "Usage with limited reach",
+      "clause": "4",
+      "kind": "requirement"
+    },
+    {
+      "num": "4.2.9",
+      "name": "Minimize photosensitive seizure triggers",
+      "clause": "4",
+      "kind": "requirement"
+    },
+    {
+      "num": "4.2.10",
+      "name": "Usage with limited cognition, language or learning",
+      "clause": "4",
+      "kind": "requirement"
+    },
+    {
+      "num": "4.2.11",
+      "name": "Privacy",
+      "clause": "4",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.1",
+      "name": "Introduction (informative)",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.2.1",
+      "name": "Closed functionality",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.2.2",
+      "name": "Assistive technology",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.3.1",
+      "name": "Audio output of visual information",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.3.2",
+      "name": "Auditory output delivery including speech",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.3.3",
+      "name": "Auditory output correlation",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.3.4",
+      "name": "Speech output user control",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.3.5",
+      "name": "Speech output automatic interruption",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.3.6",
+      "name": "Speech output for non-text content",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.3.7",
+      "name": "Speech output for video information",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.3.8",
+      "name": "Masked entry",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.3.9",
+      "name": "Private access to personal data",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.3.10",
+      "name": "Non-interfering audio output",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.3.11",
+      "name": "Private listening volume",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.3.12",
+      "name": "Speaker volume",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.3.13",
+      "name": "Volume reset",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.3.14",
+      "name": "Spoken languages",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.3.15",
+      "name": "Non-visual error identification",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.3.16",
+      "name": "Receipts, tickets, and transactional outputs",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.4",
+      "name": "Functionality closed to text enlargement",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.5",
+      "name": "Visual output for auditory information",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.6.1",
+      "name": "Closed functionality",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.6.2",
+      "name": "Input focus",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.1.7",
+      "name": "Access without speech",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.2",
+      "name": "Activation of accessibility features",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.3",
+      "name": "Biometrics",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.4",
+      "name": "Preservation of accessibility information during conversion",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.5.1",
+      "name": "Means of operation",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.5.2",
+      "name": "Operable parts discernibility",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.6.1",
+      "name": "Tactile or auditory status",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.6.2",
+      "name": "Visual status",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.7",
+      "name": "Key repeat",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.8",
+      "name": "Double-strike key acceptance",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "5.9",
+      "name": "Simultaneous user actions",
+      "clause": "5",
+      "kind": "requirement"
+    },
+    {
+      "num": "6.1",
+      "name": "Audio bandwidth for speech",
+      "clause": "6",
+      "kind": "requirement"
+    },
+    {
+      "num": "6.2.1.1",
+      "name": "RTT communication",
+      "clause": "6",
+      "kind": "requirement"
+    },
+    {
+      "num": "6.2.1.2",
+      "name": "Concurrent voice and text",
+      "clause": "6",
+      "kind": "requirement"
+    },
+    {
+      "num": "6.2.2.1",
+      "name": "Visually distinguishable display",
+      "clause": "6",
+      "kind": "requirement"
+    },
+    {
+      "num": "6.2.2.2",
+      "name": "Programmatically determinable send and receive direction",
+      "clause": "6",
+      "kind": "requirement"
+    },
+    {
+      "num": "6.2.2.3",
+      "name": "Speaker identification",
+      "clause": "6",
+      "kind": "requirement"
+    },
+    {
+      "num": "6.2.2.4",
+      "name": "Visual indicator of Audio with RTT",
+      "clause": "6",
+      "kind": "requirement"
+    },
+    {
+      "num": "6.2.3",
+      "name": "Interoperability",
+      "clause": "6",
+      "kind": "requirement"
+    },
+    {
+      "num": "6.2.4",
+      "name": "RTT responsiveness",
+      "clause": "6",
+      "kind": "requirement"
+    },
+    {
+      "num": "6.3",
+      "name": "Caller ID",
+      "clause": "6",
+      "kind": "requirement"
+    },
+    {
+      "num": "6.4",
+      "name": "Alternatives to voice-based services",
+      "clause": "6",
+      "kind": "requirement"
+    },
+    {
+      "num": "6.5.1",
+      "name": "General (informative)",
+      "clause": "6",
+      "kind": "requirement"
+    },
+    {
+      "num": "6.5.2",
+      "name": "Resolution",
+      "clause": "6",
+      "kind": "requirement"
+    },
+    {
+      "num": "6.5.3",
+      "name": "Frame rate",
+      "clause": "6",
+      "kind": "requirement"
+    },
+    {
+      "num": "6.5.4",
+      "name": "Synchronization between audio and video",
+      "clause": "6",
+      "kind": "requirement"
+    },
+    {
+      "num": "6.5.5",
+      "name": "Visual indicator of audio with video",
+      "clause": "6",
+      "kind": "requirement"
+    },
+    {
+      "num": "6.5.6",
+      "name": "Speaker identification with video (sign language) communication",
+      "clause": "6",
+      "kind": "requirement"
+    },
+    {
+      "num": "6.6",
+      "name": "Alternatives to video-based services",
+      "clause": "6",
+      "kind": "requirement"
+    },
+    {
+      "num": "7.1.1",
+      "name": "Captioning playback",
+      "clause": "7",
+      "kind": "requirement"
+    },
+    {
+      "num": "7.1.2",
+      "name": "Captioning synchronization",
+      "clause": "7",
+      "kind": "requirement"
+    },
+    {
+      "num": "7.1.3",
+      "name": "Preservation of captioning",
+      "clause": "7",
+      "kind": "requirement"
+    },
+    {
+      "num": "7.1.4",
+      "name": "Captions characteristics",
+      "clause": "7",
+      "kind": "requirement"
+    },
+    {
+      "num": "7.1.5",
+      "name": "Spoken subtitles",
+      "clause": "7",
+      "kind": "requirement"
+    },
+    {
+      "num": "7.2.1",
+      "name": "Audio description playback",
+      "clause": "7",
+      "kind": "requirement"
+    },
+    {
+      "num": "7.2.2",
+      "name": "Audio description synchronization",
+      "clause": "7",
+      "kind": "requirement"
+    },
+    {
+      "num": "7.2.3",
+      "name": "Preservation of audio description",
+      "clause": "7",
+      "kind": "requirement"
+    },
+    {
+      "num": "7.3",
+      "name": "User controls for captions and audio description",
+      "clause": "7",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.1.1",
+      "name": "Generic requirements",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.1.2",
+      "name": "Standard connections",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.1.3",
+      "name": "Colour",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.2.1.1",
+      "name": "Speech volume range",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.2.1.2",
+      "name": "Incremental volume control",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.2.2.1",
+      "name": "Fixed-line devices",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.2.2.2",
+      "name": "Wireless communication devices",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.3.0",
+      "name": "General",
+      "clause": "8",
+      "kind": "scope"
+    },
+    {
+      "num": "8.3.1",
+      "name": "Forward or side reach",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.3.2.1",
+      "name": "Unobstructed high forward reach",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.3.2.2",
+      "name": "Unobstructed low forward reach",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.3.2.3",
+      "name": "Obstructed forward reach",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.3.2.4",
+      "name": "Knee and toe clearance width",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.3.2.5",
+      "name": "Toe clearance",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.3.2.6",
+      "name": "Knee clearance",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.3.3.1",
+      "name": "Unobstructed high side reach",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.3.3.2",
+      "name": "Unobstructed low side reach",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.3.3.3",
+      "name": "Obstructed side reach",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.3.4.1",
+      "name": "Change in level",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.3.4.2",
+      "name": "Clear floor or ground space",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.3.4.3",
+      "name": "Approach",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.3.5",
+      "name": "Visibility",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.3.6",
+      "name": "Installation instructions",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.4.1",
+      "name": "Numeric keys",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.4.2.1",
+      "name": "Means of operation of mechanical parts",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.4.2.2",
+      "name": "Force of operation of mechanical parts",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.4.3",
+      "name": "Keys, tickets and fare cards",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "8.5",
+      "name": "Tactile indication of speech mode",
+      "clause": "8",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.0",
+      "name": "General (informative)",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.1.1",
+      "name": "Non-text content",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.2.1",
+      "name": "Audio-only and video-only (pre-recorded)",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.2.2",
+      "name": "Captions (pre-recorded)",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.2.3",
+      "name": "Audio description or media alternative (pre-recorded)",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.2.4",
+      "name": "Captions (live)",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.2.5",
+      "name": "Audio description (pre-recorded)",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.3.1",
+      "name": "Info and relationships",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.3.2",
+      "name": "Meaningful sequence",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.3.3",
+      "name": "Sensory characteristics",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.3.4",
+      "name": "Orientation",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.3.5",
+      "name": "Identify input purpose",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.4.1",
+      "name": "Use of colour",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.4.2",
+      "name": "Audio control",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.4.3",
+      "name": "Contrast (minimum)",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.4.4",
+      "name": "Resize text",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.4.5",
+      "name": "Images of text",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.4.6",
+      "name": "Void",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.4.7",
+      "name": "Void",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.4.8",
+      "name": "Void",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.4.9",
+      "name": "Void",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.4.10",
+      "name": "Reflow",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.4.11",
+      "name": "Non-text contrast",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.4.12",
+      "name": "Text spacing",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.1.4.13",
+      "name": "Content on hover or focus",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.2.1.1",
+      "name": "Keyboard",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.2.1.2",
+      "name": "No keyboard trap",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.2.1.3",
+      "name": "Void",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.2.1.4",
+      "name": "Character key shortcuts",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.2.2.1",
+      "name": "Timing adjustable",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.2.2.2",
+      "name": "Pause, stop, hide",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.2.3.1",
+      "name": "Three flashes or below threshold",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.2.4.1",
+      "name": "Bypass blocks",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.2.4.2",
+      "name": "Page titled",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.2.4.3",
+      "name": "Focus Order",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.2.4.4",
+      "name": "Link purpose (in context)",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.2.4.5",
+      "name": "Multiple ways",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.2.4.6",
+      "name": "Headings and labels",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.2.4.7",
+      "name": "Focus visible",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.2.5.1",
+      "name": "Pointer gestures",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.2.5.2",
+      "name": "Pointer cancellation",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.2.5.3",
+      "name": "Label in name",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.2.5.4",
+      "name": "Motion actuation",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.3.1.1",
+      "name": "Language of page",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.3.1.2",
+      "name": "Language of parts",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.3.2.1",
+      "name": "On focus",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.3.2.2",
+      "name": "On input",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.3.2.3",
+      "name": "Consistent navigation",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.3.2.4",
+      "name": "Consistent identification",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.3.3.1",
+      "name": "Error identification",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.3.3.2",
+      "name": "Labels or instructions",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.3.3.3",
+      "name": "Error suggestion",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.3.3.4",
+      "name": "Error prevention (legal, financial, data)",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.4.1.1",
+      "name": "Parsing",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.4.1.2",
+      "name": "Name, role, value",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.4.1.3",
+      "name": "Status messages",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.5",
+      "name": "WCAG 2.1 AAA Success Criteria",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "9.6",
+      "name": "WCAG conformance requirements",
+      "clause": "9",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.0",
+      "name": "General (informative)",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.1.1",
+      "name": "Non-text content",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.2.1",
+      "name": "Audio-only and video-only (pre-recorded)",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.2.2",
+      "name": "Captions (pre-recorded)",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.2.3",
+      "name": "Audio description or media alternative (pre-recorded)",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.2.4",
+      "name": "Captions (live)",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.2.5",
+      "name": "Audio description (pre-recorded)",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.3.1",
+      "name": "Info and relationships",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.3.2",
+      "name": "Meaningful sequence",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.3.3",
+      "name": "Sensory characteristics",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.3.4",
+      "name": "Orientation",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.3.5",
+      "name": "Identify input purpose",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.4.1",
+      "name": "Use of colour",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.4.2",
+      "name": "Audio control",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.4.3",
+      "name": "Contrast (minimum)",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.4.4",
+      "name": "Resize text",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.4.5",
+      "name": "Images of text",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.4.6",
+      "name": "Void",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.4.7",
+      "name": "Void",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.4.8",
+      "name": "Void",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.4.9",
+      "name": "Void",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.4.10",
+      "name": "Reflow",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.4.11",
+      "name": "Non-text contrast",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.4.12",
+      "name": "Text spacing",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.1.4.13",
+      "name": "Content on hover or focus",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.2.1.1",
+      "name": "Keyboard",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.2.1.2",
+      "name": "No keyboard trap",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.2.1.3",
+      "name": "Void",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.2.1.4",
+      "name": "Character key shortcuts",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.2.2.1",
+      "name": "Timing adjustable",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.2.2.2",
+      "name": "Pause, stop, hide",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.2.3.1",
+      "name": "Three flashes or below threshold",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.2.4.1",
+      "name": "Void",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.2.4.2",
+      "name": "Document titled",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.2.4.3",
+      "name": "Focus Order",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.2.4.4",
+      "name": "Link purpose (in context)",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.2.4.5",
+      "name": "Void",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.2.4.6",
+      "name": "Headings and labels",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.2.4.7",
+      "name": "Focus visible",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.2.5.1",
+      "name": "Pointer gestures",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.2.5.2",
+      "name": "Pointer cancellation",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.2.5.3",
+      "name": "Label in name",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.2.5.4",
+      "name": "Motion actuation",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.3.1.1",
+      "name": "Language of document",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.3.1.2",
+      "name": "Language of parts",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.3.2.1",
+      "name": "On focus",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.3.2.2",
+      "name": "On input",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.3.2.3",
+      "name": "Void",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.3.2.4",
+      "name": "Void",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.3.3.1",
+      "name": "Error identification",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.3.3.2",
+      "name": "Labels or instructions",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.3.3.3",
+      "name": "Error suggestion",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.3.3.4",
+      "name": "Error prevention (legal, financial, data)",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.4.1.1",
+      "name": "Parsing",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.4.1.2",
+      "name": "Name, role, value",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.4.1.3",
+      "name": "Status messages",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.5",
+      "name": "Caption positioning",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "10.6",
+      "name": "Audio description timing",
+      "clause": "10",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.0",
+      "name": "General (informative)",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.1.1",
+      "name": "Non-text content",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.2.1",
+      "name": "Audio-only and video-only (pre-recorded)",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.2.2",
+      "name": "Captions (pre-recorded)",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.2.3",
+      "name": "Audio description or media alternative (pre-recorded)",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.2.4",
+      "name": "Captions (live)",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.2.5",
+      "name": "Audio description (pre-recorded)",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.3.1",
+      "name": "Info and relationships",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.3.2",
+      "name": "Meaningful sequence",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.3.3",
+      "name": "Sensory characteristics",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.3.4",
+      "name": "Orientation",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.3.5",
+      "name": "Identify input purpose",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.4.1",
+      "name": "Use of colour",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.4.2",
+      "name": "Audio control",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.4.3",
+      "name": "Contrast (minimum)",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.4.4",
+      "name": "Resize text",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.4.5",
+      "name": "Images of text",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.4.6",
+      "name": "Void",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.4.7",
+      "name": "Void",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.4.8",
+      "name": "Void",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.4.9",
+      "name": "Void",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.4.10",
+      "name": "Reflow",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.4.11",
+      "name": "Non-text contrast",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.4.12",
+      "name": "Text spacing",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.1.4.13",
+      "name": "Content on hover or focus",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.2.1.1",
+      "name": "Keyboard",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.2.1.2",
+      "name": "No keyboard trap",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.2.1.3",
+      "name": "Void",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.2.1.4",
+      "name": "Character key shortcuts",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.2.2.1",
+      "name": "Timing adjustable",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.2.2.2",
+      "name": "Pause, stop, hide",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.2.3.1",
+      "name": "Three flashes or below threshold",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.2.4.1",
+      "name": "Void",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.2.4.2",
+      "name": "Void",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.2.4.3",
+      "name": "Focus order",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.2.4.4",
+      "name": "Link purpose (in context)",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.2.4.5",
+      "name": "Void",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.2.4.6",
+      "name": "Headings and labels",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.2.4.7",
+      "name": "Focus visible",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.2.5.1",
+      "name": "Pointer gestures",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.2.5.2",
+      "name": "Pointer cancellation",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.2.5.3",
+      "name": "Label in name",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.2.5.4",
+      "name": "Motion actuation",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.3.1.1",
+      "name": "Language of software",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.3.1.2",
+      "name": "Void",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.3.2.1",
+      "name": "On focus",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.3.2.2",
+      "name": "On input",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.3.2.3",
+      "name": "Void",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.3.2.4",
+      "name": "Void",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.3.3.1",
+      "name": "Error identification",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.3.3.2",
+      "name": "Labels or instructions",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.3.3.3",
+      "name": "Error suggestion",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.3.3.4",
+      "name": "Error prevention (legal, financial, data)",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.4.1.1",
+      "name": "Parsing",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.4.1.2",
+      "name": "Name, role, value",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.4.1.3",
+      "name": "Status messages",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.5.1",
+      "name": "Closed functionality",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.5.2.1",
+      "name": "Platform accessibility service support for software that provides a user",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.5.2.2",
+      "name": "Platform accessibility service support for assistive technologies",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.5.2.3",
+      "name": "Use of accessibility services",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.5.2.4",
+      "name": "Assistive technology",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.5.2.5",
+      "name": "Object information",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.5.2.6",
+      "name": "Row, column, and headers",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.5.2.7",
+      "name": "Values",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.5.2.8",
+      "name": "Label relationships",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.5.2.9",
+      "name": "Parent-child relationships",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.5.2.10",
+      "name": "Text",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.5.2.11",
+      "name": "List of available actions",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.5.2.12",
+      "name": "Execution of available actions",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.5.2.13",
+      "name": "Tracking of focus and selection attributes",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.5.2.14",
+      "name": "Modification of focus and selection attributes",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.5.2.15",
+      "name": "Change notification",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.5.2.16",
+      "name": "Modifications of states and properties",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.5.2.17",
+      "name": "Modifications of values and text",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.6.1",
+      "name": "User control of accessibility features",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.6.2",
+      "name": "No disruption of accessibility features",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.7",
+      "name": "User preferences",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.8.0",
+      "name": "General (informative)",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.8.1",
+      "name": "Content technology",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.8.2",
+      "name": "Accessible content creation",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.8.3",
+      "name": "Preservation of accessibility information in transformations",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.8.4",
+      "name": "Repair assistance",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "11.8.5",
+      "name": "Templates",
+      "clause": "11",
+      "kind": "requirement"
+    },
+    {
+      "num": "12.1.1",
+      "name": "Accessibility and compatibility features",
+      "clause": "12",
+      "kind": "requirement"
+    },
+    {
+      "num": "12.1.2",
+      "name": "Accessible documentation",
+      "clause": "12",
+      "kind": "requirement"
+    },
+    {
+      "num": "12.2.1",
+      "name": "General (informative)",
+      "clause": "12",
+      "kind": "requirement"
+    },
+    {
+      "num": "12.2.2",
+      "name": "Information on accessibility and compatibility features",
+      "clause": "12",
+      "kind": "requirement"
+    },
+    {
+      "num": "12.2.3",
+      "name": "Effective communication",
+      "clause": "12",
+      "kind": "requirement"
+    },
+    {
+      "num": "12.2.4",
+      "name": "Accessible documentation",
+      "clause": "12",
+      "kind": "requirement"
+    },
+    {
+      "num": "13.1.1",
+      "name": "General (informative)",
+      "clause": "13",
+      "kind": "requirement"
+    },
+    {
+      "num": "13.1.2",
+      "name": "Text relay services",
+      "clause": "13",
+      "kind": "requirement"
+    },
+    {
+      "num": "13.1.3",
+      "name": "Sign relay services",
+      "clause": "13",
+      "kind": "requirement"
+    },
+    {
+      "num": "13.1.4",
+      "name": "Lip-reading relay services",
+      "clause": "13",
+      "kind": "requirement"
+    },
+    {
+      "num": "13.1.5",
+      "name": "Captioned telephony services",
+      "clause": "13",
+      "kind": "requirement"
+    },
+    {
+      "num": "13.1.6",
+      "name": "Speech to speech relay services",
+      "clause": "13",
+      "kind": "requirement"
+    },
+    {
+      "num": "13.2",
+      "name": "Access to relay services",
+      "clause": "13",
+      "kind": "requirement"
+    },
+    {
+      "num": "13.3",
+      "name": "Access to emergency services",
+      "clause": "13",
+      "kind": "requirement"
+    }
+  ]
 }

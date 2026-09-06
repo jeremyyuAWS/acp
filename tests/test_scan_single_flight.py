@@ -135,6 +135,45 @@ def test_confirmed_replacement_cancels_a_queued_scan(gated_client, isolated_stor
         assert {row["status"] for row in isolated_store._db.fetchall(cur)} == {"dead"}
 
 
+def test_active_assessment_blocks_a_new_discovery_until_user_confirms(
+        gated_client, isolated_store):
+    sid = _start_queued(gated_client, OWNER)
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(
+            cur, "UPDATE jobs SET status='done' WHERE scan_id=%s", (sid,))
+    isolated_store.enqueue_stage_batch(
+        sid, "assess", "scan_assess", [{"scan_id": sid}],
+        snapshot_id="snapshot-1", request_fingerprint="scope-1")
+
+    response = _start_response(gated_client, OWNER)
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "workflow_stage_active"
+    assert detail["active_stage"] == "assess"
+    assert detail["active_scan_id"] == sid
+
+
+def test_confirmed_new_discovery_cancels_and_preserves_the_active_assessment(
+        gated_client, isolated_store):
+    sid = _start_queued(gated_client, OWNER)
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(
+            cur, "UPDATE jobs SET status='done' WHERE scan_id=%s", (sid,))
+    execution = isolated_store.enqueue_stage_batch(
+        sid, "assess", "scan_assess", [{"scan_id": sid}],
+        snapshot_id="snapshot-1", request_fingerprint="scope-1")
+
+    response = _start_response(gated_client, OWNER, replace=True)
+
+    assert response.status_code == 200, response.text
+    replacement = response.json()["scan_id"]
+    assert replacement != sid
+    assert isolated_store.get_scan(sid, owner=OWNER)["run"]["status"] == "cancelled"
+    assert isolated_store.get_job(execution["job_ids"][0])["status"] == "dead"
+    assert isolated_store.get_scan(replacement, owner=OWNER)["run"]["workflow_revision"] == 2
+
+
 def test_same_idempotency_key_rejoins_the_active_discovery(gated_client, isolated_store):
     s1 = _start_queued(gated_client, OWNER, intent="one-click")
     s2 = _start_queued(gated_client, OWNER, intent="one-click")

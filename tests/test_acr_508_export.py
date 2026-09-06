@@ -253,7 +253,13 @@ def test_the_gate_closes_again_if_the_catalog_is_not_deployed(monkeypatch):
     """
     monkeypatch.setattr(acr_catalog, "_SECTION_508_PATH",
                         Path("/nonexistent/section-508.json"))
-    assert acr_catalog.requirement_sets_available() == frozenset({acr_catalog.REQ_WCAG})
-    assert acr_catalog.offerable_editions() == [acr_catalog.EDITION_WCAG]
+    available = acr_catalog.requirement_sets_available()
+    assert acr_catalog.REQ_SECTION_508 not in available
+    assert acr_catalog.REQ_WCAG in available
+    # The EU edition is unaffected: its own catalog is still there. A deployment missing ONE
+    # catalog loses the editions that oblige it and keeps the rest.
+    assert acr_catalog.EDITION_508 not in acr_catalog.offerable_editions()
+    assert acr_catalog.EDITION_INT not in acr_catalog.offerable_editions()
+    assert acr_catalog.EDITION_EU in acr_catalog.offerable_editions()
     assert acr_catalog.missing_requirement_sets(acr_catalog.EDITION_508) == frozenset(
         {acr_catalog.REQ_SECTION_508})

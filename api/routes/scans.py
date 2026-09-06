@@ -145,6 +145,23 @@ def _supersede_replaced_run(prior: dict | None, new_scan_id: str, owner: str) ->
                        new_scan_id, prior["id"], exc)
 
 
+def _cancel_replaced_stage(prior: dict | None, new_scan_id: str, owner: str) -> None:
+    """Stop an accepted downstream stage without hiding its partial results from history.
+
+    Discovery replacement is an abandoned inventory attempt and uses ``superseded``. Assess and
+    later stages may already contain useful durable evidence, so the user's explicit replacement
+    is a cancellation: jobs stop, partial results remain reachable, and the newly accepted
+    Discovery still starts even if this best-effort cleanup fails.
+    """
+    if not prior or not prior.get("id") or prior["id"] == new_scan_id:
+        return
+    try:
+        core.store.cancel_scan(prior["id"], owner=owner)
+    except Exception as exc:  # noqa: BLE001 — the replacement is already durable
+        logger.warning("scan %s accepted, but cancelling prior stage on %s failed: %s",
+                       new_scan_id, prior["id"], exc)
+
+
 def sharepoint_site_overflow(folder: str | None, folders: list[str] | None) -> str | None:
     """The message to refuse a SharePoint request with when it names more sites than one scan
     may span, or None when it is within the cap.
@@ -278,11 +295,15 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
         # Starting revised Discovery work must never silently destroy an accepted run. Include
         # queued work as well as a worker-claimed scan: the former is exactly where a second click
         # can otherwise create two jobs before active_scan() has a running row to report.
-        _active_discovery = next(
-            (item for item in core.store.active_workflows(user)
-             if item.get("stage") == "discover"), None)
+        # One active stage per owner workflow. Idempotency below prevents a duplicate submit for
+        # the SAME Discovery intent; this fence prevents a DIFFERENT stage transition from being
+        # admitted beside it. Previously this filtered to Discovery only, so a user could start a
+        # new Discovery while Assess was still consuming the prior immutable snapshot. Both cards
+        # then truthfully showed running work, but together described no coherent workflow.
+        _active_workflow = next(iter(core.store.active_workflows(user)), None)
+        _active_stage = (_active_workflow or {}).get("stage") or "discover"
         _prior_active = core.store.active_scan(owner=user)
-        prior_scan_id = ((_active_discovery or {}).get("scan_id")
+        prior_scan_id = ((_active_workflow or {}).get("scan_id")
                          or (_prior_active or {}).get("id"))
         prior_run = ((core.store.get_scan(prior_scan_id, owner=user) or {}).get("run")
                      if prior_scan_id else {}) or {}
@@ -292,13 +313,14 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
             idempotency_key and prior_run.get("idempotency_key") == idempotency_key)
         if prior_scan_id and not replaying_same_intent and not replace_active:
             raise HTTPException(status_code=409, detail={
-                "code": "discovery_workflow_active",
+                "code": ("discovery_workflow_active" if _active_stage == "discover"
+                         else "workflow_stage_active"),
                 "active_scan_id": prior_scan_id,
-                "active_stage": "discover",
+                "active_stage": _active_stage,
                 "workflow_id": (prior_workflow or {}).get("id", prior_scan_id),
                 "workflow_revision": int((prior_workflow or {}).get("revision") or 1),
-                "message": ("Discovery is already active. Continue that workflow, or confirm "
-                            "that it should be replaced before starting a separate Discovery."),
+                "message": (f"{_active_stage.title()} is already active. Continue that workflow, "
+                            "or explicitly stop and replace it before starting a new Discovery."),
             })
         scan_id = uuid.uuid4().hex[:12]
         # fanout=true → decompose into per-file jobs (ADR 0007); else the monolithic
@@ -389,11 +411,13 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
         # Acceptance is durable from here on: scan_runs + jobs + scan_inputs are committed and
         # GET /scans/{scan_id} resolves. Only NOW is it safe to stop the run this one replaces.
         if replace_active:
-            # Prefer the job-backed continuity result because it sees queued work. A queued scan
-            # has no running scan row for supersede_scan(), so cancel its durable job explicitly.
-            if prior_scan_id and not (_prior_active or {}).get("id"):
-                core.store.cancel_queued_job(prior_scan_id)
-            _supersede_replaced_run(_prior_active, scan_id, user)
+            # active_workflows sees queued work and every downstream stage, while active_scan is
+            # status-based. Use the durable run row as the fallback so replacing an Assess job
+            # actually cancels that job and supersedes its run instead of only starting a sibling.
+            if _active_stage == "discover":
+                _supersede_replaced_run(_prior_active or prior_run, scan_id, user)
+            else:
+                _cancel_replaced_stage(_prior_active or prior_run, scan_id, user)
         # ADR 0042 — the run's first event, and the only one emitted from a request thread rather
         # than from the worker. After enqueue_scan, because that is the durable write that makes
         # the scan real: before it there is no job row and no scan_id worth anchoring to. This is

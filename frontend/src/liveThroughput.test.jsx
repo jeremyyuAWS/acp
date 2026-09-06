@@ -42,4 +42,19 @@ describe('LiveThroughput', () => {
     expect(html).not.toContain('Earlier')
     expect(html).not.toContain('live updates</div>')
   })
+
+  it('offers a status-corner mini sparkline with no duplicated labels', () => {
+    const html = renderToStaticMarkup(
+      <LiveThroughput mini points={[1, 3, 8]} ratePerMin={5} label="Assessment throughput" />,
+    )
+    expect(html).toContain('width="92"')
+    expect(html).toContain('height="20"')
+    expect(html).toContain('Assessment throughput: 5 documents/min')
+    expect(html).not.toContain('Assessment throughput</div>')
+    expect(html).not.toContain('5 documents/min</strong>')
+  })
+
+  it('does not put calibrating copy in the compact status corner', () => {
+    expect(renderToStaticMarkup(<LiveThroughput mini points={[2]} />)).toBe('')
+  })
 })

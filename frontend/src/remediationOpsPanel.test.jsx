@@ -26,10 +26,16 @@ const SNAP = {
             libraries: ['Contracts'], scan_snapshot_id: 'scan-1',
             breadcrumb: 'SharePoint · Legal · Contracts' },
   total_documents: 10,
+  total_findings: 47,
+  finding_reconciliation: {
+    assessed: 47, resolved_verified: null, awaiting_review: 9,
+    approved_pending_verification: null, unchanged_no_fix: null, failed: null,
+    excluded: null, superseded: null, accounted: null, unaccounted: null, exact: false,
+  },
   documents: { completed: 4, processing: 2, waiting: 3, review: 1, failed: 0, skipped: 0 },
   fixes: { applied: 26, verified: 21, verification_failures: 5, documents_verified: 4 },
   delivery: { stored: 4, delivered: 3, pending: 1, eligible: 4, latest_at: null },
-  review: { documents: 1, items: 2 },
+  review: { documents: 1, items: 2, findings: 9 },
   phases: [
     { key: 'preparing', label: 'Preparing', status: 'completed', detail: '10 documents in scope' },
     { key: 'applying', label: 'Applying approved fixes', status: 'active', detail: '2 in flight' },
@@ -76,6 +82,35 @@ describe('the panel renders the server snapshot and never assembles its own', ()
     // A bare "Verified" is the ambiguity the PRD names: it was read as documents on one line and
     // as fixes on the next, from the same number.
     expect(html).not.toMatch(/>Verified</)
+  })
+
+  it('reconciles the stage handoff without subtracting unlike units', () => {
+    const html = render({ snapshot: SNAP, connected: true, receivedAt: Date.now() })
+    expect(html).toContain('Assessment → Remediation accounting')
+    expect(html).toContain('Assessment findings')
+    expect(html).toContain('Finding instances handed into this workflow')
+    expect(html).toContain('Verified changes')
+    expect(html).toContain('Pending human review')
+    expect(html).toContain('Documents processed')
+    expect(html).toContain('5 / 10')
+    expect(html).toContain('9 findings')
+    expect(html).toContain('Across 2 review cards')
+    expect(html).toContain('Exact finding disposition')
+    expect(html).toContain('Not yet available')
+    expect(html).toContain('These values do not form a subtraction.')
+    expect(html).not.toContain('findings remaining')
+  })
+
+  it('renders unknown finding accounting as unavailable rather than zero', () => {
+    const snapshot = {
+      ...SNAP,
+      finding_reconciliation: { ...SNAP.finding_reconciliation, assessed: null, awaiting_review: null },
+      review: { ...SNAP.review, findings: null },
+    }
+    const html = render({ snapshot, connected: true, receivedAt: Date.now() })
+    expect(html).toContain('Assessment → Remediation accounting')
+    expect(html.match(/Not yet available/g)?.length).toBeGreaterThanOrEqual(3)
+    expect(html).not.toContain('<dd>0<span>Finding instances')
   })
 
   it('announces the headline only — not every counter increment', () => {

@@ -12,10 +12,14 @@ vi.mock('./api.js', () => ({
   openReport: vi.fn(), publishFile: vi.fn(() => Promise.resolve({})),
   publishAllFiles: (...a) => publishAllFiles(...a),
   getReleaseStatus: vi.fn(() => Promise.resolve({ release_id: null })),
+  listReleaseHistory: vi.fn(() => Promise.resolve({ releases: [] })),
+  getReleaseManifest: vi.fn(() => Promise.resolve({ manifest: {} })),
   listHitlQueue: vi.fn(() => Promise.resolve([])),
   getSettings: vi.fn(() => Promise.resolve({ drive_mirror_enabled: false, drive_mirror_folder: 'Remediated' })),
   getSourceStatus: vi.fn(() => Promise.resolve({ files: [], stale_count: 0 })),
   rescoreFile: vi.fn(() => Promise.resolve({})),
+  previewReleaseDestination: vi.fn(() => Promise.resolve({ can_release: true, documents: [] })),
+  downloadReleasePackage: vi.fn(() => Promise.resolve()),
 }))
 // Keep the heavy children out of the mount — this test is about the Publish graduation surface.
 vi.mock('./FileDrawer.jsx', () => ({ default: () => null }))
@@ -42,6 +46,17 @@ const held = (file, over = {}) => ({ file, compliant: false, score: 40, issues: 
 const run = { id: 'scan1', files: 3, certifiable: 2 }
 
 describe('Publish — W5 conditional-to-full graduation', () => {
+  it('shows the three real delivery destinations in the guided workspace', async () => {
+    const c = await mount({ run, files: [verified('a.pdf')], certified: [], onPublish: vi.fn() })
+    const choose = [...c.querySelectorAll('button')].find((b) => b.textContent === 'Choose delivery')
+    await act(async () => { choose.dispatchEvent(new MouseEvent('click', { bubbles: true })) })
+    expect(c.textContent).toMatch(/Where should the corrected files go\?/)
+    expect(c.textContent).toMatch(/Publish to connected source/i)
+    expect(c.textContent).toMatch(/Download to this device/)
+    expect(c.textContent).toMatch(/Keep in ACP for later/)
+    expect(c.querySelectorAll('input[name="delivery-method"]')).toHaveLength(3)
+  })
+
   it('shows CONDITIONAL status when a document was released while another is held', async () => {
     // a.pdf released (persisted published_at), b.pdf still held.
     const files = [verified('a.pdf', { published_at: '2026-08-01T00:00:00Z' }), held('b.pdf')]

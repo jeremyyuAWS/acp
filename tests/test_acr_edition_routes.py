@@ -56,12 +56,10 @@ def test_the_editions_route_says_which_are_offered_and_what_is_missing(client):
     by_name = {e["edition"]: e for e in client.get("/acr/editions").json()["editions"]}
     assert by_name["VPAT 2.5Rev WCAG"]["offered"] is True
     assert by_name["VPAT 2.5Rev WCAG"]["missing"] == []
-    assert by_name["VPAT 2.5Rev 508"]["offered"] is True
-    assert by_name["VPAT 2.5Rev 508"]["missing"] == []
-    assert by_name["VPAT 2.5Rev EU"]["offered"] is False
-    assert by_name["VPAT 2.5Rev EU"]["missing"] == ["en-301-549"]
-    # INT obliges all three sets; only the one genuinely absent is named.
-    assert by_name["VPAT 2.5Rev INT"]["missing"] == ["en-301-549"]
+    # All four now: EN 301 549's catalog landed in 6.4, so nothing is absent for any edition.
+    for edition in ("VPAT 2.5Rev 508", "VPAT 2.5Rev EU", "VPAT 2.5Rev INT"):
+        assert by_name[edition]["offered"] is True, edition
+        assert by_name[edition]["missing"] == [], edition
 
 
 def test_a_new_report_defaults_to_the_wcag_edition(client):
@@ -87,18 +85,48 @@ def test_creating_a_508_report_is_allowed_and_carries_the_508_rows(client):
     assert by_set == {"wcag-2.2-aa": 55, "section-508": 120}
 
 
-def test_creating_an_eu_report_is_refused_and_says_what_is_absent(client):
+def test_creating_an_eu_report_is_allowed_and_carries_the_en_clauses(client):
+    """The last of #1532's four editions to open. Asserted by COUNT rather than by the edition
+    string, because the string is the claim and the rows are what make it true: 55 WCAG criteria
+    plus 314 clauses from EN 301 549."""
     r = client.post("/acr", json={"product_version": "1.4.0",
                                   "metadata": {"vpat_edition": "VPAT 2.5Rev EU"}})
-    assert r.status_code == 400, r.text
-    assert "EN 301 549" in r.json()["detail"]
-    assert "VPAT 2.5Rev WCAG" in r.json()["detail"]   # what they CAN pick
+    assert r.status_code == 200, r.text
+    rows = client.get(f"/acr/{r.json()['report_id']}/criteria").json()["criteria"]
+    by_set = {}
+    for row in rows:
+        by_set[row["requirement_set"]] = by_set.get(row["requirement_set"], 0) + 1
+    assert by_set == {"wcag-2.2-aa": 55, "en-301-549": 314}
 
 
-def test_the_metadata_form_cannot_patch_an_unoffered_edition(client):
-    """The path an author actually takes. Guarding creation alone would leave this open."""
+def test_creating_an_int_report_carries_all_three_standards(client):
+    r = client.post("/acr", json={"product_version": "1.4.0",
+                                  "metadata": {"vpat_edition": "VPAT 2.5Rev INT"}})
+    assert r.status_code == 200, r.text
+    rows = client.get(f"/acr/{r.json()['report_id']}/criteria").json()["criteria"]
+    by_set = {}
+    for row in rows:
+        by_set[row["requirement_set"]] = by_set.get(row["requirement_set"], 0) + 1
+    assert by_set == {"wcag-2.2-aa": 55, "section-508": 120, "en-301-549": 314}
+
+
+def test_the_metadata_form_can_patch_an_offered_edition(client):
+    """The path an author actually takes. Every edition is offered now, so the PATCH succeeds —
+    and the matrix does NOT change with it, which is the part worth pinning: switching edition on
+    an existing report is a metadata edit, and the rows it obliges are built at creation."""
     rid = client.post("/acr", json={"product_version": "1.4.0"}).json()["report_id"]
     r = client.patch(f"/acr/{rid}", json={"fields": {"vpat_edition": "VPAT 2.5Rev EU"}})
+    assert r.status_code == 200, r.text
+    assert client.get(f"/acr/{rid}").json()["report"]["vpat_edition"] == "VPAT 2.5Rev EU"
+    rows = client.get(f"/acr/{rid}/criteria").json()["criteria"]
+    assert len(rows) == 55, "a metadata edit must not silently rebuild the matrix"
+
+
+def test_the_metadata_form_still_cannot_patch_a_misspelled_edition(client):
+    """Guarding creation alone would leave this open, and the guard has to keep working now that
+    no real edition triggers it."""
+    rid = client.post("/acr", json={"product_version": "1.4.0"}).json()["report_id"]
+    r = client.patch(f"/acr/{rid}", json={"fields": {"vpat_edition": "VPAT 2.5Rev European"}})
     assert r.status_code == 400, r.text
     # And the stored value is untouched — a refused write must not half-apply.
     assert client.get(f"/acr/{rid}").json()["report"]["vpat_edition"] == "VPAT 2.5Rev WCAG"

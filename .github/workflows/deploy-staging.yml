@@ -19,9 +19,10 @@
 # The job is gated on `vars.STAGING_FQDN != ''`, so merging this file changes nothing until the
 # staging target exists. It "turns on" the moment you set that repo variable. Before it can
 # succeed, three things must exist OUTSIDE this repo (redeploy.sh updates apps, it does not
-# create them, and it health-checks BOTH app and worker as `Running` before it will deploy):
+# create them, and it health-checks the app and all three role workers before it will deploy):
 #
-#   1. Two Azure Container Apps — `acp-app-staging` and `acp-worker-staging` — in the
+#   1. Four Azure Container Apps — `acp-app-staging`, `acp-discovery-staging`,
+#      `acp-assess-staging`, and `acp-remediate-staging` — in the
 #      `mdk-accessibility` resource group, provisioned with their OWN config/secrets and their
 #      OWN DATABASE_URL. Give staging a SEPARATE database: they share this registry image, and a
 #      staging app pointed at the production DB would write to production data. `deploy.sh` (the
@@ -31,7 +32,7 @@
 #      empty and it stays unattended by construction.
 #   3. Repo variable `STAGING_FQDN` = the staging app hostname (no scheme). Setting it is also
 #      the switch that un-dormants this workflow. Optional overrides: STAGING_RG / STAGING_APP /
-#      STAGING_WORKER if you provision under different names.
+#      STAGING_DISCOVERY_WORKER / STAGING_ASSESS_WORKER / STAGING_REMEDIATE_WORKER.
 #
 # The Azure secrets (AZURE_CLIENT_ID / TENANT_ID / SUBSCRIPTION_ID) and the OIDC federation are
 # shared with prod; the service principal's Contributor on `mdk-accessibility` + AcrPush already
@@ -114,12 +115,14 @@ jobs:
           # The greenlit sha on an auto run; the dispatch input on a manual one; redeploy.sh
           # resolves an empty value to origin/main.
           ACP_PIN: ${{ github.event.workflow_run.head_sha || inputs.pin }}
-          # Staging targets. redeploy.sh reads all four from the environment (ACP_RG/ACP_APP/
-          # ACP_WORKER, ACR left at the shared default). Overridable via repo vars if provisioned
-          # under other names.
+          # Every role worker is explicit. ACP_WORKER is the retired mixed-tier variable; passing
+          # only that once made redeploy.sh fall through to its three PRODUCTION defaults.
           ACP_RG: ${{ vars.STAGING_RG || 'mdk-accessibility' }}
           ACP_APP: ${{ vars.STAGING_APP || 'acp-app-staging' }}
-          ACP_WORKER: ${{ vars.STAGING_WORKER || 'acp-worker-staging' }}
+          ACP_DISCOVERY_WORKER: ${{ vars.STAGING_DISCOVERY_WORKER || 'acp-discovery-staging' }}
+          ACP_ASSESS_WORKER: ${{ vars.STAGING_ASSESS_WORKER || 'acp-assess-staging' }}
+          ACP_REMEDIATE_WORKER: ${{ vars.STAGING_REMEDIATE_WORKER || 'acp-remediate-staging' }}
+          ACP_DEPLOY_TARGET_ENV: staging
           # Only reachable via an explicit manual dispatch with the checkbox set — `inputs` is
           # empty on the auto (workflow_run) trigger, so this is unset there and the gate behaves
           # exactly as before. See the input's own description for when this is legitimate.

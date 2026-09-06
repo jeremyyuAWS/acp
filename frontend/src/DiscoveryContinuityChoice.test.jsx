@@ -46,3 +46,19 @@ it('explains why an exact recent workflow should be continued', () => {
   expect(container.textContent).toContain('Workflow revision 2')
   expect(container.textContent).toContain('Start revised Discovery')
 })
+
+it('names an active Assessment and requires explicit cancellation before a new Discovery', () => {
+  const onReplace = vi.fn()
+  const { container, root } = createTestRoot()
+  act(() => root.render(<DiscoveryContinuityChoice
+    choice={{ scanId: 'scan-assess', workflowRevision: 4, activeStage: 'assess' }}
+    onContinue={() => {}} onReplace={onReplace} onDismiss={() => {}} />))
+
+  expect(container.textContent).toContain('Assessment is already running')
+  expect(container.textContent).toContain('Continue current Assessment')
+  const replace = [...container.querySelectorAll('button')]
+    .find((button) => button.textContent === 'Cancel Assessment and start new Discovery')
+  expect(replace).toBeTruthy()
+  act(() => replace.click())
+  expect(onReplace).toHaveBeenCalledOnce()
+})

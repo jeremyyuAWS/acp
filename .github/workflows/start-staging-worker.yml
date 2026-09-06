@@ -7,10 +7,6 @@ on:
         description: "Resource group (default: mdk-accessibility)"
         required: false
         type: string
-      worker:
-        description: "Worker container app name (default: acp-worker-staging)"
-        required: false
-        type: string
 
 permissions:
   id-token: write
@@ -32,32 +28,27 @@ jobs:
       - name: Start worker if not Running
         env:
           ACP_RG: ${{ inputs.rg || vars.STAGING_RG || 'mdk-accessibility' }}
-          ACP_WORKER: ${{ inputs.worker || vars.STAGING_WORKER || 'acp-worker-staging' }}
+          ACP_DISCOVERY_WORKER: ${{ vars.STAGING_DISCOVERY_WORKER || 'acp-discovery-staging' }}
+          ACP_ASSESS_WORKER: ${{ vars.STAGING_ASSESS_WORKER || 'acp-assess-staging' }}
+          ACP_REMEDIATE_WORKER: ${{ vars.STAGING_REMEDIATE_WORKER || 'acp-remediate-staging' }}
           ACP_SUBSCRIPTION: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
           set -euo pipefail
-          STATUS=$(az containerapp show --subscription "$ACP_SUBSCRIPTION" \
-            -g "$ACP_RG" -n "$ACP_WORKER" \
-            --query properties.runningStatus -o tsv 2>/dev/null || echo "NotFound")
-          echo "Current status: $STATUS"
-          if [ "$STATUS" = "Running" ]; then
-            echo "Worker is already Running — nothing to do."
-          else
-            echo "Starting $ACP_WORKER (status was '$STATUS')..."
-            az containerapp start --subscription "$ACP_SUBSCRIPTION" \
-              -g "$ACP_RG" -n "$ACP_WORKER"
-            echo "Waiting for Running status..."
-            for i in $(seq 1 24); do
-              sleep 5
-              ST=$(az containerapp show --subscription "$ACP_SUBSCRIPTION" \
-                -g "$ACP_RG" -n "$ACP_WORKER" \
-                --query properties.runningStatus -o tsv 2>/dev/null || echo "Unknown")
-              echo "  ($i) $ST"
-              [ "$ST" = "Running" ] && break
-            done
-            ST=$(az containerapp show --subscription "$ACP_SUBSCRIPTION" \
+          for ACP_WORKER in "$ACP_DISCOVERY_WORKER" "$ACP_ASSESS_WORKER" "$ACP_REMEDIATE_WORKER"; do
+            case "$ACP_WORKER" in *-staging) ;; *) echo "ERROR: refusing non-staging worker $ACP_WORKER"; exit 1 ;; esac
+            STATUS=$(az containerapp show --subscription "$ACP_SUBSCRIPTION" \
               -g "$ACP_RG" -n "$ACP_WORKER" \
-              --query properties.runningStatus -o tsv 2>/dev/null || echo "Unknown")
-            [ "$ST" = "Running" ] || { echo "ERROR: worker did not reach Running (got '$ST')"; exit 1; }
-            echo "Worker is now Running."
-          fi
+              --query properties.runningStatus -o tsv 2>/dev/null || echo "NotFound")
+            echo "$ACP_WORKER: $STATUS"
+            if [ "$STATUS" != "Running" ]; then
+              [ "$STATUS" != "NotFound" ] || { echo "ERROR: provision roles with staging_up.sh first"; exit 1; }
+              az containerapp start --subscription "$ACP_SUBSCRIPTION" -g "$ACP_RG" -n "$ACP_WORKER"
+            fi
+            for i in $(seq 1 24); do
+              ST=$(az containerapp show --subscription "$ACP_SUBSCRIPTION" \
+                -g "$ACP_RG" -n "$ACP_WORKER" --query properties.runningStatus -o tsv 2>/dev/null || echo Unknown)
+              [ "$ST" = "Running" ] && break
+              sleep 5
+            done
+            [ "$ST" = "Running" ] || { echo "ERROR: $ACP_WORKER did not reach Running"; exit 1; }
+          done

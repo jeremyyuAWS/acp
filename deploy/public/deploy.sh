@@ -457,6 +457,7 @@ echo "   blob account = $BLOB_ACCOUNT"
 # closes the gap where deploy.sh ignored it and would have retargeted prod's worker. Prod's manual
 # deploys don't set it, so the default is unchanged.
 WORKER_APP="${ACP_WORKER:-acp-worker}"
+WORKER_ROLE_ENV="${ACP_WORKER_ROLE:+ACP_WORKER_ROLE=$ACP_WORKER_ROLE}"
 # The worker command is the SINGLE dash-free token `acp-worker` — a launcher baked into the image
 # (deploy/public/worker-entry.sh → /usr/local/bin/acp-worker). az's --command can carry neither a
 # bare "-c" (argparse eats it) nor a JSON array string (stored as ONE literal token → exec of a
@@ -467,6 +468,10 @@ if [ "${ACP_DEPLOY_WORKER:-}" = "1" ]; then
     exit 1
   fi
   WK_N="${ACP_WORKER_COUNT:-2}"
+  WK_CPU="${ACP_WORKER_CPU:-2.0}"
+  WK_MEMORY="${ACP_WORKER_MEMORY:-4.0Gi}"
+  WK_MIN_REPLICAS="${ACP_WORKER_MIN_REPLICAS:-1}"
+  WK_MAX_REPLICAS="${ACP_WORKER_MAX_REPLICAS:-3}"
   echo "== worker tier: (re)deploy $WORKER_APP — python -m worker_main, $WK_N workers, no ingress =="
   # A NEW worker app starts with ZERO secrets, but its env inherits secretREFS from the API app
   # (database-url, langfuse-sk, demo-drive-key…) — a ref without its secret fails the create with
@@ -566,15 +571,19 @@ for s in json.loads(os.environ.get("APP_SECRETS_JSON") or "[]"):
       --server "$ACRSERVER" --username "$ACRUSER" --password "$ACRPW" -o none
     _az_scrubbed az containerapp update "${AZ[@]}" -g "$RG" -n "$WORKER_APP" --image "$ACRSERVER/$IMAGE" \
       --command acp-worker \
-      --set-env-vars $ADC_ENV $DEPLOY_ENV_ENV $DEFER_ENV $DB_ENV $LF_ENV $TRACE_NAMES_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV ACP_WORKERS=$WK_N -o none
+      --set-env-vars $ADC_ENV $DEPLOY_ENV_ENV $DEFER_ENV $DB_ENV $LF_ENV $TRACE_NAMES_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV $WORKER_ROLE_ENV ACP_WORKERS=$WK_N -o none
   else
     _az_scrubbed az containerapp create "${AZ[@]}" -g "$RG" -n "$WORKER_APP" --environment "$ENVNAME" \
       --image "$ACRSERVER/$IMAGE" \
       --registry-server "$ACRSERVER" --registry-username "$ACRUSER" --registry-password "$ACRPW" \
       --command acp-worker \
       --secrets "${WORKER_SECRETS[@]}" \
-      --env-vars $ADC_ENV $DEPLOY_ENV_ENV $DEFER_ENV $DB_ENV $LF_ENV $TRACE_NAMES_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV ACP_WORKERS=$WK_N \
-      --system-assigned --cpu 2.0 --memory 4.0Gi --ephemeral-storage 8.0Gi --min-replicas 1 --max-replicas 3 -o none
+      --env-vars $ADC_ENV $DEPLOY_ENV_ENV $DEFER_ENV $DB_ENV $LF_ENV $TRACE_NAMES_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV $WORKER_ROLE_ENV ACP_WORKERS=$WK_N \
+      # ACA's containerapp extension rejects its ephemeral-storage option on `create` (through \
+      # 1.3.0b5). Leave it at the platform-derived allocation; an unsupported flag prevents the \
+      # worker from being created at all, including the 0.25 CPU staging migration lanes. \
+      --system-assigned --cpu "$WK_CPU" --memory "$WK_MEMORY" \
+      --min-replicas "$WK_MIN_REPLICAS" --max-replicas "$WK_MAX_REPLICAS" -o none
     echo "   one-time: grant the worker's managed identity 'Storage Blob Data Contributor' on"
     echo "   the '$BLOB_ACCOUNT' account so its remediation Blob writes don't 403 — exact"
     echo "   commands are in docs/adr/0013-worker-durability-hardening.md (§2 runbook)."

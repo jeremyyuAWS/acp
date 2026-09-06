@@ -6,6 +6,7 @@ import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseM
 import { releaseDestination, releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
 import { SET_STATUS, certificationUniverse, releaseSetStatus } from './graduation.js'
 import { mirrorState, MIRROR } from './deliveryPolicy.js'
+import ReleaseHistory from './ReleaseHistory.jsx'
 
 // Step 9 · Publish. Marks re-validated documents as published: the conformance status
 // is recorded in the audit trail and the fixed copy (already in Blob + the Drive
@@ -38,6 +39,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [deliveryMethod, setDeliveryMethod] = useState('publish')
   const [packageName, setPackageName] = useState('')
   const [releaseFolderName, setReleaseFolderName] = useState('')
+  const [keptInAcp, setKeptInAcp] = useState(false)
   const [releasePreview, setReleasePreview] = useState(null)
   const [previewingRelease, setPreviewingRelease] = useState(false)
   const [selectedFiles, setSelectedFiles] = useState(() => new Set())
@@ -393,6 +395,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   }
   const chooseDelivery = () => {
     if (!selectedPublishable.length) setDeliveryMethod('download')
+    setKeptInAcp(false)
     setBuilderStep(2)
   }
   const validateDeliveryName = (value, label) => {
@@ -405,9 +408,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   }
   const deliveryNameError = deliveryMethod === 'download'
     ? validateDeliveryName(packageName, 'ZIP filename')
-    : releaseFolder ? '' : validateDeliveryName(releaseFolderName, 'Release folder name')
+    : deliveryMethod === 'publish' && !releaseFolder ? validateDeliveryName(releaseFolderName, 'Release folder name') : ''
   const reviewDelivery = async () => {
     if (deliveryMethod === 'download') { setReleasePreview(null); setBuilderStep(3); return }
+    if (deliveryMethod === 'acp') { setReleasePreview(null); setBuilderStep(3); return }
     setPreviewingRelease(true)
     setReleaseAnnouncement('')
     try {
@@ -431,6 +435,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       builderRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
       builderRef.current?.focus({ preventScroll: true })
     })
+  }
+  const keepSelectedInAcp = () => {
+    setKeptInAcp(true)
+    setReleaseAnnouncement(`${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file remains' : 'files remain'} securely in ACP. No external copies were created and the originals were not changed.`)
   }
 
   return (
@@ -716,34 +724,52 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
               </div>
             ) : builderStep === 2 ? <>
               <fieldset className="release-methods">
-                <legend>How do you want to receive the corrected files?</legend>
+                <legend>Where should the corrected files go?</legend>
                 <label className={`${deliveryMethod === 'publish' ? 'selected' : ''}${!selectedPublishable.length ? ' disabled' : ''}`}>
-                  <input type="radio" name="delivery-method" value="publish" checked={deliveryMethod === 'publish'} disabled={!selectedPublishable.length} onChange={() => setDeliveryMethod('publish')} />
-                  <b>Publish copies</b>
-                  <span>{selectedPublishable.length ? `${selectedPublishable.length} unreleased · ${releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}` : 'Every selected file is already published. Choose download to retrieve another copy.'}</span>
+                  <input type="radio" name="delivery-method" value="publish" checked={deliveryMethod === 'publish'} disabled={!selectedPublishable.length} onChange={() => { setDeliveryMethod('publish'); setKeptInAcp(false) }} />
+                  <b>Publish to {sourceProduct}</b>
+                  <span>{selectedPublishable.length ? `Create ${selectedPublishable.length} protected ${selectedPublishable.length === 1 ? 'copy' : 'copies'} in the connected source.` : 'Every selected file is already published. Choose download to retrieve another copy.'}</span>
                 </label>
                 <label className={deliveryMethod === 'download' ? 'selected' : ''}>
-                  <input type="radio" name="delivery-method" value="download" checked={deliveryMethod === 'download'} onChange={() => setDeliveryMethod('download')} />
-                  <b>Download ZIP package</b>
-                  <span>One ZIP with the source folder structure and a release manifest.</span>
+                  <input type="radio" name="delivery-method" value="download" checked={deliveryMethod === 'download'} onChange={() => { setDeliveryMethod('download'); setKeptInAcp(false) }} />
+                  <b>Download to this device</b>
+                  <span>Build one ZIP package with the source folder structure and a release manifest; your browser chooses where to save it.</span>
                 </label>
-                <div className="release-methods__resting">
-                  <b>Not ready to deliver?</b><span>Do nothing—corrected copies remain safely stored in ACP.</span>
-                </div>
+                <label className={deliveryMethod === 'acp' ? 'selected' : ''}>
+                  <input type="radio" name="delivery-method" value="acp" checked={deliveryMethod === 'acp'} onChange={() => { setDeliveryMethod('acp'); setKeptInAcp(false) }} />
+                  <b>Keep in ACP for later</b>
+                  <span>Create no external copy. Return when you are ready to publish or download.</span>
+                </label>
               </fieldset>
-              <div className="release-name-field">
+              <div className="release-destination-config" aria-live="polite">
                 {deliveryMethod === 'download' ? <>
+                  <div className="release-destination-config__heading"><b>Download package</b><span>Saved by your browser</span></div>
+                  <div className="release-name-field">
                   <label htmlFor="release-package-name"><b>ZIP filename</b> <span>Optional</span></label>
                   <input id="release-package-name" value={packageName} onChange={(e) => setPackageName(e.target.value)} placeholder={`acp-release-${run?.id || 'scan'}.zip`} aria-describedby="release-name-help release-name-error" />
                   <small id="release-name-help">“.zip” is added automatically. Leave blank to use the scan-based name.</small>
+                  </div>
+                  <div className="release-includes"><span>✓ Corrected files</span><span>✓ Original folder structure</span><span>✓ Release manifest with checksums</span></div>
+                </> : deliveryMethod === 'acp' ? <>
+                  <div className="release-destination-config__heading"><b>ACP controlled storage</b><span>No external delivery</span></div>
+                  <p className="muted">The corrected copies stay associated with this scan. You can return to Release later and choose another destination.</p>
+                  <div className="release-includes"><span>✓ Corrected copies retained</span><span>✓ Review decisions retained</span><span>✓ Originals unchanged</span></div>
                 </> : releaseFolder ? <>
+                  <div className="release-destination-config__heading"><b>{sourceProduct} destination</b><span>Connected source</span></div>
+                  <div className="release-destination-path">{releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}</div>
+                  <div className="release-name-field">
                   <label><b>Release folder name</b></label>
                   <div className="release-name-existing">{releaseFolder.name}</div>
                   <small>This scan’s release has started, so retries keep the same destination.</small>
+                  </div>
                 </> : <>
+                  <div className="release-destination-config__heading"><b>{sourceProduct} destination</b><span>Connected source</span></div>
+                  <div className="release-destination-path">{releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}</div>
+                  <div className="release-name-field">
                   <label htmlFor="release-folder-name"><b>Release folder name</b> <span>Optional</span></label>
                   <input id="release-folder-name" value={releaseFolderName} onChange={(e) => setReleaseFolderName(e.target.value)} placeholder="Automatic: release date and time" aria-describedby="release-name-help release-name-error" />
                   <small id="release-name-help">This name becomes permanent when this scan’s first release starts.</small>
+                  </div>
                 </>}
                 {deliveryNameError && <div id="release-name-error" className="release-name-error" role="alert">{deliveryNameError}</div>}
               </div>
@@ -757,7 +783,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                   <b>Review your release plan</b>
                   <p>{deliveryMethod === 'publish'
                     ? `${selectedPublishable.length} unreleased corrected ${selectedPublishable.length === 1 ? 'copy' : 'copies'} will be published to ${(releaseFolder?.name || releaseFolderName.trim()) ? `the “${releaseFolder?.name || releaseFolderName.trim()}” release folder` : releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}. Already released files are excluded. Original files will not be changed.`
-                    : `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file' : 'files'} will be packaged in “${packageName.trim().replace(/\.zip$/i, '') || `acp-release-${run?.id || 'scan'}`}.zip” with folder structure and a manifest. Original files will not be changed.`}</p>
+                    : deliveryMethod === 'download'
+                      ? `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file' : 'files'} will be packaged in “${packageName.trim().replace(/\.zip$/i, '') || `acp-release-${run?.id || 'scan'}`}.zip” with folder structure and a manifest. Your browser will ask where to save it. Original files will not be changed.`
+                      : `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file' : 'files'} will remain securely in ACP. No external copy will be created and original files will not be changed.`}</p>
                   {deliveryMethod === 'publish' && releasePreview && <div className="release-preview">
                     <div className="release-preview__heading"><b>Exact destination preview</b><span>{releasePreview.documents?.length || 0} files · {releasePreview.folder_state === 'existing' ? 'existing release folder' : 'new release folder'}</span></div>
                     {(releasePreview.documents || []).slice(0, 5).map((item) => <div className="release-preview__path" key={item.file}><span>{item.action === 'reuse' ? '↻ Reuse' : '+ Create'}</span><code>{item.destination_path}</code></div>)}
@@ -770,7 +798,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                   <button className="ghost" onClick={() => setBuilderStep(2)}>Back to delivery</button>
                   {deliveryMethod === 'publish'
                     ? <button className="qbtn approve" disabled={readOnly || publishing || !selectedPublishable.length || !releasePreview?.can_release} onClick={() => setConfirm({ kind: 'selected', files: selectedPublishable.map((f) => f.file), folderName: releasePreview?.folder_name || releaseFolder?.name || releaseFolderName.trim() })}>{publishing ? 'Publishing…' : `Publish ${selectedPublishable.length} ${selectedPublishable.length === 1 ? 'copy' : 'copies'}`}</button>
-                    : <button className="qbtn approve" disabled={downloading || !selectedReady.length} onClick={downloadSelected}>{downloading ? 'Building package…' : `Download ZIP (${selectedReady.length})`}</button>}
+                    : deliveryMethod === 'download'
+                      ? <button className="qbtn approve" disabled={downloading || !selectedReady.length} onClick={downloadSelected}>{downloading ? 'Building package…' : `Download ZIP (${selectedReady.length})`}</button>
+                      : <button className="qbtn approve" disabled={!selectedReady.length || keptInAcp} onClick={keepSelectedInAcp}>{keptInAcp ? 'Kept in ACP' : `Keep ${selectedReady.length} in ACP`}</button>}
                 </div>
               </div>
             </>}
@@ -805,6 +835,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           <p className="muted" style={{ marginTop: 12 }}>Releasing writes the fixed copy to {releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })} and records each release in the audit trail here.</p>
         )}
       </section>
+
+      <ReleaseHistory refreshKey={`${run?.id || ''}:${publishedCount}:${failedCount}`} />
 
       {/* Confirmation before a release runs. States, in checkable terms, exactly what will happen —
           destination, that the original is untouched, the audit entry, and that this is not a
