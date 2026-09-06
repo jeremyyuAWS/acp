@@ -33,6 +33,11 @@ afterEach(() => {
   // keeps a cache across unmount, so a test that wants a cold start has to say so.
   resetJobsFeed()
   vi.useRealTimers()
+  // The backoff tests pin Math.random with vi.spyOn. Leaving it pinned would silently fix the
+  // jitter for every later test in the file — the same class of defect as the flake it replaced,
+  // just pointing the other way. Only spies are restored; the vi.fn() module mocks are reset in
+  // beforeEach and are unaffected.
+  vi.restoreAllMocks()
 })
 
 const flush = async () => { await vi.advanceTimersByTimeAsync(0) }
@@ -240,18 +245,74 @@ describe('errors and recovery', () => {
     expect(meta.fetchedAt).not.toBeNull()      // last-known is still there, honestly aged
   })
 
-  it('backs off after failures instead of hammering, then recovers', async () => {
+  /**
+   * THE JITTER IS PINNED, because otherwise this asserts the dice.
+   *
+   * `delayFor` is `min(interval * 2**failures, MAX_BACKOFF) * (0.5 + Math.random() * 0.5)`. With
+   * `intervalMs: 1000` and one failure that is 2000 * [0.5, 1) — a range of [1000, 2000). The
+   * earlier version of this test advanced to exactly 2000ms and asserted no retry had fired,
+   * which is the range's BOTTOM EDGE: whenever Math.random() came up near zero the retry landed
+   * on 2000 and the test failed with `expected 3 to be 2`. It did so on unrelated PRs, costing a
+   * CI cycle each time (#1579 was one).
+   *
+   * So the fix is not to widen the window — that would leave a smaller flake — but to remove the
+   * randomness from the assertion and then assert what the implementation actually guarantees.
+   *
+   * WHAT IT ACTUALLY GUARANTEES, measured by stepping the fake clock 1ms at a time and recording
+   * every call instant:
+   *
+   *   jitter 0 (floor)   calls at 1000, 2000, 4000, 8000   gaps 1000, 2000, 4000
+   *   jitter ~1 (top)    calls at 1000, 2999, 6998         gaps 1999, 3999
+   *
+   * Two properties hold at BOTH extremes, and they are the honest statement of "does not hammer":
+   * a retry never comes sooner than the plain interval, and the wait grows with each consecutive
+   * failure. What does NOT hold is the old comment's claim that the first retry is "well beyond
+   * the plain interval" — at the jitter floor it is exactly the plain interval. The old assertion
+   * was stronger than the code, which is why it failed at random rather than consistently.
+   */
+  const retryInstants = async (jitter, { intervalMs, window }) => {
+    vi.spyOn(Math, 'random').mockReturnValue(jitter)
+    subscribeJobs(null, vi.fn(), { intervalMs, onError: vi.fn() })
+    await flush()
+    getJobs.mockRejectedValue(new Error('down'))
+    const at = []
+    let seen = getJobs.mock.calls.length
+    for (let t = 1; t <= window; t += 1) {
+      await vi.advanceTimersByTimeAsync(1)
+      if (getJobs.mock.calls.length > seen) { seen = getJobs.mock.calls.length; at.push(t) }
+    }
+    return at
+  }
+
+  // Both ends of the jitter range, because a property that holds only at one end is the bug this
+  // file just had. 0 is the floor that used to break it; 0.999999 stands in for the open top.
+  for (const [label, jitter] of [['the jitter floor', 0], ['the jitter ceiling', 0.999999]]) {
+    it(`never retries sooner than the plain interval, at ${label}`, async () => {
+      const at = await retryInstants(jitter, { intervalMs: 1000, window: 8000 })
+      expect(at.length).toBeGreaterThan(1)          // a first poll plus at least one retry
+      const gaps = at.slice(1).map((t, i) => t - at[i])
+      for (const gap of gaps) expect(gap).toBeGreaterThanOrEqual(1000)
+    })
+
+    it(`waits longer after each consecutive failure, at ${label}`, async () => {
+      const at = await retryInstants(jitter, { intervalMs: 1000, window: 8000 })
+      const gaps = at.slice(1).map((t, i) => t - at[i])
+      expect(gaps.length).toBeGreaterThan(1)        // or "increasing" is vacuous
+      for (let i = 1; i < gaps.length; i += 1) expect(gaps[i]).toBeGreaterThan(gaps[i - 1])
+    })
+  }
+
+  it('recovers once the endpoint answers again', async () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
     subscribeJobs(null, vi.fn(), { intervalMs: 1000, onError: vi.fn() })
     await flush()
     getJobs.mockRejectedValue(new Error('down'))
 
     await vi.advanceTimersByTimeAsync(1100)
     const afterFirstFailure = getJobs.mock.calls.length
-    // The next attempt is backed off well beyond the plain interval.
-    await vi.advanceTimersByTimeAsync(900)
-    expect(getJobs.mock.calls.length).toBe(afterFirstFailure)
 
     getJobs.mockResolvedValue({ workers: 1, jobs: [] })
+    // Comfortably past MAX_BACKOFF (60000), so this cannot depend on where in the curve we are.
     await vi.advanceTimersByTimeAsync(60000)
     expect(getJobs.mock.calls.length).toBeGreaterThan(afterFirstFailure)
   })
