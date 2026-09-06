@@ -76,3 +76,11 @@ digital-accessibility/
 # tree next to the code that generates it, which is the exact way a reviewer ends up signing off
 # yesterday's render.
 review-packet/
+
+# mutation testing (P5.4, on demand only — scripts/mutation_test.py)
+# mutmut copies the whole source tree into mutants/ and rewrites it; it is build output, and on
+# this repo it is ~20MB because the copy has to include api/, config/, rules/, scripts/ and
+# test-corpus/ for the suite to run at all.
+mutants/
+.mutmut-cache
+mutmut-stats.json
