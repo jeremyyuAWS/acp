@@ -129,7 +129,7 @@ def test_a_decimal_memory_quantity_is_not_reported_as_a_difference(monkeypatch):
     assert not memory_differences, [d.render() for d in memory_differences]
 
 
-def test_the_assess_tier_stays_pinned_warm(report):
+def test_the_assess_tier_now_autoscales_in_production(report):
     """THE DECISION, GUARDED ON BOTH SIDES — and this test has now outlived two states of it.
 
     It began as the headline FINDING: production pinned assess at five warm replicas and the
@@ -154,10 +154,8 @@ def test_the_assess_tier_stays_pinned_warm(report):
     """
     from acpctl.azure_baseline import baseline
     assess = baseline()["acp-assess"]
-    assert assess.min_replicas == assess.max_replicas == 5, (
-        "assess is no longer pinned at 5 in rightsize-production.sh — the parity document's "
-        "central argument needs rewriting")
-    assert not assess.autoscaled
+    assert (assess.min_replicas, assess.max_replicas) == (5, 10)
+    assert assess.autoscaled
 
     contract = report["contract"]["assess"]
     assert (contract["replicas.min"], contract["replicas.max"]) == (5, 5), (
@@ -221,7 +219,7 @@ def test_remediation_now_autoscales_on_its_own_lane_job_types():
     assert "remediation-queue" in baseline()["acp-remediate"].scale_rules
 
 
-def test_a_scale_rule_on_a_pinned_tier_is_reported_as_inert():
+def test_the_assess_scale_rule_is_reported_as_live():
     """A rule the tier cannot act on must not read as an autoscaler it has.
 
     `acp-assess` runs a floor equal to its ceiling, so KEDA may compute any replica count it
@@ -238,15 +236,14 @@ def test_a_scale_rule_on_a_pinned_tier_is_reported_as_inert():
     from acpctl.azure_baseline import baseline
     apps = baseline()
     assess = apps["acp-assess"]
-    assert assess.min_replicas == assess.max_replicas, (
-        "acp-assess is no longer pinned — the assess-queue rule is live now, and this test "
-        "should assert that the marker is GONE rather than present")
+    assert assess.min_replicas < assess.max_replicas
     assert "assess-queue" in assess.scale_rules
 
     document = (ROOT / "packaging" / "docs" / "azure-parity.md").read_text(encoding="utf-8")
     row = [ln for ln in document.splitlines() if ln.startswith("| `acp-assess` |")]
     assert len(row) == 1, row
-    assert "`assess-queue` (inert: tier pinned)" in row[0], row[0]
+    assert "`assess-queue`" in row[0], row[0]
+    assert "inert" not in row[0], row[0]
 
     # Bite check: the marker must be about THIS tier, not stamped on every rule. acp-remediate
     # is 5-10, so its rule is live and must carry no marker.
@@ -298,13 +295,15 @@ def test_four_real_differences_remain_and_every_one_is_explained(report):
     hidden if it were folded into the ceiling's row.
     """
     from acpctl.azure_parity import ACKNOWLEDGED
-    assert report["stillDiffers"] == 4
+    assert report["stillDiffers"] == 6
     assert all(d.classification == ACKNOWLEDGED for d in report["differences"])
     assert {(d.tier, d.field) for d in report["differences"]} == {
         ("api", "replicas.min"),
         ("api", "replicas.max"),
         ("discover", "replicas.min"),
         ("discover", "replicas.max"),
+        ("assess", "replicas.max"),
+        ("assess", "autoscaled"),
     }
 
 
@@ -349,7 +348,7 @@ def test_the_flag_says_what_it_measures_rather_than_claiming_parity(report):
         "the flag is back under a name that claims more than it measures")
     assert report["noUnexplainedDifferences"] is True
     assert report["divergences"] == 0
-    assert report["stillDiffers"] == 4
+    assert report["stillDiffers"] == 6
 
 
 # ── what the repository can and cannot confirm ────────────────────────────────

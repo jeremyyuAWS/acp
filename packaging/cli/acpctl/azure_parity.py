@@ -77,6 +77,14 @@ ACKNOWLEDGED_DIFFERENCES: dict[tuple[str, str], str] = {
         "that has 150. 6 is the largest ceiling that fits, with one connection to spare. The "
         "owner kept the floor and took the ceiling the budget allows. Azure is to be brought down "
         "to 6 to match; until it is, production is the side that diverges."),
+    ("assess", "replicas.max"): (
+        "Production raised Assess from 5-5 to 5-10 on 2026-09-06 after PostgreSQL moved from "
+        "Burstable to General Purpose and the live connection ceiling rose from 150 to 859. "
+        "The contract example remains pinned until its independent portability policy is revised."),
+    ("assess", "autoscaled"): (
+        "Production now has a live PostgreSQL queue scaler for Assess, targeting eight claimable "
+        "jobs per replica. The standard contract example still describes a fixed warm pool; this "
+        "difference is deliberate and must remain visible until that example is reconsidered."),
 }
 
 # Configuration this repo cannot see, and why. Named so that a clean report is not read as a

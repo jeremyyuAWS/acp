@@ -347,8 +347,8 @@ def test_the_chart_renders_todays_azure_once_the_known_findings_are_cleared(docu
         assert env.get("ACP_DB_MAX_CONN") == "2", deployment["metadata"]["name"]
 
     scaled = [d for d in rendered if d and d.get("kind") == "ScaledObject"]
-    assert len(scaled) == 1, (
-        "exactly one tier autoscales on a queue in today's Azure (remediate, #1370); "
+    assert len(scaled) == 2, (
+        "Assess and Remediation both autoscale on their own queues in today's Azure; "
         f"the chart rendered {[d['metadata']['name'] for d in scaled]}")
 
 

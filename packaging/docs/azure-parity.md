@@ -306,7 +306,7 @@ Parsed from the deployment scripts, not from a live subscription.
 | Container app | Tier | CPU | Memory | Replicas | DB pool | Scales? | Ingress | Scale rules | Read from |
 |---|---|---:|---:|---|---:|---|---|---|---|
 | `acp-app` | `api` | 1.0 | 2Gi | 1–3 | — | yes | external | none in this repo | rightsize-production.sh + deploy.sh |
-| `acp-assess` | `assess` | 2.0 | 4Gi | 5–5 | 2 | **no** | none | `assess-queue` (inert: tier pinned) | rightsize-production.sh |
+| `acp-assess` | `assess` | 2.0 | 4Gi | 5–10 | 2 | yes | none | `assess-queue` | rightsize-production.sh |
 | `acp-discovery` | `discover` | 1.0 | 2Gi | 4–6 | 2 | yes | none | none in this repo | rightsize-production.sh |
 | `acp-grafana` | — | 0.5 | 1.0Gi | 1–1 | — | **no** | external | none in this repo | deploy.sh |
 | `acp-ollama` | — | 4.0 | 8Gi | 0–1 | — | yes | none | none in this repo | rightsize-production.sh |
@@ -324,14 +324,16 @@ Parsed from the deployment scripts, not from a live subscription.
 
 ## Differences
 
-**0 unexplained**, 4 acknowledged.
+**0 unexplained**, 6 acknowledged.
 
-Every difference now carries a recorded decision. Production still differs from the contract in **4** places — that is the point of the acknowledgements, not something they undo. Each row below says which side is authoritative and why.
+Every difference now carries a recorded decision. Production still differs from the contract in **6** places — that is the point of the acknowledgements, not something they undo. Each row below says which side is authoritative and why.
 
 | Tier | Field | Azure | Contract | | Why |
 |---|---|---|---|---|---|
 | `api` | `replicas.min` | `1` | `2` | acknowledged | The example raises the API floor from 1 to 2 because the standard profile requires two API replicas (PRD S8), and the example's own header says so. Azure runs 1 — so today's production would FAIL its own profile's floor, which is a finding about the deployment rather than about the contract. |
 | `api` | `replicas.max` | `3` | `4` | acknowledged | Production's ceiling of 3 was chosen against a floor of 1 — rightsize-production.sh says 'The web tier retains burst headroom', which is a statement about the RANGE. The contract corrects that floor to 2 for the profile, so holding the ceiling at 3 would silently halve the burst range production says it wants (3x down to 1.5x); 2-4 keeps it at 2x. Priced: the extra replica is 16 Postgres connections against 267 of headroom. The contract stands and Azure's ceiling is the override to correct alongside its floor. |
+| `assess` | `replicas.max` | `10` | `5` | acknowledged | Production raised Assess from 5-5 to 5-10 on 2026-09-06 after PostgreSQL moved from Burstable to General Purpose and the live connection ceiling rose from 150 to 859. The contract example remains pinned until its independent portability policy is revised. |
+| `assess` | `autoscaled` | `True` | `False` | acknowledged | Production now has a live PostgreSQL queue scaler for Assess, targeting eight claimable jobs per replica. The standard contract example still describes a fixed warm pool; this difference is deliberate and must remain visible until that example is reconsidered. |
 | `discover` | `replicas.min` | `4` | `1` | acknowledged | Production runs a floor of 4 against the contract's 1. Decided 2026-09-06: discovery was found scaled up by hand, the owner confirmed the live shape is the intended one, and the script was corrected to match rather than the estate shrunk to meet a range nobody had argued for. A floor costs what it always costs — it is paid continuously — but the worst case is set by the ceiling below, so this row adds nothing to the budget. |
 | `discover` | `replicas.max` | `6` | `3` | acknowledged | The script runs a ceiling of 6 against the contract's 3, and unlike the previous 2 this one is explained — by arithmetic rather than preference. Production was found at 8 on 2026-09-06 and 8 does not survive a deploy: ACA runs the old and new revisions together, and at 4-8 the fleet wants 153 Postgres connections during that overlap against a server that has 150. 6 is the largest ceiling that fits, with one connection to spare. The owner kept the floor and took the ceiling the budget allows. Azure is to be brought down to 6 to match; until it is, production is the side that diverges. |
 
