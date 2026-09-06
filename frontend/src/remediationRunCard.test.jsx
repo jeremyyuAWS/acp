@@ -52,13 +52,15 @@ describe('the run card never overstates the run', () => {
     expect(html).not.toMatch(/>Complete</)
   })
 
-  it('withholds an ETA until five documents have completed, however many samples exist', () => {
+  it('withholds an ETA until five documents have been processed, however many samples exist', () => {
     // The sample gate and the document gate answer different questions: four polls of a run that
     // finished nothing is four samples and no evidence.
     const calibrated = { calibrating: false, etaText: '8–12 minutes', ratePerMin: 6 }
-    const few = { ...SNAP, documents: { ...SNAP.documents, completed: 4 } }
+    const few = { ...SNAP, documents: { completed: 4, processing: 16, waiting: 0,
+                                        review: 0, failed: 0, skipped: 0 } }
     expect(etaGate(few, calibrated)).toEqual({ show: false, note: 'Estimating after the first results' })
-    const enough = { ...SNAP, documents: { ...SNAP.documents, completed: MIN_DOCUMENTS_FOR_ETA } }
+    const enough = { ...SNAP, documents: { completed: 0, processing: 15, waiting: 0,
+                                           review: MIN_DOCUMENTS_FOR_ETA, failed: 0, skipped: 0 } }
     expect(etaGate(enough, calibrated)).toMatchObject({ show: true, text: '8–12 minutes' })
     // ...and a document count alone is not enough either — the measurement must have settled.
     expect(etaGate(enough, { calibrating: true, etaText: null }).show).toBe(false)

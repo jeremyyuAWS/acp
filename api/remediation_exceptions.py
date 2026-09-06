@@ -187,7 +187,8 @@ def _has_undelivered_correction(record: dict) -> bool:
     provider. Their difference is exactly PRD §11's delivery-failure class, and it is a fact about
     two columns rather than an inference from an error message nobody kept.
     """
-    return bool(record.get("artifact_stored_at")) and not record.get("delivered_url")
+    return (bool(record.get("artifact_stored_at")) and not record.get("delivered_url")
+            and not record.get("awaiting_release"))
 
 
 # ── destination identity ─────────────────────────────────────────────────────

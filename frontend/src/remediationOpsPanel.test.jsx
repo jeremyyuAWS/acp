@@ -352,13 +352,20 @@ describe('the v2 live operations hierarchy', () => {
   })
 
   it('turns delayed progress into an actionable cue without declaring a stall early', () => {
-    const snapshot = { ...SNAP, progress: { material_age_s: 116 },
+    const snapshot = { ...SNAP, progress: { material_age_s: 316, lease_healthy: true },
       thresholds: { delayed_after_s: 60, stall_after_s: 900 } }
     const html = render({ snapshot, connected: true, receivedAt: Date.now(), onViewMonitor: () => {} })
     expect(html).toContain('checkpoint delayed')
-    expect(html).toContain('No durable progress for 1m 56s')
+    expect(html).toContain('No durable progress for 5m 16s')
     expect(html).toContain('Check Live Operations')
     expect(html).not.toContain('No durable progress is being recorded')
+  })
+
+  it('does not warn after one minute while current worker leases prove healthy work', () => {
+    const snapshot = { ...SNAP, progress: { material_age_s: 116, lease_healthy: true },
+      thresholds: { delayed_after_s: 60, stall_after_s: 900 } }
+    const html = render({ snapshot, connected: true, receivedAt: Date.now() })
+    expect(html).not.toContain('checkpoint delayed')
   })
 
   it('gives a stalled run a direct worker and retry action', () => {
@@ -371,8 +378,16 @@ describe('the v2 live operations hierarchy', () => {
   it('explains an empty throughput graph while documents are active', () => {
     const html = render({ snapshot: { ...SNAP, throughput: null }, connected: true,
       receivedAt: Date.now() })
-    expect(html).toContain('No document has completed in the last five minutes')
+    expect(html).toContain('No document was processed in the last five minutes')
     expect(html).toContain('2 are actively processing')
+  })
+
+  it('labels a reclaimed worker execution as resumed rather than a processing failure', () => {
+    const snapshot = { ...SNAP, active_attempts: [
+      { file: 'large.pdf', phase: 'verifying', attempt: 2, elapsed_s: 30 },
+    ] }
+    const html = render({ snapshot, connected: true, receivedAt: Date.now() })
+    expect(html).toContain('resumed attempt 2')
   })
 
   it('renders reconciled progress before pipeline, active work, throughput, activity, and exceptions', () => {

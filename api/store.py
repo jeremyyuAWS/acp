@@ -7473,6 +7473,11 @@ class Store:
                 "artifact_digest": correction.get("corrected_sha256") or None,
                 "artifact_bytes": correction.get("corrected_bytes") or None,
                 "delivered_url": correction.get("drive_write_url") or None,
+                # Microsoft-source corrections are intentionally published by the explicit
+                # Release stage. Before that stage runs, an absent provider URL is expected and
+                # must not be classified as a failed write.
+                "awaiting_release": (provider in ("sharepoint", "onedrive")
+                                     and not correction.get("drive_write_url")),
                 "source_modified": item.get("source_modified") or None,
                 "destination_drive_id": item.get("drive_id") or None,
                 # The id when the submission recorded one (Drive only — it creates the mirror
