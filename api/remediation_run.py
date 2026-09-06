@@ -696,6 +696,10 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
         "multi_attempt_active": sum(1 for attempt in active
                                     if int(attempt.get("attempt") or 0) > 1),
     }
+    assessed_findings = facts.get("total_findings")
+    assessed_findings = int(assessed_findings) if assessed_findings is not None else None
+    review_findings = facts.get("review_findings")
+    review_findings = int(review_findings) if review_findings is not None else None
 
     snapshot = {
         "run_id": facts.get("run_id"),
@@ -721,7 +725,24 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
             scan_id=facts.get("scan_id"), provider=facts.get("source"),
             locations=facts.get("locations"), scan_snapshot_id=facts.get("scan_snapshot_id")),
         "total_documents": total,
-        "total_findings": facts.get("total_findings"),
+        "total_findings": assessed_findings,
+        # This is a cross-stage HANDOFF, not a false partition. Assessment findings, verified
+        # changes and review cards are different units. `review.findings` says how many assessed
+        # instances the pending cards represent; an exact resolved/unresolved finding ledger is
+        # deliberately not inferred from fix rows because one finding can require several edits.
+        "finding_reconciliation": {
+            "assessed": assessed_findings,
+            "resolved_verified": None,
+            "awaiting_review": review_findings,
+            "approved_pending_verification": None,
+            "unchanged_no_fix": None,
+            "failed": None,
+            "excluded": None,
+            "superseded": None,
+            "accounted": None,
+            "unaccounted": None,
+            "exact": False,
+        },
         "documents": counters,
         "outcome_reasons": reasons,
         # Units are in the KEY, always. "Verified" alone was ambiguous between documents and
@@ -734,7 +755,8 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
                      "eligible": len(corrected),
                      "latest_at": facts.get("latest_delivery_at") or None},
         "review": {"documents": counters["review"],
-                   "items": int(facts.get("review_items") or 0)},
+                   "items": int(facts.get("review_items") or 0),
+                   "findings": review_findings},
         "throughput": throughput,
         "estimate": estimate,
         "phases": derive_phases(counters, total=total, state=state, applied_fixes=applied,

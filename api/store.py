@@ -7365,11 +7365,15 @@ class Store:
             # Human review: the documents whose automatic work stopped for a decision, and how
             # many individual items are waiting. Two different units, named apart (PRD §6C).
             self._db.execute(cur,
-                "SELECT file,COUNT(*) AS n FROM hitl_queue WHERE scan_id=%s AND status='pending' "
-                "GROUP BY file", (scan_id,))
+                "SELECT file,COUNT(*) AS n,COALESCE(SUM(finding_count),0) AS findings "
+                "FROM hitl_queue WHERE scan_id=%s AND status='pending' GROUP BY file", (scan_id,))
             review = self._db.fetchall(cur)
             out["review_documents"] = [r["file"] for r in review if r.get("file")]
             out["review_items"] = sum(int(r.get("n") or 0) for r in review)
+            # A review item is a decision card, not necessarily one finding. One card can group
+            # (for example) 18 images that all need authored text. Preserve both units so the UI
+            # can relate remediation to Assessment without pretending queue rows are findings.
+            out["review_findings"] = sum(int(r.get("findings") or 0) for r in review)
 
             # Corrected copies. `remediated_at` proves ACP stored one; `drive_write_url` proves it
             # reached the source provider. A delivery failure leaves the first set and the second
@@ -7401,8 +7405,12 @@ class Store:
                 "SELECT DISTINCT file FROM remediation_diff WHERE scan_id=%s", (scan_id,))
             out["verified_documents"] = [r["file"] for r in self._db.fetchall(cur) if r.get("file")]
 
+            # Use the exact finding definition used by live Assessment and certification. An
+            # issue_records row is an aggregate and may represent several instances, so COUNT(*)
+            # made the same run acquire a different finding total when it reached Remediation.
             self._db.execute(cur,
-                "SELECT COUNT(*) AS n FROM issue_records WHERE scan_id=%s", (scan_id,))
+                "SELECT COALESCE(SUM(finding_count),0) AS n FROM scan_rule_traces "
+                "WHERE scan_id=%s AND outcome='FAIL'", (scan_id,))
             out["total_findings"] = int((self._db.fetchone(cur) or {}).get("n") or 0)
 
             # WHERE the documents came from, from the run's OWN inventory — never from the

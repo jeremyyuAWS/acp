@@ -6,6 +6,7 @@ import ActivityPulse from './ActivityPulse.jsx'
 import RemediationExceptions, { useRemediationExceptions, exceptionCount } from './RemediationExceptions.jsx'
 import './remediation-ops-panel.css'
 import './remediation-live-detail.css'
+import './remediation-reconciliation.css'
 
 const PHASE_TEXT = { pending: 'Pending', active: 'In progress', completed: 'Completed', completed_with_exceptions: 'Completed with exceptions', failed: 'Failed', skipped: 'Skipped' }
 const POSITIVE = new Set(['fixesApplied', 'fixesVerified', 'documentsVerified', 'delivered'])
@@ -149,6 +150,30 @@ function Secondary({ snapshot }) {
   return rows.length ? <dl className="remops-secondary">{rows.map((row) => <div key={row.key}><dt>{row.label}</dt><dd>{POSITIVE.has(row.key) ? <LiveCounter value={row.value} /> : row.value.toLocaleString()}</dd></div>)}</dl> : null
 }
 
+function FindingReconciliation({ snapshot }) {
+  const reconciliation = snapshot.finding_reconciliation
+  if (!reconciliation) return null
+  const assessed = reconciliation.assessed
+  const reviewFindings = reconciliation.awaiting_review
+  const reviewItems = snapshot.review?.items
+  const verifiedChanges = snapshot.fixes?.verified
+  const documents = snapshot.documents || {}
+  const processedDocuments = ['completed', 'review', 'failed', 'skipped']
+    .reduce((sum, key) => sum + (typeof documents[key] === 'number' ? documents[key] : 0), 0)
+  const count = (value) => typeof value === 'number' ? value.toLocaleString() : 'Not yet available'
+  return <section className="remops-reconciliation" aria-labelledby="remops-reconciliation-title">
+    <div><h3 id="remops-reconciliation-title">Assessment → Remediation accounting</h3><p className="muted">The units stay separate so completed processing is not mistaken for resolved findings.</p></div>
+    <dl>
+      <div><dt>Assessment findings</dt><dd>{count(assessed)}{typeof assessed === 'number' && ' findings'}<span>Finding instances handed into this workflow</span></dd></div>
+      <div><dt>Documents processed</dt><dd>{processedDocuments.toLocaleString()} / {snapshot.total_documents.toLocaleString()} documents<span>Files that reached a terminal remediation outcome</span></dd></div>
+      <div><dt>Verified changes</dt><dd>{count(verifiedChanges)}{typeof verifiedChanges === 'number' && ' changes'}<span>Before/after changes that passed re-check</span></dd></div>
+      <div><dt>Pending human review</dt><dd>{count(reviewFindings)}{typeof reviewFindings === 'number' && ' findings'}<span>{typeof reviewItems === 'number' ? `Across ${reviewItems.toLocaleString()} review card${reviewItems === 1 ? '' : 's'}` : 'Review-card count not yet available'}</span></dd></div>
+      <div><dt>Exact finding disposition</dt><dd>{reconciliation.exact === true ? 'Available' : 'Not yet available'}<span>{reconciliation.exact === true ? 'Every assessed finding has a durable outcome' : 'A finding-disposition ledger is not yet available'}</span></dd></div>
+    </dl>
+    {reconciliation.exact !== true && <p className="remops-accounting-note">These values do not form a subtraction. One finding may require several verified changes, and one review item may group several findings. ACP does not yet track an exact disposition for every finding.</p>}
+  </section>
+}
+
 function Activity({ events = [] }) {
   return <section className="remops-activity"><h3>Live activity</h3>{events.length ? <ol aria-label="Recent remediation activity">{events.slice(0, 10).map((event) => <li key={event.key}><time dateTime={event.occurredAt || undefined}>{event.occurredAt ? new Date(event.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Now'}</time><span aria-hidden="true">{event.tone === 'error' ? '×' : event.tone === 'attention' ? '!' : event.tone === 'success' ? '✓' : '·'}</span><span>{event.line}</span></li>)}</ol> : <p className="muted">New durable remediation events will appear here.</p>}</section>
 }
@@ -204,6 +229,7 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
     <RetryNotice retryAt={snapshot.retry_at} now={clock} />
     <ProgressCue snapshot={snapshot} onViewMonitor={onViewMonitor} />
     <Progress snapshot={snapshot} suspect={documentCountsSuspect} />
+    <FindingReconciliation snapshot={snapshot} />
     {snapshot.phases?.length > 0 && <Disclosure title="Phases" compact={compact}><Pipeline phases={snapshot.phases} attempts={snapshot.active_attempts || []} moving={connected && snapshot.state !== 'stalled' && (snapshot.active_attempts || []).length > 0} /></Disclosure>}
     <div className="remops-two"><Workstream attempts={snapshot.active_attempts || []} generatedAt={snapshot.generated_at} compact={compact} /><Throughput snapshot={snapshot} frozen={paused || hidden} /></div>
     <Disclosure title="Fix and delivery totals" compact={compact}><Secondary snapshot={snapshot} /></Disclosure>

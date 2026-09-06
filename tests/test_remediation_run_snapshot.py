@@ -443,5 +443,61 @@ def test_the_facts_method_reads_review_and_delivery_from_the_real_tables(isolate
     facts = isolated_store.remediation_run_facts(sid)
     assert facts["review_documents"] == ["a.docx"]
     assert facts["review_items"] == 1
+    assert facts["review_findings"] == 2
     assert facts["source"] == "sharepoint"
     assert [j["file"] for j in facts["jobs"]] == ["a.docx"]
+
+
+def test_one_review_card_reports_all_eighteen_findings_it_represents(isolated_store):
+    sid = _scan_with_batch(isolated_store, "s-snap-review-card-count", ["a.docx"])
+    isolated_store.queue_hitl_deferral(sid, "a.docx", "author text alternatives", 18,
+                                      rule_id="1.1.1", rule_name="Non-text Content")
+    facts = isolated_store.remediation_run_facts(sid)
+    assert facts["review_items"] == 1
+    assert facts["review_findings"] == 18
+
+
+def test_finding_total_uses_assessments_finding_instances_not_issue_rows(isolated_store):
+    sid = _scan_with_batch(isolated_store, "s-snap-finding-count", ["a.docx"])
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "INSERT INTO scan_rule_traces(scan_id,file,rule_id,rule_name,plain_name,level,"
+            "fix_mode,outcome,finding_count) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (sid, "a.docx", "1.1.1", "Non-text Content", "Images need text", "A",
+             "human", "FAIL", 7))
+        isolated_store._db.execute(cur,
+            "INSERT INTO issue_records(scan_id,file,rule_id,wcag,severity,detail) "
+            "VALUES(%s,%s,%s,%s,%s,%s)",
+            (sid, "a.docx", "r1", "1.1.1", "serious", "seven images"))
+    facts = isolated_store.remediation_run_facts(sid)
+    assert facts["total_findings"] == 7
+
+
+def test_five_failing_traces_sum_to_seventeen_assessment_findings(isolated_store):
+    sid = _scan_with_batch(isolated_store, "s-snap-five-finding-counts", ["a.docx"])
+    with isolated_store._db.cursor() as cur:
+        for index, finding_count in enumerate((3, 7, 1, 4, 2), start=1):
+            isolated_store._db.execute(cur,
+                "INSERT INTO scan_rule_traces(scan_id,file,rule_id,rule_name,plain_name,level,"
+                "fix_mode,outcome,finding_count) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (sid, "a.docx", f"rule-{index}", f"Rule {index}", f"Rule {index}", "A",
+                 "human", "FAIL", finding_count))
+    assert isolated_store.remediation_run_facts(sid)["total_findings"] == 17
+
+
+def test_snapshot_uses_phase_one_contract_and_preserves_unknowns_as_null():
+    snapshot = _snap([], total_findings=None, review_findings=None)
+    assert snapshot["finding_reconciliation"] == {
+        "assessed": None,
+        "resolved_verified": None,
+        "awaiting_review": None,
+        "approved_pending_verification": None,
+        "unchanged_no_fix": None,
+        "failed": None,
+        "excluded": None,
+        "superseded": None,
+        "accounted": None,
+        "unaccounted": None,
+        "exact": False,
+    }
+    assert snapshot["review"]["findings"] is None
