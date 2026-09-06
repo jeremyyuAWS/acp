@@ -38,20 +38,22 @@ const requiredLevel = (finding) => {
 
 export function automationForecast(findings = [], level = DEFAULT_AUTOMATION_LEVEL) {
   const rows = Array.isArray(findings) ? findings : []
-  let candidates = 0
-  let protectedCount = 0
+  const buckets = { candidates: [], review: [], protected: [] }
   rows.forEach((finding) => {
     const threshold = requiredLevel(finding)
-    if (threshold == null) protectedCount += 1
-    else if (threshold <= level) candidates += 1
+    if (threshold == null) buckets.protected.push(finding)
+    else if (threshold <= level) buckets.candidates.push(finding)
+    else buckets.review.push(finding)
   })
+  const fileCount = (bucket) => new Set(bucket.map((finding) => finding?.file).filter(Boolean)).size
   return {
     total: rows.length,
-    candidates,
-    protected: protectedCount,
-    // The three forecast tiles are a partition. Protected work is always reviewed, but it has
-    // its own tile; counting it here too made the visible totals exceed the queue population.
-    review: rows.length - candidates - protectedCount,
+    candidates: buckets.candidates.length,
+    candidateFiles: fileCount(buckets.candidates),
+    review: buckets.review.length,
+    reviewFiles: fileCount(buckets.review),
+    protected: buckets.protected.length,
+    protectedFiles: fileCount(buckets.protected),
   }
 }
 

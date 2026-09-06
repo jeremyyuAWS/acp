@@ -26,16 +26,17 @@ describe('AutomationPolicyControl', () => {
   it('updates its honest current-queue forecast without changing the run', async () => {
     const container = await mount({
       runId: 'run-2',
-      findings: [{ rule_id: 'WCAG_2_4_4', hasProposal: true, proposals: [{ proposed_value: 'Learn about benefits' }] }],
+      findings: [{ file: 'benefits.docx', rule_id: 'WCAG_2_4_4', hasProposal: true, proposals: [{ proposed_value: 'Learn about benefits' }] }],
     })
     const slider = container.querySelector('input[type="range"]')
-    expect(container.textContent).toContain('0automation candidates')
+    expect(container.textContent).toContain('0 findings across 0 files')
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(slider, '4')
       slider.dispatchEvent(new Event('input', { bubbles: true }))
     })
     expect(container.querySelector('.automation-policy__selection strong').textContent).toBe('Assisted')
-    expect(container.textContent).toContain('1automation candidates')
+    expect(container.textContent).toContain('1 finding across 1 file')
+    expect(container.textContent).toContain('eligible for automation')
     expect(container.textContent).toContain('This preview does not change the active run.')
   })
 })
