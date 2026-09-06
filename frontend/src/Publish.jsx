@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import ScopeBanner from './ScopeBanner.jsx'
 import { documentSelection, documentScopeSentence } from './remediableScope.js'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
-import { openReport, publishFile, publishAllFiles, getReleaseStatus, listHitlQueue, getSettings, getSourceStatus, rescoreFile } from './api.js'
+import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseManifest, listHitlQueue, getSettings, getSourceStatus, rescoreFile } from './api.js'
 import { releaseDestination, releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
 import { SET_STATUS, certificationUniverse, releaseSetStatus } from './graduation.js'
 import { mirrorState, MIRROR } from './deliveryPolicy.js'
@@ -30,6 +30,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [releaseFolders, setReleaseFolders] = useState([])
   const [releaseResults, setReleaseResults] = useState({})
   const [releaseAnnouncement, setReleaseAnnouncement] = useState('')
+  const [manifestError, setManifestError] = useState('')
   const [publishing, setPublishing] = useState(false)
   const [sel, setSel] = useState(null)
   // Why is the publish queue empty? A remediated file only becomes certifiable once its
@@ -269,13 +270,17 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   }, {})
   const selectedResult = sel ? releaseResults[sel.file] : null
   const failedCount = Object.values(releaseResults).filter((row) => row.status === 'failed').length
-  const downloadReleaseManifest = () => {
-    const payload = { release_id: releaseId, scan_id: run?.id, release_folder: releaseFolder,
-      original_files_unchanged: true, documents: Object.values(releaseResults) }
-    const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }))
-    const link = document.createElement('a')
-    link.href = url; link.download = `acp-release-${run?.id || 'manifest'}.json`; link.click()
-    URL.revokeObjectURL(url)
+  const downloadReleaseManifest = async () => {
+    setManifestError('')
+    try {
+      const payload = await getReleaseManifest(run.id)
+      const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }))
+      const link = document.createElement('a')
+      link.href = url; link.download = `acp-release-${run?.id || 'manifest'}.json`; link.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setManifestError(e?.message || 'The release manifest could not be downloaded.')
+    }
   }
 
   return (
@@ -465,6 +470,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           <div style={{ marginTop: 14 }}>
             {Object.keys(done).length === ready.length && ready.length > 0 && <div className="okline" style={{ marginBottom: 10 }}><b>{ready.length} corrected {ready.length === 1 ? 'copy' : 'copies'} released</b>{releaseFolder?.url && <> · <a href={releaseFolder.url} target="_blank" rel="noopener noreferrer">Open release folder ↗</a></>}</div>}
             <button className="ghost small" onClick={downloadReleaseManifest}>Download release manifest</button>
+            {manifestError && <div role="alert" style={{ color: 'var(--danger-fg)', marginTop: 8 }}>{manifestError}</div>}
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 6 }}>📋 Audit trail · {publishedEntries.length} released</div>
             {publishedEntries.slice(0, 8).map((e) => (
               <div key={e.file} style={{ fontSize: 12.5, padding: '5px 0', borderBottom: '1px solid var(--line)' }}>

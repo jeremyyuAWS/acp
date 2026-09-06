@@ -3273,6 +3273,85 @@ def get_release_status(sid: str, request: Request):
             "roots": status["roots"], "documents": status["documents"]}
 
 
+def _release_manifest_payload(status: dict, *, scan_id: str, owner: str,
+                              snapshot_id: str | None) -> dict:
+    """Build the authoritative, stable release record from persisted server evidence.
+
+    This intentionally contains no request-time timestamp: downloading the same unchanged
+    release twice must produce the same digest.  The digest is tamper evidence, not a digital
+    signature; ACP has no configured signing identity and must not imply non-repudiation.
+    """
+    roots = [{
+        "provider": row.get("provider"),
+        "provider_location": row.get("provider_location"),
+        "folder_id": row.get("folder_id"),
+        "folder_name": row.get("folder_name"),
+        "folder_url": row.get("folder_url"),
+        "created_at": row.get("created_at"),
+    } for row in status.get("roots", [])]
+    documents = [{
+        "file": row.get("file"),
+        "source_document_id": row.get("source_document_id"),
+        "source_relative_path": row.get("source_relative_path"),
+        "destination_relative_path": row.get("destination_relative_path"),
+        "released_document_id": row.get("released_document_id"),
+        "released_document_url": row.get("released_document_url"),
+        "corrected_sha256": row.get("corrected_checksum"),
+        "verification": row.get("verification"),
+        "status": row.get("status"),
+        "failure_category": row.get("failure_category"),
+        "explanation": row.get("explanation"),
+        "created": bool(row.get("created_result")),
+        "published_at": row.get("published_at"),
+    } for row in status.get("documents", [])]
+    return {
+        "schema_version": 1,
+        "release_id": status.get("id"),
+        "scan_id": scan_id,
+        "snapshot_id": snapshot_id,
+        "actor": owner,
+        "source": status.get("source"),
+        "status": status.get("status"),
+        "created_at": status.get("created_at"),
+        "updated_at": status.get("updated_at"),
+        "release_folder": status.get("folder_name"),
+        "original_files_unchanged": True,
+        "counts": {
+            "total": int(status.get("documents_total") or 0),
+            "published": int(status.get("published") or 0),
+            "failed": int(status.get("failed") or 0),
+            "remaining": int(status.get("remaining") or 0),
+        },
+        "roots": roots,
+        "documents": documents,
+        "manifest_generated_by": {
+            "service": "acp",
+            "release_version": status.get("acp_version") or "not recorded",
+        },
+    }
+
+
+@router.get("/scans/{sid}/release/manifest")
+def get_release_manifest(sid: str, request: Request):
+    """Return an owner-scoped server manifest plus a reproducible SHA-256 content digest."""
+    owner = _owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    status = core.store.release_for_scan(sid, owner)
+    if status is None:
+        raise HTTPException(404, "release not found")
+    manifest = _release_manifest_payload(
+        status, scan_id=sid, owner=owner, snapshot_id=core.store.stage_snapshot_id(sid))
+    canonical = _json.dumps(manifest, sort_keys=True, separators=(",", ":"),
+                            ensure_ascii=False, default=str).encode("utf-8")
+    return {
+        "manifest": manifest,
+        "content_digest": {"algorithm": "SHA-256", "value": hashlib.sha256(canonical).hexdigest()},
+        "digest_note": ("This digest makes changes detectable. It is not a digital signature "
+                        "and does not provide non-repudiation."),
+    }
+
+
 @router.get("/scans/{scan_id}/files/{filename:path}/remediated")
 def get_remediated_file(scan_id: str, filename: str, request: Request):
     """Stream a remediated file's fixed bytes (ADR 0010): Blob first (the durable source

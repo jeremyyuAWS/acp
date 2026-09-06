@@ -1,4 +1,5 @@
 """Durable release execution state is owner-scoped and retry-safe."""
+import os
 
 
 def _scan(store, scan_id, owner):
@@ -14,6 +15,8 @@ def test_release_execution_and_roots_are_stable_across_retries(isolated_store):
         "scan-1", "owner@example.com", "sharepoint", 99)
     assert first["id"] == again["id"]
     assert again["documents_total"] == 2
+    assert again["acp_version"] == (os.environ.get("ACP_BUILD_VERSION") or
+                                    os.environ.get("ACP_VERSION") or "dev")
 
     isolated_store.record_release_root(
         first["id"], "owner@example.com", "sharepoint", "graph:drive-a",
