@@ -110,9 +110,18 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
   file — `remediation_capability.py:148`). These are HUMAN lanes, which is the completion state.
   *(Source-verified 2026-08-24.)* **~4 legitimately N/A** (interaction SCs on static docs:
   `pptx 2.1.1/2.1.2/2.4.3`, `xlsx 2.1.2` — `ASSESSMENT_OVERRIDES`).
-- [ ] **R9 — (optional) Archive auto-fire.** Lifecycle Archive is override-only on real scans; auto-fire
-  needs backend `superseded` detection (`retentionOf`, `FileDrawer.jsx:373`). Skip unless the demo wants
-  Archive on the auto path.
+- [x] **R9 — Archive auto-fire.** Done (#1472), and it shipped stricter than filed. The item asked for
+  `retentionOf` detection; what landed refuses to move a file on that alone unless the evidence carries
+  STABLE SOURCE IDENTIFIERS, because the tempting signal — a filename pair like
+  `Clinical-Access-v2/v3.docx` — is also two unrelated documents in two unrelated libraries often
+  enough to matter. Four approved evidence types (`api/archive_evidence.py`), a content-addressed
+  policy snapshot, an idempotency key enforced by a unique index rather than by a check-then-insert,
+  and a preflight whose every check answers pass/fail/UNKNOWN with unknown routed to a human
+  (`api/archive_autofire.py`). Ships DISABLED and dry-run, so the default is unchanged
+  recommendation-only. Google Drive is deliberately out of scope and the reason is recorded in the
+  module: ACP holds no Drive read of a retention lock or legal hold, so "no hold blocks this move"
+  would be an assertion about something never looked at — and a lane that fails closed on every item
+  is worse than no lane, because it looks like it works.
 
 ### Testing / verification holes
 
@@ -700,11 +709,25 @@ argued.
   `<w:delText>` before flattening. Insertions correctly stay (ordinary `<w:t>`), and the regex
   detectors were already safe (they read `<w:t>`, never `<w:delText>`). Stance: extract as
   tracked changes ACCEPTED — insertions in, deletions out.
-- [?] **P5.3 — Word round-trip via LibreOffice.** BLOCKED on an install, not on design. LibreOffice
-  is not present on the build host (no `soffice`, no `/Applications/LibreOffice.app`), so the
-  independent round-trip cannot run here. Unblock: install LibreOffice (headless is enough), then
-  build the round-trip check. Still the cheapest external validation available — worth doing once
-  the binary is there.
+- [x] **P5.3 — Word round-trip via LibreOffice.** Built (`tests/test_docx_libreoffice_roundtrip.py`).
+  The install blocker was real when filed and is not universal: LibreOffice Writer installs cleanly
+  on the Ubuntu 24.04 session image (`apt-get update` first — a stale index 404s on the .deb), and
+  the core `soffice` package alone is not enough, since without `libreoffice-writer` it cannot load
+  a .docx at all and reports that as `exit 0` with "source file could not be loaded".
+  **It runs where `soffice` exists and skips cleanly where it does not — deliberately NOT installed
+  in CI**, because several hundred megabytes and a minute or two on every PR is a budget decision
+  for whoever owns CI, not something to slip in with a test. So it guards nothing automatically
+  today; that is the honest state, and the skip reason names the package that changes it.
+  **What it is worth, measured rather than argued.** Every .docx ACP tests against was written by
+  ACP with python-docx, so the corpus shares one serialisation and a detector keying on something
+  incidental to it would pass everything here. Injecting exactly that bug — a detector firing on
+  python-docx's `version='1.0'` XML declaration — leaves the existing docx suites green
+  (53 passed across `test_docx_corpus_regression_gate`, `test_docx_detector_robustness`,
+  `test_corpus_invariants`, `test_docx_empty_heading`) and fails all 10 round-trip cases.
+  Both detector paths are compared: `office_structure.docx_checks` plus the 10 registered rules.
+  The registry was nearly left out on a measurement taken from ONE all-REVIEW fixture; swept across
+  the corpus, 1.1.1 and 2.4.4 return FAIL on three of them — and alt text surviving a
+  re-serialisation is the most valuable thing here, so it is in.
 - [?] **P5.4 — Mutation testing on the detector modules.** BLOCKED on tooling. No mutation library
   is installed in the venv (`mutmut` / `cosmic-ray` absent), and adding one plus running a campaign
   is a dev-dependency + CI-time decision, not a quiet addition. Unblock: decide whether to vendor a
