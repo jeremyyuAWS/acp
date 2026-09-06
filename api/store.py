@@ -10986,6 +10986,7 @@ class Store:
                     "WHERE id = ("
                     "  SELECT qj.id" + candidate_from +
                     "  WHERE qj.status='queued' AND qj.run_after<=%s "
+                    "AND qj.attempts < qj.max_attempts "
                     + clause + fair_order +
                     # Only qj is claimable. The LEFT JOIN rows provide scheduling metadata and
                     # may be absent, so PostgreSQL must not try to lock their nullable sides.
@@ -11004,6 +11005,7 @@ class Store:
                 self._db.execute(cur,
                     "SELECT qj.id" + candidate_from +
                     "WHERE qj.status='queued' AND qj.run_after<=%s "
+                    "AND qj.attempts < qj.max_attempts "
                     + clause + fair_order + "LIMIT 1", (lane_key, now, *fair_params))
                 row = self._db.fetchone(cur)
                 if not row:
@@ -11779,7 +11781,8 @@ class Store:
         scope = " AND scan_id IN (SELECT id FROM scan_runs WHERE owner_email=%s)" if owner else ""
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT id, type, created_at FROM jobs WHERE status='queued' AND run_after<=%s" + scope +
+                "SELECT id, type, created_at FROM jobs WHERE status='queued' AND run_after<=%s "
+                "AND attempts < max_attempts" + scope +
                 " ORDER BY created_at ASC LIMIT 1",
                 (self._now(), owner) if owner else (self._now(),))
             return self._db.fetchone(cur)

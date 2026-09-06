@@ -98,13 +98,23 @@ function Workstream({ attempts = [], generatedAt, compact = false }) {
   const now = generatedAt ? Date.parse(generatedAt) : null
   const shown = attempts.slice(0, compact ? 2 : 3)
   const hiddenCount = attempts.length - shown.length
-  return <section className="remops-work"><h3>In flight now <span>· {attempts.length} document{attempts.length === 1 ? '' : 's'}</span></h3><ul>{shown.map((a) => { const signal = now && a.progress_at ? (now - Date.parse(a.progress_at)) / 1000 : null; const trail = Array.isArray(a.trail) ? a.trail : []; return <li key={`${a.file}-${a.started_at || ''}`}><div className="remops-doc-head"><strong><span aria-hidden="true">●</span> <span className="fname">{a.file}</span></strong><span>{ago(a.elapsed_s) ? `in flight ${ago(a.elapsed_s)}` : ''}</span></div><div className="remops-trail"><span className="remops-done">✓ Opened</span>{trail.map((step, index) => <span className="remops-trail-step" key={`${step.label || step}-${index}`}><span aria-hidden="true">→</span><span className="remops-done">✓ {step.label || step}</span></span>)}<span aria-hidden="true">→</span><span className="remops-active">● {a.phase || 'Processing'}</span>{a.attempt > 1 && <span>resumed attempt {a.attempt}</span>}{ago(signal) && <span>last signal {ago(signal)} ago</span>}</div></li> })}</ul>{hiddenCount > 0 && <p className="muted">and {hiddenCount} more document{hiddenCount === 1 ? '' : 's'} in flight</p>}</section>
+  return <section className="remops-work"><h3>In flight now <span>· {attempts.length} document{attempts.length === 1 ? '' : 's'}</span></h3><ul>{shown.map((a) => { const signal = now && a.progress_at ? (now - Date.parse(a.progress_at)) / 1000 : null; const trail = Array.isArray(a.trail) ? a.trail : []; return <li key={`${a.file}-${a.started_at || ''}`}><div className="remops-doc-head"><strong><span aria-hidden="true">●</span> <span className="fname">{a.file}</span></strong><span>{ago(a.elapsed_s) ? `in flight ${ago(a.elapsed_s)}` : ''}</span></div><div className="remops-trail"><span className="remops-done">✓ Opened</span>{trail.map((step, index) => <span className="remops-trail-step" key={`${step.label || step}-${index}`}><span aria-hidden="true">→</span><span className="remops-done">✓ {step.label || step}</span></span>)}<span aria-hidden="true">→</span><span className="remops-active">● {a.phase || 'Processing'}</span>{a.attempt > 1 && <span>attempt {a.attempt}</span>}{ago(signal) && <span>last signal {ago(signal)} ago</span>}</div></li> })}</ul>{hiddenCount > 0 && <p className="muted">and {hiddenCount} more document{hiddenCount === 1 ? '' : 's'} in flight</p>}</section>
 }
 
 function RetryNotice({ retryAt, now }) {
   const seconds = retrySeconds(retryAt, now)
   if (seconds === null) return null
   return <div className="remops-retry" role="status"><span aria-hidden="true">↻</span> Temporary issue · {seconds > 0 ? `retry in ${seconds}s` : 'retry due now'}</div>
+}
+
+function RecoveryNotice({ recovery = {} }) {
+  const reclaimed = Number(recovery.worker_reclaimed) || 0
+  const retries = Number(recovery.retry_scheduled) || 0
+  if (!reclaimed && !retries) return null
+  return <div className="remops-recovery" role="status">
+    {reclaimed > 0 && <span><b>{reclaimed} document{reclaimed === 1 ? '' : 's'} safely queued after a worker interruption.</b> No action is needed; ACP will resume the work.</span>}
+    {retries > 0 && <span><b>{retries} document{retries === 1 ? '' : 's'} waiting after a processing error.</b> The scheduled retry remains active.</span>}
+  </div>
 }
 
 function Milestones({ notices, onDismiss }) {
@@ -191,6 +201,7 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
     {suspect && <div className="remops-integrity" role="status"><b>{documentCountsSuspect ? 'Document status is temporarily inconsistent.' : 'Some supporting totals are catching up.'}</b> ACP cannot currently reconcile {(snapshot.integrity.affected || []).join(', ') || 'one or more values'}. {documentCountsSuspect ? 'Document counts below are the last ACP confirmed.' : 'Live document progress remains available.'}</div>}
     <ActivityPulse events={events} generatedAt={snapshot.generated_at} />
     <Milestones notices={milestones} onDismiss={(key) => setMilestones((current) => current.filter((notice) => notice.key !== key))} />
+    <RecoveryNotice recovery={snapshot.recovery} />
     <RetryNotice retryAt={snapshot.retry_at} now={clock} />
     <ProgressCue snapshot={snapshot} onViewMonitor={onViewMonitor} />
     <Progress snapshot={snapshot} suspect={documentCountsSuspect} />

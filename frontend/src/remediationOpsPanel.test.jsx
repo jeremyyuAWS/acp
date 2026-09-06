@@ -382,12 +382,15 @@ describe('the v2 live operations hierarchy', () => {
     expect(html).toContain('2 are actively processing')
   })
 
-  it('labels a reclaimed worker execution as resumed rather than a processing failure', () => {
-    const snapshot = { ...SNAP, active_attempts: [
-      { file: 'large.pdf', phase: 'verifying', attempt: 2, elapsed_s: 30 },
-    ] }
+  it('distinguishes an interrupted worker recovery from a processing-error retry', () => {
+    const snapshot = { ...SNAP, recovery: { worker_reclaimed: 2, retry_scheduled: 1 },
+      active_attempts: [{ file: 'large.pdf', phase: 'verifying', attempt: 2, elapsed_s: 30 }] }
     const html = render({ snapshot, connected: true, receivedAt: Date.now() })
-    expect(html).toContain('resumed attempt 2')
+    expect(html).toContain('2 documents safely queued after a worker interruption')
+    expect(html).toContain('No action is needed; ACP will resume the work')
+    expect(html).toContain('1 document waiting after a processing error')
+    expect(html).toContain('attempt 2')
+    expect(html).not.toContain('resumed attempt 2')
   })
 
   it('renders reconciled progress before pipeline, active work, throughput, activity, and exceptions', () => {

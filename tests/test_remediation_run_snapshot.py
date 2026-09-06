@@ -102,6 +102,14 @@ def test_a_lease_that_has_only_just_expired_is_still_processing():
         _job("x", "running", lease_expires_at=_iso(seconds=-5)), now=NOW)[0] == "processing"
 
 
+def test_a_reclaimed_worker_is_distinct_from_an_unclaimed_document_and_a_retry():
+    reclaimed = _job("x", "queued", attempts=1, phase="reclaimed")
+    assert rr.classify_document(reclaimed, now=NOW) == ("waiting", "worker_reclaimed")
+    snap = _snap([reclaimed])
+    assert snap["recovery"] == {"worker_reclaimed": 1, "retry_scheduled": 0,
+                                "attempts_exhausted": 0, "multi_attempt_active": 0}
+
+
 # ── run state ────────────────────────────────────────────────────────────────
 
 def test_a_queued_run_with_no_active_attempt_cannot_display_applying_fixes():
