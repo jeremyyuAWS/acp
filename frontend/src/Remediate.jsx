@@ -33,6 +33,7 @@ import QueuePanel from './QueuePanel.jsx'
 import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
 import RemediationOpsPanel from './RemediationOpsPanel.jsx'
 import RemediationWorkspaceTabs from './RemediationWorkspaceTabs.jsx'
+import AutomationPolicyControl from './AutomationPolicyControl.jsx'
 import './remediation-prior-results.css'
 import { deriveRemediateProcessingState } from './remediateProcessingState.js'
 import { groupFixesByRule, summarizeImpact, totalFixes, scOf } from './fixSummary.js'
@@ -100,6 +101,8 @@ function dbItemToUi(it, files) {
     file: it.file,
     scanId: it.scan_id,
     ruleId: it.rule_id,
+    rule_id: it.rule_id,
+    validated: !!it.validated,
     aiDraftable: AI_DRAFTABLE_SCS.has(sc),
     source: fileRec.sourceName,
     rule: `WCAG ${sc}${it.rule_name ? ' — ' + it.rule_name : ITEM_NAME[sc] ? ' — ' + ITEM_NAME[sc] : ''}`,
@@ -1611,6 +1614,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         primary={primary}
         readOnly={readOnly}
         onOpenRunDetails={() => setRunDetailsOpen((v) => !v)} />
+      <AutomationPolicyControl findings={reviewNeeds} runId={runId} />
       <RemediationWorkspaceTabs
         runId={runId}
         reviewCount={reviewCount}
