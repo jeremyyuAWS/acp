@@ -38,6 +38,13 @@ vi.mock('./acrApi', () => ({
   getAcrAudit: vi.fn(),
   getAcrPreview: (...a) => api.getAcrPreview(...a),
   getAcrGaps: (...a) => api.getAcrGaps(...a),
+  // The export tab checks the Word export's accessibility gate on open. This mock is NOT partial,
+  // so omitting these makes AcrWorkspace throw from inside an effect the moment that tab is
+  // opened — which reads as "says the draft export is not a VPAT" failing, rather than as a
+  // missing mock. The gate answers clean here; acrDocxDownload.test.jsx is where its states are
+  // the subject.
+  getAcrDocxGate: vi.fn(async () => ({ ok: true, failures: [], reviews: [] })),
+  downloadAcrDocx: vi.fn(),
   ingestAxe: vi.fn(),
   setAcrApplicability: vi.fn(),
   addAcrEvidence: vi.fn(),
