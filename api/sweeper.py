@@ -14,6 +14,9 @@ workers crash, are interrupted by deploys, or fail to finalise their scan runs:
                          scan_finalize was never enqueued get a fresh finalize job.
   5. Memory derivation — ADR 0021 §D: propose org_memory rows from mature HITL signal.
                          Runs at most once per ACP_MEMORY_DERIVE_INTERVAL_S (default 86400).
+  6. Event retention  — PRD "Remediation Real-Time Operations Panel" §22: keep resumable
+                        remediation events for 24 hours OR 10,000 per run, whichever is greater.
+                        Bounded per tick; see store.prune_scan_events.
 
 Typical use: call run_sweep(store) once per tick from a background thread or cron.
 The function is idempotent and safe to call concurrently — each sub-sweep uses
@@ -23,12 +26,15 @@ Environment variables:
   ACP_SWEEP_LEASE_S              — lease window for reclaim_stuck_jobs (default 600)
   ACP_SWEEP_GRACE_S              — orphan grace window for sweep_orphaned_scans (default 600)
   ACP_MEMORY_DERIVE_INTERVAL_S   — how often to run the derivation job (default 86400)
+  ACP_EVENT_PRUNE_INTERVAL_S     — how often to apply event retention (default 3600)
+  ACP_EVENT_PRUNE_MAX_RUNS       — scans visited per retention pass (default 200)
 """
 from __future__ import annotations
 import os
 import time
 
 _last_derive_run: float = 0.0
+_last_event_prune: float = 0.0
 
 
 def _int_env(name: str, default: int) -> int:
@@ -40,7 +46,8 @@ def _int_env(name: str, default: int) -> int:
 
 def run_sweep(store, *, lease_seconds: int | None = None,
               grace_seconds: int | None = None,
-              derive_interval_seconds: int | None = None) -> dict[str, int]:
+              derive_interval_seconds: int | None = None,
+              event_prune_interval_seconds: int | None = None) -> dict[str, int]:
     """Run all reconciliation checks once and return per-check counts.
 
     Parameters override the corresponding env vars when provided.
@@ -51,8 +58,9 @@ def run_sweep(store, *, lease_seconds: int | None = None,
       scans_interrupted  — scan_runs moved from 'running' → 'interrupted'
       scans_rescued      — scan_runs re-enqueued with a fresh scan_finalize job
       memory_proposed    — new org_memory rows written by the derivation job
+      events_pruned      — scan_events rows removed by the retention policy
     """
-    global _last_derive_run
+    global _last_derive_run, _last_event_prune
     lease_s = lease_seconds if lease_seconds is not None else _int_env("ACP_SWEEP_LEASE_S", 600)
     grace_s = grace_seconds if grace_seconds is not None else _int_env("ACP_SWEEP_GRACE_S", 600)
     derive_s = (derive_interval_seconds if derive_interval_seconds is not None
@@ -74,12 +82,29 @@ def run_sweep(store, *, lease_seconds: int | None = None,
             print(f"[sweeper] memory-derive error: {e}", flush=True)
         _last_derive_run = now
 
+    # PRD §22 retention. Hourly rather than per tick: the policy's finest grain is 24 hours, so a
+    # per-minute DELETE would spend writes proving nothing has aged out yet. Bounded per pass so
+    # one tick cannot walk an unbounded table, and never able to fail the sweep — a row kept too
+    # long is a cost, while an exception here would stop lease reclamation.
+    prune_s = (event_prune_interval_seconds if event_prune_interval_seconds is not None
+               else _int_env("ACP_EVENT_PRUNE_INTERVAL_S", 3600))
+    events_pruned = 0
+    now = time.monotonic()
+    if now - _last_event_prune >= prune_s:
+        try:
+            events_pruned = store.prune_scan_events(
+                max_runs=_int_env("ACP_EVENT_PRUNE_MAX_RUNS", 200))
+        except Exception as e:
+            print(f"[sweeper] event-retention error: {e}", flush=True)
+        _last_event_prune = now
+
     result = {
         "reclaimed": reclaimed,
         "exhausted_dead": exhausted,
         "scans_interrupted": interrupted,
         "scans_rescued": rescued,
         "memory_proposed": memory_proposed,
+        "events_pruned": events_pruned,
     }
     total = sum(result.values())
     if total:

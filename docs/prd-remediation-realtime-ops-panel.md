@@ -429,7 +429,9 @@ Where those documents describe what ACP may remediate and how workers process jo
 
 ## 20. Implementation status
 
-Phase 1 ("one truthful snapshot") is implemented. What exists, and where:
+Phase 1 ("one truthful snapshot") is implemented, and so is Phase 2's live-execution spine —
+resumable event IDs, snapshot reconciliation, retention, and a stream that stays open through
+delivery. What exists, and where:
 
 | Piece | Where |
 |---|---|
@@ -439,6 +441,13 @@ Phase 1 ("one truthful snapshot") is implemented. What exists, and where:
 | Client normalization + freshness (never run state) | `frontend/src/remediationSnapshot.js` |
 | Regions A, B, C and E | `frontend/src/RemediationOpsPanel.jsx` (+ `RemediationExceptions.jsx`), mounted in `Remediate.jsx` |
 | Contract tests for every invariant and precedence rule | `tests/test_remediation_run_snapshot.py`, `frontend/src/remediationOpsPanel.test.jsx` |
+| Resumable event IDs and reconcile-on-unhonourable-cursor (ADR 0051) | `routes/scans.py::_resume_plan` + `stream_remediation_status`; client cursor in `frontend/src/useRemediationRun.js` |
+| Structured event record — document, attempt, phase, timestamp, event ID, correlation ID (ADR 0052) | `scan_events.document` / `.correlation_id`, `store.append_scan_event`, `store.list_scan_events(document=…)` |
+| Material progress vs worker lease/heartbeat | `Store.MATERIAL_SCAN_EVENT_KINDS` / `LEASE_SCAN_EVENT_KINDS`, `store.latest_material_event_at`, `snapshot.progress` |
+| Event retention — §22's 24h **or** 10,000 per run | `store.prune_scan_events`, run hourly by `api/sweeper.py` |
+| Filename suppression on every read path | `routes/scans.py::_project_event`, `store.remediation_filename_privacy`, `remediation_run.document_ref` |
+| Stream stays open through delivery and reconciliation | `routes/scans.py::_stream_is_finished` |
+| Regression fixtures for all of the above | `tests/test_remediation_progress_events.py`, `tests/test_remediation_progress_wire.py`, `tests/test_remediation_stream_resume.py`, `frontend/src/remediationEventDocuments.test.js` |
 
 Deliberately NOT implemented, and why — each of these would be a fabricated answer rather than a
 missing feature:
@@ -453,6 +462,11 @@ missing feature:
   Per-format and per-lane calibration remains Phase 4 work once production history supports it.
 - **Phase-specific stall thresholds (§18)** collapse to one `STALL_AFTER_S`. Five invented
   thresholds are worse than one honest one until there is per-format evidence to set them from.
+  §22's *other* clause — stalled requires an expired or unhealthy lease as well as a stale
+  progress clock — IS implemented, because it needed no per-format evidence. It was unreachable
+  until the progress clock stopped counting heartbeats: while `latest_progress_at` was
+  `max(jobs.updated_at)` and `touch_job` rewrote that on every beat, the age could not exceed the
+  threshold and `stalled` could not be reached by any path. See ADR 0052.
 - **`paused` (§7)** is now DERIVED, and only from a durable hold (`store.remediation_run_hold`,
   written by `POST /scans/{sid}/remediation/pause`). The original rule is unchanged and is why
   this reads as it does: an idle queue with no hold row is still `waiting`. A run whose documents
@@ -460,8 +474,14 @@ missing feature:
   The pause defers UNCLAIMED jobs only; an attempt in flight runs to completion, and
   `remediation_exceptions.CONTROL_SPECS['pause']['scope']` is the sentence the panel shows so the
   limit is stated before the button is pressed rather than discovered afterwards.
-- **Resumable event IDs (§8)** are not implemented; the stream re-pushes a whole snapshot on
-  change and the client drops any frame whose `revision` went backwards.
+- **Region D** (live workstream cards) is Phase 2; the snapshot already carries `active_attempts`
+  for it. **Region E** (grouped exception routing) is implemented — see the seam table below.
+- **Resumable event IDs (§8)** ARE implemented (ADR 0051, extended by ADR 0052) — this entry used
+  to say they were not, and is corrected here rather than deleted, because a status list that
+  understates what shipped sends the next change to rebuild it. The stream still re-pushes the
+  whole snapshot on change and the client still drops any frame whose `revision` went backwards;
+  event frames are additive beside that, typed `remediation-event`, each carrying its `seq` as the
+  SSE `id:`. A client that ignores them behaves exactly as it did before resume existed.
 
 ---
 
@@ -476,11 +496,11 @@ already exists.
 | Surface | Where | What it still owes |
 |---|---|---|
 | Run state, counters, phases, invariants | `api/remediation_run.py` | Nothing for Phase 1. Phase 2 adds phase events as an input rather than deriving the rail from counts alone. |
-| Snapshot facts | `store.remediation_run_facts` | Batch-scoped and one-row-per-document already. §11's delivery-failure class is still *derived* from `remediated_at` + `drive_write_url` — which is the honest reading of two columns and needs no per-attempt outcome to be correct — but a delivery ATTEMPT is now a durable row (`remediation_delivery`, keyed by its idempotency key) carrying actor, destination, artifact digest and result. |
+| Snapshot facts | `store.remediation_run_facts` | Batch-scoped and one-row-per-document already. `latest_progress_at` now counts MATERIAL progress only and `latest_heartbeat_at` reports liveness beside it (ADR 0052) — it used to be `max(jobs.updated_at)`, which a lease heartbeat rewrites, so a wedged worker read as a progressing run. §11's delivery-failure class is still *derived* from `remediated_at` + `drive_write_url` — the honest reading of two columns, which needs no per-attempt outcome to be correct — but a delivery ATTEMPT is now a durable row (`remediation_delivery`, keyed by its idempotency key) carrying actor, destination, artifact digest and result. |
 | Exceptions and scoped recovery | `api/remediation_exceptions.py` (pure), `store.remediation_exception_facts`, `GET/POST /scans/{sid}/remediation/exceptions*` | The five groups of §6E, the refusal codes, the delivery-retry gate and the run controls. Owes per-lane policy labels (§6D's "deterministic / grouped approval / individual review"), which nothing records per document. |
 | Delivery-only retry | `api/remediation_delivery.py`, `handlers._deliver_corrected_copy` | SharePoint, OneDrive and Google Drive. Writes into the configured mirror folder, never in place over a source document. Owes an in-place replace lane, which is a destructive action and needs its own decision, not a retry button. |
 | Snapshot endpoint | `GET /scans/{sid}/remediation/snapshot` | Carries revision, state, reason, freshness thresholds and the reconciled partition. Owes `links` (currently always `{}`) and `policy_version` / `execution_mode`, which nothing records. |
-| Live updates | `GET /scans/{sid}/remediation/stream` | Owes resumable event IDs. It still closes when `in_flight` reaches zero, even though review, delivery and reconciliation may remain — the snapshot's own `completing` state exposes that gap but the stream does not stay open for it. |
+| Live updates | `GET /scans/{sid}/remediation/stream` | Nothing outstanding here. Resumable event IDs shipped (ADR 0051) and the close condition now reads the snapshot's own `completing` state rather than `in_flight` (ADR 0052) — it stays open through delivery and reconciliation, and deliberately does NOT stay open for `needs_attention`, where the wait is on a human and the client polls. |
 | Legacy status | `GET /scans/{sid}/remediation-status` | Unchanged and still feeding the progress bar. Its `fixes_applied` / `verified_documents` mislabelling is corrected in the snapshot, not in this endpoint; the two must not be mixed in one view. |
 | Activity | `activity.current(sid)` | One current line cannot represent parallel documents. Region D reads `snapshot.active_attempts` instead, which is already a list. |
 | Client | `remediationSnapshot.js`, `RemediationOpsPanel.jsx`, `RemediationExceptions.jsx` | Region E is served by its own endpoint and decides nothing locally. `RemediationRunProgress` still renders a serial "last fixed ‹file›" beside the panel — two accounts of one run, and the older one implies serial work. |
@@ -511,11 +531,21 @@ cite a decision rather than invent a number.
   `STALL_AFTER_S` stands — one honest threshold beats five invented ones.
 - **Event retention.** Retain resumable events for 24 hours or 10,000 events per run, whichever is
   greater. Terminal audit evidence follows the product retention policy and is not bounded by this.
+  *Implemented* — `store.prune_scan_events`, run hourly by the sweeper. "Whichever is greater"
+  means a row survives if it is inside EITHER window and is deleted only when outside both; read
+  the other way a busy run would lose its last hour on passing ten thousand events. A cursor older
+  than what survives gets `reconciliation-required`, which is what ADR 0051 wrote that branch for.
 - **Delivery retry.** Enable for SharePoint/OneDrive and Google Drive only, where destination
   identity and idempotency are durable. Blob and download-only outputs require explicit proof
   before activation.
 - **Filename privacy.** Show names to users already authorized for the scan; suppress them in
-  shared operational views and telemetry exports.
+  shared operational views and telemetry exports. *Implemented* — the cross-user Live Operations
+  projection never selects the document at all, and a deployment whose filenames are themselves
+  sensitive sets `remediation_filename_privacy = suppressed`, after which one projection
+  (`routes/scans.py::_project_event`) withholds the name on the stream AND on the polling
+  fallback, keeping a non-reversible per-run `document_ref` so §6D's parallel-document histories
+  still group and order. An unreadable policy suppresses: a disclosure cannot be un-sent, and a
+  withheld label can.
 - **Small-run estimates.** Hide estimates until at least five comparable documents complete. Runs
   smaller than five show phase progress only.
 - **Review prioritization.** Group first whenever a valid policy cluster exists; surface individual

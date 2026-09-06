@@ -20,9 +20,11 @@ import { addRemediationEvent } from './remediationEventFeed.js'
 // from the last event this browser actually rendered — across tabs, not just across a dropped
 // connection. Remediate.jsx consumes this rather than opening its own.
 //
-// THE POLL IS THE FALLBACK, NOT THE DEFAULT. The stream closes itself when the batch drains
-// (routes/scans.py ends it on `in_flight == 0`), and an idle or finished run has no stream at
-// all — so the snapshot is fetched once up front and then polled only while nothing is streaming.
+// THE POLL IS THE FALLBACK, NOT THE DEFAULT. The stream closes itself once the run is finished —
+// terminal AND with no corrected copy still awaiting delivery (routes/scans.py's
+// `_stream_is_finished`; it used to end on `in_flight == 0`, which closed while delivery and
+// final reconciliation were still outstanding). An idle or finished run has no stream at all, so
+// the snapshot is fetched once up front and then polled only while nothing is streaming.
 const IDLE_POLL_MS = 5000
 const RECONNECT_MS = 3000
 
@@ -129,9 +131,9 @@ export function useRemediationRun(runId) {
           if (!live) return
           setConnected(false)
           setEndedAt(Date.now())
-          // The batch drained, but review, delivery and evidence may not have. Poll on so the
-          // card keeps reconciling until the SNAPSHOT says the run is terminal — the stream's
-          // own close is about in-flight jobs, not about the run being finished.
+          // `done` is stronger than it was — the server holds the stream through delivery now —
+          // and the poll still starts, deliberately: review and evidence can outlive delivery,
+          // and the reconciled snapshot, not one frame, is what says the run is terminal.
           startPoll()
         },
         onError: () => {

@@ -202,6 +202,25 @@ def derive_throughput(completed_at: list, *, remaining: int,
 
 # ── per-document outcome ─────────────────────────────────────────────────────
 
+def document_ref(scan_id: str | None, document: str | None) -> str | None:
+    """A stable, non-reversible handle for one document within one run.
+
+    This is what keeps PRD §6D's per-document narrative working when §22's privacy policy
+    withholds the name. Grouping, ordering and de-duplication are all questions about DOCUMENT
+    IDENTITY, not about the filename — so the panel can keep three parallel documents apart, and
+    keep each one's history in order, while never being told what any of them is called.
+
+    Salted with the scan id so the same filename in two runs does not produce one handle: a
+    shared ref would let a viewer of one run correlate activity in another they cannot see.
+    Truncated to 12 hex characters — collision-irrelevant within a single run's document set, and
+    short enough to sit in a DOM id.
+    """
+    if not document:
+        return None
+    import hashlib
+    return hashlib.sha256(f"{scan_id or ''}\x00{document}".encode()).hexdigest()[:12]
+
+
 def classify_document(job: dict, *, now: _dt.datetime, review_pending: bool = False,
                       has_correction: bool = False, has_verified_fix: bool = False,
                       lease_grace_s: int = LEASE_GRACE_S) -> tuple[str, str]:
@@ -263,7 +282,8 @@ def classify_document(job: dict, *, now: _dt.datetime, review_pending: bool = Fa
 
 def _applicable_states(counters: dict, *, total: int, claimed_any: bool,
                        progress_age_s: float | None, retry_at, stall_after_s: int,
-                       corrected_pending_delivery: int) -> dict[str, str]:
+                       corrected_pending_delivery: int,
+                       lease_healthy: bool = False) -> dict[str, str]:
     """Which precedence states this run currently satisfies, mapped to their reason codes.
 
     Each predicate is an independently TRUE statement about the run, so precedence chooses
@@ -288,8 +308,20 @@ def _applicable_states(counters: dict, *, total: int, claimed_any: bool,
     # Stall is only claimable once SOMETHING was claimed. A queue nobody has picked up is
     # `waiting` — "no compatible processing slot is currently active" — and calling that stalled
     # would report a capacity fact as a fault.
-    if non_terminal > 0 and claimed_any and progress_age_s is not None \
-            and progress_age_s > stall_after_s:
+    #
+    # AND it needs an unhealthy lease, which is PRD §22's decision stated exactly: "declare
+    # stalled after two further missed heartbeats AND an expired or unhealthy attempt lease".
+    # The second half only became necessary when the first half became true: while a heartbeat
+    # refreshed `latest_progress_at` the age could never exceed the threshold, so the lease gate
+    # would have been unreachable code. Now that progress means MATERIAL progress, a document
+    # that is genuinely slow — a large PDF mid-render, one honest attempt, a live lease — would
+    # be called stalled without it, and "Progress has stopped" about work that has not stopped is
+    # the same class of false statement this panel exists to remove.
+    #
+    # `progress_age_s is None` stays unclaimable in either direction: an unknown age is not a
+    # stall and is not health, so no predicate may be built on it.
+    if non_terminal > 0 and claimed_any and not lease_healthy \
+            and progress_age_s is not None and progress_age_s > stall_after_s:
         out["stalled"] = "no_progress_within_threshold"
 
     if review > 0:
@@ -324,7 +356,8 @@ def derive_run_state(counters: dict, *, total: int, claimed_any: bool = False,
                      progress_age_s: float | None = None, retry_at=None,
                      cancel_requested: bool = False, cancelled: bool = False,
                      paused: bool = False, corrected_pending_delivery: int = 0,
-                     stall_after_s: int = STALL_AFTER_S) -> dict:
+                     stall_after_s: int = STALL_AFTER_S,
+                     lease_healthy: bool = False) -> dict:
     """The run's single displayed state, its reason code, and the states it also satisfies.
 
     Cancellation overrides normal processing states (PRD §7); everything else resolves through
@@ -350,7 +383,8 @@ def derive_run_state(counters: dict, *, total: int, claimed_any: bool = False,
     applicable = _applicable_states(
         counters, total=total, claimed_any=claimed_any, progress_age_s=progress_age_s,
         retry_at=retry_at, stall_after_s=stall_after_s,
-        corrected_pending_delivery=corrected_pending_delivery)
+        corrected_pending_delivery=corrected_pending_delivery,
+        lease_healthy=lease_healthy)
 
     if paused and counters["processing"] + counters["waiting"] > 0:
         return {"state": "paused", "reason": "held_by_operator", "also": sorted(applicable)}
@@ -614,11 +648,17 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
     retry_at = min(retry_candidates) if retry_candidates else None
     progress_age = _age_s(facts.get("latest_progress_at"), now)
 
+    # An attempt is holding a live lease. PRD §22 requires this before the run may be called
+    # stalled — see _applicable_states. Derived from the attempts already classified above rather
+    # than re-read, so the state and the attempt list cannot disagree about the same leases.
+    lease_healthy = any(a.get("lease_valid") for a in active)
+
     resolved = derive_run_state(
         counters, total=total, claimed_any=claimed_any, progress_age_s=progress_age,
         retry_at=retry_at, cancel_requested=bool(facts.get("cancel_requested")),
         cancelled=bool(facts.get("cancelled")), paused=bool(facts.get("paused")),
-        corrected_pending_delivery=pending_delivery, stall_after_s=stall_after_s)
+        corrected_pending_delivery=pending_delivery, stall_after_s=stall_after_s,
+        lease_healthy=lease_healthy)
     state = resolved["state"]
 
     applied = int(facts.get("fixes_applied") or 0)
@@ -671,6 +711,19 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
         "active_attempts": active,
         "retry_at": retry_at.isoformat() if retry_at else None,
         "latest_progress_at": facts.get("latest_progress_at") or None,
+        # PROGRESS AND LIVENESS ARE DIFFERENT FACTS AND ARE NAMED APART (PRD §22, ADR 0052).
+        # `material` is the newest durable evidence the run MOVED; `heartbeat` is the newest
+        # evidence a worker is BREATHING. They used to be the same number, which is how a wedged
+        # worker rendered as a progressing run. `age_s` is None when the corresponding stamp is
+        # unknown — never 0, which would assert the event happened just now.
+        "progress": {
+            "material_at": facts.get("latest_progress_at") or None,
+            "material_age_s": progress_age,
+            "material_event_at": facts.get("latest_material_event_at") or None,
+            "heartbeat_at": facts.get("latest_heartbeat_at") or None,
+            "heartbeat_age_s": _age_s(facts.get("latest_heartbeat_at"), now),
+            "lease_healthy": lease_healthy,
+        },
         # How old the newest durable progress event may get before the CLIENT calls the panel
         # delayed, and before this server calls the run stalled. Sent rather than hardcoded in
         # the browser so both ends move together.

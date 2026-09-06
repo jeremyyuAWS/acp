@@ -473,4 +473,6 @@ def test_the_lifecycle_event_for_an_action_omits_the_actor_from_the_shared_log(g
               if e["kind"] == "remediate.delivery_retry_requested"]
     assert events, "no lifecycle event for the retry"
     assert "actor" not in (events[0]["detail"] or {})
-    assert (events[0]["detail"] or {}).get("file") == DOC
+    # The document is the structured COLUMN (ADR 0052), not a detail key.
+    assert events[0]["document"] == DOC
+    assert "file" not in (events[0]["detail"] or {})
