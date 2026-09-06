@@ -101,10 +101,15 @@ REQUIREMENT_SET_NAMES = {
 #
 # `_RENDERABLE` is the half that is easy to forget and expensive to get wrong. A set belongs here
 # only once acr_export_preview knows how to project its rows into the document — for WCAG that is
-# the criteria table, for Section 508 the per-chapter tables `_section_508` builds. EN 301 549 is
-# absent because nothing renders a clause-organised EU report yet, and it stays absent until
-# something does, however complete its catalog becomes.
-_RENDERABLE: frozenset[str] = frozenset({REQ_WCAG, REQ_SECTION_508})
+# the criteria table, for Section 508 and EN 301 549 the per-division tables `_grouped_section`
+# builds and both the HTML and Word renderers print.
+#
+# EN 301 549 IS RENDERABLE AND STILL NOT OFFERED, which is the conjunction doing its job rather
+# than a contradiction: `config/en-301-549.json` holds no requirements, so `_catalog_populated`
+# answers False and the EU and INT editions stay refused. Building the renderer first was
+# deliberate — it depends on no licensing answer, and it means the day the requirement text lands
+# the edition opens with no renderer written under time pressure.
+_RENDERABLE: frozenset[str] = frozenset({REQ_WCAG, REQ_SECTION_508, REQ_EN_301_549})
 
 
 def _catalog_path(requirement_set: str) -> Path | None:
@@ -412,5 +417,15 @@ def build_matrix(report_id: str, edition: str | None = None) -> list[dict]:
         for row in _load_508()["requirements"]:
             r = _blank_row(report_id, row["num"], row["name"], REQ_SECTION_508)
             r["chapter"] = row["chapter"]
+            rows.append(r)
+    if REQ_EN_301_549 in required:
+        # `chapter` carries the CLAUSE here, and one column is right rather than two. The field
+        # means "the top-level division of the requirement set this row belongs to" — a chapter in
+        # 36 CFR 1194, a clause in EN 301 549 — and acr_export_preview groups on it either way. A
+        # second nullable column would be one more thing every renderer had to know about, for a
+        # distinction only the heading label expresses.
+        for row in _load_en()["requirements"]:
+            r = _blank_row(report_id, row["num"], row["name"], REQ_EN_301_549)
+            r["chapter"] = row.get("clause")
             rows.append(r)
     return rows

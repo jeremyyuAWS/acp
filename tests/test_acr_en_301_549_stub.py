@@ -16,10 +16,14 @@ question for counsel rather than engineering. Saying "the source cannot be obtai
 false, and the stub says so in `_meta.source_reachable` rather than implying otherwise.
 
 THE RULE THIS FILE MOSTLY EXISTS FOR. A requirement set is available only when it is BOTH populated
-and renderable. An empty catalog reads as nothing to offer, so committing this file changes no
-behaviour — and a POPULATED one still would not open the EU edition on its own, because nothing
-renders a clause-organised EU report yet. That is 6.3's lesson written into code instead of a
-comment.
+and renderable — 6.3's lesson written into code instead of a comment. An empty catalog reads as
+nothing to offer, so this file changes no behaviour.
+
+THE RENDERER LANDED FIRST, and the tests below say so rather than describing the older state. EN
+301 549 is in `_RENDERABLE` now: the projection groups its clauses and both the HTML and Word
+renderers print them. The EU edition is still refused, because the catalog holds nothing — which
+is the conjunction working, not a contradiction. What remains for 6.4 is exactly one thing, the
+requirement text.
 """
 from __future__ import annotations
 
@@ -62,9 +66,11 @@ def test_the_stub_records_the_row_shape_it_will_be_filled_with():
     """So the eventual parse has a target, and so the renderer can be written against something."""
     shape = acr_catalog.en_301_549_meta()["row_shape"]
     assert set(shape) == {"num", "name", "clause", "kind"}
-    clauses = acr_catalog.en_301_549_meta()["reportable_clauses"]
-    assert clauses["9"] == "Web"
-    assert clauses["11"] == "Software"
+    # The clause map mirrors config/section-508.json's `_meta.chapters` shape exactly — {num:
+    # {"name": ...}} — so acr_export_preview._catalog_division_names reads both with one function.
+    clauses = acr_catalog.en_301_549_meta()["clauses"]
+    assert clauses["9"]["name"] == "Web"
+    assert clauses["11"]["name"] == "Software"
 
 
 def test_the_eu_and_int_editions_are_still_refused():
@@ -99,9 +105,10 @@ def test_an_empty_catalog_and_an_absent_one_are_the_same_answer(tmp_path, monkey
 def test_populating_the_catalog_is_not_enough_on_its_own(tmp_path, monkeypatch):
     """6.3's lesson, enforced rather than remembered.
 
-    Land EN 301 549's requirements tomorrow and the EU edition still must not be offered, because
-    nothing renders a clause-organised EU report. A populated catalog with no renderer produces a
-    document naming a standard it does not print — #1532's defect, arriving by a third route.
+    A populated catalog with no renderer produces a document naming a standard it does not print —
+    #1532's defect, arriving by a third route. EN 301 549 is renderable NOW, so the unrenderable
+    half of the conjunction is demonstrated by taking it back out: the rule has to keep refusing a
+    set the exports cannot lay out, whichever set that happens to be.
     """
     filled = tmp_path / "en.json"
     filled.write_text(json.dumps({
@@ -110,22 +117,34 @@ def test_populating_the_catalog_is_not_enough_on_its_own(tmp_path, monkeypatch):
                           "kind": "requirement"}],
     }), encoding="utf-8")
     monkeypatch.setattr(acr_catalog, "_EN_301_549_PATH", filled)
+    monkeypatch.setattr(acr_catalog, "_RENDERABLE", frozenset(
+        {acr_catalog.REQ_WCAG, acr_catalog.REQ_SECTION_508}))
     acr_catalog._load_en.cache_clear()
 
     assert acr_catalog._catalog_populated(acr_catalog.REQ_EN_301_549) is True
-    assert acr_catalog.REQ_EN_301_549 not in acr_catalog._RENDERABLE
     assert acr_catalog.REQ_EN_301_549 not in acr_catalog.requirement_sets_available()
     assert acr_catalog.offerable_editions() == [
         acr_catalog.EDITION_WCAG, acr_catalog.EDITION_508]
     acr_catalog._load_en.cache_clear()
 
 
+def test_the_renderer_landed_before_the_content_and_the_gate_still_holds():
+    """The state this slice leaves the repo in, asserted so it cannot be mistaken for the other
+    ordering. EN 301 549 IS renderable — the projection and both renderers lay out its clauses —
+    and the EU edition is still refused, because the catalog holds nothing. Renderer first was
+    deliberate: it depends on no licensing answer, so the day the text lands the edition opens
+    without a renderer being written under time pressure."""
+    assert acr_catalog.REQ_EN_301_549 in acr_catalog._RENDERABLE
+    assert acr_catalog._catalog_populated(acr_catalog.REQ_EN_301_549) is False
+    assert acr_catalog.REQ_EN_301_549 not in acr_catalog.requirement_sets_available()
+
+
 def test_the_edition_opens_only_when_both_halves_are_there(tmp_path, monkeypatch):
     """The other direction, so the rule is shown to be a conjunction and not a way of saying no.
 
-    With the catalog populated AND the set declared renderable, the EU edition becomes offerable
-    and build_matrix emits its rows — which is the whole of 6.4 minus the two things that are
-    genuinely outstanding: the requirement text, and a projection that lays it out.
+    With the catalog populated — the set is already renderable — the EU edition becomes offerable
+    and build_matrix emits its rows. This test is what will pass unchanged on the day the
+    requirement text lands, which is the one thing 6.4 still needs.
     """
     filled = tmp_path / "en.json"
     filled.write_text(json.dumps({
@@ -136,8 +155,6 @@ def test_the_edition_opens_only_when_both_halves_are_there(tmp_path, monkeypatch
                           "kind": "requirement"}],
     }), encoding="utf-8")
     monkeypatch.setattr(acr_catalog, "_EN_301_549_PATH", filled)
-    monkeypatch.setattr(acr_catalog, "_RENDERABLE", frozenset(
-        {acr_catalog.REQ_WCAG, acr_catalog.REQ_SECTION_508, acr_catalog.REQ_EN_301_549}))
     acr_catalog._load_en.cache_clear()
 
     assert acr_catalog.REQ_EN_301_549 in acr_catalog.requirement_sets_available()
