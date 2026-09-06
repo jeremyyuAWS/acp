@@ -1,20 +1,22 @@
-"""Local-model AI layer for ACP.
+"""AI layer for ACP.
 
-Calls a locally-running Ollama instance (its native /api HTTP endpoint) to
-generate human-readable explanations and fix examples for WCAG findings. No
-commercial-LLM SDK or API key is used anywhere — the only backend is the local
-Ollama model; the layer degrades to deterministic prose when it is unreachable.
+Text backend: delegates to providers.claude_text_generate() (cloud path, when a key is
+configured) then falls back to the locally-running Ollama instance on any failure or
+when no key is set — callers never break and never need a key for the keyless local path.
 
-Config (env vars):
-  OLLAMA_BASE_URL      — default http://localhost:11434
-  OLLAMA_MODEL         — default llama3.2 (text: explain / suggest / digest)
-  OLLAMA_VISION_MODEL  — default moondream (vision: genuine alt text from image bytes)
+Vision backend: uses providers.active_vision_provider(), which selects a cloud vision
+adapter when one is configured, otherwise falls back to Ollama.
+
+Config (env vars — cloud key and model name are consumed by providers.py):
+  CLAUDE_TEXT_MODEL    — default claude-haiku-4-5 (text: suggest / simplify)
+  OLLAMA_BASE_URL      — default http://localhost:11434 (Ollama fallback)
+  OLLAMA_MODEL         — default llama3.2 (text fallback)
+  OLLAMA_VISION_MODEL  — default moondream (vision fallback)
   OLLAMA_VISION_TIMEOUT— default 120s (CPU vision inference is heavier than text)
 
-Fails gracefully: every public function returns None (deterministic prose for the
-digest) when Ollama is unreachable — callers never break and never need a key. The
-vision path (describe_image) is the same: unavailable → None, and callers fall back
-to a faithful source or human review.
+The cloud provider key rides only in the x-api-key request header (managed by
+providers.py); it is never stored, logged, returned in a response, or written to any
+database row.
 """
 from __future__ import annotations
 import os
@@ -88,6 +90,9 @@ def provenance() -> dict:
     """
     from urllib.parse import urlparse
     import providers as _providers  # lazy, like _vision_generate — no import-time cycle
+    _tp = _providers.text_provider_provenance()
+    if _tp is not None:
+        return {**_tp, "vision_model": OLLAMA_VISION_MODEL}
     host = (urlparse(OLLAMA_BASE_URL).hostname or "").lower()
     return {
         "provider": "ollama",
@@ -1193,6 +1198,33 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
     prompt = _suggest_prompt(rule_id, rule_name, filename, detail, guidance)
     import time as _t
     _t0 = _t.monotonic()
+    # Try the cloud text provider when configured — zero-configuration fallback to Ollama.
+    import providers as _prov
+    _cr = _prov.claude_text_generate(prompt, temperature=0.4, max_tokens=800)
+    if _cr is not None:
+        text = _cr["text"].strip().strip('"').strip()
+        if text:
+            _trace_ai("suggest", prompt, text, _t0, ok=True,
+                      provider=_cr["provider"], zone=_cr["zone"], model=_cr["model"],
+                      prompt_tokens=_cr["prompt_tokens"],
+                      completion_tokens=_cr["completion_tokens"],
+                      cost_usd=_cr["cost_usd"], temperature=0.4,
+                      prompt_version="suggest-v1")
+            kind = _SUGGEST_KIND.get(rule_id, ("fix", ""))[0]
+            out = {"suggestion": text, "kind": kind,
+                   "is_template": rule_id == "1.1.1", "model": _cr["model"],
+                   "provider": _cr["provider"], "processing_zone": _cr["zone"],
+                   "cost_usd": _cr["cost_usd"]}
+            if out["is_template"]:
+                out["reason"] = (
+                    "Template only — no vision model is available to look at this image. "
+                    "Rewrite it before approving."
+                    if image_bytes else
+                    "Template only — this text model cannot see the image, so it guessed from the "
+                    "filename. Pick the image above and draft again, or write the value yourself."
+                )
+            return out
+    # Cloud provider unavailable or not configured — fall back to Ollama.
     try:
         import httpx
         r = httpx.post(
