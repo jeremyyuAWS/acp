@@ -6,8 +6,8 @@ import os
 from fastapi import APIRouter, Header, HTTPException, Request
 
 from realtime_events import owner_scope
-from realtime_gateway.app import event_stream_response
-from realtime_gateway.store import RedisEventStore
+from realtime_event_store import RedisEventStore
+from realtime_stream import event_stream_response
 import core
 
 
@@ -18,7 +18,7 @@ def _enabled() -> bool:
     return os.getenv("ACP_REALTIME_V1_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _store() -> RedisEventStore:
+def _store():
     import redis.asyncio as redis
     url = (os.getenv("ACP_REALTIME_V1_REDIS_URL") or os.getenv("REDIS_URL") or "").strip()
     if not url:
