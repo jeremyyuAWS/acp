@@ -75,6 +75,7 @@ import AcrWorkspace from './AcrWorkspace.jsx'
 import AccessRestricted from './AccessRestricted.jsx'
 import { visibleTabs, isVisible, canOperate, firstPermittedTab, canOpenSettings } from './access.js'
 import { handleWorkflowTabKeyDown } from './workflowTabs.js'
+import { narrowScanDefaultContext, pickDefaultScan } from './defaultScan.js'
 
 // Self-scan overlay: on in dev, or on the deployed demo via ?a11y
 const SHOW_A11Y = import.meta.env.DEV || (typeof location !== 'undefined' && new URLSearchParams(location.search).has('a11y'))
@@ -1111,10 +1112,10 @@ export default function App() {
 
   const switchScan = async (id) => {
     if (id === scan?.run?.id) return
-    // "Going to the latest" clears the explicit flag; picking any older scan sets it.
-    // scanList[0] is the newest completed scan — if the list isn't loaded yet, treat
+    // "Going to the workspace default" clears the explicit flag; picking any other scan sets it.
+    // The default may deliberately be older than a narrow newest scan. If the list isn't loaded, treat
     // every switch as forward (non-explicit) so the banner stays quiet on init.
-    setExplicitTimeTravel(scanList.length > 0 && id !== scanList[0].id)
+    setExplicitTimeTravel(scanList.length > 0 && id !== pickDefaultScan(scanList)?.id)
     setScanLoading(true)
     try {
       setScan(await getScan(id))
@@ -1692,7 +1693,10 @@ export default function App() {
   // Remediate/Publish/Monitor, so a freshly-discovered estate came up locked.
   // Requiring membership in scanList is what makes this mean "a past scan" — completed_at is
   // then guaranteed present, since that is exactly what listScans() filters on.
-  const isTimeTravel = !!(run && scanList.some((s) => s.id === run.id) && scanList[0]?.id !== run.id)
+  const defaultScanId = pickDefaultScan(scanList)?.id
+  const isTimeTravel = !!(run && scanList.some((s) => s.id === run.id) && defaultScanId !== run.id)
+  const narrowDefault = !explicitTimeTravel ? narrowScanDefaultContext(scanList, run?.id) : null
+  const showScanHistoryBanner = isTimeTravel || !!narrowDefault
 
 
   return (
@@ -2039,7 +2043,7 @@ export default function App() {
           )}
       </div>
 
-      {isTimeTravel && (
+      {showScanHistoryBanner && (
         <div className="ttbanner" role="status">
           {explicitTimeTravel ? (
             <>
@@ -2048,10 +2052,14 @@ export default function App() {
                   render as a bold empty span followed by a bare period. */}
               <span style={{ fontSize: 13.5 }}>🕐 <b>Scan History replay</b> — viewing {scanWorkflowContext(run) ? <><b>{scanWorkflowContext(run)}</b> from </> : 'the scan from '}<b>{fmtStamp(run.completed_at) ?? 'an earlier scan'}</b>{run.avg_score != null ? ` · ${run.avg_score}/100` : ''}. Every tab, the dashboard and your saved decisions reflect this past scan.</span>
             </>
+          ) : narrowDefault ? (
+            <span style={{ fontSize: 13.5 }}>✓ <b>Narrow scan saved without replacing your workspace</b> — the newer run contains <b>{narrowDefault.newestFiles} documents</b>, compared with <b>{narrowDefault.referenceFiles}</b> in the full scan ACP kept as your default. Both remain in Scan History.</span>
           ) : (
             <span style={{ fontSize: 13.5 }}>✨ <b>New scan available</b> from <b>{fmtStamp(scanList[0]?.completed_at) ?? 'just now'}</b> — a more recent scan finished while you were reviewing this one.</span>
           )}
-          <button className="ttexit" onClick={() => switchScan(scanList[0].id)}>↩ Switch to latest</button>
+          <button className="ttexit" onClick={() => switchScan(scanList[0].id)}>
+            {narrowDefault ? 'View narrow scan' : '↩ Switch to latest'}
+          </button>
         </div>
       )}
 
