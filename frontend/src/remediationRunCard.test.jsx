@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createElement } from 'react'
+import { act, createElement } from 'react'
+import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import RemediationRunCard from './RemediationRunCard.jsx'
 import { progressBar, etaGate, runHeadline, shouldShowCard, SEGMENTS,
@@ -225,6 +226,33 @@ describe('corrected copies and verified documents stay distinct', () => {
     // Never a bare, unit-less "Verified" — it was read as documents on one line and fixes on the
     // next, from the same number.
     expect(html).not.toMatch(/>Verified</)
+  })
+
+  it('adds deltas only to positive progress when a live snapshot advances', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const props = { receivedAt: Date.now(), connected: true }
+    await act(async () => { root.render(createElement(RemediationRunCard, { ...props, snapshot: SNAP })) })
+    expect(host.textContent).toContain('12 of 20 documents processed')
+    expect(host.querySelectorAll('.livecounter-delta')).toHaveLength(0)
+
+    const next = {
+      ...SNAP,
+      revision: SNAP.revision + 1,
+      documents: { ...SNAP.documents, completed: 10, processing: 2, waiting: 4 },
+      fixes: { ...SNAP.fixes, applied: 30, verified: 24, documents_verified: 10 },
+      delivery: { ...SNAP.delivery, delivered: 9, pending: 2 },
+    }
+    await act(async () => { root.render(createElement(RemediationRunCard, { ...props, snapshot: next })) })
+
+    const deltas = [...host.querySelectorAll('.livecounter-delta')].map((node) => node.textContent)
+    expect(deltas).toEqual(expect.arrayContaining(['+2', '+4', '+3']))
+    const pending = [...host.querySelectorAll('dt')]
+      .find((node) => node.textContent === 'Pending delivery')?.nextElementSibling
+    expect(pending?.querySelector('.livecounter')).toBeFalsy()
+    await act(async () => { root.unmount() })
+    host.remove()
   })
 })
 

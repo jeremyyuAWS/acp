@@ -224,10 +224,16 @@ def test_an_override_below_the_floor_is_still_clamped():
 # The worker services now carry an explicit pool ceiling of three connections per replica.
 # That is independent of ACP_WORKERS and is part of the reviewed baseline below.
 
-# Verified: deploy/public/rightsize-production.sh.
+# Verified: deploy/public/rightsize-production.sh. The guard at the bottom of this file re-checks
+# that on every run, and it is what caught the 2026-09-06 discovery change — the script moved and
+# every number in this section had to be recomputed rather than the constant edited to match.
+#
+# Discovery's ceiling of 6 is set BY THE OVERLAP FIGURE BELOW, not by steady state. Production was
+# found running 4-8, which is 138 during a rollout and 153 with the reserve — over the 150 the
+# server has. 6 is the largest ceiling that survives a deploy.
 RIGHTSIZE_REPLICAS = {
     "acp-app": (1, 3),
-    "acp-discovery": (1, 2),
+    "acp-discovery": (4, 6),
     "acp-assess": (5, 5),
     "acp-remediate": (5, 10),
 }
@@ -254,14 +260,14 @@ def deployed_tiers(worker_threads: int, *, worker_override=None, api_override=No
 def test_explicit_worker_pools_keep_autoscaled_fleet_under_server_budget(threads):
     steady = fleet_ceiling_tiers(
         deployed_tiers(threads, worker_override=WORKER_DB_POOL), overlap=False)
-    assert steady == 82
+    assert steady == 90
     assert steady + RESERVE_PROD <= PROD_LIMIT
 
 
 def test_autoscaled_fleet_fits_during_revision_overlap():
     overlap = fleet_ceiling_tiers(
         deployed_tiers(2, worker_override=WORKER_DB_POOL), overlap=True)
-    assert overlap == 120
+    assert overlap == 134
     assert overlap + RESERVE_PROD <= PROD_LIMIT
 
 
@@ -291,7 +297,7 @@ def test_cutting_to_four_does_not_fit_even_with_the_proposed_pool_override():
     cut = deployed_tiers(12, worker_override=12, api_override=12,
                          assess_range=(1, 4), remediate_range=(1, 4))
     steady = fleet_ceiling_tiers(cut, overlap=False)
-    assert steady == 156
+    assert steady == 204
     assert steady + RESERVE_PROD > PROD_LIMIT
 
 

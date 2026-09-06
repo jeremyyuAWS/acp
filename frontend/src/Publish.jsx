@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import ScopeBanner from './ScopeBanner.jsx'
 import { documentSelection, documentScopeSentence } from './remediableScope.js'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
-import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseManifest, listHitlQueue, getSettings, getSourceStatus, rescoreFile } from './api.js'
+import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseManifest, listHitlQueue, getSettings, getSourceStatus, rescoreFile, downloadRemediated } from './api.js'
 import { releaseDestination, releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
 import { SET_STATUS, certificationUniverse, releaseSetStatus } from './graduation.js'
 import { mirrorState, MIRROR } from './deliveryPolicy.js'
@@ -32,6 +32,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [releaseAnnouncement, setReleaseAnnouncement] = useState('')
   const [manifestError, setManifestError] = useState('')
   const [publishing, setPublishing] = useState(false)
+  const [downloading, setDownloading] = useState(false)
+  const [builderOpen, setBuilderOpen] = useState(false)
+  const [deliveryMethod, setDeliveryMethod] = useState('publish')
+  const [selectedFiles, setSelectedFiles] = useState(() => new Set())
   const [sel, setSel] = useState(null)
   // Why is the publish queue empty? A remediated file only becomes certifiable once its
   // human-review findings are approved. Fetch the pending HITL queue so the empty state can
@@ -90,6 +94,18 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   }, [run?.id, ready.length])
   const srcOf = (f) => srcStatus.byFile[f.file]?.state
   const staleReady = ready.filter((f) => !done[f.file] && srcOf(f) === 'stale')
+  const selectableReady = ready.filter((f) => !done[f.file] && srcOf(f) !== 'stale')
+  const selectedReady = selectableReady.filter((f) => selectedFiles.has(f.file))
+  useEffect(() => {
+    setSelectedFiles((old) => {
+      const eligible = new Set(selectableReady.map((f) => f.file))
+      if (old.size === 0) return eligible
+      const next = new Set([...old].filter((file) => eligible.has(file)))
+      return next.size ? next : eligible
+    })
+    // Source freshness and release completion can change the eligible set.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [run?.id, ready.length, srcStatus.stale, Object.keys(done).length])
   const rescanBusy = Object.keys(rescanning).length > 0
   const rescanStale = async () => {
     const targets = staleReady.map((f) => f.file)
@@ -198,10 +214,11 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       if (successful.some((row) => row.file === file)) onPublish?.(file)
     } catch { setReleaseAnnouncement('Release failed. The original file is unchanged; retry when the connection is available.') }
   }
-  const publishAll = async () => {
+  const publishAll = async (fileNames = null) => {
     if (publishing) return
     setPublishing(true)
-    const pending = ready.filter((f) => !done[f.file]).map((f) => f.file)
+    const requested = fileNames ? new Set(fileNames) : null
+    const pending = ready.filter((f) => !done[f.file] && (!requested || requested.has(f.file))).map((f) => f.file)
     try {
       const res = await publishAllFiles(run?.id, pending)
       const successful = rememberRelease(res, pending)
@@ -215,6 +232,18 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       successful.forEach((row) => onPublish?.(row.file))
     } catch { /* best-effort */ }
     setPublishing(false)
+  }
+  const downloadSelected = async () => {
+    if (downloading || !selectedReady.length) return
+    setDownloading(true)
+    let failed = 0
+    for (const file of selectedReady) {
+      try { await downloadRemediated(run?.id, file.file) } catch { failed += 1 }
+    }
+    setReleaseAnnouncement(failed
+      ? `${selectedReady.length - failed} corrected files downloaded; ${failed} could not be downloaded.`
+      : `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file' : 'files'} downloaded.`)
+    setDownloading(false)
   }
   // W5 — set-level certification status (graduation.js). A release can go out CONDITIONALLY while
   // some in-scope documents are still held; once those held documents are remediated (each is
@@ -293,6 +322,25 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           a report could be read as covering an estate that two documents of it were fixed in. */}
       <ScopeBanner run={run} fileCount={files.length}
                    docScope={documentScopeSentence(documentSelection(files, triage))} />
+      <section className="panel release-overview" aria-labelledby="release-title">
+        <div className="release-overview__heading">
+          <div>
+            <h2 id="release-title" style={{ margin: 0 }}>Release</h2>
+            <p className="muted" style={{ margin: '5px 0 0' }}>Deliver verified, remediated copies without changing the originals.</p>
+          </div>
+          <div className="release-overview__actions">
+            <button className="ghost" onClick={() => run?.id && openReport(run.id)}>Download report</button>
+            <button className="qbtn approve" disabled={!selectableReady.length} onClick={() => setBuilderOpen(true)}>Start a release</button>
+          </div>
+        </div>
+        <div className="release-metrics" aria-label="Release status overview">
+          <div><b>{selectableReady.length}</b><span>Ready</span></div>
+          <div><b>{pendingReview.files}</b><span>Need review</span></div>
+          <div className={staleReady.length ? 'release-metric--warn' : ''}><b>{staleReady.length}</b><span>Source changed</span></div>
+          <div><b>{pubStarted ? publishedCount : 0}</b><span>Released</span></div>
+          <div className={failedCount ? 'release-metric--warn' : ''}><b>{failedCount}</b><span>Failed</span></div>
+        </div>
+      </section>
       {/* Release Center — the controlled-release summary. NOT a conformance certificate: ACP's
           automated checks verify WITHIN the selected scope; they cannot certify overall WCAG
           conformance. The estate score and "certifiable/conformant" language are gone for exactly
@@ -378,13 +426,15 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           real settings, not a selector for a behaviour ACP can't perform. There is one policy:
           write a corrected COPY; the original is never overwritten. The explainer says plainly why
           replace-in-place isn't on offer. */}
-      <section className="panel" style={{ borderLeft: '3px solid var(--info-fg)' }}>
+      <details className="panel" style={{ borderLeft: '3px solid var(--info-fg)' }}>
+        <summary style={{ cursor: 'pointer' }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
           <b style={{ fontSize: 13.5 }}>Release policy</b>
           <span style={{ fontSize: 13 }}>
             <span aria-hidden="true" style={{ color: 'var(--info-fg)' }}>●</span> Remediated copy → {releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}
           </span>
         </div>
+        </summary>
         <div className="muted" style={{ fontSize: 12.5, marginTop: 6, lineHeight: 1.6 }}>
           The source file is <b>never overwritten</b>. ACP verifies the criteria in scope — it does not certify overall WCAG conformance.
         </div>
@@ -394,7 +444,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
             Replacing the source file in place is not part of Release. ACP writes corrected copies to a separate timestamped location in Google Drive or each source SharePoint library, which is why your originals are never modified.
           </div>
         </details>
-      </section>
+      </details>
 
       <details className="panel">
         <summary style={{ cursor: 'pointer', fontWeight: 600, listStyle: 'revert' }}>What “release” does <span className="muted" style={{ fontWeight: 400 }}>· what happens to every verified document</span></summary>
@@ -408,8 +458,11 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
 
       <section className="panel">
         <div className="rubrichdr">
-          <h2 style={{ margin: 0 }}>Release queue <span className="muted">· {ready.length} verified in scope, ready to release</span></h2>
-          <button disabled={readOnly || publishing || !ready.length || Object.keys(done).length >= ready.length} title={readOnly ? 'Scan History replay — switch to the latest scan to release' : undefined} onClick={() => setConfirm({ kind: 'all' })}>{publishing ? 'Releasing…' : `Release all (${ready.length})`}</button>
+          <h2 style={{ margin: 0 }}>Choose files <span className="muted">· {selectedReady.length} of {selectableReady.length} selected</span></h2>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="ghost small" disabled={!selectableReady.length} onClick={() => setSelectedFiles(new Set(selectableReady.map((f) => f.file)))}>Select all</button>
+            <button className="ghost small" disabled={!selectedReady.length} onClick={() => setSelectedFiles(new Set())}>Clear</button>
+          </div>
         </div>
         {staleReady.length > 0 && (
           <div style={{ marginTop: 10, padding: '10px 14px', borderRadius: 9, background: '#FDECEC', border: '1px solid #E9A8A8', color: '#8A1F1F', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -437,7 +490,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
             {shownReady.length === 0 ? <p className="muted">No files match — <button className="ghost small" onClick={sfP.clear}>clear the filters</button></p> : Object.entries(groupedReady).map(([folder, folderFiles]) => (
               <div key={folder}>
                 <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--muted)', padding: '8px 6px 4px' }}>{folder}</div>
-                {folderFiles.map((f) => <div className={`pubrow${done[f.file] ? ' pubdone' : ''}`} key={f.file}>
+                {folderFiles.map((f) => <div className={`pubrow release-file-row${done[f.file] ? ' pubdone' : ''}`} key={f.file}>
+                <input type="checkbox" aria-label={`Select ${f.file}`} checked={selectedFiles.has(f.file)}
+                       disabled={done[f.file] || srcOf(f) === 'stale'}
+                       onChange={(e) => setSelectedFiles((old) => { const next = new Set(old); if (e.target.checked) next.add(f.file); else next.delete(f.file); return next })} />
                 <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName} · {f.department}</span></button>
                 <span className="badge" style={{ background: 'var(--success-bg)', color: 'var(--success-fg)' }}>{f.score} / 100</span>
                 <span className="muted" title="Where this document’s corrected copy will be written" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>→ {releaseDestination({ provider: releaseProvider, driveFileId: f.drive_file_id, driveMirrorEnabled, driveMirrorFolder }).label}</span>
@@ -445,7 +501,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                 {srcOf(f) === 'unavailable' && <span className="muted" title="ACP could not read the source now (moved, deleted, or access lost)" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>source unreachable</span>}
                 {done[f.file]
                   ? <span className="okline" style={{ fontSize: 13 }}>✓ released · fixed copy in Blob · audit recorded{pubUrls[f.file] && <> · <a href={pubUrls[f.file]} target="_blank" rel="noopener noreferrer">↗ open in Drive</a></>}</span>
-                  : <button className="qbtn approve" onClick={() => setConfirm({ kind: 'file', file: f.file })} disabled={readOnly || publishing} title={readOnly ? 'Scan History replay — switch to the latest scan to release' : undefined}>↺ Release</button>}
+                  : <button className="ghost small" onClick={() => setSel(f)}>View details</button>}
               </div>)}
               </div>
             ))}
@@ -464,6 +520,50 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                 <details style={{ marginTop: 16 }}><summary>Audit history</summary><p className="muted">{selectedResult?.published_at ? `Released ${new Date(selectedResult.published_at).toLocaleString()} · ${selectedResult.created ? 'created' : 'reused'}` : 'No release event yet.'}</p></details>
               </> : <p className="muted">Select a document to see its original path, destination, verification, and audit history.</p>}
             </div>
+          </div>
+        )}
+        {ready.length > 0 && (
+          <div className="release-builder" aria-label="Release builder">
+            <div className="release-builder__steps" aria-label="Release steps">
+              <span className="active">1 <b>Choose files</b></span><span className={builderOpen ? 'active' : ''}>2 <b>Choose delivery</b></span><span>3 <b>Review</b></span>
+            </div>
+            {!builderOpen ? (
+              <div className="release-builder__continue">
+                <span className="muted">{selectedReady.length ? `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file is' : 'files are'} ready.` : 'Select at least one ready file.'}</span>
+                <button className="qbtn approve" disabled={!selectedReady.length} onClick={() => setBuilderOpen(true)}>Continue</button>
+              </div>
+            ) : <>
+              <fieldset className="release-methods">
+                <legend>How do you want to receive the corrected files?</legend>
+                <label className={deliveryMethod === 'publish' ? 'selected' : ''}>
+                  <input type="radio" name="delivery-method" value="publish" checked={deliveryMethod === 'publish'} onChange={() => setDeliveryMethod('publish')} />
+                  <b>Publish copies</b>
+                  <span>{releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}</span>
+                </label>
+                <label className={deliveryMethod === 'download' ? 'selected' : ''}>
+                  <input type="radio" name="delivery-method" value="download" checked={deliveryMethod === 'download'} onChange={() => setDeliveryMethod('download')} />
+                  <b>Download corrected files</b>
+                  <span>Download the selected files to this device. Copies remain available in ACP.</span>
+                </label>
+                <div className="release-methods__resting">
+                  <b>Not ready to deliver?</b><span>Do nothing—corrected copies remain safely stored in ACP.</span>
+                </div>
+              </fieldset>
+              <div className="release-plan">
+                <div>
+                  <b>Review your release plan</b>
+                  <p>{deliveryMethod === 'publish'
+                    ? `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'copy' : 'copies'} will be published to ${releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}. Original files will not be changed.`
+                    : `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file' : 'files'} will be downloaded to this device. Original files will not be changed.`}</p>
+                </div>
+                <div className="release-plan__actions">
+                  <button className="ghost" onClick={() => setBuilderOpen(false)}>Back</button>
+                  {deliveryMethod === 'publish'
+                    ? <button className="qbtn approve" disabled={readOnly || publishing || !selectedReady.length} onClick={() => setConfirm({ kind: 'selected', files: selectedReady.map((f) => f.file) })}>{publishing ? 'Publishing…' : `Publish ${selectedReady.length} ${selectedReady.length === 1 ? 'copy' : 'copies'}`}</button>
+                    : <button className="qbtn approve" disabled={downloading || !selectedReady.length} onClick={downloadSelected}>{downloading ? 'Downloading…' : `Download ${selectedReady.length} ${selectedReady.length === 1 ? 'file' : 'files'}`}</button>}
+                </div>
+              </div>
+            </>}
           </div>
         )}
         {publishedList.length > 0 ? (
@@ -488,24 +588,25 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           destination, that the original is untouched, the audit entry, and that this is not a
           conformance certificate. Escape or a backdrop click cancels. */}
       {confirm && (() => {
-        const isAll = confirm.kind === 'all'
-        const targets = isAll ? ready.filter((f) => !done[f.file]) : ready.filter((f) => f.file === confirm.file)
-        const cnt = isAll ? targets.length : 1
+        const isBatch = confirm.kind === 'all' || confirm.kind === 'selected'
+        const requested = new Set(confirm.files || [])
+        const targets = confirm.kind === 'selected' ? ready.filter((f) => requested.has(f.file)) : confirm.kind === 'all' ? ready.filter((f) => !done[f.file]) : ready.filter((f) => f.file === confirm.file)
+        const cnt = targets.length
         const batchAnyDrive = targets.some((f) => f.drive_file_id)
         const lines = releaseConfirmLines({ count: cnt, provider: releaseProvider, anyDrive: batchAnyDrive, driveMirrorEnabled, driveMirrorFolder })
-        const onGo = () => { setConfirm(null); if (isAll) publishAll(); else publish(confirm.file) }
+        const onGo = () => { setConfirm(null); if (isBatch) publishAll(targets.map((f) => f.file)); else publish(confirm.file) }
         return (
           <div role="dialog" aria-modal="true" aria-label="Confirm release" onClick={() => setConfirm(null)}
                style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.42)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20 }}>
             <div onClick={(e) => e.stopPropagation()}
                  style={{ background: 'var(--panel, #fff)', color: 'var(--ink)', border: '1px solid var(--line)', borderRadius: 12, padding: '20px 22px', maxWidth: 520, width: '100%', boxShadow: '0 12px 40px rgba(0,0,0,0.25)' }}>
-              <h3 style={{ margin: '0 0 12px' }}>{isAll ? `Release ${cnt} document${cnt === 1 ? '' : 's'}?` : `Release ${confirm.file}?`}</h3>
+              <h3 style={{ margin: '0 0 12px' }}>{isBatch ? `Publish ${cnt} corrected ${cnt === 1 ? 'copy' : 'copies'}?` : `Release ${confirm.file}?`}</h3>
               <ul style={{ margin: '0 0 18px', paddingLeft: 18, fontSize: 13.5, lineHeight: 1.65 }}>
                 {lines.map((l, i) => <li key={i}>{l}</li>)}
               </ul>
               <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
                 <button className="ghost" onClick={() => setConfirm(null)}>Cancel</button>
-                <button className="qbtn approve" onClick={onGo} disabled={cnt === 0}>{isAll ? `Release ${cnt}` : 'Release'}</button>
+                <button className="qbtn approve" onClick={onGo} disabled={cnt === 0}>{isBatch ? `Publish ${cnt}` : 'Release'}</button>
               </div>
             </div>
           </div>

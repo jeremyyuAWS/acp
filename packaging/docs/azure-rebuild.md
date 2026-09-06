@@ -104,12 +104,12 @@ Worst case at max replicas, against the server production actually runs.
 | Service | Replicas | Pool per replica | Worst case |
 |---|---|---:|---:|
 | `acp-web-api` | 1–3 | 16 (derived) | 48 |
-| `acp-discovery` | 1–2 | 2 (pinned) | 4 |
+| `acp-discovery` | 4–6 | 2 (pinned) | 12 |
 | `acp-assess` | 5–5 | 2 (pinned) | 10 |
 | `acp-remediate` | 5–10 | 2 (pinned) | 20 |
-| **total** | | | **82** |
+| **total** | | | **90** |
 
-Against `maxConnections: 150` — **within budget**, headroom 68.
+Against `maxConnections: 150` — **within budget**, headroom 60.
 
 ## What the contract could not express
 

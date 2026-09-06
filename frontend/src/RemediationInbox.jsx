@@ -9,6 +9,7 @@ import { scOf } from './fixSummary.js'
 import { changeSentence, isContrastFinding } from './remediationEvidence.js'
 import WorkspaceProgress from './WorkspaceProgress.jsx'
 import WorkspaceFooter from './WorkspaceFooter.jsx'
+import { confirm as confirmAction } from './ConfirmDialog.jsx'
 import './RemediationInbox.css'
 
 // Master/detail Remediation inbox. Remediation is queue work — select an item, understand it, act,
@@ -378,9 +379,17 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
     setCopiedValue(kind)
   }
   const why = whyOf(f)
-  const decideForGroup = (decision) => {
+  const decideForGroup = async (decision) => {
     if (matchingCount > LARGE_BATCH_THRESHOLD) {
-      const ok = window.confirm(`Apply this decision to ${matchingCount + 1} findings across ${new Set([f.file, ...matchingFindings.map((x) => x.file)]).size} documents?`)
+      const findingCount = matchingCount + 1
+      const documentCount = new Set([f.file, ...matchingFindings.map((x) => x.file)]).size
+      const ok = await confirmAction({
+        title: 'Apply decision to matching findings?',
+        message: `This will apply the same decision to ${findingCount} findings across ${documentCount} documents.`,
+        presentation: 'toast',
+        confirmLabel: 'Apply to all',
+        cancelLabel: 'Cancel',
+      })
       if (!ok) return
     }
     return onApplyToMatching?.(f, decision)

@@ -1,5 +1,6 @@
 import { progressBar, etaGate, runHeadline, shouldShowCard } from './remediationRunCard.js'
 import { freshness } from './remediationSnapshot.js'
+import LiveCounter from './LiveCounter.jsx'
 
 // The persistent remediation run card — visible on EVERY tab while a run is live.
 //
@@ -82,6 +83,11 @@ export default function RemediationRunCard({ snapshot = null, receivedAt = null,
   const fixes = snapshot.fixes || {}
   const delivery = snapshot.delivery || {}
   const source = snapshot.source || {}
+  const documents = snapshot.documents || {}
+  const processed = typeof snapshot.total_documents === 'number'
+    && ['processing', 'waiting'].every((key) => typeof documents[key] === 'number')
+    ? snapshot.total_documents - documents.processing - documents.waiting
+    : null
 
   return (
     <section className="panel" aria-label="Remediation run" data-testid="rem-run-card"
@@ -110,6 +116,11 @@ export default function RemediationRunCard({ snapshot = null, receivedAt = null,
       </div>
 
       <div style={{ marginTop: 10 }}>
+        {processed != null && (
+          <p style={{ margin: '0 0 7px', fontSize: 12.5, fontWeight: 650 }}>
+            <LiveCounter value={processed} /> of {snapshot.total_documents.toLocaleString()} documents processed
+          </p>
+        )}
         <ProgressBar bar={bar} />
       </div>
 
@@ -118,17 +129,19 @@ export default function RemediationRunCard({ snapshot = null, receivedAt = null,
           delivered but not verified, is exactly the case these must not merge. */}
       <dl style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 20px', margin: '10px 0 0' }}>
         {[
-          ['Fixes applied', fixes.applied],
-          ['Fixes verified', fixes.verified],
-          ['Corrected copies delivered', delivery.delivered],
-          ['Awaiting Release', delivery.awaiting_release],
-          ['Pending delivery', delivery.pending],
-        ].filter(([, v]) => typeof v === 'number').map(([label, value]) => (
+          ['Fixes applied', fixes.applied, true],
+          ['Fixes verified', fixes.verified, true],
+          ['Documents verified', fixes.documents_verified, true],
+          ['Corrected copies delivered', delivery.delivered, true],
+          ['Awaiting Release', delivery.awaiting_release, false],
+          ['Pending delivery', delivery.pending, false],
+        ].filter(([, v]) => typeof v === 'number').map(([label, value, positive]) => (
           <div key={label}>
             <dt className="muted" style={{ fontSize: 10.5, textTransform: 'uppercase',
                                            letterSpacing: '0.02em' }}>{label}</dt>
             <dd style={{ margin: 0, fontSize: 13.5, fontWeight: 650,
-                         fontVariantNumeric: 'tabular-nums' }}>{value.toLocaleString()}</dd>
+                         fontVariantNumeric: 'tabular-nums' }}>{positive
+                ? <LiveCounter value={value} /> : value.toLocaleString()}</dd>
           </div>
         ))}
       </dl>

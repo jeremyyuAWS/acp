@@ -93,7 +93,7 @@ Profile `standard`, postgres `managed`, 14 requirements.
 | Resource | Setting | Required | From | Why |
 |---|---|---|---|---|
 | `postgres` | `provisioning` | Azure Database for PostgreSQL Flexible Server | document | data.postgres.mode is managed |
-| `postgres` | `max_connections` | >= 97 | derived | the fleet's worst case at maximum replicas is 82 (acpctl.inventory.connection_budget, which mirrors api/store.py's db_max_conn per replica), plus 15 the server keeps for itself |
+| `postgres` | `max_connections` | >= 105 | derived | the fleet's worst case at maximum replicas is 90 (acpctl.inventory.connection_budget, which mirrors api/store.py's db_max_conn per replica), plus 15 the server keeps for itself |
 | `postgres` | `sku` | one whose max_connections reaches the value above | vendor | Azure derives max_connections from the server's vCPU/memory tier, and this repository cannot check that table offline — so the requirement is stated as the number to satisfy rather than as a SKU name that would read as verified |
 | `postgres` | `backup.retentionDays` | UNDECIDED | document | the document states none. THIS IS THE GAP slice 2 could not close: deploy/public/ does not provision the server, so no artifact in this repository owned retention and the derived document had to leave it blank. The adapter owns it now, and an adapter that provisions a server without setting it has left the decision to Azure's default |
 | `redis` | `provisioning` | Azure Managed Redis | document | data.redis.mode is managed |

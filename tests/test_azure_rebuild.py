@@ -73,13 +73,18 @@ def test_the_document_records_todays_replica_ranges_not_the_examples(document):
     (packaging/docs/azure-parity.md), so assess NOW equals the example and that is correct — the
     example moved to production, not the derivation to the example.
 
-    Discover (1-2 against the example's 1-3) and remediate (5-10 against 3-10) still differ, so
+    Discover (4-6 against the example's 1-3) and remediate (5-10 against 3-10) still differ, so
     the guard keeps its discriminating power: a derivation that started copying the example would
     still be caught by those two. Assess is now a fixed expectation like any other.
+
+    Discover moved from 1-2 on 2026-09-06. Production was found running 4-8, the owner kept the
+    floor of 4, and the ceiling was set to 6 by the deploy-time connection budget rather than by
+    preference — 4-8 wants 153 connections during a revision overlap against a server that has
+    150. See tests/test_db_connection_budget.py, which is where that arithmetic lives.
     """
     assert document["workers"]["assess"]["replicas"] == {"min": 5, "max": 5}
     assert document["workers"]["remediate"]["replicas"] == {"min": 5, "max": 10}
-    assert document["workers"]["discover"]["replicas"] == {"min": 1, "max": 2}
+    assert document["workers"]["discover"]["replicas"] == {"min": 4, "max": 6}
 
 
 def test_a_pinned_tier_gets_no_autoscale_block(document):
@@ -139,12 +144,12 @@ def test_the_override_replaces_the_formula_rather_than_capping_it():
 
 
 def test_todays_azure_fits_its_postgres_server(document):
-    """82 of 150. The number production actually runs at."""
+    """90 of 150. The number production runs at once discovery is 4-6 (2026-09-06)."""
     from acpctl.inventory import connection_budget
     budget = connection_budget(document)
     assert budget["serverMaxConnections"] == 150, (
         "the derived document no longer names the Postgres server production runs")
-    assert budget["worstCaseConnections"] == 82
+    assert budget["worstCaseConnections"] == 90
     assert budget["withinBudget"]
 
 
@@ -152,7 +157,7 @@ def test_without_the_pinned_pools_the_same_fleet_reads_as_oversubscribed(documen
     """THE FINDING, EXECUTABLE — and the test that makes `connectionPool` load-bearing.
 
     Strip the pools the scripts pin and nothing else changes: same tiers, same replica ranges, same
-    server. Demand goes from 82 to 384 against a 150-connection ceiling, and `acpctl plan` reports
+    server. Demand goes from 90 to 456 against a 150-connection ceiling, and `acpctl plan` reports
     today's Azure as 2.5x oversubscribed when it demonstrably is not.
 
     That was the state of the contract before this slice. It is kept as a test rather than a
@@ -166,7 +171,7 @@ def test_without_the_pinned_pools_the_same_fleet_reads_as_oversubscribed(documen
         tier.pop("connectionPool", None)
 
     budget = connection_budget(unpinned)
-    assert budget["worstCaseConnections"] == 384
+    assert budget["worstCaseConnections"] == 456
     assert not budget["withinBudget"], (
         "the pre-slice-2 contract no longer misreports this fleet — if the formula changed, this "
         "test's premise did too and the document's headline needs rewriting")
