@@ -196,6 +196,47 @@ def policy_for(schedule: sched.Schedule, lane_job_types: dict) -> list[AppPolicy
     return policies
 
 
+def holiday_enforcement(schedule: sched.Schedule) -> dict:
+    """Whether the published Azure policy can observe this schedule's holidays. It cannot.
+
+    THE HONEST ANSWER, STATED RATHER THAN WORKED AROUND. A KEDA `cron` rule is a start
+    expression, an end expression and a timezone. Cron has a day-of-month field and a month
+    field, so it can say "the 25th of December" — it has no way to say "every weekday EXCEPT the
+    25th of December". Expressing the exclusion would take one rule per contiguous run of working
+    days between holidays, which is unbounded and would have to be republished as the calendar
+    moves; every republish is a revision, which is the thing §6.4 exists to avoid.
+
+    So a holiday is observed everywhere ACP decides — `effective_mode`, `next_transition`,
+    validation, and the tab — and NOT by the cron rule holding the warm floor in Azure. The
+    practical consequence is precise and worth stating in those terms: on a holiday, Azure holds
+    the business-hours floor and ACP knows it should not. That is wasted spend for a day, not a
+    correctness failure, and it is the administrator's to decide about.
+
+    The two ways to actually close it, neither of which this module will do unasked:
+
+      * publish a policy with the cron rule removed for the day and republish after — two
+        revisions per holiday, which §6.4 permits for a deliberate edit but not on a timer;
+      * create a temporary override for the day (`POST /control/capacity-schedule/override`),
+        which costs no revision, expires by itself, and is audited — but only lasts up to four
+        hours, so a full day needs several.
+
+    Returning a structure rather than raising: a schedule with holidays is perfectly valid, and
+    the tab needs to be able to say what will happen rather than refuse the schedule.
+    """
+    holidays = tuple(schedule.holidays or ())
+    return {
+        "declared": list(holidays),
+        # `enforced_by_policy` is False whenever holidays exist, and that is not a bug being
+        # reported — it is the KEDA cron scaler's expressive limit, recorded so nobody has to
+        # rediscover it from a surprising Azure bill.
+        "enforced_by_policy": not holidays,
+        "reason": ("" if not holidays else
+                   "A KEDA cron rule cannot express an exception to its own window, so Azure "
+                   "will hold the business-hours floor on these dates. ACP reports off-hours "
+                   "for them and will not raise capacity itself."),
+    }
+
+
 def az_commands(policy: list[AppPolicy], *, resource_group: str, subscription: str) -> list[list[str]]:
     """The `az` invocations that would apply this policy — rendered, never run.
 

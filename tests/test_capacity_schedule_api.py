@@ -398,3 +398,59 @@ def test_the_policy_view_shows_what_would_be_applied_without_applying_it(store, 
     # Azure is unconfigured in these tests, so no command naming a placeholder subscription is
     # rendered — the kind of thing that gets pasted.
     assert policy["az_commands"] == []
+
+
+# ── Phase 4: holidays and attribution through the API ────────────────────────────────────────
+
+def test_a_saved_holiday_round_trips_and_reaches_the_policy_view(store, admin):
+    control.put_capacity_schedule(_fits(enabled=True, holidays=["2026-12-25"]), admin)
+    payload = control.get_capacity_schedule()
+    assert payload["holidays"] == ["2026-12-25"]
+    policy = control.get_capacity_policy()
+    # THE HONEST FIELD. Listing the holidays without saying Azure cannot observe them would be
+    # the most expensive quiet wrongness here: an operator would believe capacity drops on the
+    # day, and the bill would say otherwise.
+    assert policy["holidays"]["declared"] == ["2026-12-25"]
+    assert policy["holidays"]["enforced_by_policy"] is False
+    assert "cron rule cannot express" in policy["holidays"]["reason"]
+
+
+def test_a_schedule_without_holidays_reports_them_as_enforceable(store, admin):
+    control.put_capacity_schedule(_fits(enabled=True), admin)
+    assert control.get_capacity_policy()["holidays"]["enforced_by_policy"] is True
+
+
+def test_an_unparseable_holiday_cannot_be_saved(store, admin):
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as excinfo:
+        control.put_capacity_schedule(_fits(holidays=["christmas"]), admin)
+    assert excinfo.value.status_code == 422
+    assert "unparseable_holiday" in str(excinfo.value.detail)
+
+
+def test_the_payload_attributes_each_service(store, admin, monkeypatch):
+    monkeypatch.setattr(control, "_AZ_CONFIGURED", True)
+    monkeypatch.setattr(control, "get_capacity", lambda: {
+        "configured": True,
+        "apps": {
+            "acp-assess": {"current_replicas": 8, "min_replicas": 1, "max_replicas": 10},
+            "acp-remediate": {"current_replicas": 5, "min_replicas": 1, "max_replicas": 10,
+                              "draining_replicas": 2},
+        },
+    })
+    control.put_capacity_schedule(_fits(enabled=True), admin)
+    attribution = control.get_capacity_schedule()["attribution"]
+    assert attribution["assess"]["reason"] in ("queue", "scheduled", "below_floor")
+    assert attribution["remediate"]["reason"] == "deployment"
+    assert attribution["gpu"]["reason"] == "unknown"
+
+
+def test_an_override_is_named_as_the_reason_capacity_is_where_it_is(store, admin, monkeypatch):
+    monkeypatch.setattr(control, "_AZ_CONFIGURED", True)
+    monkeypatch.setattr(control, "get_capacity", lambda: {
+        "configured": True, "apps": {"acp-assess": {"current_replicas": 9}}})
+    control.put_capacity_schedule(_fits(enabled=True), admin)
+    control.create_capacity_override(
+        control.OverrideRequest(mode="custom", duration="1h", reason="batch",
+                                floors={"assess": 9}), admin)
+    assert control.get_capacity_schedule()["attribution"]["assess"]["reason"] == "manual_override"

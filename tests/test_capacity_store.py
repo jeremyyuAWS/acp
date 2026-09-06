@@ -289,3 +289,21 @@ def test_a_custom_override_carries_the_floors_it_was_given(store):
     floors, authority = store_mod.effective_floors(cs.PROPOSED, override, datetime.now(timezone.utc))
     assert authority == "manual_override"
     assert floors == {"assess": 7}
+
+
+def test_every_tuple_field_round_trips_as_a_tuple(store):
+    """The bug class, guarded at the class level rather than one field at a time.
+
+    JSON has no tuple, so `asdict` writes these as lists and a naive load hands back a list —
+    which compares unequal to an identical schedule and makes a frozen dataclass unhashable.
+    `days` was coerced from the start; `holidays` was added in Phase 4 and was not, and this
+    test is derived from the annotations so a third tuple field cannot repeat it.
+    """
+    fields = [name for name, f in cs.Schedule.__dataclass_fields__.items() if "tuple" in str(f.type)]
+    assert "days" in fields and "holidays" in fields, fields
+    saved = store_mod.save_schedule(store, replace(cs.PROPOSED, holidays=("2026-12-25",)),
+                                    actor="a", expected_version=0, reason="r")
+    reloaded = store_mod.load_schedule(store)
+    for name in fields:
+        assert isinstance(getattr(reloaded, name), tuple), name
+    assert reloaded == saved

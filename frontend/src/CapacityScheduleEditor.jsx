@@ -46,6 +46,7 @@ function draftFrom(snap) {
     business_hours: { ...(snap.business_hours || {}) },
     off_hours: { ...(snap.off_hours || {}) },
     maximums: { ...(snap.maximums || {}) },
+    holidays: [...(snap.holidays || [])],
   }
 }
 
@@ -188,6 +189,25 @@ export default function CapacityScheduleEditor({ snap, onSaved }) {
           ))}
         </tbody>
       </table>
+
+      <span>
+        <label style={label} htmlFor="cap-holidays">
+          Holiday exceptions — YYYY-MM-DD, comma separated (optional)
+        </label>
+        <input id="cap-holidays" value={draft.holidays.join(', ')}
+               style={{ width: '100%', padding: '4px 6px', fontSize: 12 }}
+               onChange={(e) => setField('holidays',
+                 e.target.value.split(',').map((d) => d.trim()).filter(Boolean))} />
+        {/* The caveat belongs beside the field, not in a doc. ACP observes a holiday everywhere
+            ACP decides; the published Azure policy cannot, because a KEDA cron rule has no way
+            to express an exception to its own window. An administrator who types a date here and
+            is not told that would reasonably expect the spend to drop on the day. */}
+        <span className="muted" style={{ fontSize: 11 }}>
+          ACP treats these as off-hours days. Azure does not: a cron scale rule cannot express an
+          exception to its own window, so a published policy still holds the business-hours floor
+          on them. Use a temporary override on the day, or republish without the schedule enabled.
+        </span>
+      </span>
 
       <span>
         <label style={label} htmlFor="cap-reason">Reason for this change (recorded in the audit log)</label>

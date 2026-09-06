@@ -37,6 +37,17 @@ const SERVICES = [
 // The four states GET /control/capacity-schedule can report for a queue scaler, and the words
 // used for each. `pinned` reads as a warning rather than a failure on purpose: nothing is
 // broken, the tier simply cannot act on the rule.
+// AC 14's four causes, plus the two honest non-answers. `below_floor` reads as a warning
+// because it is one: nothing asked for fewer replicas than the schedule's floor.
+const ATTRIBUTION = {
+  scheduled: { label: 'Scheduled floor', tone: 'var(--success-fg)' },
+  queue: { label: 'Queue-driven', tone: 'var(--ink)' },
+  manual_override: { label: 'Manual override', tone: 'var(--warn-fg, #8a5a00)' },
+  deployment: { label: 'Deployment in progress', tone: 'var(--ink)' },
+  below_floor: { label: 'Below the scheduled floor', tone: 'var(--warn-fg, #8a5a00)' },
+  unknown: { label: 'Not known', tone: 'var(--muted)' },
+}
+
 const SCALER = {
   healthy: { label: 'Healthy', tone: 'var(--success-fg)' },
   pinned: { label: 'Inert — tier pinned', tone: 'var(--warn-fg, #8a5a00)' },
@@ -192,6 +203,39 @@ export default function CapacitySchedule({ me = null } = {}) {
           </tbody>
         </table>
       </div>
+
+      {/* AC 14: whether capacity is where it is because of the schedule, the queue, an override
+          or a deployment. `below_floor` is deliberately its own word — a tier running short of
+          its floor looks identical to one sitting exactly on it in a bare replica count, and
+          only one of them is a problem. */}
+      {!!Object.keys(snap.attribution || {}).length && (
+        <div className="panel" style={{ padding: 12 }}>
+          <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>WHY CAPACITY IS WHERE IT IS</div>
+          <div style={{ display: 'grid', gap: 5 }}>
+            {Object.entries(snap.attribution).map(([service, why]) => (
+              <div key={service} style={{ fontSize: 12 }}>
+                <b>{service}</b>{' · '}
+                <span style={{ color: ATTRIBUTION[why.reason]?.tone || 'var(--muted)' }}>
+                  {ATTRIBUTION[why.reason]?.label || why.reason}
+                </span>
+                {why.detail && <div className="muted" style={{ fontSize: 11 }}>{why.detail}</div>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {!!snap.holidays?.length && (
+        <div className="panel" style={{ padding: 12, fontSize: 12 }}>
+          <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>HOLIDAY EXCEPTIONS</div>
+          <div>{snap.holidays.join(' · ')}</div>
+          <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+            ACP treats these as off-hours days. A published Azure policy does not observe them —
+            a cron scale rule cannot express an exception to its own window — so warm capacity
+            stays at the business-hours floor on these dates unless an override is used.
+          </div>
+        </div>
+      )}
 
       {/* Scaler health. `pinned` is the state AC 10 did not have a word for. */}
       <div className="panel" style={{ padding: 12 }}>

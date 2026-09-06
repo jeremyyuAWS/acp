@@ -2078,6 +2078,10 @@ class ScheduleProposal(BaseModel):
     business_hours: Optional[dict[str, int]] = None
     off_hours: Optional[dict[str, int]] = None
     maximums: Optional[dict[str, int]] = None
+    # §5.2's optional holiday exceptions. Absent from this model until Phase 4, which meant a
+    # body carrying them was accepted and the dates silently dropped — the caller saw a 200 and
+    # a schedule that did not contain what they sent.
+    holidays: Optional[list[str]] = None
 
 
 def _schedule_payload(schedule, now: datetime) -> dict:
@@ -2095,6 +2099,7 @@ def _schedule_payload(schedule, now: datetime) -> dict:
         "business_hours": dict(schedule.business_hours),
         "off_hours": dict(schedule.off_hours),
         "maximums": dict(schedule.maximums),
+        "holidays": list(schedule.holidays or ()),
         "effective_mode": mode,
         "next_transition_at": upcoming[0].isoformat() if upcoming else None,
         "next_transition_to": upcoming[1] if upcoming else None,
@@ -2175,6 +2180,11 @@ def get_capacity_schedule():
                         if schedule.applied else [])
     payload["drift_evaluated"] = bool(schedule.applied)
     payload["azure_configured"] = configured
+    # AC 14: whether capacity is where it is because of the schedule, the queue, an override or a
+    # deployment. Derived from the same reading drift uses, so it costs no extra Azure call and
+    # no storage — see capacity_schedule.attribute_capacity for why it is derived rather than
+    # recorded, and what that trade gives up.
+    payload["attribution"] = sched_mod.attribute_fleet(observed, floors, authority)
     return payload
 
 
@@ -2199,8 +2209,9 @@ def validate_capacity_schedule(body: ScheduleProposal, request: Request):
 
     current = store_mod.load_schedule(core.store)
     supplied = {k: v for k, v in body.model_dump().items() if v is not None}
-    if "days" in supplied:
-        supplied["days"] = tuple(supplied["days"])
+    for _tuple_field in ("days", "holidays"):
+        if _tuple_field in supplied:
+            supplied[_tuple_field] = tuple(supplied[_tuple_field])
     try:
         proposed = replace(current, **supplied)
     except TypeError as e:  # noqa: BLE001 — a field name the schedule does not have
@@ -2292,8 +2303,9 @@ def put_capacity_schedule(body: ScheduleWrite, request: Request):
     current = store_mod.load_schedule(core.store)
     supplied = {k: v for k, v in body.model_dump(exclude={"version", "reason"}).items()
                 if v is not None}
-    if "days" in supplied:
-        supplied["days"] = tuple(supplied["days"])
+    for _tuple_field in ("days", "holidays"):
+        if _tuple_field in supplied:
+            supplied[_tuple_field] = tuple(supplied[_tuple_field])
     try:
         proposed = replace(current, **supplied)
     except TypeError as e:  # noqa: BLE001
@@ -2395,4 +2407,9 @@ def get_capacity_policy():
                                                subscription=_AZ_SUB)
                         if _AZ_CONFIGURED and _AZ_SUB else []),
         "transitions_create_no_revision": True,
+        # Stated, not omitted: a KEDA cron rule cannot express an exception to its own window, so
+        # a schedule's holidays are observed by ACP and not by Azure. A policy view that listed
+        # the holidays without saying that would be the most expensive kind of quiet wrongness
+        # here — an operator would believe capacity drops on the day, and it would not.
+        "holidays": policy_mod.holiday_enforcement(schedule),
     }

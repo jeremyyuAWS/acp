@@ -135,9 +135,9 @@ def test_a_disabled_schedule_is_off_hours_and_has_no_next_transition():
 
 
 def test_a_once_weekly_schedule_still_finds_next_week_from_late_on_its_own_day():
-    """Why the search window is nine days rather than seven: a seven-day walk starting after the
-    last transition on the only active day finds nothing and returns None, which the tab would
-    render as 'no schedule' on the one day it is most obviously scheduled."""
+    """Why the search runs past a week: a seven-day walk starting after the last transition on
+    the only active day finds nothing and returns None, which the tab renders as 'no scheduled
+    transition' on the one day it is most obviously scheduled."""
     weekly = sched(days=("mon",))
     # 05:00 UTC on the 13th is 21:00 PST on Monday the 12th — after that Monday's 20:00 end, so
     # the only remaining transition is the following Monday, seven local days on. A range(0, 7)
@@ -380,3 +380,144 @@ def test_the_vcpu_quota_has_no_default_and_an_unparseable_one_is_not_guessed(mon
     assert cs.vcpu_quota() is None
     monkeypatch.setenv("ACP_ACA_VCPU_QUOTA", "120")
     assert cs.vcpu_quota() == 120.0
+
+
+# ── Phase 4: holiday exceptions ──────────────────────────────────────────────────────────────
+#
+# §5.2's "optional holiday exceptions". A holiday is a LOCAL CALENDAR DAY in the schedule's own
+# timezone — not a UTC window — so a US holiday does not begin at 16:00 the day before for a
+# Pacific schedule. That distinction is the whole reason these are dates and not instants.
+
+def test_a_holiday_is_off_hours_all_day():
+    # 2026-01-19 is a Monday, and the proposal runs Monday to Friday.
+    holiday = sched(holidays=("2026-01-19",))
+    for hour in (14, 18, 23):        # 06:00, 10:00 and 15:00 Pacific — all inside the window
+        assert cs.effective_mode(holiday, utc(2026, 1, 19, hour, 0)) == "off_hours", hour
+    # The Monday before is unaffected, which is what says the exception is scoped to the date.
+    assert cs.effective_mode(holiday, utc(2026, 1, 12, 18, 0)) == "business_hours"
+
+
+def test_a_holiday_carries_no_transitions():
+    """Both halves matter: business hours must not begin on the day, and must not end on it
+    either — an 'end' transition on a day that never started would put a spurious entry in the
+    tab's 'next transition' and in any log built from it."""
+    holiday = sched(days=("mon",), holidays=("2026-01-19",))
+    instant, mode = cs.next_transition(holiday, utc(2026, 1, 18, 0, 0))
+    assert (instant, mode) == (utc(2026, 1, 26, 14, 0), "business_hours"), "the holiday was not skipped"
+
+
+def test_a_holiday_is_the_local_calendar_day_not_a_utc_one():
+    """16:00 UTC on the 19th is 08:00 Pacific ON the holiday — off hours. 06:00 UTC on the 20th
+    is 22:00 Pacific on the 19th, still the holiday but outside business hours anyway; the
+    discriminating case is the 20th's own morning, which must be a normal working day."""
+    holiday = sched(holidays=("2026-01-19",))
+    assert cs.effective_mode(holiday, utc(2026, 1, 19, 16, 0)) == "off_hours"
+    assert cs.effective_mode(holiday, utc(2026, 1, 20, 16, 0)) == "business_hours"
+
+
+def test_a_holiday_on_a_day_the_schedule_never_works_changes_nothing():
+    weekend = sched(holidays=("2026-01-17",))            # a Saturday
+    assert cs.effective_mode(weekend, utc(2026, 1, 17, 18, 0)) == "off_hours"
+    assert cs.effective_mode(weekend, utc(2026, 1, 19, 18, 0)) == "business_hours"
+
+
+def test_an_unparseable_holiday_blocks_the_save():
+    """BLOCKING, not a warning. A holiday ACP cannot read is one it will not observe, and the
+    administrator cannot tell from the tab: their date is listed and the capacity is warm anyway.
+    Refusing is the only outcome that cannot mislead."""
+    result = validate(sched(holidays=("2026-12-25", "christmas")))
+    assert "unparseable_holiday" in codes(result)
+    assert result["blocked"]
+    assert "christmas" in " ".join(f["detail"] for f in result["findings"])
+
+
+def test_a_duplicate_holiday_warns_without_blocking():
+    result = validate(sched(holidays=("2026-12-25", "2026-12-25")))
+    duplicate = [f for f in result["findings"] if f["code"] == "duplicate_holiday"]
+    assert duplicate and not duplicate[0]["blocking"]
+
+
+def test_a_schedule_with_valid_holidays_still_validates():
+    assert "unparseable_holiday" not in codes(validate(sched(holidays=("2026-12-25", "2026-01-01"))))
+
+
+# ── Phase 4: why capacity is where it is (AC 14) ─────────────────────────────────────────────
+
+def test_a_rollout_outranks_every_other_explanation():
+    """During a rollout the replica count says nothing about demand, and reading it as queue
+    pressure is how a deploy gets mistaken for a spike."""
+    answer = cs.attribute_capacity({"current_replicas": 9, "draining_replicas": 2},
+                                   floor=5, authority="business_hours", queue_depth=40)
+    assert answer["reason"] == "deployment"
+
+
+def test_an_override_outranks_the_queue_but_not_a_rollout():
+    assert cs.attribute_capacity({"current_replicas": 9}, floor=5,
+                                 authority="manual_override")["reason"] == "manual_override"
+    assert cs.attribute_capacity({"current_replicas": 9, "draining_replicas": 1}, floor=5,
+                                 authority="manual_override")["reason"] == "deployment"
+
+
+def test_above_the_floor_is_queue_driven_and_says_by_how_much():
+    answer = cs.attribute_capacity({"current_replicas": 8}, floor=5,
+                                   authority="business_hours", queue_depth=31)
+    assert answer["reason"] == "queue"
+    assert "3 replica(s) above" in answer["detail"]
+    assert "31" in answer["detail"]
+
+
+def test_exactly_the_floor_is_the_schedule():
+    answer = cs.attribute_capacity({"current_replicas": 5}, floor=5, authority="business_hours")
+    assert answer["reason"] == "scheduled"
+
+
+def test_below_the_floor_is_named_rather_than_folded_into_scheduled():
+    """The two look identical in a bare replica count and only one of them is a problem. A
+    tier running four when the schedule asks for five is not 'scheduled' — it is a restart, a
+    failed revision, or capacity Azure has not granted."""
+    answer = cs.attribute_capacity({"current_replicas": 4}, floor=5, authority="business_hours")
+    assert answer["reason"] == "below_floor"
+    assert "short of" in answer["detail"]
+
+
+def test_an_unreadable_app_is_never_attributed_to_a_cause():
+    for block in ({}, {"app_unavailable": True}, {"current_replicas": None}):
+        assert cs.attribute_capacity(block, floor=5, authority="business_hours")["reason"] == "unknown"
+
+
+def test_a_service_with_no_known_floor_is_unknown_rather_than_guessed():
+    answer = cs.attribute_capacity({"current_replicas": 3}, floor=None, authority="business_hours")
+    assert answer["reason"] == "unknown"
+
+
+def test_the_fleet_view_answers_per_service():
+    answer = cs.attribute_fleet(
+        {"acp-assess": {"current_replicas": 8}, "acp-remediate": {"current_replicas": 5}},
+        floors={"assess": 5, "remediate": 5}, authority="business_hours",
+        queue_depths={"assess": 12})
+    assert answer["assess"]["reason"] == "queue"
+    assert answer["remediate"]["reason"] == "scheduled"
+    assert answer["gpu"]["reason"] == "unknown"
+    assert set(answer) == set(cs.SERVICE_APPS)
+
+
+def test_a_holiday_cannot_hide_the_next_transition():
+    """The case that forced the horizon past a fortnight, found by the test above it.
+
+    A schedule naming one weekday, with a holiday on the next occurrence of that weekday, has its
+    next transition FIFTEEN days out. A nine-day window returned None, and None renders as "no
+    scheduled transition" — so a valid schedule with a single holiday reported itself as having
+    nothing scheduled, indefinitely.
+    """
+    holiday = sched(days=("mon",), holidays=("2026-01-19",))
+    instant, mode = cs.next_transition(holiday, utc(2026, 1, 18, 0, 0))
+    assert (instant, mode) == (utc(2026, 1, 26, 14, 0), "business_hours")
+
+
+def test_a_schedule_whose_every_day_is_excluded_reports_nothing_rather_than_looping():
+    """The horizon has to end somewhere, and None is the honest answer here — not a transition a
+    year away that the schedule does not actually have."""
+    from datetime import date, timedelta as td
+    mondays = tuple((date(2026, 1, 5) + td(weeks=n)).isoformat() for n in range(60))
+    assert cs.next_transition(sched(days=("mon",), holidays=mondays),
+                              utc(2026, 1, 1, 0, 0)) is None

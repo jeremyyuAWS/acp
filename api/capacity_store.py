@@ -68,9 +68,20 @@ def _serialise(schedule: sched.Schedule) -> str:
     return json.dumps(body, sort_keys=True)
 
 
+# Fields the dataclass declares as tuples. JSON has no tuple, so `asdict` writes them as lists
+# and a naive load hands back a list — which compares unequal to an identical schedule, and makes
+# a frozen dataclass unhashable. `days` was coerced from the start; `holidays` was added later
+# and was NOT, which is exactly how this class of bug arrives. tests/test_capacity_store.py
+# derives the list from the annotations so a third tuple field cannot repeat it.
+_TUPLE_FIELDS = tuple(name for name, f in sched.Schedule.__dataclass_fields__.items()
+                      if "tuple" in str(f.type))
+
+
 def _deserialise(raw: str) -> sched.Schedule:
     body = json.loads(raw)
-    body["days"] = tuple(body.get("days") or ())
+    for name in _TUPLE_FIELDS:
+        if name in body:
+            body[name] = tuple(body.get(name) or ())
     known = {f for f in sched.Schedule.__dataclass_fields__}
     # A stored row written by an older version may carry a field this one does not have. Dropping
     # the unknown ones beats refusing to load: the schedule is what production is running, and

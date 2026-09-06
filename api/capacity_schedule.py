@@ -76,6 +76,15 @@ class Schedule:
     maximums: dict                   # service -> queue-driven ceiling
     version: int = 0
     applied: bool = False            # whether this shape is in force on Azure
+    # §5.2's "optional holiday exceptions". ISO dates (YYYY-MM-DD) read in THIS schedule's
+    # timezone: a holiday is a local calendar day, not a UTC window, so a US holiday does not
+    # begin at 16:00 the day before for a Pacific schedule.
+    #
+    # THEY ARE NOT ENFORCEABLE BY THE PUBLISHED AZURE POLICY, and capacity_policy says so rather
+    # than dropping them quietly — see holidays_are_enforceable() there. ACP honours them in
+    # every place ACP decides (the mode, the next transition, validation, the tab); KEDA's cron
+    # scaler has no way to express "every weekday except these dates".
+    holidays: tuple[str, ...] = ()
 
     def floors(self, mode: str) -> dict:
         return dict(self.business_hours if mode == "business_hours" else self.off_hours)
@@ -99,6 +108,7 @@ PROPOSED = Schedule(
     maximums={"web": 3, "discovery": 4, "assess": 10, "remediate": 10, "gpu": 1},
     version=0,
     applied=False,
+    holidays=(),
 )
 
 
@@ -215,9 +225,31 @@ def _to_utc(local_naive: datetime, zone: ZoneInfo, *, prefer_last: bool) -> date
     return second_utc if prefer_last else first_utc
 
 
+def holiday_dates(schedule: Schedule) -> set:
+    """The schedule's holidays as dates. An unparseable entry is REPORTED, never skipped here.
+
+    Silently dropping a malformed holiday is the failure that matters: the administrator sees
+    their date listed in the tab and gets business-hours capacity on it anyway. `_shape_findings`
+    blocks the save instead, so a schedule that reaches this function has already been checked.
+    """
+    from datetime import date as _date
+    out = set()
+    for raw in schedule.holidays or ():
+        try:
+            out.add(_date.fromisoformat(str(raw)))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def _candidates(schedule: Schedule, zone: ZoneInfo, day: datetime.date):
     """The (instant, mode) transitions this local date carries, in local order."""
     if DAYS[day.weekday()] not in schedule.days:
+        return []
+    if day in holiday_dates(schedule):
+        # A holiday is a working day the schedule names and ACP declines to warm. Returning no
+        # transitions is what makes both `next_transition` skip it and the day read as off-hours
+        # from the first minute to the last.
         return []
     start, end = _hhmm(schedule.start, "start"), _hhmm(schedule.end, "end")
     return [
@@ -240,26 +272,36 @@ def effective_mode(schedule: Schedule, now: datetime) -> str:
     local = now.astimezone(zone)
     if DAYS[local.weekday()] not in schedule.days:
         return "off_hours"
+    if local.date() in holiday_dates(schedule):
+        return "off_hours"
     return "business_hours" if start <= local.time() < end else "off_hours"
 
 
 def next_transition(schedule: Schedule, now: datetime) -> tuple[datetime, str] | None:
     """The next instant the mode changes, and what it changes to. None when nothing is scheduled.
 
-    Searches nine local days rather than seven: a schedule may name a single weekday, and the
-    extra margin means a search starting late on that day still finds the following week's
-    occurrence instead of returning None.
+    Walks forward day by day and stops at the FIRST day carrying a transition still ahead of
+    `now`, so the cost is one day's arithmetic in the normal case.
+
+    THE HORIZON IS A YEAR, not a week, and holidays are why. A nine-day window was enough for a
+    schedule that names a single weekday — until a holiday lands on that weekday, at which point
+    the next occurrence is fifteen days out and the search returned None. The tab renders None as
+    "no scheduled transition", so a schedule with one holiday on it would have reported itself as
+    having nothing scheduled, indefinitely, while remaining perfectly valid. A year absorbs any
+    realistic holiday list; beyond that, None is the honest answer for a schedule whose days are
+    all excluded.
     """
     if not schedule.enabled or not schedule.days:
         return None
     zone = _zone(schedule)
     today = now.astimezone(zone).date()
-    upcoming = []
-    for offset in range(0, 9):
-        for instant, mode in _candidates(schedule, zone, today + timedelta(days=offset)):
-            if instant > now:
-                upcoming.append((instant, mode))
-    return min(upcoming, key=lambda pair: pair[0]) if upcoming else None
+    for offset in range(0, 366):
+        upcoming = [(instant, mode)
+                    for instant, mode in _candidates(schedule, zone, today + timedelta(days=offset))
+                    if instant > now]
+        if upcoming:
+            return min(upcoming, key=lambda pair: pair[0])
+    return None
 
 
 # ── validation ───────────────────────────────────────────────────────────────────────────────
@@ -306,6 +348,26 @@ def _shape_findings(schedule: Schedule) -> list[budget.Finding]:
                     "min_exceeds_max", True,
                     f"{service}: the {mode.replace('_', '-')} floor {floor} is above its "
                     f"ceiling {ceiling}."))
+    from datetime import date as _date
+    bad_dates = []
+    for raw in schedule.holidays or ():
+        try:
+            _date.fromisoformat(str(raw))
+        except (TypeError, ValueError):
+            bad_dates.append(str(raw))
+    if bad_dates:
+        # BLOCKING, not a warning. A holiday ACP cannot parse is one it will not observe, and the
+        # administrator has no way to tell from the tab — their date is listed and the capacity
+        # is warm anyway. Refusing the save is the only outcome that cannot mislead.
+        findings.append(budget.Finding(
+            "unparseable_holiday", True,
+            f"Not YYYY-MM-DD dates: {', '.join(sorted(bad_dates))}. A holiday ACP cannot read is "
+            f"one it will not observe."))
+    if len(set(schedule.holidays or ())) != len(schedule.holidays or ()):
+        findings.append(budget.Finding(
+            "duplicate_holiday", False,
+            "The same holiday is listed more than once; the duplicates have no effect."))
+
     for service in QUEUE_SERVICES:
         if schedule.off_hours.get(service, 0) < 1:
             findings.append(budget.Finding(
@@ -448,4 +510,84 @@ def scaler_health(observed_apps: dict, *, configured: bool = True) -> dict:
                                       f"rule, so nothing asks it to."}
         else:
             out[service] = {"app": app_name, "state": "healthy", "rules": rules}
+    return out
+
+
+# ── why capacity is where it is (AC 14) ──────────────────────────────────────────────────────
+
+def attribute_capacity(app_block: dict, *, floor: int | None, authority: str,
+                       queue_depth: int | None = None) -> dict:
+    """Why this app is running the number of replicas it is running.
+
+    AC 14: "Monitor identifies whether scaling was scheduled, queue-driven, manual, or
+    deployment-related." §10 asks the same thing of the metrics. Neither was built, and it is
+    also the apparatus PRD Phase 4's tuning needs — "tune queue thresholds and cooldowns" is not
+    a decision anybody can make from a replica count that does not say what asked for it.
+
+    DERIVED, NOT RECORDED. There is no scale-event table and this deliberately does not add one:
+    every input is already in `GET /control/workers/capacity` plus the schedule ACP holds, so the
+    answer costs no storage, no migration and no background writer that can fall behind. What it
+    cannot do is explain a scale event that has already finished — this says why capacity is
+    where it is NOW. A durable history is a separate decision with a real cost, and it should be
+    made against a week of this rather than in advance of it.
+
+    ORDER MATTERS, because more than one cause can be true at once and the useful answer is the
+    one that dominates:
+
+      deployment       a rollout is in progress — replicas on more than one revision. This wins
+                       outright: during a rollout the count says nothing about demand, and
+                       reading it as queue pressure is how a deploy gets mistaken for a spike.
+      manual_override  an administrator set the floor by hand, and it expires.
+      queue            more replicas than the floor asks for, so something else asked.
+      scheduled        exactly the floor in force. The quiet, expected case.
+      below_floor      FEWER than the floor. Not a scaling reason at all — a restart, a failed
+                       revision, or capacity Azure has not granted. Named rather than folded
+                       into `scheduled`, because the two look identical in a bare count and only
+                       one of them is a problem.
+      unknown          the reading did not come back. Never inferred.
+    """
+    if not isinstance(app_block, dict) or app_block.get("app_unavailable"):
+        return {"reason": "unknown", "detail": "Azure did not answer for this app."}
+    current = app_block.get("current_replicas")
+    if current is None:
+        return {"reason": "unknown", "detail": "The running replica count could not be read."}
+    current = int(current)
+
+    draining = app_block.get("draining_replicas")
+    if draining:
+        return {"reason": "deployment", "current_replicas": current,
+                "detail": f"{draining} replica(s) still on a previous revision: a rollout is in "
+                          f"progress, so this count reflects the deploy rather than demand."}
+    if authority == "manual_override":
+        return {"reason": "manual_override", "current_replicas": current,
+                "detail": f"An administrator set this floor by hand; it expires on its own."}
+    if floor is None:
+        return {"reason": "unknown", "current_replicas": current,
+                "detail": "No scheduled floor is known for this service, so the count cannot be "
+                          "attributed."}
+    if current > floor:
+        extra = current - floor
+        depth = "" if queue_depth is None else f" Queue depth {queue_depth}."
+        return {"reason": "queue", "current_replicas": current, "floor": floor,
+                "detail": f"{extra} replica(s) above the scheduled floor of {floor}: the queue "
+                          f"scaler asked for them.{depth}"}
+    if current < floor:
+        return {"reason": "below_floor", "current_replicas": current, "floor": floor,
+                "detail": f"{floor - current} replica(s) short of the scheduled floor of "
+                          f"{floor}. Not a scaling decision — a restart, a failed revision, or "
+                          f"capacity Azure has not granted."}
+    return {"reason": "scheduled", "current_replicas": current, "floor": floor,
+            "detail": f"Exactly the scheduled floor of {floor} for the current mode."}
+
+
+def attribute_fleet(observed_apps: dict, floors: dict, authority: str,
+                    queue_depths: dict | None = None) -> dict:
+    """`attribute_capacity` per service, keyed by service rather than by app name."""
+    depths = queue_depths or {}
+    out = {}
+    for service, app_name in SERVICE_APPS.items():
+        out[service] = attribute_capacity(
+            observed_apps.get(app_name) or {},
+            floor=floors.get(service), authority=authority,
+            queue_depth=depths.get(service))
     return out

@@ -513,6 +513,68 @@ Two things this turned up that the PRD could not have known:
   hand-applied rule. §1 of the runbook is the read that settles it; until then, guessing is worse
   than abstaining.
 
+## R9 — Phase 4's tuning cannot start, and saying so is the deliverable
+
+§14 gates Phase 4 on *"at least one week of measurements"*. There are none: nothing has been
+applied to Azure (Phase 3b needs a subscription), so no schedule has ever been in force and no
+transition has ever happened. Three of Phase 4's four items depend on that data:
+
+| Item | What it needs before it can be decided |
+|---|---|
+| Tune business-hours floors | Cold-start latency at the window's open, and queue wait at the floor, over a week of real mornings. Nothing has warmed on a schedule yet. |
+| Tune queue thresholds and cooldowns | How often the queue asked for replicas that then idled, and how often it asked too late. `targetQueryValue` is 4 for remediate and 8 for assess; both are **stated starting points, not derived figures**. |
+| Overnight GPU scale-to-zero | Idle GPU cost per night against first-request cold-start latency. `acp-ollama` is 4 vCPU and already 0–1, so the saving is real but unmeasured. |
+
+Picking numbers now would produce figures indistinguishable, to every later reader, from measured
+ones — which is the failure mode this repository has documented three times over. So they stay
+open, with the measurement named.
+
+**What was built instead is the apparatus those decisions need.** "Tune queue thresholds" is not a
+decision anybody can make from a replica count that does not say what asked for it. AC 14 —
+*"Monitor identifies whether scaling was scheduled, queue-driven, manual, or deployment-related"* —
+was an outstanding acceptance criterion and is exactly that instrument.
+`capacity_schedule.attribute_capacity` derives it from readings that already exist, so it costs no
+storage and no background writer. It distinguishes five states, and the fifth is the one a bare
+replica count hides:
+
+* `deployment` — a rollout is in progress, so the count says nothing about demand. Outranks
+  everything: reading a deploy as a demand spike is the classic misattribution.
+* `manual_override` · `queue` · `scheduled` — the three §10 asks for.
+* `below_floor` — **fewer** replicas than the floor. Not a scaling decision at all: a restart, a
+  failed revision, or capacity Azure has not granted. Identical to `scheduled` in a bare count,
+  and only one of them is a problem.
+
+**A durable scale-event history is deliberately NOT built.** It is a table, a writer and a
+retention decision, and it should be made against a week of the derived view rather than in
+advance of it.
+
+## R10 — holiday exceptions work in ACP and cannot work in Azure
+
+Delivered as a first-class schedule field: `effective_mode`, `next_transition`, validation and the
+tab all observe them, and an unparseable date **blocks the save** rather than being dropped (a
+holiday ACP cannot read is one it will not observe, and the administrator would see their date
+listed and get warm capacity anyway).
+
+**The published Azure policy cannot enforce them, and this is a limit rather than a gap.** A KEDA
+`cron` rule is a start expression, an end expression and a timezone. Cron can say *"the 25th of
+December"*; it has no way to say *"every weekday except the 25th of December"*. Expressing the
+exclusion needs one rule per contiguous run of working days between holidays — unbounded, and
+republished as the calendar moves, when every republish is a revision §6.4 exists to avoid.
+
+So on a holiday, **Azure holds the business-hours floor and ACP knows it should not.** That is a
+day of wasted spend, not a correctness failure, and it is stated in three places rather than
+discovered from a bill: `GET …/policy` returns `holidays.enforced_by_policy: false` with the
+reason, the tab says it beside the dates, and the editor says it beside the field. The two ways to
+actually close it — republish without the schedule for the day (two revisions), or a temporary
+override (no revision, but four hours at a time) — are recorded next to the caveat.
+
+**One bug this turned up.** `next_transition` searched nine local days. A schedule naming a single
+weekday, with a holiday on the next occurrence of that weekday, has its next transition fifteen
+days out — so the search returned `None`, and the tab renders `None` as *"no scheduled
+transition"*. A valid schedule with one holiday would have reported itself as having nothing
+scheduled, indefinitely. The horizon is now a year, with an early exit on the first day that
+carries one.
+
 ## R8 — Smaller notes
 
 - **§5.3's GPU row is not a Postgres client** and does not appear in the connection budget. It
@@ -535,4 +597,4 @@ Two things this turned up that the PRD could not have known:
 | 2 | **Delivered.** Read-only Scheduling tab in Settings, `GET /control/capacity-schedule` and the admin-only `POST …/validate`, scaler health (with the `pinned` state AC 10 was missing), the Live Operations capacity-mode strip (R1), and the DST tests moved forward (R8). No infrastructure changes, no persistence, no writes. |
 | 3 | **Delivered, except applying to Azure.** `PUT /control/capacity-schedule` (validated, version-checked, audited), audited overrides that expire on read, `GET …/policy` rendering the cron+queue mechanism (R7), and the administrator editor. Persistence and application are separate steps: a saved schedule reports `azure_applied: false` until somebody pushes it. |
 | 3b | **New.** Apply a published policy to Azure and verify a real transition creates no revision (AC 5, AC 17). Needs a subscription; `docs/runbooks/verify-capacity-scalers.md` §8 is the procedure. |
-| 4 | Unchanged. |
+| 4 | **Split.** Holiday exceptions and AC 14's scale attribution are delivered — neither needs measurements. The three tuning items are **blocked on data that does not exist**: see below. |

@@ -41,6 +41,7 @@ const SNAP = {
   next_transition_to: null, version: 7, applied: true, override: null,
   validation: { blocked: false, findings: [], capacity: null },
   scalers: {}, observed: {}, drift: [], drift_evaluated: true, azure_configured: true,
+  holidays: ['2026-12-25'], attribution: {},
 }
 
 const ADMIN = { is_admin: true }
@@ -222,5 +223,33 @@ describe('nothing is rendered optimistically', () => {
     await act(async () => { button(c, 'Save schedule').click() })
     await act(async () => { await Promise.resolve() })
     expect(c.textContent).toMatch(/Nothing was changed|could not be saved/)
+  })
+})
+
+
+describe('holiday exceptions', () => {
+  it('round-trips the dates and sends them with the save', async () => {
+    const c = await mount()
+    expect(field(c, 'cap-holidays').value).toBe('2026-12-25')
+    type(field(c, 'cap-holidays'), '2026-12-25, 2027-01-01')
+    type(field(c, 'cap-reason'), 'add new year')
+    await act(async () => { button(c, 'Save schedule').click() })
+    expect(calls.put[0].holidays).toEqual(['2026-12-25', '2027-01-01'])
+  })
+
+  it('tells the administrator that Azure will not observe them', async () => {
+    // An administrator who types a date here and is not told this would reasonably expect the
+    // spend to drop on the day. The caveat belongs beside the field, not in a doc.
+    const c = await mount()
+    expect(c.textContent).toMatch(/cron scale rule cannot express an exception/)
+    expect(c.textContent).toMatch(/temporary override on the day/)
+  })
+
+  it('drops blank entries rather than sending an empty date', async () => {
+    const c = await mount()
+    type(field(c, 'cap-holidays'), '2026-12-25, , 2027-01-01,')
+    type(field(c, 'cap-reason'), 'r')
+    await act(async () => { button(c, 'Save schedule').click() })
+    expect(calls.put[0].holidays).toEqual(['2026-12-25', '2027-01-01'])
   })
 })

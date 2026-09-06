@@ -63,6 +63,8 @@ const PROPOSED = {
   drift: [],
   drift_evaluated: false,
   azure_configured: true,
+  holidays: [],
+  attribution: {},
 }
 
 async function mount(data = PROPOSED) {
@@ -210,5 +212,44 @@ describe('the tab stays read-only and points elsewhere for the rest', () => {
     const c = await mount(new Error('boom'))
     expect(c.textContent).toMatch(/could not be read/)
     expect(c.textContent).toMatch(/nothing has been altered/i)
+  })
+})
+
+
+describe('why capacity is where it is (AC 14)', () => {
+  it('names each cause and does not fold "below the floor" into "scheduled"', async () => {
+    const c = await mount({ ...PROPOSED, attribution: {
+      web: { reason: 'scheduled', detail: 'Exactly the scheduled floor of 1.' },
+      assess: { reason: 'queue', detail: '3 replica(s) above the scheduled floor of 5.' },
+      remediate: { reason: 'deployment', detail: '2 replica(s) still on a previous revision.' },
+      discovery: { reason: 'below_floor', detail: '1 replica(s) short of the scheduled floor of 4.' },
+      gpu: { reason: 'unknown', detail: 'Azure did not answer for this app.' },
+    } })
+    expect(c.textContent).toContain('Scheduled floor')
+    expect(c.textContent).toContain('Queue-driven')
+    expect(c.textContent).toContain('Deployment in progress')
+    expect(c.textContent).toContain('Below the scheduled floor')
+    expect(c.textContent).toContain('Not known')
+    expect(c.textContent).toMatch(/3 replica\(s\) above/)
+  })
+
+  it('renders no attribution panel when there is nothing to attribute', async () => {
+    const c = await mount()
+    expect(c.textContent).not.toContain('WHY CAPACITY IS WHERE IT IS')
+  })
+})
+
+describe('holiday exceptions say what Azure will actually do', () => {
+  it('lists the dates and states that a published policy cannot observe them', async () => {
+    const c = await mount({ ...PROPOSED, holidays: ['2026-12-25', '2027-01-01'] })
+    expect(c.textContent).toContain('2026-12-25')
+    expect(c.textContent).toMatch(/cron scale rule cannot express an exception/)
+    // The consequence in the operator's terms, not just the mechanism.
+    expect(c.textContent).toMatch(/stays at the business-hours floor/)
+  })
+
+  it('renders nothing when no holidays are declared', async () => {
+    const c = await mount()
+    expect(c.textContent).not.toContain('HOLIDAY EXCEPTIONS')
   })
 })
