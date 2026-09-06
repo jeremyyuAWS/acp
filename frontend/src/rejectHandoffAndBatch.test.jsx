@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { createElement } from 'react'
+import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { createElement, Fragment } from 'react'
 import { act } from 'react-dom/test-utils'
 import { createTestRoot, unmountAll } from './testRoots.js'
 import {
@@ -7,6 +7,7 @@ import {
 } from './remediationInboxModel.js'
 
 const { default: RemediationInbox } = await import('./RemediationInbox.jsx')
+const { default: ConfirmDialog } = await import('./ConfirmDialog.jsx')
 
 afterEach(unmountAll)
 
@@ -37,7 +38,9 @@ describe('W2 — a rejected AI fix has a destination (handoff lane)', () => {
 // ── component harness ──────────────────────────────────────────────────────────────────────────
 let container, root
 beforeEach(() => { ;({ container, root } = createTestRoot()) })
-const render = async (props) => { await act(async () => { root.render(createElement(RemediationInbox, { initialSort: 'document', ...props })) }) }
+const render = async (props) => { await act(async () => { root.render(createElement(Fragment, null,
+  createElement(RemediationInbox, { initialSort: 'document', ...props }),
+  createElement(ConfirmDialog))) }) }
 const click = async (el) => { await act(async () => { el.dispatchEvent(new MouseEvent('click', { bubbles: true })) }) }
 const btnByText = (t) => [...container.querySelectorAll('button')].find((b) => b.textContent.includes(t))
 const detailHeading = () => container.querySelector('h3')?.textContent
@@ -117,17 +120,28 @@ describe('W8 — apply a decision to every matching finding in the same cluster'
     expect(container.textContent).not.toContain('share this issue')
   })
 
-  it('requires a second confirmation before a decision reaches a large group', async () => {
+  it('uses an upper-right toast confirmation before a decision reaches a large group', async () => {
     const queue = Array.from({ length: 12 }, (_, i) => ({
       id: i + 20, file: `doc-${i + 1}.docx`, title: 'DOCX · Image needs alt text',
       rule_id: '1.1.1', hasProposal: true, after: `alt ${i + 1}`,
     }))
     const calls = []
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false)
     await render({ queue, decisions: {}, onDecide: (f) => calls.push(f.id) })
     await click(btnByText('Approve & apply to all 12'))
-    expect(confirm).toHaveBeenCalledWith('Apply this decision to 12 findings across 12 documents?')
+    const toast = container.querySelector('[role="alertdialog"]')
+    expect(toast).toBeTruthy()
+    expect(toast.getAttribute('aria-modal')).toBe('false')
+    expect(toast.getAttribute('style')).toContain('top: 18px')
+    expect(toast.getAttribute('style')).toContain('right: 18px')
+    expect(toast.textContent).toContain('Apply decision to matching findings?')
+    expect(toast.textContent).toContain('12 findings across 12 documents')
     expect(calls).toEqual([])
-    confirm.mockRestore()
+    await click(btnByText('Cancel'))
+    expect(container.querySelector('[role="alertdialog"]')).toBeNull()
+    expect(calls).toEqual([])
+
+    await click(btnByText('Approve & apply to all 12'))
+    await click(btnByText('Apply to all'))
+    expect(calls.sort((a, b) => a - b)).toEqual(Array.from({ length: 12 }, (_, i) => i + 20))
   })
 })
