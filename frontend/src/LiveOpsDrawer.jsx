@@ -933,7 +933,9 @@ function JobHealth({ health }) {
       : <ul style={{ listStyle: 'none', margin: '7px 0 0', padding: 0, display: 'grid', gap: 6 }}>
         {health.jobs.map((job) => <li key={job.key} style={{ ...PANEL, padding: 9, fontSize: 12 }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
-            <code style={{ overflowWrap: 'anywhere', flex: '1 1 auto' }}>{job.file || 'file not reported'}</code>
+            <code style={{ overflowWrap: 'anywhere', flex: '1 1 auto' }}>
+              {job.file || (job.fileRedacted ? 'Document name withheld' : 'file not reported')}
+            </code>
             {job.phase && <span style={{ fontSize: 11, fontWeight: 700, color: TONE.info,
               whiteSpace: 'nowrap' }}>{job.phase}</span>}
           </div>

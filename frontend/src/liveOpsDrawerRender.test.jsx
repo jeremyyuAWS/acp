@@ -1922,3 +1922,56 @@ describe('What the worker service is doing', () => {
     expect(panel.querySelectorAll('li')).toHaveLength(0)
   })
 })
+
+describe('A document name the viewer is not entitled to', () => {
+  // The backend redacts names on runs the viewer does not own -- including for admins, who see
+  // the whole fleet. The panel must say WITHHELD rather than "not reported": one is a policy, the
+  // other is a claim about the system, and saying the wrong one is misleading either way.
+  const foreign = {
+    ...snapshot,
+    runs: [{ ...snapshot.runs[0], owner: 'other@example.org', current_file: null,
+      file_redacted: true, in_flight: [
+        { job_id: 'j1', file: null, file_redacted: true, rule_id: 'WCAG 1.4.3',
+          job_type: 'assess_file', phase: 'remediating', started_at: iso(-45),
+          heartbeat_at: iso(-2), attempts: 0 },
+      ] }],
+  }
+
+  it('says the name is withheld, not that it was never reported', async () => {
+    const container = await mount({ nodeId: 'stage:assess', snapshot: foreign,
+      node: { kind: 'worker', label: 'Assess workers', service } })
+    const work = container.querySelector('[aria-label="Current work"]')
+
+    expect(work.textContent).toContain('Document name withheld')
+    expect(work.textContent).not.toContain('file not reported')
+  })
+
+  it('keeps every operational fact about the redacted job', async () => {
+    // Redaction removes a name, not the ability to diagnose: an admin must still see what the
+    // stage is doing on a tenant that is not theirs.
+    const container = await mount({ nodeId: 'stage:assess', snapshot: foreign,
+      node: { kind: 'worker', label: 'Assess workers', service } })
+    const work = container.querySelector('[aria-label="Current work"]')
+
+    expect(work.textContent).toContain('WCAG 1.4.3')
+    expect(work.textContent).toContain('Applying fixes')
+    expect(work.textContent).toMatch(/running 45s/)
+    expect(work.textContent).toContain('1 document in flight')
+  })
+
+  it('still says "not reported" when the handler genuinely reported nothing', async () => {
+    const quiet = {
+      ...snapshot,
+      runs: [{ ...snapshot.runs[0], current_file: null, in_flight: [
+        { job_id: 'j1', file: null, rule_id: null, job_type: 'assess_file', phase: null,
+          started_at: iso(-10), heartbeat_at: iso(-1), attempts: 0 },
+      ] }],
+    }
+    const container = await mount({ nodeId: 'stage:assess', snapshot: quiet,
+      node: { kind: 'worker', label: 'Assess workers', service } })
+    const work = container.querySelector('[aria-label="Current work"]')
+
+    expect(work.textContent).toContain('file not reported')
+    expect(work.textContent).not.toContain('withheld')
+  })
+})

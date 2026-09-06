@@ -554,6 +554,10 @@ export function workerJobHealth(snapshot = {}, stage, { nowMs = Date.now() } = {
       scanId: run.scan_id,
       owner: run.owner || null,
       file: row.file || null,
+      // Withheld from this viewer, as opposed to never reported by the handler. Two different
+      // facts about an absent name, and a panel given only the absence will state one of them
+      // regardless — so the backend flags which, and the panel repeats only what it was told.
+      fileRedacted: row.file_redacted === true || run.file_redacted === true,
       ruleId: row.rule_id || null,
       jobType: row.job_type ? String(row.job_type).replaceAll('_', ' ') : null,
       // What the handler says it is doing. Unmapped values pass through as themselves rather
