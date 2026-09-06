@@ -383,9 +383,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 3.12, because that is what the API image runs (deploy/public/Dockerfile.base-api). This
+      # job sat on 3.11 with no stated reason while every other job, azure-pipelines.yml and
+      # production were on 3.12 — testing the one version nothing ships. It stayed green only
+      # because its test selection happens not to import routes/scans.py, which since #1592
+      # contains a nested-quote f-string that is PEP 701 syntax and a SyntaxError before 3.12.
+      # Adding a test here that imports the app would have turned it red for a reason that had
+      # nothing to do with the test. tests/test_ci_python_version.py now holds the pins together.
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
 
       - name: Install API + test dependencies
         run: python -m pip install --quiet -r api/requirements.txt -r tests/requirements.txt

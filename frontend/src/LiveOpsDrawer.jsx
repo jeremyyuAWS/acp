@@ -139,7 +139,7 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queu
       </svg>
       <div style={{ minWidth: 160, flex: 1 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontWeight: 700, color }}>
-          <span aria-hidden="true">{{ available: '●', approaching: '▲', saturated: '■', idle: '○', unavailable: '—' }[gauge.state]}</span>
+          <span aria-hidden="true">{{ available: '●', approaching: '▲', saturated: '■', idle: '○', unclaimed: '◐', unavailable: '—' }[gauge.state]}</span>
           {gauge.stateLabel}
         </div>
         <p style={{ margin: '6px 0 0', fontSize: 13 }}>{gauge.text}.</p>
@@ -150,11 +150,17 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queu
           <span aria-hidden="true">■ </span>
           {gauge.oversubscribed} more {gauge.oversubscribed === 1 ? 'job' : 'jobs'} running than slots
         </p>}
-        {gauge.overCommittedNote
-          ? <p className="muted" style={{ fontSize: 11, marginTop: 6 }}>{gauge.overCommittedNote}</p>
-          : <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
-            Amber from 75% of slots, red at 100% — the documented capacity rule, not a colour range.
-          </div>}
+        {/* The unclaimed note comes FIRST: when a service is running work its slots do not
+            account for, the capacity-rule sentence is the least useful thing on the panel. */}
+        {gauge.unclaimedNote
+          ? <p style={{ fontSize: 11, marginTop: 6, color: TONE.warn }}>
+            <span aria-hidden="true">▲ </span>{gauge.unclaimedNote}
+          </p>
+          : gauge.overCommittedNote
+            ? <p className="muted" style={{ fontSize: 11, marginTop: 6 }}>{gauge.overCommittedNote}</p>
+            : <div className="muted" style={{ fontSize: 11, marginTop: 6 }}>
+              Amber from 75% of slots, red at 100% — the documented capacity rule, not a colour range.
+            </div>}
         <div className="muted" style={{ fontSize: 11, marginTop: 4, overflowWrap: 'anywhere' }}>
           Heartbeat {service?.age_s == null ? NOT_REPORTED : `${Math.round(service.age_s)}s ago`}
         </div>

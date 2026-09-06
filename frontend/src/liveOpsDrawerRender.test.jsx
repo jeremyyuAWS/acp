@@ -1975,3 +1975,46 @@ describe('A document name the viewer is not entitled to', () => {
     expect(work.textContent).not.toContain('withheld')
   })
 })
+
+describe('A service running work its slots do not account for', () => {
+  // The production reading on 2026-09-06: Assess showed "Idle — capacity available, 0 of 20
+  // worker slots active (0%)" with 13 jobs in flight and 8 of them listed by name below it.
+  const stranded = { ...service, active: 0, slots: 20, available: 20, alive: true,
+    jobs_in_flight: 13, unattributed_running: 13, capacity_source: 'worker_instances' }
+
+  it('does not head the panel "Idle" while it is running jobs', async () => {
+    const container = await mount({ nodeId: 'stage:assess',
+      node: { kind: 'worker', label: 'Assess workers', service: stranded } })
+    const dialog = container.querySelector('[role="dialog"]')
+
+    expect(dialog.textContent).toContain('Running work not claimed by live slots')
+    expect(dialog.textContent).not.toContain('Idle — capacity available')
+  })
+
+  it('keeps the true 0% and explains why it disagrees with the work', async () => {
+    const container = await mount({ nodeId: 'stage:assess',
+      node: { kind: 'worker', label: 'Assess workers', service: stranded } })
+    const dialog = container.querySelector('[role="dialog"]')
+
+    // The number stays: zero CLAIMED slots is a correct measurement, and hiding it would trade
+    // one wrong impression for another.
+    // The drawer renders gauge.text (busyText is the map tile's phrasing) — the exact sentence
+    // from the production screenshot.
+    expect(dialog.textContent).toContain('0 of 20 worker slots active (0%), 20 available')
+    expect(dialog.textContent).toContain('13 running job records')
+    expect(dialog.textContent).toContain('The jobs are real')
+    // The capacity-rule sentence is the least useful line here and yields to the explanation.
+    expect(dialog.textContent).not.toContain('Amber from 75% of slots')
+  })
+
+  it('still reads Idle when the service really is doing nothing', async () => {
+    const container = await mount({ nodeId: 'stage:assess',
+      node: { kind: 'worker', label: 'Assess workers',
+        service: { ...stranded, jobs_in_flight: 0, unattributed_running: 0 } } })
+    const dialog = container.querySelector('[role="dialog"]')
+
+    expect(dialog.textContent).toContain('Idle — capacity available')
+    expect(dialog.textContent).not.toContain('Running work not claimed')
+    expect(dialog.textContent).toContain('Amber from 75% of slots')
+  })
+})

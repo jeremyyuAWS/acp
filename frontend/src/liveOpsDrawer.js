@@ -129,6 +129,18 @@ export function componentState(data = {}, ctx = {}) {
     if (provisioningState && !/^(provisioned|succeeded)$/i.test(String(provisioningState))) {
       return withLabel('provisioning', 'Provisioning', `Active revision is ${provisioningState}.`)
     }
+    // BEFORE the idle branch. This said "Online with no work claimed — healthy, not stalled"
+    // about a production service holding thirteen running jobs, on a panel that listed eight of
+    // them by name two sections below. Zero CLAIMED slots was true; healthy and not stalled was
+    // an assertion the data did not support, and it is the sentence a reader trusts first.
+    const unattributed = num(service.unattributed_running) || 0
+    const inFlight = num(service.jobs_in_flight) || 0
+    if (unattributed > 0 || (num(service.active) === 0 && inFlight > 0)) {
+      return withLabel('degraded', 'Work unclaimed',
+        `${inFlight || unattributed} running job ${(inFlight || unattributed) === 1 ? 'record is' : 'records are'} `
+        + 'held by this service while its live worker slots report none claimed. The work is real; '
+        + 'the slots count only processes whose telemetry is fresh.')
+    }
     if (num(service.active) === 0) {
       return withLabel('idle', 'Idle', 'Online with no work claimed — healthy, not stalled.')
     }
@@ -781,13 +793,28 @@ export function gaugeModel(service = {}, options = {}) {
   // once — a different condition with a different cause (see oversubscriptionNote).
   const oversubscribed = overCommitted ? active - slots : null
   const availableSlots = Math.max(0, slots - active)
+  // WORK THIS SERVICE IS RUNNING THAT NO LIVE SLOT ACCOUNTS FOR. `active` counts the busy slots
+  // reported by worker processes whose registry row is FRESH; `jobs_in_flight` counts the durable
+  // job rows this service actually holds. They disagree whenever the process holding a job is not
+  // reporting — mid-rollout, a replica draining past its telemetry, a heartbeat that stopped
+  // while its handler kept working.
+  const inFlight = num(service.jobs_in_flight)
+  const unattributed = num(service.unattributed_running)
+  const runningUnclaimed = (unattributed || 0) > 0 || (active === 0 && (inFlight || 0) > 0)
+
   let state = 'available'
   if (!service.alive) state = 'unavailable'
   else if (options.stalled || overCommitted) state = 'saturated'
   else if (slots > 0 && active >= slots * CAPACITY_RULES.saturatedAt) state = 'saturated'
   else if (slots > 0 && active >= slots * CAPACITY_RULES.approachingAt) state = 'approaching'
+  // BEFORE `idle`, and that ordering is the fix. This read "Idle — capacity available" against a
+  // production service running thirteen documents, directly above a panel listing eight of them
+  // by name. 0 of 20 slots busy was TRUE; idle was not, and of the two the headline is what a
+  // reader takes away. Zero CLAIMED slots and zero WORK are different states and now say so.
+  else if (runningUnclaimed) state = 'unclaimed'
   else if (active === 0) state = 'idle'
-  const tone = { available: 'ok', approaching: 'warn', saturated: 'bad', idle: 'idle', unavailable: 'idle' }[state]
+  const tone = { available: 'ok', approaching: 'warn', saturated: 'bad', idle: 'idle',
+    unclaimed: 'warn', unavailable: 'idle' }[state]
   return {
     available: true, active, slots, availableSlots, provisioning, fraction, pct, state, tone,
     overCommitted, oversubscribed,
@@ -813,7 +840,20 @@ export function gaugeModel(service = {}, options = {}) {
       : null,
     stateLabel: overCommitted ? 'Over committed'
       : { available: 'Capacity available', approaching: 'Approaching capacity',
-        saturated: 'At capacity', idle: 'Idle — capacity available', unavailable: 'Capacity unavailable' }[state],
+        saturated: 'At capacity', idle: 'Idle — capacity available',
+        unclaimed: 'Running work not claimed by live slots',
+        unavailable: 'Capacity unavailable' }[state],
+    // The numbers behind that state, so the panel explains rather than only labels. Null when the
+    // condition does not hold, like every other note here.
+    unclaimedNote: state === 'unclaimed'
+      ? `${inFlight == null ? 'Some' : inFlight} running job `
+        + `${inFlight === 1 ? 'record is' : 'records are'} held by this service while its live `
+        + 'worker slots report none claimed. The slot figure counts only processes whose registry '
+        + 'row is fresh, so a replica still working through a drain, or one whose telemetry '
+        + 'stopped before its handler did, does its work outside this gauge. The jobs are real; '
+        + 'the percentage describes claimed slots, not whether the service is busy.'
+      : null,
+    runningUnclaimed, jobsInFlight: inFlight, unattributed,
   }
 }
 
