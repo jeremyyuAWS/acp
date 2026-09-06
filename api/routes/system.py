@@ -1495,6 +1495,9 @@ def _admin_activity_snapshot() -> dict:
     running_by_type = _running_by_type() if callable(_running_by_type) else None
     _list_events = getattr(core.store, "list_orchestration_events", None)
     lifecycle_events = _list_events(limit=200) if callable(_list_events) else []
+    _list_stage_events = getattr(core.store, "list_workflow_stage_events", None)
+    stage_events = _list_stage_events() if callable(_list_stage_events) else lifecycle_events
+    recovery = _recovery_summary(stage_events)
     for role, row in per_role.items():
         stage = "discover" if role == "discovery" else role
         if running_by_type is None:
@@ -1580,7 +1583,7 @@ def _admin_activity_snapshot() -> dict:
         pressure = "busy"
     else:
         pressure = "healthy"
-    workflows = _workflow_rows(runs)
+    workflows = _workflow_rows(runs, stage_events)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "runs": runs,
@@ -1610,6 +1613,7 @@ def _admin_activity_snapshot() -> dict:
                 "unlinked_active_jobs": unlinked_active_jobs,
                 "complete": unlinked_active_jobs == 0 if unlinked_active_jobs is not None else None,
             },
+            "recovery": recovery,
             # During mixed-version rollout an empty registry is unavailable, not zero capacity.
             # Once any process has reported, worker_capacity_by_role contains the fresh/stale
             # split and every raw instance needed by the authorized operations drawer.
@@ -1627,23 +1631,108 @@ def _admin_activity_snapshot() -> dict:
     }
 
 
-def _workflow_rows(runs: list[dict]) -> list[dict]:
+def _recovery_summary(events: list[dict] | None) -> dict:
+    """Bounded aggregate over the same 24-hour durable stage stream used by the map.
+
+    No actor, owner, filename or error detail is returned. A completed cancellation is matched
+    to its request by workflow, stage and execution correlation so unrelated cancellations do
+    not inflate the recovery success figure.
+    """
+    events = events or []
+    def _key(row):
+        return (str(row.get("scan_id") or ""), str(row.get("stage") or ""),
+                str(row.get("correlation_id") or ""))
+
+    requested = {_key(row): row for row in events
+                 if row.get("kind") == "workflow.stage_cancel_requested"}
+    cancelled = {_key(row): row for row in events if row.get("kind") == "job.stage_cancelled"}
+    resolved_keys = requested.keys() & cancelled.keys()
+    resolved = len(resolved_keys)
+    durations = []
+    for key in resolved_keys:
+        try:
+            started = datetime.fromisoformat(str(requested[key].get("occurred_at")).replace("Z", "+00:00"))
+            ended = datetime.fromisoformat(str(cancelled[key].get("occurred_at")).replace("Z", "+00:00"))
+            durations.append(max(0, int((ended - started).total_seconds())))
+        except (TypeError, ValueError):
+            continue
+    durations.sort()
+    median_seconds = (durations[len(durations) // 2] if len(durations) % 2 else
+                      round((durations[len(durations) // 2 - 1] + durations[len(durations) // 2]) / 2)) \
+        if durations else None
+    actions = [row for row in events if row.get("kind") in (
+        "workflow.stage_cancel_requested", "workflow.stage_resumed")]
+    latest = max((str(row.get("occurred_at") or "") for row in actions), default="") or None
+    return {
+        "window_hours": 24,
+        "cancel_requests": len(requested),
+        "cancel_resolved": resolved,
+        "cancel_pending": max(0, len(requested) - resolved),
+        "cancel_success_pct": round(resolved / len(requested) * 100) if requested else None,
+        "median_cancel_seconds": median_seconds,
+        "resumes": sum(1 for row in events if row.get("kind") == "workflow.stage_resumed"),
+        "latest_action_at": latest,
+    }
+
+
+def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None) -> list[dict]:
     """Turn stage aggregates into the durable workflow contract used by Live Ops.
 
-    ``scan_id`` is already the parent identity stamped on every queue record in the pipeline.
-    Calling it ``workflow_id`` here makes that relationship explicit without creating a second
-    identity that could drift.  Stage ids are deterministic because the current queue model has
-    one aggregate stage per scan; individual attempts remain inspectable in the stage detail.
+    New scans carry a persisted workflow execution and revision. Its external id deliberately
+    equals the first scan id in revision 1, preserving every existing deep link while making the
+    relationship first-class; legacy rows use that same fallback. Stage ids are deterministic
+    because the current queue model has one aggregate stage per scan; individual attempts remain
+    inspectable in the stage detail.
     """
+    # Event-only stages are projection inputs, not queue rows. Work on a copy so returning the
+    # canonical workflow history cannot silently widen the endpoint's separate `runs` contract.
+    runs = list(runs)
     grouped: dict[str, dict] = {}
+    durable_stages: dict[tuple[str, str], dict] = {}
+    for event in lifecycle_events or []:
+        if event.get("kind") not in ("job.stage_started", "job.stage_completed",
+                                      "job.stage_failed", "job.stage_cancelled"):
+            continue
+        key = (str(event.get("scan_id") or ""), str(event.get("stage") or ""))
+        if not all(key):
+            continue
+        state = durable_stages.setdefault(key, {})
+        transition = event["kind"].removeprefix("job.stage_")
+        previous = state.get(transition)
+        if not previous or (str(event.get("occurred_at") or ""), str(event.get("event_id") or "")) > \
+                (str(previous.get("occurred_at") or ""), str(previous.get("event_id") or "")):
+            state[transition] = event
+    represented = {(str(run.get("scan_id") or ""), str(run.get("stage") or "")) for run in runs}
+    # A terminal stage remains part of the flow after its queue rows leave the recent tail. Only
+    # a terminal event can be reconstructed without live jobs; a lone old start is not evidence that
+    # work is still active, so it is deliberately not synthesized.
+    for key, state in durable_stages.items():
+        terminal = max((event for name, event in state.items() if name != "started"),
+                       key=lambda event: str(event.get("occurred_at") or ""), default=None)
+        if key in represented or not terminal:
+            continue
+        completed = terminal
+        started = state.get("started") or {}
+        detail = completed.get("detail") or {}
+        runs.append({
+            "scan_id": key[0], "stage": key[1], "owner": completed.get("owner_email"),
+            "source": completed.get("source") or "unknown",
+            "status": "recent" if completed.get("kind") == "job.stage_completed" else "failed",
+            "running": 0, "queued": 0, "failed": 0,
+            "completed": int(detail.get("documents") or 0),
+            "total": int(detail.get("documents") or 0), "max_attempts_seen": completed.get("attempt"),
+            "started_at": started.get("occurred_at"), "updated_at": completed.get("occurred_at"),
+        })
     stage_order = {"discover": 0, "assess": 1, "remediate": 2, "release": 3}
+    now = datetime.now(timezone.utc)
     for run in runs:
         scan_id = str(run.get("scan_id") or "").strip()
         stage = str(run.get("stage") or "").strip()
         if not scan_id or not stage:
             continue
         workflow = grouped.setdefault(scan_id, {
-            "workflow_id": scan_id,
+            "workflow_id": run.get("workflow_id") or scan_id,
+            "workflow_revision": int(run.get("workflow_revision") or 1),
             "scan_id": scan_id,
             "owner_display_name": run.get("owner") or "unknown",
             "source": run.get("source") or "unknown",
@@ -1661,9 +1750,36 @@ def _workflow_rows(runs: list[dict]) -> list[dict]:
         stage_status = ("running" if int(run.get("running") or 0) else
                         "waiting" if int(run.get("queued") or 0) else
                         "failed" if int(run.get("failed") or 0) else "completed")
+        durable = durable_stages.get((scan_id, stage), {})
+        durable_start = durable.get("started") or {}
+        durable_terminal = max((event for name, event in durable.items() if name != "started"),
+                               key=lambda event: str(event.get("occurred_at") or ""), default={})
+        durable_completion = durable_terminal if durable_terminal.get("kind") == "job.stage_completed" else {}
+        durable_failure = durable_terminal if durable_terminal.get("kind") in ("job.stage_failed", "job.stage_cancelled") else {}
+        if durable_failure and not int(run.get("running") or 0) and not int(run.get("queued") or 0):
+            stage_status = "cancelled" if durable_failure.get("kind") == "job.stage_cancelled" else "failed"
+        heartbeat = run.get("current_job_heartbeat_at")
+        stalled = False
+        if stage_status == "running" and heartbeat:
+            try:
+                beat = datetime.fromisoformat(str(heartbeat).replace("Z", "+00:00"))
+                if beat.tzinfo is None:
+                    beat = beat.replace(tzinfo=timezone.utc)
+                stalled = (now - beat).total_seconds() > 360
+            except (TypeError, ValueError):
+                stalled = False
+        # A stage-completed event is the authoritative once-only transition for new executions.
+        # Queue aggregation remains the rolling-deploy fallback for jobs completed before the
+        # emitter existed, and continues to provide live document counts.
+        if durable_completion and stage_status == "completed":
+            completed_at = durable_completion.get("occurred_at")
+        else:
+            completed_at = run.get("updated_at") if stage_status == "completed" else None
         workflow["stages"].append({
             "stage": stage,
-            "stage_run_id": f"{scan_id}:{stage}",
+            "stage_run_id": (durable_terminal.get("correlation_id")
+                             or durable_start.get("correlation_id")
+                             or f"{scan_id}:{stage}"),
             "attempt": max(1, int(run.get("max_attempts_seen") or 0)),
             "status": stage_status,
             "total": int(run.get("total") or 0),
@@ -1671,10 +1787,19 @@ def _workflow_rows(runs: list[dict]) -> list[dict]:
             "active": int(run.get("running") or 0),
             "waiting": int(run.get("queued") or 0),
             "failed": int(run.get("failed") or 0),
-            "started_at": run.get("started_at"),
-            "completed_at": run.get("updated_at") if stage_status == "completed" else None,
+            "started_at": durable_start.get("occurred_at") or run.get("started_at"),
+            "completed_at": completed_at,
+            "completion_recorded": bool(durable_completion),
+            "terminal_outcome": ("failed" if durable_failure.get("kind") == "job.stage_failed" else
+                                 "cancelled" if durable_failure else
+                                 "completed" if durable_completion else None),
+            "error_class": durable_failure.get("error_class") or run.get("last_error_class"),
             "latest_progress_at": run.get("updated_at"),
-            "waiting_reason": None,
+            "stalled": stalled,
+            "paused": run.get("paused") is True,
+            "cancel_requested": run.get("cancel_requested") is True,
+            "cancel_requested_at": run.get("cancel_requested_at"),
+            "waiting_reason": "worker_heartbeat_stale" if stalled else None,
             "next_retry_at": None,
         })
     for workflow in grouped.values():
@@ -1759,6 +1884,74 @@ def admin_activity(request: Request, response: Response):
     return snapshot
 
 
+@router.post("/admin/activity/workflows/{scan_id}/stages/{stage}/cancel")
+def cancel_workflow_stage(scan_id: str, stage: str, request: Request):
+    """Platform-admin recovery action: stop only the selected workflow stage."""
+    _require_admin(request)
+    if stage not in ("discover", "assess", "remediate", "release"):
+        raise HTTPException(400, "this stage cannot be cancelled here")
+    scan = core.store.get_scan(scan_id)
+    if scan is None:
+        raise HTTPException(404, "workflow not found")
+    actor = str(getattr(request.state, "user_email", "") or "").strip().lower()
+    if stage == "discover":
+        if not core.store.cancel_scan(scan_id):
+            raise HTTPException(409, "no active discovery execution was found")
+        core.store._update_workflow_stage(scan_id, "discover", "cancelled")
+        owner = core.store._stage_owner(scan_id)
+        if owner:
+            document_count = scan.get("files")
+            if not isinstance(document_count, (int, float)):
+                document_count = (scan.get("summary") or {}).get("files", 0)
+            core.store.append_orchestration_event(
+                event_id=core.store._stage_event_id(
+                    scan_id, "discover", f"{scan_id}:discover", "cancelled"),
+                owner_email=owner, kind="job.stage_cancelled", scan_id=scan_id,
+                workflow=scan_id, stage="discover", correlation_id=f"{scan_id}:discover",
+                error_class="cancelled",
+                detail={"documents": int(document_count or 0), "cancelled": 1,
+                        "stage_execution_id": f"{scan_id}:discover"})
+            core.store.append_orchestration_event(
+                owner_email=owner, kind="workflow.stage_cancel_requested", scan_id=scan_id,
+                workflow=scan_id, stage="discover", correlation_id=f"{scan_id}:discover",
+                detail={"requested_by": actor, "scope": "active discovery"})
+        return {"workflow_id": scan_id, "stage": stage, "found": True,
+                "cancelled": 1, "requested": 0}
+    result = core.store.request_stage_cancel(scan_id, stage, actor=actor)
+    if not result.get("found"):
+        raise HTTPException(409, "no durable stage execution was found")
+    return {"workflow_id": scan_id, "stage": stage, **result}
+
+
+@router.post("/admin/activity/workflows/{scan_id}/stages/remediate/resume")
+def resume_workflow_remediation(scan_id: str, request: Request):
+    """Platform-admin recovery action: release a remediation hold already recorded by ACP."""
+    _require_admin(request)
+    if core.store.get_scan(scan_id) is None:
+        raise HTTPException(404, "workflow not found")
+    if not core.store.remediation_run_paused(scan_id):
+        raise HTTPException(409, "remediation is not paused")
+    actor = str(getattr(request.state, "user_email", "") or "").strip().lower()
+    result = core.store.resume_remediation_run(scan_id, actor=actor)
+    owner = core.store._stage_owner(scan_id)
+    if owner:
+        core.store.append_orchestration_event(
+            owner_email=owner, kind="workflow.stage_resumed", scan_id=scan_id,
+            workflow=scan_id, stage="remediate", correlation_id=scan_id,
+            detail={"requested_by": actor, "released": result.get("released", 0)})
+    return {"workflow_id": scan_id, "stage": "remediate", "paused": False, **result}
+
+
+def _activity_signature(snapshot: dict) -> str:
+    """Stable identity for every activity field that can change the live UI."""
+    return json.dumps(
+        {"runs": snapshot.get("runs", []),
+         "workflows": snapshot.get("workflows", []),
+         "summary": snapshot.get("summary", {})},
+        sort_keys=True, default=str,
+    )
+
+
 @router.get("/admin/activity/stream")
 async def admin_activity_stream(request: Request):
     """Authenticated SSE snapshots for the live multi-user traffic map."""
@@ -1774,8 +1967,11 @@ async def admin_activity_stream(request: Request):
         while not await request.is_disconnected():
             snapshot = _scope_activity_snapshot(
                 await asyncio.to_thread(_admin_activity_snapshot), viewer)
-            signature = json.dumps({"runs": snapshot["runs"], "summary": snapshot["summary"]},
-                                   sort_keys=True, default=str)
+            # Durable workflow rows can change without a queue row or aggregate moving (for
+            # example, a stage records its terminal outcome after the last job leaves the live
+            # tail). Include them in change detection so that the UI receives those transitions
+            # immediately instead of waiting for an unrelated job or summary change.
+            signature = _activity_signature(snapshot)
             if signature != last:
                 last = signature
                 idle = 0

@@ -168,11 +168,24 @@ def test_documents_terminal_but_a_corrected_copy_undelivered_is_completing_not_c
     """PRD §11's delivery-failure class: the fix and its verification stand, only the write to
     the destination is outstanding. Reporting that run as complete is what makes a lost corrected
     copy invisible."""
-    snap = _snap([_job("a.docx", "done")], corrected_documents=["a.docx"],
-                 corrected_stored=1, corrected_delivered=0)
+    snap = _snap([_job("a.docx", "done")], source="drive",
+                 corrected_documents=["a.docx"], corrected_stored=1,
+                 corrected_delivered=0)
     assert snap["state"] == "completing"
-    assert snap["delivery"] == {"stored": 1, "delivered": 0, "pending": 1, "eligible": 1,
-                                "latest_at": None}
+    assert snap["delivery"] == {"stored": 1, "delivered": 0, "pending": 1,
+                                "awaiting_release": 0, "eligible": 1, "latest_at": None}
+
+
+def test_sharepoint_corrections_wait_for_release_without_becoming_delivery_failures():
+    snap = _snap([_job("a.docx", "done")], source="sharepoint",
+                 corrected_documents=["a.docx"], corrected_stored=1,
+                 corrected_delivered=0)
+    assert snap["delivery"]["pending"] == 0
+    assert snap["delivery"]["awaiting_release"] == 1
+    assert snap["state"] == "completed"
+    saving = next(phase for phase in snap["phases"] if phase["key"] == "saving")
+    assert saving == {"key": "saving", "label": "Saving corrected copies",
+                      "status": "completed", "detail": "1 corrected copy awaiting Release"}
 
 
 def test_no_run_at_all_is_draft_rather_than_a_completed_run_of_zero_documents():
@@ -205,6 +218,62 @@ def test_applied_verified_and_delivered_are_separately_labelled():
     assert snap["fixes"]["documents_verified"] == 1
     assert snap["delivery"]["delivered"] == 1
     assert "verified" not in snap  # never a bare, unit-less count at the top level
+
+
+# ── throughput and estimate ──────────────────────────────────────────────────────
+
+def test_throughput_uses_successful_terminal_documents_not_old_completions():
+    completed = [_iso(seconds=-20), _iso(seconds=-40), _iso(seconds=-70),
+                 _iso(seconds=-100), _iso(seconds=-130), _iso(seconds=-160)]
+    throughput, estimate = rr.derive_throughput(
+        completed + [_iso(minutes=-8)], remaining=4, now=NOW)
+    assert throughput["documents_per_minute"] == 1.2
+    assert throughput["sample_documents"] == 6
+    assert sum(throughput["buckets"]) == 6
+    assert throughput["change_percent"] is None
+    assert estimate["available"] is True
+    assert estimate["low_minutes"] <= estimate["high_minutes"]
+    assert estimate["method"] == "recent_completions_approximate_95_percent"
+
+
+def test_small_or_idle_windows_abstain_instead_of_inventing_an_eta_or_zero_rate():
+    throughput, estimate = rr.derive_throughput([_iso(seconds=-20)], remaining=4, now=NOW)
+    assert throughput["sample_documents"] == 1
+    assert estimate == {"available": False, "reason": "insufficient_sample",
+                        "sample_documents": 1, "minimum_documents": 5}
+    assert rr.derive_throughput([], remaining=4, now=NOW) == (
+        None, {"available": False, "reason": "no_recent_completions"})
+
+
+def test_rate_change_requires_enough_documents_in_both_five_minute_windows():
+    current = [_iso(seconds=-(20 + i * 30)) for i in range(6)]
+    previous = [_iso(seconds=-(320 + i * 50)) for i in range(5)]
+    throughput, _ = rr.derive_throughput(current + previous, remaining=10, now=NOW)
+    assert throughput["change_percent"] == 20
+
+
+def test_snapshot_publishes_server_throughput_and_eta_from_completed_outcomes():
+    done = [_job(f"done-{i}.docx", "done", updated_at=_iso(seconds=-(20 + i * 30)))
+            for i in range(6)]
+    waiting = [_job(f"waiting-{i}.docx", "queued") for i in range(4)]
+    corrected = [job["file"] for job in done]
+    snap = _snap(done + waiting, corrected_documents=corrected, corrected_stored=6,
+                 corrected_delivered=6)
+    assert snap["throughput"]["documents_per_minute"] == 1.2
+    assert snap["throughput"]["sample_documents"] == 6
+    assert snap["estimate"]["available"] is True
+    assert snap["estimate"]["label"].startswith("about ")
+
+
+def test_snapshot_throughput_counts_review_and_skipped_as_processed_work():
+    done = [_job(f"done-{i}.docx", "done", updated_at=_iso(seconds=-(20 + i * 30)))
+            for i in range(6)]
+    snap = _snap(done, review_documents=["done-0.docx", "done-1.docx"],
+                 corrected_documents=["done-2.docx", "done-3.docx"], corrected_stored=2,
+                 corrected_delivered=2)
+    assert snap["documents"] == {"completed": 2, "processing": 0, "waiting": 0,
+                                 "review": 2, "failed": 0, "skipped": 2}
+    assert snap["throughput"]["sample_documents"] == 6
 
 
 # ── source identity ──────────────────────────────────────────────────────────
@@ -245,15 +314,11 @@ def test_a_partition_that_does_not_sum_is_reported_not_repaired():
     assert violations[0]["metric"] == "documents"
 
 
-def test_more_verified_fixes_than_applied_is_a_violation():
+def test_verified_evidence_is_the_minimum_truthful_applied_count():
     snap = _snap([_job("a.docx", "done")], fixes_applied=2, fixes_verified=7,
                  corrected_documents=["a.docx"], corrected_stored=1, corrected_delivered=1)
-    assert any(v["invariant"] == "verified_within_applied" for v in snap["integrity"]["violations"])
-    assert snap["integrity"]["ok"] is False
-    # The measured values SURVIVE the violation — the panel keeps showing last-confirmed numbers
-    # and names the affected metric, rather than the server silently choosing one of them.
-    assert snap["fixes"]["applied"] == 2 and snap["fixes"]["verified"] == 7
-    assert snap["integrity"]["affected"] == ["fixes"]
+    assert snap["fixes"]["applied"] == 7 and snap["fixes"]["verified"] == 7
+    assert snap["integrity"]["ok"] is True
 
 
 def test_a_terminal_run_with_an_active_attempt_is_a_violation():

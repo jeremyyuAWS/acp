@@ -159,18 +159,13 @@ def _sp_find_child(token: str, url: str, name: str, *, folder_only: bool = False
 
 def ensure_sharepoint_release_folder(token: str, drive_id: str | None, release_id: str,
                                      folder_name: str) -> dict:
-    """Create a distinct ``Remediated/<timestamp>`` root in one Graph drive/library."""
+    """Find/create the release's durably claimed root in one Graph drive/library."""
     import scanner
-    root_id = scanner._sp_folder_id(token, drive_id, RELEASE_ROOT)
+    root_id = _sp_ensure_folder(token, drive_id, None, RELEASE_ROOT)
     base = scanner._sp_base(drive_id)
-    children_url = f"{base}/items/{root_id}/children?$select=id,name,folder,webUrl&$top=200"
-    collision = _sp_find_child(token, children_url, folder_name, folder_only=True)
-    # Graph enforces sibling-name uniqueness. Preserve the clean timestamp normally and add a
-    # stable release suffix only when another execution began in the same minute.
-    actual_name = folder_name if collision is None else f"{folder_name} · {release_id[:8]}"
-    folder_id = scanner._sp_folder_id(token, drive_id, actual_name, parent_id=root_id)
+    folder_id = _sp_ensure_folder(token, drive_id, root_id, folder_name)
     item = scanner._sp_get(token, f"{base}/items/{folder_id}?$select=id,name,webUrl")
-    return {"id": folder_id, "name": item.get("name") or actual_name,
+    return {"id": folder_id, "name": item.get("name") or folder_name,
             "url": item.get("webUrl")}
 
 
@@ -181,6 +176,35 @@ def _sp_child(token: str, drive_id: str | None, folder_id: str, name: str) -> di
                "$select=id,name,file,size,webUrl&$top=200", name)
 
 
+def _sp_ensure_folder(token: str, drive_id: str | None, parent_id: str | None,
+                      name: str) -> str:
+    """Find/create one Graph folder, following pagination and converging on a 409 race."""
+    import httpx
+    import scanner
+    base = scanner._sp_base(drive_id)
+    parent = f"{base}/items/{parent_id}" if parent_id else f"{base}/root"
+    children = f"{parent}/children"
+    listing = f"{children}?$select=id,name,folder&$top=200"
+    found = _sp_find_child(token, listing, name, folder_only=True)
+    if found:
+        return found["id"]
+    response = httpx.post(
+        children,
+        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+        json={"name": name, "folder": {}, "@microsoft.graph.conflictBehavior": "fail"},
+        timeout=30, follow_redirects=True)
+    if response.status_code == 401:
+        raise scanner.SharePointSessionExpired("Microsoft Graph access token expired.")
+    if response.status_code == 403:
+        raise PermissionError("Microsoft Graph refused to create the SharePoint release folder.")
+    if response.status_code == 409:
+        winner = _sp_find_child(token, listing, name, folder_only=True)
+        if winner:
+            return winner["id"]
+    response.raise_for_status()
+    return response.json()["id"]
+
+
 def _sp_content_matches(token: str, drive_id: str | None, item_id: str,
                         expected_sha256: str) -> bool:
     """Verify an existing/uploaded Graph item by reading its bytes; never trust size alone."""
@@ -189,6 +213,8 @@ def _sp_content_matches(token: str, drive_id: str | None, item_id: str,
     response = httpx.get(f"{scanner._sp_base(drive_id)}/items/{item_id}/content",
                          headers={"Authorization": f"Bearer {token}"}, timeout=120,
                          follow_redirects=True)
+    if response.status_code == 401:
+        raise scanner.SharePointSessionExpired("Microsoft Graph access token expired.")
     response.raise_for_status()
     return hashlib.sha256(response.content).hexdigest() == expected_sha256
 
@@ -196,19 +222,20 @@ def _sp_content_matches(token: str, drive_id: str | None, item_id: str,
 def archive_copy_publish_sharepoint(token: str, drive_id: str | None, folder_id: str,
                                     owner: str, release_id: str, scan_id: str,
                                     filename: str, relative_path: str | None,
-                                    source_id: str, folder_cache: dict | None = None) -> dict | None:
+                                    source_id: str, folder_cache: dict | None = None,
+                                    source_filename: str | None = None) -> dict | None:
     """Publish one Blob-backed corrected copy into a Graph drive without overwriting a source."""
     import scanner
     data = _blob.download_remediated(owner, scan_id, filename)
     if not data:
         return None
-    folders, safe_name = sharepoint_relative_path(relative_path, filename)
+    folders, safe_name = sharepoint_relative_path(relative_path, source_filename or filename)
     cache = folder_cache if folder_cache is not None else {}
     parent = folder_id
     for segment in folders:
         key = (drive_id or "me", parent, segment.casefold())
         if key not in cache:
-            cache[key] = scanner._sp_folder_id(token, drive_id, segment, parent_id=parent)
+            cache[key] = _sp_ensure_folder(token, drive_id, parent, segment)
         parent = cache[key]
     sha256 = hashlib.sha256(data).hexdigest()
     key = publication_key(release_id, source_id, sha256)
@@ -233,7 +260,8 @@ def archive_copy_publish_sharepoint(token: str, drive_id: str | None, folder_id:
     base = f"{scanner._sp_base(drive_id)}/items/{parent}:/{encoded_name}:"
     result = scanner._sp_write(token, put_url=f"{base}/content",
                                session_url=f"{base}/createUploadSession",
-                               content=data, content_type=_mime_for(target_name))
+                               content=data, content_type=_mime_for(target_name),
+                               conflict_behavior="fail", force_session=True)
     item_id = result.get("id")
     if not item_id:
         result = _sp_child(token, drive_id, parent, target_name) or {}

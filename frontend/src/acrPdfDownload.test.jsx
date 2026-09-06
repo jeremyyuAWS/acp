@@ -28,6 +28,12 @@ const api = {
   getAcrPreview: vi.fn(),
   getAcrGaps: vi.fn(),
   downloadAcrPdf: vi.fn(),
+  // The Word export's two calls. This mock is NOT partial, so an omitted export is `undefined`
+  // at the call site and AcrWorkspace throws from inside an effect — which surfaces as five
+  // unrelated assertion failures in this file rather than as a missing mock. Adding the docx
+  // download did exactly that before these two lines existed.
+  downloadAcrDocx: vi.fn(),
+  getAcrDocxGate: vi.fn(async () => ({ ok: true, failures: [], reviews: [] })),
 }
 
 vi.mock('./acrApi', () => ({
@@ -42,6 +48,8 @@ vi.mock('./acrApi', () => ({
   getAcrPreview: (...a) => api.getAcrPreview(...a),
   getAcrGaps: (...a) => api.getAcrGaps(...a),
   downloadAcrPdf: (...a) => api.downloadAcrPdf(...a),
+  downloadAcrDocx: (...a) => api.downloadAcrDocx(...a),
+  getAcrDocxGate: (...a) => api.getAcrDocxGate(...a),
   ingestAxe: vi.fn(),
   setAcrApplicability: vi.fn(),
   addAcrEvidence: vi.fn(),

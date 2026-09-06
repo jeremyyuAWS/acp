@@ -1,6 +1,6 @@
 # ADR 0051 — `Last-Event-ID` resume for the remediation stream
 
-**Status:** Proposed
+**Status:** Accepted — implemented; both Open items closed by ADR 0052
 **Date:** 2026-09-05
 **Related:** ADR 0042 (durable scan lifecycle event log) — this is the PR 5 that ADR deferred to
 "its own ADR after PRs 1–4 have run in production". Code: `api/routes/scans.py`
@@ -95,6 +95,11 @@ events".
 
 ### 5. Retention is DECIDED but NOT IMPLEMENTED, and the gap check is written for its absence
 
+> **Superseded 2026-09-05 by ADR 0052, which added the pruning.** The reasoning below is kept
+> because it is the argument for writing an unreachable branch, and that argument was paid off:
+> when `store.prune_scan_events` landed, the pruned-past-`N` condition worked on the first run and
+> its fixture could prune for real rather than construct the state by hand.
+
 PRD §22 settles retention at 24 hours or 10,000 events per run, whichever is greater. **Nothing
 prunes `scan_events` today.** The pruned-past-`N` condition above is therefore unreachable in
 production right now, and this ADR does not add pruning: retention is a separate change with its
@@ -141,8 +146,23 @@ to keep every event id it has ever rendered.
 
 ## Open
 
-- **Pruning**, per §22's 24h/10,000 decision. The gap check lands here; the deletion does not.
-- **Whether the stream should stay open past `in_flight == 0`.** The PRD's §21 records that it
-  closes while review, delivery and reconciliation may remain. That is a separate behavioural
-  change to a path the shipped progress bar depends on (`onDone` drives `finishRemediation`), and
-  is deliberately not bundled with the reconnect contract.
+**Both were closed by ADR 0052.** Kept here rather than deleted, because what each one turned out
+to cost is the useful part:
+
+- ~~**Pruning**, per §22's 24h/10,000 decision. The gap check lands here; the deletion does not.~~
+  Landed in `store.prune_scan_events`, run hourly by the sweeper. The `events_pruned` reconcile
+  branch below is now reachable, and its fixture prunes for real instead of issuing a DELETE that
+  imitates one — which is the whole reason the branch was written before anything could produce
+  the condition.
+- ~~**Whether the stream should stay open past `in_flight == 0`.**~~ It does now, while the
+  snapshot's own `completing` state ("delivery_reconciliation_outstanding") holds. The caution
+  above was right about the risk and wrong about the shape: `_stream_is_finished` keeps the
+  `in_flight` gate as its first clause, so the change can only ever extend the stream, never
+  shorten it — which is what makes it safe for `onDone`/`finishRemediation`. It deliberately does
+  NOT stay open for `needs_attention`; a review decision may be hours away, and the client already
+  polls there.
+
+Still open:
+
+- **Per-phase stall thresholds** (PRD §18). ADR 0052 added §22's lease clause to the stall
+  predicate, which needed no per-format evidence; the thresholds themselves still do.

@@ -150,19 +150,27 @@ describe('the Users tab onboards Microsoft and Google identities in one flow', (
     const add = [...c.querySelectorAll('button')].find((b) => b.textContent.includes('Add people'))
     expect(add).toBeTruthy()
     await act(async () => add.click())
-    expect(c.textContent).toContain('Microsoft')
-    expect(c.textContent).toContain('Google')
-    expect(c.querySelector('[role="dialog"][aria-modal="true"]')).toBeTruthy()
-    expect(c.textContent).toContain('Google test user')
+    // The dialog is PORTALLED to document.body — see peopleDialogPortal.test.jsx — so its copy
+    // is no longer inside the Settings subtree this test mounted. `document.body` is the honest
+    // scope for the dialog's own content; the container remains the scope for the panel.
+    await act(async () => {})
+    // BY ITS OWN LABEL, not by [role="dialog"][aria-modal="true"] — the Settings overlay carries
+    // both of those attributes itself, so the generic selector matches the panel rather than the
+    // dialog inside it and every assertion below silently tests the wrong element.
+    const dialog = document.querySelector('[aria-labelledby="add-person-title"]')
+    expect(dialog).toBeTruthy()
+    expect(dialog.textContent).toContain('Microsoft')
+    expect(dialog.textContent).toContain('Google')
+    expect(dialog.textContent).toContain('Google test user')
   })
 
   it('adding a Google user persists it to the people roster', async () => {
     const c = await render()
     await act(async () => [...c.querySelectorAll('button')].find((b) => b.textContent.includes('Add people')).click())
-    const input = c.querySelector('input[type="email"]')
+    const input = document.querySelector('input[type="email"]')
     expect(input).toBeTruthy()
     setValue(input, 'newtester@gmail.com')
-    const btn = [...c.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Add person')
+    const btn = [...document.querySelectorAll('button')].find((b) => b.textContent.trim() === 'Add person')
     await act(async () => { btn.click() })
     await settle()
     expect(c.textContent).toContain('newtester@gmail.com is ready to join ACP')

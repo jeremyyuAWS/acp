@@ -883,9 +883,9 @@ getJob.openStream = openJobStream
 // (scan_id, job_id) rather than inserting, so a response lost after the commit resolves to the
 // job that already exists instead of creating a second scan. Optional so every existing caller
 // and test keeps working unchanged; without it the server behaves exactly as before.
-export const startScanQueued = (source = 'local', folder = null, aiEnabled = true, pii = false, excludeRemediated = false, incremental = true, folders = null, exclude = null, idempotencyKey = null) => (SIM
+export const startScanQueued = (source = 'local', folder = null, aiEnabled = true, pii = false, excludeRemediated = false, incremental = true, folders = null, exclude = null, idempotencyKey = null, replaceActive = false, preferRecent = false) => (SIM
   ? sim({ scan_id: 'sim-scan', job_id: 'sim-job', queued: true, workers: 4 })
-  : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${foldersQ(folders)}${excludeQ(exclude)}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}&queue=true&fanout=true`, { method: 'POST', headers: headers(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}), signal: AbortSignal.timeout(SCAN_ENQUEUE_TIMEOUT_MS) }).then(j))
+  : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${foldersQ(folders)}${excludeQ(exclude)}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}&queue=true&fanout=true&replace_active=${replaceActive ? 'true' : 'false'}&prefer_recent=${preferRecent ? 'true' : 'false'}`, { method: 'POST', headers: headers(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}), signal: AbortSignal.timeout(SCAN_ENQUEUE_TIMEOUT_MS) }).then(j))
 // Read-only check on the SPECIFIC source + folders about to be scanned — run right before
 // doScan actually starts one, so a bad credential, a deleted folder, or a dead worker tier is
 // caught before a scan row exists rather than surfacing as "0 documents" after the fact.
@@ -1028,6 +1028,38 @@ export const getRemediationSnapshot = (scanId) => (SIM
   ? sim(null)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/snapshot`,
           { headers: headers(), cache: 'no-store' }).then(j))
+// ── Exceptions and scoped recovery (PRD §6E, §11) ─────────────────────────────
+//
+// SIM RETURNS AN EMPTY VIEW, deliberately, exactly as getRemediationSnapshot returns null. A
+// simulated exception group would be a hand-written set of refusal codes and destinations — a
+// second, fabricated implementation of the one contract these endpoints exist to make impossible
+// to fake — and its retry buttons would appear to write to a customer's library and do nothing.
+export const getRemediationExceptions = (scanId) => (SIM
+  ? sim({ run_id: scanId, groups: [], controls: [] })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/exceptions`,
+          { headers: headers(), cache: 'no-store' }).then(j))
+// `files` is the SELECTION — the documents the user can currently see and has chosen. Always sent
+// explicitly, never omitted to mean "all": the server acts on exactly what it is given, so a
+// group action can never reach a row that scrolled out of view or was filtered away.
+const remediationAction = (scanId, path, files) => (SIM
+  ? sim({ requested: 0, started: 0, refused: 0, failed: 0, duplicate: 0, results: [],
+          complete_success: false, summary: 'Not available in the demo' })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/${path}`,
+          { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify(files === undefined ? {} : { files }) }).then(j))
+export const retryRemediationDelivery = (scanId, files) =>
+  remediationAction(scanId, 'exceptions/retry-delivery', files)
+export const retryRemediationDocuments = (scanId, files) =>
+  remediationAction(scanId, 'exceptions/retry-documents', files)
+export const cancelRemediationRun = (scanId) => remediationAction(scanId, 'cancel')
+export const pauseRemediationRun = (scanId) => remediationAction(scanId, 'pause')
+export const resumeRemediationRun = (scanId) => remediationAction(scanId, 'resume')
+export const cancelLiveOpsStage = (scanId, stage) => fetch(
+  `${BASE}/admin/activity/workflows/${encodeURIComponent(scanId)}/stages/${encodeURIComponent(stage)}/cancel`,
+  { method: 'POST', headers: headers() }).then(j)
+export const resumeLiveOpsRemediation = (scanId) => fetch(
+  `${BASE}/admin/activity/workflows/${encodeURIComponent(scanId)}/stages/remediate/resume`,
+  { method: 'POST', headers: headers() }).then(j)
 // Authenticated Remediate progress stream.  Native EventSource cannot send ACP's bearer header,
 // so this shares Discover's fetch + ReadableStream SSE parser and exposes the same close contract.
 // `lastEventId` resumes the durable lifecycle log (ADR 0051): pass the last id this client
@@ -1416,6 +1448,11 @@ export const publishAllFiles = (scanId, files) => (SIM
 export const getReleaseStatus = (scanId) => (SIM
   ? sim({ release_id: null, roots: [], documents: [], documents_total: 0, published: 0, failed: 0, remaining: 0 }, 50)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release`, { headers: headers() }).then(j))
+export const getReleaseManifest = (scanId) => (SIM
+  ? sim({ manifest: { schema_version: 1, scan_id: scanId, documents: [] },
+      content_digest: { algorithm: 'SHA-256', value: 'simulation' },
+      digest_note: 'Simulation manifest.' }, 50)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/manifest`, { headers: headers() }).then(j))
 
 // Queue state: depth by status + recent jobs (drives the in-app queue panel).
 export const getJobs = (status = null) => (SIM
@@ -1865,6 +1902,55 @@ export const reorderDispositionPolicies = (policyIds) => (SIM
 export const listDispositionConflicts = () => (SIM
   ? sim({ conflicts: [] })
   : fetch(`${BASE}/disposition/policies/conflicts`, { headers: headers() }).then(j))
+
+// ── Safe lifecycle archive auto-fire (R9) ────────────────────────────────────────────────────
+//
+// SIM RETURNS THE DISABLED, UNCONFIGURED SHAPE AND NEVER AN ELIGIBLE ITEM, deliberately. The demo
+// runs against no tenant, so there is no source system in which a move could be proven to have
+// happened — and a demo that showed "Automatically archived" would be showing the one state this
+// whole feature exists to make honest. Recommendation-only is both the truthful demo answer and
+// the shipped default, so SIM and a fresh real tenant agree.
+const ARCHIVE_SIM_POLICY = {
+  configured: false,
+  policy: { enabled: false, kill_switch: false, dry_run: true, source_connections: [], rule_ids: [],
+            required_evidence: ['metadata_link'], confirmed_families: [], min_replacement_age_days: 30,
+            archive_root: '', preserve_hierarchy: true, max_actions_per_run: 25, max_actions_per_day: 100 },
+  snapshot_id: null, updated_at: null, updated_by: null,
+  evidence_types: [
+    { type: 'metadata_link', label: 'Replacement metadata names this document (retentionOf / supersedes)' },
+    { type: 'rule_family', label: 'A lifecycle rule identifies a document family and a strictly newer version' },
+    { type: 'sp_version', label: 'SharePoint version metadata names a newer approved replacement' },
+    { type: 'admin_mapping', label: 'An administrator confirmed this document-family mapping' },
+  ],
+  auto_sources: ['sharepoint', 'onedrive'],
+  problem: '',
+  notice: 'Age, filename similarity and inactivity never authorize an automatic move. A document is '
+        + 'archived automatically only when durable evidence shows a newer item supersedes it and '
+        + 'this policy permits it.',
+}
+export const getArchivePolicy = () => (SIM
+  ? sim(JSON.parse(JSON.stringify(ARCHIVE_SIM_POLICY)))
+  : fetch(`${BASE}/lifecycle/archive/policy`, { headers: headers() }).then(j))
+export const updateArchivePolicy = (patch) => (SIM
+  ? sim(JSON.parse(JSON.stringify(ARCHIVE_SIM_POLICY)))
+  : fetch(`${BASE}/lifecycle/archive/policy`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }),
+                                                body: JSON.stringify(patch) }).then(j))
+export const setArchiveKillSwitch = (on) => (SIM
+  ? sim(JSON.parse(JSON.stringify(ARCHIVE_SIM_POLICY)))
+  : fetch(`${BASE}/lifecycle/archive/kill-switch`, { method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+                                                     body: JSON.stringify({ on: !!on }) }).then(j))
+export const getArchiveCandidates = (scanId) => (SIM
+  ? sim({ scan_id: scanId, snapshot_id: null, dry_run: true, counts: {}, progress: '', items: [] })
+  : fetch(`${BASE}/lifecycle/archive/candidates?scan_id=${encodeURIComponent(scanId)}`,
+          { headers: headers() }).then(j))
+export const runArchiveAutofire = (scanId) => (SIM
+  ? Promise.reject(new Error('Automatic archival is not available in the demo — it would move real files.'))
+  : fetch(`${BASE}/lifecycle/archive/run?scan_id=${encodeURIComponent(scanId)}`,
+          { method: 'POST', headers: headers() }).then(j))
+export const listArchiveExecutions = (scanId = null) => (SIM
+  ? sim({ executions: [] })
+  : fetch(`${BASE}/lifecycle/archive/executions${scanId ? `?scan_id=${encodeURIComponent(scanId)}` : ''}`,
+          { headers: headers() }).then(j))
 export const previewDispositionPolicy = (policyId) => (SIM
   ? sim({ policy_id: policyId, would_match: 3, documents: [
       { doc_id: 'drive:sim1', path: 'HR Handbook 2019.pdf', department: 'HR', age_days: 1460 },

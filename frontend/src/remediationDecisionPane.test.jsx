@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { createElement } from 'react'
 import { act } from 'react-dom/test-utils'
+import axe from 'axe-core'
 import { createTestRoot, unmountAll } from './testRoots.js'
 
 afterEach(unmountAll)
@@ -109,16 +110,46 @@ describe('Guided pane — decision-first ordering + grounded evidence', () => {
 })
 
 describe('Guided pane — preserves the #412/#415 behaviours', () => {
-  it('keeps the editable draft (Save edited fix) on an AI-drafted fix', async () => {
+  it('keeps the editable draft (Apply edited fix) on an AI-drafted fix', async () => {
     const calls = []
     await renderInbox({ queue: [CONTRAST_APPLY], decisions: {}, onDecide: (f, d) => calls.push(d) })
     const ta = container.querySelector('textarea[aria-label="Edit the proposed fix"]')
     expect(ta).toBeTruthy()
     const setValue = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
     await act(async () => { setValue.call(ta, '#595959'); ta.dispatchEvent(new Event('input', { bubbles: true })) })
-    await click(btnByText('Save edited fix'))
+    await click(btnByText('Apply edited fix'))
     expect(calls[0].state).toBe('accepted')
     expect(calls[0].value).toBe('#595959')
+  })
+
+
+  it('puts Apply, Edit, Reject and Defer in one labelled decision footer', async () => {
+    await renderInbox({ queue: [CONTRAST_APPLY], decisions: {}, onDecide: () => {} })
+    const actions = container.querySelector('[role="group"][aria-label^="Decision actions for"]')
+    expect(actions).toBeTruthy()
+    for (const label of ['Apply fix', 'Edit proposed fix', 'Reject to manual', 'Defer']) {
+      expect([...actions.querySelectorAll('button')].some((button) => button.textContent.includes(label))).toBe(true)
+    }
+    await click(btnByText('Edit proposed fix'))
+    expect(document.activeElement).toBe(container.querySelector('textarea[aria-label="Edit the proposed fix"]'))
+  })
+
+  it('keeps injected audit evidence but does not add a pipeline to the decision content', async () => {
+    await renderInbox({
+      queue: [CONTRAST_APPLY], decisions: {},
+      renderDetailExtra: () => createElement('details', { 'aria-label': 'Audit trail' },
+        createElement('summary', null, 'Audit trail'), createElement('p', null, 'Decision saved by reviewer')),
+    })
+    const audit = container.querySelector('details[aria-label="Audit trail"]')
+    expect(audit).toBeTruthy()
+    expect(audit.open).toBe(false)
+    expect(container.querySelector('.remediation-doc-progress')).toBeNull()
+  })
+
+  it('has no automated accessibility violations in the active decision workspace', async () => {
+    await renderInbox({ queue: [CONTRAST_APPLY], decisions: {}, onDecide: () => {} })
+    const results = await axe.run(container, { rules: { region: { enabled: false } } })
+    expect(results.violations).toEqual([])
   })
 
   it('hides verification until saved, then shows Written → Re-scan → Certified', async () => {

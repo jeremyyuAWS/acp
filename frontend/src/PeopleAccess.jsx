@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { addPerson, getPeople, removePerson, updatePerson, getWorkspaceRoles, assignWorkspaceRole, roleImpact } from './api.js'
 
 // LABELS ONLY. The colours moved to `.people-badge.is-<status>` in styles.css so they can be the
@@ -26,6 +27,32 @@ function Badge({ status }) {
   </div>
 }
 
+/**
+ * Render an overlay at document.body instead of where it sits in the tree.
+ *
+ * WHY THIS IS NOT COSMETIC. Both dialogs below are `position: fixed; inset: 0`, and both are
+ * rendered inside Settings, whose `.setoverlay` sets `backdrop-filter: blur(2px)`. An element
+ * with a backdrop-filter becomes the CONTAINING BLOCK for its fixed-position descendants, so
+ * "fixed" stopped meaning "relative to the viewport" and started meaning "relative to the
+ * settings overlay" — which scrolls.
+ *
+ * The consequence, measured in Chromium on the People screen: with the panel scrolled, the
+ * confirmation dialog rendered at y=-21 with its scrim at y=-105, i.e. above the top of the
+ * window. Selecting a role therefore did nothing an administrator could see — the dialog was
+ * there, focusable, and off-screen. That is the whole reported bug: "the dropdown does not
+ * work". It saves only after the confirmation, and the confirmation was never visible.
+ *
+ * A portal moves the DOM node out of that ancestor, so `fixed` resolves against the viewport
+ * again. React events still propagate along the REACT tree, so `.setpanel`'s stopPropagation
+ * still keeps a click inside the dialog from closing Settings — the behaviour is unchanged, only
+ * the position is fixed.
+ *
+ * Guarded on `document` so a non-DOM render (SSR, a bare unit test) falls back to rendering in
+ * place rather than throwing.
+ */
+const Overlay = ({ children }) =>
+  (typeof document === 'undefined' ? children : createPortal(children, document.body))
+
 export default function PeopleAccess() {
   const [data, setData] = useState({ people: [], domains: [], invite_enabled: false, can_manage: false })
   const [open, setOpen] = useState(false)
@@ -44,9 +71,25 @@ export default function PeopleAccess() {
   // always thrown away. See the note it feeds, below the heading.
   const [enforced, setEnforced] = useState(true)
   const [rollout, setRollout] = useState(null)
-  // The role change awaiting confirmation (PRD §9). Held rather than applied immediately because
-  // the confirmation has to say what CHANGES, and that answer comes from the server.
-  const [roleChange, setRoleChange] = useState(null)
+  // The role change that JUST HAPPENED, reported as a toast in the top-right corner.
+  //
+  // This replaced a modal confirmation (PRD §9 originally specified one, and it shipped). The
+  // change was asked for directly: the confirmation made every assignment a two-step act, and
+  // assigning roles to a roster is a repetitive job. What the dialog carried that a plain
+  // "saved" message does not is the SERVER-COMPUTED IMPACT — which capabilities the person
+  // gains and, the half nobody can derive from two role names, which they lose. That moves into
+  // the toast, and an Undo replaces the Cancel button: the safety is now after the fact rather
+  // than before it, which is the trade this change makes deliberately.
+  const [roleToast, setRoleToast] = useState(null)
+
+  // The toast carries an Undo, so it has to outlast READING it — three short lines plus a
+  // decision. LiveOperationsNotifier's 8s is for a toast you can only dismiss; this one is the
+  // entire safety net for a change that now happens without asking, so it is given longer.
+  useEffect(() => {
+    if (!roleToast) return undefined
+    const timer = setTimeout(() => setRoleToast(null), 12000)
+    return () => clearTimeout(timer)
+  }, [roleToast])
 
   const load = () => getPeople().then(setData).catch((e) => setError(e.message || 'Could not load people.'))
   useEffect(() => { load() }, [])
@@ -63,22 +106,45 @@ export default function PeopleAccess() {
       .catch(() => setRoles([]))
   }, [])
 
-  const askToChangeRole = (person, roleId) => {
+  // Paint the new role on the row immediately. The select is CONTROLLED by
+  // `person.workspace_role_id`, so without this it snaps back to the old value for the length of
+  // the round trip — which, on the screen whose whole reported bug was "the dropdown does not
+  // do anything", is the one thing it must not do.
+  const showRole = (email, roleId) => setData((old) => ({
+    ...old,
+    people: old.people.map((p) => (p.email === email ? { ...p, workspace_role_id: roleId || null } : p)),
+  }))
+
+  const changeRole = (person, roleId) => {
+    const previousRoleId = person.workspace_role_id || ''
+    if (roleId === previousRoleId) return
     setError('')
-    roleImpact(person.email, roleId)
-      .then((impact) => setRoleChange({ person, roleId, impact }))
-      // Without the preview the change is still legitimate — the confirmation is a courtesy, and
-      // refusing to proceed because the PREVIEW failed would make a broken read block a working
-      // write. The dialog says the impact is unavailable rather than inventing one.
-      .catch(() => setRoleChange({ person, roleId, impact: null }))
+    showRole(person.email, roleId)
+    // THE IMPACT IS ASKED FOR BEFORE THE ASSIGNMENT LANDS, and the order is load-bearing: it is
+    // the difference between the role they hold NOW and the one they are moving to. Asked
+    // afterwards, the server would be comparing the new role with itself and would answer
+    // "nothing changes" every single time — a preview that is always empty is worse than none,
+    // because it reads as a fact about the roles rather than about when it was requested.
+    //
+    // A failed preview still must not block the write: the assignment is the operation, the
+    // impact is commentary. `.catch(() => null)` degrades it to "could not be previewed".
+    roleImpact(person.email, roleId).catch(() => null)
+      .then((impact) => assignWorkspaceRole(person.email, roleId).then(() => impact))
+      .then((impact) => { setRoleToast({ at: Date.now(), person, roleId, previousRoleId, impact }); load() })
+      // load() on failure too — the optimistic paint above has to be undone by the truth rather
+      // than by guessing what the server kept.
+      .catch((e) => { setRoleToast(null); setError(e.message || 'Could not change this role.'); load() })
   }
 
-  const confirmRoleChange = () => {
-    const { person, roleId } = roleChange
-    setRoleChange(null)
-    assignWorkspaceRole(person.email, roleId)
-      .then(() => { setMessage(`${person.email}'s role was updated.`); load() })
-      .catch((e) => setError(e.message || 'Could not change this role.'))
+  const undoRoleChange = () => {
+    if (!roleToast) return
+    const { person, previousRoleId } = roleToast
+    setRoleToast(null)
+    setError('')
+    showRole(person.email, previousRoleId)
+    assignWorkspaceRole(person.email, previousRoleId)
+      .then(() => load())
+      .catch((e) => { setError(e.message || 'Could not undo this change.'); load() })
   }
   useEffect(() => {
     if (!open) return undefined
@@ -161,9 +227,9 @@ export default function PeopleAccess() {
     <div role="status" aria-live="polite" style={{ minHeight: 22, marginTop: 10, color: error ? 'var(--error-fg-strong)' : '#287D3C', fontSize: 13 }}>{error || message}</div>
     <div style={{ border: '1px solid var(--line)', borderRadius: 10, overflow: 'hidden' }}>
       {data.people.length === 0 ? <p className="muted" style={{ padding: 18, margin: 0 }}>No people have been added yet.</p> : data.people.map((person) => <div key={person.email} className={roles.length > 0 ? 'people-row has-role-column' : 'people-row'}>
-        <div><b style={{ fontSize: 13 }}>{person.email}</b><div className="muted" style={{ fontSize: 12, marginTop: 3 }}>{person.provider === 'microsoft' ? 'Microsoft · SharePoint / OneDrive' : person.provider === 'google' ? 'Google · Drive' : person.role === 'owner' ? 'Workspace owner' : 'Provider not recorded'}</div></div>
+        <div><b className="people-email">{person.email}</b><div className="muted" style={{ fontSize: 12, marginTop: 3 }}>{person.provider === 'microsoft' ? 'Microsoft · SharePoint / OneDrive' : person.provider === 'google' ? 'Google · Drive' : person.role === 'owner' ? 'Workspace owner' : 'Provider not recorded'}</div></div>
         <Badge status={person.status} />
-        {person.protected ? <b style={{ fontSize: 12 }}>Owner</b> : data.can_manage ? <select aria-label={`Access level for ${person.email}`} value={person.role || 'user'} onChange={(e) => change(person, { role: e.target.value })}><option value="user">User</option><option value="admin">Platform Admin</option></select> : <span style={{ fontSize: 12 }}>{person.role === 'admin' ? 'Platform Admin' : 'User'}</span>}
+        {person.protected ? <b style={{ fontSize: 12 }}>Owner</b> : data.can_manage ? <select className="people-select" aria-label={`Access level for ${person.email}`} value={person.role || 'user'} onChange={(e) => change(person, { role: e.target.value })}><option value="user">User</option><option value="admin">Platform Admin</option></select> : <span style={{ fontSize: 12 }}>{person.role === 'admin' ? 'Platform Admin' : 'User'}</span>}
         {/* The WORKSPACE role (PRD §9), a different thing from the platform access level beside
             it: that one decides whether they can touch platform settings, this one decides which
             tabs they see. Shown only when roles exist — on a deployment that has not been
@@ -174,9 +240,10 @@ export default function PeopleAccess() {
             {person.protected ? (
               <span style={{ fontSize: 12 }}>Owner — full access</span>
             ) : (
-              <select aria-label={`Workspace role for ${person.email}`}
+              <select className={`people-select${person.workspace_role_id ? '' : ' is-unassigned'}`}
+                      aria-label={`Workspace role for ${person.email}`}
                       value={person.workspace_role_id || ''}
-                      onChange={(e) => askToChangeRole(person, e.target.value)}>
+                      onChange={(e) => changeRole(person, e.target.value)}>
                 <option value="">No role</option>
                 {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
               </select>
@@ -192,40 +259,56 @@ export default function PeopleAccess() {
     </div>
     <p className="muted" style={{ fontSize: 12, lineHeight: 1.5 }}>People sign in with their existing Google or Microsoft identity. Their Drive, OneDrive, and SharePoint access remains governed by that provider; adding them here does not grant access to source documents.</p>
 
-    {/* PRD §9's impact confirmation. It names what is GAINED and what is LOST, because "change
-        Jane's role?" is a question nobody can answer — the consequential half is which of today's
-        abilities disappear, and that is the half an administrator cannot work out from two role
-        names. */}
-    {roleChange && <div role="presentation" onMouseDown={(e) => e.target === e.currentTarget && setRoleChange(null)} style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(24,18,25,.42)', display: 'grid', placeItems: 'center', padding: 20 }}>
-      <div role="dialog" aria-modal="true" aria-labelledby="role-change-title" style={{ width: 'min(480px, 100%)', padding: 22, borderRadius: 12, background: 'var(--surface)', boxShadow: '0 20px 60px rgba(0,0,0,.25)' }}>
-        <h3 id="role-change-title" style={{ marginTop: 0 }}>Change this role?</h3>
-        <p style={{ fontSize: 13, lineHeight: 1.5 }}>
-          {roleChange.person.email} will become <b>{roles.find((r) => r.id === roleChange.roleId)?.name || 'unassigned'}</b>.
+    {/* WHAT JUST HAPPENED, not a question about what is about to.
+        Portalled for the SAME reason the dialogs are (see Overlay above): this is
+        `position: fixed`, Settings' `.setoverlay` carries a `backdrop-filter`, and a
+        fixed-position descendant of one of those is positioned against IT rather than the
+        viewport. A toast pinned to the top-right corner of a scrolling panel is the identical
+        bug in a new place — it would drift off-screen exactly as the confirmation did.
+
+        Geometry and tokens match LiveOperationsToast deliberately: the application already has
+        one top-right toast, and a second at different coordinates on a different surface reads
+        as a different product, `color` included: both use `--ink`. That agreement is recent —
+        LiveOperationsToast asked for an undefined `--text` until it was corrected, so this rule
+        was written against `--ink` on purpose rather than by copying. See
+        cssCustomProperties.test.jsx, which now fails if a bare undefined property reappears. */}
+    {roleToast && <Overlay>
+      <div role="status" aria-live="polite" aria-atomic="true" className="people-toast">
+        <div className="people-toast-head">
+          <b>Role updated</b>
+          <button type="button" className="ghost small" aria-label="Dismiss notification"
+                  onClick={() => setRoleToast(null)}>×</button>
+        </div>
+        <p className="people-toast-line">
+          {roleToast.person.email} is now <b>{roles.find((r) => r.id === roleToast.roleId)?.name || 'unassigned'}</b>.
         </p>
-        {roleChange.impact === null ? (
-          <p className="muted people-role-impact">
-            The exact effect could not be previewed just now. The change itself is unaffected.
+        {/* PAST TENSE, and that is not a nicety. The dialog said "they will lose"; by the time
+            this is on screen they already have. Copy that still reads as a forecast invites an
+            administrator to think there is something left to approve. */}
+        {roleToast.impact === null ? (
+          <p className="muted people-toast-line">
+            The exact effect could not be previewed. The change itself went through.
           </p>
         ) : (
           <>
-            {roleChange.impact.loses?.length > 0 && (
-              <p className="people-role-impact"><b>They will lose:</b> {roleChange.impact.loses.join(', ')}</p>
+            {roleToast.impact.loses?.length > 0 && (
+              <p className="people-toast-line"><b>Lost:</b> {roleToast.impact.loses.join(', ')}</p>
             )}
-            {roleChange.impact.gains?.length > 0 && (
-              <p className="people-role-impact"><b>They will gain:</b> {roleChange.impact.gains.join(', ')}</p>
+            {roleToast.impact.gains?.length > 0 && (
+              <p className="people-toast-line"><b>Gained:</b> {roleToast.impact.gains.join(', ')}</p>
             )}
-            {!roleChange.impact.loses?.length && !roleChange.impact.gains?.length && (
-              <p className="muted people-role-impact">Nothing they can do today changes.</p>
+            {!roleToast.impact.loses?.length && !roleToast.impact.gains?.length && (
+              <p className="muted people-toast-line">Nothing they can do today changes.</p>
             )}
-            {/* WHAT "NOT ENFORCED" MEANS DEPENDS ON THE RUNG, and saying the wrong one here is
-                worse than saying nothing. At `navigation` this assignment DOES take effect — the
-                tabs disappear for them on their next load — while the server still answers a
-                direct request. Telling an administrator it "takes no effect" at that rung would
-                have them change somebody's access believing they had not. */}
-            {roleChange.impact.enforced === false && (
-              <p className="muted people-role-impact">
-                {roleChange.impact.mode === 'navigation'
-                  ? 'This will hide tabs for them on their next page load, but the server still '
+            {/* WHAT "NOT ENFORCED" MEANS DEPENDS ON THE RUNG, and saying the wrong one is worse
+                than saying nothing. At `navigation` this assignment DOES take effect — their
+                tabs disappear on the next load — while the server still answers a direct
+                request. Telling an administrator it "changes nothing" at that rung would have
+                them alter somebody's access believing they had not. */}
+            {roleToast.impact.enforced === false && (
+              <p className="muted people-toast-line">
+                {roleToast.impact.mode === 'navigation'
+                  ? 'This hides tabs for them on their next page load, but the server still '
                     + 'allows direct requests until the rollout reaches the enforce stage.'
                   : 'Roles are not being enforced yet, so this changes nothing for them until the '
                     + 'rollout advances.'}
@@ -233,14 +316,16 @@ export default function PeopleAccess() {
             )}
           </>
         )}
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}>
-          <button type="button" className="ghost" onClick={() => setRoleChange(null)}>Cancel</button>
-          <button type="button" onClick={confirmRoleChange}>Change role</button>
+        {/* The Undo is what the Cancel button became. Without it this screen would assign on a
+            single stray change event with no way back except knowing what the previous role
+            was — which, for a role the administrator did not set, they do not. */}
+        <div className="people-toast-actions">
+          <button type="button" className="ghost small" onClick={undoRoleChange}>Undo</button>
         </div>
       </div>
-    </div>}
+    </Overlay>}
 
-    {open && <div role="presentation" onMouseDown={(e) => e.target === e.currentTarget && close()} style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(24,18,25,.42)', display: 'grid', placeItems: 'center', padding: 20 }}>
+    {open && <Overlay><div role="presentation" onMouseDown={(e) => e.target === e.currentTarget && close()} style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(24,18,25,.42)', display: 'grid', placeItems: 'center', padding: 20 }}>
       <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="add-person-title" style={{ width: 'min(500px, 100%)', padding: 22, borderRadius: 12, background: 'var(--surface)', boxShadow: '0 20px 60px rgba(0,0,0,.25)' }}>
       <form onSubmit={submit}>
         <h3 id="add-person-title" style={{ marginTop: 0 }}>Add a person</h3>
@@ -255,6 +340,6 @@ export default function PeopleAccess() {
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 20 }}><button type="button" className="ghost" onClick={close}>Cancel</button><button type="submit" disabled={busy}>{busy ? 'Adding…' : 'Add person'}</button></div>
       </form>
       </div>
-    </div>}
+    </div></Overlay>}
   </section>
 }

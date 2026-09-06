@@ -4,6 +4,7 @@ The load-bearing property: the running screen's tally is read from the SAME run-
 final certification uses (`_fill_run_aggregate`: certifiable/uncertain/error), never a separate
 re-tally — so running and final can never diverge. The last test pins that against a real store.
 """
+import json
 import sys
 from pathlib import Path
 
@@ -186,3 +187,23 @@ def test_findings_count_reconciles_with_the_report_source(isolated_store):
     assert s.live_findings_count(sid) == report_findings > 0
     snap = live_snapshot.build_snapshot(s, sid, owner="o@x.com")
     assert snap["kpis"]["findings_so_far"] == report_findings
+
+
+def test_second_opinion_usage_is_bounded_and_truthfully_labelled(isolated_store):
+    s = isolated_store
+    sid = "opinion-live"
+    s.enqueue_scan(sid, "sharepoint", "o@x.com", "scan_sharepoint", {}, inputs={
+                                 "source": "sharepoint", "feature_flags": {"second_opinion_policy": {
+                                     "enabled": True, "criteria": ["1.3.5"], "confidence_threshold": "low",
+                                     "max_requests_per_scan": 2, "max_requests_per_day": 4,
+                                     "max_daily_cost_usd": 1.0, "estimated_cost_per_request_usd": .1}}})
+    s.init_scan_run(sid, "sharepoint", 2, "2026-09-05T00:00:00Z", "default", "rh",
+                    owner="o@x.com", status="running")
+    policy = s.get_scan_inputs(sid)["feature_flags"]["second_opinion_policy"]
+    s.set_setting("second_opinion_policy", json.dumps(policy))
+    assert s.reserve_second_opinion(scan_id=sid, file="a.docx", policy=policy)[0]
+    snap = live_snapshot.build_snapshot(s, sid, owner="o@x.com")
+    block = snap["second_opinion"]
+    assert block["status"] == "used" or block["status"] == "ready"
+    assert block["scan"] == {"used": 1, "limit": 2, "remaining": 1}
+    assert block["cost"]["estimated_remaining_usd"] == .9

@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Background, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { getAdminActivity, getWorkerCapacity, openAdminActivityStream } from './api.js'
+import { cancelLiveOpsStage, getAdminActivity, getWorkerCapacity, openAdminActivityStream,
+  resumeLiveOpsRemediation } from './api.js'
 import { ensureResizeObserver } from './resizeObserverFallback.js'
 import LiveOpsDrawer from './LiveOpsDrawer.jsx'
 import LiveOpsCostSummary from './LiveOpsCostSummary.jsx'
+import LiveOpsAiSummary from './LiveOpsAiSummary.jsx'
 import { appendSample, deriveEvents, formatDuration, mergeEvents, queueCapacityGauge,
-  durableRunEvents, sampleForNode, secondsSince } from './liveOpsDrawer.js'
+  durableRunEvents, sampleForNode, secondsSince, workflowStageRuns } from './liveOpsDrawer.js'
 
 ensureResizeObserver(typeof window === 'undefined' ? globalThis : window)
 
@@ -44,6 +46,28 @@ function age(iso) {
   if (seconds < 60) return `${seconds}s`
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`
   return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
+}
+
+export const JOB_STATE_FILTERS = [
+  { key: 'all', label: 'All' },
+  { key: 'active', label: 'Active' },
+  { key: 'stopping', label: 'Stop requested' },
+  { key: 'attention', label: 'Needs attention' },
+  { key: 'stalled', label: 'Stalled' },
+  { key: 'paused', label: 'Paused' },
+  { key: 'cancelled', label: 'Cancelled' },
+  { key: 'recent', label: 'Recently completed' },
+]
+
+/** One stable vocabulary for card labels, filtering and assistive text. */
+export function runOperationalState(run = {}) {
+  if (run.cancel_requested === true) return 'stopping'
+  if (run.paused === true) return 'paused'
+  if (run.stalled === true) return 'stalled'
+  if (run.status === 'failed' || Number(run.failed || 0) > 0) return 'attention'
+  if (run.status === 'cancelled') return 'cancelled'
+  if (run.status === 'recent') return 'recent'
+  return 'active'
 }
 
 export function queueConcentration(runs = []) {
@@ -131,8 +155,8 @@ export function MetricChart({ values = [], field, label, color }) {
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}><b style={{ fontSize: 12 }}>{label}</b>
       <span style={{ color, fontWeight: 700 }}>{points.at(-1) ?? 0}</span></div>
     {points.length > 1 ? <svg role="img" aria-label={`${label} over recent live updates`} viewBox="0 0 282 116" style={{ width: '100%', height: 116 }}>
-      <line x1="24" y1="12" x2="24" y2="94" stroke="var(--border)" />
-      <line x1="24" y1="94" x2="270" y2="94" stroke="var(--border)" />
+      <line x1="24" y1="12" x2="24" y2="94" stroke="var(--line)" />
+      <line x1="24" y1="94" x2="270" y2="94" stroke="var(--line)" />
       <text x="2" y="17" fontSize="9" fill="var(--muted)">{max}</text>
       <text x="10" y="96" fontSize="9" fill="var(--muted)">0</text>
       <text x="24" y="109" fontSize="9" fill="var(--muted)">earlier</text>
@@ -215,7 +239,7 @@ function AzureCapacity({ capacity, state }) {
       <span className="muted" style={{ fontSize: 11 }}>{capacity.measured_at ? `Measured ${age(capacity.measured_at)} ago` : 'Measurement time unavailable'}</span>
     </div>
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 8 }}>
-      {tiles.map(([label, value, detail]) => <div key={label} style={{ minWidth: 0, padding: 10, border: '1px solid var(--border)', borderRadius: 9 }}>
+      {tiles.map(([label, value, detail]) => <div key={label} style={{ minWidth: 0, padding: 10, border: '1px solid var(--line)', borderRadius: 9 }}>
         <div className="muted" style={{ fontSize: 10.5 }}>{label}</div>
         <b style={{ display: 'block', fontSize: 17, overflowWrap: 'anywhere' }}>{value}</b>
         <div className="muted" style={{ fontSize: 11, overflowWrap: 'anywhere' }}>{detail}</div>
@@ -260,8 +284,8 @@ export function tileStyle(kind, color) {
   const spec = TILE_KINDS[tileKind(kind)] || TILE_KINDS.service
   return {
     background: spec.tint
-      ? `color-mix(in srgb, ${color} ${spec.tint}%, var(--panel))`
-      : 'var(--panel)',
+      ? `color-mix(in srgb, ${color} ${spec.tint}%, var(--surface))`
+      : 'var(--surface)',
     borderLeft: spec.accent ? `${spec.accent}px solid ${color}` : undefined,
     borderRadius: spec.radius,
     label: spec.label,
@@ -272,8 +296,13 @@ function RunNode({ data }) {
   const cfg = STAGE[data.run.stage] || { label: data.run.stage, color: '#6B7280' }
   const accent = data.workflowColor || cfg.color
   const pct = data.run.total ? Math.round((data.run.completed / data.run.total) * 100) : 0
-  const statusLabel = data.run.status === 'recent' ? 'Complete'
-    : data.run.status === 'failed' ? 'Failed' : `${pct}%`
+  const operationalState = runOperationalState(data.run)
+  const statusLabel = operationalState === 'recent' ? 'Complete'
+    : operationalState === 'attention' ? 'Needs attention'
+      : operationalState === 'cancelled' ? 'Cancelled'
+        : operationalState === 'stalled' ? 'Stalled'
+          : operationalState === 'paused' ? 'Paused'
+            : operationalState === 'stopping' ? 'Stop requested' : `${pct}%`
   return <div title="Select for live run details; double-click to open charts"
     style={{ width: 225, padding: 12,
       ...tileStyle('run', accent),
@@ -284,11 +313,14 @@ function RunNode({ data }) {
     <div style={{ color: cfg.color, fontSize: 9.5, fontWeight: 800, letterSpacing: '.09em',
       marginBottom: 4 }}>{TILE_KINDS.job.label}</div>
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-      <b>{cfg.label}</b><span style={{ color: data.run.status === 'failed' ? 'var(--error-fg)' : cfg.color,
+      <b>{cfg.label}</b><span style={{ color: ['attention', 'stalled'].includes(operationalState) ? 'var(--error-fg)' : cfg.color,
         fontWeight: 700 }}>{statusLabel}</span>
     </div>
+    <div className="muted" style={{ fontSize: 10, marginTop: 2 }}>
+      Workflow revision {Math.max(1, Number(data.run.workflow_revision || 1))}
+    </div>
     <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{data.run.owner}</div>
-    <div style={{ height: 5, background: 'var(--border)', borderRadius: 4, margin: '9px 0 7px' }}>
+    <div style={{ height: 5, background: 'var(--line)', borderRadius: 4, margin: '9px 0 7px' }}>
       <div style={{ width: `${pct}%`, height: '100%', background: cfg.color, borderRadius: 4 }} />
     </div>
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'end' }}>
@@ -300,6 +332,10 @@ function RunNode({ data }) {
     {!!data.run.queued && <div style={{ fontSize: 11, marginTop: 5, color: 'var(--muted)' }}>
       {data.run.queued} waiting{data.run.queue_position ? ` · queue position ${data.run.queue_position}` : ''}
     </div>}
+    {operationalState !== 'active' && data.run.updated_at && <div style={{ fontSize: 10.5, marginTop: 5, color: 'var(--muted)' }}>
+      {statusLabel} · {operationalState === 'stopping' ? 'requested' : 'last changed'} {age(
+        operationalState === 'stopping' ? data.run.cancel_requested_at : data.run.updated_at)} ago
+    </div>}
     <Handle type="source" position={Position.Right} />
   </div>
 }
@@ -307,10 +343,12 @@ function RunNode({ data }) {
 function WorkflowNode({ data }) {
   return <div style={{ width: 225, minHeight: 112, padding: 12, borderRadius: 9,
     border: `2px solid ${data.color}`, borderLeft: `7px solid ${data.color}`,
-    background: 'var(--panel)', boxShadow: '0 2px 8px rgba(24,20,28,.07)' }}>
+    background: 'var(--surface)', boxShadow: '0 2px 8px rgba(24,20,28,.07)' }}>
     <div style={{ color: data.color, fontSize: 9.5, fontWeight: 800, letterSpacing: '.09em' }}>WORKFLOW</div>
     <b style={{ display: 'block', marginTop: 4, overflowWrap: 'anywhere' }}>{data.owner}</b>
-    <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>{data.source}</div>
+    <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
+      Revision {data.workflowRevision} · {data.source}
+    </div>
     <div style={{ fontSize: 11, marginTop: 9, fontWeight: 700 }}>{data.status}</div>
     <div className="muted" style={{ fontSize: 10, marginTop: 3 }}>{data.workflowId}</div>
     <Handle type="source" position={Position.Right} />
@@ -516,6 +554,9 @@ export function infrastructureDetail(data, snapshot = {}, capacity = null) {
       facts: [['Queued jobs', `${summary.queued || 0}`], ['Users waiting', `${summary.waiting_users || 0}`], ['Scheduling', 'Tenant-fair'], ['Pressure', PRESSURE[summary.pressure]?.label || PRESSURE.healthy.label]] },
     output: { title: 'Durable outputs and audit trail', subtitle: 'Corrected copies, conformance results, and provenance', color: data.color,
       facts: [['Storage class', 'Durable application storage'], ['Source safety', 'Original source documents remain unchanged'], ['Traceability', 'Run, rule, decision, and validation evidence retained']] },
+    workflow: { title: `Workflow revision ${data.workflowRevision}`, subtitle: 'One continuous Discover, Assess, Remediate, and Release lineage', color: data.color,
+      facts: [['Owner', data.owner], ['Source', data.source], ['Current state', data.status],
+        ['Current revision', `${data.workflowRevision}`], ['Stable workflow ID', data.workflowId]] },
   }
   return details[data.kind] || { title: data.label, subtitle: data.detail, color: data.color, facts: [] }
 }
@@ -532,6 +573,9 @@ export function runFacts(run = {}, nowMs = Date.now()) {
   return [
     ['User', run.owner || 'Not reported'],
     ['Source', run.source || 'Not reported'],
+    ['Workflow revision', `${Math.max(1, Number(run.workflow_revision || 1))}`],
+    ['Workflow lineage', run.workflow_id || run.scan_id || 'Not reported'],
+    ['Revision scan', run.scan_id || 'Not reported'],
     ['Progress', `${run.completed ?? 0} of ${run.total ?? 0}`],
     ['Queue', `${run.running ?? 0} active · ${run.queued ?? 0} waiting`],
     ['Status', run.status === 'recent' ? 'Recently completed'
@@ -574,7 +618,7 @@ export function flowEdge({ id, source, target, color, active = false, detail, ..
 }
 
 export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = null, connection = 'connecting') {
-  const runs = snapshot?.runs || []
+  const runs = workflowStageRuns(snapshot)
   const services = workerServiceRows(snapshot?.summary || {})
   const serviceByStage = new Map(services.map((service) => [service.stage, service]))
   const sourceKinds = ['drive', 'sharepoint']
@@ -710,12 +754,15 @@ export function trafficGraphForTab(graph = { nodes: [], edges: [] }, tab = 'infr
     const allRuns = graph.nodes.filter((node) => node.type === 'run')
     const matchingIds = new Set(allRuns.filter((node) =>
       (!filter?.stage || node.data?.run?.stage === filter.stage)
-      && (!filter?.source || node.data?.run?.source === filter.source))
-      .map((node) => node.data?.run?.scan_id))
-    const runs = filter ? allRuns.filter((node) => matchingIds.has(node.data?.run?.scan_id)) : allRuns
+      && (!filter?.source || node.data?.run?.source === filter.source)
+      && (!filter?.state || filter.state === 'all'
+        || runOperationalState(node.data?.run) === filter.state))
+      .map((node) => node.data?.run?.workflow_id || node.data?.run?.scan_id))
+    const runs = filter ? allRuns.filter((node) => matchingIds.has(
+      node.data?.run?.workflow_id || node.data?.run?.scan_id)) : allRuns
     const byWorkflow = new Map()
     for (const node of runs) {
-      const id = node.data?.run?.scan_id
+      const id = node.data?.run?.workflow_id || node.data?.run?.scan_id
       if (!byWorkflow.has(id)) byWorkflow.set(id, [])
       byWorkflow.get(id).push(node)
     }
@@ -727,21 +774,26 @@ export function trafficGraphForTab(graph = { nodes: [], edges: [] }, tab = 'infr
     })
     const nodes = []
     const edges = []
-    const stageX = { discover: 310, assess: 580, remediate: 850, release: 1120 }
     ordered.forEach(([workflowId, workflowRuns], lane) => {
       const y = 45 + lane * 185
       const color = workflowColor(workflowId)
       const first = workflowRuns[0]?.data.run || {}
       const active = workflowRuns.filter((node) => node.data.run.status === 'active')
       const failed = workflowRuns.some((node) => node.data.run.status === 'failed')
+      const workflowRevision = Math.max(...workflowRuns.map((node) =>
+        Math.max(1, Number(node.data.run.workflow_revision || 1))))
       nodes.push({ id: `workflow:${workflowId}`, type: 'workflow', position: { x: 25, y },
-        ariaLabel: `Workflow ${workflowId}, ${first.owner || 'owner not reported'}, ${active.length ? 'active' : 'recently completed'}.`,
-        data: { workflowId, owner: first.owner || 'Owner not reported', source: first.source || 'Source not reported',
+        ariaLabel: `Workflow ${workflowId}, revision ${workflowRevision}, ${first.owner || 'owner not reported'}, ${active.length ? 'active' : 'recently completed'}.`,
+        data: { kind: 'workflow', workflowId, owner: first.owner || 'Owner not reported', source: first.source || 'Source not reported',
+          workflowRevision,
           status: active.length ? `${active.at(-1).data.run.stage} in progress`
             : failed ? 'Needs attention' : 'Recently completed', color } })
-      const stages = workflowRuns.sort((a, b) => (stageX[a.data.run.stage] || 1390) - (stageX[b.data.run.stage] || 1390))
+      const stageOrder = { discover: 0, assess: 1, remediate: 2, release: 3 }
+      const stages = workflowRuns.sort((a, b) =>
+        Number(a.data.run.workflow_revision || 1) - Number(b.data.run.workflow_revision || 1)
+        || (stageOrder[a.data.run.stage] ?? 99) - (stageOrder[b.data.run.stage] ?? 99))
       stages.forEach((node, index) => {
-        nodes.push({ ...node, position: { x: stageX[node.data.run.stage] || 1390, y },
+        nodes.push({ ...node, position: { x: 310 + index * 270, y },
           data: { ...node.data, workflowColor: color } })
         const prior = index ? stages[index - 1].id : `workflow:${workflowId}`
         const live = Number(node.data.run.running || 0) > 0 || Number(node.data.run.queued || 0) > 0
@@ -756,7 +808,7 @@ export function trafficGraphForTab(graph = { nodes: [], edges: [] }, tab = 'infr
   return { nodes, edges: graph.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target)) }
 }
 
-export default function AdminLiveTraffic() {
+export default function AdminLiveTraffic({ me = null, currentScanId = null, onNavigateRecovery = null }) {
   const [snapshot, setSnapshot] = useState(null)
   const [selectedKey, setSelectedKey] = useState(null)
   const [connection, setConnection] = useState('connecting')
@@ -764,6 +816,7 @@ export default function AdminLiveTraffic() {
   const [capacityState, setCapacityState] = useState('loading')
   const [flowTab, setFlowTab] = useState('infrastructure')
   const [flowFilter, setFlowFilter] = useState(null)
+  const [jobState, setJobState] = useState('all')
   const history = useRef(new Map())
   // Per-node metric samples over the drawer's 15-minute window, and the operational events derived
   // from the differences between consecutive live snapshots. Both are session state: there is no
@@ -811,8 +864,9 @@ export default function AdminLiveTraffic() {
   // is no second keydown listener here to fight it.
 
   const graph = useMemo(() => buildTrafficGraph(snapshot, history.current, capacity, connection), [snapshot, capacity, connection])
-  const visibleGraph = useMemo(() => trafficGraphForTab(graph, flowTab, flowFilter),
-    [graph, flowTab, flowFilter])
+  const visibleGraph = useMemo(() => trafficGraphForTab(graph, flowTab,
+    flowTab === 'jobs' ? { ...flowFilter, state: jobState } : flowFilter),
+    [graph, flowTab, flowFilter, jobState])
 
   // One pass per live snapshot: sample every node for the trend strip, and diff this snapshot
   // against the previous one for the timeline. Both write into refs the same way the sparkline
@@ -854,6 +908,8 @@ export default function AdminLiveTraffic() {
   const pressure = PRESSURE[summary.pressure] || PRESSURE.healthy
   const stageRows = Object.entries(summary.by_stage || {})
   const services = workerServiceRows(summary)
+  const recovery = summary.recovery || {}
+  const correlation = summary.workflow_correlation || {}
   return <section className="panel" style={{ padding: 16, marginBottom: 20 }} aria-label="Live Azure processing traffic">
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
       <div><b>Live Azure traffic</b><div className="muted" style={{ fontSize: 12 }}>Active worker flow plus the last 15 minutes</div></div>
@@ -868,9 +924,41 @@ export default function AdminLiveTraffic() {
         <b style={{ fontSize: 20 }}>{summary.queued || 0} jobs</b><div className="muted">{summary.waiting_users || 0} users waiting · tenant-fair</div></div>
       <div className="panel" style={{ padding: 12 }}><div className="muted" style={{ fontSize: 11 }}>UTILIZATION</div>
         <b style={{ fontSize: 20 }}>{summary.utilization_pct ?? '—'}%</b><div className="muted">{summary.worker_tier_alive ? 'Worker tier online' : 'Worker tier unavailable'}</div></div>
+      <div className="panel" style={{ padding: 12 }} aria-label="Recovery activity in the last 24 hours">
+        <div className="muted" style={{ fontSize: 11 }}>RECOVERY · 24 HOURS</div>
+        <b style={{ fontSize: 20 }}>{recovery.cancel_resolved ?? 0} resolved</b>
+        <div className="muted">{recovery.cancel_pending ?? 0} stopping · {recovery.resumes ?? 0} resumed</div>
+        <div className="muted" style={{ fontSize: 10.5, marginTop: 3 }}>
+          {recovery.cancel_success_pct == null ? 'No stop requests in window'
+            : `${recovery.cancel_success_pct}% completed`
+              + (recovery.median_cancel_seconds == null ? '' : ` · median ${formatDuration(recovery.median_cancel_seconds)}`)}
+        </div>
+        {recovery.latest_action_at && <div className="muted" style={{ fontSize: 10.5, marginTop: 3 }}>
+          Latest action {age(recovery.latest_action_at)} ago
+        </div>}
+      </div>
+      <div className="panel" style={{ padding: 12 }} aria-label="Workflow data linkage">
+        <div className="muted" style={{ fontSize: 11 }}>WORKFLOW WIRING</div>
+        <b style={{ fontSize: 20 }}>
+          {correlation.complete == null ? 'Not reported'
+            : correlation.complete ? 'Complete' : `${correlation.unlinked_active_jobs || 0} unlinked`}
+        </b>
+        <div className="muted">
+          {correlation.attributed_stage_runs == null ? 'Stage-run linkage unavailable'
+            : `${correlation.attributed_stage_runs} stage run${correlation.attributed_stage_runs === 1 ? '' : 's'} linked`}
+        </div>
+        <div className="muted" style={{ fontSize: 10.5, marginTop: 3 }}>
+          {correlation.complete == null
+            ? 'ACP cannot verify whether every active job appears in a workflow.'
+            : correlation.complete
+              ? 'Every active job is represented in the workflow view.'
+              : 'Some active jobs are omitted from the workflow view; queue totals remain authoritative.'}
+        </div>
+      </div>
     </div>
     <AzureCapacity capacity={capacity} state={capacityState} />
     <LiveOpsCostSummary />
+    <LiveOpsAiSummary />
     {!!stageRows.length && <div aria-label="Load by processing stage" style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
       {stageRows.map(([stage, row]) => <span className="chip" key={stage} style={{ borderColor: STAGE[stage]?.color }}>
         <b>{STAGE[stage]?.label || stage}</b>&nbsp; {row.running} active · {row.queued} waiting
@@ -880,7 +968,7 @@ export default function AdminLiveTraffic() {
       <div className="muted" style={{ fontSize: 11, padding: '9px 12px 5px' }}>WORKER SERVICES</div>
       {services.map((service) => <div key={service.role} style={{ display: 'grid',
         gridTemplateColumns: 'minmax(110px,1fr) minmax(180px,2fr) minmax(130px,1fr)', gap: 12,
-        alignItems: 'center', padding: '8px 12px', borderTop: '1px solid var(--border)', fontSize: 12 }}>
+        alignItems: 'center', padding: '8px 12px', borderTop: '1px solid var(--line)', fontSize: 12 }}>
         <span><b>{STAGE[service.stage]?.label || service.role}</b><br />
           <span style={{ color: service.alive ? PRESSURE.healthy.color : PRESSURE.stalled.color }}>
             ● {service.alive ? 'Online' : 'Offline'}
@@ -891,7 +979,7 @@ export default function AdminLiveTraffic() {
       </div>)}
     </div>}
     {concentration.pct >= 70 && concentration.total > 1 && <div role="status" style={{ padding: '9px 11px', marginBottom: 12,
-      borderLeft: `4px solid ${PRESSURE.busy.color}`, background: 'var(--page)', fontSize: 12 }}>
+      borderLeft: `4px solid ${PRESSURE.busy.color}`, background: 'var(--bg)', fontSize: 12 }}>
       <b>Queue concentration:</b> one user holds {concentration.pct}% of waiting jobs. Tenant-fair scheduling gives other waiting users the next equally prioritized capacity.
     </div>}
     <div role="tablist" aria-label="Live Operations flow views" style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
@@ -905,9 +993,16 @@ export default function AdminLiveTraffic() {
       Showing workflows for {flowFilter.stage ? `${STAGE[flowFilter.stage]?.label || flowFilter.stage} activity` : flowFilter.source}
       <button type="button" className="ghost" onClick={() => setFlowFilter(null)} style={{ marginLeft: 8 }}>Clear filter</button>
     </div>}
+    {flowTab === 'jobs' && <div aria-label="Filter workflows by state" style={{ display: 'flex', gap: 6,
+      flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
+      <span className="muted" style={{ fontSize: 11, marginRight: 2 }}>SHOW</span>
+      {JOB_STATE_FILTERS.map(({ key, label }) => <button key={key} type="button"
+        className={jobState === key ? '' : 'ghost'} aria-pressed={jobState === key}
+        onClick={() => setJobState(key)} style={{ padding: '5px 9px', fontSize: 11 }}>{label}</button>)}
+    </div>}
     <div style={{ height: flowTab === 'infrastructure' ? 590
       : Math.max(360, 100 + visibleGraph.nodes.filter((node) => node.type === 'workflow').length * 185), maxHeight: 760,
-      border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden', background: 'var(--page)' }}>
+      border: '1px solid var(--line)', borderRadius: 10, overflow: 'hidden', background: 'var(--bg)' }}>
       <ReactFlow key={flowTab} nodes={visibleGraph.nodes} edges={visibleGraph.edges} nodeTypes={nodeTypes}
         defaultEdgeOptions={EDGE_ROUTING}
         fitView minZoom={0.35} maxZoom={1.5}
@@ -924,17 +1019,25 @@ export default function AdminLiveTraffic() {
         }}>
         <Background gap={18} size={1} /><MiniMap pannable zoomable /><Controls showInteractive={false} />
         {flowTab === 'infrastructure' && <div aria-label="Map key" style={{ position: 'absolute', zIndex: 3, right: 12, top: 12,
-          display: 'flex', gap: 12, padding: '6px 9px', border: '1px solid var(--border)',
-          borderRadius: 7, background: 'var(--panel)', boxShadow: '0 2px 7px rgba(24,20,28,.07)',
+          display: 'flex', gap: 12, padding: '6px 9px', border: '1px solid var(--line)',
+          borderRadius: 7, background: 'var(--surface)', boxShadow: '0 2px 7px rgba(24,20,28,.07)',
           color: 'var(--muted)', fontSize: 10.5 }}>
           <span><b style={{ color: 'var(--ink)' }}>SERVICE</b> · capacity</span>
           <span><b style={{ color: 'var(--ink)' }}>DATA</b> · sources and outputs</span>
+        </div>}
+        {flowTab === 'jobs' && <div aria-label="Workflow map key" style={{ position: 'absolute', zIndex: 3,
+          right: 12, top: 12, display: 'grid', gap: 4, padding: '7px 9px', border: '1px solid var(--line)',
+          borderRadius: 7, background: 'var(--surface)', boxShadow: '0 2px 7px rgba(24,20,28,.07)',
+          color: 'var(--muted)', fontSize: 10.5 }}>
+          <span><b style={{ color: 'var(--ink)' }}>COLOR</b> · one workflow and owner</span>
+          <span><b style={{ color: 'var(--ink)' }}>MOVING LINE</b> · work active or waiting</span>
+          <span><b style={{ color: 'var(--ink)' }}>SOLID LINE</b> · recorded stage transition</span>
         </div>}
         {flowTab === 'infrastructure' && <div className="chip" style={{ position: 'absolute', zIndex: 3, left: 12, bottom: 12 }}>
           Idle · select any tile to inspect the ready processing path
         </div>}
         {flowTab === 'jobs' && !visibleGraph.nodes.length && <div className="chip" style={{ position: 'absolute', zIndex: 3, left: 12, top: 12 }}>
-          No active or recently completed workflows match this view
+          No workflows match this view
         </div>}
         {flowTab === 'jobs' && !!visibleGraph.nodes.length && <div className="chip" style={{ position: 'absolute', zIndex: 3, left: 12, bottom: 12 }}>
           Select a stage to inspect progress; connected cards belong to one workflow
@@ -944,6 +1047,10 @@ export default function AdminLiveTraffic() {
     {selectedNode && <LiveOpsDrawer nodeId={selectedKey} node={selectedNode} snapshot={snapshot}
       capacity={liveCapacity} connection={connection}
       samples={trends.current.get(selectedKey) || []} events={eventLog.current}
-      facts={selectedFacts} accent={selectedAccent} onClose={() => setSelectedKey(null)} />}
+      facts={selectedFacts} accent={selectedAccent} onClose={() => setSelectedKey(null)}
+      onCancelStage={me?.is_admin ? (run) => cancelLiveOpsStage(run.scan_id, run.stage) : null}
+      onResumeStage={me?.is_admin ? (run) => resumeLiveOpsRemediation(run.scan_id) : null}
+      onRecover={currentScanId && selectedNode?.run?.scan_id === currentScanId
+        ? (run) => onNavigateRecovery?.(run.stage) : null} />}
   </section>
 }

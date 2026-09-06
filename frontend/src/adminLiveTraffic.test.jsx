@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { TILE_KINDS, azureBytes, azureLatest, buildTrafficGraph, capacityValue, flowEdge, infrastructureDetail, nodeGauge, queueConcentration, sizeScopeNote, tileKind, tileStyle, trafficEdgeStyle, trafficGraphForTab, trendToggleLabel, workerServiceRows, workflowColor } from './AdminLiveTraffic.jsx'
+import { JOB_STATE_FILTERS, TILE_KINDS, azureBytes, azureLatest, buildTrafficGraph, capacityValue, flowEdge, infrastructureDetail, nodeGauge, queueConcentration, runFacts, runOperationalState, sizeScopeNote, tileKind, tileStyle, trafficEdgeStyle, trafficGraphForTab, trendToggleLabel, workerServiceRows, workflowColor } from './AdminLiveTraffic.jsx'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(join(here, 'AdminLiveTraffic.jsx'), 'utf8')
@@ -10,6 +10,7 @@ const source = readFileSync(join(here, 'AdminLiveTraffic.jsx'), 'utf8')
 // markup they were written to protect rather than the file it used to live in.
 const drawer = readFileSync(join(here, 'LiveOpsDrawer.jsx'), 'utf8')
 const a11y = readFileSync(join(here, 'a11y.js'), 'utf8')
+const app = readFileSync(join(here, 'App.jsx'), 'utf8')
 
 const run = {
   scan_id: 's1', owner: 'operator@example.org', source: 'drive', stage: 'assess',
@@ -17,6 +18,11 @@ const run = {
 }
 
 describe('Admin live traffic graph', () => {
+  it('supplies mutating recovery handlers only for the server-confirmed platform admin', () => {
+    expect(source).toMatch(/onCancelStage=\{me\?\.is_admin\s*\?/)
+    expect(source).toMatch(/onResumeStage=\{me\?\.is_admin\s*\?/)
+    expect(app).toMatch(/<AdminLiveTraffic me=\{me\}/)
+  })
   it('keeps the complete processing topology visible while idle', () => {
     const graph = buildTrafficGraph({ runs: [], summary: {} })
     expect(graph.nodes.map((node) => node.id)).toEqual([
@@ -74,7 +80,7 @@ describe('Admin live traffic graph', () => {
     expect(TILE_KINDS.job.label).toBe('ACTIVE JOB')
     expect(TILE_KINDS.service.label).toBe('SERVICE')
     expect(tileStyle('run', '#4C78C2').background).toMatch(/^color-mix\(in srgb, #4C78C2 \d+%/)
-    expect(tileStyle('worker', '#4C78C2').background).toBe('var(--panel)')
+    expect(tileStyle('worker', '#4C78C2').background).toBe('var(--surface)')
     expect(TILE_KINDS.job.radius).toBe(6)
     expect(TILE_KINDS.service.radius).toBeGreaterThan(TILE_KINDS.job.radius)
     expect(source).toContain('SERVICE</b> · capacity')
@@ -99,6 +105,53 @@ describe('Admin live traffic graph', () => {
       .toBeLessThan(jobs.nodes.find((node) => node.id === 'one:assess').position.x)
   })
 
+  it('keeps revisions in one workflow lane and orders every stage without overlap', () => {
+    const graph = buildTrafficGraph({ summary: {}, runs: [
+      { scan_id: 'scan-v1', workflow_id: 'workflow-one', workflow_revision: 1, stage: 'discover',
+        owner: 'a', source: 'sharepoint', status: 'recent', completed: 1, total: 1 },
+      { scan_id: 'scan-v2', workflow_id: 'workflow-one', workflow_revision: 2, stage: 'discover',
+        owner: 'a', source: 'sharepoint', status: 'recent', completed: 1, total: 1 },
+      { scan_id: 'scan-v2', workflow_id: 'workflow-one', workflow_revision: 2, stage: 'assess',
+        owner: 'a', source: 'sharepoint', status: 'active', running: 1, completed: 0, total: 1 },
+    ] })
+    const jobs = trafficGraphForTab(graph, 'jobs')
+    expect(jobs.nodes.filter((node) => node.type === 'workflow')).toHaveLength(1)
+    expect(jobs.nodes.find((node) => node.type === 'workflow').data.workflowRevision).toBe(2)
+    const stages = jobs.nodes.filter((node) => node.type === 'run')
+    expect(stages.map((node) => node.position.x)).toEqual([310, 580, 850])
+    expect(new Set(stages.map((node) => `${node.position.x}:${node.position.y}`)).size).toBe(3)
+    expect(infrastructureDetail(jobs.nodes.find((node) => node.type === 'workflow').data, {}, null).facts)
+      .toContainEqual(['Stable workflow ID', 'workflow-one'])
+  })
+
+  it('includes lineage identifiers in stage operational facts', () => {
+    expect(runFacts({ scan_id: 'scan-v2', workflow_id: 'workflow-one', workflow_revision: 2 }))
+      .toEqual(expect.arrayContaining([
+        ['Workflow revision', '2'],
+        ['Workflow lineage', 'workflow-one'],
+        ['Revision scan', 'scan-v2'],
+      ]))
+  })
+
+  it('keeps a durable completed stage connected after its queue rows age out', () => {
+    const graph = buildTrafficGraph({ summary: {}, runs: [
+      { scan_id: 'one', stage: 'assess', owner: 'a', source: 'sharepoint', status: 'active',
+        running: 1, queued: 0, completed: 0, total: 1 },
+    ], workflows: [{ scan_id: 'one', owner_display_name: 'a', source: 'sharepoint', stages: [
+      { stage: 'discover', stage_run_id: 'd1', status: 'completed', completed: 1, total: 1,
+        active: 0, waiting: 0, completed_at: '2026-09-05T09:00:00Z', completion_recorded: true },
+      { stage: 'assess', stage_run_id: 'a1', status: 'running', completed: 0, total: 1,
+        active: 1, waiting: 0 },
+    ] }] })
+    const jobs = trafficGraphForTab(graph, 'jobs')
+    expect(jobs.nodes.map((node) => node.id)).toEqual([
+      'workflow:one', 'one:discover', 'one:assess',
+    ])
+    expect(jobs.edges.map((edge) => [edge.source, edge.target])).toEqual([
+      ['workflow:one', 'one:discover'], ['one:discover', 'one:assess'],
+    ])
+  })
+
   it('filters whole workflows from an infrastructure stage', () => {
     const graph = buildTrafficGraph({ summary: {}, runs: [
       { scan_id: 'one', stage: 'discover', owner: 'a', source: 'drive', status: 'recent' },
@@ -109,6 +162,52 @@ describe('Admin live traffic graph', () => {
     expect(jobs.nodes.some((node) => node.id === 'one:discover')).toBe(true)
     expect(jobs.nodes.some((node) => node.id === 'one:assess')).toBe(true)
     expect(jobs.nodes.some((node) => node.id === 'two:discover')).toBe(false)
+  })
+
+  it('filters by operational state without breaking a workflow lane apart', () => {
+    const graph = buildTrafficGraph({ summary: {}, runs: [
+      { scan_id: 'one', stage: 'discover', owner: 'a', source: 'drive', status: 'recent' },
+      { scan_id: 'one', stage: 'assess', owner: 'a', source: 'drive', status: 'active', stalled: true },
+      { scan_id: 'two', stage: 'remediate', owner: 'b', source: 'sharepoint', status: 'active', paused: true },
+      { scan_id: 'three', stage: 'assess', owner: 'c', source: 'drive', status: 'failed' },
+      { scan_id: 'four', stage: 'release', owner: 'd', source: 'drive', status: 'active',
+        cancel_requested: true, cancel_requested_at: '2026-09-05T10:00:00Z' },
+    ] })
+
+    const stalled = trafficGraphForTab(graph, 'jobs', { state: 'stalled' })
+    expect(stalled.nodes.map((node) => node.id)).toEqual([
+      'workflow:one', 'one:discover', 'one:assess',
+    ])
+    expect(trafficGraphForTab(graph, 'jobs', { state: 'paused' }).nodes.map((node) => node.id))
+      .toEqual(['workflow:two', 'two:remediate'])
+    expect(trafficGraphForTab(graph, 'jobs', { state: 'attention' }).nodes.map((node) => node.id))
+      .toEqual(['workflow:three', 'three:assess'])
+    expect(trafficGraphForTab(graph, 'jobs', { state: 'stopping' }).nodes.map((node) => node.id))
+      .toEqual(['workflow:four', 'four:release'])
+  })
+
+  it('uses the same state vocabulary for cards and workflow filters', () => {
+    expect(runOperationalState({ cancel_requested: true, paused: true })).toBe('stopping')
+    expect(runOperationalState({ paused: true, stalled: true, status: 'failed' })).toBe('paused')
+    expect(runOperationalState({ stalled: true, status: 'active' })).toBe('stalled')
+    expect(runOperationalState({ status: 'active', failed: 1 })).toBe('attention')
+    expect(runOperationalState({ status: 'cancelled' })).toBe('cancelled')
+    expect(runOperationalState({ status: 'recent' })).toBe('recent')
+    expect(runOperationalState({ status: 'active' })).toBe('active')
+    expect(JOB_STATE_FILTERS.map((item) => item.key)).toEqual([
+      'all', 'active', 'stopping', 'attention', 'stalled', 'paused', 'cancelled', 'recent',
+    ])
+  })
+
+  it('explains job line and color semantics and exposes state controls', () => {
+    expect(source).toContain('aria-label="Filter workflows by state"')
+    expect(source).toContain('aria-label="Workflow map key"')
+    expect(source).toContain('MOVING LINE</b> · work active or waiting')
+    expect(source).toContain("operationalState === 'stopping' ? 'requested' : 'last changed'")
+    expect(source).toContain('RECOVERY · 24 HOURS')
+    expect(source).toContain('recovery.cancel_success_pct')
+    expect(source).toContain('recovery.median_cancel_seconds')
+    expect(drawer).toContain('Running work is draining at its next safe checkpoint')
   })
 
   it('uses crisp non-scaling paths at every zoom', () => {
@@ -600,8 +699,8 @@ describe('A scan job and a durable service do not look alike', () => {
     // beside "2 slots" on a service tile read as one contradiction rather than two measurements.
     const job = tileStyle('run', '#4C78C2')
     const service = tileStyle('worker', '#4C78C2')
-    expect(job.background).toBe('color-mix(in srgb, #4C78C2 16%, var(--panel))')
-    expect(service.background).toBe('var(--panel)')
+    expect(job.background).toBe('color-mix(in srgb, #4C78C2 16%, var(--surface))')
+    expect(service.background).toBe('var(--surface)')
     expect(job.borderLeft).toBe('5px solid #4C78C2')
     expect(service.borderLeft).toBeUndefined()
   })

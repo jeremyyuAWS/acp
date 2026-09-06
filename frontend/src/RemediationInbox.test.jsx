@@ -304,7 +304,7 @@ describe('RemediationInbox — workflow-status queue', () => {
     await render({ queue: QUEUE, decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })
     await click(btnByText('Image needs alt text'))                   // id2, apply lane
     expect(detailHeading()).toBe('Image needs alt text')
-    await click(btnByText('Approve & next \u2192'))
+    await click(btnByText('Apply fix & next \u2192'))
     expect(calls).toEqual([[2, 'accepted']])
     // auto-advance moved the workspace to the next unresolved needs-review finding without a click
     expect(detailHeading()).toBe('Heading contrast is too low')      // id1, the remaining auto-fix
@@ -334,7 +334,7 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(calls[0].state).toBe('not_applicable')
   })
 
-  it('lets the reviewer edit the AI draft and applies their version (Save edited fix)', async () => {
+  it('lets the reviewer edit the AI draft and applies their version (Apply edited fix)', async () => {
     const calls = []
     await render({ queue: QUEUE, decisions: {}, onDecide: (f, d) => calls.push(d) })
     await click(btnByText('Image needs alt text'))               // id2, apply lane, carries `after`
@@ -344,8 +344,8 @@ describe('RemediationInbox — workflow-status queue', () => {
     // Edit through the native setter so React's controlled onChange fires.
     const setValue = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
     await act(async () => { setValue.call(ta, 'A revenue bar chart, 2021–2025'); ta.dispatchEvent(new Event('input', { bubbles: true })) })
-    // Editing flips the primary action to "Save edited fix" and carries the edited value.
-    await click(btnByText('Save edited fix'))
+    // Editing flips the primary action to "Apply edited fix" and carries the edited value.
+    await click(btnByText('Apply edited fix'))
     expect(calls[0].state).toBe('accepted')
     expect(calls[0].value).toBe('A revenue bar chart, 2021–2025')
   })
@@ -354,7 +354,7 @@ describe('RemediationInbox — workflow-status queue', () => {
     await render({ queue: QUEUE, decisions: {} })
     await click(btnByText('Image needs alt text'))               // id2, apply lane, unresolved
     expect(detailHeading()).toBe('Image needs alt text')
-    expect(btnByText('Send to manual')).toBeTruthy()          // the specific outcome
+    expect(btnByText('Reject to manual')).toBeTruthy()        // the specific outcome
     expect(btnByText('Defer')).toBeTruthy()
     // The ambiguous bare "Reject" button is gone.
     const bareReject = [...container.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Reject')

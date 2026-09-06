@@ -86,7 +86,9 @@ describe('what the running screen uses instead', () => {
     expect(l).toMatch(/useLiveSnapshot\(/)
     const h = code('useLiveSnapshot.js')
     expect(h).toMatch(/getScanLive\(/)
-    expect(h).toMatch(/setInterval\(/)
+    // Assess deliberately remains an authenticated snapshot feed. Its adaptive scheduler uses
+    // setTimeout rather than a fixed interval so idle/hidden cards do not create needless reads.
+    expect(h).toMatch(/setTimeout\(poll,/)
   })
 
   it('and the poll keeps the three guarantees that make the stream not worth the swap', () => {

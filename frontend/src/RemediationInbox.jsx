@@ -9,6 +9,7 @@ import { scOf } from './fixSummary.js'
 import { changeSentence, isContrastFinding } from './remediationEvidence.js'
 import WorkspaceProgress from './WorkspaceProgress.jsx'
 import WorkspaceFooter from './WorkspaceFooter.jsx'
+import './RemediationInbox.css'
 
 // Master/detail Remediation inbox. Remediation is queue work — select an item, understand it, act,
 // move to the next — so the layout is a TWO-column split: a 35% work queue on the left to find and
@@ -336,6 +337,7 @@ function taskLineOf(f, lane) {
 function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFindings = [], onApplyToMatching, cluster = null, draft = null, onDraftChange, saving = false, error = null, headingRef = null, detailExtra = null, emptyState = null }) {
   const [matchingPreviewOpen, setMatchingPreviewOpen] = useState(false)
   const [copiedValue, setCopiedValue] = useState('')
+  const draftRef = useRef(null)
   useEffect(() => { setMatchingPreviewOpen(false) }, [f?.id])
   useEffect(() => { setCopiedValue('') }, [f?.id])
   if (!f) {
@@ -428,7 +430,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
             {canEdit && (
               <div style={{ marginTop: 14 }}>
                 <label className="muted" htmlFor="rem-draft" style={{ display: 'block', margin: '0 0 6px', fontSize: 12, fontWeight: 600 }}>Edit proposed value</label>
-                <textarea id="rem-draft" value={draftValue} onChange={(e) => onDraftChange?.(e.target.value)}
+                <textarea ref={draftRef} id="rem-draft" value={draftValue} onChange={(e) => onDraftChange?.(e.target.value)}
                           aria-label="Edit the proposed fix" rows={2}
                           style={{ width: '100%', fontSize: 13.5, padding: '8px 10px', borderRadius: 8,
                                    border: '1px solid var(--line,#e2dce4)', fontFamily: 'inherit', resize: 'vertical' }} />
@@ -470,7 +472,8 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
       </div>
 
       {/* 4 · Decision bar — follows the evidence so actions stay visually connected to it. */}
-      <div className="remediation-detail-actions" style={{ borderTop: '1px solid var(--line,#e2dce4)', background: 'var(--bg, #fff)' }}>
+      <div className="remediation-detail-actions" role="group" aria-label={`Decision actions for ${displayText(r.issue)}`}
+           style={{ borderTop: '1px solid var(--line,#e2dce4)', background: 'var(--bg, #fff)' }}>
         {/* W8 — batch a decision across every other queued finding of the same rule/SC. Explicit and
             reversible-feeling: it names the count, and each target routes through the same onDecide
             (so approvals re-validate and rejections hand off) as if the reviewer acted on them one by
@@ -559,12 +562,13 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
             <>
               <button className="primary" disabled={saving}
                       onClick={() => onDecide?.(f, { state: 'accepted', value: canEdit ? draftValue : undefined })}>
-                {saving ? 'Saving…' : edited ? 'Save edited fix & next →' : 'Approve & next →'}
+                {saving ? 'Applying…' : edited ? 'Apply edited fix & next →' : 'Apply fix & next →'}
               </button>
+              {canEdit && <button className="ghost" disabled={saving} onClick={() => draftRef.current?.focus()}>Edit proposed fix</button>}
               {/* A specific action, not a bare "Reject": declining an AI fix hands the finding to a
                   person (the handoff lane), so the label names that outcome rather than leaving the
                   reviewer to guess what "Reject" does. */}
-              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>Send to manual</button>
+              <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>Reject to manual</button>
               <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'assigned' })}>Defer</button>
               <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'not_applicable' })}>Not applicable</button>
               {onOpenWord && <button className="ghost" disabled={saving} onClick={() => onOpenWord(f)}>Open source document</button>}

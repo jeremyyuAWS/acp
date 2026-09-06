@@ -147,6 +147,28 @@ _map_many([
     ("POST", "/scans/{sid}/remediate"),
     ("POST", "/scans/{scan_id}/files/{filename:path}/remediate"),
     ("POST", "/scans/{sid}/files/{filename:path}/undo-fix"),
+    # Scoped recovery and run controls. `remediate.run` rather than `remediate.review`, and the
+    # split is deliberate: these ACT on the estate or on the queue (a delivery writes a document
+    # into a customer's library; a cancel stops work), while `remediate.review` decides the
+    # content of a fix. A reviewer who may approve alt text is not thereby permitted to write to
+    # SharePoint — and `release.publish` is not required either, because delivering a corrected
+    # copy to the run's own mirror folder is finishing the remediation the operator started, not
+    # publishing a release.
+    ("POST", "/scans/{sid}/remediation/exceptions/retry-delivery"),
+    ("POST", "/scans/{sid}/remediation/exceptions/retry-documents"),
+    ("POST", "/scans/{sid}/remediation/cancel"),
+    ("POST", "/scans/{sid}/remediation/pause"),
+    ("POST", "/scans/{sid}/remediation/resume"),
+], {"remediate.run"})
+# Live Ops recovery remains independently platform-admin gated in routes/system.py. The
+# capability middleware still needs to name the underlying action: the dynamic stage endpoint
+# can stop assess, remediate, or release work, so any one of those operating rights gets the
+# request as far as the stricter admin boundary; Resume is remediation only.
+_map_many([
+    ("POST", "/admin/activity/workflows/{scan_id}/stages/{stage}/cancel"),
+], {"discover.run", "assess.cancel", "remediate.run", "release.publish"})
+_map_many([
+    ("POST", "/admin/activity/workflows/{scan_id}/stages/remediate/resume"),
 ], {"remediate.run"})
 _map_many([
     ("GET", "/scans/{sid}/remediation-status"),
@@ -155,6 +177,11 @@ _map_many([
     # the same capability. Anything narrower would let the summary be read where the detail it
     # summarises cannot be.
     ("GET", "/scans/{sid}/remediation/snapshot"),
+    # The exception view is the snapshot's detail — the same filenames plus the provider
+    # container each corrected copy would be written to — so it takes the same capability the
+    # snapshot does. Narrower would let the summary be read where the detail it summarises
+    # cannot be; wider would put destination identifiers behind a view-only role's read.
+    ("GET", "/scans/{sid}/remediation/exceptions"),
     ("GET", "/scans/{sid}/remediation-diffs"),
     ("GET", "/scans/{sid}/files/{filename:path}/remediation-diffs"),
     ("GET", "/scans/{sid}/files/{filename:path}/remediation-state"),
@@ -177,7 +204,10 @@ _map_many([("GET", "/ai/suggest"), ("GET", "/ai/explain"), ("GET", "/ai/validate
 # ── Release ───────────────────────────────────────────────────────────────────
 # Publishing is a GRANT (PRD §5), never implied by seeing the Release tab.
 _map_many([("POST", "/scans/{sid}/publish")], {"release.publish"})
-_map_many([("GET", "/scans/{sid}/release")], {"release.view"})
+_map_many([
+    ("GET", "/scans/{sid}/release"),
+    ("GET", "/scans/{sid}/release/manifest"),
+], {"release.view"})
 _map_many([("GET", "/scans/{sid}/report.pdf")], {"release.view", "reports.export"})
 
 # ── Monitor ───────────────────────────────────────────────────────────────────
@@ -254,6 +284,37 @@ _map_many([
     ("POST", "/disposition/approvals/{audit_id}/undo"),
     ("POST", "/disposition/policies/{policy_id}/execute"),
 ], {"release.publish"})
+
+# ── Archive auto-fire (R9) ────────────────────────────────────────────────────
+# The unattended sibling of the block above, and mapped one tier stricter at every level for the
+# reason the whole feature turns on: nobody is watching when it acts.
+#
+# READING is release.view + monitor.view, matching the lifecycle reads above. Somebody has to be
+# able to see WHICH files a machine is about to move and on what evidence without also holding the
+# right to start it — a permission shape that only works if the two are separate capabilities.
+_map_many([
+    ("GET", "/lifecycle/archive/policy"),
+    ("GET", "/lifecycle/archive/candidates"),
+    ("GET", "/lifecycle/archive/executions"),
+    ("GET", "/lifecycle/archive/executions/{execution_id}"),
+], {"release.view", "monitor.view"})
+# CONFIGURING it is release.publish, NOT release.view — unlike authoring a disposition rule, which
+# sits at release.view above because a rule only ever writes a recommendation. This policy is the
+# authorization itself: saving it decides what may be moved with no human in the loop, so it is
+# the same class of act as publishing, one step removed. The kill switch is here too rather than
+# somewhere looser, and that is a deliberate trade — anyone who can turn the lane ON can turn it
+# off, and nobody else can, which is the right way round for a control whose failure mode is
+# unauthorised STOPPING of a governance process the customer configured. The route additionally
+# gates on _require_admin.
+_map_many([
+    ("PUT", "/lifecycle/archive/policy"),
+    ("POST", "/lifecycle/archive/kill-switch"),
+], {"release.publish"})
+# RUNNING it moves customer files unattended. release.publish here as well, and the route is
+# additionally _require_owner — the strictest gate this codebase has for an estate change, which
+# routes/disposition.py already applies to its own execute path for the attended version of the
+# same act.
+_map_many([("POST", "/lifecycle/archive/run")], {"release.publish"})
 
 # ── Campaigns, org memory, content workspaces ─────────────────────────────────
 _map_many([("GET", "/campaigns"), ("GET", "/campaigns/{campaign_id}")], _REMEDIATE_READ)

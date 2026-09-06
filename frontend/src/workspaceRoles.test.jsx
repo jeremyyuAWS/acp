@@ -80,6 +80,14 @@ beforeEach(() => {
 const flush = async () => { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve() }) }
 const click = async (el) => { await act(async () => { el.click() }); await flush() }
 const byText = (c, sel, re) => [...c.querySelectorAll(sel)].find((e) => re.test(e.textContent))
+
+// THE DRAWER IS NOT INSIDE THIS COMPONENT ANY MORE. It renders through a portal at
+// `document.body` so `position: fixed` resolves against the viewport rather than against
+// Settings' `.setoverlay`, whose `backdrop-filter` made it the containing block and displaced the
+// drawer by the panel's scroll offset. Queries that reach INTO the drawer therefore scope to
+// `document`; queries for the roles LIST still scope to the mounted container, and the difference
+// is now load-bearing — see "the role drawer renders outside this component" at the end of this
+// file.
 const rowFor = (c, name) => [...c.querySelectorAll('.roles-row')].find((r) => r.textContent.includes(name))
 const buttonIn = (row, label) => [...row.querySelectorAll('button')].find((b) => b.textContent.trim() === label)
 
@@ -196,7 +204,7 @@ describe('the protected role', () => {
   it('opens read-only, and explains why rather than just disabling everything', async () => {
     const c = await mount()
     await click(buttonIn(rowFor(c, 'Owner'), 'View'))
-    const drawer = c.querySelector('[role="dialog"]')
+    const drawer = document.querySelector('[role="dialog"]')
     expect(drawer.textContent).toMatch(/cannot be changed/i)
     expect(drawer.textContent).toMatch(/lockout/i)
     expect(drawer.querySelector('input').disabled).toBe(true)
@@ -217,7 +225,7 @@ describe('the drawer', () => {
     // ignored. The catalog here deliberately holds THREE tabs, not the real ten.
     const c = await mount()
     await click(buttonIn(rowFor(c, 'Spare'), 'Edit'))
-    const rows = [...c.querySelectorAll('.roles-grid tbody tr')]
+    const rows = [...document.querySelectorAll('.roles-grid tbody tr')]
     expect(rows.map((r) => r.querySelector('th').textContent)).toEqual(['Overview', 'Remediate', 'Release'])
     expect(rows[0].querySelectorAll('input[type="radio"]')).toHaveLength(3)
   })
@@ -225,7 +233,7 @@ describe('the drawer', () => {
   it('preselects the level each tab currently has', async () => {
     const c = await mount()
     await click(buttonIn(rowFor(c, 'Remediation Reviewer'), 'Edit'))
-    const checked = [...c.querySelectorAll('.roles-grid input:checked')].map((i) => i.value)
+    const checked = [...document.querySelectorAll('.roles-grid input:checked')].map((i) => i.value)
     expect(checked).toEqual(['view', 'operate', 'view'])
   })
 
@@ -234,7 +242,7 @@ describe('the drawer', () => {
     // it and meet the refusal at save time, having already decided what the role is for.
     const c = await mount()
     await click(buttonIn(rowFor(c, 'Spare'), 'Edit'))
-    const labels = [...c.querySelectorAll('.roles-grant')]
+    const labels = [...document.querySelectorAll('.roles-grant')]
     const publish = labels.find((l) => l.textContent.includes('Publish corrected files'))
     const exportReports = labels.find((l) => l.textContent.includes('Export reports'))
     expect(publish.querySelector('input').disabled).toBe(true)
@@ -245,19 +253,19 @@ describe('the drawer', () => {
   it('sends the version on an edit, so a stale save is refused rather than winning', async () => {
     const c = await mount()
     await click(buttonIn(rowFor(c, 'Spare'), 'Edit'))
-    await click(byText(c, 'button', /^Save role$/))
+    await click(byText(document, 'button', /^Save role$/))
     expect(updateWorkspaceRole).toHaveBeenCalledWith('spare', expect.objectContaining({ version: 1 }))
   })
 
   it('creates rather than updates when the role is new', async () => {
     const c = await mount()
     await click(byText(c, 'button', /Create role/))
-    const input = c.querySelector('[role="dialog"] input')
+    const input = document.querySelector('[role="dialog"] input')
     await act(async () => {
       Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, 'Auditor')
       input.dispatchEvent(new Event('input', { bubbles: true }))
     })
-    await click(byText(c, '[role="dialog"] button', /^Create role$/))
+    await click(byText(document, '[role="dialog"] button', /^Create role$/))
     expect(createWorkspaceRole).toHaveBeenCalledWith(expect.objectContaining({ name: 'Auditor' }))
     expect(updateWorkspaceRole).not.toHaveBeenCalled()
   })
@@ -265,7 +273,7 @@ describe('the drawer', () => {
   it('carries the source role through a duplicate', async () => {
     const c = await mount()
     await click(buttonIn(rowFor(c, 'Remediation Reviewer'), 'Duplicate'))
-    await click(byText(c, '[role="dialog"] button', /^Create role$/))
+    await click(byText(document, '[role="dialog"] button', /^Create role$/))
     expect(createWorkspaceRole).toHaveBeenCalledWith(
       expect.objectContaining({ duplicate_of: 'remediation-reviewer' }))
   })
@@ -278,7 +286,7 @@ describe('the drawer', () => {
     CATALOG = { ...CATALOG_FULL, mine: [...CATALOG_FULL.mine, 'release.publish'] }
     const c = await mount()
     await click(buttonIn(rowFor(c, 'Spare'), 'Edit'))
-    expect(c.querySelector('.roles-warn').textContent).toMatch(/cannot see the Release tab/i)
+    expect(document.querySelector('.roles-warn').textContent).toMatch(/cannot see the Release tab/i)
   })
 })
 
@@ -291,7 +299,7 @@ describe('when the server refuses', () => {
     updateWorkspaceRole.mockRejectedValueOnce(new Error('role spare is at version 4, not 1'))
     const c = await mount()
     await click(buttonIn(rowFor(c, 'Spare'), 'Edit'))
-    await click(byText(c, 'button', /^Save role$/))
+    await click(byText(document, 'button', /^Save role$/))
     expect(c.querySelector('[role="status"]').textContent).toContain('version 4')
   })
 })
@@ -340,9 +348,43 @@ describe('accessibility', () => {
     // structure in a way it accepts — so it is asserted directly.
     const c = await mount()
     await click(buttonIn(rowFor(c, 'Spare'), 'Edit'))
-    const labels = [...c.querySelectorAll('.roles-grid input')].map((i) => i.getAttribute('aria-label'))
+    const labels = [...document.querySelectorAll('.roles-grid input')].map((i) => i.getAttribute('aria-label'))
     expect(labels).toContain('Remediate: Operate')
     expect(labels).toContain('Overview: Hidden')
     expect(labels.every(Boolean)).toBe(true)
+  })
+})
+
+
+// ── the drawer has to escape the Settings overlay ─────────────────────────────
+
+describe('the role drawer renders outside this component', () => {
+  /**
+   * SAME TRAP AS PeopleAccess's DIALOGS, on the screen right beside it.
+   *
+   * `.roles-drawer-scrim` is `position: fixed`, and this screen renders inside Settings, whose
+   * `.setoverlay` carries `backdrop-filter: blur(2px)`. An element with a backdrop-filter becomes
+   * the containing block for its fixed descendants, so "fixed" resolved against a box that
+   * SCROLLS — measured on the People screen at y=-105 for the equivalent scrim, i.e. off the top
+   * of the window, present and unreachable.
+   *
+   * This test exists because its absence was caught by a BITE CHECK rather than by review: the
+   * drawer was portalled in the same change as the dialogs, and un-portalling it left the whole
+   * suite green. A fix nothing can fail on is a fix nobody will keep.
+   */
+  it('portals to document.body, so nothing above it can become its containing block', async () => {
+    const c = await mount()
+    await click(buttonIn(rowFor(c, 'Spare'), 'Edit'))
+    const drawer = document.querySelector('.roles-drawer-scrim')
+    expect(drawer, 'the drawer did not open').toBeTruthy()
+    expect(c.contains(drawer)).toBe(false)
+    expect(drawer.parentElement).toBe(document.body)
+  })
+
+  it('still renders the role it was opened for', async () => {
+    // The portal must not cost the content: portalled children keep React context and props.
+    const c = await mount()
+    await click(buttonIn(rowFor(c, 'Spare'), 'Edit'))
+    expect(document.querySelector('.roles-drawer-scrim').textContent).toContain('Spare')
   })
 })

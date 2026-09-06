@@ -14,6 +14,7 @@ Per-file fan-out (PDF/HTML) is a possible future optimization (ADR 0004 step 3).
 """
 from __future__ import annotations
 
+import hashlib as _hashlib
 import json as _json
 import logging
 import os as _os
@@ -707,6 +708,121 @@ def _propose_media_captions(scan_id: str, filename: str, drive_file_id: str,
 REMEDIATION_SOURCES = ("drive", "local", "sharepoint")
 
 
+def _release_failure(release_id: str, owner: str, filename: str, record: dict,
+                     category: str, explanation: str) -> None:
+    """Persist one safe Release failure; provider exception text never crosses the API."""
+    core.store.record_release_document(release_id, owner, {
+        "file": filename,
+        "source_document_id": record.get("drive_file_id") or filename,
+        "original_relative_path": (record.get("source_relative_path")
+                                   or record.get("parent_folder") or filename),
+        "released_relative_path": None,
+        "status": "failed",
+        "failure_category": category,
+        "explanation": explanation,
+        "created": False,
+    })
+
+
+@handler("publish_file")
+def _publish_file(payload: dict, job: dict) -> None:
+    """Durably publish one approved corrected copy to its source SharePoint library.
+
+    Tokens are resolved from the short-lived Redis token store at execution time and are never
+    placed in the durable job payload. One file per job makes a deployment/restart resumable and
+    bounds each Graph operation independently.
+    """
+    scan_id = payload.get("scan_id") or job.get("scan_id")
+    filename = payload.get("file")
+    owner = payload.get("owner")
+    release_id = payload.get("release_id")
+    if not all((scan_id, filename, owner, release_id)):
+        raise FatalJobError("publish_file job missing release identity")
+    scan = core.store.get_scan(scan_id, owner=owner)
+    if not scan or (scan.get("run") or {}).get("source") != "sharepoint":
+        raise FatalJobError("publish_file job is not an owned SharePoint scan")
+    record = core.store.get_file_record(scan_id, filename)
+    if not record or not record.get("compliant") or not record.get("remediated_at"):
+        _release_failure(release_id, owner, filename, record or {}, "not_approved",
+                         "Only approved corrected copies can be released.")
+        return
+    saved = core.store.get_release_document(release_id, filename, owner)
+    if saved and saved.get("status") == "published":
+        return
+    token = core.get_scan_tokens(scan_id).get("sp")
+    if not token:
+        _release_failure(release_id, owner, filename, record,
+                         "provider_session_expired",
+                         "Reconnect SharePoint and retry this document.")
+        # Dead, not done: enqueue_stage_batch deliberately revives failed terminal rows when the
+        # user retries with a fresh token. Marking this successful would make Retry a no-op.
+        raise FatalJobError("SharePoint session expired — reconnect and retry")
+    import publish as _publish
+    import scanner as _scanner
+    source_path = record.get("source_relative_path") or record.get("parent_folder") or filename
+    source_name = record.get("source_name") or filename
+    source_id = record.get("drive_file_id") or filename
+    drive_id = record.get("drive_id")
+    location = f"graph:{drive_id or 'me'}"
+    try:
+        release = core.store.release_status(release_id, owner)
+        if not release:
+            raise FatalJobError("release execution not found")
+        root = core.store.get_release_root(release_id, location, owner)
+        if not root:
+            claimed_name = core.store.claim_release_root_name(
+                release_id, owner, "sharepoint", location, release["folder_name"])
+            detail = _publish.ensure_sharepoint_release_folder(
+                token, drive_id, release_id, claimed_name)
+            root = core.store.record_release_root(
+                release_id, owner, "sharepoint", location, detail["id"],
+                detail["name"], detail.get("url"))
+        publication = _publish.archive_copy_publish_sharepoint(
+            token, drive_id, root["folder_id"], owner, release_id, scan_id,
+            filename, source_path, source_id, source_filename=source_name)
+        if publication is None:
+            raise IOError("corrected content was unavailable")
+        folders, _ = _publish.sharepoint_relative_path(source_path, source_name)
+        released_name = publication.get("filename") or source_name
+        published_at = core.store.record_publish(
+            scan_id, filename, published_url=publication.get("url"))
+        core.store.record_release_document(release_id, owner, {
+            "file": filename, "source_document_id": source_id,
+            "original_relative_path": source_path,
+            "released_relative_path": "/".join([*folders, released_name]),
+            "status": "published", "published_at": published_at,
+            "published_url": publication.get("url"),
+            "verification": "content verified",
+            "released_document_id": publication.get("id"),
+            "corrected_checksum": publication.get("checksum"),
+            "created": publication.get("created", False),
+        })
+    except _scanner.SharePointSessionExpired:
+        if int((job or {}).get("attempts") or 1) < int((job or {}).get("max_attempts") or 5):
+            raise
+        _release_failure(release_id, owner, filename, record,
+                         "provider_session_expired",
+                         "Reconnect SharePoint and retry this document.")
+        raise FatalJobError("SharePoint session expired — reconnect and retry")
+    except PermissionError:
+        _release_failure(release_id, owner, filename, record,
+                         "provider_permission_denied",
+                         "SharePoint refused the write. Reconnect after an administrator grants Files.ReadWrite.All and Sites.ReadWrite.All.")
+        raise FatalJobError("SharePoint write permission denied — administrator consent required")
+    except FatalJobError:
+        raise
+    except Exception:
+        # Let transient Graph/Redis failures use the queue's normal retry/backoff. On the final
+        # attempt, settle the document into an actionable durable state instead of leaving it
+        # looking queued forever after the job dead-letters.
+        if int((job or {}).get("attempts") or 1) < int((job or {}).get("max_attempts") or 5):
+            raise
+        _release_failure(release_id, owner, filename, record,
+                         "provider_write_failed",
+                         "The corrected copy could not be verified at the SharePoint release destination. Retry this document.")
+        raise
+
+
 def _remediation_source_bytes(scan_id: str, filename: str, payload: dict,
                               drive_file_id: str | None = None):
     """Original bytes for one remediation job, chosen by the job's OWN source. Returns
@@ -786,17 +902,38 @@ def _rem_event(scan_id: str, kind: str, job: dict | None, file: str | None, **de
     thirteen call sites each remembering to. `scan_event` itself never raises — a narration line
     must never be able to fail the work it narrates — so this cannot either.
 
-    `file` goes in the DETAIL payload, not a column: `scan_events` has no file column, and adding
-    one for this would migrate a table five other event kinds share. The detail is JSON and the
-    readers already decode it.
+    `file` goes in the `document` COLUMN — it used to ride inside the JSON detail, on the
+    reasoning that adding a column would migrate a table five other kinds share. Two requirements
+    overturned that, and both are reads the JSON could not serve:
+
+      * per-document replay (`list_scan_events(document=...)`) needs an index, and
+      * PRD §22's filename suppression needs the name reachable from exactly ONE place, so that
+        withholding it is a property of a projection rather than a search through a blob.
+
+    It is NOT written to `detail` as well. One fact, one home: two copies is two places for a
+    suppression rule to be applied to only one of them.
+
+    `correlation_id` is the batch this event belongs to, taken from the job row. It is what
+    separates two remediation runs over the same scan — `scan_id` alone cannot, and the panel is
+    scoped to the latest batch.
 
     FILENAMES ARE IN HERE. That is deliberate and it is why the read path is owner-scoped —
     `list_scan_events(owner=...)` plus the route's own `get_scan(owner=...)` gate, exactly as PRD
     §13 requires. Nothing here carries extracted document CONTENT, only its name and the counts.
     """
+    payload = (job or {}).get("payload")
+    if isinstance(payload, str):
+        try:
+            import json as _json
+            payload = _json.loads(payload)
+        except (TypeError, ValueError):
+            payload = None
+    correlation = ((job or {}).get("batch_id")
+                   or (payload or {}).get("stage_execution_id"))
     scan_event(scan_id, kind, job_id=(job or {}).get("id"),
                attempt=(job or {}).get("attempts"),
-               detail={"file": file, **detail} if file else (detail or None))
+               document=file or None, correlation_id=correlation or None,
+               detail=detail or None)
 
 
 @handler("remediate_file")
@@ -1153,7 +1290,13 @@ def _remediate_file(payload: dict, job: dict) -> None:
         print(f"[remediate] source mirror: {filename} skipped — {source} scan; corrected copy "
               "stored in ACP", flush=True)
 
-    core.store.record_remediation(scan_id, filename, drive_write_url=web_url, blob_url=blob_url)
+    # The digest of the bytes that were actually stored, recorded WITH the correction rather
+    # than derived later. A delivery-only retry checks the stored object against this value, so
+    # a correction saved without one can never be re-delivered — the gate answers
+    # `artifact_provenance_unknown` rather than sending bytes whose provenance nobody can state.
+    _digest = _hashlib.sha256(fixed_bytes).hexdigest()
+    core.store.record_remediation(scan_id, filename, drive_write_url=web_url, blob_url=blob_url,
+                                  corrected_sha256=_digest, corrected_bytes=len(fixed_bytes))
     # `delivered` names the DESTINATION write, not the correction. A corrected copy that
     # reached blob but not the provider is stored-not-delivered — PRD §11's delivery-failure
     # class — and the snapshot counts it as pending. Saying `delivered` for it would make a
@@ -1768,7 +1911,8 @@ def _discover_norm_row(it: dict) -> dict:
     resumed scan whose early sites are missing metadata the late ones have, which reads as a
     tenant that labels some sites and not others.
     """
-    return {"file": it["name"], "drive_file_id": it.get("id"), "mime": it.get("mime"),
+    return {"file": it["name"], "source_name": it.get("source_name") or it["name"],
+            "drive_file_id": it.get("id"), "mime": it.get("mime"),
             "path": it.get("path"), "checksum": it.get("checksum"),
             "drive_id": it.get("driveId"),
             # WHICH SharePoint site and library this document came from. Carried on the
@@ -1795,7 +1939,8 @@ def _discover_inventory_row(it: dict) -> dict:
     """One normalised record as the scan_inventory row add_inventory persists. See
     _discover_norm_row for why this is a function rather than a comprehension."""
     import classify as _cls
-    return {"file": it["file"], "drive_file_id": it.get("drive_file_id"),
+    return {"file": it["file"], "source_name": it.get("source_name") or it["file"],
+            "drive_file_id": it.get("drive_file_id"),
             "mime": it.get("source_mime"), "size_kb": it.get("size_kb"),
             "doc_class": _cls.classify_from_metadata(it["file"], it.get("source_mime"))["doc_class"],
             "checksum": it.get("checksum"), "path": it.get("path"),
@@ -4658,3 +4803,108 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
                 detail="all findings resolved (auto-fixed + approved values written) — advanced to Publish")
     except Exception:
         swallowed("_apply_approved_values: marking the file compliant after revalidation failed", scan_id)
+
+
+@handler("deliver_corrected_copy")
+def _deliver_corrected_copy(payload: dict, job: dict) -> None:
+    """Re-send ONE already-verified corrected copy to its source provider. Fixes nothing.
+
+    This is the worker behind PRD §11's "retry delivery only". Read what it does NOT do first,
+    because that is the contract: it does not open the source document, does not run a fixer,
+    does not re-verify, and does not touch `applied_fixes`, `remediation_diff`, `hitl_queue` or
+    `file_records.remediated_at`. A delivery failure must not reduce the applied or verified
+    counts, and the way that is guaranteed is that nothing on this path can write them.
+
+    The route has already gated the request (owner, capability, artifact provenance, destination)
+    and taken the idempotency claim. This re-checks the artifact against its digest anyway —
+    see remediation_delivery.load_artifact for why once is not enough — and then makes exactly
+    one provider write.
+
+    THE CLAIM IS ALWAYS CLOSED. Every exit below finishes the `remediation_delivery` row, because
+    a row left `in_flight` refuses every future retry of that artifact with `retry_in_flight` and
+    nothing would ever clear it. A refusal closes it as refused, a provider error as failed.
+    """
+    import remediation_delivery as _delivery
+    import remediation_exceptions as _exceptions
+
+    scan_id = payload.get("scan_id")
+    filename = payload.get("file")
+    key = payload.get("idempotency_key")
+    digest = payload.get("artifact_digest")
+    destination = payload.get("destination") or {}
+    provider = (destination.get("provider") or payload.get("provider") or "").lower()
+    owner = payload.get("owner")
+    actor = payload.get("actor")
+    if not (scan_id and filename and key):
+        raise FatalJobError("deliver_corrected_copy job missing scan_id/file/idempotency_key")
+
+    import blob as _blob
+
+    def _refuse(code: str) -> None:
+        core.store.finish_delivery(key, status="refused", error=code)
+        _rem_event(scan_id, "remediate.delivery_retry_refused", job, filename,
+                   destination=provider or None, reason=code)
+        core.store.log_decision(actor or "system", "remediate.delivery_retry_refused",
+                                scan_id=scan_id, file=filename,
+                                detail=_audit_detail(_exceptions.audit_payload(
+                                    actor=actor, run_id=scan_id, file=filename,
+                                    action="retry_delivery", outcome="refused",
+                                    destination=destination, idempotency_key=key, reason=code)))
+
+    try:
+        data = _delivery.load_artifact(owner=owner, scan_id=scan_id, file=filename,
+                                       expected_digest=digest or "",
+                                       download=_blob.download_remediated)
+    except _delivery.DeliveryRefused as refused:
+        _refuse(refused.code)
+        return
+
+    _phase(job, "delivering the corrected copy")
+    try:
+        url = _delivery.perform_delivery(
+            provider=provider, destination=destination, filename=filename, data=data,
+            drive_client=_drive_client(payload["drive_token"]) if payload.get("drive_token")
+            else None,
+            graph_token=payload.get("sp_token"))
+    except _delivery.DeliveryRefused as refused:
+        _refuse(refused.code)
+        return
+    except Exception as exc:      # noqa: BLE001 — a provider failure is an outcome, not a crash
+        core.store.finish_delivery(key, status="failed", error=f"{type(exc).__name__}: {exc}")
+        _rem_event(scan_id, "remediate.delivery_failed", job, filename,
+                   destination=provider or None)
+        core.store.log_decision(actor or "system", "remediate.delivery_retry_failed",
+                                scan_id=scan_id, file=filename,
+                                detail=_audit_detail(_exceptions.audit_payload(
+                                    actor=actor, run_id=scan_id, file=filename,
+                                    action="retry_delivery", outcome="failed",
+                                    destination=destination, idempotency_key=key,
+                                    reason=type(exc).__name__)))
+        raise
+
+    # ONE COLUMN. record_remediation would restamp `remediated_at` and make a week-old
+    # correction look like it was produced now — see store.record_delivery_url.
+    if url:
+        core.store.record_delivery_url(scan_id, filename, url)
+    core.store.finish_delivery(key, status="delivered", delivered_url=url)
+    _rem_event(scan_id, "remediate.delivered", job, filename, destination="provider")
+    core.store.log_decision(actor or "system", "remediate.delivery_retry_delivered",
+                            scan_id=scan_id, file=filename,
+                            detail=_audit_detail(_exceptions.audit_payload(
+                                actor=actor, run_id=scan_id, file=filename,
+                                action="retry_delivery", outcome="delivered",
+                                destination=destination, idempotency_key=key)))
+
+
+def _audit_detail(payload: dict) -> str:
+    """A bounded audit payload as the one string log_decision stores.
+
+    JSON rather than prose so the fields stay machine-readable, and truncated to the column's
+    own limit here rather than by whatever the database does silently. The payload is already a
+    whitelist (remediation_exceptions.audit_payload); this only decides how it is spelled.
+    """
+    import json as _json
+    try:
+        return _json.dumps(payload, sort_keys=True)[:400]
+    except (TypeError, ValueError):
+        return str(payload)[:400]

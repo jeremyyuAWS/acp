@@ -48,6 +48,7 @@ const snapshot = {
     active_runs: 1, recent_runs: 0, active_users: 1, waiting_users: 2, queued: 10, running: 2,
     completed_jobs: 140, worker_slots: 7, available_slots: 5, utilization_pct: 28,
     pressure: 'busy', scheduling_policy: 'tenant_fair_least_loaded', worker_tier_alive: true,
+    workflow_correlation: { attributed_stage_runs: 1, unlinked_active_jobs: 2, complete: false },
     by_stage: { assess: { running: 2, queued: 10, completed: 8, total: 20 },
       remediate: { completed: 12, running: 1 }, release: { completed: 9, running: 0 } },
     worker_roles: { assess: { alive: true, pool_size: 3, age_s: 4, version: 'v25' } },
@@ -280,6 +281,75 @@ describe('Primary visualization per node', () => {
   })
 
   const runNode = { kind: 'run', run: snapshot.runs[0] }
+
+  it('requires an explicit second click before cancelling only the selected stage', async () => {
+    const calls = []
+    const container = await mount({ nodeId: 's1:assess', node: runNode,
+      onCancelStage: async (run) => {
+        calls.push([run.scan_id, run.stage])
+        return { cancelled: 10, requested: 2 }
+      } })
+    await click(buttonNamed(container, 'Stop assess stage'))
+    expect(calls).toEqual([])
+    expect(container.textContent).toContain('Other workflow stages are not changed')
+    await click(buttonNamed(container, 'Confirm stop assess'))
+    expect(calls).toEqual([['s1', 'assess']])
+    expect(container.textContent).toContain('10 waiting and 2 running job(s) were targeted')
+    expect(buttonNamed(container, 'Stop assess stage').disabled).toBe(true)
+  })
+
+  it('does not render operator controls when the caller has no authorized action handlers', async () => {
+    const container = await mount({ nodeId: 's1:assess', node: runNode })
+    expect(container.textContent).not.toContain('OPERATOR RECOVERY')
+    expect(buttonNamed(container, 'Stop assess stage')).toBeFalsy()
+  })
+
+  it('offers the existing discovery stop with scope-specific confirmation copy', async () => {
+    const run = { ...snapshot.runs[0], stage: 'discover' }
+    const container = await mount({ nodeId: 's1:discover', node: { kind: 'run', run },
+      onCancelStage: async () => ({ cancelled: 1, requested: 0 }) })
+    await click(buttonNamed(container, 'Stop discover stage'))
+    expect(container.textContent).toContain('preserves everything already found')
+  })
+
+  it('links a failed current workflow to its stage-specific recovery screen', async () => {
+    const calls = []
+    const run = { ...snapshot.runs[0], status: 'failed', queued: 0, running: 0, stage: 'remediate' }
+    const container = await mount({ nodeId: 's1:remediate', node: { kind: 'run', run },
+      onRecover: (selected) => calls.push(selected.stage) })
+    await click(buttonNamed(container, 'Open remediation exceptions'))
+    expect(calls).toEqual(['remediate'])
+  })
+
+  it('offers durable resume only when a remediation run is actually paused', async () => {
+    const calls = []
+    const run = { ...snapshot.runs[0], stage: 'remediate', paused: true }
+    const container = await mount({ nodeId: 's1:remediate', node: { kind: 'run', run },
+      onResumeStage: async (selected) => { calls.push(selected.scan_id); return { released: 4 } } })
+    await click(buttonNamed(container, 'Resume remediation'))
+    expect(calls).toEqual([])
+    expect(container.textContent).toContain('releases only remediation jobs held by the durable pause control')
+    await click(buttonNamed(container, 'Confirm resume'))
+    expect(calls).toEqual(['s1'])
+    expect(container.textContent).toContain('4 waiting job(s) were released')
+  })
+
+  it('does not offer a stop action after a stage is terminal', async () => {
+    const run = { ...snapshot.runs[0], status: 'failed', queued: 0, running: 0 }
+    const container = await mount({ nodeId: 's1:assess', node: { kind: 'run', run },
+      onCancelStage: async () => ({}) })
+    expect(buttonNamed(container, 'Stop assess stage')).toBeFalsy()
+  })
+
+  it('shows a durable stop request and prevents a duplicate stop action', async () => {
+    const run = { ...snapshot.runs[0], cancel_requested: true,
+      cancel_requested_at: iso(-30) }
+    const container = await mount({ nodeId: 's1:assess', node: { kind: 'run', run },
+      onCancelStage: async () => ({}) })
+    expect(container.textContent).toContain('Stop requested')
+    expect(container.textContent).toContain('No second stop request is needed')
+    expect(buttonNamed(container, 'Stop assess stage')).toBeFalsy()
+  })
 
   it('labels the remaining-time figure as an estimate, and names what it projects from', async () => {
     // WRITTEN WRONG FIRST, and the bite-check caught it: the original asserted /estimate/i against
@@ -1452,6 +1522,15 @@ describe('The seven-section drawer', () => {
     const container = await mount({ nodeId: 'stage:assess', node: NODES[0][1] })
     expect(container.querySelector('[aria-label="5. Alerts and platform health"]')).not.toBeNull()
     expect(container.querySelector('[aria-label="6. Configuration and limits"]')).not.toBeNull()
+  })
+
+  it('warns when active jobs are missing from the workflow view', async () => {
+    const container = await mount({ nodeId: 'stage:assess', node: NODES[0][1] })
+    const linkage = container.querySelector('[aria-label="Workflow data linkage"]')
+    expect(linkage).not.toBeNull()
+    expect(linkage.textContent).toContain('Workflow view is incomplete')
+    expect(linkage.textContent).toContain('2 active jobs cannot be attributed to a workflow')
+    expect(linkage.textContent).toContain('Queue totals remain authoritative')
   })
 
   it('says why a section is thin rather than dropping it', async () => {

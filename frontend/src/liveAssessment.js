@@ -97,6 +97,7 @@ export function normalizeLive(raw) {
     // Passed through for reconnect/ordering (the UI drops out-of-order frames by sequence).
     sequence: typeof raw.sequence === 'number' ? raw.sequence : null,
     generatedAt: raw.generated_at || null,
+    secondOpinion: raw.second_opinion && typeof raw.second_opinion === 'object' ? raw.second_opinion : null,
   }
 }
 

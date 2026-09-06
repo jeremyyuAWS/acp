@@ -169,3 +169,16 @@ def test_discovered_at_is_selected_so_a_caller_can_read_the_real_timestamp(isola
     row = st.list_finished_scans(owner=OWNER)[0]
     assert row["completed_at"] is None
     assert row["discovered_at"] == "2026-08-28T09:05:00+00:00"
+
+
+def test_finished_rows_carry_workflow_lineage(isolated_store):
+    """The history picker can distinguish related revisions instead of showing flat scans."""
+    st = isolated_store
+    _discovered(st, "revision-two", OWNER, discovered_at="2026-08-28T12:00:00+00:00")
+    with st._db.cursor() as cur:
+        st._db.execute(cur,
+            "UPDATE scan_runs SET workflow_id=%s,workflow_revision=%s WHERE id=%s",
+            ("workflow-one", 2, "revision-two"))
+    row = st.list_finished_scans(owner=OWNER)[0]
+    assert row["workflow_id"] == "workflow-one"
+    assert row["workflow_revision"] == 2

@@ -29,9 +29,14 @@ import datetime as _dt
 DOCUMENT_OUTCOMES = ("completed", "processing", "waiting", "review", "failed", "skipped")
 
 #: Every run state the panel can display. `draft` and `accepted` are entry states (no work has
-#: been claimed yet); `paused` is declared but NEVER derived — ACP has no pause control for a
-#: remediation run, and a state nothing can produce must not be inferred from an idle queue.
-#: See PRD §18's first open decision.
+#: been claimed yet).
+#:
+#: `paused` WAS declared and never derived, because ACP had no pause control and a state nothing
+#: can produce must not be inferred from an idle queue. That is still the rule, and it is why
+#: this comment changed rather than being deleted: `paused` is derived now ONLY from
+#: `store.remediation_run_hold`, a row an operator's Pause writes. An idle queue with no hold row
+#: is still `waiting`, exactly as before. The state moved because something can produce it, not
+#: because the panel wanted a word for quiet.
 RUN_STATES = (
     "draft", "accepted", "running", "waiting", "retry_scheduled", "needs_attention",
     "paused", "stalled", "completing", "completed", "completed_with_exceptions", "failed",
@@ -89,6 +94,12 @@ STALL_AFTER_S = 900
 #: between expiry and reclaim from flickering a document out of `processing` and back.
 LEASE_GRACE_S = 60
 
+# Ten server buckets cover the five-minute live window. The browser controls presentation
+# cadence, but never re-buckets raw events or derives a completion rate itself.
+THROUGHPUT_WINDOW_S = 300
+THROUGHPUT_BUCKET_S = 30
+THROUGHPUT_MIN_SAMPLE = 5
+
 #: Provider labels. "SharePoint / OneDrive" — the label every other surface in this repo uses —
 #: is deliberately NOT here: PRD §17.1 is that a SharePoint run must never be labelled OneDrive,
 #: and a slash-joined pair naming both providers is precisely the mismatch that made the panel
@@ -125,7 +136,90 @@ def _age_s(ts, now: _dt.datetime) -> float | None:
     return None if parsed is None else (now - parsed).total_seconds()
 
 
+def _eta_label(low_minutes: int, high_minutes: int) -> str:
+    """A compact range without implying precision the sample does not support."""
+    if high_minutes < 90:
+        return f"about {low_minutes}–{high_minutes} min left"
+    low_hours = max(1, round(low_minutes / 60))
+    high_hours = max(low_hours, round(high_minutes / 60))
+    return f"about {low_hours}–{high_hours} hr left"
+
+
+def derive_throughput(completed_at: list, *, remaining: int,
+                      now: _dt.datetime) -> tuple[dict | None, dict]:
+    """Server-observed successful completion rate and evidence-gated ETA."""
+    stamps = [stamp for value in completed_at if (stamp := _parse(value)) is not None]
+    current_start = now - _dt.timedelta(seconds=THROUGHPUT_WINDOW_S)
+    previous_start = current_start - _dt.timedelta(seconds=THROUGHPUT_WINDOW_S)
+    current = [stamp for stamp in stamps if current_start < stamp <= now]
+    previous = [stamp for stamp in stamps if previous_start < stamp <= current_start]
+    buckets = [0] * (THROUGHPUT_WINDOW_S // THROUGHPUT_BUCKET_S)
+    for stamp in current:
+        index = min(len(buckets) - 1, int((stamp - current_start).total_seconds()
+                                         // THROUGHPUT_BUCKET_S))
+        buckets[index] += 1
+
+    if not current:
+        return None, {"available": False, "reason": "no_recent_completions"}
+
+    window_minutes = THROUGHPUT_WINDOW_S / 60
+    rate = len(current) / window_minutes
+    throughput = {
+        "window_seconds": THROUGHPUT_WINDOW_S,
+        "bucket_seconds": THROUGHPUT_BUCKET_S,
+        "documents_per_minute": round(rate, 1),
+        "sample_documents": len(current),
+        "buckets": buckets,
+        "change_percent": None,
+    }
+    if len(current) >= THROUGHPUT_MIN_SAMPLE and len(previous) >= THROUGHPUT_MIN_SAMPLE:
+        previous_rate = len(previous) / window_minutes
+        throughput["change_percent"] = round((rate - previous_rate) / previous_rate * 100)
+
+    if remaining <= 0:
+        return throughput, {"available": False, "reason": "run_complete"}
+    if len(current) < THROUGHPUT_MIN_SAMPLE:
+        return throughput, {"available": False, "reason": "insufficient_sample",
+                            "sample_documents": len(current),
+                            "minimum_documents": THROUGHPUT_MIN_SAMPLE}
+
+    # Approximate 95% Poisson interval for the observed count. It is deliberately wide with five
+    # samples and narrows only as evidence accumulates; no client-side smoothing invents certainty.
+    spread = 1.96 * (len(current) ** 0.5)
+    low_rate = max(0.01, (len(current) - spread) / window_minutes)
+    high_rate = (len(current) + spread) / window_minutes
+    low_minutes = max(1, round(remaining / high_rate))
+    high_minutes = max(low_minutes, round(remaining / low_rate))
+    return throughput, {
+        "available": True,
+        "label": _eta_label(low_minutes, high_minutes),
+        "low_minutes": low_minutes,
+        "high_minutes": high_minutes,
+        "sample_documents": len(current),
+        "method": "recent_completions_approximate_95_percent",
+    }
+
+
 # ── per-document outcome ─────────────────────────────────────────────────────
+
+def document_ref(scan_id: str | None, document: str | None) -> str | None:
+    """A stable, non-reversible handle for one document within one run.
+
+    This is what keeps PRD §6D's per-document narrative working when §22's privacy policy
+    withholds the name. Grouping, ordering and de-duplication are all questions about DOCUMENT
+    IDENTITY, not about the filename — so the panel can keep three parallel documents apart, and
+    keep each one's history in order, while never being told what any of them is called.
+
+    Salted with the scan id so the same filename in two runs does not produce one handle: a
+    shared ref would let a viewer of one run correlate activity in another they cannot see.
+    Truncated to 12 hex characters — collision-irrelevant within a single run's document set, and
+    short enough to sit in a DOM id.
+    """
+    if not document:
+        return None
+    import hashlib
+    return hashlib.sha256(f"{scan_id or ''}\x00{document}".encode()).hexdigest()[:12]
+
 
 def classify_document(job: dict, *, now: _dt.datetime, review_pending: bool = False,
                       has_correction: bool = False, has_verified_fix: bool = False,
@@ -188,7 +282,8 @@ def classify_document(job: dict, *, now: _dt.datetime, review_pending: bool = Fa
 
 def _applicable_states(counters: dict, *, total: int, claimed_any: bool,
                        progress_age_s: float | None, retry_at, stall_after_s: int,
-                       corrected_pending_delivery: int) -> dict[str, str]:
+                       corrected_pending_delivery: int,
+                       lease_healthy: bool = False) -> dict[str, str]:
     """Which precedence states this run currently satisfies, mapped to their reason codes.
 
     Each predicate is an independently TRUE statement about the run, so precedence chooses
@@ -213,8 +308,20 @@ def _applicable_states(counters: dict, *, total: int, claimed_any: bool,
     # Stall is only claimable once SOMETHING was claimed. A queue nobody has picked up is
     # `waiting` — "no compatible processing slot is currently active" — and calling that stalled
     # would report a capacity fact as a fault.
-    if non_terminal > 0 and claimed_any and progress_age_s is not None \
-            and progress_age_s > stall_after_s:
+    #
+    # AND it needs an unhealthy lease, which is PRD §22's decision stated exactly: "declare
+    # stalled after two further missed heartbeats AND an expired or unhealthy attempt lease".
+    # The second half only became necessary when the first half became true: while a heartbeat
+    # refreshed `latest_progress_at` the age could never exceed the threshold, so the lease gate
+    # would have been unreachable code. Now that progress means MATERIAL progress, a document
+    # that is genuinely slow — a large PDF mid-render, one honest attempt, a live lease — would
+    # be called stalled without it, and "Progress has stopped" about work that has not stopped is
+    # the same class of false statement this panel exists to remove.
+    #
+    # `progress_age_s is None` stays unclaimable in either direction: an unknown age is not a
+    # stall and is not health, so no predicate may be built on it.
+    if non_terminal > 0 and claimed_any and not lease_healthy \
+            and progress_age_s is not None and progress_age_s > stall_after_s:
         out["stalled"] = "no_progress_within_threshold"
 
     if review > 0:
@@ -248,14 +355,23 @@ def _applicable_states(counters: dict, *, total: int, claimed_any: bool,
 def derive_run_state(counters: dict, *, total: int, claimed_any: bool = False,
                      progress_age_s: float | None = None, retry_at=None,
                      cancel_requested: bool = False, cancelled: bool = False,
-                     corrected_pending_delivery: int = 0,
-                     stall_after_s: int = STALL_AFTER_S) -> dict:
+                     paused: bool = False, corrected_pending_delivery: int = 0,
+                     stall_after_s: int = STALL_AFTER_S,
+                     lease_healthy: bool = False) -> dict:
     """The run's single displayed state, its reason code, and the states it also satisfies.
 
     Cancellation overrides normal processing states (PRD §7); everything else resolves through
     STATE_PRECEDENCE. `also` is returned so the panel can say "Review required · 20 documents
     still processing" instead of hiding live progress behind the more severe headline — the
     precedence order decides the HEADLINE, not what the run is allowed to mention.
+
+    `paused` is a DURABLE HOLD, passed in from store.remediation_run_hold, and it ranks below
+    cancellation and above everything else — but only while there is still work a hold could be
+    holding. A run whose documents are all terminal is finished, not paused; reporting "Run
+    paused" over a completed run would be the same class of error as reporting "Applying fixes"
+    over an idle queue, which is the defect this module exists to close. The states the run also
+    satisfies still come back in `also`, so a pause taken while three attempts are in flight can
+    say so rather than pretending the work stopped instantly.
     """
     if cancelled:
         return {"state": "cancelled", "reason": "cancelled", "also": []}
@@ -267,7 +383,11 @@ def derive_run_state(counters: dict, *, total: int, claimed_any: bool = False,
     applicable = _applicable_states(
         counters, total=total, claimed_any=claimed_any, progress_age_s=progress_age_s,
         retry_at=retry_at, stall_after_s=stall_after_s,
-        corrected_pending_delivery=corrected_pending_delivery)
+        corrected_pending_delivery=corrected_pending_delivery,
+        lease_healthy=lease_healthy)
+
+    if paused and counters["processing"] + counters["waiting"] > 0:
+        return {"state": "paused", "reason": "held_by_operator", "also": sorted(applicable)}
 
     # Entry state: a durable run exists and nothing has ever been claimed. More precise than
     # `waiting`, which also covers a run whose workers went away mid-flight.
@@ -290,7 +410,8 @@ def derive_run_state(counters: dict, *, total: int, claimed_any: bool = False,
 
 def derive_phases(counters: dict, *, total: int, state: str, applied_fixes: int,
                   verified_fixes: int, corrected_stored: int,
-                  corrected_pending_delivery: int) -> list[dict]:
+                  corrected_pending_delivery: int,
+                  corrected_pending_release: int = 0) -> list[dict]:
     """The phase rail, derived from durable facts rather than optimistic client transitions.
 
     Every phase carries exactly one of: pending / active / completed / completed_with_exceptions
@@ -343,6 +464,10 @@ def derive_phases(counters: dict, *, total: int, state: str, applied_fixes: int,
         rail.append(_phase("saving", "active",
                            f"{corrected_pending_delivery} corrected cop"
                            f"{'y' if corrected_pending_delivery == 1 else 'ies'} pending delivery"))
+    elif corrected_pending_release > 0:
+        rail.append(_phase("saving", "completed",
+                           f"{corrected_pending_release} corrected cop"
+                           f"{'y' if corrected_pending_release == 1 else 'ies'} awaiting Release"))
     else:
         rail.append(_phase("saving", "completed",
                            f"{corrected_stored} corrected cop"
@@ -486,6 +611,7 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
     reasons: dict[str, int] = {}
     active: list[dict] = []
     retry_candidates: list[_dt.datetime] = []
+    completed_at: list = []
     claimed_any = False
 
     for job in jobs:
@@ -495,6 +621,12 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
             has_correction=file in corrected, has_verified_fix=file in verified_docs,
             lease_grace_s=lease_grace_s)
         counters[outcome] += 1
+        # Throughput measures work leaving remediation, not only the narrow successful-copy
+        # bucket. A document routed to Review or legitimately Skipped consumed worker capacity
+        # and advanced the batch just as surely as a corrected document did. Counting only
+        # `completed` made a healthy review-heavy run report zero throughput and no ETA.
+        if outcome not in ("processing", "waiting"):
+            completed_at.append(job.get("updated_at"))
         reasons[reason] = reasons.get(reason, 0) + 1
         if int(job.get("attempts") or 0) > 0 or job.get("locked_at"):
             claimed_any = True
@@ -521,19 +653,37 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
     total = len(jobs)
     corrected_stored = int(facts.get("corrected_stored") or 0)
     delivered = int(facts.get("corrected_delivered") or 0)
-    pending_delivery = max(0, corrected_stored - delivered)
+    undelivered = max(0, corrected_stored - delivered)
+    # SharePoint and OneDrive publish corrected copies in the explicit Release stage. Merely
+    # storing the verified artifact during Remediation is therefore "awaiting Release", not a
+    # failed delivery and not work that should hold this run open indefinitely.
+    release_staged = str(facts.get("source") or "").lower() in ("sharepoint", "onedrive")
+    pending_release = undelivered if release_staged else 0
+    pending_delivery = 0 if release_staged else undelivered
     retry_at = min(retry_candidates) if retry_candidates else None
     progress_age = _age_s(facts.get("latest_progress_at"), now)
+
+    # An attempt is holding a live lease. PRD §22 requires this before the run may be called
+    # stalled — see _applicable_states. Derived from the attempts already classified above rather
+    # than re-read, so the state and the attempt list cannot disagree about the same leases.
+    lease_healthy = any(a.get("lease_valid") for a in active)
 
     resolved = derive_run_state(
         counters, total=total, claimed_any=claimed_any, progress_age_s=progress_age,
         retry_at=retry_at, cancel_requested=bool(facts.get("cancel_requested")),
-        cancelled=bool(facts.get("cancelled")), corrected_pending_delivery=pending_delivery,
-        stall_after_s=stall_after_s)
+        cancelled=bool(facts.get("cancelled")), paused=bool(facts.get("paused")),
+        corrected_pending_delivery=pending_delivery, stall_after_s=stall_after_s,
+        lease_healthy=lease_healthy)
     state = resolved["state"]
 
-    applied = int(facts.get("fixes_applied") or 0)
     verified = int(facts.get("fixes_verified") or 0)
+    # `applied_fixes` is detailed evidence for fixes whose authored value is retained. The
+    # independent remediation_diff table covers every verified deterministic change. Every
+    # verified fix was necessarily applied, so it is a truthful lower bound when the narrower
+    # evidence table has no row for that fixer.
+    applied = max(int(facts.get("fixes_applied") or 0), verified)
+    remaining = counters["processing"] + counters["waiting"]
+    throughput, estimate = derive_throughput(completed_at, remaining=remaining, now=now)
 
     snapshot = {
         "run_id": facts.get("run_id"),
@@ -546,6 +696,11 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
         "also": resolved["also"],
         "message": STATE_MESSAGES.get(state, state),
         "terminal": state in TERMINAL_STATES,
+        # The hold itself, separately from the headline. A run paused WITH attempts in flight
+        # displays `paused` and still has `processing > 0`, and a client that wants to say
+        # "Paused · 3 attempts finishing" needs both facts rather than inferring the second from
+        # the first.
+        "paused": bool(facts.get("paused")),
         "started_at": facts.get("started_at") or None,
         "assessed_at": facts.get("assessed_at") or None,
         "policy_version": facts.get("policy_version") or None,
@@ -563,16 +718,33 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
                   "verification_failures": max(0, applied - verified),
                   "documents_verified": len(verified_docs)},
         "delivery": {"stored": corrected_stored, "delivered": delivered,
-                     "pending": pending_delivery, "eligible": len(corrected),
+                     "pending": pending_delivery, "awaiting_release": pending_release,
+                     "eligible": len(corrected),
                      "latest_at": facts.get("latest_delivery_at") or None},
         "review": {"documents": counters["review"],
                    "items": int(facts.get("review_items") or 0)},
+        "throughput": throughput,
+        "estimate": estimate,
         "phases": derive_phases(counters, total=total, state=state, applied_fixes=applied,
                                 verified_fixes=verified, corrected_stored=corrected_stored,
-                                corrected_pending_delivery=pending_delivery),
+                                corrected_pending_delivery=pending_delivery,
+                                corrected_pending_release=pending_release),
         "active_attempts": active,
         "retry_at": retry_at.isoformat() if retry_at else None,
         "latest_progress_at": facts.get("latest_progress_at") or None,
+        # PROGRESS AND LIVENESS ARE DIFFERENT FACTS AND ARE NAMED APART (PRD §22, ADR 0052).
+        # `material` is the newest durable evidence the run MOVED; `heartbeat` is the newest
+        # evidence a worker is BREATHING. They used to be the same number, which is how a wedged
+        # worker rendered as a progressing run. `age_s` is None when the corresponding stamp is
+        # unknown — never 0, which would assert the event happened just now.
+        "progress": {
+            "material_at": facts.get("latest_progress_at") or None,
+            "material_age_s": progress_age,
+            "material_event_at": facts.get("latest_material_event_at") or None,
+            "heartbeat_at": facts.get("latest_heartbeat_at") or None,
+            "heartbeat_age_s": _age_s(facts.get("latest_heartbeat_at"), now),
+            "lease_healthy": lease_healthy,
+        },
         # How old the newest durable progress event may get before the CLIENT calls the panel
         # delayed, and before this server calls the run stalled. Sent rather than hardcoded in
         # the browser so both ends move together.

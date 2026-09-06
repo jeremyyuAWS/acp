@@ -121,6 +121,7 @@ export default function RemediationRunCard({ snapshot = null, receivedAt = null,
           ['Fixes applied', fixes.applied],
           ['Fixes verified', fixes.verified],
           ['Corrected copies delivered', delivery.delivered],
+          ['Awaiting Release', delivery.awaiting_release],
           ['Pending delivery', delivery.pending],
         ].filter(([, v]) => typeof v === 'number').map(([label, value]) => (
           <div key={label}>

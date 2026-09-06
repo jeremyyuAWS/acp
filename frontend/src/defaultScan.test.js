@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { pickDefaultScan } from './defaultScan.js'
+import { narrowScanDefaultContext, pickDefaultScan } from './defaultScan.js'
 
 // scans arrive newest-first (list_scans ORDER BY completed_at DESC).
 const scan = (id, files, published_at = null) => ({ id, files, published_at })
@@ -54,5 +54,20 @@ describe('pickDefaultScan', () => {
     // A published but collapsed scan loses to a larger unpublished one above the floor.
     const list = [scan('small-pub', 5, '2026-08-01T00:00:00Z'), scan('big-unpub', 22)]
     expect(pickDefaultScan(list).id).toBe('big-unpub')
+  })
+})
+
+describe('narrowScanDefaultContext', () => {
+  it('explains when a newer narrow scan was preserved without replacing the default', () => {
+    const list = [scan('narrow', 4), scan('default', 986), scan('older', 980)]
+    expect(narrowScanDefaultContext(list, 'default')).toMatchObject({
+      newest: { id: 'narrow' }, selected: { id: 'default' }, newestFiles: 4, referenceFiles: 986,
+    })
+  })
+
+  it('does not relabel ordinary history replay or a normal new scan', () => {
+    const list = [scan('new', 900), scan('old', 986), scan('older', 980)]
+    expect(narrowScanDefaultContext(list, 'old')).toBeNull()
+    expect(narrowScanDefaultContext([scan('tiny', 4), scan('full', 986)], 'tiny')).toBeNull()
   })
 })

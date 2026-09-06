@@ -5,7 +5,9 @@ WHAT THIS IS, AND WHAT IT DELIBERATELY IS NOT
 PRD §16 requires the exported ACR to be built on the official ITI VPAT® 2.5Rev template. That is
 Phase 5, and it is gated on a decision that has not been made: vendoring a third-party template
 into this repo carries the VPAT® trademark's usage terms, and this codebase's precedent for
-vendoring a third-party artifact (ADR 0029, the PDF analyser) is that it gets its own ADR first.
+vendoring a third-party artifact is that it gets its own ADR first — ADR 0053, which frames the
+question and deliberately does not answer it. (This comment used to cite ADR 0029 as the
+precedent. It is not one: 0029 has no licensing or trademark reasoning in it at all.)
 
 So this module renders the report's CONTENT in the VPAT table's shape — the same rows, the same
 column meanings, the same four conformance terms — and nothing else. It emits JSON and a plain

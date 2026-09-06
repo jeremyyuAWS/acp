@@ -91,6 +91,38 @@ def _phase(state: str, eligible: int, completed: int) -> str:
     return "assessing"
 
 
+def _second_opinion_block(store, scan_id: str) -> dict | None:
+    """Bounded governance/usage state; never document content or provider output."""
+    try:
+        from second_opinion_policy import load_policy, normalize_policy
+        inputs = store.get_scan_inputs(scan_id) or {}
+        saved = (inputs.get("feature_flags") or {}).get("second_opinion_policy")
+        if not saved:
+            return None
+        policy = normalize_policy(saved)
+        live_enabled = load_policy(store)["enabled"]
+        usage = store.second_opinion_usage(scan_id)
+        scan_left = max(0, policy["max_requests_per_scan"] - usage["scan_reserved"])
+        day_left = max(0, policy["max_requests_per_day"] - usage["daily_reserved"])
+        cost_left = max(0.0, policy["max_daily_cost_usd"] - usage["daily_estimated_cost_usd"])
+        if not policy["enabled"]: status, reason = "disabled", "Disabled for this assessment"
+        elif not live_enabled: status, reason = "paused", "Disabled by the live kill switch"
+        elif not scan_left: status, reason = "limited", "Per-scan request limit reached"
+        elif not day_left: status, reason = "limited", "Daily request limit reached"
+        elif cost_left < policy["estimated_cost_per_request_usd"]: status, reason = "limited", "Daily estimated-cost limit reached"
+        elif usage["last_failure_reason"]: status, reason = "degraded", f"Latest provider attempt failed: {usage['last_failure_reason']}"
+        elif usage["calls"]: status, reason = "used", f"{usage['ok']} of {usage['calls']} provider attempts succeeded"
+        else: status, reason = "ready", "Waiting for an eligible low-confidence finding"
+        return {"status": status, "reason": reason, "criteria": policy["criteria"],
+                "confidence_threshold": policy["confidence_threshold"],
+                "scan": {"used": usage["scan_reserved"], "limit": policy["max_requests_per_scan"], "remaining": scan_left},
+                "day": {"used": usage["daily_reserved"], "limit": policy["max_requests_per_day"], "remaining": day_left},
+                "cost": {"estimated_used_usd": usage["daily_estimated_cost_usd"], "estimated_limit_usd": policy["max_daily_cost_usd"],
+                         "estimated_remaining_usd": round(cost_left, 6), "measured_scan_usd": usage["measured_cost_usd"]}}
+    except Exception:
+        return None
+
+
 def build_snapshot(store, scan_id: str, owner: str | None = None, now_iso: str | None = None) -> dict:
     """Compose the authoritative run snapshot, or `{"available": False, ...}` for an unknown scan.
 
@@ -192,6 +224,9 @@ def build_snapshot(store, scan_id: str, owner: str | None = None, now_iso: str |
         snap["kpis"]["processing"] = min(in_flight, max(0, eligible - completed))
         pending = [k for k in pending if k not in ("queued", "throughput", "workers")]
     snap["kpis_pending"] = pending
+    second_opinion = _second_opinion_block(store, scan_id)
+    if second_opinion is not None:
+        snap["second_opinion"] = second_opinion
     return snap
 
 

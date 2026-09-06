@@ -96,6 +96,73 @@ def test_live_activity_read_still_rejects_anonymous_users():
     assert denied.value.status_code == 401
 
 
+def test_live_ops_cancel_is_admin_gated_and_stage_scoped(monkeypatch):
+    calls = []
+    monkeypatch.setattr(system, "_require_admin", lambda request: calls.append(("guard", request)))
+    monkeypatch.setattr(system.core.store, "get_scan",
+                        lambda scan_id: {"_scan_id": scan_id, "files": 4})
+    monkeypatch.setattr(system.core.store, "request_stage_cancel",
+                        lambda scan_id, stage, actor: {"found": True, "batch_id": "b1",
+                                                       "cancelled": 3, "requested": 1,
+                                                       "actor": actor})
+    request = _Request("admin@example.org")
+    result = system.cancel_workflow_stage("scan-1", "assess", request)
+    assert calls == [("guard", request)]
+    assert result == {"workflow_id": "scan-1", "stage": "assess", "found": True,
+                      "batch_id": "b1", "cancelled": 3, "requested": 1,
+                      "actor": "admin@example.org"}
+
+
+def test_live_ops_discover_cancel_uses_the_existing_whole_scan_stop(monkeypatch):
+    monkeypatch.setattr(system, "_require_admin", lambda request: None)
+    monkeypatch.setattr(system.core.store, "get_scan", lambda scan_id: {"_scan_id": scan_id})
+    monkeypatch.setattr(system.core.store, "cancel_scan", lambda scan_id: True)
+    workflow_updates = []
+    monkeypatch.setattr(system.core.store, "_update_workflow_stage",
+                        lambda *args: workflow_updates.append(args))
+    monkeypatch.setattr(system.core.store, "_stage_owner", lambda scan_id: "owner@example.org")
+    events = []
+    monkeypatch.setattr(system.core.store, "append_orchestration_event",
+                        lambda **event: events.append(event))
+    result = system.cancel_workflow_stage("scan-1", "discover", _Request("admin@example.org"))
+    assert result["stage"] == "discover" and result["cancelled"] == 1
+    assert events[0]["kind"] == "job.stage_cancelled"
+    assert events[1]["detail"]["requested_by"] == "admin@example.org"
+    assert workflow_updates == [("scan-1", "discover", "cancelled")]
+
+
+def test_live_ops_cancel_still_refuses_an_unknown_stage(monkeypatch):
+    monkeypatch.setattr(system, "_require_admin", lambda request: None)
+    with pytest.raises(HTTPException) as denied:
+        system.cancel_workflow_stage("scan-1", "archive", _Request("admin@example.org"))
+    assert denied.value.status_code == 400
+
+
+def test_live_ops_resume_uses_existing_durable_remediation_hold(monkeypatch):
+    monkeypatch.setattr(system, "_require_admin", lambda request: None)
+    monkeypatch.setattr(system.core.store, "get_scan", lambda scan_id: {"_scan_id": scan_id})
+    monkeypatch.setattr(system.core.store, "remediation_run_paused", lambda scan_id: True)
+    monkeypatch.setattr(system.core.store, "_stage_owner", lambda scan_id: "owner@example.org")
+    events = []
+    monkeypatch.setattr(system.core.store, "append_orchestration_event",
+                        lambda **event: events.append(event))
+    monkeypatch.setattr(system.core.store, "resume_remediation_run",
+                        lambda scan_id, actor: {"resumed_at": "now", "released": 2})
+    result = system.resume_workflow_remediation("scan-1", _Request("admin@example.org"))
+    assert result["paused"] is False
+    assert result["released"] == 2
+    assert events[0]["detail"]["requested_by"] == "admin@example.org"
+
+
+def test_live_ops_resume_refuses_to_invent_a_pause(monkeypatch):
+    monkeypatch.setattr(system, "_require_admin", lambda request: None)
+    monkeypatch.setattr(system.core.store, "get_scan", lambda scan_id: {"_scan_id": scan_id})
+    monkeypatch.setattr(system.core.store, "remediation_run_paused", lambda scan_id: False)
+    with pytest.raises(HTTPException) as denied:
+        system.resume_workflow_remediation("scan-1", _Request("admin@example.org"))
+    assert denied.value.status_code == 409
+
+
 def test_admin_live_activity_groups_active_stage_without_exposing_payload(isolated_store):
     isolated_store.save_scan(_scan())
     isolated_store.enqueue_job("scan_file", {"file": "Private Report.docx", "secret": "never-return"},
@@ -126,6 +193,34 @@ def test_admin_live_activity_exposes_only_safe_running_context(isolated_store):
     assert row["current_rule_id"] == "1.1.1"
     assert row["current_job_type"] == "remediate_file"
     assert "secret" not in str(row)
+
+
+def test_admin_live_activity_exposes_the_durable_remediation_hold(isolated_store):
+    isolated_store.save_scan(_scan())
+    isolated_store.enqueue_stage_batch(
+        "scan-live-1", "remediate", "remediate_file", [{"file": "Private Report.docx"}],
+        snapshot_id="remediate-1", request_fingerprint="remediate")
+    isolated_store.pause_remediation_run("scan-live-1", actor="operator@example.org")
+    row = isolated_store.admin_live_activity()[0]
+    assert row["stage"] == "remediate"
+    assert row["paused"] is True
+    assert "paused_by" not in row
+
+
+def test_admin_live_activity_exposes_a_running_stage_cancellation_request(isolated_store):
+    isolated_store.save_scan(_scan())
+    job_id = isolated_store.enqueue_job(
+        "scan_assess", {"file": "Private Report.docx"}, scan_id="scan-live-1", batch_id="batch-1")
+    claimed = isolated_store.claim_job("test-worker")
+    assert claimed and claimed["id"] == job_id
+
+    result = isolated_store.request_stage_cancel(
+        "scan-live-1", "assess", actor="operator@example.org")
+    assert result["requested"] == 1
+    row = isolated_store.admin_live_activity()[0]
+    assert row["cancel_requested"] is True
+    assert row["cancel_requested_at"]
+    assert "operator@example.org" not in str(row)
 
 
 def test_admin_live_activity_carries_bounded_sanitized_remediation_events(isolated_store):
@@ -198,6 +293,99 @@ def test_workflow_contract_groups_stages_under_the_scan_identity():
     assert workflow["stages"][1]["attempt"] == 2
 
 
+def test_workflow_contract_uses_the_durable_stage_execution_and_completion_time():
+    run = {"scan_id": "scan-1", "owner": "owner@example.org", "source": "sharepoint",
+           "stage": "assess", "status": "recent", "running": 0, "queued": 0,
+           "completed": 2, "total": 2, "started_at": "2026-09-05T10:00:00+00:00",
+           "updated_at": "2026-09-05T10:10:00+00:00", "max_attempts_seen": 1}
+    events = [
+        {"event_id": "start", "kind": "job.stage_started", "scan_id": "scan-1",
+         "stage": "assess", "correlation_id": "batch-42",
+         "occurred_at": "2026-09-05T10:01:00+00:00"},
+        {"event_id": "done", "kind": "job.stage_completed", "scan_id": "scan-1",
+         "stage": "assess", "correlation_id": "batch-42",
+         "occurred_at": "2026-09-05T10:09:00+00:00"},
+    ]
+
+    stage = system._workflow_rows([run], events)[0]["stages"][0]
+    assert stage["stage_run_id"] == "batch-42"
+    assert stage["started_at"] == "2026-09-05T10:01:00+00:00"
+    assert stage["completed_at"] == "2026-09-05T10:09:00+00:00"
+    assert stage["completion_recorded"] is True
+
+
+def test_workflow_contract_keeps_completed_stage_after_queue_tail_expires():
+    events = [
+        {"event_id": "start", "kind": "job.stage_started", "scan_id": "scan-old",
+         "stage": "discover", "correlation_id": "batch-old", "owner_email": "a@example.org",
+         "source": "sharepoint", "occurred_at": "2026-09-05T08:00:00+00:00"},
+        {"event_id": "done", "kind": "job.stage_completed", "scan_id": "scan-old",
+         "stage": "discover", "correlation_id": "batch-old", "owner_email": "a@example.org",
+         "source": "sharepoint", "occurred_at": "2026-09-05T08:02:00+00:00",
+         "attempt": 1, "detail": {"documents": 12}},
+    ]
+
+    workflow = system._workflow_rows([], events)[0]
+    assert workflow["workflow_id"] == "scan-old"
+    assert workflow["owner_display_name"] == "a@example.org"
+    assert workflow["source"] == "sharepoint"
+    assert workflow["status"] == "completed"
+    assert workflow["stages"][0]["stage_run_id"] == "batch-old"
+    assert workflow["stages"][0]["completed"] == 12
+    assert workflow["stages"][0]["completion_recorded"] is True
+
+
+def test_workflow_contract_keeps_a_durable_failed_stage_after_queue_tail_expires():
+    events = [{"event_id": "failed", "kind": "job.stage_failed", "scan_id": "scan-failed",
+               "stage": "assess", "correlation_id": "batch-failed",
+               "owner_email": "a@example.org", "source": "sharepoint", "error_class": "timeout",
+               "occurred_at": "2026-09-05T08:02:00+00:00", "attempt": 5,
+               "detail": {"documents": 12, "completed": 9, "failed": 3}}]
+    stage = system._workflow_rows([], events)[0]["stages"][0]
+    assert stage["status"] == "failed"
+    assert stage["terminal_outcome"] == "failed"
+    assert stage["error_class"] == "timeout"
+    assert stage["completion_recorded"] is False
+
+
+def test_workflow_contract_flags_a_running_stage_with_a_stale_worker_heartbeat():
+    run = {"scan_id": "scan-stalled", "stage": "assess", "owner": "a@example.org",
+           "source": "sharepoint", "running": 1, "queued": 0, "completed": 3, "total": 12,
+           "started_at": "2020-01-01T00:00:00+00:00", "updated_at": "2020-01-01T00:01:00+00:00",
+           "current_job_heartbeat_at": "2020-01-01T00:01:00+00:00"}
+    stage = system._workflow_rows([run])[0]["stages"][0]
+    assert stage["stalled"] is True
+    assert stage["waiting_reason"] == "worker_heartbeat_stale"
+
+
+def test_workflow_contract_carries_the_stop_request_into_the_stage():
+    run = {"scan_id": "scan-stopping", "stage": "assess", "owner": "a@example.org",
+           "source": "drive", "running": 1, "queued": 0, "completed": 3, "total": 12,
+           "cancel_requested": True, "cancel_requested_at": "2026-09-05T10:03:00+00:00"}
+    stage = system._workflow_rows([run])[0]["stages"][0]
+    assert stage["cancel_requested"] is True
+    assert stage["cancel_requested_at"] == "2026-09-05T10:03:00+00:00"
+
+
+def test_recovery_summary_matches_only_requested_stage_cancellations():
+    events = [
+        {"kind": "workflow.stage_cancel_requested", "scan_id": "s1", "stage": "assess",
+         "correlation_id": "b1", "occurred_at": "2026-09-05T10:00:00+00:00"},
+        {"kind": "job.stage_cancelled", "scan_id": "s1", "stage": "assess",
+         "correlation_id": "b1", "occurred_at": "2026-09-05T10:01:00+00:00"},
+        {"kind": "job.stage_cancelled", "scan_id": "s2", "stage": "discover",
+         "correlation_id": "unrequested", "occurred_at": "2026-09-05T10:02:00+00:00"},
+        {"kind": "workflow.stage_resumed", "scan_id": "s3", "stage": "remediate",
+         "correlation_id": "r1", "occurred_at": "2026-09-05T10:03:00+00:00"},
+    ]
+    assert system._recovery_summary(events) == {
+        "window_hours": 24, "cancel_requests": 1, "cancel_resolved": 1,
+        "cancel_pending": 0, "resumes": 1,
+        "cancel_success_pct": 100, "median_cancel_seconds": 60,
+        "latest_action_at": "2026-09-05T10:03:00+00:00",
+    }
+
+
 def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(monkeypatch):
     class ActivityStore:
         def worker_tier_status(self):
@@ -242,6 +430,9 @@ def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(mo
         "recent_workflows": 0,
         "workflow_correlation": {"attributed_stage_runs": 2,
                                  "unlinked_active_jobs": None, "complete": None},
+        "recovery": {"window_hours": 24, "cancel_requests": 0, "cancel_resolved": 0,
+                     "cancel_pending": 0, "cancel_success_pct": None,
+                     "median_cancel_seconds": None, "resumes": 0, "latest_action_at": None},
         "by_stage": {
             # `findings` is None, not 0: this stub reports no findings count, and "no findings yet"
             # is a different fact from "findings were not counted for this stage".
@@ -371,3 +562,13 @@ def test_capacity_uses_the_central_freshness_threshold(monkeypatch):
         "active_job_count": 0}], now=now)
     assert rows["assess"]["healthy_replicas"] == 1
     assert rows["assess"]["freshness_threshold_seconds"] == 90
+
+
+def test_activity_signature_includes_durable_workflow_changes():
+    base = {"runs": [], "summary": {"running": 0}, "workflows": [
+        {"scan_id": "s1", "stages": [{"stage": "assess", "status": "active"}]},
+    ]}
+    changed = {**base, "workflows": [
+        {"scan_id": "s1", "stages": [{"stage": "assess", "status": "completed"}]},
+    ]}
+    assert system._activity_signature(base) != system._activity_signature(changed)

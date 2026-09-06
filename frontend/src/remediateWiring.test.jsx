@@ -146,13 +146,20 @@ describe('the per-item four reach the detail pane, beside their subject', () => 
   // was dropped by Deva and confirmed by Jeremy; see issue #568.)
   const rem = () => code('Remediate.jsx')
 
-  for (const name of ['RemediationDocProgress', 'DocumentAudit']) {
+  for (const name of ['DocumentAudit']) {
     it(`renders ${name} for the selected finding`, () => {
       const s = rem()
       expect(s).toMatch(new RegExp(`import ${name} from '\\./${name}\\.jsx'`))
       expect(s).toMatch(new RegExp(`<${name}[\\s/>]`))
     })
   }
+
+  it('keeps the document pipeline out of the human decision pane', () => {
+    const s = rem()
+    expect(s).not.toMatch(/import RemediationDocProgress from/)
+    expect(s).not.toMatch(/<RemediationDocProgress[\s/>]/)
+    expect(code('RemediationDocProgress.jsx')).toMatch(/export default function RemediationDocProgress/)
+  })
 
   it('mounts FixOutcomes (R8) at PAGE level, not per finding', () => {
     // "What did not work in this run" is a property of the run, not of whichever finding happens

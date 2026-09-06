@@ -22,6 +22,12 @@ const render = (snapshot, throughput, onStop) =>
   renderToStaticMarkup(createElement(AssessRunProgress, { snapshot, throughput, onStop }))
 
 describe('the assessment running screen focuses on the document in flight', () => {
+  it('describes the no-write boundary without misnaming SharePoint as a drive', () => {
+    const html = render({ ...SNAP, source: 'sharepoint' })
+    expect(html).toContain('connected source during assessment')
+    expect(html).not.toContain('your drive at any point')
+  })
+
   it('keeps the SharePoint boundary visible while documents are assessed', () => {
     const html = render({ ...SNAP, source: 'sharepoint', scope: { kind: 'sharepoint', sites: [
       { id: 's1', name: 'Clinical', status: 'complete', libraries: [{ id: 'l1', name: 'Documents' }] },
@@ -54,6 +60,19 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).toContain('12 documents/min')
     expect(html).toContain('about 1 min 50s left')
     expect(html).toMatch(/Results appear when the run finishes/)
+  })
+
+  it('shows truthful cloud second-opinion use and remaining budgets', () => {
+    const html = render({ ...SNAP, second_opinion: {
+      status: 'used', reason: '2 of 2 provider attempts succeeded',
+      scan: { used: 2, limit: 5, remaining: 3 }, day: { used: 7, limit: 20, remaining: 13 },
+      cost: { estimated_remaining_usd: 8.4, measured_scan_usd: 0.024 },
+    } })
+    expect(html).toContain('Cloud second opinions · used')
+    expect(html).toContain('2 of 5 requests this scan')
+    expect(html).toContain('13 daily requests remaining')
+    expect(html).toContain('$8.40 estimated budget remaining')
+    expect(html).toContain('$0.0240 measured for this scan')
   })
 
   it('labels dedicated worker heartbeat capacity as per-replica, never unavailable or aggregate', () => {

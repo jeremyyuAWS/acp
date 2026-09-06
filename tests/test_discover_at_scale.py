@@ -917,6 +917,8 @@ class TestDedupeAtScale:
             suffixed = f"dup_{i:04d} (1).docx"
             assert original in names, f"original {original} should be preserved"
             assert suffixed in names, f"suffixed {suffixed} should exist"
+        assert [r["source_name"] for r in rows if r["file"].startswith("dup_0000")] == [
+            "dup_0000.docx", "dup_0000.docx"]
 
 
 # ── Progress event sequence ordering ─────────────────────────────────────────

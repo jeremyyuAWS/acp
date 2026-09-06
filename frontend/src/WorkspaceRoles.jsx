@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   getWorkspaceRoles, getRoleCapabilities, createWorkspaceRole,
   updateWorkspaceRole, deleteWorkspaceRole,
@@ -188,7 +189,13 @@ function RoleDrawer({ role, catalog, onClose, onSaved, onError }) {
       .finally(() => setBusy(false))
   }
 
-  return (
+  // PORTALLED FOR THE SAME REASON AS PeopleAccess's DIALOGS, and found by the same measurement.
+  // `.roles-drawer-scrim` is `position: fixed`, and this drawer renders inside Settings, whose
+  // `.setoverlay` carries `backdrop-filter: blur(2px)` — which makes that overlay the containing
+  // block for fixed descendants. So the drawer was positioned against a scrolling box rather than
+  // the viewport, and slid off-screen exactly as the role-change dialog did. The People screen is
+  // where it was reported; this screen has the identical defect and would have been reported next.
+  const drawer = (
     <div role="presentation" className="roles-drawer-scrim"
          onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="role-drawer-title"
@@ -289,4 +296,5 @@ function RoleDrawer({ role, catalog, onClose, onSaved, onError }) {
       </div>
     </div>
   )
+  return typeof document === 'undefined' ? drawer : createPortal(drawer, document.body)
 }

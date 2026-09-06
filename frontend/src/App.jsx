@@ -27,6 +27,7 @@ import Logo from './Logo.jsx'
 import ChatWidget from './ChatWidget.jsx'
 import VersionToast from './VersionToast.jsx'
 import WorkflowContinuityBanner, { primaryActiveWorkflow } from './WorkflowContinuityBanner.jsx'
+import DiscoveryContinuityChoice from './DiscoveryContinuityChoice.jsx'
 // Lazy: KnowledgeGraph statically imports all of d3 (~250 kB min) — the only heavy
 // dep not already behind a dynamic import. Loading it on tab entry keeps d3 out of
 // the main chunk entirely.
@@ -43,7 +44,7 @@ import AssessRunner from './AssessRunner.jsx'
 import AssessSetup from './AssessSetup.jsx'
 import AssessFileFindings from './AssessFileFindings.jsx'
 import { inventorySnapshot } from './discoverRunTime.js'
-import { scanOptionAt } from './scanOptionDate.js'
+import { scanOptionAt, scanWorkflowContext } from './scanOptionDate.js'
 import AssessSummary from './AssessSummary.jsx'
 import AssessRunIntegrity, { useScanManifest } from './AssessRunIntegrity.jsx'
 import { runIntegrity, integrityCaveat } from './runIntegrity.js'
@@ -74,6 +75,7 @@ import AcrWorkspace from './AcrWorkspace.jsx'
 import AccessRestricted from './AccessRestricted.jsx'
 import { visibleTabs, isVisible, canOperate, firstPermittedTab, canOpenSettings } from './access.js'
 import { handleWorkflowTabKeyDown } from './workflowTabs.js'
+import { narrowScanDefaultContext, pickDefaultScan } from './defaultScan.js'
 
 // Self-scan overlay: on in dev, or on the deployed demo via ?a11y
 const SHOW_A11Y = import.meta.env.DEV || (typeof location !== 'undefined' && new URLSearchParams(location.search).has('a11y'))
@@ -325,6 +327,7 @@ export default function App() {
   // make here. The request was bounded and the response lost, so the scan may or may not exist —
   // and the retry is safe either way because the idempotency key is held (submitIntent.js).
   const [submitUncertain, setSubmitUncertain] = useState(null)
+  const [discoveryChoice, setDiscoveryChoice] = useState(null)
   // Capacity state from the last preflight check — drives the notice near the scan action.
   // null = no check run yet (first visit); cleared when a new scan starts successfully.
   const [preflightCapacityState, setPreflightCapacityState] = useState(null)
@@ -451,22 +454,38 @@ export default function App() {
   const [hasSPToken, setHasSPToken] = useState(() => !!sessionStorage.getItem('sp_token'))
   const [tokenRefreshError, setTokenRefreshError] = useState(null)
 
-  // Keep a long-running SharePoint scan's MSAL token fresh. Mirrors the Drive keep-alive above.
-  // Best-effort; no-op without MSAL configured or without an active SharePoint session.
+  // Keep every long-running SharePoint workflow's MSAL token fresh, including Release jobs that
+  // run after the scan itself is complete. Refresh immediately when the session opens and then
+  // every 20 minutes. Background refresh is silent-only: a timer must never summon a popup.
   useEffect(() => {
-    if (!hasSPToken) return
-    const iv = setInterval(async () => {
+    if (!hasSPToken || !me) return
+    let alive = true
+    const refresh = async () => {
       try {
-        const a = await getActiveScan()
-        if (!a?.id) return
-        const tok = await refreshSPToken()
+        const response = await getActiveWorkflows()
+        if (!alive) return
+        const workflows = response?.active_workflows || []
+        setActiveWorkflows(workflows)
+        let ids = [...new Set(workflows
+          .filter((workflow) => workflow?.source === 'sharepoint' && workflow?.scan_id)
+          .map((workflow) => workflow.scan_id))]
+        // Compatibility for an older API replica during a rolling deploy: it does not expose
+        // publish_file yet, but can still report a live SharePoint scan through this endpoint.
+        if (!ids.length) {
+          const active = await getActiveScan()
+          if (active?.id) ids = [active.id]
+        }
+        if (!ids.length || !alive) return
+        const tok = await refreshSPToken({ interactive: false })
         setSPToken(tok)
-        await refreshScanSPToken(a.id)
+        await Promise.all(ids.map((id) => refreshScanSPToken(id)))
         setTokenRefreshError(null)
-      } catch { setTokenRefreshError('SharePoint session may have expired — files added since then may be skipped. Re-sign in to SharePoint to continue.') }
-    }, 20 * 60 * 1000)
-    return () => clearInterval(iv)
-  }, [hasSPToken])
+      } catch { setTokenRefreshError('SharePoint session may have expired — remaining scan or release files are paused until you re-sign in to SharePoint.') }
+    }
+    refresh()
+    const iv = setInterval(refresh, 20 * 60 * 1000)
+    return () => { alive = false; clearInterval(iv) }
+  }, [hasSPToken, me])
   const [delegations, setDelegations] = useState(loadDelegations)
   const [fileTypeConfig, setFileTypeConfig] = useState(loadFileTypeConfig)
   const [rolePrivileges, setRolePrivileges] = useState(loadRolePrivileges)
@@ -490,7 +509,12 @@ export default function App() {
   // called on some renders and not others, which is "Rendered more hooks than during the previous
   // render" and takes the whole app down. Both were caught by the full suite rather than by any
   // test of this card.
-  const remRun = useRemediationRun(scan?.run?.id || null)
+  // Bootstrap already carries the owner-scoped active workflow before the full scan payload
+  // finishes loading. Use that id for active Remediation so its persistent card can connect
+  // immediately after sign-in/reload instead of waiting behind the estate-sized getScan.
+  const activeRemediationScanId = primaryWorkflow?.stage === 'remediate'
+    ? primaryWorkflow.scan_id : null
+  const remRun = useRemediationRun(activeRemediationScanId || scan?.run?.id || null)
   // Durable (background queue) is the default (2026-08-21). The session-scoped path runs as a
   // bare in-process thread with no queue behind it — the code's own comment on it has always said
   // "lost if that replica restarts", and this app auto-deploys on every merge to main, so that was
@@ -958,7 +982,8 @@ export default function App() {
       if (m2?.is_admin) setMe((m) => {
         const allow = m.allow || []
         const adminViews = ['analytics', 'liveops'].filter((view) => !allow.includes(view))
-        return adminViews.length ? { ...m, allow: [...allow, ...adminViews] } : m
+        return { ...m, is_admin: true,
+          allow: adminViews.length ? [...allow, ...adminViews] : allow }
       })
     }).catch(() => {})
   }
@@ -1087,10 +1112,10 @@ export default function App() {
 
   const switchScan = async (id) => {
     if (id === scan?.run?.id) return
-    // "Going to the latest" clears the explicit flag; picking any older scan sets it.
-    // scanList[0] is the newest completed scan — if the list isn't loaded yet, treat
+    // "Going to the workspace default" clears the explicit flag; picking any other scan sets it.
+    // The default may deliberately be older than a narrow newest scan. If the list isn't loaded, treat
     // every switch as forward (non-explicit) so the banner stays quiet on init.
-    setExplicitTimeTravel(scanList.length > 0 && id !== scanList[0].id)
+    setExplicitTimeTravel(scanList.length > 0 && id !== pickDefaultScan(scanList)?.id)
     setScanLoading(true)
     try {
       setScan(await getScan(id))
@@ -1255,7 +1280,7 @@ export default function App() {
     })
   }
 
-  const doScan = async (source, folder = null, runScope = null) => {
+  const doScan = async (source, folder = null, runScope = null, replaceActive = false) => {
     if (busy) return                              // a scan/assessment is already running — don't launch another
     setBusy(true); setErr(null); setSubmitUncertain(null); setPreflightCapacityState(null); setProgress({ phase: 'preparing' })
     // A stop belongs to the run that was stopped. Clearing both here is what stops the previous
@@ -1330,7 +1355,7 @@ export default function App() {
         const submitKey = beginOrResumeIntent('scan')
         let accepted
         try {
-          accepted = await startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded, submitKey)
+          accepted = await startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded, submitKey, replaceActive, true)
         } catch (err) {
           // Hold the key when we cannot tell whether the scan was created; drop it when the
           // server proved it was not, so the user's next, corrected attempt is a fresh intent
@@ -1472,6 +1497,18 @@ export default function App() {
       // both rendered at once and directly contradicted each other. The failure is the newer,
       // harder signal; it wins.
       setPreflightCapacityState(null)
+      if (e?.status === 409 && ['discovery_workflow_active', 'recent_compatible_workflow'].includes(e?.detail?.code)) {
+        setDiscoveryChoice({
+          scanId: e.detail.active_scan_id,
+          workflowRevision: e.detail.workflow_revision,
+          recentCompatible: e.detail.code === 'recent_compatible_workflow',
+          source,
+          folder,
+          runScope,
+        })
+        setErr(null)
+        return
+      }
       // An unconfirmed submit already has its own, more accurate surface; a red "scan failed"
       // beside it would contradict it, which is exactly the two-banners-disagreeing bug the
       // comment above was written about.
@@ -1656,7 +1693,10 @@ export default function App() {
   // Remediate/Publish/Monitor, so a freshly-discovered estate came up locked.
   // Requiring membership in scanList is what makes this mean "a past scan" — completed_at is
   // then guaranteed present, since that is exactly what listScans() filters on.
-  const isTimeTravel = !!(run && scanList.some((s) => s.id === run.id) && scanList[0]?.id !== run.id)
+  const defaultScanId = pickDefaultScan(scanList)?.id
+  const isTimeTravel = !!(run && scanList.some((s) => s.id === run.id) && defaultScanId !== run.id)
+  const narrowDefault = !explicitTimeTravel ? narrowScanDefaultContext(scanList, run?.id) : null
+  const showScanHistoryBanner = isTimeTravel || !!narrowDefault
 
 
   return (
@@ -1971,7 +2011,7 @@ export default function App() {
                 onChange={(e) => switchScan(e.target.value)}
                 disabled={scanLoading || busy}
                 aria-label="Select scan run"
-                style={{ fontSize: 12, padding: '2px 6px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--surface)', color: 'inherit', cursor: 'pointer' }}
+                style={{ fontSize: 12, padding: '2px 6px', borderRadius: 4, border: '1px solid var(--line)', background: 'var(--surface)', color: 'inherit', cursor: 'pointer' }}
               >
                 {scanList.map((s, i) => {
                   // scanOptionDate.js: `at` is completed_at when assessed, discovered_at (ADR
@@ -1981,12 +2021,13 @@ export default function App() {
                   // unassessed scan's own picker entry, from this label reading completed_at
                   // alone.
                   const at = scanOptionAt(s)
+                  const workflowContext = scanWorkflowContext(s)
                   return (
                     <option key={s.id} value={s.id}>
                       {i === 0 ? '★ ' : ''}
                       {at ? new Date(at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'not yet dated'}
                       {s.avg_score != null ? ` · ${s.avg_score}/100` : ''}
-                      {' · '}{at ? timeAgo(at) : ''}{i === 0 ? ' · latest' : ''}{s.published_at ? ' · verified' : ''}
+                      {' · '}{at ? timeAgo(at) : ''}{workflowContext ? ` · ${workflowContext}` : ''}{i === 0 ? ' · latest' : ''}{s.published_at ? ' · verified' : ''}
                     </option>
                   )
                 })}
@@ -2002,19 +2043,23 @@ export default function App() {
           )}
       </div>
 
-      {isTimeTravel && (
+      {showScanHistoryBanner && (
         <div className="ttbanner" role="status">
           {explicitTimeTravel ? (
             <>
               {/* fmtStamp returns null for a missing stamp; the guard on isTimeTravel means that
                   can no longer happen here, but the fallback stays so a null can never again
                   render as a bold empty span followed by a bare period. */}
-              <span style={{ fontSize: 13.5 }}>🕐 <b>Scan History replay</b> — viewing the scan from <b>{fmtStamp(run.completed_at) ?? 'an earlier scan'}</b>{run.avg_score != null ? ` · ${run.avg_score}/100` : ''}. Every tab, the dashboard and your saved decisions reflect this past scan.</span>
+              <span style={{ fontSize: 13.5 }}>🕐 <b>Scan History replay</b> — viewing {scanWorkflowContext(run) ? <><b>{scanWorkflowContext(run)}</b> from </> : 'the scan from '}<b>{fmtStamp(run.completed_at) ?? 'an earlier scan'}</b>{run.avg_score != null ? ` · ${run.avg_score}/100` : ''}. Every tab, the dashboard and your saved decisions reflect this past scan.</span>
             </>
+          ) : narrowDefault ? (
+            <span style={{ fontSize: 13.5 }}>✓ <b>Narrow scan saved without replacing your workspace</b> — the newer run contains <b>{narrowDefault.newestFiles} documents</b>, compared with <b>{narrowDefault.referenceFiles}</b> in the full scan ACP kept as your default. Both remain in Scan History.</span>
           ) : (
             <span style={{ fontSize: 13.5 }}>✨ <b>New scan available</b> from <b>{fmtStamp(scanList[0]?.completed_at) ?? 'just now'}</b> — a more recent scan finished while you were reviewing this one.</span>
           )}
-          <button className="ttexit" onClick={() => switchScan(scanList[0].id)}>↩ Switch to latest</button>
+          <button className="ttexit" onClick={() => switchScan(scanList[0].id)}>
+            {narrowDefault ? 'View narrow scan' : '↩ Switch to latest'}
+          </button>
         </div>
       )}
 
@@ -2082,13 +2127,30 @@ export default function App() {
                   onClick={() => setStopped(null)}>Dismiss</button>
         </div>
       )}
+      <DiscoveryContinuityChoice
+        choice={discoveryChoice}
+        onContinue={() => {
+          const scanId = discoveryChoice?.scanId
+          setDiscoveryChoice(null)
+          if (scanId) switchScan(scanId)
+          goToView('discover')
+          window.scrollTo({ top: 0, behavior: 'smooth' })
+        }}
+        onReplace={() => {
+          const pending = discoveryChoice
+          setDiscoveryChoice(null)
+          if (pending) doScan(pending.source, pending.folder, pending.runScope, true)
+        }}
+        onDismiss={() => setDiscoveryChoice(null)}
+      />
       {/* Assessment has a real live card immediately below this fallback. Do not stack a
           generic “still running” banner above the richer card for the same work. */}
       <WorkflowContinuityBanner
-        workflow={primaryWorkflow?.stage === 'assess' && assessPhase === 'running'
+        workflow={primaryWorkflow?.stage === 'assess'
           ? null : primaryWorkflow}
         currentView={view}
         onReturn={(stage) => { goToView(stage); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+        onViewPrevious={(scanId) => { switchScan(scanId); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
         onLiveOps={() => { goToView('liveops'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
       />
       {busy && progress && view !== 'discover' && (
@@ -2127,10 +2189,15 @@ export default function App() {
       {/* Keep the authoritative live Assessment card directly below the tabs on EVERY view,
           including Assess itself. AssessRunner's detailed file list answers a different question;
           it is not a replacement for the compact stage-level card. `busy` is a DISCOVER-only
-          flag; assessPhase is the authority for whether this card is active. */}
-      <LiveAssessmentLive scanId={liveScanId || run?.id}
-                          active={assessPhase === 'running'}
-                          onStop={() => stopScan(liveScanId || run?.id)} />
+          flag; local phase gives immediate feedback and the server-owned active workflow restores
+          the same card after sign-in or reload. */}
+      <LiveAssessmentLive scanId={primaryWorkflow?.stage === 'assess'
+                                    ? primaryWorkflow.scan_id
+                                    : (liveScanId || run?.id)}
+                          active={assessPhase === 'running' || primaryWorkflow?.stage === 'assess'}
+                          onStop={() => stopScan(primaryWorkflow?.stage === 'assess'
+                            ? primaryWorkflow.scan_id
+                            : (liveScanId || run?.id))} />
 
       {/* THE PERSISTENT REMEDIATION CARD. Outside the tabpanel on purpose: `<Remediate/>` below
           is mounted only while `view === 'remediate'`, so a card rendered inside it — and the
@@ -2337,7 +2404,9 @@ export default function App() {
         {/* Live Azure traffic is read-only and payload-sanitized. Its API and SSE endpoints still
             require an authenticated user, and the stream starts only when this tab is opened. */}
         {view === 'liveops' &&
-          <Suspense fallback={<Loading />}><AdminLiveTraffic /></Suspense>}
+          <Suspense fallback={<Loading />}><AdminLiveTraffic me={me} currentScanId={run?.id || null}
+            onNavigateRecovery={(stage) => setView({ assess: 'assess', remediate: 'remediate',
+              release: 'publish' }[stage] || 'overview')} /></Suspense>}
 
         {/* ACP's own Accessibility Conformance Report (ADR 0047). No `run` gate: it is not about a
             scan, and requiring one would make the tab unreachable on a fresh deploy. Every write

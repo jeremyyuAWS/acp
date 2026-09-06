@@ -52,13 +52,15 @@ describe('the run card never overstates the run', () => {
     expect(html).not.toMatch(/>Complete</)
   })
 
-  it('withholds an ETA until five documents have completed, however many samples exist', () => {
+  it('withholds an ETA until five documents have been processed, however many samples exist', () => {
     // The sample gate and the document gate answer different questions: four polls of a run that
     // finished nothing is four samples and no evidence.
     const calibrated = { calibrating: false, etaText: '8–12 minutes', ratePerMin: 6 }
-    const few = { ...SNAP, documents: { ...SNAP.documents, completed: 4 } }
+    const few = { ...SNAP, documents: { completed: 4, processing: 16, waiting: 0,
+                                        review: 0, failed: 0, skipped: 0 } }
     expect(etaGate(few, calibrated)).toEqual({ show: false, note: 'Estimating after the first results' })
-    const enough = { ...SNAP, documents: { ...SNAP.documents, completed: MIN_DOCUMENTS_FOR_ETA } }
+    const enough = { ...SNAP, documents: { completed: 0, processing: 15, waiting: 0,
+                                           review: MIN_DOCUMENTS_FOR_ETA, failed: 0, skipped: 0 } }
     expect(etaGate(enough, calibrated)).toMatchObject({ show: true, text: '8–12 minutes' })
     // ...and a document count alone is not enough either — the measurement must have settled.
     expect(etaGate(enough, { calibrating: true, etaText: null }).show).toBe(false)
@@ -175,9 +177,10 @@ describe('the card outlives a tab change', () => {
     //   · reading the `run` const (derived far below) is a temporal-dead-zone ReferenceError,
     //   · a hook placed after `if (!me) return <SignIn/>` runs on some renders and not others,
     //     which React rejects with "Rendered more hooks than during the previous render".
-    // So the call must read `scan?.run?.id` and must sit above that return.
+    // So the call must avoid the later `run` const and must sit above that return.
     const app = readFileSync(join(here, 'App.jsx'), 'utf8')
-    const call = app.indexOf('useRemediationRun(scan?.run?.id')
+    expect(app).toMatch(/const activeRemediationScanId = primaryWorkflow\?\.stage === 'remediate'[\s\S]{0,100}?primaryWorkflow\.scan_id/)
+    const call = app.indexOf('useRemediationRun(activeRemediationScanId || scan?.run?.id')
     expect(call).toBeGreaterThan(-1)
     // Match the RETURN STATEMENT, not the words — App.jsx discusses this early return in prose
     // above it, and an indexOf on the sentence finds the comment first. That mistake made an
@@ -266,9 +269,11 @@ describe('one stream, owned above the tab switch', () => {
   })
 
   it('polls only while nothing is streaming', () => {
-    // The poll is the FALLBACK. A live frame supersedes it, and the stream closing (which happens
-    // when the batch drains, not when the run finishes) turns it back on so the card keeps
-    // reconciling review, delivery and evidence.
+    // The poll is the FALLBACK. A live frame supersedes it, and the stream closing turns it back
+    // on so the card keeps reconciling. That close means more than it used to — since ADR 0052
+    // the server holds the stream through delivery and reconciliation rather than ending it the
+    // moment the batch drains — and the poll is still required, because review decisions and
+    // evidence can outlive delivery and only the reconciled snapshot says the run is terminal.
     const h = hook()
     expect(h).toMatch(/stopPoll\(\)\s+\/\/ a live frame supersedes the fallback/)
     const onDone = h.slice(h.indexOf('onDone:'))

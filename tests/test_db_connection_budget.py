@@ -270,7 +270,14 @@ def test_rightsize_script_sets_worker_pool_and_queue_autoscale():
               / "deploy" / "public" / "rightsize-production.sh").read_text()
     assert script.count("ACP_DB_MAX_CONN=$db_pool") == 1
     assert "--scale-rule-name remediation-queue" in script
-    assert "type IN ('remediate_file','rescore_file','apply_approved_values')" in script
+    # THAT there is a queue predicate, not WHICH types it names. This assertion pinned the literal
+    # list until now, which made it the fifth copy of core.REMEDIATE_LANE_JOB_TYPES in the tree —
+    # and it went red for a job type added to the first ON TWO SUCCESSIVE PUSHES, which is the
+    # argument for deleting the copy rather than updating it a third time. What the list must
+    # contain is asserted once, derived from core, in test_packaging_chart.py::
+    # test_the_production_autoscaler_counts_every_remediate_job_type; this file keeps testing the
+    # script's SHAPE, which is what it is about.
+    assert "FROM jobs WHERE status='queued' AND type IN (" in script
     assert '"targetQueryValue=4"' in script
 
 

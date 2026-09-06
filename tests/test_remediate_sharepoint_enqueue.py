@@ -87,12 +87,73 @@ def test_completed_submission_is_reused_for_the_same_snapshot(client, isolated_s
     assert set(second["job_ids"]) == set(first["job_ids"])
 
 
-def test_a_different_exact_scope_creates_a_distinct_execution(client, isolated_store):
+def test_a_different_exact_scope_is_refused_while_the_first_execution_is_active(
+        client, isolated_store):
     _save(isolated_store, "sp-scope", "sharepoint")
     first = client.post("/scans/sp-scope/remediate", json={"scope": ["a.docx"]}).json()
-    second = client.post("/scans/sp-scope/remediate", json={"scope": ["b.pptx"]}).json()
-    assert second["reused"] is False
-    assert second["batch_id"] != first["batch_id"]
+    response = client.post("/scans/sp-scope/remediate", json={"scope": ["b.pptx"]})
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == {
+        "code": "stage_execution_active",
+        "stage": "remediate",
+        "active_batch_id": first["batch_id"],
+        "message": ("A different remediate run is already active. Wait for it to finish or "
+                    "stop it before starting revised work."),
+    }
+
+
+def test_a_different_exact_scope_creates_a_distinct_execution_after_completion(
+        client, isolated_store):
+    _save(isolated_store, "sp-scope-done", "sharepoint")
+    first = client.post(
+        "/scans/sp-scope-done/remediate", json={"scope": ["a.docx"]}).json()
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(
+            cur, "UPDATE jobs SET status='done' WHERE id=%s", (first["job_ids"][0],))
+
+    second = client.post(
+        "/scans/sp-scope-done/remediate", json={"scope": ["b.pptx"]}).json()
+    assert second["reused"] is False and second["batch_id"] != first["batch_id"]
+
+
+def test_changed_approved_fix_creates_a_new_execution(client, isolated_store):
+    _save(isolated_store, "sp-decision", "sharepoint", files=("a.docx",))
+    item_id = isolated_store.enqueue_proposals(
+        "sp-decision", "a.docx", "1.1.1",
+        [{"locator": "word:image:1", "proposed_value": "Initial description"}],
+        validated=True)
+    isolated_store.update_hitl_item(item_id, "approved", approved_value="Initial description")
+
+    first = client.post("/scans/sp-decision/remediate", json={}).json()
+    equivalent = client.post("/scans/sp-decision/remediate", json={}).json()
+    assert equivalent["batch_id"] == first["batch_id"]
+    assert equivalent["decision_digest"] == first["decision_digest"]
+    assert equivalent["reused"] is True
+
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(
+            cur, "UPDATE jobs SET status='done' WHERE id=%s", (first["job_ids"][0],))
+
+    isolated_store.update_hitl_item(item_id, "approved", approved_value="Corrected description")
+    revised = client.post("/scans/sp-decision/remediate", json={}).json()
+    assert revised["decision_digest"] != first["decision_digest"]
+    assert revised["batch_id"] != first["batch_id"]
+    assert revised["reused"] is False
+    payload = isolated_store.get_job(revised["job_ids"][0])["payload"]
+    assert payload["decision_digest"] == revised["decision_digest"]
+
+
+def test_decision_on_an_unselected_file_does_not_change_scoped_execution(isolated_store):
+    _save(isolated_store, "sp-scoped-decision", "sharepoint")
+    before = isolated_store.remediation_decision_digest(
+        "sp-scoped-decision", ["a.docx"], owner="demo")
+    isolated_store.save_decision(
+        "sp-scoped-decision", "b.pptx", "action", '{"state":"accepted"}',
+        "demo", "2026-09-05T00:00:00Z")
+    after = isolated_store.remediation_decision_digest(
+        "sp-scoped-decision", ["a.docx"], owner="demo")
+    assert after == before
 
 
 def test_a_drive_batch_still_carries_its_token(client, isolated_store):

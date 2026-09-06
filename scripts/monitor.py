@@ -70,6 +70,7 @@ class Report:
         self.rows: list[tuple[str, str, str]] = []
         self.failed = 0
         self.skipped = 0
+        self.warned = 0
 
     def ok(self, name: str, detail: str = "") -> None:
         self.rows.append(("ok", name, detail))
@@ -78,12 +79,16 @@ class Report:
         self.rows.append(("FAIL", name, detail))
         self.failed += 1
 
+    def warn(self, name: str, detail: str) -> None:
+        self.rows.append(("WARN", name, detail))
+        self.warned += 1
+
     def skip(self, name: str, why: str) -> None:
         self.rows.append(("skip", name, why))
         self.skipped += 1
 
     def render(self) -> int:
-        icon = {"ok": "  ok  ", "FAIL": " FAIL ", "skip": " skip "}
+        icon = {"ok": "  ok  ", "FAIL": " FAIL ", "WARN": " WARN ", "skip": " skip "}
         for state, name, detail in self.rows:
             print(f"{icon[state]} {name:<28} {detail}")
         print()
@@ -94,7 +99,10 @@ class Report:
                     print(f"::error title=production monitor::{name} — {detail}")
             print(f"{self.failed} check(s) FAILED, {self.skipped} skipped")
             return 1
-        print(f"all checks passed ({self.skipped} skipped)")
+        for state, name, detail in self.rows:
+            if state == "WARN":
+                print(f"::warning title=production monitor::{name} — {detail}")
+        print(f"all checks passed ({self.warned} warning(s), {self.skipped} skipped)")
         return 0
 
 
@@ -202,6 +210,7 @@ def check_estate(base: str, key: str, rep: Report) -> None:
         return
 
     files = [(n or 0) for n in ((est.get("scans") or {}).get("recent_files") or [])]
+    sweep = est.get("sweep") or {}
     total = (est.get("scans") or {}).get("total", len(files))
     if not files:
         rep.fail("scan list non-empty", "no completed scans at all")
@@ -210,11 +219,16 @@ def check_estate(base: str, key: str, rep: Report) -> None:
         newest, biggest = recent[0], max(recent)
         rep.ok("estate readable", f"{total} scans, newest has {newest} documents")
         if biggest and newest < biggest * COLLAPSE_RATIO:
-            rep.fail(
-                "newest scan is full-size",
-                f"newest has {newest} documents but a recent scan had {biggest} — "
-                f"a collapsed 'latest' scan is what every dashboard, report and selector will show",
-            )
+            detail = (f"newest has {newest} documents but a recent scan had {biggest} — "
+                      "workspace defaults remain on the newest non-collapsed scan")
+            # A narrow user-selected scope is legitimate and must stay in Scan History. The old
+            # check called every such scan an outage even though workspace bootstrap deliberately
+            # protects the default view. Fail only on the known production defect: the scheduled
+            # sweep itself saved the collapsed newest scan. Keep other collapses visible as a
+            # warning so operators can investigate without turning healthy production red.
+            sweep_saved_newest = (sweep.get("enabled") and sweep.get("last_ok") is True
+                                  and sweep.get("last_files") == newest)
+            (rep.fail if sweep_saved_newest else rep.warn)("newest scan is narrow", detail)
         else:
             rep.ok("newest scan is full-size", f"{newest} vs {biggest} biggest of last {len(recent)}")
 
@@ -232,7 +246,6 @@ def check_estate(base: str, key: str, rep: Report) -> None:
     # scopes.py). Found live 2026-08-28 chasing a "0 documents discovered" report: /monitor/
     # estate had carried this data (#908) but nothing printed it, so answering "is this the sweep
     # or a real collapse" needed a manual API read instead of one line of monitor output.
-    sweep = est.get("sweep") or {}
     if not sweep.get("enabled"):
         rep.ok("sweep status", "no scheduled sweep configured on this deployment")
     elif sweep.get("last_at") is None:

@@ -124,7 +124,7 @@ describe('no redesign component ships unreachable', () => {
     // so that finding-level approval happens in exactly one place (the inbox's review panel); it is
     // now tracked as a deliberate orphan by unmountedComponents.test.jsx instead.
     'RemediationWork', 'ManualWork', 'RemediationVerify',
-    'DeliveryPanel', 'CloseoutPanel', 'FixOutcomes', 'RemediationDocProgress', 'DocumentAudit',
+    'DeliveryPanel', 'CloseoutPanel', 'FixOutcomes', 'DocumentAudit',
     // ADR 0042's run-level history panel. On this list for exactly the reason the list exists:
     // it renders nothing until expanded and returns null without a scanId, so an unmounted copy
     // and a mounted-but-never-opened one look identical on screen and in a passing suite.

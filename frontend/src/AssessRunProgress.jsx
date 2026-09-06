@@ -202,6 +202,8 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
 
   const cur = m.queue ? m.queue.current : null
   const eta = throughput && (throughput.etaText || (throughput.calibrating ? 'estimating…' : null))
+  const opinion = m.secondOpinion
+  const updateMode = snapshot?._live?.mode || 'live'
 
   return (
     <section className="assess-run-progress" role="region"
@@ -220,12 +222,28 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
               <strong style={{ fontSize: 14.5 }}>{isFinished ? 'Assessment complete' : 'Assessing documents'}</strong>
               <span role="status" style={{ fontSize: 11.5, padding: '2px 7px', borderRadius: 4,
                                             display: 'inline-flex', alignItems: 'center', gap: 5,
-                                            background: 'var(--green-bg,#f0f7e6)', color: 'var(--success-fg)',
-                                            border: '1px solid var(--green-line,#a8cf7a)' }}>
-                {!isFinished && <span className="pulsedot" aria-hidden="true" />}
-                {isFinished ? 'Updates complete' : 'Live'}
+                                            background: updateMode === 'reconnecting' ? 'var(--amber-bg,#fff8e6)' : 'var(--green-bg,#f0f7e6)',
+                                            color: updateMode === 'reconnecting' ? 'var(--amber,#92400e)' : 'var(--success-fg)',
+                                            border: `1px solid ${updateMode === 'reconnecting' ? 'var(--amber-line,#e7c46a)' : 'var(--green-line,#a8cf7a)'}` }}>
+                {!isFinished && updateMode === 'live' && <span className="pulsedot" aria-hidden="true" />}
+                {isFinished ? 'Updates complete' : updateMode === 'reconnecting' ? 'Reconnecting · last update kept' : 'Live updates'}
               </span>
             </div>
+
+            {opinion && (
+              <div role="status" aria-label="Cloud second-opinion status"
+                   style={{ border: '1px solid var(--line,#e4e8ec)', borderRadius: 8, padding: '9px 11px', fontSize: 12.5 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                  <strong>Cloud second opinions · {opinion.status}</strong>
+                  <span className="muted">{opinion.scan.used} of {opinion.scan.limit} requests this scan</span>
+                </div>
+                <div className="muted" style={{ marginTop: 3 }}>{opinion.reason}</div>
+                <div className="muted" style={{ marginTop: 3 }}>
+                  {opinion.day.remaining} daily requests remaining · ${Number(opinion.cost.estimated_remaining_usd).toFixed(2)} estimated budget remaining
+                  {' · '}${Number(opinion.cost.measured_scan_usd).toFixed(4)} measured for this scan
+                </div>
+              </div>
+            )}
 
             <progress value={completed} max={Math.max(1, total)}
                       aria-label={`Assessment: ${completed.toLocaleString()} of ${total.toLocaleString()} documents complete`}
@@ -295,7 +313,7 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
         <p className="muted" style={{ fontSize: 12.5, margin: 0, lineHeight: 1.6, flex: '1 1 260px' }}>
           Results appear when the run finishes, not before — a half-populated count of failures reads as a
           verdict, and there is no honest way to caption one mid-run. Stopping keeps the documents already
-          assessed; nothing is written back to your drive at any point.
+          assessed; nothing is written back to the connected source during assessment.
         </p>
       </div>
     </section>

@@ -12,7 +12,7 @@ import {
   revisionComparisonModel,
   arcPath, capacityMatchesService, chartModel,
   capacityForService, componentState, defaultMetricFor, eventClock, eventsForNode, filterEvents,
-  formatDuration,
+  formatDuration, secondsSince,
   REPLICA_STATES, gaugeModel, metricGroups, nodeTypeLabel, outputModel, provenance, queueModel,
   THROUGHPUT_SERIES, replicaLifecycle, reported, requestHealth, saturationModel, scaleEvents,
   scaleExplanation, throughputModel, tracingModel, workerJobHealth,
@@ -1182,7 +1182,8 @@ function RunPipeline({ pipeline }) {
           color: stage.present ? 'var(--ink)' : 'var(--muted)' }}>
           {/* Shape carries the state, not colour (1.4.1): done, working, unreported. */}
           <span aria-hidden="true">
-            {stage.state === 'complete' ? '●' : stage.state === 'active' ? '◐' : '○'}
+            {stage.state === 'complete' ? '●' : stage.state === 'active' ? '◐'
+              : stage.state === 'failed' ? '■' : stage.state === 'cancelled' ? '×' : '○'}
           </span>
           {stage.label}
           {stage.present && <span className="muted">
@@ -1260,15 +1261,86 @@ function RunTiming({ timing, nowMs }) {
  * cannot. Nothing here shows the error text, and nothing here shows a document.
  */
 function RunTrouble({ trouble }) {
-  if (!trouble.kind && !trouble.retrying) return null
+  if (!trouble.kind && !trouble.retrying && !trouble.stalled) return null
   return <p role="status" style={{ margin: '10px 0 0', padding: '9px 11px', fontSize: 12,
     borderLeft: `4px solid ${TONE.warn}`, background: 'var(--warn-bg)', color: 'var(--ink)' }}>
     <span aria-hidden="true">▲ </span>
+    {trouble.stalled && <b>Stage appears stalled</b>}
+    {trouble.stalled && trouble.label ? ' · ' : ''}
     {trouble.label && <b>{trouble.label}</b>}
     {trouble.label && trouble.attempts != null ? ' · ' : ''}
     {trouble.attempts != null && `${trouble.attempts} attempt${trouble.attempts === 1 ? '' : 's'}`}
     {trouble.note && <span className="muted" style={{ display: 'block', marginTop: 3 }}>{trouble.note}</span>}
   </p>
+}
+
+/** Explicit, stage-scoped operator recovery. The second click is intentional: stopping a live
+ * cross-user workflow must never be a one-click accident, and the copy says exactly what will
+ * continue. Running work cooperates at its next checkpoint; queued work stops immediately. */
+function RunRecovery({ run, onCancel, onResume, onRecover }) {
+  const [confirming, setConfirming] = useState(null)
+  const [state, setState] = useState({ kind: 'idle', message: '' })
+  const stage = String(run?.stage || '').toLowerCase()
+  const stopping = run?.cancel_requested === true
+  const active = run?.status === 'active' && (Number(run?.queued || 0) + Number(run?.running || 0) > 0)
+  const canCancel = active && !stopping && ['discover', 'assess', 'remediate', 'release'].includes(stage) && onCancel
+  const canResume = stage === 'remediate' && run?.paused === true && onResume
+  const canRecover = run?.status === 'failed' && ['assess', 'remediate', 'release'].includes(stage) && onRecover
+  const actionFinished = state.kind === 'done'
+  useEffect(() => {
+    setConfirming(null)
+    setState({ kind: 'idle', message: '' })
+  }, [run?.scan_id, stage])
+  if (!canCancel && !canResume && !canRecover && !stopping && state.kind === 'idle') return null
+
+  const act = async (kind) => {
+    const action = kind === 'cancel' ? onCancel : onResume
+    setState({ kind: 'working', message: kind === 'cancel' ? 'Requesting stage cancellation…' : 'Resuming stage…' })
+    try {
+      const result = await action(run)
+      const message = kind === 'cancel'
+        ? `Cancellation requested. ${result?.cancelled || 0} waiting and ${result?.requested || 0} running job(s) were targeted.`
+        : `Remediation resumed. ${result?.released || 0} waiting job(s) were released.`
+      setState({ kind: 'done', message })
+      setConfirming(null)
+    } catch (error) {
+      setState({ kind: 'error', message: error?.message || 'The recovery action could not be completed.' })
+    }
+  }
+
+  return <div style={{ ...PANEL, marginTop: 10, borderColor: confirming ? TONE.warn : 'var(--line)' }}>
+    <span style={LABEL}>OPERATOR RECOVERY</span>
+    {stopping && <p role="status" style={{ margin: '0 0 8px', fontSize: 12 }}>
+      <b>Stop requested</b>{run.cancel_requested_at ? ` · ${formatDuration(secondsSince(run.cancel_requested_at))} ago` : ''}
+      <span className="muted" style={{ display: 'block', marginTop: 3 }}>
+        Running work is draining at its next safe checkpoint. No second stop request is needed.
+      </span>
+    </p>}
+    {canRecover && <button type="button" className="ghost small" onClick={() => onRecover(run)}>
+      {stage === 'remediate' ? 'Open remediation exceptions' : `Open ${stage} recovery`}
+    </button>}
+    {canResume && <button type="button" className="ghost small" disabled={state.kind === 'working' || actionFinished}
+      style={{ marginLeft: canRecover ? 7 : 0 }}
+      onClick={() => confirming === 'resume' ? act('resume') : setConfirming('resume')}>
+      {confirming === 'resume' ? 'Confirm resume' : 'Resume remediation'}
+    </button>}
+    {canCancel && <button type="button" className="ghost small" disabled={state.kind === 'working' || actionFinished}
+      style={{ marginLeft: canResume || canRecover ? 7 : 0 }}
+      onClick={() => confirming === 'cancel' ? act('cancel') : setConfirming('cancel')}>
+      {confirming === 'cancel' ? `Confirm stop ${stage}` : `Stop ${stage} stage`}
+    </button>}
+    {confirming && <div role="alert" style={{ marginTop: 8, fontSize: 12 }}>
+      {confirming === 'cancel'
+        ? stage === 'discover'
+          ? 'This stops the active discovery and preserves everything already found. Downstream completed work is not removed.'
+          : 'Waiting jobs stop immediately. Running work stops cooperatively at its next safe checkpoint. Other workflow stages are not changed.'
+        : 'This releases only remediation jobs held by the durable pause control.'}
+      <button type="button" className="ghost small" style={{ marginLeft: 7 }}
+        onClick={() => setConfirming(null)}>Keep current state</button>
+    </div>}
+    {state.message && <p role="status" style={{ margin: '8px 0 0', fontSize: 12,
+      color: state.kind === 'error' ? TONE.bad : 'var(--ink)' }}>{state.message}</p>}
+  </div>
 }
 
 /** SharePoint site coverage. Absent entirely for Drive and OneDrive runs — the backend sends no
@@ -1292,7 +1364,8 @@ function RunCoverage({ coverage }) {
   </div>
 }
 
-function RunRadial({ model, run, accent, pipeline, flow, timing, trouble, coverage, nowMs }) {
+function RunRadial({ model, run, accent, pipeline, flow, timing, trouble, coverage, nowMs,
+  onCancelStage, onResumeStage, onRecover }) {
   const radius = 46
   const circumference = 2 * Math.PI * radius
   const dash = model.total ? circumference * model.fraction : 0
@@ -1345,6 +1418,7 @@ function RunRadial({ model, run, accent, pipeline, flow, timing, trouble, covera
       past {formatDuration(timing.staleThresholdS)}. The job is still claimed, so nothing else can pick it up.
     </p>}
     <RunTrouble trouble={trouble} />
+    <RunRecovery run={run} onCancel={onCancelStage} onResume={onResumeStage} onRecover={onRecover} />
     <RunPipeline pipeline={pipeline} />
     <RunCoverage coverage={coverage} />
   </section>
@@ -1570,6 +1644,25 @@ function IntakeSummary({ snapshot, state }) {
   </section>
 }
 
+function WorkflowCorrelation({ summary = {} }) {
+  const model = summary.workflow_correlation || {}
+  const known = model.complete != null
+  const unlinked = Number(model.unlinked_active_jobs || 0)
+  return <section aria-label="Workflow data linkage" style={{ ...PANEL, padding: 12, marginTop: 10,
+    borderLeft: `4px solid ${!known ? TONE.idle : unlinked ? TONE.warn : TONE.ok}` }}>
+    <b>{!known ? 'Workflow linkage not reported' : unlinked ? 'Workflow view is incomplete' : 'Workflow linkage complete'}</b>
+    <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>
+      {model.attributed_stage_runs == null ? 'Linked stage runs are not reported.'
+        : `${model.attributed_stage_runs} stage run${model.attributed_stage_runs === 1 ? '' : 's'} linked.`}
+      {' '}{!known
+        ? 'ACP cannot verify whether every active job appears in the workflow view.'
+        : unlinked
+          ? `${unlinked} active job${unlinked === 1 ? '' : 's'} cannot be attributed to a workflow. Queue totals remain authoritative.`
+          : 'Every active job is represented in the workflow view.'}
+    </p>
+  </section>
+}
+
 /* ─────────────────── C. Real-time trend strip ─────────────────── */
 
 function TrendStrip({ groups, metricKey, onMetric, chart, markers, paused, source, measuredAt, nowMs }) {
@@ -1742,7 +1835,8 @@ function OperationalFacts({ groups }) {
 }
 
 export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connection = 'connecting',
-  samples = [], events = [], facts = [], accent = 'var(--plum)', onClose, nowMs = Date.now() }) {
+  samples = [], events = [], facts = [], accent = 'var(--plum)', onClose, onCancelStage,
+  onResumeStage, onRecover, nowMs = Date.now() }) {
   const panelRef = useRef(null)
   const [metricKey, setMetricKey] = useState(() => defaultMetricFor(node?.kind))
   const [filter, setFilter] = useState('all')
@@ -1803,6 +1897,7 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
       timing={runTiming(node.run || {}, { nowMs })}
       trouble={runTrouble(node.run || {})}
       coverage={runCoverage(node.run || {})}
+      onCancelStage={onCancelStage} onResumeStage={onResumeStage} onRecover={onRecover}
       pipeline={runStagePipeline(node.run?.scan_id, snapshot)} />
   } else if (node?.kind === 'intake') {
     primary = <><IntakeSummary snapshot={snapshot} state={state} />
@@ -1867,6 +1962,7 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
       </Section>
 
       <Section n={5} title="Alerts and platform health">
+        <WorkflowCorrelation summary={snapshot?.summary} />
         {isAzureBacked(node)
           ? <><ActiveAlerts alerts={alertsModel(serviceCapacity)}
               measuredAt={serviceCapacity?.measured_at} nowMs={nowMs} />

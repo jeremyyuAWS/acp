@@ -2,7 +2,7 @@ import { act } from 'react'
 import { afterEach, expect, it, vi } from 'vitest'
 import { createTestRoot, unmountAll } from './testRoots.js'
 import DiscoveryLifecycleResults from './DiscoveryLifecycleResults.jsx'
-import DiscoveryFolderLabel from './DiscoveryFolderLabel.jsx'
+import DiscoveryFolderLabel, { readableFolderPath } from './DiscoveryFolderLabel.jsx'
 import { getDriveFolderName } from './api.js'
 vi.mock('./api.js', () => ({ getDriveFolderName: vi.fn(async () => ({
   name: 'Working', path: 'Department Drives / Cardiology / Working',
@@ -46,6 +46,15 @@ it('does not send local or SharePoint paths to Google', async () => {
   await act(async () => root.render(<DiscoveryFolderLabel source="sharepoint" folder="Clinical/Policies" />))
   expect(container.textContent).toBe('Clinical/Policies')
   expect(getDriveFolderName).not.toHaveBeenCalled()
+})
+it('removes the Graph drive root prefix from displayed folder paths', async () => {
+  const { root, container } = createTestRoot()
+  const path = '/drive/root:/Clinical Shared Documents/Cardiology'
+  await act(async () => root.render(<DiscoveryFolderLabel source="sharepoint" folder={path} />))
+  expect(container.textContent).toBe('Clinical Shared Documents/Cardiology')
+  expect(container.querySelector('span').title).toBe(path)
+  expect(getDriveFolderName).not.toHaveBeenCalled()
+  expect(readableFolderPath('/drive/root:')).toBe('Drive root')
 })
 it('bounds the rendered metadata rows while keeping the full search population', async () => {
   const { root, container } = createTestRoot()

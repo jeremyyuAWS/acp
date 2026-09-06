@@ -104,17 +104,19 @@ def test_the_sequence_survives_the_parallel_writers_remediation_actually_has():
 
 def test_an_event_carries_the_filename_but_never_document_content():
     """PRD §13: activity events contain no extracted document content. The filename is in the
-    detail payload (scan_events has no file column, and adding one would migrate a table five
-    other kinds share); the read path is owner-scoped, which is what makes that safe."""
+    `document` COLUMN since ADR 0052 — it used to ride inside `detail`, on the reasoning that a
+    column would migrate a table five other kinds share, and two reads that JSON could not serve
+    overturned that (per-document replay needs an index; §22's suppression needs the name
+    reachable from exactly one place). The read path is owner-scoped, which is what makes
+    carrying it safe at all."""
     import store as store_mod
     store = store_mod.Store()
     sid = "s-detail"
     store.append_scan_event(sid, "remediate.verified", owner_email=OWNER,
-                            detail={"file": "Board Pack.pdf", "fixes": 4})
+                            document="Board Pack.pdf", detail={"fixes": 4})
     event = store.list_scan_events(sid, owner=OWNER)[0]
-    detail = event["detail"]
-    assert detail["file"] == "Board Pack.pdf"
-    assert set(detail) == {"file", "fixes"}     # nothing else rode along
+    assert event["document"] == "Board Pack.pdf"
+    assert event["detail"] == {"fixes": 4}      # nothing else rode along, and no second copy
 
 
 def test_a_foreign_reader_gets_nothing(monkeypatch):

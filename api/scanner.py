@@ -320,6 +320,7 @@ def _dedupe_inventory_files(rows: list[dict]) -> None:
     seen: dict[str, int] = {}
     for r in rows:
         name = r.get("file") or ""
+        r.setdefault("source_name", name)
         n = seen.get(name, 0)
         seen[name] = n + 1
         if n:
@@ -1480,9 +1481,11 @@ def _sp_get(token: str, url: str, timeout: int = 30):
             # Callers that genuinely know their target — the readiness endpoint and the discovery
             # preflight — pass `on_site` to diagnose_refusal directly.
             import sp_readiness
-            raise PermissionError(
-                sp_readiness.diagnose_refusal(r.status_code, token=token)["message"]
-                + " URL: " + url.split("?")[0])
+            message = (sp_readiness.diagnose_refusal(r.status_code, token=token)["message"]
+                       + " URL: " + url.split("?")[0])
+            if r.status_code == 401:
+                raise SharePointSessionExpired(message)
+            raise PermissionError(message)
         if (r.status_code == 429 or r.status_code >= 500) and attempt <= attempts:
             _sp_note_retry(r.status_code)
             delay = _sp_retry_delay(r, attempt)
@@ -3225,7 +3228,7 @@ def _sp_file_from_inventory_row(row: dict) -> dict:
     """
     size_kb = row.get("size_kb")
     hashes = {"quickXorHash": row["checksum"]} if row.get("checksum") else {}
-    out = {"id": row.get("drive_file_id"), "name": row.get("file"),
+    out = {"id": row.get("drive_file_id"), "name": row.get("source_name") or row.get("file"),
            "file": {"mimeType": row.get("mime"), "hashes": hashes},
            "createdDateTime": row.get("created_at"),
            "lastModifiedDateTime": row.get("source_modified"),
@@ -3332,11 +3335,17 @@ def sp_reconstructed_listing(prior_files: list[dict], changed_files: list[dict],
     return result
 
 
+class SharePointSessionExpired(PermissionError):
+    """A delegated Graph token expired; a freshly supplied token can make a retry succeed."""
+
+
 def _sp_put(token: str, url: str, data: bytes, content_type: str):
     import httpx
     r = httpx.put(url, headers={"Authorization": f"Bearer {token}", "Content-Type": content_type},
                   content=data, timeout=120, follow_redirects=True)
-    if r.status_code in (401, 403):
+    if r.status_code == 401:
+        raise SharePointSessionExpired("Microsoft Graph access token expired.")
+    if r.status_code == 403:
         raise PermissionError(
             "Microsoft Graph refused the write. Writing remediated copies needs a WRITE scope "
             "(Files.ReadWrite.All, or Sites.ReadWrite.All for a team site) on the Azure app "
@@ -3368,7 +3377,9 @@ def _sp_folder_id(token: str, drive_id: str, name: str, parent_id: str = "") -> 
                    json={"name": name, "folder": {},
                          "@microsoft.graph.conflictBehavior": "fail"},
                    timeout=30, follow_redirects=True)
-    if r.status_code in (401, 403):
+    if r.status_code == 401:
+        raise SharePointSessionExpired("Microsoft Graph access token expired.")
+    if r.status_code == 403:
         raise PermissionError(
             f"Microsoft Graph refused to create the '{name}' folder — this needs a WRITE scope "
             "(Files.ReadWrite.All / Sites.ReadWrite.All).")
@@ -3406,7 +3417,9 @@ def _sp_archive_original(token: str, drive_id: str, item_id: str, today: str) ->
                             "Content-Type": "application/json"},
                    json={"parentReference": {"id": dated}},
                    timeout=60, follow_redirects=True)
-    if r.status_code in (401, 403):
+    if r.status_code == 401:
+        raise SharePointSessionExpired("Microsoft Graph access token expired.")
+    if r.status_code == 403:
         raise PermissionError(
             "Microsoft Graph refused to archive the original — replacing a file in place needs a "
             "WRITE scope (Files.ReadWrite.All / Sites.ReadWrite.All). Nothing was overwritten.")
@@ -3419,23 +3432,26 @@ def _sp_archive_original(token: str, drive_id: str, item_id: str, today: str) ->
 
 
 def _sp_write(token: str, *, put_url: str, session_url: str, content: bytes,
-              content_type: str) -> dict:
+              content_type: str, conflict_behavior: str = "replace",
+              force_session: bool = False) -> dict:
     """One Graph write, simple or resumable depending on size.
 
     Graph rejects a simple PUT past 4 MiB with a 413 that says nothing about chunking, so the
     large path opens an upload session instead. Shared by the mirror upload and the in-place
     replace, which differ only in the URLs they aim at.
     """
-    if len(content) <= _SP_SIMPLE_MAX:
+    if len(content) <= _SP_SIMPLE_MAX and not force_session:
         return _sp_put(token, put_url, content, content_type)
 
     import httpx
     r = httpx.post(session_url,
                    headers={"Authorization": f"Bearer {token}",
                             "Content-Type": "application/json"},
-                   json={"item": {"@microsoft.graph.conflictBehavior": "replace"}},
+                   json={"item": {"@microsoft.graph.conflictBehavior": conflict_behavior}},
                    timeout=30, follow_redirects=True)
-    if r.status_code in (401, 403):
+    if r.status_code == 401:
+        raise SharePointSessionExpired("Microsoft Graph access token expired.")
+    if r.status_code == 403:
         raise PermissionError(
             "Microsoft Graph refused to open an upload session — writing needs "
             "Files.ReadWrite.All / Sites.ReadWrite.All.")
@@ -3454,6 +3470,8 @@ def _sp_write(token: str, *, put_url: str, session_url: str, content: bytes,
         cr = httpx.put(url, headers={"Content-Length": str(end - start + 1),
                                      "Content-Range": f"bytes {start}-{end}/{total}"},
                        content=content[start:end + 1], timeout=300)
+        if cr.status_code == 401:
+            raise SharePointSessionExpired("Microsoft Graph upload session expired.")
         cr.raise_for_status()
         if cr.content:
             out = cr.json()
@@ -3542,14 +3560,15 @@ def _dedupe_names(items: list[dict]) -> list[dict]:
     out = []
     for it in items:
         name = it["name"]
+        item = {**it, "source_name": it.get("source_name") or name}
         n = seen.get(name, 0)
         seen[name] = n + 1
         if n == 0:
-            out.append(it)
+            out.append(item)
         else:
             stem, dot, ext = name.rpartition(".")
             disambiguated = f"{stem or name} ({n}){dot}{ext}" if dot else f"{name} ({n})"
-            out.append({**it, "name": disambiguated})
+            out.append({**item, "name": disambiguated})
     return out
 
 

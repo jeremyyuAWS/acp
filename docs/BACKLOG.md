@@ -9,6 +9,8 @@ under-reporting closed. The full list is in **Closed on 2026-08-09** near the fo
 read the "Still open after today" note there before approving any deploy. Phase 5 itself: P5.1
 (#214), P5.2 (#215) and P5.5 (#216) closed — each measured with a red fixture before any fix — and
 P5.3/P5.4 marked blocked on installs (LibreOffice, a mutation runner) rather than on design.
+**Both closed since, on 2026-09-06** — P5.3 in #1487 and #1513, P5.4 in #1503. The entries under
+Phase 5 below are the current state; this paragraph is the 2026-08-09 snapshot.
 
 **Synced 2026-08-09.** Six entries had gone stale in two days — Phase 0 was fully closed, P2.4,
 P2.5 and P4.8 were done, and P4.2 was half done — while the file still listed all of them as open.
@@ -110,9 +112,18 @@ Cut ahead of releasing to three pilot users. Grouped: **R1–R3 ops-blocking**, 
   file — `remediation_capability.py:148`). These are HUMAN lanes, which is the completion state.
   *(Source-verified 2026-08-24.)* **~4 legitimately N/A** (interaction SCs on static docs:
   `pptx 2.1.1/2.1.2/2.4.3`, `xlsx 2.1.2` — `ASSESSMENT_OVERRIDES`).
-- [ ] **R9 — (optional) Archive auto-fire.** Lifecycle Archive is override-only on real scans; auto-fire
-  needs backend `superseded` detection (`retentionOf`, `FileDrawer.jsx:373`). Skip unless the demo wants
-  Archive on the auto path.
+- [x] **R9 — Archive auto-fire.** Done (#1472), and it shipped stricter than filed. The item asked for
+  `retentionOf` detection; what landed refuses to move a file on that alone unless the evidence carries
+  STABLE SOURCE IDENTIFIERS, because the tempting signal — a filename pair like
+  `Clinical-Access-v2/v3.docx` — is also two unrelated documents in two unrelated libraries often
+  enough to matter. Four approved evidence types (`api/archive_evidence.py`), a content-addressed
+  policy snapshot, an idempotency key enforced by a unique index rather than by a check-then-insert,
+  and a preflight whose every check answers pass/fail/UNKNOWN with unknown routed to a human
+  (`api/archive_autofire.py`). Ships DISABLED and dry-run, so the default is unchanged
+  recommendation-only. Google Drive is deliberately out of scope and the reason is recorded in the
+  module: ACP holds no Drive read of a retention lock or legal hold, so "no hold blocks this move"
+  would be an assertion about something never looked at — and a lane that fails closed on every item
+  is worse than no lane, because it looks like it works.
 
 ### Testing / verification holes
 
@@ -700,16 +711,66 @@ argued.
   `<w:delText>` before flattening. Insertions correctly stay (ordinary `<w:t>`), and the regex
   detectors were already safe (they read `<w:t>`, never `<w:delText>`). Stance: extract as
   tracked changes ACCEPTED — insertions in, deletions out.
-- [?] **P5.3 — Word round-trip via LibreOffice.** BLOCKED on an install, not on design. LibreOffice
-  is not present on the build host (no `soffice`, no `/Applications/LibreOffice.app`), so the
-  independent round-trip cannot run here. Unblock: install LibreOffice (headless is enough), then
-  build the round-trip check. Still the cheapest external validation available — worth doing once
-  the binary is there.
-- [?] **P5.4 — Mutation testing on the detector modules.** BLOCKED on tooling. No mutation library
-  is installed in the venv (`mutmut` / `cosmic-ray` absent), and adding one plus running a campaign
-  is a dev-dependency + CI-time decision, not a quiet addition. Unblock: decide whether to vendor a
-  mutation runner and where it runs (it is slow), then point it at `office_structure` / the docx
-  detectors. The reasoning stands: F1 1.00 bounds only the fixtures we thought to write.
+- [x] **P5.3 — Word round-trip via LibreOffice.** Built (`tests/test_docx_libreoffice_roundtrip.py`).
+  The install blocker was real when filed and is not universal: LibreOffice Writer installs cleanly
+  on the Ubuntu 24.04 session image (`apt-get update` first — a stale index 404s on the .deb), and
+  the core `soffice` package alone is not enough, since without `libreoffice-writer` it cannot load
+  a .docx at all and reports that as `exit 0` with "source file could not be loaded".
+  **It runs where `soffice` exists and skips cleanly where it does not — deliberately NOT installed
+  in CI**, because several hundred megabytes and a minute or two on every PR is a budget decision
+  for whoever owns CI, not something to slip in with a test. So it guards nothing automatically
+  today; that is the honest state, and the skip reason names the package that changes it.
+  **What it is worth, measured rather than argued.** Every .docx ACP tests against was written by
+  ACP with python-docx, so the corpus shares one serialisation and a detector keying on something
+  incidental to it would pass everything here. Injecting exactly that bug — a detector firing on
+  python-docx's `version='1.0'` XML declaration — leaves the existing docx suites green
+  (53 passed across `test_docx_corpus_regression_gate`, `test_docx_detector_robustness`,
+  `test_corpus_invariants`, `test_docx_empty_heading`) and fails all 10 round-trip cases.
+  Both detector paths are compared: `office_structure.docx_checks` plus the 10 registered rules.
+  The registry was nearly left out on a measurement taken from ONE all-REVIEW fixture; swept across
+  the corpus, 1.1.1 and 2.4.4 return FAIL on three of them — and alt text surviving a
+  re-serialisation is the most valuable thing here, so it is in.
+- [x] **P5.4 — Mutation testing on the detector modules.** Done, with `mutmut`, **on demand only**
+  — the decision the item was blocked on, taken 2026-09-06. Run it with
+  `pip install mutmut && python scripts/mutation_test.py`; `--report` re-reads the last campaign
+  without re-running it. `mutmut` is deliberately absent from both requirements files (nothing ACP
+  ships imports it) and nothing in CI runs it, which
+  `test_mutation_harness.test_mutation_testing_is_not_wired_into_ci` keeps true by construction.
+
+  **The measurement, 2026-09-06, on `api/office_structure.py` graded by all 58 test modules that
+  import it: 4574 mutants, 3449 killed, 1125 survived, 0 unreached, 75.4%, 35m01s.** Read the score
+  as a floor rather than a grade — some survivors are equivalent mutants that no test could kill,
+  and there is no automatic way to tell those from real gaps. The useful output is the survivor
+  list, grouped by function, read one entry at a time. Largest groups: `docx_checks` 87,
+  `_pdf_link_has_underline` 68, `pdf_text_spacing_checks` 56, `xlsx_contrast_checks` 49,
+  `office_text_spacing_checks` 48.
+
+  **A narrow run is misleadingly quick, and that is the methodology finding.** The first campaign
+  selected only the `test_docx_*` modules and finished the same 4574 mutants in 2m35s at 32.1% —
+  but 2977 of them were never reached, and most of its survivors sat in the shared `office_*`
+  helpers that pptx and xlsx own, reached by the docx tests without being asserted by them. That
+  number measured the SELECTION, not the suite. Fast means "did not look": a campaign that returns
+  in minutes is a configuration to check, not good news. The shipped selection reaches every
+  mutant (0 unreached), which is what makes 75.4% a statement about the tests.
+
+  **The harness's own failure mode was the thing worth engineering against.** mutmut names mutants
+  after the file path (`api.office_structure`) while this repo imports the module bare
+  (`office_structure`, because `conftest` puts `api/` on `sys.path`). Unreconciled, mutmut stops
+  with "no mutant key matched" — it fails closed, which is why `mutmut_module_alias.py` is a
+  bookkeeping correction rather than a way past a warning. Had it reported every mutant killed
+  instead, the campaign would have read as a clean bill of health for a suite it never measured.
+  The alias registers ONE module object under both names, so the existing tests are unchanged:
+  mutation testing has to grade the real suite, not a rewritten one.
+
+  Three configuration traps are guarded in `tests/test_mutation_harness.py` (9 tests, milliseconds,
+  safe in CI because the expensive part is not there): a mutated-but-unaliased module silently
+  dropping out of the score, a test selection naming a deleted file (which makes the score go UP),
+  and `also_copy` losing a directory the suite needs. That last one is the loud failure — it cost
+  three runs to discover `config/`, `scripts/` and `engine/` one at a time, each by a campaign that
+  refused to score rather than grading whatever survived collection.
+
+  The original reasoning stands and is now quantified: F1 1.00 bounds only the fixtures we thought
+  to write, and 1125 survivors is the size of that bound on this module.
 - [x] **P5.5 — v2 capability table synced to the backend, and guarded.** Done (#216), and it was
   bigger than filed. The item said "no docx 4.1.2 row"; measuring found FIVE drifted cells —
   docx 1.4.1/1.4.11/2.1.2/4.1.2 missing on both axes, and xlsx 3.1.2 carrying a WRONG value
@@ -757,8 +818,10 @@ argued.
 - [x] **Phase 5 — silent under-reporting closed (#214, #215, #216).** Link purpose is now judged
   in headers, footers and notes rather than the body alone (#214); tracked deletions no longer
   leak into extracted text (#215); the v2 capability table is synced to the backend and guarded so
-  it stays synced (#216). Each was measured with a red fixture first. P5.3/P5.4 remain blocked on
-  installs (LibreOffice, a mutation runner), not on design.
+  it stays synced (#216). Each was measured with a red fixture first. P5.3/P5.4 were blocked on
+  installs (LibreOffice, a mutation runner), not on design, when this entry was written — **both
+  closed on 2026-09-06** (P5.3 #1487 and #1513, P5.4 #1503), which completes Phase 5. Read the
+  Phase 5 entries above for the current state, not this line.
 - [x] **Security & privacy (#209, #210, #213).** A non-owner could be redirected to another user's
   remediated document (#209); a reviewer's note left as text rather than a length (#210); a
   filename that names a patient now travels as a label, not the name (#213).

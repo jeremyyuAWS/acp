@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { createElement } from 'react'
+import { act, createElement } from 'react'
+import { createRoot } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import RemediationOpsPanel from './RemediationOpsPanel.jsx'
-import { freshness, partitionSums, headline, isNewer, counterRows, secondaryRows }
+import { freshness, integrityAffects, partitionSums, headline, isNewer, counterRows, secondaryRows }
   from './remediationSnapshot.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -53,6 +54,7 @@ describe('the panel renders the server snapshot and never assembles its own', ()
     const html = render({ snapshot: SNAP, connected: true, receivedAt: Date.now() })
     expect(html).toContain('Remediation in progress')
     expect(html).toContain('Applying approved fixes')
+    expect(html).toContain('Scope ready · 10 documents in scope')
     expect(html).toContain('10 documents in scope')
     for (const label of ['Completed', 'Processing', 'Waiting', 'Review', 'Failed', 'Skipped']) {
       expect(html).toContain(label)
@@ -137,9 +139,9 @@ describe('unknown and inconsistent are shown as themselves, never as zero or hea
                    violations: [{ invariant: 'verified_within_applied', metric: 'fixes',
                                   detail: '30 verified fixes against 26 applied' }] } }
     const html = render({ snapshot: broken, connected: true, receivedAt: Date.now() })
-    expect(html).toContain('Status temporarily inconsistent')
+    expect(html).toContain('Some supporting totals are catching up')
     expect(html).toContain('fixes')
-    expect(html).toContain('last ACP confirmed')
+    expect(html).toContain('Live document progress remains available')
     expect(html).toContain('26')          // the measured value survives the violation
   })
 
@@ -176,10 +178,16 @@ describe('freshness is the transport\'s answer, not an inference from the number
                        receivedAt: now, now }).level).toBe('stalled')
   })
 
-  it('is unknown — never zero, never healthy — with no snapshot or an unreconciled one', () => {
+  it('is unknown with no snapshot or when freshness itself cannot be reconciled', () => {
     expect(freshness({ snapshot: null, connected: true, now }).level).toBe('unknown')
-    expect(freshness({ snapshot: { ...SNAP, integrity: { ok: false, violations: [], affected: [] } },
+    expect(freshness({ snapshot: { ...SNAP, integrity: { ok: false, violations: [], affected: ['freshness'] } },
                        connected: true, receivedAt: now, now }).level).toBe('unknown')
+  })
+
+  it('keeps transport live when only supporting fix totals are catching up', () => {
+    const snapshot = { ...SNAP, integrity: { ok: false, violations: [], affected: ['fixes'] } }
+    expect(integrityAffects(snapshot, 'documents')).toBe(false)
+    expect(freshness({ snapshot, connected: true, receivedAt: now, now }).level).toBe('live')
   })
 })
 
@@ -343,6 +351,45 @@ describe('the v2 live operations hierarchy', () => {
     expect(html).toContain('4 fixes applied')
   })
 
+  it('turns delayed progress into an actionable cue without declaring a stall early', () => {
+    const snapshot = { ...SNAP, progress: { material_age_s: 316, lease_healthy: true },
+      thresholds: { delayed_after_s: 60, stall_after_s: 900 } }
+    const html = render({ snapshot, connected: true, receivedAt: Date.now(), onViewMonitor: () => {} })
+    expect(html).toContain('checkpoint delayed')
+    expect(html).toContain('No durable progress for 5m 16s')
+    expect(html).toContain('Check Live Operations')
+    expect(html).not.toContain('No durable progress is being recorded')
+  })
+
+  it('does not warn after one minute while current worker leases prove healthy work', () => {
+    const snapshot = { ...SNAP, progress: { material_age_s: 116, lease_healthy: true },
+      thresholds: { delayed_after_s: 60, stall_after_s: 900 } }
+    const html = render({ snapshot, connected: true, receivedAt: Date.now() })
+    expect(html).not.toContain('checkpoint delayed')
+  })
+
+  it('gives a stalled run a direct worker and retry action', () => {
+    const snapshot = { ...SNAP, state: 'stalled', progress: { material_age_s: 901 } }
+    const html = render({ snapshot, connected: true, receivedAt: Date.now(), onViewMonitor: () => {} })
+    expect(html).toContain('No durable progress is being recorded')
+    expect(html).toContain('Inspect workers and retries')
+  })
+
+  it('explains an empty throughput graph while documents are active', () => {
+    const html = render({ snapshot: { ...SNAP, throughput: null }, connected: true,
+      receivedAt: Date.now() })
+    expect(html).toContain('No document was processed in the last five minutes')
+    expect(html).toContain('2 are actively processing')
+  })
+
+  it('labels a reclaimed worker execution as resumed rather than a processing failure', () => {
+    const snapshot = { ...SNAP, active_attempts: [
+      { file: 'large.pdf', phase: 'verifying', attempt: 2, elapsed_s: 30 },
+    ] }
+    const html = render({ snapshot, connected: true, receivedAt: Date.now() })
+    expect(html).toContain('resumed attempt 2')
+  })
+
   it('renders reconciled progress before pipeline, active work, throughput, activity, and exceptions', () => {
     const html = render({ snapshot: { ...SNAP, active_attempts: [
       { file: 'guide.docx', phase: 're-verifying', elapsed_s: 8, attempt: 1 },
@@ -350,7 +397,7 @@ describe('the v2 live operations hierarchy', () => {
       { key: '17', kind: 'remediate.delivered', tone: 'success',
         occurredAt: '2026-09-05T12:00:00Z', line: 'Corrected copy delivered for guide.docx' },
     ] })
-    const labels = ['documents complete', 'Active document pipeline', 'In flight now',
+    const labels = ['documents processed', 'Active document pipeline', 'In flight now',
       'Throughput', 'Live activity', 'Needs attention']
     const positions = labels.map((label) => html.indexOf(label))
     expect(positions.every((position) => position >= 0)).toBe(true)
@@ -375,5 +422,70 @@ describe('the v2 live operations hierarchy', () => {
       const cell = html.slice(html.indexOf('>', open) + 1, html.indexOf('</dd>', open))
       expect(cell).not.toContain('livecounter')
     }
+  })
+
+  it('keeps the essentials visible and collapses secondary detail on narrow screens', () => {
+    const attempts = Array.from({ length: 4 }, (_, index) => ({
+      file: `long-document-name-${index}.docx`, phase: 'applying', attempt: 1, elapsed_s: 10,
+    }))
+    const html = render({ snapshot: { ...SNAP, active_attempts: attempts }, connected: true,
+      receivedAt: Date.now(), compactLayout: true })
+    expect(html).toContain('5 of 10 documents processed')
+    expect(html).toContain('Throughput')
+    for (const title of ['Phases', 'Fix and delivery totals', 'Live activity', 'Needs attention']) {
+      expect(html).toContain(`<summary>${title}</summary>`)
+    }
+    expect(html).not.toContain('<details class="remops-disclosure remops-disclosure-compact" open="">')
+    const work = html.slice(html.indexOf('In flight now'), html.indexOf('</ul>', html.indexOf('In flight now')))
+    expect(work).toContain('long-document-name-0.docx')
+    expect(work).toContain('long-document-name-1.docx')
+    expect(work).not.toContain('long-document-name-2.docx')
+    expect(html).toContain('and 2 more documents in flight')
+  })
+
+  it('advances run completeness when work finishes without an eligible automatic fix', () => {
+    const noFixesYet = {
+      ...SNAP,
+      documents: { completed: 0, processing: 10, waiting: 149, review: 0, failed: 0, skipped: 0 },
+      total_documents: 159,
+    }
+    const fourInspected = {
+      ...noFixesYet,
+      documents: { completed: 0, processing: 10, waiting: 145, review: 0, failed: 0, skipped: 4 },
+    }
+    expect(render({ snapshot: noFixesYet })).toContain('0 of 159 documents processed')
+    expect(render({ snapshot: fourInspected })).toContain('4 of 159 documents processed')
+    // The outcome remains explicit; "processed" must not relabel a no-fix document as corrected.
+    expect(render({ snapshot: fourInspected })).toContain('data-testid="rem-count-completed"')
+    expect(render({ snapshot: fourInspected })).toContain('data-testid="rem-count-skipped"')
+  })
+
+  it('keeps compact disclosure choices through live snapshot updates', async () => {
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    const props = { connected: true, receivedAt: Date.now(), compactLayout: true }
+    await act(async () => { root.render(createElement(RemediationOpsPanel, { ...props, snapshot: SNAP })) })
+    const phases = [...host.querySelectorAll('details')]
+      .find((details) => details.querySelector('summary')?.textContent === 'Phases')
+    expect(phases.open).toBe(false)
+    await act(async () => {
+      phases.open = true
+      phases.dispatchEvent(new Event('toggle'))
+    })
+    await act(async () => { root.render(createElement(RemediationOpsPanel, {
+      ...props, snapshot: { ...SNAP, revision: SNAP.revision + 1,
+        documents: { ...SNAP.documents, completed: 5, waiting: 2 } },
+    })) })
+    expect(phases.open).toBe(true)
+    await act(async () => { root.unmount() })
+    host.remove()
+  })
+
+  it('leaves every disclosure open on wider layouts and wraps compact filenames', () => {
+    const html = render({ snapshot: SNAP, connected: true, receivedAt: Date.now(), compactLayout: false })
+    expect(html.match(/<details class="remops-disclosure" open="">/g)).toHaveLength(4)
+    const css = readFileSync(join(here, 'remediation-live-detail.css'), 'utf8')
+    expect(css).toContain('.remops-work .fname{overflow-wrap:anywhere;word-break:break-word}')
   })
 })

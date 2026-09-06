@@ -75,6 +75,13 @@ lxml==6.1.1
 # from the base image (see deploy/public/Dockerfile.base-api) — a pure `pip install` is not enough.
 weasyprint==69.0
 reportlab==4.5.1
+
+# --- ACR Word export (PRD §16 Phase 5 groundwork) ---
+# Moved here from tests/requirements.txt, where it had been test-only: api/acr_export_docx.py
+# imports it at runtime, so leaving it undeclared would give a deployment that 503s on the Word
+# export forever while every test passed. Pure Python — no system libraries, unlike weasyprint —
+# so declaring it is enough to make the lane available.
+python-docx==1.2.0
 Jinja2>=3.1,<4          # HTML→PDF report template (report_tagged.py)
 segno>=1.6  # pure-Python QR code generation (R15 verify-this-report)
 

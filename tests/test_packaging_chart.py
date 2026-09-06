@@ -317,6 +317,37 @@ def test_the_queue_lanes_match_the_application():
     assert LANE_JOB_TYPES["remediate"] == core.REMEDIATE_LANE_JOB_TYPES
 
 
+def test_the_production_autoscaler_counts_every_remediate_job_type():
+    """The THIRD copy of the remediate lane list, and until now the unguarded one.
+
+    `deploy/public/rightsize-production.sh` hands KEDA a literal SQL query — `type IN (...)` — as
+    the remediate tier's queue-depth metric. A job type missing from it is invisible to the
+    scaler: the jobs queue, the depth the scaler reads stays at zero, and the tier sits at its
+    floor while the backlog grows. The acpctl copy above already carries a comment about exactly
+    this failure ("autoscaling silently does not happen") and the guard next to it covers only
+    acpctl; adding `deliver_corrected_copy` to core and to acpctl left the scaler counting four
+    types out of five, which is how this test came to exist.
+
+    Parsed rather than eyeballed, because the whole point is that nobody reads a shell script
+    when they add a handler.
+    """
+    import re
+    import sys
+    root = Path(__file__).resolve().parent.parent
+    if str(root / "api") not in sys.path:
+        sys.path.insert(0, str(root / "api"))
+    import core
+
+    script = (root / "deploy/public/rightsize-production.sh").read_text()
+    match = re.search(r"type IN \(([^)]*)\)", script)
+    assert match, "the remediate autoscale rule no longer contains a `type IN (...)` predicate"
+    counted = tuple(value.strip().strip("'") for value in match.group(1).split(","))
+    assert set(counted) == set(core.REMEDIATE_LANE_JOB_TYPES), (
+        f"the production autoscaler counts {sorted(counted)} but the remediate lane owns "
+        f"{sorted(core.REMEDIATE_LANE_JOB_TYPES)}. A type the scaler does not count cannot "
+        f"cause the tier to scale up for it.")
+
+
 def test_every_lane_job_type_is_a_real_handler():
     """A typo in a job type is a scaler that counts zero jobs forever — so the tier never scales
     up and nothing anywhere reports why. Checked against the handler registry rather than against

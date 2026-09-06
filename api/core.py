@@ -1590,7 +1590,15 @@ ASSESS_LANE_JOB_TYPES = (
     "scan", "scan_assess", "scan_batch", "scan_file", "workspace_scan_file",
     "workspace_scan_discover", "scan_finalize", "assess_trace",
 )
-REMEDIATE_LANE_JOB_TYPES = ("remediate_file", "rescore_file", "apply_approved_values")
+# `deliver_corrected_copy` is a Remediate-lane job even though it opens no document and applies no
+# fix: it finishes the work `remediate_file` started, on the same run, against the same provider
+# grant, and it is the retry an operator reaches for when that job's provider write failed. Putting
+# it anywhere else would let a Remediate backlog and its own recovery queue behind different
+# capacity — the exact cross-lane stall these disjoint tuples exist to prevent.
+REMEDIATE_LANE_JOB_TYPES = (
+    "remediate_file", "deliver_corrected_copy", "rescore_file", "apply_approved_values",
+    "publish_file",
+)
 
 
 def _replica_id() -> str:
@@ -1783,12 +1791,14 @@ def _get_redis():
 
 
 def register_scan_tokens(scan_id: str, *, drive: str | None = None, sp: str | None = None) -> None:
-    toks = {}
+    # Refreshing one provider must not erase the other provider's still-live credential. This
+    # matters now that the SharePoint keep-alive updates a completed scan throughout Release.
+    toks = dict(get_scan_tokens(scan_id))
     if drive:
         toks["drive"] = drive
     if sp:
         toks["sp"] = sp
-    if not toks:
+    if not (drive or sp):
         return
     r = _get_redis()
     if r is not None:

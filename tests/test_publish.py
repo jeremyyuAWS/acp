@@ -192,24 +192,37 @@ def test_sharepoint_child_lookup_follows_nextlink_before_deciding_name_is_free(m
     ]
 
 
-def test_sharepoint_release_root_collision_on_later_page_gets_stable_suffix(monkeypatch):
+def test_sharepoint_folder_reuse_follows_every_page_and_does_not_create(monkeypatch):
+    import httpx
+    import scanner
+    pages = {
+        "https://graph/items/parent/children?$select=id,name,folder&$top=200": {
+            "value": [{"id": str(i), "name": f"folder-{i}", "folder": {}} for i in range(200)],
+            "@odata.nextLink": "https://graph/folders-page-2",
+        },
+        "https://graph/folders-page-2": {
+            "value": [{"id": "winner", "name": "Policies", "folder": {}}]
+        },
+    }
+    monkeypatch.setattr(scanner, "_sp_base", lambda drive: "https://graph")
+    monkeypatch.setattr(scanner, "_sp_get", lambda token, url: pages[url])
+    monkeypatch.setattr(httpx, "post",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not create")))
+
+    assert publish._sp_ensure_folder("token", "drive", "parent", "Policies") == "winner"
+
+
+def test_sharepoint_release_root_reuses_its_durably_claimed_name(monkeypatch):
     import scanner
     folder_calls = []
-    monkeypatch.setattr(scanner, "_sp_folder_id",
-                        lambda token, drive, name, parent_id="":
+    monkeypatch.setattr(publish, "_sp_ensure_folder",
+                        lambda token, drive, parent_id, name:
                         folder_calls.append((name, parent_id)) or
                         ("root" if not parent_id else "release-folder"))
     monkeypatch.setattr(scanner, "_sp_base", lambda drive: "https://graph")
     pages = {
-        "https://graph/items/root/children?$select=id,name,folder,webUrl&$top=200": {
-            "value": [{"id": str(i), "name": f"older-{i}", "folder": {}} for i in range(200)],
-            "@odata.nextLink": "https://graph/roots-page-2",
-        },
-        "https://graph/roots-page-2": {
-            "value": [{"id": "same-minute", "name": "2026-09-05 10-00 UTC", "folder": {}}]
-        },
         "https://graph/items/release-folder?$select=id,name,webUrl": {
-            "id": "release-folder", "name": "2026-09-05 10-00 UTC · abcdef12",
+            "id": "release-folder", "name": "2026-09-05 10-00 UTC",
             "webUrl": "https://sp/release",
         },
     }
@@ -218,7 +231,7 @@ def test_sharepoint_release_root_collision_on_later_page_gets_stable_suffix(monk
     result = publish.ensure_sharepoint_release_folder(
         "token", "drive", "abcdef123456", "2026-09-05 10-00 UTC")
 
-    assert folder_calls[-1] == ("2026-09-05 10-00 UTC · abcdef12", "root")
+    assert folder_calls[-1] == ("2026-09-05 10-00 UTC", "root")
     assert result["id"] == "release-folder"
 
 
@@ -232,7 +245,7 @@ def test_sharepoint_publish_reuses_identical_copy_without_writing(monkeypatch):
     monkeypatch.setattr(publish, "_sp_content_matches",
                         lambda token, drive, item, expected: expected == digest)
     import scanner
-    monkeypatch.setattr(scanner, "_sp_folder_id", lambda *a, **k: "unused")
+    monkeypatch.setattr(publish, "_sp_ensure_folder", lambda *a, **k: "unused")
     monkeypatch.setattr(scanner, "_sp_write",
                         lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not write")))
 
@@ -256,8 +269,8 @@ def test_sharepoint_publish_preserves_hierarchy_and_never_overwrites_collision(m
                         lambda token, drive, item, expected: item == "uploaded")
     import scanner
     folders = []
-    monkeypatch.setattr(scanner, "_sp_folder_id",
-                        lambda token, drive, name, parent_id=None:
+    monkeypatch.setattr(publish, "_sp_ensure_folder",
+                        lambda token, drive, parent_id, name:
                         folders.append((parent_id, name)) or f"folder-{name}")
     monkeypatch.setattr(scanner, "_sp_base", lambda drive: "https://graph/drive")
     writes = []
@@ -274,3 +287,52 @@ def test_sharepoint_publish_preserves_hierarchy_and_never_overwrites_collision(m
     assert result["created"] is True
     assert result["filename"].startswith("report (")
     assert writes[0]["put_url"].endswith(f"/{result['filename'].replace(' ', '%20').replace('(', '%28').replace(')', '%29')}:/content")
+    assert writes[0]["conflict_behavior"] == "fail"
+    assert writes[0]["force_session"] is True
+
+
+def test_sharepoint_publish_uses_original_name_but_internal_blob_identity(monkeypatch):
+    downloaded = []
+    monkeypatch.setattr(publish._blob, "download_remediated",
+                        lambda owner, scan, name: downloaded.append(name) or b"corrected")
+    monkeypatch.setattr(publish, "_sp_child", lambda *a, **k: None)
+    monkeypatch.setattr(publish, "_sp_content_matches", lambda *a, **k: True)
+    monkeypatch.setattr(publish, "_sp_ensure_folder", lambda *a, **k: "parent")
+    import scanner
+    monkeypatch.setattr(scanner, "_sp_base", lambda drive: "https://graph/drive")
+    writes = []
+    monkeypatch.setattr(scanner, "_sp_write",
+                        lambda token, **kwargs: writes.append(kwargs) or
+                        {"id": "created", "webUrl": "https://sp/created"})
+
+    result = publish.archive_copy_publish_sharepoint(
+        "token", "drive", "release", "owner", "rel", "scan", "report (1).pdf",
+        "/drives/drive/root:/Legal", "source-2", source_filename="report.pdf")
+
+    assert downloaded == ["report (1).pdf"]
+    assert writes[0]["put_url"].endswith("/report.pdf:/content")
+    assert result["filename"] == "report.pdf"
+
+
+def test_sharepoint_publish_uses_atomic_fail_on_conflict_even_for_small_files(monkeypatch):
+    """The child lookup is advisory. A sibling can appear after it, so a path PUT must never
+    silently replace that new file; every release copy uses Graph's atomic session contract."""
+    monkeypatch.setattr(publish._blob, "download_remediated", lambda *a, **k: b"small")
+    monkeypatch.setattr(publish, "_sp_child", lambda *a, **k: None)
+    monkeypatch.setattr(publish, "_sp_content_matches", lambda *a, **k: True)
+    monkeypatch.setattr(publish, "_sp_ensure_folder", lambda *a, **k: "parent")
+    import scanner
+    monkeypatch.setattr(scanner, "_sp_base", lambda drive: "https://graph/drive")
+    seen = {}
+
+    def write(token, **kwargs):
+        seen.update(kwargs)
+        return {"id": "created", "webUrl": "https://sp/created"}
+
+    monkeypatch.setattr(scanner, "_sp_write", write)
+    publish.archive_copy_publish_sharepoint(
+        "token", "drive", "release", "owner", "rel", "scan", "report.pdf",
+        None, "source")
+
+    assert seen["conflict_behavior"] == "fail"
+    assert seen["force_session"] is True

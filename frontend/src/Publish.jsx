@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import ScopeBanner from './ScopeBanner.jsx'
 import { documentSelection, documentScopeSentence } from './remediableScope.js'
 import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
-import { openReport, publishFile, publishAllFiles, getReleaseStatus, listHitlQueue, getSettings, getSourceStatus, rescoreFile } from './api.js'
+import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseManifest, listHitlQueue, getSettings, getSourceStatus, rescoreFile } from './api.js'
 import { releaseDestination, releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
 import { SET_STATUS, certificationUniverse, releaseSetStatus } from './graduation.js'
 import { mirrorState, MIRROR } from './deliveryPolicy.js'
@@ -26,9 +26,11 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [done, setDone] = useState({})
   const [pubUrls, setPubUrls] = useState({})   // file -> published Drive URL, from POST /publish
   const [releaseFolder, setReleaseFolder] = useState(null)
+  const [releaseId, setReleaseId] = useState(null)
   const [releaseFolders, setReleaseFolders] = useState([])
   const [releaseResults, setReleaseResults] = useState({})
   const [releaseAnnouncement, setReleaseAnnouncement] = useState('')
+  const [manifestError, setManifestError] = useState('')
   const [publishing, setPublishing] = useState(false)
   const [sel, setSel] = useState(null)
   // Why is the publish queue empty? A remediated file only becomes certifiable once its
@@ -102,6 +104,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     ? me.email.split('@')[1]?.replace(/\.[^.]+$/, '') || me.name || 'your organisation'
     : me?.name || 'your organisation'
   const rememberRelease = (res, expectedFiles = []) => {
+    if (res?.release_id) setReleaseId(res.release_id)
     const roots = res?.release_folders || res?.roots || []
     const mappedRoots = roots.map((root) => ({
       id: root.folder_id || root.id, name: root.folder_name || root.name,
@@ -134,26 +137,48 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           .map((row) => [row.file, row.published_url])),
       }))
     }
-    setReleaseAnnouncement(`${successful.length} corrected ${successful.length === 1 ? 'copy' : 'copies'} released${rows.length - successful.length ? `; ${rows.length - successful.length} need attention` : ''}.`)
+    const failed = rows.filter((row) => row.status === 'failed').length
+    const inFlight = rows.filter((row) => row.status === 'queued' || row.status === 'running').length
+    setReleaseAnnouncement(inFlight
+      ? `${inFlight} corrected ${inFlight === 1 ? 'copy is' : 'copies are'} being released.`
+      : `${successful.length} corrected ${successful.length === 1 ? 'copy' : 'copies'} released${failed ? `; ${failed} need attention` : ''}.`)
     return successful
+  }
+  const applyReleaseStatus = (status) => rememberRelease({
+    ...status, release_folders: status.roots,
+    published: (status.documents || []).map((row) => ({
+      file: row.file, status: row.status,
+      original_relative_path: row.source_relative_path,
+      released_relative_path: row.destination_relative_path,
+      released_document_id: row.released_document_id,
+      published_url: row.released_document_url,
+      corrected_checksum: row.corrected_checksum,
+      verification: row.verification, published_at: row.published_at,
+      created: !!row.created_result,
+      failure_category: row.failure_category, explanation: row.explanation,
+    })),
+  })
+  const followSharePointRelease = async (expectedFiles) => {
+    // The backend queues one durable job per SharePoint document. Follow the persisted release,
+    // not the originating request: navigation, a worker restart, or a replica change cannot erase
+    // progress. The normal load effect below restores the same state after a page reload.
+    for (let attempt = 0; attempt < 180; attempt += 1) {
+      const status = await getReleaseStatus(run.id)
+      applyReleaseStatus(status)
+      const rows = status?.documents || []
+      const pending = rows.some((row) => row.status === 'queued' || row.status === 'running')
+      if (!pending && rows.length >= expectedFiles.length) return status
+      await new Promise((resolve) => setTimeout(resolve, 2000))
+    }
+    setReleaseAnnouncement('Release is still running safely in the background. You may leave this page and return later.')
+    return null
   }
   useEffect(() => {
     let live = true
     if (!run?.id) return undefined
     getReleaseStatus(run.id).then((status) => {
       if (!live || !status?.release_id) return
-      rememberRelease({ ...status, release_folders: status.roots,
-        published: (status.documents || []).map((row) => ({
-          file: row.file, status: row.status,
-          original_relative_path: row.source_relative_path,
-          released_relative_path: row.destination_relative_path,
-          released_document_id: row.released_document_id,
-          published_url: row.released_document_url,
-          corrected_checksum: row.corrected_checksum,
-          verification: row.verification, published_at: row.published_at,
-          created: !!row.created_result,
-          failure_category: row.failure_category, explanation: row.explanation,
-        })) })
+      applyReleaseStatus(status)
     }).catch(() => {})
     return () => { live = false }
     // Release state is durable; reload it when the selected scan changes.
@@ -164,6 +189,12 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     try {
       const res = await publishFile(run?.id, file)
       const successful = rememberRelease(res, [file])
+      if (releaseProvider === 'sharepoint' && res?.queued) {
+        const status = await followSharePointRelease([file])
+        const completed = (status?.documents || []).find((row) => row.file === file && row.status === 'published')
+        if (completed) onPublish?.(file)
+        return
+      }
       if (successful.some((row) => row.file === file)) onPublish?.(file)
     } catch { setReleaseAnnouncement('Release failed. The original file is unchanged; retry when the connection is available.') }
   }
@@ -174,6 +205,13 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     try {
       const res = await publishAllFiles(run?.id, pending)
       const successful = rememberRelease(res, pending)
+      if (releaseProvider === 'sharepoint' && res?.queued) {
+        const status = await followSharePointRelease(pending)
+        ;(status?.documents || []).filter((row) => row.status === 'published')
+          .forEach((row) => onPublish?.(row.file))
+        setPublishing(false)
+        return
+      }
       successful.forEach((row) => onPublish?.(row.file))
     } catch { /* best-effort */ }
     setPublishing(false)
@@ -193,6 +231,13 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     try {
       const res = await publishAllFiles(run?.id, targets)
       const successful = rememberRelease(res, targets)
+      if (releaseProvider === 'sharepoint' && res?.queued) {
+        const status = await followSharePointRelease(targets)
+        ;(status?.documents || []).filter((row) => row.status === 'published')
+          .forEach((row) => onPublish?.(row.file))
+        setPublishing(false)
+        return
+      }
       successful.forEach((row) => onPublish?.(row.file))
     } catch { /* best-effort — local state still updates */ }
     setPublishing(false)
@@ -225,13 +270,17 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   }, {})
   const selectedResult = sel ? releaseResults[sel.file] : null
   const failedCount = Object.values(releaseResults).filter((row) => row.status === 'failed').length
-  const downloadReleaseManifest = () => {
-    const payload = { release_id: run?.id, release_folder: releaseFolder,
-      original_files_unchanged: true, documents: Object.values(releaseResults) }
-    const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }))
-    const link = document.createElement('a')
-    link.href = url; link.download = `acp-release-${run?.id || 'manifest'}.json`; link.click()
-    URL.revokeObjectURL(url)
+  const downloadReleaseManifest = async () => {
+    setManifestError('')
+    try {
+      const payload = await getReleaseManifest(run.id)
+      const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }))
+      const link = document.createElement('a')
+      link.href = url; link.download = `acp-release-${run?.id || 'manifest'}.json`; link.click()
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      setManifestError(e?.message || 'The release manifest could not be downloaded.')
+    }
   }
 
   return (
@@ -410,7 +459,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                   <dt>Destination path</dt><dd>{selectedResult?.released_relative_path || `Remediated / ${releaseFolder?.name || '<release timestamp>'} / ${sourcePath(sel)}`}</dd>
                   <dt>Verification</dt><dd>{selectedResult?.verification || 'Pending release'}</dd>
                 </dl>
-                {selectedResult?.status === 'failed' && <div role="alert" style={{ marginTop: 14, color: 'var(--danger-fg)' }}><b>Needs attention:</b> {selectedResult.explanation}</div>}
+                {selectedResult?.status === 'failed' && <div role="alert" style={{ marginTop: 14, color: 'var(--error-fg-strong)' }}><b>Needs attention:</b> {selectedResult.explanation}</div>}
                 {selectedResult?.published_url && <a href={selectedResult.published_url} target="_blank" rel="noopener noreferrer" aria-label={`Open released document ${sel.file}`}>Open released document ↗</a>}
                 <details style={{ marginTop: 16 }}><summary>Audit history</summary><p className="muted">{selectedResult?.published_at ? `Released ${new Date(selectedResult.published_at).toLocaleString()} · ${selectedResult.created ? 'created' : 'reused'}` : 'No release event yet.'}</p></details>
               </> : <p className="muted">Select a document to see its original path, destination, verification, and audit history.</p>}
@@ -421,6 +470,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           <div style={{ marginTop: 14 }}>
             {Object.keys(done).length === ready.length && ready.length > 0 && <div className="okline" style={{ marginBottom: 10 }}><b>{ready.length} corrected {ready.length === 1 ? 'copy' : 'copies'} released</b>{releaseFolder?.url && <> · <a href={releaseFolder.url} target="_blank" rel="noopener noreferrer">Open release folder ↗</a></>}</div>}
             <button className="ghost small" onClick={downloadReleaseManifest}>Download release manifest</button>
+            {manifestError && <div role="alert" style={{ color: 'var(--error-fg-strong)', marginTop: 8 }}>{manifestError}</div>}
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 6 }}>📋 Audit trail · {publishedEntries.length} released</div>
             {publishedEntries.slice(0, 8).map((e) => (
               <div key={e.file} style={{ fontSize: 12.5, padding: '5px 0', borderBottom: '1px solid var(--line)' }}>

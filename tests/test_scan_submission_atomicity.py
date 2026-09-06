@@ -54,8 +54,9 @@ def gated_client(monkeypatch, isolated_store):
     return as_user
 
 
-def _start_queued(client_fn, owner, source="local", headers=None):
-    r = client_fn(owner).post(f"/scans?source={source}&queue=true&fanout=true",
+def _start_queued(client_fn, owner, source="local", headers=None, *, replace=False):
+    r = client_fn(owner).post(f"/scans?source={source}&queue=true&fanout=true"
+                              f"&replace_active={'true' if replace else 'false'}",
                               headers=headers or {})
     assert r.status_code == 200, r.text
     return r.json()["scan_id"]
@@ -85,7 +86,8 @@ def test_a_failed_submission_leaves_the_running_scan_alone(gated_client, isolate
     monkeypatch.setattr(isolated_store, "enqueue_scan", _exhausted)
 
     before = {r["id"] for r in isolated_store.list_scans_including_discovered(owner=OWNER)}
-    r = gated_client(OWNER).post("/scans?source=local&queue=true&fanout=true")
+    r = gated_client(OWNER).post(
+        "/scans?source=local&queue=true&fanout=true&replace_active=true")
 
     # #1045's handler turns PoolError into this contract, and this PR's ordering fix is what
     # makes the OUTCOME below true: the caller's running scan survives a rejected submission.
@@ -114,7 +116,7 @@ def test_the_guard_still_supersedes_on_the_success_path(gated_client, isolated_s
     s1 = _start_queued(gated_client, OWNER)
     _mark_running(isolated_store, s1, OWNER)
 
-    s2 = _start_queued(gated_client, OWNER)
+    s2 = _start_queued(gated_client, OWNER, replace=True)
 
     assert s2 != s1
     assert isolated_store.get_scan(s1, owner=OWNER)["run"]["status"] == "superseded"
@@ -154,7 +156,8 @@ def test_a_failure_to_stop_the_prior_run_does_not_fail_an_accepted_scan(gated_cl
 
     monkeypatch.setattr(isolated_store, "supersede_scan", _exhausted)
 
-    r = gated_client(OWNER).post("/scans?source=local&queue=true&fanout=true")
+    r = gated_client(OWNER).post(
+        "/scans?source=local&queue=true&fanout=true&replace_active=true")
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["queued"] is True and body["scan_id"] and body["job_id"]

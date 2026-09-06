@@ -27,3 +27,19 @@ export function pickDefaultScan(scans, { ratio = COLLAPSE_RATIO, window = COLLAP
   if (!aboveFloor.length) return scans[0]
   return aboveFloor.find((s) => s.published_at) || aboveFloor[0]
 }
+
+/**
+ * Explain the otherwise surprising case where the raw newest scan is not the workspace default.
+ * Returns null for ordinary history replay and published-scan preference; this notice is only for
+ * a newest run whose file population is below the same collapse threshold used by both pickers.
+ */
+export function narrowScanDefaultContext(scans, selectedId,
+  { ratio = COLLAPSE_RATIO, window = COLLAPSE_WINDOW } = {}) {
+  if (!Array.isArray(scans) || scans.length < 2 || !selectedId) return null
+  const recent = scans.slice(0, window)
+  const newest = recent[0]
+  const selected = recent.find((scan) => scan?.id === selectedId)
+  const biggest = Math.max(...recent.map(_files))
+  if (!selected || newest?.id === selectedId || !biggest || _files(newest) >= biggest * ratio) return null
+  return { newest, selected, newestFiles: _files(newest), referenceFiles: biggest }
+}

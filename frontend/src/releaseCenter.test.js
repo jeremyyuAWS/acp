@@ -72,4 +72,12 @@ describe('Release Center: confirmation before a release', () => {
     expect(s).toMatch(/aria-live="polite"/)
     expect(s).toMatch(/<details[^>]*><summary>Audit history/)
   })
+
+  it('follows durable SharePoint jobs instead of treating submission as completion', () => {
+    const s = pub()
+    expect(s).toMatch(/releaseProvider === 'sharepoint' && res\?\.queued/)
+    expect(s).toMatch(/await getReleaseStatus\(run\.id\)/)
+    expect(s).toMatch(/row\.status === 'queued' \|\| row\.status === 'running'/)
+    expect(s).toMatch(/still running safely in the background/)
+  })
 })

@@ -24,9 +24,8 @@ describe('scan superseding — background poll + banner differentiation', () => 
     expect(app).toMatch(/useState\(false\)[\s\S]{0,80}explicitTimeTravel|explicitTimeTravel[\s\S]{0,80}useState\(false\)/)
   })
 
-  it('switchScan sets explicitTimeTravel based on whether the chosen scan is the latest', () => {
-    // The logic: going to scanList[0] is "forward" (false); picking any older id is "back" (true).
-    expect(app).toMatch(/setExplicitTimeTravel\(scanList\.length > 0 && id !== scanList\[0\]\.id\)/)
+  it('switchScan sets explicitTimeTravel against the protected workspace default', () => {
+    expect(app).toMatch(/setExplicitTimeTravel\(scanList\.length > 0 && id !== pickDefaultScan\(scanList\)\?\.id\)/)
   })
 
   it('background poll uses setInterval to refresh listScans while idle', () => {
@@ -48,6 +47,14 @@ describe('scan superseding — background poll + banner differentiation', () => 
 
   it('the "new scan available" banner text appears when !explicitTimeTravel', () => {
     expect(app).toContain('New scan available')
+  })
+
+  it('explains when a narrow scan is preserved without replacing the workspace default', () => {
+    expect(app).toContain('Narrow scan saved without replacing your workspace')
+    expect(app).toContain('Both remain in Scan History')
+    expect(app).toContain("narrowScanDefaultContext(scanList, run?.id)")
+    expect(app).toContain("narrowDefault ? 'View narrow scan' : '↩ Switch to latest'")
+    expect(app).toContain('const showScanHistoryBanner = isTimeTravel || !!narrowDefault')
   })
 
   it('"new scan available" banner is gated on !explicitTimeTravel', () => {
