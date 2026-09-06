@@ -124,8 +124,8 @@ def test_it_counts_every_owner_not_just_the_caller(prod_client):
     assert sorted(body["scans"]["recent_files"]) == [11, 258]
 
 
-def test_the_collapse_is_visible_in_what_it_returns(prod_client, monkeypatch):
-    """End to end with the real check: the monitor's policy must fire on data this route
+def test_a_narrow_scan_is_visible_without_declaring_an_outage(prod_client, monkeypatch):
+    """End to end with the real check: the monitor's policy must warn on data this route
     actually produces, not only on a hand-written fixture.
 
     tests/test_monitor.py drives check_estate from a literal payload, which proves the policy
@@ -138,13 +138,15 @@ def test_the_collapse_is_visible_in_what_it_returns(prod_client, monkeypatch):
     client, store = prod_client
     _seed_scan(store, "scan01", "alice@movate.com", files=258)
     _seed_scan(store, "scan02", "alice@movate.com", files=258)
-    _seed_scan(store, "scan03", "alice@movate.com", files=1)     # the sweep lands on top
+    _seed_scan(store, "scan03", "alice@movate.com", files=1)     # an intentional narrow scope
 
     res = client.get("/monitor/estate", headers={"X-Monitor-Key": KEY})
     monkeypatch.setattr(M, "get", lambda url, key=None, timeout=20: (res.status_code, res.text, 1.0))
     rep = M.Report()
     M.check_estate("https://x", KEY, rep)
-    assert rep.failed == 1
+    assert rep.failed == 0
+    assert rep.warned == 1
+    assert any(r[0] == "WARN" for r in rep.rows)
     assert any("newest has 1 documents but a recent scan had 258" in r[2] for r in rep.rows)
 
 
