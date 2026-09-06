@@ -184,6 +184,15 @@ steps:
   - script: python scripts/gen_fixture_coverage.py --check
     displayName: Corpus guard — ground-truth fixture coverage has not regressed
 
+  # config/section-508.json is the denominator of a 508-edition report: 120 requirements a human
+  # must decide and that print in the exported tables. A row lost in a hand-edit is invisible. The
+  # generator shipped with --check in #1539 and nothing ever ran it.
+  #
+  # In BOTH pipelines in this commit, per the note directly above: "Adding a guard to one pipeline
+  # is how the third drift starts", and that note names two occasions it already has.
+  - script: python scripts/gen_section_508_catalog.py --check
+    displayName: Standards guard — the Section 508 catalog matches the regulation
+
   # Fails when a commit changed rule code without declaring its matrix impact. Add a
   # `Matrix-Note:` (+ `WCAG:`) trailer, or `Matrix-Note: none` to record a deliberate omission.
   # Merge commits are skipped by check() itself, explicitly and by parent count: a merge authors
