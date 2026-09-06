@@ -175,13 +175,11 @@ def test_the_508_edition_is_offerable_now_that_the_whole_chain_exists():
     contain.
     """
     assert acr_catalog.section_508_available() is True
-    assert acr_catalog.requirement_sets_available() == frozenset(
-        {acr_catalog.REQ_WCAG, acr_catalog.REQ_SECTION_508})
+    assert {acr_catalog.REQ_WCAG, acr_catalog.REQ_SECTION_508} <= (
+        acr_catalog.requirement_sets_available())
     assert acr_catalog.missing_requirement_sets(acr_catalog.EDITION_508) == frozenset()
-    assert acr_catalog.offerable_editions() == [acr_catalog.EDITION_WCAG, acr_catalog.EDITION_508]
-    # EN 301 549 has no catalog, so the editions that oblige it stay refused.
-    assert acr_catalog.missing_requirement_sets(acr_catalog.EDITION_EU) == frozenset(
-        {acr_catalog.REQ_EN_301_549})
+    assert acr_catalog.offerable_editions()[:2] == [
+        acr_catalog.EDITION_WCAG, acr_catalog.EDITION_508]
 
 
 def test_the_wcag_edition_carries_no_508_rows():
