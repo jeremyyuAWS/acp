@@ -16,6 +16,7 @@ IDEMPOTENCY_PROPERTY = "acpPublishKey"
 _FOLDER_MIME = "application/vnd.google-apps.folder"
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 _INVALID = re.compile(r'[<>:"|?*]')
+_RELEASE_NAME_INVALID = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]')
 _EXT_MIME = {
     "pdf": "application/pdf",
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -27,6 +28,22 @@ _EXT_MIME = {
 
 class UnsafeReleasePath(ValueError):
     """The immutable source path cannot safely become a provider path."""
+
+
+def normalize_release_name(value: str | None, *, field: str) -> str | None:
+    """Validate an optional user-facing package or destination label."""
+    if value is None or not value.strip():
+        return None
+    cleaned = value.strip()
+    if not cleaned or cleaned in (".", ".."):
+        raise UnsafeReleasePath(f"{field} must contain a usable name")
+    if cleaned.endswith("."):
+        raise UnsafeReleasePath(f"{field} cannot end with a period")
+    if len(cleaned) > 100:
+        raise UnsafeReleasePath(f"{field} must be 100 characters or fewer")
+    if _RELEASE_NAME_INVALID.search(cleaned):
+        raise UnsafeReleasePath(f"{field} contains a character that cannot be used in a file or folder name")
+    return cleaned
 
 
 def _mime_for(filename: str) -> str:
@@ -102,6 +119,7 @@ def _ensure_folder(svc, parent_id: str | None, name: str, *,
 
 def ensure_published_folder(svc, release_id: str | None = None, *,
                             released_at: datetime | None = None,
+                            folder_name: str | None = None,
                             return_details: bool = False):
     """Create/reuse ``Remediated/<UTC timestamp>`` for one stable release execution."""
     if not release_id:  # backwards compatibility for older callers/tests
@@ -110,7 +128,7 @@ def ensure_published_folder(svc, release_id: str | None = None, *,
     root, _ = _ensure_folder(svc, None, RELEASE_ROOT)
     folder = _find_folder(svc, root["id"], release_id=release_id)
     at = (released_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    name = at.strftime("%Y-%m-%d %H-%M UTC")
+    name = folder_name or at.strftime("%Y-%m-%d %H-%M UTC")
     if not folder:
         created = svc.files().create(
             body={"name": name, "mimeType": _FOLDER_MIME, "parents": [root["id"]],

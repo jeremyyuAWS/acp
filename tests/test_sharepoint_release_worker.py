@@ -13,6 +13,7 @@ class FakeStore:
         self.jobs = None
         self.published = None
         self.root = None
+        self.preferred_folder_name = None
 
     def get_scan(self, scan_id, owner=None):
         return {"run": {"id": scan_id, "source": "sharepoint", "owner_email": OWNER},
@@ -23,9 +24,11 @@ class FakeStore:
                 "drive_file_id": "source-item", "drive_id": "library-1",
                 "source_relative_path": "/drives/library-1/root:/HR/Policies"}
 
-    def ensure_release_execution(self, scan_id, owner, source, documents_total):
+    def ensure_release_execution(self, scan_id, owner, source, documents_total,
+                                 preferred_folder_name=None):
+        self.preferred_folder_name = preferred_folder_name
         return {"id": "release-1", "created_at": "2026-09-05T10:00:00+00:00",
-                "folder_name": "2026-09-05 10-00 UTC"}
+                "folder_name": preferred_folder_name or "2026-09-05 10-00 UTC"}
 
     def get_release_document(self, release_id, filename, owner):
         return self.documents.get(filename)
@@ -80,6 +83,22 @@ def test_sharepoint_submission_queues_token_free_per_document_work(monkeypatch):
     assert "delegated-secret" not in repr(store.jobs)
     assert registered == {"scan_id": SID, "sp": "delegated-secret",
                           "require_shared": True}
+
+
+def test_sharepoint_submission_saves_a_valid_custom_release_folder(monkeypatch):
+    import core
+    from routes.scans import publish_files
+
+    store = FakeStore()
+    monkeypatch.setattr(core, "store", store)
+    monkeypatch.setattr(core, "register_scan_tokens", lambda *args, **kwargs: None)
+    request = SimpleNamespace(state=SimpleNamespace(user_email=OWNER),
+                              headers={"x-sp-token": "delegated-secret"})
+    response = publish_files(
+        SID, request,
+        {"files": [FILE], "release_folder_name": "Q3 Accessibility Release"})
+    assert store.preferred_folder_name == "Q3 Accessibility Release"
+    assert response["release_folder_name"] == "Q3 Accessibility Release"
 
 
 def test_sharepoint_worker_publishes_and_records_verified_copy(monkeypatch):
