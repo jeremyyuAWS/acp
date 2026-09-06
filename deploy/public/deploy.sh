@@ -579,7 +579,10 @@ for s in json.loads(os.environ.get("APP_SECRETS_JSON") or "[]"):
       --command acp-worker \
       --secrets "${WORKER_SECRETS[@]}" \
       --env-vars $ADC_ENV $DEPLOY_ENV_ENV $DEFER_ENV $DB_ENV $LF_ENV $TRACE_NAMES_ENV $DEMO_ENV $BLOB_ENV $REDIS_ENV $RUNPOD_ENV $WORKER_ROLE_ENV ACP_WORKERS=$WK_N \
-      --system-assigned --cpu "$WK_CPU" --memory "$WK_MEMORY" --ephemeral-storage 8.0Gi \
+      # ACA's containerapp extension rejects its ephemeral-storage option on `create` (through \
+      # 1.3.0b5). Leave it at the platform-derived allocation; an unsupported flag prevents the \
+      # worker from being created at all, including the 0.25 CPU staging migration lanes. \
+      --system-assigned --cpu "$WK_CPU" --memory "$WK_MEMORY" \
       --min-replicas "$WK_MIN_REPLICAS" --max-replicas "$WK_MAX_REPLICAS" -o none
     echo "   one-time: grant the worker's managed identity 'Storage Blob Data Contributor' on"
     echo "   the '$BLOB_ACCOUNT' account so its remediation Blob writes don't 403 — exact"
