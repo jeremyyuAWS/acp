@@ -33,6 +33,11 @@ def test_cost_endpoint_is_truthful_when_not_configured(open_client, monkeypatch)
     assert body["configured"] is False
     assert body["estimated_hourly_usd"] is None
     assert body["billing"]["freshness_label"] == "Azure billing feed not configured"
+    assert body["setup"]["capacity"]["configured"] is False
+    assert body["setup"]["capacity"]["available"] is False
+    assert body["setup"]["rate_card"]["configured"] is False
+    assert body["setup"]["billing_actuals"]["configured"] is False
+    assert "subscription access" in body["setup"]["capacity"]["reason"]
 
 
 def test_cost_endpoint_is_mapped_to_live_operations_access():
@@ -62,6 +67,11 @@ def test_cost_endpoint_reports_each_service_and_total(open_client, monkeypatch):
     assert body["estimated_hourly_usd"] == .96
     assert body["estimated_daily_usd"] == 23.04
     assert body["rate_source"] == "Contract rate card 2026-09"
+    assert body["setup"]["capacity"]["configured"] is True
+    assert body["setup"]["capacity"]["available"] is True
+    assert body["setup"]["rate_card"]["configured"] is True
+    assert body["services"][0]["allocated_vcpu"] == 4
+    assert body["services"][0]["allocated_memory_gib"] == 8
 
 
 def test_one_unavailable_app_does_not_fabricate_or_hide_other_costs(open_client, monkeypatch):
@@ -86,7 +96,33 @@ def test_one_unavailable_app_does_not_fabricate_or_hide_other_costs(open_client,
     body = open_client.get("/control/costs").json()
     assert body["services"][0]["estimated_hourly_usd"] == .12
     assert body["services"][1]["status"] == "not_reported"
+    assert body["services"][1]["unavailable_reason"] == "Azure capacity could not be read"
+    assert body["setup"]["capacity"]["available"] is False
+    assert "acp-remediate" in body["setup"]["capacity"]["reason"]
     assert body["estimated_hourly_usd"] is None
+
+
+def test_measured_capacity_survives_a_missing_rate_card():
+    from routes.costs import estimate_service
+    line = estimate_service("acp-assess", 3, 2, 4, None)
+    assert line["estimated_hourly_usd"] is None
+    assert line["capacity_available"] is True
+    assert line["allocated_vcpu"] == 6
+    assert line["allocated_memory_gib"] == 12
+    assert line["unavailable_reason"] == "No rate card is configured for this worker service"
+
+
+def test_partial_rate_card_names_the_service_that_is_missing(open_client, monkeypatch):
+    from routes import costs
+    monkeypatch.setattr(costs, "_AZ_SUB", "sub")
+    monkeypatch.setattr(costs, "_app_names", lambda: ["acp-assess", "acp-remediate"])
+    monkeypatch.setattr(costs, "_rate_card", lambda: ({
+        "acp-assess": {"vcpu_hour": .1, "gib_hour": .01},
+    }, "approved rates"))
+    monkeypatch.setattr(costs, "_az_client", lambda: (_ for _ in ()).throw(RuntimeError("offline")))
+    body = open_client.get("/control/costs").json()
+    assert body["setup"]["rate_card"]["configured"] is False
+    assert body["setup"]["rate_card"]["reason"] == "Rates are missing for: acp-remediate"
 
 
 def test_azure_client_failure_returns_not_reported_instead_of_breaking_live_ops(open_client, monkeypatch):
@@ -104,3 +140,5 @@ def test_azure_client_failure_returns_not_reported_instead_of_breaking_live_ops(
     body = response.json()
     assert body["services"][0]["status"] == "not_reported"
     assert body["estimated_hourly_usd"] is None
+    assert body["setup"]["capacity"]["available"] is False
+    assert "API service identity" in body["setup"]["capacity"]["reason"]
