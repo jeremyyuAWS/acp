@@ -81,7 +81,7 @@ Stale records stay visible for audit history and cannot independently support pu
 | 3 | Guided manual test plans, tester metadata, and the publish gate that consumes them | **delivered** |
 | 4 | Publication, reviewer sign-off, immutable snapshots, revision history | **delivered** |
 | 5 | ITI VPAT 2.5Rev template + accessible Word export + export accessibility gate | **part delivered** — see below |
-| 6 | Section 508, EU and International editions | planned |
+| 6 | Section 508, EU and International editions | **part delivered** — see below |
 
 **Phase 5 is three deliverables and only one of them is blocked**, which is why its row can read
 neither `planned` nor `delivered`. The export and the gate ship today, across these surfaces:
@@ -103,8 +103,33 @@ repository, and whether one may be vendored is **ADR 0053**, which is a licensin
 counsel and not an engineering one. Acceptance row 13 tracks it; row 14 does not depend on it,
 because the gate runs over whatever document ACP generates.
 
-Phase 6 is being worked separately — `734fec29` landed its first slice — so its row is left as its
-own author finds it rather than updated from here.
+**Phase 6 is two editions and only one of them is blocked**, for a reason that is not effort.
+ITI publishes four editions and each obliges a report to carry a different requirement set;
+`734fec29` made `vpat_edition` a checked claim rather than free text, after finding a report that
+declared the Section 508 edition and contained none of Section 508. The **Section 508 edition is
+offerable now**, and it took three things, landed in that order and gated on each other:
+
+| | | |
+|---|---|---|
+| 6.1 | the requirements | `config/section-508.json`, 120 rows from 36 CFR 1194 Appendix C |
+| 6.2 | rows in the matrix | `build_matrix(report_id, edition)`, and `requirement_set` on each row |
+| 6.3 | rows in the document | the projection and all three exports print a Revised Section 508 Report |
+
+`requirement_sets_available()` was held at WCAG-only through 6.1 and 6.2 deliberately: opening it
+on the catalog alone would have produced a document naming a standard it could not print, which is
+the defect `734fec29` fixed arriving by another route.
+
+Chapter 4 is hardware, and 69 of the 120 rows end there for a hosted web application. The matrix
+carries them anyway: PRD §10 makes applicability a human's call with a stated reason, so a system
+that dropped the chapter would be making it. Grouping those rows by chapter in the criteria list,
+and marking a chapter in one decision, is the workspace half of 6.3 and is the piece still
+landing — the document already prints them that way.
+
+**What is held is EN 301 549**, the requirement set the EU and INT editions oblige. This is the
+same shape of question as ADR 0053 and not the same answer: 36 CFR is a work of the United States
+Government, uncopyrightable under 17 U.S.C. §105, so vendoring it needed no decision. EN 301 549
+is not in that position. Until it is answered and its catalog lands, `build_matrix` refuses those
+two editions and the publication gate refuses them again on stored state.
 
 ## Phase 1 — what shipped
 
