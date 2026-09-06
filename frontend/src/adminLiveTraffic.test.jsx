@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { TILE_KINDS, azureBytes, azureLatest, buildTrafficGraph, capacityValue, flowEdge, infrastructureDetail, nodeGauge, queueConcentration, sizeScopeNote, tileKind, tileStyle, trafficEdgeStyle, trafficGraphForTab, trendToggleLabel, workerServiceRows, workflowColor } from './AdminLiveTraffic.jsx'
+import { JOB_STATE_FILTERS, TILE_KINDS, azureBytes, azureLatest, buildTrafficGraph, capacityValue, flowEdge, infrastructureDetail, nodeGauge, queueConcentration, runOperationalState, sizeScopeNote, tileKind, tileStyle, trafficEdgeStyle, trafficGraphForTab, trendToggleLabel, workerServiceRows, workflowColor } from './AdminLiveTraffic.jsx'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(join(here, 'AdminLiveTraffic.jsx'), 'utf8')
@@ -134,6 +134,43 @@ describe('Admin live traffic graph', () => {
     expect(jobs.nodes.some((node) => node.id === 'one:discover')).toBe(true)
     expect(jobs.nodes.some((node) => node.id === 'one:assess')).toBe(true)
     expect(jobs.nodes.some((node) => node.id === 'two:discover')).toBe(false)
+  })
+
+  it('filters by operational state without breaking a workflow lane apart', () => {
+    const graph = buildTrafficGraph({ summary: {}, runs: [
+      { scan_id: 'one', stage: 'discover', owner: 'a', source: 'drive', status: 'recent' },
+      { scan_id: 'one', stage: 'assess', owner: 'a', source: 'drive', status: 'active', stalled: true },
+      { scan_id: 'two', stage: 'remediate', owner: 'b', source: 'sharepoint', status: 'active', paused: true },
+      { scan_id: 'three', stage: 'assess', owner: 'c', source: 'drive', status: 'failed' },
+    ] })
+
+    const stalled = trafficGraphForTab(graph, 'jobs', { state: 'stalled' })
+    expect(stalled.nodes.map((node) => node.id)).toEqual([
+      'workflow:one', 'one:discover', 'one:assess',
+    ])
+    expect(trafficGraphForTab(graph, 'jobs', { state: 'paused' }).nodes.map((node) => node.id))
+      .toEqual(['workflow:two', 'two:remediate'])
+    expect(trafficGraphForTab(graph, 'jobs', { state: 'attention' }).nodes.map((node) => node.id))
+      .toEqual(['workflow:three', 'three:assess'])
+  })
+
+  it('uses the same state vocabulary for cards and workflow filters', () => {
+    expect(runOperationalState({ paused: true, stalled: true, status: 'failed' })).toBe('paused')
+    expect(runOperationalState({ stalled: true, status: 'active' })).toBe('stalled')
+    expect(runOperationalState({ status: 'active', failed: 1 })).toBe('attention')
+    expect(runOperationalState({ status: 'cancelled' })).toBe('cancelled')
+    expect(runOperationalState({ status: 'recent' })).toBe('recent')
+    expect(runOperationalState({ status: 'active' })).toBe('active')
+    expect(JOB_STATE_FILTERS.map((item) => item.key)).toEqual([
+      'all', 'active', 'attention', 'stalled', 'paused', 'cancelled', 'recent',
+    ])
+  })
+
+  it('explains job line and color semantics and exposes state controls', () => {
+    expect(source).toContain('aria-label="Filter workflows by state"')
+    expect(source).toContain('aria-label="Workflow map key"')
+    expect(source).toContain('MOVING LINE</b> · work active or waiting')
+    expect(source).toContain('last changed {age(data.run.updated_at)} ago')
   })
 
   it('uses crisp non-scaling paths at every zoom', () => {
