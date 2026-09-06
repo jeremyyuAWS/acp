@@ -820,7 +820,7 @@ def _figure_objr_xobj(fig, pdf, page_map: dict):
             except Exception:
                 continue
     except Exception:
-        pass
+        swallowed("proposals._figure_objr_xobj: resolving a PDF figure object reference failed")
     return None, None
 
 
@@ -846,7 +846,7 @@ def _pdf_struct_image_map(pdf) -> dict:
             try:
                 page_map[page.objgen[0]] = idx + 1
             except Exception:
-                pass
+                continue
     except Exception:
         return {}
 
