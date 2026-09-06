@@ -260,7 +260,8 @@ def archive_copy_publish_sharepoint(token: str, drive_id: str | None, folder_id:
     base = f"{scanner._sp_base(drive_id)}/items/{parent}:/{encoded_name}:"
     result = scanner._sp_write(token, put_url=f"{base}/content",
                                session_url=f"{base}/createUploadSession",
-                               content=data, content_type=_mime_for(target_name))
+                               content=data, content_type=_mime_for(target_name),
+                               conflict_behavior="fail", force_session=True)
     item_id = result.get("id")
     if not item_id:
         result = _sp_child(token, drive_id, parent, target_name) or {}

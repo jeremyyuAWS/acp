@@ -294,3 +294,29 @@ def test_sharepoint_publish_preserves_hierarchy_and_never_overwrites_collision(m
     assert result["created"] is True
     assert result["filename"].startswith("report (")
     assert writes[0]["put_url"].endswith(f"/{result['filename'].replace(' ', '%20').replace('(', '%28').replace(')', '%29')}:/content")
+    assert writes[0]["conflict_behavior"] == "fail"
+    assert writes[0]["force_session"] is True
+
+
+def test_sharepoint_publish_uses_atomic_fail_on_conflict_even_for_small_files(monkeypatch):
+    """The child lookup is advisory. A sibling can appear after it, so a path PUT must never
+    silently replace that new file; every release copy uses Graph's atomic session contract."""
+    monkeypatch.setattr(publish._blob, "download_remediated", lambda *a, **k: b"small")
+    monkeypatch.setattr(publish, "_sp_child", lambda *a, **k: None)
+    monkeypatch.setattr(publish, "_sp_content_matches", lambda *a, **k: True)
+    monkeypatch.setattr(publish, "_sp_ensure_folder", lambda *a, **k: "parent")
+    import scanner
+    monkeypatch.setattr(scanner, "_sp_base", lambda drive: "https://graph/drive")
+    seen = {}
+
+    def write(token, **kwargs):
+        seen.update(kwargs)
+        return {"id": "created", "webUrl": "https://sp/created"}
+
+    monkeypatch.setattr(scanner, "_sp_write", write)
+    publish.archive_copy_publish_sharepoint(
+        "token", "drive", "release", "owner", "rel", "scan", "report.pdf",
+        None, "source")
+
+    assert seen["conflict_behavior"] == "fail"
+    assert seen["force_session"] is True
