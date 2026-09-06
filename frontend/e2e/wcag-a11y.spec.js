@@ -213,10 +213,12 @@ test.describe('Remediate tab', () => {
   test.beforeEach(async ({ page }) => {
     await signIn(page)
     await clickTab(page, /Remediate/)
-    await expect(page.locator('[role="tabpanel"]')).toBeVisible()
-    await page.waitForFunction(() =>
-      document.querySelector('[role="tabpanel"]')?.textContent?.length > 50
-    , { timeout: 10_000 })
+    // Remediation contains its own Review and Live Processing tabpanels. Scope readiness to
+    // the workflow-level panel instead of relying on there being only one tabpanel in the page.
+    const panel = page.locator('#workflow-panel')
+    await expect(panel).toBeVisible()
+    await expect.poll(async () => (await panel.textContent())?.length || 0,
+      { timeout: 10_000 }).toBeGreaterThan(50)
   })
 
   test('no WCAG 2.1 A/AA violations', async ({ page }) => {
