@@ -13,7 +13,7 @@ import {
   LATENCY_PERCENTILES_NOTE, replicaLifecycle, reported, requestHealth, revisionLabel, runModel,
   sampleForNode, saturationModel, scaleEvents, tracingModel,
   scaleExplanation, secondsSince, seriesForMetric, sourceModel, tenantConcentration, throughputModel,
-  replicaJobLoad, trendMarkers, updatedAgo, workerJobHealth } from './liveOpsDrawer.js'
+  PHASE_LABELS, replicaJobLoad, trendMarkers, updatedAgo, workerJobHealth } from './liveOpsDrawer.js'
 
 const NOW = Date.parse('2026-09-04T14:32:00Z')
 const iso = (offsetS) => new Date(NOW + offsetS * 1000).toISOString()
@@ -2391,5 +2391,83 @@ describe('replicaJobLoad', () => {
     const absent = replicaJobLoad({}, SERVICE, CAPACITY)
     expect(absent.available).toBe(false)
     expect(absent.reason).toMatch(/does not report/i)
+  })
+})
+
+describe('workerJobHealth, per in-flight job', () => {
+  // Asked for 2026-09-06: "showing the names of the replicas is not as important as the files and
+  // activity they are doing". The panel was one row per RUN, built from `current_file` — whichever
+  // running row the store read first — so a service with forty jobs in flight named one document.
+  const NOW = Date.parse('2026-09-06T16:00:00Z')
+  const ago = (s) => new Date(NOW - s * 1000).toISOString()
+
+  const run = {
+    scan_id: 's1', stage: 'remediate', owner: 'ops@example.org',
+    current_file: 'First.docx', current_rule_id: 'WCAG 1.1.1',
+    current_job_type: 'remediate_file', current_job_started_at: ago(30),
+    in_flight: [
+      { job_id: 'j1', file: 'Handbook.docx', rule_id: 'WCAG 1.4.3', job_type: 'remediate_file',
+        phase: 'remediating', started_at: ago(45), heartbeat_at: ago(2), attempts: 0 },
+      { job_id: 'j2', file: 'Policy.pdf', rule_id: 'WCAG 1.1.1', job_type: 'remediate_file',
+        phase: 'verifying', started_at: ago(300), heartbeat_at: ago(180), attempts: 2 },
+      { job_id: 'j3', file: 'Notes.pptx', rule_id: null, job_type: 'remediate_file',
+        phase: 'unheard_of_phase', started_at: null, heartbeat_at: null, attempts: 0 },
+    ],
+  }
+
+  it('reports every in-flight document, not just the first', () => {
+    const health = workerJobHealth({ runs: [run] }, 'remediate', { nowMs: NOW })
+    expect(health.jobs.map((job) => job.file))
+      .toEqual(['Handbook.docx', 'Policy.pdf', 'Notes.pptx'])
+    expect(health.jobs.map((job) => job.ruleId))
+      .toEqual(['WCAG 1.4.3', 'WCAG 1.1.1', null])
+  })
+
+  it('says what the handler says it is doing, in words', () => {
+    const health = workerJobHealth({ runs: [run] }, 'remediate', { nowMs: NOW })
+    expect(health.jobs[0].phase).toBe('Applying fixes')
+    expect(health.jobs[1].phase).toBe('Verifying the fix')
+    // A phase this build has no label for reads as itself. Dropping it would make a new handler
+    // phase silently invisible, which is the failure mode that keeps a label table stale.
+    expect(health.jobs[2].phase).toBe('unheard_of_phase')
+  })
+
+  it('separates how long it has run from how fresh its lease is', () => {
+    // A job running an hour with a two-second-old lease is healthy; one running a minute with a
+    // two-minute-old lease is not. Runtime alone cannot tell those apart.
+    const health = workerJobHealth({ runs: [run] }, 'remediate', { nowMs: NOW })
+    expect(health.jobs[0].runtimeS).toBe(45)
+    expect(health.jobs[0].heartbeatS).toBe(2)
+    expect(health.jobs[1].runtimeS).toBe(300)
+    expect(health.jobs[1].heartbeatS).toBe(180)
+    // Nothing reported means nothing reported — not zero, which would read as "just claimed".
+    expect(health.jobs[2].runtimeS).toBe(null)
+    expect(health.jobs[2].heartbeatS).toBe(null)
+    expect(health.jobs[1].attempts).toBe(2)
+  })
+
+  it('still renders against a backend that does not send in_flight yet', () => {
+    // Mid-rollout the API can be older than the bundle. Falling back to the single current_* job
+    // keeps the panel populated instead of blanking it.
+    const older = { ...run, in_flight: undefined }
+    const health = workerJobHealth({ runs: [older] }, 'remediate', { nowMs: NOW })
+    expect(health.jobs).toHaveLength(1)
+    expect(health.jobs[0].file).toBe('First.docx')
+    expect(health.jobs[0].ruleId).toBe('WCAG 1.1.1')
+    expect(health.jobs[0].runtimeS).toBe(30)
+    expect(health.jobs[0].phase).toBe(null)
+  })
+
+  it('gives every row a stable key, so two jobs on one run do not collide', () => {
+    // The old panel keyed by scanId, which is fine for one row per run and a duplicate-key bug
+    // the moment there are several.
+    const health = workerJobHealth({ runs: [run] }, 'remediate', { nowMs: NOW })
+    expect(new Set(health.jobs.map((job) => job.key)).size).toBe(3)
+  })
+
+  it('reports nothing rather than an empty row when no job is in flight', () => {
+    const idle = workerJobHealth({ runs: [{ scan_id: 's2', stage: 'remediate' }] }, 'remediate',
+      { nowMs: NOW })
+    expect(idle.jobs).toEqual([])
   })
 })

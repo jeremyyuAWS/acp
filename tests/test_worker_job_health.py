@@ -136,3 +136,54 @@ def test_running_jobs_by_type_counts_durable_rows_without_payloads(isolated_stor
     isolated_store.claim_job("w2", job_types=("scan_assess",))
     isolated_store.claim_job("w3", job_types=("remediate_file",))
     assert isolated_store.running_jobs_by_type() == {"scan_assess": 2, "remediate_file": 1}
+
+
+def test_every_in_flight_job_is_reported_with_its_phase(isolated_store):
+    """`current_file` names whichever running row came back first.
+
+    A stage with several jobs in flight therefore named ONE document, and Live Operations read as
+    though a saturated service were barely working. `in_flight` carries them all, each with the
+    phase the handler writes as it works — a column this query did not select at all.
+    """
+    isolated_store.save_scan(_scan())
+    ids = []
+    for name in ("Handbook.docx", "Policy.pdf", "Notes.pptx"):
+        ids.append(isolated_store.enqueue_job("scan_file", {"file": name}, scan_id="scan-health-1"))
+    for i, job_id in enumerate(ids):
+        assert isolated_store.claim_job(f"assess:rep-a:proc:w{i}") is not None
+    isolated_store.set_job_phase(ids[0], "remediating")
+    isolated_store.set_job_phase(ids[1], "verifying")
+
+    row = [r for r in isolated_store.admin_live_activity() if r["stage"] == "assess"][0]
+    in_flight = {job["file"]: job for job in row["in_flight"]}
+
+    assert set(in_flight) == {"Handbook.docx", "Policy.pdf", "Notes.pptx"}
+    assert in_flight["Handbook.docx"]["phase"] == "remediating"
+    assert in_flight["Policy.pdf"]["phase"] == "verifying"
+    # None, not a phase guessed from the job type: a handler that has written nothing has not
+    # reported, and inventing "processing" would be a guess dressed as a measurement.
+    assert in_flight["Notes.pptx"]["phase"] is None
+    # Claim instant, never locked_at — touch_job rewrites locked_at on every heartbeat.
+    assert all(job["started_at"] for job in row["in_flight"])
+    assert all(job["job_id"] for job in row["in_flight"])
+
+    # current_* is unchanged, so every existing reader of this shape behaves exactly as before.
+    assert row["current_file"] in in_flight
+    assert row["current_job_type"] == "scan_file"
+
+
+def test_the_in_flight_list_is_bounded(isolated_store):
+    """A live panel refreshed every two seconds is not the place for an unbounded list."""
+    from api.store import _IN_FLIGHT_LIMIT
+
+    isolated_store.save_scan(_scan())
+    for i in range(_IN_FLIGHT_LIMIT + 5):
+        job_id = isolated_store.enqueue_job("scan_file", {"file": f"Doc{i}.docx"},
+                                            scan_id="scan-health-1")
+        assert isolated_store.claim_job(f"assess:rep-a:proc:w{i}") is not None
+
+    row = [r for r in isolated_store.admin_live_activity() if r["stage"] == "assess"][0]
+    assert len(row["in_flight"]) == _IN_FLIGHT_LIMIT
+    # The stage's own running count is NOT capped — the bound is on what is listed, not on what
+    # is counted, or the panel would understate the service's load.
+    assert row["running"] == _IN_FLIGHT_LIMIT + 5

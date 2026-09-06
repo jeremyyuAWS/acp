@@ -2426,6 +2426,12 @@ def sharepoint_scope_sites(scope: dict | None) -> tuple[str, ...]:
     return (str(one),) if one else ()
 
 
+# How many in-flight jobs one stage reports to the live drawer. A live panel, refreshed every
+# two seconds, is not a place for an unbounded list: enough rows to see what the stage is working
+# through, and a count for the rest.
+_IN_FLIGHT_LIMIT = 8
+
+
 def _sp_coverage(live_checkpoint) -> dict:
     """Per-site coverage counts from a run's checkpointed listing progress, for the live map.
 
@@ -11997,7 +12003,11 @@ class Store:
                 # from the CLOSED ERROR_CLASS_VOCABULARY rather than the free-text last_error —
                 # this method is cross-user, and an error string can carry another tenant's
                 # filename, while a vocabulary term cannot.
-                "SELECT j.scan_id,j.type,j.status,j.created_at,j.updated_at,j.payload,"
+                # `j.phase` is what the HANDLER says it is doing right now — downloading,
+                # remediating, verifying, saving — written as it works and, until now, selected
+                # by nothing. It is the answer to "what is it actually doing" that the drawer
+                # was reduced to guessing at from the job type.
+                "SELECT j.id,j.scan_id,j.type,j.status,j.created_at,j.updated_at,j.payload,j.phase,"
                 "j.locked_at,j.claimed_at,j.error_class,j.attempts,j.cancel_requested_at,rh.paused_at,"
                 "sr.owner_email,sr.source,sr.files,sr.files_done,sr.live_checkpoint,"
                 "COALESCE(sr.workflow_id,sr.id) AS workflow_id,"
@@ -12028,6 +12038,12 @@ class Store:
                 "oldest_queued_at": None, "current_file": None,
                 "current_job_type": None, "current_rule_id": None,
                 "current_job_started_at": None, "last_error_class": None, "max_attempts_seen": 0,
+                # EVERY in-flight job, not just the first. `current_file` is set from whichever
+                # running row happened to come back first, so a stage with forty jobs in flight
+                # named ONE document and the drawer had nothing else to say. Bounded at
+                # _IN_FLIGHT_LIMIT: this is a live panel, not an export, and an unbounded list
+                # would put a thousand rows on a screen that refreshes every two seconds.
+                "in_flight": [],
                 "paused": stage == "remediate" and bool(row.get("paused_at")),
                 "cancel_requested": False, "cancel_requested_at": None,
                 # SharePoint COVERAGE, for the operations map. A 30-site walk is one long
@@ -12078,19 +12094,41 @@ class Store:
                 # Kept, and now named for what it actually is, so the drawer can show lease
                 # freshness and run duration as the two different facts they are.
                 item["current_job_heartbeat_at"] = row.get("locked_at")
-            if status == "running" and not item["current_file"]:
+            if status == "running":
                 try:
                     payload = row.get("payload") or {}
                     if isinstance(payload, str):
                         payload = json.loads(payload)
-                    if isinstance(payload, dict):
-                        item["current_file"] = (payload.get("file") or payload.get("filename")
-                                                or payload.get("path"))
-                        item["current_rule_id"] = (payload.get("current_rule_id")
-                                                   or payload.get("rule_id") or payload.get("wcag"))
-                        item["current_job_type"] = row.get("type")
+                    if not isinstance(payload, dict):
+                        payload = {}
                 except (TypeError, ValueError):
-                    pass
+                    payload = {}
+                file_name = (payload.get("file") or payload.get("filename")
+                             or payload.get("path"))
+                rule_id = (payload.get("current_rule_id") or payload.get("rule_id")
+                           or payload.get("wcag"))
+                # Unchanged: the first running row still populates current_*, so every existing
+                # reader of this shape behaves exactly as before.
+                if not item["current_file"]:
+                    item["current_file"] = file_name
+                    item["current_rule_id"] = rule_id
+                    item["current_job_type"] = row.get("type")
+                if len(item["in_flight"]) < _IN_FLIGHT_LIMIT:
+                    item["in_flight"].append({
+                        "job_id": row.get("id"),
+                        "file": file_name,
+                        "rule_id": rule_id,
+                        "job_type": row.get("type"),
+                        # None when the handler has not written one — an honest "not reported"
+                        # rather than a phase inferred from the job type, which would be a guess
+                        # dressed as a measurement.
+                        "phase": row.get("phase"),
+                        # The claim instant, never locked_at: touch_job rewrites locked_at on
+                        # every heartbeat, so runtime taken from it is always near zero.
+                        "started_at": row.get("claimed_at"),
+                        "heartbeat_at": row.get("locked_at"),
+                        "attempts": int(row.get("attempts") or 0),
+                    })
             if row.get("created_at") and str(row["created_at"]) < str(item.get("started_at") or row["created_at"]):
                 item["started_at"] = row["created_at"]
             if str(row.get("updated_at") or "") > str(item.get("updated_at") or ""):
