@@ -1499,9 +1499,10 @@ export default function App() {
       // both rendered at once and directly contradicted each other. The failure is the newer,
       // harder signal; it wins.
       setPreflightCapacityState(null)
-      if (e?.status === 409 && ['discovery_workflow_active', 'recent_compatible_workflow'].includes(e?.detail?.code)) {
+      if (e?.status === 409 && ['discovery_workflow_active', 'workflow_stage_active', 'recent_compatible_workflow'].includes(e?.detail?.code)) {
         setDiscoveryChoice({
           scanId: e.detail.active_scan_id,
+          activeStage: e.detail.active_stage,
           workflowRevision: e.detail.workflow_revision,
           recentCompatible: e.detail.code === 'recent_compatible_workflow',
           source,
@@ -2138,9 +2139,10 @@ export default function App() {
         choice={discoveryChoice}
         onContinue={() => {
           const scanId = discoveryChoice?.scanId
+          const activeStage = discoveryChoice?.activeStage || 'discover'
           setDiscoveryChoice(null)
           if (scanId) switchScan(scanId)
-          goToView('discover')
+          goToView(activeStage)
           window.scrollTo({ top: 0, behavior: 'smooth' })
         }}
         onReplace={() => {
