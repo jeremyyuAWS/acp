@@ -609,8 +609,21 @@ _SCHEMA = [
     "CREATE INDEX IF NOT EXISTS idx_stage_events_execution ON stage_events(execution_id,recorded_at,event_id)",
     """CREATE TABLE IF NOT EXISTS stage_outbox (
       message_id TEXT PRIMARY KEY, execution_id TEXT NOT NULL, work_item_id TEXT NOT NULL,
-      topic TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL, published_at TEXT
+      topic TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL, published_at TEXT,
+      status TEXT NOT NULL DEFAULT 'pending', attempts INT NOT NULL DEFAULT 0,
+      available_at TEXT, claimed_by TEXT, claimed_at TEXT, lease_expires_at TEXT,
+      delivery_ack TEXT, last_error TEXT, dead_lettered_at TEXT
     )""",
+    "ALTER TABLE stage_outbox ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'pending'",
+    "ALTER TABLE stage_outbox ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0",
+    "ALTER TABLE stage_outbox ADD COLUMN IF NOT EXISTS available_at TEXT",
+    "ALTER TABLE stage_outbox ADD COLUMN IF NOT EXISTS claimed_by TEXT",
+    "ALTER TABLE stage_outbox ADD COLUMN IF NOT EXISTS claimed_at TEXT",
+    "ALTER TABLE stage_outbox ADD COLUMN IF NOT EXISTS lease_expires_at TEXT",
+    "ALTER TABLE stage_outbox ADD COLUMN IF NOT EXISTS delivery_ack TEXT",
+    "ALTER TABLE stage_outbox ADD COLUMN IF NOT EXISTS last_error TEXT",
+    "ALTER TABLE stage_outbox ADD COLUMN IF NOT EXISTS dead_lettered_at TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_stage_outbox_delivery ON stage_outbox(status,available_at,created_at)",
     """CREATE TABLE IF NOT EXISTS stage_output_manifests (
       manifest_id TEXT PRIMARY KEY, execution_id TEXT NOT NULL UNIQUE, digest TEXT NOT NULL,
       item_count INT NOT NULL, entries TEXT NOT NULL, sealed_at TEXT NOT NULL
@@ -2227,8 +2240,11 @@ class _PgAdapter:
     # v27 is the union of main's v26 workflow-lineage migration and release_root_claims, the
     # pre-provider name reservation that closes the
     # SharePoint-folder creation crash window.
-    _SCHEMA_VERSION = 29
-    _SCHEMA_CHECKSUM_AT_VERSION = "5a1df0d4df99ed5b2d5312844fff7f64"
+    # v30 makes the stage outbox an operational delivery queue. All columns are additive and
+    # existing unpublished rows default to pending; older replicas continue inserting their
+    # original column set and therefore safely produce pending messages for the new dispatcher.
+    _SCHEMA_VERSION = 30
+    _SCHEMA_CHECKSUM_AT_VERSION = "85d15e116c9d16a8a9b4469a94de37b9"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -10974,6 +10990,139 @@ class Store:
                     row["payload"] = None
         return rows
 
+    def claim_stage_outbox(self, dispatcher_id: str, *, limit: int = 50,
+                           lease_seconds: int = 60) -> list[dict]:
+        """Lease due outbox messages without holding a database transaction while publishing.
+
+        The conditional UPDATE is the concurrency fence shared by SQLite and Postgres.  An
+        abandoned lease becomes claimable again; a delivery acknowledgement is terminal and can
+        never be reclaimed.  ``attempts`` counts delivery attempts, including a publisher crash
+        after the remote system accepted a message.  Consumers must therefore deduplicate by the
+        stable ``message_id`` supplied in every returned envelope.
+        """
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+        import json as _json
+        if not dispatcher_id:
+            raise ValueError("dispatcher_id is required")
+        now_dt = _dt.now(_tz.utc)
+        now = now_dt.isoformat()
+        lease_until = (now_dt + _td(seconds=max(1, int(lease_seconds)))).isoformat()
+        limit = max(0, min(int(limit), 500))
+        if not limit:
+            return []
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT message_id FROM stage_outbox WHERE published_at IS NULL "
+                "AND dead_lettered_at IS NULL "
+                "AND (available_at IS NULL OR available_at<=%s) "
+                "AND (status IN ('pending','retry') OR "
+                "(status='claimed' AND lease_expires_at<=%s)) "
+                "ORDER BY created_at,message_id LIMIT %s", (now, now, limit))
+            candidates = [row["message_id"] for row in self._db.fetchall(cur)]
+        claimed = []
+        for message_id in candidates:
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "UPDATE stage_outbox SET status='claimed',claimed_by=%s,claimed_at=%s,"
+                    "lease_expires_at=%s,attempts=attempts+1 WHERE message_id=%s "
+                    "AND published_at IS NULL AND dead_lettered_at IS NULL "
+                    "AND (available_at IS NULL OR available_at<=%s) "
+                    "AND (status IN ('pending','retry') OR "
+                    "(status='claimed' AND lease_expires_at<=%s))",
+                    (dispatcher_id, now, lease_until, message_id, now, now))
+                if (getattr(cur, "rowcount", 0) or 0) != 1:
+                    continue
+                self._db.execute(cur, "SELECT * FROM stage_outbox WHERE message_id=%s",
+                                 (message_id,))
+                row = self._db.fetchone(cur)
+            if row:
+                if isinstance(row.get("payload"), str):
+                    try:
+                        row["payload"] = _json.loads(row["payload"])
+                    except Exception:
+                        pass
+                claimed.append(row)
+        return claimed
+
+    def acknowledge_stage_outbox(self, message_id: str, dispatcher_id: str, *,
+                                 delivery_ack: str | None = None) -> bool:
+        """Record confirmed delivery. Repeating the same acknowledgement is a safe no-op."""
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE stage_outbox SET status='delivered',published_at=%s,delivery_ack=%s,"
+                "lease_expires_at=NULL,last_error=NULL WHERE message_id=%s AND status='claimed' "
+                "AND claimed_by=%s AND published_at IS NULL AND dead_lettered_at IS NULL",
+                (now, delivery_ack, message_id, dispatcher_id))
+            changed = (getattr(cur, "rowcount", 0) or 0) == 1
+            if changed:
+                return True
+            self._db.execute(cur,
+                "SELECT status,claimed_by,delivery_ack FROM stage_outbox WHERE message_id=%s",
+                (message_id,))
+            row = self._db.fetchone(cur)
+        return bool(row and row.get("status") == "delivered" and
+                    (delivery_ack is None or row.get("delivery_ack") == delivery_ack))
+
+    def fail_stage_outbox(self, message_id: str, dispatcher_id: str, error: str, *,
+                          max_attempts: int = 8, backoff_seconds: int = 5) -> str:
+        """Release a failed delivery for retry, or durably dead-letter its final attempt."""
+        from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+        now_dt = _dt.now(_tz.utc)
+        now = now_dt.isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT attempts FROM stage_outbox WHERE message_id=%s AND status='claimed' "
+                "AND claimed_by=%s AND published_at IS NULL AND dead_lettered_at IS NULL",
+                (message_id, dispatcher_id))
+            row = self._db.fetchone(cur)
+            if not row:
+                return "stale"
+            attempts = int(row.get("attempts") or 0)
+            if attempts >= max(1, int(max_attempts)):
+                self._db.execute(cur,
+                    "UPDATE stage_outbox SET status='dead',dead_lettered_at=%s,last_error=%s,"
+                    "lease_expires_at=NULL WHERE message_id=%s AND status='claimed' AND claimed_by=%s",
+                    (now, str(error)[:2000], message_id, dispatcher_id))
+                return "dead"
+            delay = max(0, int(backoff_seconds)) * (2 ** max(0, attempts - 1))
+            available = (now_dt + _td(seconds=min(delay, 3600))).isoformat()
+            self._db.execute(cur,
+                "UPDATE stage_outbox SET status='retry',available_at=%s,last_error=%s,"
+                "claimed_by=NULL,claimed_at=NULL,lease_expires_at=NULL "
+                "WHERE message_id=%s AND status='claimed' AND claimed_by=%s",
+                (available, str(error)[:2000], message_id, dispatcher_id))
+            return "retry"
+
+    def stage_outbox_health(self, *, owner: str | None = None) -> dict:
+        """Bounded operational truth for delivery lag, retries and dead letters."""
+        from datetime import datetime as _dt, timezone as _tz
+        scope = (" AND execution_id IN (SELECT execution_id FROM stage_executions "
+                 "WHERE owner_email=%s)") if owner is not None else ""
+        params = (owner,) if owner is not None else ()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT status,COUNT(*) AS n FROM stage_outbox WHERE 1=1" + scope +
+                " GROUP BY status", params)
+            counts = {str(row["status"]): int(row["n"] or 0) for row in self._db.fetchall(cur)}
+            self._db.execute(cur,
+                "SELECT created_at FROM stage_outbox WHERE published_at IS NULL "
+                "AND dead_lettered_at IS NULL" + scope + " ORDER BY created_at LIMIT 1", params)
+            oldest = (self._db.fetchone(cur) or {}).get("created_at")
+        oldest_age = None
+        if oldest:
+            try:
+                stamp = _dt.fromisoformat(str(oldest).replace("Z", "+00:00"))
+                if stamp.tzinfo is None:
+                    stamp = stamp.replace(tzinfo=_tz.utc)
+                oldest_age = max(0, int((_dt.now(_tz.utc) - stamp).total_seconds()))
+            except (TypeError, ValueError):
+                pass
+        return {"pending": counts.get("pending", 0), "claimed": counts.get("claimed", 0),
+                "retrying": counts.get("retry", 0), "delivered": counts.get("delivered", 0),
+                "dead_lettered": counts.get("dead", 0),
+                "oldest_undelivered_at": oldest, "oldest_undelivered_age_s": oldest_age}
+
     def record_side_effect_receipt(self, *, execution_id: str, work_item_id: str | None,
                                    effect_type: str, destination: str, content_digest: str,
                                    receipt: dict | None = None) -> dict:
@@ -11069,6 +11218,10 @@ class Store:
                 "FROM stage_attempts WHERE execution_id=%s AND state='cancel_requested'",
                 (execution_id,))
             cancellation = self._db.fetchone(cur) or {}
+            self._db.execute(cur,
+                "SELECT status,COUNT(*) AS count FROM stage_outbox WHERE execution_id=%s "
+                "GROUP BY status", (execution_id,))
+            outbox_partitions = {r["status"]: int(r["count"]) for r in self._db.fetchall(cur)}
         expected = execution.get("expected_items")
         observed = sum(partitions.values())
         terminal = sum(partitions.get(s, 0) for s in ("completed", "failed", "cancelled", "skipped"))
@@ -11097,6 +11250,11 @@ class Store:
                        "cancelled": partitions.get("cancelled", 0)}},
             "attempts": {"unit": "worker attempts", "total": sum(attempt_partitions.values()),
                          **attempt_partitions},
+            "delivery": {"unit": "messages", "pending": outbox_partitions.get("pending", 0),
+                         "claimed": outbox_partitions.get("claimed", 0),
+                         "retrying": outbox_partitions.get("retry", 0),
+                         "delivered": outbox_partitions.get("delivered", 0),
+                         "dead_lettered": outbox_partitions.get("dead", 0)},
             "integrity": {"ok": not violations,
                           "affected": ["work_item_partition"] if violations else [],
             "violations": violations},
