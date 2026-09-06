@@ -221,6 +221,8 @@ _map_many([
     ("GET", "/stage-executions/{execution_id}/snapshot"),
     ("GET", "/stage-executions/{execution_id}/events"),
 ], {"operations.view", "discover.view", "assess.view", "remediate.view", "release.view"})
+_map_many([("GET", "/scans/{sid}/stage-lineage")],
+          {"operations.view", "discover.view", "assess.view", "remediate.view", "release.view"})
 _map_many([
     ("POST", "/workflows/{workflow_id}/stages/{stage}/executions"),
     ("POST", "/stage-executions/{execution_id}/pause"),

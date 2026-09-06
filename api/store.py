@@ -4463,6 +4463,10 @@ class Store:
                          # Release executions and their provider destinations are customer data.
                          "release_documents", "release_roots", "release_root_claims",
                          "release_executions",
+                         # Canonical execution history, delivery state, manifests and receipts
+                         # are all records of customer work and must leave with the scan data.
+                         "stage_executions", "stage_work_items", "stage_attempts", "stage_events",
+                         "stage_outbox", "stage_output_manifests", "side_effect_receipts",
                          "content_workspaces",  # ADR 0044 — a customer's own workspace, not config
                          "content_workspace_documents", "content_workspace_document_versions",
                          "orchestration_events",  # operational log — carries owner_email, customer data
@@ -11236,7 +11240,7 @@ class Store:
                     try:
                         row["payload"] = _json.loads(row["payload"])
                     except Exception:
-                        pass
+                        swallowed("store.claim_stage_outbox: decoding the event payload failed")
                 claimed.append(row)
         return claimed
 
