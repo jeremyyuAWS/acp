@@ -9,16 +9,26 @@ const publish = readFileSync(join(here, 'Publish.jsx'), 'utf8')
 
 describe('Release ZIP package', () => {
   it('posts selected names through the authenticated API and saves one ZIP', () => {
-    expect(api).toMatch(/export const downloadReleasePackage = \(scanId, files\)/)
+    expect(api).toMatch(/export const downloadReleasePackage = \(scanId, files, packageName = ''\)/)
     expect(api).toMatch(/\/release\/package/)
     expect(api).toMatch(/headers: headers\(\{ 'Content-Type': 'application\/json' \}\)/)
-    expect(api).toMatch(/body: JSON\.stringify\(\{ files \}\)/)
-    expect(api).toMatch(/a\.download = match\?\.\[1\] \|\| `acp-release-\$\{scanId\}\.zip`/)
+    expect(api).toMatch(/package_name: packageName\.trim\(\)/)
+    expect(api).toMatch(/requestedName \? `\$\{requestedName\}\.zip`/)
   })
 
   it('explains the package contents before download', () => {
     expect(publish).toMatch(/One ZIP with the source folder structure and a release manifest/)
-    expect(publish).toMatch(/packaged in one ZIP with folder structure and a manifest/)
+    expect(publish).toMatch(/\.zip” with folder structure and a manifest/)
     expect(publish).toMatch(/Download ZIP \(\$\{selectedReady\.length\}\)/)
+  })
+
+  it('collects and validates package or destination names before review', () => {
+    expect(publish).toMatch(/ZIP filename/)
+    expect(publish).toMatch(/Release folder name/)
+    expect(publish).toMatch(/validateDeliveryName/)
+    expect(publish).toMatch(/disabled=\{Boolean\(deliveryNameError\)\}/)
+    expect(publish).toMatch(/folderName: releaseFolder\?\.name \|\| releaseFolderName\.trim\(\)/)
+    expect(publish).toMatch(/retries keep the same destination/)
+    expect(publish).toMatch(/Release folder: “\{confirm\.folderName\}”/)
   })
 })

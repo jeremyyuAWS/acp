@@ -26,6 +26,19 @@ def test_release_identity_and_roots_stay_stable_while_total_expands(isolated_sto
     assert root["folder_id"] == "folder-a"
 
 
+def test_custom_folder_name_is_saved_once_and_stays_stable_on_retry(isolated_store):
+    owner = "owner@example.com"
+    _scan(isolated_store, "scan-named", owner)
+    first = isolated_store.ensure_release_execution(
+        "scan-named", owner, "sharepoint", 2,
+        preferred_folder_name="Q3 Accessibility Release")
+    retry = isolated_store.ensure_release_execution(
+        "scan-named", owner, "sharepoint", 2,
+        preferred_folder_name="A different name")
+    assert first["folder_name"] == "Q3 Accessibility Release"
+    assert retry["folder_name"] == "Q3 Accessibility Release"
+
+
 def test_later_approvals_expand_and_reopen_a_completed_release(isolated_store):
     owner = "owner@example.com"
     _scan(isolated_store, "scan-expand", owner)

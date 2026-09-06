@@ -51,7 +51,7 @@ describe('Release Center: confirmation before a release', () => {
     const s = pub()
     expect(s).toMatch(/role="dialog" aria-modal="true"/)
     expect(s).toMatch(/releaseConfirmLines\(\{ count: cnt, provider: releaseProvider, anyDrive: batchAnyDrive/)
-    expect(s).toMatch(/setConfirm\(null\); if \(isBatch\) publishAll\(targets\.map\(\(f\) => f\.file\)\); else publish\(confirm\.file\)/)
+    expect(s).toMatch(/setConfirm\(null\); if \(isBatch\) publishAll\(targets\.map\(\(f\) => f\.file\), confirm\.folderName \|\| ''\); else publish\(confirm\.file\)/)
     // Escape closes it.
     expect(s).toMatch(/if \(e\.key === 'Escape'\) setConfirm\(null\)/)
   })

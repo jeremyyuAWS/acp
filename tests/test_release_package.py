@@ -84,3 +84,25 @@ def test_package_fails_whole_request_when_a_copy_is_unavailable(monkeypatch):
             scans.ReleasePackageRequest(files=["report.pdf", "form.docx"]))
     assert exc.value.status_code == 409
     assert "form.docx" in exc.value.detail
+
+
+def test_package_uses_a_valid_custom_name_in_header_and_manifest(monkeypatch):
+    monkeypatch.setattr(scans.core, "store", _Store())
+    monkeypatch.setattr(scans, "_remediated_bytes", lambda owner, sid, name: b"corrected")
+    response = scans.download_release_package(
+        "scan-1", _request(),
+        scans.ReleasePackageRequest(files=["report.pdf"], package_name="Q3 Accessible Files.zip"))
+    assert 'filename="Q3 Accessible Files.zip"' in response.headers["content-disposition"]
+    with zipfile.ZipFile(io.BytesIO(asyncio.run(_response_body(response)))) as archive:
+        manifest = json.loads(archive.read("release-manifest.json"))
+    assert manifest["package_name"] == "Q3 Accessible Files"
+
+
+def test_package_rejects_an_unsafe_custom_name(monkeypatch):
+    monkeypatch.setattr(scans.core, "store", _Store())
+    with pytest.raises(HTTPException) as exc:
+        scans.download_release_package(
+            "scan-1", _request(),
+            scans.ReleasePackageRequest(files=["report.pdf"], package_name="Q3/exports"))
+    assert exc.value.status_code == 422
+    assert "ZIP filename" in exc.value.detail

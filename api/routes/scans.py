@@ -11,6 +11,7 @@ import threading
 import uuid
 import zipfile
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import RedirectResponse, Response, StreamingResponse
@@ -3195,7 +3196,14 @@ def publish_files(sid: str, request: Request, body: dict):
     source = scan.get("run", {}).get("source") or "local"
     eligible = [row for row in scan.get("files", [])
                 if row.get("compliant") and row.get("remediated_at")]
-    release = core.store.ensure_release_execution(sid, owner, source, len(eligible))
+    try:
+        preferred_folder_name = _publish.normalize_release_name(
+            body.get("release_folder_name"), field="Release folder name")
+    except _publish.UnsafeReleasePath as exc:
+        raise HTTPException(422, str(exc)) from exc
+    release = core.store.ensure_release_execution(
+        sid, owner, source, len(eligible),
+        preferred_folder_name=preferred_folder_name)
     release_id = release["id"]
     created_at = release["created_at"]
     folder_name = release["folder_name"]
@@ -3305,6 +3313,7 @@ def publish_files(sid: str, request: Request, body: dict):
                     detail = _publish.ensure_published_folder(
                         drive_svc, release_id,
                         released_at=datetime.fromisoformat(created_at.replace("Z", "+00:00")),
+                        folder_name=folder_name,
                         return_details=True)
                     root = core.store.record_release_root(
                         release_id, owner, "drive", location, detail["id"],
@@ -3486,6 +3495,7 @@ def get_release_manifest(sid: str, request: Request):
 
 class ReleasePackageRequest(BaseModel):
     files: list[str]
+    package_name: str | None = None
 
 
 def _remediated_bytes(owner: str, scan_id: str, filename: str) -> bytes | None:
@@ -3516,6 +3526,14 @@ def download_release_package(sid: str, request: Request, body: ReleasePackageReq
         raise HTTPException(404, f"corrected file not found: {unknown[0]}")
 
     import publish as _publish
+    try:
+        requested_package_name = (body.package_name or "").strip()
+        if requested_package_name.lower().endswith(".zip"):
+            requested_package_name = requested_package_name[:-4]
+        package_name = _publish.normalize_release_name(
+            requested_package_name, field="ZIP filename")
+    except _publish.UnsafeReleasePath as exc:
+        raise HTTPException(422, str(exc)) from exc
     owner = _owner(request)
     source = (scan.get("run") or {}).get("source") or "local"
     documents: list[dict] = []
@@ -3556,6 +3574,7 @@ def download_release_package(sid: str, request: Request, body: ReleasePackageReq
                 "scan_id": sid,
                 "snapshot_id": core.store.stage_snapshot_id(sid),
                 "actor": owner,
+                "package_name": package_name,
                 "original_files_unchanged": True,
                 "documents": documents,
                 "release": release_manifest,
@@ -3577,10 +3596,14 @@ def download_release_package(sid: str, request: Request, body: ReleasePackageReq
         finally:
             output.close()
 
-    filename = f'acp-release-{re.sub(r"[^A-Za-z0-9._-]", "_", sid)}.zip'
+    filename = f'{package_name or f"acp-release-{re.sub(r"[^A-Za-z0-9._-]", "_", sid)}"}.zip'
+    ascii_filename = re.sub(r"[^A-Za-z0-9._ -]", "_", filename)
+    disposition = f'attachment; filename="{ascii_filename}"'
+    if ascii_filename != filename:
+        disposition += f"; filename*=UTF-8''{quote(filename)}"
     return StreamingResponse(
         stream_package(), media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"',
+        headers={"Content-Disposition": disposition,
                  "Cache-Control": "private, no-store",
                  "Content-Length": str(content_length)})
 

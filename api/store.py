@@ -7829,7 +7829,8 @@ class Store:
         return now
 
     def ensure_release_execution(self, scan_id: str, owner: str, source: str,
-                                 documents_total: int) -> dict:
+                                 documents_total: int, *,
+                                 preferred_folder_name: str | None = None) -> dict:
         """Create/reconcile the one durable Release execution for a scan atomically.
 
         The total is grow-only: later approvals expand the same release, while a stale retry can
@@ -7840,8 +7841,9 @@ class Store:
         requested_total = max(0, int(documents_total))
         release_id = uuid.uuid4().hex[:16]
         from datetime import datetime, timezone
-        folder_name = datetime.fromisoformat(now).astimezone(timezone.utc).strftime(
-            "%Y-%m-%d %H-%M UTC")
+        folder_name = (preferred_folder_name or
+                       datetime.fromisoformat(now).astimezone(timezone.utc).strftime(
+                           "%Y-%m-%d %H-%M UTC"))
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO release_executions(id,scan_id,owner_email,source,folder_name,"
