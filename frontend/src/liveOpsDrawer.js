@@ -2242,6 +2242,9 @@ export function workflowStageRuns(snapshot = {}) {
         last_error_class: stage.error_class || null,
         max_attempts_seen: num(stage.attempt),
         stalled: stage.stalled === true,
+        paused: stage.paused === true,
+        cancel_requested: stage.cancel_requested === true,
+        cancel_requested_at: stage.cancel_requested_at || null,
         waiting_reason: stage.waiting_reason || null,
       }
       // Never replace live-only operational facts such as current_file, worker heartbeat, queue

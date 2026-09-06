@@ -340,6 +340,16 @@ describe('Primary visualization per node', () => {
     expect(buttonNamed(container, 'Stop assess stage')).toBeFalsy()
   })
 
+  it('shows a durable stop request and prevents a duplicate stop action', async () => {
+    const run = { ...snapshot.runs[0], cancel_requested: true,
+      cancel_requested_at: iso(-30) }
+    const container = await mount({ nodeId: 's1:assess', node: { kind: 'run', run },
+      onCancelStage: async () => ({}) })
+    expect(container.textContent).toContain('Stop requested')
+    expect(container.textContent).toContain('No second stop request is needed')
+    expect(buttonNamed(container, 'Stop assess stage')).toBeFalsy()
+  })
+
   it('labels the remaining-time figure as an estimate, and names what it projects from', async () => {
     // WRITTEN WRONG FIRST, and the bite-check caught it: the original asserted /estimate/i against
     // the whole tile, which the LABEL "ESTIMATED REMAINING" satisfies on its own — so it passed

@@ -12,7 +12,7 @@ import {
   revisionComparisonModel,
   arcPath, capacityMatchesService, chartModel,
   capacityForService, componentState, defaultMetricFor, eventClock, eventsForNode, filterEvents,
-  formatDuration,
+  formatDuration, secondsSince,
   REPLICA_STATES, gaugeModel, metricGroups, nodeTypeLabel, outputModel, provenance, queueModel,
   THROUGHPUT_SERIES, replicaLifecycle, reported, requestHealth, saturationModel, scaleEvents,
   scaleExplanation, throughputModel, tracingModel, workerJobHealth,
@@ -1281,8 +1281,9 @@ function RunRecovery({ run, onCancel, onResume, onRecover }) {
   const [confirming, setConfirming] = useState(null)
   const [state, setState] = useState({ kind: 'idle', message: '' })
   const stage = String(run?.stage || '').toLowerCase()
+  const stopping = run?.cancel_requested === true
   const active = run?.status === 'active' && (Number(run?.queued || 0) + Number(run?.running || 0) > 0)
-  const canCancel = active && ['discover', 'assess', 'remediate', 'release'].includes(stage) && onCancel
+  const canCancel = active && !stopping && ['discover', 'assess', 'remediate', 'release'].includes(stage) && onCancel
   const canResume = stage === 'remediate' && run?.paused === true && onResume
   const canRecover = run?.status === 'failed' && ['assess', 'remediate', 'release'].includes(stage) && onRecover
   const actionFinished = state.kind === 'done'
@@ -1290,7 +1291,7 @@ function RunRecovery({ run, onCancel, onResume, onRecover }) {
     setConfirming(null)
     setState({ kind: 'idle', message: '' })
   }, [run?.scan_id, stage])
-  if (!canCancel && !canResume && !canRecover && state.kind === 'idle') return null
+  if (!canCancel && !canResume && !canRecover && !stopping && state.kind === 'idle') return null
 
   const act = async (kind) => {
     const action = kind === 'cancel' ? onCancel : onResume
@@ -1309,6 +1310,12 @@ function RunRecovery({ run, onCancel, onResume, onRecover }) {
 
   return <div style={{ ...PANEL, marginTop: 10, borderColor: confirming ? TONE.warn : 'var(--line)' }}>
     <span style={LABEL}>OPERATOR RECOVERY</span>
+    {stopping && <p role="status" style={{ margin: '0 0 8px', fontSize: 12 }}>
+      <b>Stop requested</b>{run.cancel_requested_at ? ` · ${formatDuration(secondsSince(run.cancel_requested_at))} ago` : ''}
+      <span className="muted" style={{ display: 'block', marginTop: 3 }}>
+        Running work is draining at its next safe checkpoint. No second stop request is needed.
+      </span>
+    </p>}
     {canRecover && <button type="button" className="ghost small" onClick={() => onRecover(run)}>
       {stage === 'remediate' ? 'Open remediation exceptions' : `Open ${stage} recovery`}
     </button>}

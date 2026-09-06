@@ -11828,7 +11828,7 @@ class Store:
                 # this method is cross-user, and an error string can carry another tenant's
                 # filename, while a vocabulary term cannot.
                 "SELECT j.scan_id,j.type,j.status,j.created_at,j.updated_at,j.payload,"
-                "j.locked_at,j.claimed_at,j.error_class,j.attempts,rh.paused_at,"
+                "j.locked_at,j.claimed_at,j.error_class,j.attempts,j.cancel_requested_at,rh.paused_at,"
                 "sr.owner_email,sr.source,sr.files,sr.files_done,sr.live_checkpoint,"
                 "COALESCE(sr.workflow_id,sr.id) AS workflow_id,"
                 "COALESCE(sr.workflow_revision,1) AS workflow_revision "
@@ -11859,6 +11859,7 @@ class Store:
                 "current_job_type": None, "current_rule_id": None,
                 "current_job_started_at": None, "last_error_class": None, "max_attempts_seen": 0,
                 "paused": stage == "remediate" and bool(row.get("paused_at")),
+                "cancel_requested": False, "cancel_requested_at": None,
                 # SharePoint COVERAGE, for the operations map. A 30-site walk is one long
                 # "discovering" bar there today: the file count ticks and nothing says which
                 # sites are done, which are queued, or that one is blocked on a consent that
@@ -11885,6 +11886,14 @@ class Store:
                     recent.add(key)
             if status in ("queued", "running"):
                 active.add(key)
+            # A running row keeps its status until the worker reaches a safe cancellation
+            # checkpoint. Carry the durable request separately so Live Ops says "stopping"
+            # during that interval rather than continuing to claim ordinary activity.
+            requested_at = row.get("cancel_requested_at")
+            if status == "running" and requested_at:
+                item["cancel_requested"] = True
+                if str(requested_at) > str(item.get("cancel_requested_at") or ""):
+                    item["cancel_requested_at"] = requested_at
             # Retry pressure and the classified reason, for every job in the group rather than
             # only the running one: a stage that is retrying is a different situation from one
             # that is merely busy, and the newest running job may be the one attempt that is fine.

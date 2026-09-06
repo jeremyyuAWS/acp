@@ -51,6 +51,7 @@ function age(iso) {
 export const JOB_STATE_FILTERS = [
   { key: 'all', label: 'All' },
   { key: 'active', label: 'Active' },
+  { key: 'stopping', label: 'Stop requested' },
   { key: 'attention', label: 'Needs attention' },
   { key: 'stalled', label: 'Stalled' },
   { key: 'paused', label: 'Paused' },
@@ -60,6 +61,7 @@ export const JOB_STATE_FILTERS = [
 
 /** One stable vocabulary for card labels, filtering and assistive text. */
 export function runOperationalState(run = {}) {
+  if (run.cancel_requested === true) return 'stopping'
   if (run.paused === true) return 'paused'
   if (run.stalled === true) return 'stalled'
   if (run.status === 'failed' || Number(run.failed || 0) > 0) return 'attention'
@@ -299,7 +301,8 @@ function RunNode({ data }) {
     : operationalState === 'attention' ? 'Needs attention'
       : operationalState === 'cancelled' ? 'Cancelled'
         : operationalState === 'stalled' ? 'Stalled'
-          : operationalState === 'paused' ? 'Paused' : `${pct}%`
+          : operationalState === 'paused' ? 'Paused'
+            : operationalState === 'stopping' ? 'Stop requested' : `${pct}%`
   return <div title="Select for live run details; double-click to open charts"
     style={{ width: 225, padding: 12,
       ...tileStyle('run', accent),
@@ -327,7 +330,8 @@ function RunNode({ data }) {
       {data.run.queued} waiting{data.run.queue_position ? ` · queue position ${data.run.queue_position}` : ''}
     </div>}
     {operationalState !== 'active' && data.run.updated_at && <div style={{ fontSize: 10.5, marginTop: 5, color: 'var(--muted)' }}>
-      {statusLabel} · last changed {age(data.run.updated_at)} ago
+      {statusLabel} · {operationalState === 'stopping' ? 'requested' : 'last changed'} {age(
+        operationalState === 'stopping' ? data.run.cancel_requested_at : data.run.updated_at)} ago
     </div>}
     <Handle type="source" position={Position.Right} />
   </div>
@@ -887,6 +891,7 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
   const pressure = PRESSURE[summary.pressure] || PRESSURE.healthy
   const stageRows = Object.entries(summary.by_stage || {})
   const services = workerServiceRows(summary)
+  const recovery = summary.recovery || {}
   return <section className="panel" style={{ padding: 16, marginBottom: 20 }} aria-label="Live Azure processing traffic">
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
       <div><b>Live Azure traffic</b><div className="muted" style={{ fontSize: 12 }}>Active worker flow plus the last 15 minutes</div></div>
@@ -901,6 +906,19 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
         <b style={{ fontSize: 20 }}>{summary.queued || 0} jobs</b><div className="muted">{summary.waiting_users || 0} users waiting · tenant-fair</div></div>
       <div className="panel" style={{ padding: 12 }}><div className="muted" style={{ fontSize: 11 }}>UTILIZATION</div>
         <b style={{ fontSize: 20 }}>{summary.utilization_pct ?? '—'}%</b><div className="muted">{summary.worker_tier_alive ? 'Worker tier online' : 'Worker tier unavailable'}</div></div>
+      <div className="panel" style={{ padding: 12 }} aria-label="Recovery activity in the last 24 hours">
+        <div className="muted" style={{ fontSize: 11 }}>RECOVERY · 24 HOURS</div>
+        <b style={{ fontSize: 20 }}>{recovery.cancel_resolved ?? 0} resolved</b>
+        <div className="muted">{recovery.cancel_pending ?? 0} stopping · {recovery.resumes ?? 0} resumed</div>
+        <div className="muted" style={{ fontSize: 10.5, marginTop: 3 }}>
+          {recovery.cancel_success_pct == null ? 'No stop requests in window'
+            : `${recovery.cancel_success_pct}% completed`
+              + (recovery.median_cancel_seconds == null ? '' : ` · median ${formatDuration(recovery.median_cancel_seconds)}`)}
+        </div>
+        {recovery.latest_action_at && <div className="muted" style={{ fontSize: 10.5, marginTop: 3 }}>
+          Latest action {age(recovery.latest_action_at)} ago
+        </div>}
+      </div>
     </div>
     <AzureCapacity capacity={capacity} state={capacityState} />
     <LiveOpsCostSummary />

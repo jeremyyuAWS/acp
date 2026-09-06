@@ -142,6 +142,8 @@ describe('Admin live traffic graph', () => {
       { scan_id: 'one', stage: 'assess', owner: 'a', source: 'drive', status: 'active', stalled: true },
       { scan_id: 'two', stage: 'remediate', owner: 'b', source: 'sharepoint', status: 'active', paused: true },
       { scan_id: 'three', stage: 'assess', owner: 'c', source: 'drive', status: 'failed' },
+      { scan_id: 'four', stage: 'release', owner: 'd', source: 'drive', status: 'active',
+        cancel_requested: true, cancel_requested_at: '2026-09-05T10:00:00Z' },
     ] })
 
     const stalled = trafficGraphForTab(graph, 'jobs', { state: 'stalled' })
@@ -152,9 +154,12 @@ describe('Admin live traffic graph', () => {
       .toEqual(['workflow:two', 'two:remediate'])
     expect(trafficGraphForTab(graph, 'jobs', { state: 'attention' }).nodes.map((node) => node.id))
       .toEqual(['workflow:three', 'three:assess'])
+    expect(trafficGraphForTab(graph, 'jobs', { state: 'stopping' }).nodes.map((node) => node.id))
+      .toEqual(['workflow:four', 'four:release'])
   })
 
   it('uses the same state vocabulary for cards and workflow filters', () => {
+    expect(runOperationalState({ cancel_requested: true, paused: true })).toBe('stopping')
     expect(runOperationalState({ paused: true, stalled: true, status: 'failed' })).toBe('paused')
     expect(runOperationalState({ stalled: true, status: 'active' })).toBe('stalled')
     expect(runOperationalState({ status: 'active', failed: 1 })).toBe('attention')
@@ -162,7 +167,7 @@ describe('Admin live traffic graph', () => {
     expect(runOperationalState({ status: 'recent' })).toBe('recent')
     expect(runOperationalState({ status: 'active' })).toBe('active')
     expect(JOB_STATE_FILTERS.map((item) => item.key)).toEqual([
-      'all', 'active', 'attention', 'stalled', 'paused', 'cancelled', 'recent',
+      'all', 'active', 'stopping', 'attention', 'stalled', 'paused', 'cancelled', 'recent',
     ])
   })
 
@@ -170,7 +175,11 @@ describe('Admin live traffic graph', () => {
     expect(source).toContain('aria-label="Filter workflows by state"')
     expect(source).toContain('aria-label="Workflow map key"')
     expect(source).toContain('MOVING LINE</b> · work active or waiting')
-    expect(source).toContain('last changed {age(data.run.updated_at)} ago')
+    expect(source).toContain("operationalState === 'stopping' ? 'requested' : 'last changed'")
+    expect(source).toContain('RECOVERY · 24 HOURS')
+    expect(source).toContain('recovery.cancel_success_pct')
+    expect(source).toContain('recovery.median_cancel_seconds')
+    expect(drawer).toContain('Running work is draining at its next safe checkpoint')
   })
 
   it('uses crisp non-scaling paths at every zoom', () => {

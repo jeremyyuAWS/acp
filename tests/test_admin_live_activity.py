@@ -207,6 +207,22 @@ def test_admin_live_activity_exposes_the_durable_remediation_hold(isolated_store
     assert "paused_by" not in row
 
 
+def test_admin_live_activity_exposes_a_running_stage_cancellation_request(isolated_store):
+    isolated_store.save_scan(_scan())
+    job_id = isolated_store.enqueue_job(
+        "scan_assess", {"file": "Private Report.docx"}, scan_id="scan-live-1", batch_id="batch-1")
+    claimed = isolated_store.claim_job("test-worker")
+    assert claimed and claimed["id"] == job_id
+
+    result = isolated_store.request_stage_cancel(
+        "scan-live-1", "assess", actor="operator@example.org")
+    assert result["requested"] == 1
+    row = isolated_store.admin_live_activity()[0]
+    assert row["cancel_requested"] is True
+    assert row["cancel_requested_at"]
+    assert "operator@example.org" not in str(row)
+
+
 def test_admin_live_activity_carries_bounded_sanitized_remediation_events(isolated_store):
     isolated_store.save_scan(_scan())
     isolated_store.enqueue_job(
@@ -342,6 +358,34 @@ def test_workflow_contract_flags_a_running_stage_with_a_stale_worker_heartbeat()
     assert stage["waiting_reason"] == "worker_heartbeat_stale"
 
 
+def test_workflow_contract_carries_the_stop_request_into_the_stage():
+    run = {"scan_id": "scan-stopping", "stage": "assess", "owner": "a@example.org",
+           "source": "drive", "running": 1, "queued": 0, "completed": 3, "total": 12,
+           "cancel_requested": True, "cancel_requested_at": "2026-09-05T10:03:00+00:00"}
+    stage = system._workflow_rows([run])[0]["stages"][0]
+    assert stage["cancel_requested"] is True
+    assert stage["cancel_requested_at"] == "2026-09-05T10:03:00+00:00"
+
+
+def test_recovery_summary_matches_only_requested_stage_cancellations():
+    events = [
+        {"kind": "workflow.stage_cancel_requested", "scan_id": "s1", "stage": "assess",
+         "correlation_id": "b1", "occurred_at": "2026-09-05T10:00:00+00:00"},
+        {"kind": "job.stage_cancelled", "scan_id": "s1", "stage": "assess",
+         "correlation_id": "b1", "occurred_at": "2026-09-05T10:01:00+00:00"},
+        {"kind": "job.stage_cancelled", "scan_id": "s2", "stage": "discover",
+         "correlation_id": "unrequested", "occurred_at": "2026-09-05T10:02:00+00:00"},
+        {"kind": "workflow.stage_resumed", "scan_id": "s3", "stage": "remediate",
+         "correlation_id": "r1", "occurred_at": "2026-09-05T10:03:00+00:00"},
+    ]
+    assert system._recovery_summary(events) == {
+        "window_hours": 24, "cancel_requests": 1, "cancel_resolved": 1,
+        "cancel_pending": 0, "resumes": 1,
+        "cancel_success_pct": 100, "median_cancel_seconds": 60,
+        "latest_action_at": "2026-09-05T10:03:00+00:00",
+    }
+
+
 def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(monkeypatch):
     class ActivityStore:
         def worker_tier_status(self):
@@ -386,6 +430,9 @@ def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(mo
         "recent_workflows": 0,
         "workflow_correlation": {"attributed_stage_runs": 2,
                                  "unlinked_active_jobs": None, "complete": None},
+        "recovery": {"window_hours": 24, "cancel_requests": 0, "cancel_resolved": 0,
+                     "cancel_pending": 0, "cancel_success_pct": None,
+                     "median_cancel_seconds": None, "resumes": 0, "latest_action_at": None},
         "by_stage": {
             # `findings` is None, not 0: this stub reports no findings count, and "no findings yet"
             # is a different fact from "findings were not counted for this stage".
