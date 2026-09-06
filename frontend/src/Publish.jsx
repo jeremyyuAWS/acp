@@ -654,7 +654,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         {ready.length === 0 ? (
           pendingReview.items > 0 ? (
             <div className="muted" style={{ marginTop: 10, padding: '12px 14px', borderRadius: 9, background: '#FBF1DF', border: '1px solid #EAD9BF', color: '#7A5A12' }}>
-              <b>No files are ready for release.</b> {pendingReview.items} finding{pendingReview.items !== 1 ? 's' : ''} await{pendingReview.items === 1 ? 's' : ''} human review across {pendingReview.files} document{pendingReview.files !== 1 ? 's' : ''}. A document appears here after all its review items are approved.
+              <b>No files are ready for release.</b> {pendingReview.items} finding{pendingReview.items !== 1 ? 's' : ''} await{pendingReview.items === 1 ? 's' : ''} human review across {pendingReview.files} document{pendingReview.files !== 1 ? 's' : ''}. A document appears here after all its items are approved in <b>Remediate → step 3 · Review queue</b>.
               <div style={{ marginTop: 9 }}><button className="qbtn approve" onClick={() => document.getElementById('workflow-tab-remediate')?.click()}>Review {pendingReview.files} files</button></div>
             </div>
           ) : (
