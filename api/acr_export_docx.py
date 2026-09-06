@@ -165,12 +165,31 @@ def _repeat_header_row(row) -> None:
     trpr.append(header)
 
 
-def render(projection: dict, *, language: str = DOCUMENT_LANGUAGE) -> bytes:
+# What a holder of the published Word document needs in order to check it themselves, and the
+# sentence that stops the digest being read as something it is not. Kept in step with
+# `acr_export_pdf.DIGEST_IS_NOT_A_SIGNATURE` deliberately: the two documents make the same claim
+# about the same digest, and a reader comparing a PDF and a Word file of one revision must not
+# find them saying different things about it.
+DIGEST_IS_NOT_A_SIGNATURE = (
+    "This digest is a SHA-256 over the published snapshot's contents. It is recomputable by "
+    "anyone holding the same snapshot, which makes an alteration detectable. It is not a digital "
+    "signature: it carries no key and identifies no signer, so it establishes what the content is "
+    "and never who produced it."
+)
+
+
+def render(projection: dict, *, language: str = DOCUMENT_LANGUAGE,
+           provenance: dict | None = None) -> bytes:
     """One accessible .docx from the same projection every other export renders.
 
     Deliberately plain. There is no colour anywhere in this document: the conformance level is
     the cell's text and nothing else carries meaning (1.4.1), which is also why the table needs no
     legend and survives being printed in black and white.
+
+    `provenance`, when given, is a published revision's `{revision, digest, published_at,
+    published_by, verified}` — see `render_published`. It is a parameter rather than a second
+    renderer for the reason `acr_export_pdf.published_html` exists: two call sites assembling the
+    same document differently is how one of them ends up missing a disclosure.
     """
     try:
         from docx import Document
@@ -193,6 +212,22 @@ def render(projection: dict, *, language: str = DOCUMENT_LANGUAGE) -> bytes:
 
     document.add_paragraph(NOT_A_VPAT)
     document.add_paragraph(UNRUN_GATES)
+
+    if provenance:
+        # After the two caveats and before the tables, so a reader who stops on page one has seen
+        # what has not been validated AND which frozen record this is. The digest is printed in
+        # full: a truncated one cannot be recomputed and compared, which is the only thing it is
+        # for.
+        checked = ("verified against its contents when this document was produced"
+                   if provenance.get("verified")
+                   else "NOT verified — this document was produced without checking the digest")
+        document.add_paragraph(
+            f"Published revision {provenance.get('revision')}. "
+            f"Published {provenance.get('published_at') or 'unknown'} "
+            f"by {provenance.get('published_by') or 'unknown'}. "
+            f"This is an immutable published record and is not the current draft. "
+            f"Content digest (SHA-256): {provenance.get('digest') or ''}, {checked}. "
+            f"{DIGEST_IS_NOT_A_SIGNATURE}")
 
     document.add_heading("Report information", level=2)
     meta = [(k.replace("_", " ").title(), str(v)) for k, v in report.items() if v]
@@ -264,12 +299,27 @@ def check(docx_bytes: bytes, *, tmp_dir: Path | None = None) -> dict:
     REVIEW findings are RETURNED rather than counted as failures, because that is what they are: a
     human has to look. Swallowing them would turn "ACP found nothing it can decide" into "ACP
     approved it", which is the shape PRD §4.4 forbids.
+
+    IT CLEANS UP AFTER ITSELF. The first version of this fell back to `tempfile.mkdtemp()` with no
+    cleanup, so every caller that did not pass `tmp_dir` leaked one directory and one .docx per
+    call — and the export route is a caller that runs on every download. #1499 had to wrap the
+    call site in a `TemporaryDirectory` to contain it, which is the tell: a function whose callers
+    must remember to clean up after it has put the obligation in the wrong place. `tmp_dir` stays
+    for the tests that want to inspect what was written.
     """
+    if tmp_dir is not None:
+        return _check_in(docx_bytes, Path(tmp_dir))
+
     import tempfile
 
+    with tempfile.TemporaryDirectory() as scratch:
+        return _check_in(docx_bytes, Path(scratch))
+
+
+def _check_in(docx_bytes: bytes, directory: Path) -> dict:
+    """The analyser pass itself, against a directory whose lifetime the caller owns."""
     import office_structure
 
-    directory = Path(tmp_dir) if tmp_dir else Path(tempfile.mkdtemp())
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "acr-export.docx"
     path.write_bytes(docx_bytes)
@@ -278,6 +328,20 @@ def check(docx_bytes: bytes, *, tmp_dir: Path | None = None) -> dict:
     failures = [f for f in findings if str(f.get("severity", "")).upper() != "REVIEW"]
     reviews = [f for f in findings if str(f.get("severity", "")).upper() == "REVIEW"]
     return {"ok": not failures, "failures": failures, "reviews": reviews}
+
+
+def render_published(projection: dict, *, revision, digest: str, published_at, published_by,
+                     verified: bool, language: str = DOCUMENT_LANGUAGE) -> bytes:
+    """A published revision as a Word document, carrying its provenance.
+
+    The counterpart of `acr_export_pdf.render_published`, and it exists for the same reason that
+    one does: a customer sent "the published ACR" must receive the frozen record, not whatever the
+    draft says today. Without this, a report could be sent as a published PDF but only ever as a
+    draft .docx — an asymmetry nobody would notice until the two documents disagreed.
+    """
+    return render(projection, language=language, provenance={
+        "revision": revision, "digest": digest, "published_at": published_at,
+        "published_by": published_by, "verified": verified})
 
 
 def filename_for(report: dict) -> str:

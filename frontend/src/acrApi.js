@@ -94,6 +94,17 @@ export async function downloadAcrDocx(id) {
 // is outstanding rather than handing over a document and hoping somebody checks later.
 export const getAcrDocxGate = (id) => call(`/acr/${id}/preview?format=docx-gate`)
 
+// The PUBLISHED revision as Word, the counterpart of downloadAcrRevisionPdf.
+//
+// Without it a report can be sent to a customer as a published PDF but only ever as a DRAFT
+// .docx — an asymmetry nobody notices until the two documents disagree, which is exactly when
+// it matters. Same 409 on an altered snapshot, same 500 when the generated document fails ACP's
+// own analyser.
+export async function downloadAcrRevisionDocx(id, revision) {
+  return binaryDownload(`/acr/${id}/revisions/${revision}/export?format=docx`,
+                        `acr-${id}-rev${revision}.docx`)
+}
+
 async function binaryDownload(path, fallbackName) {
   const res = await fetch(BASE + path, { headers: headers() })
   if (!res.ok) {

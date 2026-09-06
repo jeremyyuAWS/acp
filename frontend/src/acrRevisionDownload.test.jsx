@@ -26,6 +26,7 @@ const api = {
   getAcrPublication: vi.fn(),
   getAcrRevisions: vi.fn(),
   downloadAcrRevisionPdf: vi.fn(),
+  downloadAcrRevisionDocx: vi.fn(),
 }
 
 vi.mock('./acrApi', () => ({
@@ -35,6 +36,7 @@ vi.mock('./acrApi', () => ({
   reviseAcr: vi.fn(),
   getAcrRevision: vi.fn(),
   downloadAcrRevisionPdf: (...a) => api.downloadAcrRevisionPdf(...a),
+  downloadAcrRevisionDocx: (...a) => api.downloadAcrRevisionDocx(...a),
 }))
 
 const { default: AcrPublish } = await import('./AcrPublish.jsx')
@@ -85,6 +87,10 @@ const mount = async (revisions) => {
   api.downloadAcrRevisionPdf.mockReset().mockResolvedValue({
     blob: new Blob(['%PDF-1.7'], { type: 'application/pdf' }),
     filename: 'acr-acr_1-rev1.pdf',
+  })
+  api.downloadAcrRevisionDocx.mockReset().mockResolvedValue({
+    blob: new Blob(['PK'], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }),
+    filename: 'acr-acr_1-rev1.docx',
   })
   const created = createTestRoot()
   container = created.container
@@ -169,5 +175,48 @@ describe('downloading a published revision', () => {
     const b = button(/download revision 1/i)
     expect(b).toBeTruthy()
     expect(b.disabled).toBe(false)
+  })
+})
+
+
+describe('downloading a published revision as Word', () => {
+  it('offers both formats beside a verified revision', async () => {
+    await mount([REV(1)])
+    expect(button(/download revision 1 as pdf/i)).toBeTruthy()
+    expect(button(/download revision 1 as word/i)).toBeTruthy()
+  })
+
+  it('asks for the format the button names', async () => {
+    await mount([REV(1)])
+    await click(button(/download revision 1 as word/i))
+    expect(api.downloadAcrRevisionDocx).toHaveBeenCalledWith('acr_1', 1)
+    expect(api.downloadAcrRevisionPdf).not.toHaveBeenCalled()
+
+    await click(button(/download revision 1 as pdf/i))
+    expect(api.downloadAcrRevisionPdf).toHaveBeenCalledWith('acr_1', 1)
+  })
+
+  it('names the revision in every label', async () => {
+    // A screen-reader user tabbing through hears these out of the table's context, so four
+    // buttons reading "Download as Word" would be four identical controls.
+    await mount([REV(2), REV(1)])
+    for (const re of [/download revision 1 as word/i, /download revision 2 as word/i]) {
+      expect(button(re)).toBeTruthy()
+    }
+  })
+
+  it('offers neither format for a revision whose digest did not verify', async () => {
+    await mount([REV(1, { digest_verified: false, digest_problem: 'contents do not match' })])
+    expect(button(/download revision 1 as pdf/i)).toBeFalsy()
+    expect(button(/download revision 1 as word/i)).toBeFalsy()
+    expect(container.textContent).toMatch(/failed verification/i)
+  })
+
+  it('saves the Word file under the name the server chose', async () => {
+    await mount([REV(1)])
+    await click(button(/download revision 1 as word/i))
+    const a = anchors.find((el) => el.download)
+    expect(a.download).toBe('acr-acr_1-rev1.docx')
+    expect(globalThis.URL.revokeObjectURL).toHaveBeenCalledWith('blob:acr')
   })
 })
