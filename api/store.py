@@ -2134,8 +2134,8 @@ class _PgAdapter:
     # v27 is the union of main's v26 workflow-lineage migration and release_root_claims, the
     # pre-provider name reservation that closes the
     # SharePoint-folder creation crash window.
-    _SCHEMA_VERSION = 27
-    _SCHEMA_CHECKSUM_AT_VERSION = "97a24ec0c197f75099ef4df62a89fe92"
+    _SCHEMA_VERSION = 28
+    _SCHEMA_CHECKSUM_AT_VERSION = "584d38ac5dcabbf948a7055ea1137d1e"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
