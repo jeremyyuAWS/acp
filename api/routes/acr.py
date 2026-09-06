@@ -34,9 +34,7 @@ configuration the gate exists to survive.
 from __future__ import annotations
 
 import json
-import tempfile
 import uuid
-from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
@@ -873,11 +871,11 @@ def preview(report_id: str, request: Request, format: str = "json"):
             # whose structure is missing in exactly the way its readers depend on.
             raise HTTPException(503, str(exc)) from exc
 
-        # The temp directory is passed EXPLICITLY and cleaned up. acr_export_docx.check() falls
-        # back to tempfile.mkdtemp() with no cleanup, which is harmless in a test that hands it
-        # tmp_path and a slow leak of one directory and one .docx per download here.
-        with tempfile.TemporaryDirectory() as scratch:
-            gate = acr_export_docx.check(document, tmp_dir=Path(scratch))
+        # No scratch directory to manage here any more: `check()` owns the temporary file it
+        # needs and removes it. #1499 wrapped this call because the first version of `check()`
+        # fell back to `tempfile.mkdtemp()` and leaked a directory per download; the obligation
+        # has been moved into the function that creates the file.
+        gate = acr_export_docx.check(document)
 
         if format == "docx-gate":
             return gate
@@ -887,8 +885,7 @@ def preview(report_id: str, request: Request, format: str = "json"):
             # accessibility checks on a document ACP just generated — a defect in this renderer,
             # not a capability the deployment lacks. Serving it anyway would ship an inaccessible
             # accessibility report, which is the one artifact that cannot be allowed through.
-            names = ", ".join(sorted({str(f.get("rule") or f.get("criterion") or "?")
-                                      for f in gate["failures"]})) or "unnamed checks"
+            names = _failure_names(gate["failures"])
             raise HTTPException(
                 500, f"refusing to serve the Word export: it fails ACP's own document "
                      f"accessibility checks ({names}). See format=docx-gate for the detail.")
@@ -961,6 +958,24 @@ def grant_role(report_id: str, body: GrantRole, request: Request):
 # their own — acr_validation.validate, acr_authz.may_publish, acr_freshness — rather than a new
 # "can publish?" predicate written for this endpoint. A second implementation of the gate is how a
 # screen ends up green while the real check is red, and this is the check that matters most.
+
+
+def _failure_names(failures: list[dict]) -> str:
+    """Name the checks a Word export failed, for the 500 that refuses to serve it.
+
+    `ruleId` FIRST, because that is the key `office_structure._finding` actually writes. #1499 read
+    `rule` and `criterion` only — neither of which exists on a real finding — so against the live
+    analyser this message could only ever say "unnamed checks", in the one case where naming the
+    failure is the entire point. Its test passed because the fixture invented `rule` to match the
+    code; the test and the bug agreed with each other.
+
+    The other two keys are kept as fallbacks rather than deleted: they cost nothing, and a message
+    that degrades to a worse name is better than one that degrades to "?" if a second producer
+    ever feeds this path.
+    """
+    named = sorted({str(f.get("ruleId") or f.get("rule") or f.get("criterion") or "?")
+                    for f in failures})
+    return ", ".join(named) or "unnamed checks"
 
 
 def _decision_makers(criteria: list[dict]) -> dict[str, int]:
@@ -1218,6 +1233,34 @@ def revision_export(report_id: str, revision: int, request: Request, format: str
         return HTMLResponse(acr_export_pdf.published_html(
             projection, revision=snap["revision"], digest=snap["content_digest"],
             published_at=snap["published_at"], published_by=snap["published_by"], verified=ok))
+
+    if format in ("docx", "docx-gate"):
+        # The digest gate above has already refused an altered snapshot, so anything reaching
+        # here is a verified record. What remains is the document's OWN accessibility, which is
+        # a separate question and gets the same treatment the draft export gets.
+        try:
+            document = acr_export_docx.render_published(
+                projection, revision=snap["revision"], digest=snap["content_digest"],
+                published_at=snap["published_at"], published_by=snap["published_by"], verified=ok)
+        except acr_export_docx.RendererUnavailable as exc:
+            raise HTTPException(503, str(exc)) from exc
+
+        gate = acr_export_docx.check(document)
+        if format == "docx-gate":
+            return gate
+        if not gate["ok"]:
+            names = _failure_names(gate["failures"])
+            raise HTTPException(
+                500, f"refusing to serve the published Word export: it fails ACP's own document "
+                     f"accessibility checks ({names}). See format=docx-gate for the detail.")
+
+        docx_name = acr_export_docx.filename_for(
+            {"id": snap["report_id"], "revision": snap["revision"]})
+        return Response(
+            document,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f'attachment; filename="{docx_name}"',
+                     "X-ACP-Accessibility-Reviews": str(len(gate["reviews"]))})
 
     try:
         pdf = acr_export_pdf.render_published(

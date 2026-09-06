@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { getAcrPublication, publishAcr, getAcrRevisions, reviseAcr,
-         downloadAcrRevisionPdf } from './acrApi'
+         downloadAcrRevisionPdf, downloadAcrRevisionDocx } from './acrApi'
 
 /**
  * Publication and revision history (PRD §16, §17, Phase 4).
@@ -53,10 +53,11 @@ export default function AcrPublish({ reportId, onChange }) {
   // the route needs the bearer token, an anchor cannot send one, and following it would navigate
   // away from the workspace to a 401. So fetch it with the same headers as everything else and
   // hand the browser a blob — the same shape AcrWorkspace uses for the draft export.
-  const downloadRevision = (revision) => {
+  const downloadRevision = (revision, format = 'pdf') => {
     setBusy(true)
     setDownloadError(null)
-    return downloadAcrRevisionPdf(reportId, revision)
+    const fetchBlob = format === 'docx' ? downloadAcrRevisionDocx : downloadAcrRevisionPdf
+    return fetchBlob(reportId, revision)
       .then(({ blob, filename }) => {
         const url = URL.createObjectURL(blob)
         const a = document.createElement('a')
@@ -191,13 +192,26 @@ export default function AcrPublish({ reportId, onChange }) {
                     file. The reason is stated in words rather than left as a disabled control
                     with no explanation. */}
                 <td>{r.digest_verified ? (
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => downloadRevision(r.revision)}
-                  >
-                    Download revision {r.revision}
-                  </button>
+                  <>
+                    {/* The revision number is in each label, not only in the row: a screen-reader
+                        user tabbing through eight buttons hears them out of the table's context,
+                        and "Download PDF" four times over is four identical controls. */}
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => downloadRevision(r.revision, 'pdf')}
+                    >
+                      Download revision {r.revision} as PDF
+                    </button>
+                    {' '}
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => downloadRevision(r.revision, 'docx')}
+                    >
+                      Download revision {r.revision} as Word
+                    </button>
+                  </>
                 ) : (
                   <span className="muted">Not available — this snapshot failed verification</span>
                 )}</td>
