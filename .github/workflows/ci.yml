@@ -49,9 +49,10 @@ on:
   # It USED TO cover a gap the `concurrency` block below created: with a blanket
   # `cancel-in-progress: true`, several merges to main in quick succession cancelled each other's
   # runs (75d04de, 0e8f55d, 5e38f10 — none with a completed CI run on main), and a dispatch was the
-  # only way to get the answer back. That is fixed at the source now — cancellation is conditional
-  # on the ref, so main queues instead of cancelling. The dispatch stays for the OTHER reason above,
-  # which the fix does not address: when GitHub simply stops delivering events.
+  # only way to get the answer back. That is fixed at the source now — main gets one concurrency
+  # group per commit, so no two runs on main can queue behind or cancel each other. The dispatch
+  # stays for the OTHER reason above, which the fix does not address: when GitHub simply stops
+  # delivering events.
   workflow_dispatch:
 
 permissions:
@@ -73,9 +74,26 @@ concurrency:
   # which is precisely why it is easy to miss: the drift is real but transient, and the last commit
   # of the day is the one left behind.
   #
-  # So: supersede on a PR, queue on main. Serial CI runs on main cost runner minutes; a commit that
-  # silently never deploys costs a confused user comparing two builds.
-  group: ci-${{ github.ref }}
+  # `cancel-in-progress: false` DID NOT FIX IT, and that is why the SHA is in the group below.
+  # A concurrency group holds one RUNNING run plus one PENDING run. A third arrival cancels the
+  # PENDING one whatever `cancel-in-progress` says — that flag governs the run already executing,
+  # and a queued run is not it. So the middle commit of any three rapid merges still lost its CI
+  # run, and still did not ship. Measured on 2026-09-06, twice inside ten minutes:
+  #
+  #   CI 3545 (#1621), pending behind 3544 — cancelled 20:56:11, as 3547 was created at 20:56:10
+  #   CI 3549 (#1622), pending behind 3547 — cancelled 21:06:58, as 3550 was created at 21:06:56
+  #
+  # Each cancellation lands within two seconds of the next run's creation, and neither pending run
+  # had a runner. deploy run 1330 then refused main's tip: "CI on b660a03 concluded 'cancelled',
+  # not success — refusing to deploy it", leaving five merged PRs unshipped.
+  #
+  # So: supersede on a PR, and give main ONE GROUP PER COMMIT — nothing to queue behind, nothing to
+  # cancel. This reverses the trade the previous fix chose. Runs on main are now parallel rather
+  # than serial and cost more runner minutes; a commit that silently never deploys costs a confused
+  # user comparing two builds, and serialising main turned out not to buy the safety it looked like.
+  group: ci-${{ github.ref }}${{ github.ref == 'refs/heads/main' && format('-{0}', github.sha) || '' }}
+  # Vestigial for main now that its groups are per-commit, and still the correct answer there:
+  # a group of one has nothing in progress to cancel. It governs PR refs, where it is load-bearing.
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
