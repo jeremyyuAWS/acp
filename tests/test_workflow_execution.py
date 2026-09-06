@@ -124,6 +124,10 @@ def test_replacement_is_a_new_addressable_revision_of_the_same_workflow(isolated
     assert old["current_scan_id"] == current["current_scan_id"] == second
     assert old["current_revision"] == current["current_revision"] == 2
     assert current["supersedes_scan_id"] == first
+    active = next(item for item in isolated_store.active_workflows(OWNER)
+                  if item["scan_id"] == second)
+    assert active["scan_id"] == second
+    assert active["previous_scan_id"] == first
 
 
 def test_recent_compatible_workflow_requires_the_exact_frozen_inputs(isolated_store):

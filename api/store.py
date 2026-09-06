@@ -5024,7 +5024,8 @@ class Store:
             self._db.execute(cur,
                 "SELECT j.id,j.scan_id,j.type,j.status,j.created_at,j.updated_at,"
                 "sr.source,sr.files,sr.files_done,COALESCE(sr.workflow_id,sr.id) AS workflow_id,"
-                "COALESCE(sr.workflow_revision,1) AS workflow_revision,si.lifecycle_rules "
+                "COALESCE(sr.workflow_revision,1) AS workflow_revision,sr.supersedes_scan_id,"
+                "si.lifecycle_rules "
                 "FROM jobs j JOIN scan_runs sr ON sr.id=j.scan_id "
                 "LEFT JOIN scan_inputs si ON si.scan_id=sr.id "
                 "WHERE sr.owner_email=%s AND j.status IN ('queued','running') "
@@ -5041,6 +5042,7 @@ class Store:
                 "scan_id": row["scan_id"], "stage": stage,
                 "workflow_id": row.get("workflow_id") or row["scan_id"],
                 "workflow_revision": int(row.get("workflow_revision") or 1),
+                "previous_scan_id": row.get("supersedes_scan_id"),
                 "source": row.get("source") or "unknown",
                 "queued": 0, "running": 0, "total": 0,
                 "files": int(row.get("files") or 0),
