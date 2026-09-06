@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import runpy
 import subprocess
 
 
@@ -60,7 +61,38 @@ _aca_exec_tty az containerapp exec -g test-rg -n test-app \\
 
 def test_redeploy_sends_no_quoted_python_c_program_to_aca():
     script = (ROOT / "deploy/public/redeploy.sh").read_text()
-    gate = script[script.index("LEGACY_PROBE_B64="):script.index("LEGACY_PROBE_JSON=")]
+    gate = script[script.index("LEGACY_PROBE_B64="):script.index("BOOTSTRAP_REDIS BOOTSTRAP_QUEUED")]
     assert "_aca_exec_tty az containerapp exec" in gate
     assert "python -c exec(__import__('base64').b64decode(" in gate
     assert 'python -c \\"' not in gate
+
+
+def test_linux_transcript_marker_survives_a_nonzero_transport_exit(monkeypatch, capsys):
+    """The live runner returned 1 during websocket teardown after the remote command completed."""
+    transcript = (
+        "INFO: Connecting to the container 'redacted'...\r\n"
+        "\x1b[93mUse ctrl + D to exit.\x1b[0m\r\n"
+        'ACP_LEGACY_BOOTSTRAP={"queued":0,"redis_write_read":true,'
+        '"retrying":0,"running":0}\r\n'
+        "INFO: received success status from cluster\r\n"
+    )
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(transcript))
+
+    runpy.run_path(str(ROOT / "scripts/parse_legacy_bootstrap.py"), run_name="__main__")
+
+    assert capsys.readouterr().out == "true 0 0 0\n"
+    script = (ROOT / "deploy/public/redeploy.sh").read_text()
+    gate = script[script.index("LEGACY_PROBE_EXIT=0"):script.index("REDIS_CONFIGURED=true")]
+    assert '|| LEGACY_PROBE_EXIT=$?' in gate
+    assert "parse_legacy_bootstrap.py" in gate
+    assert gate.index("parse_legacy_bootstrap.py") < gate.index('[ "$BOOTSTRAP_REDIS" = true ]')
+
+
+def test_bootstrap_parser_rejects_missing_duplicate_and_malformed_markers():
+    from scripts.parse_legacy_bootstrap import parse
+
+    good = 'ACP_LEGACY_BOOTSTRAP={"redis_write_read":true,"queued":0,"retrying":0,"running":0}'
+    assert parse("") is None
+    assert parse(good + "\n" + good) is None
+    assert parse("ACP_LEGACY_BOOTSTRAP={bad json}") is None
+    assert parse('ACP_LEGACY_BOOTSTRAP={"redis_write_read":true,"queued":-1,"retrying":0,"running":0}') is None

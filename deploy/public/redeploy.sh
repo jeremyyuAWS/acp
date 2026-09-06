@@ -335,20 +335,22 @@ except Exception: print("")' <<<"$HEALTH_BEFORE")"
   # ACA splits --command on spaces itself; quoting the -c program is passed to Python literally.
   # Keep the program space-free so it remains one argument after Azure's parser handles it.
   LEGACY_PROBE_COMMAND="python -c exec(__import__('base64').b64decode('$LEGACY_PROBE_B64'))"
+  LEGACY_PROBE_EXIT=0
   LEGACY_PROBE_RAW="$(_aca_exec_tty az containerapp exec "${AZ[@]}" -g "$RG" -n "$APP" \
-    --command "$LEGACY_PROBE_COMMAND" 2>&1)" \
-    || die "legacy bootstrap could not independently verify shared Redis and queue state"
-  LEGACY_PROBE_JSON="$(printf '%s\n' "$LEGACY_PROBE_RAW" | sed -n 's/^ACP_LEGACY_BOOTSTRAP=//p' | tail -1)"
+    --command "$LEGACY_PROBE_COMMAND" 2>&1)" || LEGACY_PROBE_EXIT=$?
+  # Azure CLI sometimes returns nonzero while closing its interactive websocket AFTER the remote
+  # program printed its result. Parse the result first: exactly one strict marker proves the
+  # Redis and PostgreSQL checks ran; an exit code only describes terminal teardown. Missing,
+  # duplicated, malformed, or negative marker data remains a hard failure and raw Azure output
+  # is never printed because its connection banner carries resource identifiers.
   read -r BOOTSTRAP_REDIS BOOTSTRAP_QUEUED BOOTSTRAP_RETRYING BOOTSTRAP_RUNNING <<EOF
-$(python3 -c 'import json,sys
-try:
- d=json.load(sys.stdin); values=(d["redis_write_read"],d["queued"],d["retrying"],d["running"])
- assert values[0] is True and all(type(v) is int and v >= 0 for v in values[1:])
- print("true", values[1], values[2], values[3])
-except Exception: print("false", "", "", "")' <<<"$LEGACY_PROBE_JSON")
+$(python3 scripts/parse_legacy_bootstrap.py <<<"$LEGACY_PROBE_RAW")
 EOF
   [ "$BOOTSTRAP_REDIS" = true ] \
     || die "legacy bootstrap returned no valid Redis and queue verification; refusing worker cutover"
+  if [ "$LEGACY_PROBE_EXIT" != 0 ]; then
+    echo "  ⚠ Azure exec transport exited $LEGACY_PROBE_EXIT after the verified probe result; continuing from the strict in-container marker"
+  fi
   REDIS_CONFIGURED=true
   REDIS_REACHABLE=true
   QUEUE_AVAILABLE=true
