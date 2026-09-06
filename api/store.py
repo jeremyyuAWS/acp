@@ -2105,8 +2105,8 @@ class _PgAdapter:
     # columns, while newer replicas fall back to the scan id for pre-v24 rows.
     # v25 adds scan_inventory.source_name so provider basenames survive ACP's internal
     # same-name disambiguation and can be restored when corrected copies are published.
-    _SCHEMA_VERSION = 25
-    _SCHEMA_CHECKSUM_AT_VERSION = "b2d77139073d635b67c3c7389644bd28"
+    _SCHEMA_VERSION = 26
+    _SCHEMA_CHECKSUM_AT_VERSION = "99abe2532a455e8e1e560b0455c5f077"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
