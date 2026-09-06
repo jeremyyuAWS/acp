@@ -130,10 +130,20 @@ describe('Release builder', () => {
     expect(s).toMatch(/Start a release/)
     expect(s).toMatch(/Choose files/)
     expect(s).toMatch(/Choose delivery/)
-    expect(s).toMatch(/Publish copies/)
-    expect(s).toMatch(/Download ZIP package/)
+    expect(s).toMatch(/Publish to \{sourceProduct\}/)
+    expect(s).toMatch(/Download to this device/)
     expect(s).toMatch(/downloadReleasePackage\(run\?\.id, selectedReady\.map/)
     expect(s).toMatch(/source folder structure and a release manifest/)
+  })
+
+  it('lets the user choose a connected source, browser download, or safe ACP retention', () => {
+    const s = pub()
+    expect(s).toMatch(/Where should the corrected files go\?/)
+    expect(s).toMatch(/Publish to \{sourceProduct\}/)
+    expect(s).toMatch(/Download to this device/)
+    expect(s).toMatch(/Keep in ACP for later/)
+    expect(s).toMatch(/Your browser will ask where to save it/)
+    expect(s).toMatch(/No external copy will be created/)
   })
 
   it('publishes only the selected files and states the consequence before writing', () => {
