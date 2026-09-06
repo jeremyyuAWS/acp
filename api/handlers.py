@@ -210,6 +210,10 @@ def _scan(payload: dict, job: dict) -> None:
         folder=payload.get("folder"),
         **({"folders": payload["folders"]} if payload.get("folders") else {}),
         **({"exclude_folders": payload["exclude_folders"]} if payload.get("exclude_folders") else {}),
+        # Omit the new keyword for legacy/default jobs so older test doubles and downstream
+        # wrappers retain the exact call shape they already support.
+        **({"include_subfolders": False}
+           if payload.get("include_subfolders", True) is False else {}),
         ai_enabled=effective_ai,
         scan_id=scan_id,
         user=payload.get("user"),
@@ -2355,6 +2359,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
     # whole estate in the deployment that matters.
     folders = payload.get("folders")
     exclude_folders = payload.get("exclude_folders")
+    include_subfolders = payload.get("include_subfolders", True)
     toks = core.get_scan_tokens(scan_id)
     # Prefer token from durable job payload — in-memory store is per-replica and invisible to a
     # worker container that does not share the API's memory (split topology without Redis).
@@ -2662,6 +2667,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
             items = _list(source, svc, folder=effective_folder, sp_token=sp_tok,
                           max_files=FANOUT_MAX_FILES, **({"folders": folders} if folders else {}),
                           **({"exclude_folders": exclude_folders} if exclude_folders else {}),
+                          include_subfolders=include_subfolders,
                           exclude_remediated=bool(payload.get("exclude_remediated", False)),
                           scope_out=scope, scope_files=_scope_for_listing(user), inventory_out=inventory,
                           progress_cb=_listing_progress, drive_delta=drive_delta, sp_delta=sp_delta,
@@ -2858,6 +2864,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
                         max_files=FANOUT_MAX_FILES,
                         **({"folders": folders} if folders else {}),
                         **({"exclude_folders": exclude_folders} if exclude_folders else {}),
+                        include_subfolders=include_subfolders,
                         exclude_remediated=bool(payload.get("exclude_remediated", False)),
                         scope_out=_retry_scope, scope_files=_scope_for_listing(user),
                         inventory_out=_retry_inv, progress_cb=_listing_progress,

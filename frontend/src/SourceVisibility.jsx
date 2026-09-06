@@ -60,7 +60,9 @@ export default function SourceVisibility({ source, scope }) {
         <div role="status" style={{ marginTop: 4, color: 'var(--muted)' }}>
           <strong style={{ color: 'var(--ink)' }}>Scope locked for this run.</strong>{' '}
           {pickedFolders.length
-            ? 'Selected folders include everything beneath them recursively'
+            ? (scope?.include_subfolders === false
+              ? 'Only files directly inside the selected folders are included; child folders are not opened'
+              : 'Selected folders include everything beneath them recursively')
             : 'Only the selected source locations are included'}
           {excluded > 0 ? `, except ${excluded.toLocaleString()} explicit exclusion${excluded === 1 ? '' : 's'}` : ''}.
           {' '}{isTruncated(scope)

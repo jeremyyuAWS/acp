@@ -241,6 +241,9 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
   // selection. Empty and everything look identical otherwise, and the reassuring reading of a
   // blank list is the wrong one — the same rule the picker and the source card already follow.
   const [scopeMode, setScopeMode] = useState(startInFolderMode ? 'some' : 'all')   // 'all' | 'some'
+  // A specific folder is a boundary, not necessarily a subtree. Keep the established recursive
+  // default, but make depth explicit before launch so "folder only" is a real enforceable choice.
+  const [includeSubfolders, setIncludeSubfolders] = useState(true)
   const [saveFolders, setSaveFolders] = useState(false)    // write back to the card, off by default
   // Set the instant a person picks a tile — guards the fetch below from overwriting an explicit
   // choice with the saved default. Found live 2026-08-21: `scopeMode` starts 'all' (painting
@@ -580,6 +583,7 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
     onStartScan?.({
       folders: scopeMode === 'all' ? [] : folders,
       exclude: scopeMode === 'all' ? [] : excluded,
+      includeSubfolders: scopeMode === 'all' ? true : includeSubfolders,
     })
   }
 
@@ -753,10 +757,30 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
                 // "Specific folders" IS the claim to narrow, so an empty list here is unfinished,
                 // not "everything". Without this the picker reports the source-card meaning.
                 requireSelection
+                showRecursionNote={false}
                 // It has no Save of its own: the wizard footer is the only footer on this screen,
                 // and a second commit button next to it would make "saved" ambiguous. So the
                 // picker reports as you tick.
                 onChange={(inc, exc) => { setFolders(inc); setExcluded(exc || []) }} />
+              {folders.length > 0 && (
+                <fieldset style={{ border: 0, padding: 0, margin: '10px 0 0' }}>
+                  <legend style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>FOLDER DEPTH</legend>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {[[false, 'This folder only', 'Files directly inside the selected folder'],
+                      [true, 'Include subfolders', 'The complete folder tree, recursively']]
+                      .map(([value, title, hint]) => (
+                        <label key={title} style={{ flex: '1 1 220px', padding: '9px 10px', borderRadius: 8,
+                          border: `1px solid ${includeSubfolders === value ? '#6D28D9' : 'var(--line)'}`,
+                          background: includeSubfolders === value ? '#F3EEFC' : 'var(--surface)', cursor: 'pointer' }}>
+                          <input type="radio" name="discovery-folder-depth" checked={includeSubfolders === value}
+                            onChange={() => setIncludeSubfolders(value)} style={{ marginRight: 7 }} />
+                          <strong style={{ fontSize: 12.5 }}>{title}</strong>
+                          <span className="muted" style={{ display: 'block', marginLeft: 21, fontSize: 11.5 }}>{hint}</span>
+                        </label>
+                      ))}
+                  </div>
+                </fieldset>
+              )}
             </div>
           )}
 
@@ -933,7 +957,7 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
                 <dd style={{ margin: 0 }}>
                   {folders.length === 0
                     ? 'Entire connected source'
-                    : `${folders.length} folder${folders.length === 1 ? '' : 's'}, including subfolders`}
+                    : `${folders.length} folder${folders.length === 1 ? '' : 's'}, ${includeSubfolders ? 'including subfolders' : 'files directly inside only'}`}
                 </dd>
               </>
             )}

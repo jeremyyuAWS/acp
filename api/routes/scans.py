@@ -200,6 +200,9 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                # to carve out of and applying them to a whole-estate scan would narrow it
                # invisibly.
                exclude_folders: list[str] | None = Query(None),
+               # True preserves every existing client and saved scope. The discovery wizard sends
+               # false explicitly when the operator chooses "This folder only".
+               include_subfolders: bool = Query(True),
                ai: bool = Query(True), queue: bool = Query(False),
                # PII (deep) scan is opt-in: it doubles scan time by extracting + regex-scanning
                # every file's text, so a scan is fast unless the caller explicitly asks for it.
@@ -356,6 +359,7 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                 "ai": ai, "pii": pii, "batch": batch,
                 "exclude_remediated": exclude_remediated,
                 "incremental": incremental, "fanout": fanout,
+                "include_subfolders": include_subfolders,
             },
             "actor": user,
             "connection_ref": _connection_ref,
@@ -396,7 +400,7 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
         scan_id, job_id = core.store.enqueue_scan(
             scan_id, source, user, jtype,
             {"source": source, "scan_id": scan_id, "folder": folder, "folders": folders,
-             "exclude_folders": exclude_folders, "ai": ai,
+             "exclude_folders": exclude_folders, "include_subfolders": include_subfolders, "ai": ai,
              "user": user, "pii": pii, "batch": batch,
              "exclude_remediated": exclude_remediated, "incremental": incremental,
              # Carry tokens in the payload so the worker container can authenticate
@@ -454,7 +458,8 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
             # drops a chosen scope silently: the card says "Scans: HR" and the scan covers the
             # whole Drive. Widening is the one direction nobody re-checks.
             _scan_discover({"source": source, "scan_id": scan_id, "folder": folder,
-                            "folders": folders, "exclude_folders": exclude_folders, "ai": ai,
+                            "folders": folders, "exclude_folders": exclude_folders,
+                            "include_subfolders": include_subfolders, "ai": ai,
                             "user": user, "pii": pii, "batch": batch,
                             "exclude_remediated": exclude_remediated, "incremental": incremental},
                            {"scan_id": scan_id})
@@ -469,6 +474,7 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
         report = run_scan(source, drive_token=token, folder=folder, sp_token=sp_token,
                           **({"folders": folders} if folders else {}),
                           **({"exclude_folders": exclude_folders} if exclude_folders else {}),
+                          include_subfolders=include_subfolders,
                           ai_enabled=effective_ai, user=user, detect_pii=pii,
                           exclude_remediated=exclude_remediated, inventory_out=inv)
         sid = core.store.save_scan(report)
@@ -532,7 +538,8 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                 # Same as the sync branch above: the chosen scope has to travel with the
                 # payload or the default scan silently widens to the whole source.
                 _scan_discover({"source": source, "scan_id": sid, "folder": folder,
-                                "folders": folders, "exclude_folders": exclude_folders, "ai": ai,
+                                "folders": folders, "exclude_folders": exclude_folders,
+                                "include_subfolders": include_subfolders, "ai": ai,
                                 "user": user, "pii": pii, "batch": batch,
                                 "exclude_remediated": exclude_remediated,
                                 "incremental": incremental}, {"scan_id": sid, "id": job_id})
@@ -548,6 +555,7 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                               drive_token=token, folder=folder, sp_token=sp_token,
                               **({"folders": folders} if folders else {}),
                               **({"exclude_folders": exclude_folders} if exclude_folders else {}),
+                              include_subfolders=include_subfolders,
                               ai_enabled=effective_ai, user=user, detect_pii=pii,
                               exclude_remediated=exclude_remediated, inventory_out=inv)
             sid = core.store.save_scan(report)
@@ -3201,6 +3209,12 @@ def clear_scan_tokens(sid: str, request: Request):
     return {"scan_id": sid, "cleared": True}
 
 
+def _release_timezone(owner: str) -> str:
+    """Read the preference; minimal/older adapters use the product's US Central default."""
+    getter = getattr(core.store, "get_user_setting", None)
+    return (getter(owner, "release_timezone") if callable(getter) else None) or "America/Chicago"
+
+
 @router.post("/scans/{sid}/publish")
 def publish_files(sid: str, request: Request, body: dict):
     """Publish one or more re-validated files — ADR 0010 archive-copy, NON-destructive.
@@ -3225,6 +3239,9 @@ def publish_files(sid: str, request: Request, body: dict):
             body.get("release_folder_name"), field="Release folder name")
     except _publish.UnsafeReleasePath as exc:
         raise HTTPException(422, str(exc)) from exc
+    if not preferred_folder_name:
+        release_tz = _release_timezone(owner)
+        preferred_folder_name = _publish.release_folder_name(timezone_name=release_tz)
     release = core.store.ensure_release_execution(
         sid, owner, source, len(eligible),
         preferred_folder_name=preferred_folder_name)
@@ -3507,8 +3524,8 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
         if requested_name:
             folder_name = requested_name
         else:
-            from datetime import datetime, timezone
-            folder_name = datetime.now(timezone.utc).strftime("%Y-%m-%d %H-%M UTC")
+            release_tz = _release_timezone(owner)
+            folder_name = _publish.release_folder_name(timezone_name=release_tz)
         folder_state = "proposed"
     source = (scan.get("run") or {}).get("source") or "local"
     rows = {row.get("file"): row for row in scan.get("files", [])}

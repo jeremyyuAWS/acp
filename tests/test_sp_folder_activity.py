@@ -46,6 +46,24 @@ def test_walk_reports_exact_nested_folder_paths_without_extra_requests(monkeypat
         ("Documents", 1), ("Documents/Clinical", 1), ("Documents/Clinical/Policies", 1)]
 
 
+def test_folder_only_never_requests_a_selected_folders_children(monkeypatch):
+    calls = []
+
+    def get(_token, url):
+        calls.append(url)
+        if "/root/children" in url:
+            return {"value": [_folder("clinical", "Clinical"), _file("root-doc", "root.docx")]}
+        raise AssertionError(f"child folder should not be opened: {url}")
+
+    monkeypatch.setattr(scanner, "_sp_get", get)
+    rows, truncated = scanner._sp_walk_folder(
+        "tok", "drive-1", "root", 20, {".docx"}, include_subfolders=False)
+
+    assert truncated is False
+    assert [row["name"] for row in rows] == ["root.docx"]
+    assert len(calls) == 1
+
+
 def test_walk_reports_the_folder_that_failed_before_preserving_the_error(monkeypatch):
     monkeypatch.setattr(scanner, "_sp_get", lambda _token, _url:
                         (_ for _ in ()).throw(PermissionError("Graph 403")))

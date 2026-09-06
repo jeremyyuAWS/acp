@@ -1310,6 +1310,7 @@ export default function App() {
     // covered something else.
     let picked = null
     let excluded = null
+    const includeSubfolders = runScope?.includeSubfolders !== false
     if (runScope && Array.isArray(runScope.folders)) {
       picked = runScope.folders
       excluded = runScope.exclude || []
@@ -1357,7 +1358,7 @@ export default function App() {
         const submitKey = beginOrResumeIntent('scan')
         let accepted
         try {
-          accepted = await startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded, submitKey, replaceActive, true)
+          accepted = await startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded, submitKey, replaceActive, true, includeSubfolders)
         } catch (err) {
           // Hold the key when we cannot tell whether the scan was created; drop it when the
           // server proved it was not, so the user's next, corrected attempt is a fresh intent
@@ -1468,7 +1469,7 @@ export default function App() {
         }
         if (!fresh) throw new Error('scan still processing — watch it finish in the Monitor queue')
       } else {
-        const { job_id } = await startScan(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded)
+        const { job_id } = await startScan(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded, includeSubfolders)
         fresh = await pollScanJob(job_id)
       }
       setScan(fresh); setExplicitTimeTravel(false)

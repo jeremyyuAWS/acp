@@ -897,7 +897,7 @@ def _cancel_checkpoint() -> None:
 def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediated: bool = False,
                    scope_out: dict | None = None, inventory_out: list | None = None,
                    exclude_ids: set | None = None, raw_out: list | None = None,
-                   progress_cb=None) -> list[dict]:
+                   progress_cb=None, include_subfolders: bool = True) -> list[dict]:
     """BFS over a folder subtree — returns all scannable files in the folder AND
     every nested subfolder. Bounded by max_files (newest folders may be skipped
     once the cap is hit) and a cycle guard, so a huge tree can't run unbounded.
@@ -1012,6 +1012,8 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
             ).execute(num_retries=5)
             for f in resp.get("files", []):
                 if f["mimeType"] == "application/vnd.google-apps.folder":
+                    if not include_subfolders:
+                        continue
                     # Folder-name exclusion is RETAINED, not replaced: copies written before
                     # the provenance stamp shipped carry no stamp, and this still skips them.
                     if exclude_remediated and f["name"] == remediated_folder_name:
@@ -1175,6 +1177,7 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
         # this account's Assess tab empty: the scan was now visible, but had nothing in
         # scope.inventory to find, because this path never wrote it.
         scope_out.update({"kind": "folder", "folder_id": folder_id,
+                          "include_subfolders": include_subfolders,
                           "folders_walked": len(seen_folders), "listed": _listed[0],
                           "skipped_acp": _skipped_acp[0], "skipped_mirror": _skipped_mirror[0],
                           "skipped_excluded": _skipped_excluded[0],
@@ -1194,7 +1197,8 @@ def _search_folder(svc, folder_id: str, max_files: int = 1000, exclude_remediate
 def _search_folders(svc, folder_ids: list[str], max_files: int = 1000,
                     exclude_remediated: bool = False, scope_out: dict | None = None,
                     inventory_out: list | None = None,
-                    exclude_ids: set | None = None, progress_cb=None) -> list[dict]:
+                    exclude_ids: set | None = None, progress_cb=None,
+                    include_subfolders: bool = True) -> list[dict]:
     """Walk SEVERAL folder subtrees and return their union.
 
     Scoping to one folder was never the real ask — an estate is "HR and Finance", not "HR". This
@@ -1238,7 +1242,7 @@ def _search_folders(svc, folder_ids: list[str], max_files: int = 1000,
         batch = _search_folder(svc, fid, remaining, exclude_remediated=exclude_remediated,
                                scope_out=sub, inventory_out=inventory_out,
                                exclude_ids=exclude_ids, raw_out=raw_batch,
-                               progress_cb=progress_cb)
+                               progress_cb=progress_cb, include_subfolders=include_subfolders)
         for it in batch:
             key = it.get("id") or it.get("path") or it.get("name")
             if key in seen:
@@ -1267,6 +1271,7 @@ def _search_folders(svc, folder_ids: list[str], max_files: int = 1000,
         # why its absence here meant /assess/eligibility saw nothing for a multi-folder scan
         # (found live 2026-08-21).
         scope_out.update({"kind": "folder", "folder_id": folder_ids[0] if folder_ids else None,
+                          "include_subfolders": include_subfolders,
                           "folders": names, "folders_walked": walked, "listed": listed,
                           "skipped_acp": skipped_acp, "skipped_mirror": skipped_mirror,
                           "skipped_excluded": skipped_excluded,
@@ -1869,7 +1874,8 @@ def _sp_walk_folder(token: str, drive_id: str, item_id: str, max_files: int,
                     exts: set[str], inventory_out: list | None = None,
                     exclude_ids: set | None = None, base: str | None = None,
                     skip_names: set | None = None, progress_cb=None,
-                    root_label: str | None = None) -> tuple[list[dict], bool]:
+                    root_label: str | None = None,
+                    include_subfolders: bool = True) -> tuple[list[dict], bool]:
     """BFS one Graph folder subtree. Returns (raw driveItems, truncated).
 
     Recursion is server-side here for the same reason _search_folder does it for Drive: the
@@ -1938,6 +1944,8 @@ def _sp_walk_folder(token: str, drive_id: str, item_id: str, max_files: int,
                         url = _sp_children_url(root, seg, tier)
                 for it in data.get("value", []):
                     if it.get("folder") is not None:
+                        if not include_subfolders:
+                            continue
                         # Excluded subtree — pruned at enqueue, same rule as the Drive walker.
                         # Both `<driveId>/<itemId>` and a bare item id are accepted so a caller
                         # need not know which form reached it.
@@ -2449,7 +2457,8 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
              progress_cb=None,
              delta_plan: dict | None = None,
              site_done_cb=None,
-             skip_sites: set | dict | None = None) -> list[dict]:
+             skip_sites: set | dict | None = None,
+             include_subfolders: bool = True) -> list[dict]:
     """List scannable files from OneDrive, or from every document library on a SharePoint site.
 
     The RETURN value is the scannable analysis set (the six supported extensions) — unchanged, so
@@ -2685,7 +2694,8 @@ def _sp_list(token: str, max_files: int = 200, site: str | None = None,
                                           skip_names=skip_folders,
                                           progress_cb=lambda event, d=drive_id:
                                               _folder_tick({**event, "drive_id": d}),
-                                          root_label="Selected SharePoint folder")
+                                          root_label="Selected SharePoint folder",
+                                          include_subfolders=include_subfolders)
             hit_cap = hit_cap or cut
             targets.append((drive_id, iter([walked]), None, None, None))
     elif site_ids or _resumed:
@@ -3638,6 +3648,7 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
           inventory_out: list | None = None,
           folders: list[str] | None = None,
           exclude_folders: list[str] | None = None,
+          include_subfolders: bool = True,
           progress_cb=None, drive_delta: dict | None = None,
           sp_delta: dict | None = None,
           sp_delta_plan: dict | None = None,
@@ -3768,6 +3779,8 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
             # stubs are right to: a caller that has not opted into a feature should not be able to
             # tell it exists.
             extra = {"locations": sp_locs} if sp_locs else {}
+            if sp_locs and not include_subfolders:
+                extra["include_subfolders"] = False
             if excl:
                 extra["exclude_ids"] = excl
             if len(sp_all_sites) > 1:
@@ -3870,6 +3883,7 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
                 # a new narrowing mode gets to re-introduce for free unless it says so.
                 scope_out["folders"] = [{"id": f"{d}/{i}", "name": _sp_folder_name(sp_token, d, i)}
                                         for d, i in sp_locs]
+                scope_out["include_subfolders"] = include_subfolders
     elif source == "smb":
         # Network drive (ADR 0032). `folder` carries the in-scope SMB share root (a UNC path), the
         # same parameter Drive uses to narrow a scan and SharePoint reuses for the site id. The
@@ -3891,14 +3905,14 @@ def _list(source: str, svc=None, folder: str | None = None, sp_token: str | None
         result = _search_folders(svc, roots, max_files or 1000,
                                  exclude_remediated=exclude_remediated, scope_out=scope_out,
                                  inventory_out=inventory_out, exclude_ids=excl,
-                                 progress_cb=progress_cb)
+                                 progress_cb=progress_cb, include_subfolders=include_subfolders)
     elif roots:
         # Specific folder: recursive BFS. Kept as its own branch rather than folded into
         # _search_folders so a single-folder scan produces byte-identical scope to before.
         result = _search_folder(svc, roots[0], max_files or 1000,
                                 exclude_remediated=exclude_remediated, scope_out=scope_out,
                                 inventory_out=inventory_out, exclude_ids=excl,
-                                progress_cb=progress_cb)
+                                progress_cb=progress_cb, include_subfolders=include_subfolders)
         if scope_out is not None:
             scope_out["folder_name"] = _folder_name(svc, roots[0])
     elif folder == "root" or folder is None:
@@ -5244,6 +5258,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
              exclude_remediated: bool = False, inventory_out: list | None = None,
              folders: list[str] | None = None,
              exclude_folders: list[str] | None = None,
+             include_subfolders: bool = True,
              drive_delta: dict | None = None, sp_delta: dict | None = None) -> dict:
     # `drive_delta` — PRD Phase 3: {"prior_files", "changed", "removed_ids"}, produced by
     # core._drive_sync_plan for the scheduled sweep only. When given (whole-Drive scans only —
@@ -5311,6 +5326,7 @@ def run_scan(source: str = "local", progress=_noop, drive_token: str | None = No
                      max_files=FANOUT_MAX_FILES,
                      **({"folders": folders} if folders else {}),
                      **({"exclude_folders": exclude_folders} if exclude_folders else {}),
+                     include_subfolders=include_subfolders,
                      exclude_remediated=exclude_remediated, scope_out=scope,
                      scope_files=_scope_for_listing(user), inventory_out=inventory_out,
                      drive_delta=drive_delta, sp_delta=sp_delta)
