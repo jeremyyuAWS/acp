@@ -111,9 +111,12 @@ def run(poll_seconds: float = 2.0, _install_signals: bool = True) -> None:
         time.sleep(poll_seconds)
 
     try:
-        reporter.stop()
+        # Keep the per-process heartbeat alive for the entire bounded drain. Jobs still running
+        # during this window are real work and must remain attributed to this draining replica.
+        reporter.draining()
         core.stop_workers()
         core.stop_scheduler()
+        reporter.stop()
         reporter.offline()
         print("[worker_main] drained; exiting", flush=True)
     except Exception as e:  # a failed drain must still let the process exit

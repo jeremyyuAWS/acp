@@ -418,9 +418,10 @@ def _drain_job_workers():
     # container (audit P1).
     try:
         if _embedded_worker_reporter is not None:
-            _embedded_worker_reporter.stop()
+            _embedded_worker_reporter.draining()
         core.stop_workers()
         if _embedded_worker_reporter is not None:
+            _embedded_worker_reporter.stop()
             _embedded_worker_reporter.offline()
         print("[acp] drained job workers for shutdown", flush=True)
     except Exception as e:
