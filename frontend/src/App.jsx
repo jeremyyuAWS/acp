@@ -27,6 +27,7 @@ import Logo from './Logo.jsx'
 import ChatWidget from './ChatWidget.jsx'
 import VersionToast from './VersionToast.jsx'
 import WorkflowContinuityBanner, { primaryActiveWorkflow } from './WorkflowContinuityBanner.jsx'
+import DiscoveryContinuityChoice from './DiscoveryContinuityChoice.jsx'
 // Lazy: KnowledgeGraph statically imports all of d3 (~250 kB min) — the only heavy
 // dep not already behind a dynamic import. Loading it on tab entry keeps d3 out of
 // the main chunk entirely.
@@ -325,6 +326,7 @@ export default function App() {
   // make here. The request was bounded and the response lost, so the scan may or may not exist —
   // and the retry is safe either way because the idempotency key is held (submitIntent.js).
   const [submitUncertain, setSubmitUncertain] = useState(null)
+  const [discoveryChoice, setDiscoveryChoice] = useState(null)
   // Capacity state from the last preflight check — drives the notice near the scan action.
   // null = no check run yet (first visit); cleared when a new scan starts successfully.
   const [preflightCapacityState, setPreflightCapacityState] = useState(null)
@@ -1256,7 +1258,7 @@ export default function App() {
     })
   }
 
-  const doScan = async (source, folder = null, runScope = null) => {
+  const doScan = async (source, folder = null, runScope = null, replaceActive = false) => {
     if (busy) return                              // a scan/assessment is already running — don't launch another
     setBusy(true); setErr(null); setSubmitUncertain(null); setPreflightCapacityState(null); setProgress({ phase: 'preparing' })
     // A stop belongs to the run that was stopped. Clearing both here is what stops the previous
@@ -1331,7 +1333,7 @@ export default function App() {
         const submitKey = beginOrResumeIntent('scan')
         let accepted
         try {
-          accepted = await startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded, submitKey)
+          accepted = await startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded, submitKey, replaceActive)
         } catch (err) {
           // Hold the key when we cannot tell whether the scan was created; drop it when the
           // server proved it was not, so the user's next, corrected attempt is a fresh intent
@@ -1473,6 +1475,16 @@ export default function App() {
       // both rendered at once and directly contradicted each other. The failure is the newer,
       // harder signal; it wins.
       setPreflightCapacityState(null)
+      if (e?.status === 409 && e?.detail?.code === 'discovery_workflow_active') {
+        setDiscoveryChoice({
+          scanId: e.detail.active_scan_id,
+          source,
+          folder,
+          runScope,
+        })
+        setErr(null)
+        return
+      }
       // An unconfirmed submit already has its own, more accurate surface; a red "scan failed"
       // beside it would contradict it, which is exactly the two-banners-disagreeing bug the
       // comment above was written about.
@@ -2083,6 +2095,22 @@ export default function App() {
                   onClick={() => setStopped(null)}>Dismiss</button>
         </div>
       )}
+      <DiscoveryContinuityChoice
+        choice={discoveryChoice}
+        onContinue={() => {
+          const scanId = discoveryChoice?.scanId
+          setDiscoveryChoice(null)
+          if (scanId) switchScan(scanId)
+          goToView('discover')
+          window.scrollTo({ top: 0, behavior: 'smooth' })
+        }}
+        onReplace={() => {
+          const pending = discoveryChoice
+          setDiscoveryChoice(null)
+          if (pending) doScan(pending.source, pending.folder, pending.runScope, true)
+        }}
+        onDismiss={() => setDiscoveryChoice(null)}
+      />
       {/* Assessment has a real live card immediately below this fallback. Do not stack a
           generic “still running” banner above the richer card for the same work. */}
       <WorkflowContinuityBanner
