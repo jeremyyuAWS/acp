@@ -1894,17 +1894,62 @@ def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None)
     return sorted(grouped.values(), key=lambda row: str(row.get("updated_at") or ""), reverse=True)
 
 
+def _redact_foreign_filenames(runs, viewer: str) -> list[dict]:
+    """Strip document NAMES from runs the viewer does not own.
+
+    The name is the one field on a run that identifies another tenant's content. Everything else
+    it reports — stage, job type, phase, WCAG criterion, runtime, attempts, queue and completion
+    counts — describes the SYSTEM, so an operator can still see that someone else's remediate
+    stage is retrying or stuck. Only the name goes.
+
+    APPLIED TO ADMINS TOO, which is the whole point: a non-admin's runs are already filtered to
+    their own below, so an admin's fleet-wide view is the only path by which a cross-tenant
+    filename can reach a screen. Before #1574 that was one name per stage; it is now up to
+    _IN_FLIGHT_LIMIT of them.
+
+    `None` plus a flag, never a placeholder string. "Withheld from you" and "the handler did not
+    report one" are different facts about the same field, and a UI given only an empty value will
+    state whichever it happens to assume.
+
+    Rows are COPIED before redaction. They belong to the snapshot this was handed, which the
+    caller still holds, and a per-viewer edit must not reach back into it.
+    """
+    out = []
+    for row in runs:
+        if str(row.get("owner") or "").strip().lower() == viewer:
+            out.append(row)
+            continue
+        scrubbed = dict(row)
+        scrubbed["current_file"] = None
+        scrubbed["file_redacted"] = True
+        in_flight = scrubbed.get("in_flight")
+        if isinstance(in_flight, list):
+            scrubbed["in_flight"] = [
+                ({**job, "file": None, "file_redacted": True} if isinstance(job, dict) else job)
+                for job in in_flight]
+        out.append(scrubbed)
+    return out
+
+
 def _scope_activity_snapshot(snapshot: dict, viewer: str) -> dict:
     """Admins see fleet workflows; other signed-in users receive only their own identities.
 
     Aggregate capacity remains fleet-wide operational context.  Only the records that name or
     identify another user are filtered here, in one place shared by the initial read and SSE.
+
+    Filename redaction runs on BOTH paths rather than only the admin one. For a non-admin the
+    foreign rows are gone already, so it changes nothing — and that is exactly why it belongs
+    here: the guarantee then holds because of one rule, not because of the interaction between
+    two, and a future change to the filter cannot quietly widen it.
     """
     if core.is_admin(viewer):
-        return snapshot
+        scoped = dict(snapshot)
+        scoped["runs"] = _redact_foreign_filenames(snapshot.get("runs", []), viewer)
+        return scoped
     scoped = dict(snapshot)
-    scoped["runs"] = [row for row in snapshot.get("runs", [])
-                      if str(row.get("owner") or "").strip().lower() == viewer]
+    scoped["runs"] = _redact_foreign_filenames(
+        [row for row in snapshot.get("runs", [])
+         if str(row.get("owner") or "").strip().lower() == viewer], viewer)
     scoped["workflows"] = [row for row in snapshot.get("workflows", [])
                            if str(row.get("owner_display_name") or "").strip().lower() == viewer]
     summary = dict(snapshot.get("summary") or {})

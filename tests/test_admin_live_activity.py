@@ -58,10 +58,24 @@ def test_non_admin_live_activity_is_scoped_to_the_viewer(monkeypatch):
 
 
 def test_admin_live_activity_keeps_authorized_cross_user_workflows(monkeypatch):
+    """An admin still sees the whole fleet — the rows, the counts, the stages.
+
+    This used to assert the snapshot came back as the SAME OBJECT. It no longer can: an admin now
+    receives a copy with other tenants' document names removed. What the test is named for is
+    unchanged and is what it asserts instead — the cross-user rows are still there.
+    """
     monkeypatch.setattr(system.core, "is_admin", lambda email: True)
-    snapshot = {"runs": [{"owner": "other@example.org"}],
+    snapshot = {"runs": [{"owner": "other@example.org", "stage": "assess", "running": 3}],
                 "workflows": [{"owner_display_name": "other@example.org"}], "summary": {}}
-    assert system._scope_activity_snapshot(snapshot, "admin@example.org") is snapshot
+    scoped = system._scope_activity_snapshot(snapshot, "admin@example.org")
+
+    assert [row["owner"] for row in scoped["runs"]] == ["other@example.org"]
+    assert scoped["workflows"] == snapshot["workflows"]
+    # The operational facts survive; only the name would have gone, and this row has none.
+    assert scoped["runs"][0]["stage"] == "assess"
+    assert scoped["runs"][0]["running"] == 3
+    # And the source snapshot is not mutated by the per-viewer copy.
+    assert "file_redacted" not in snapshot["runs"][0]
 
 
 def test_the_first_read_carries_the_azure_block_so_the_page_is_not_blank(monkeypatch):
