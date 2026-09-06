@@ -11159,6 +11159,41 @@ class Store:
                 "dead_lettered": counts.get("dead", 0),
                 "oldest_undelivered_at": oldest, "oldest_undelivered_age_s": oldest_age}
 
+    def stage_cancellation_health(self, *, owner: str | None = None) -> dict:
+        """Canonical acknowledgement status for cooperative stage cancellation.
+
+        Counts attempts, not executions: one stage can have several workers draining, and hiding
+        that grain is how a partially acknowledged stop looks complete. Historical acknowledged
+        attempts remain visible separately while the actionable counters cover only attempts still
+        in ``cancel_requested``.
+        """
+        now = self._now()
+        scope = (" AND execution_id IN (SELECT execution_id FROM stage_executions "
+                 "WHERE owner_email=%s)") if owner is not None else ""
+        params = (now, owner) if owner is not None else (now,)
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS awaiting,"
+                "SUM(CASE WHEN cancel_deadline_at IS NOT NULL AND cancel_deadline_at<=%s "
+                "THEN 1 ELSE 0 END) AS overdue,"
+                "SUM(CASE WHEN escalated_at IS NOT NULL THEN 1 ELSE 0 END) AS escalated,"
+                "MIN(cancel_deadline_at) AS next_deadline "
+                "FROM stage_attempts WHERE state='cancel_requested'" + scope, params)
+            active = self._db.fetchone(cur) or {}
+            ack_params = (owner,) if owner is not None else ()
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS acknowledged FROM stage_attempts "
+                "WHERE cancel_acknowledged_at IS NOT NULL" + scope, ack_params)
+            acknowledged = int((self._db.fetchone(cur) or {}).get("acknowledged") or 0)
+        awaiting = int(active.get("awaiting") or 0)
+        overdue = int(active.get("overdue") or 0)
+        escalated = int(active.get("escalated") or 0)
+        return {"awaiting_acknowledgement": awaiting, "overdue": overdue,
+                "escalated": escalated, "acknowledged": acknowledged,
+                "next_deadline_at": active.get("next_deadline"),
+                "status": "escalated" if escalated else "overdue" if overdue else
+                          "stopping" if awaiting else "clear"}
+
     def record_side_effect_receipt(self, *, execution_id: str, work_item_id: str | None,
                                    effect_type: str, destination: str, content_digest: str,
                                    receipt: dict | None = None) -> dict:

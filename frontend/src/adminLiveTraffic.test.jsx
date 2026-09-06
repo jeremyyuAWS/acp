@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { JOB_STATE_FILTERS, TILE_KINDS, azureBytes, azureLatest, buildTrafficGraph, capacityValue, flowEdge, infrastructureDetail, nodeGauge, queueConcentration, runFacts, jobStateCounts, runOperationalState, runTileLabel, sizeScopeNote, tileKind, tileStyle, trafficEdgeStyle, trafficGraphForTab, trendToggleLabel, workerServiceRows, workflowColor, workflowOperationalState } from './AdminLiveTraffic.jsx'
+import { JOB_STATE_FILTERS, TILE_KINDS, azureBytes, azureLatest, buildTrafficGraph, capacityValue, cancellationHealthModel, deliveryHealthModel, flowEdge, infrastructureDetail, nodeGauge, queueConcentration, runFacts, jobStateCounts, runOperationalState, runTileLabel, sizeScopeNote, tileKind, tileStyle, trafficEdgeStyle, trafficGraphForTab, trendToggleLabel, workerServiceRows, workflowColor, workflowOperationalState } from './AdminLiveTraffic.jsx'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(join(here, 'AdminLiveTraffic.jsx'), 'utf8')
@@ -18,6 +18,21 @@ const run = {
 }
 
 describe('Admin live traffic graph', () => {
+  it('distinguishes unavailable, delayed, and failed canonical delivery', () => {
+    expect(deliveryHealthModel(null).state).toBe('unknown')
+    expect(deliveryHealthModel({ pending: 2, claimed: 1, delivered: 7 }).headline).toBe('3 in transit')
+    expect(deliveryHealthModel({ retrying: 2, pending: 1 }).state).toBe('warning')
+    expect(deliveryHealthModel({ dead_lettered: 1, retrying: 2 }).state).toBe('critical')
+    expect(source).toContain('aria-label="Canonical event delivery"')
+  })
+
+  it('makes overdue and escalated stop acknowledgements explicit', () => {
+    expect(cancellationHealthModel(null).state).toBe('unknown')
+    expect(cancellationHealthModel({ awaiting_acknowledgement: 2 }).headline).toBe('2 stopping')
+    expect(cancellationHealthModel({ awaiting_acknowledgement: 2, overdue: 1 }).headline).toBe('1 overdue')
+    expect(cancellationHealthModel({ awaiting_acknowledgement: 2, overdue: 1, escalated: 1 }).headline).toBe('1 escalated')
+    expect(source).toContain('aria-label="Cancellation acknowledgements"')
+  })
   it('supplies mutating recovery handlers only for the server-confirmed platform admin', () => {
     expect(source).toMatch(/onCancelStage=\{me\?\.is_admin\s*\?/)
     expect(source).toMatch(/onResumeStage=\{me\?\.is_admin\s*\?/)

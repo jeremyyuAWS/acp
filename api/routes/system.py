@@ -1644,6 +1644,24 @@ def _admin_activity_snapshot() -> dict:
             composition = _qc()
         except Exception:
             composition = None
+    # Canonical delivery and stop-acknowledgement health. These are global operational facts on
+    # the admin surface, like worker capacity and the shared queue. Missing methods during a
+    # rolling deploy remain explicitly unavailable; an old replica must never manufacture a
+    # healthy zero for tables it cannot read.
+    outbox_health = None
+    _outbox_health = getattr(core.store, "stage_outbox_health", None)
+    if callable(_outbox_health):
+        try:
+            outbox_health = _outbox_health()
+        except Exception:
+            swallowed("routes.system._admin_activity_snapshot: reading stage outbox health failed")
+    cancellation_health = None
+    _cancel_health = getattr(core.store, "stage_cancellation_health", None)
+    if callable(_cancel_health):
+        try:
+            cancellation_health = _cancel_health()
+        except Exception:
+            swallowed("routes.system._admin_activity_snapshot: reading cancellation health failed")
     if queued and not wt.get("alive"):
         pressure = "stalled"
     elif queued and slots and (instance_busy if instances else running) >= slots:
@@ -1683,6 +1701,9 @@ def _admin_activity_snapshot() -> dict:
                 "complete": unlinked_active_jobs == 0 if unlinked_active_jobs is not None else None,
             },
             "recovery": recovery,
+            **({"canonical_delivery": outbox_health} if outbox_health is not None else {}),
+            **({"cancellation_acknowledgements": cancellation_health}
+               if cancellation_health is not None else {}),
             # During mixed-version rollout an empty registry is unavailable, not zero capacity.
             # Once any process has reported, worker_capacity_by_role contains the fresh/stale
             # split and every raw instance needed by the authorized operations drawer.

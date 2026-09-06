@@ -53,6 +53,12 @@ function age(iso) {
   return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
 }
 
+function until(iso) {
+  if (!iso) return '—'
+  const seconds = Math.max(0, Math.round((new Date(iso).getTime() - Date.now()) / 1000))
+  return formatDuration(seconds)
+}
+
 export const JOB_STATE_FILTERS = [
   { key: 'all', label: 'All' },
   { key: 'active', label: 'Active' },
@@ -209,6 +215,28 @@ export function trendToggleLabel(expanded) {
 
 export function capacityValue(value, suffix = '') {
   return value == null || value === '' ? 'Not reported' : `${value}${suffix}`
+}
+
+export function deliveryHealthModel(health) {
+  if (!health) return { state: 'unknown', headline: 'Not reported', detail: 'Delivery health is unavailable on this replica.' }
+  const dead = Number(health.dead_lettered || 0)
+  const retrying = Number(health.retrying || 0)
+  const pending = Number(health.pending || 0) + Number(health.claimed || 0)
+  if (dead) return { state: 'critical', headline: `${dead} dead-lettered`, detail: `${retrying} retrying · ${pending} awaiting delivery` }
+  if (retrying) return { state: 'warning', headline: `${retrying} retrying`, detail: `${pending} awaiting delivery` }
+  return { state: 'healthy', headline: pending ? `${pending} in transit` : 'Caught up',
+    detail: pending ? `Oldest waiting ${health.oldest_undelivered_age_s == null ? 'age unknown' : formatDuration(health.oldest_undelivered_age_s)}` : `${Number(health.delivered || 0)} delivered` }
+}
+
+export function cancellationHealthModel(health) {
+  if (!health) return { state: 'unknown', headline: 'Not reported', detail: 'Cancellation acknowledgement health is unavailable.' }
+  const awaiting = Number(health.awaiting_acknowledgement || 0)
+  const overdue = Number(health.overdue || 0)
+  const escalated = Number(health.escalated || 0)
+  if (escalated) return { state: 'critical', headline: `${escalated} escalated`, detail: `${overdue} overdue · ${awaiting} awaiting acknowledgement` }
+  if (overdue) return { state: 'critical', headline: `${overdue} overdue`, detail: `${awaiting} awaiting acknowledgement` }
+  if (awaiting) return { state: 'warning', headline: `${awaiting} stopping`, detail: health.next_deadline_at ? `Next deadline in ${until(health.next_deadline_at)}` : 'Acknowledgement deadline unavailable' }
+  return { state: 'healthy', headline: 'All clear', detail: `${Number(health.acknowledged || 0)} acknowledged historically` }
 }
 
 /** One Azure metric's newest one-minute sample, or "Not reported" — never a zero standing in for
@@ -978,6 +1006,8 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
   const services = workerServiceRows(summary)
   const recovery = summary.recovery || {}
   const correlation = summary.workflow_correlation || {}
+  const delivery = deliveryHealthModel(summary.canonical_delivery)
+  const cancellations = cancellationHealthModel(summary.cancellation_acknowledgements)
   return <section className="panel" style={{ padding: 16, marginBottom: 20 }} aria-label="Live Azure processing traffic">
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
       <div><b>Live Azure traffic</b><div className="muted" style={{ fontSize: 12 }}>Active worker flow plus the last 15 minutes</div></div>
@@ -1004,6 +1034,16 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
         {recovery.latest_action_at && <div className="muted" style={{ fontSize: 10.5, marginTop: 3 }}>
           Latest action {age(recovery.latest_action_at)} ago
         </div>}
+      </div>
+      <div className="panel" role={delivery.state === 'critical' ? 'alert' : 'status'} style={{ padding: 12 }} aria-label="Canonical event delivery">
+        <div className="muted" style={{ fontSize: 11 }}>CANONICAL DELIVERY</div>
+        <b style={{ fontSize: 20 }}>{delivery.headline}</b>
+        <div className="muted">{delivery.detail}</div>
+      </div>
+      <div className="panel" role={cancellations.state === 'critical' ? 'alert' : 'status'} style={{ padding: 12 }} aria-label="Cancellation acknowledgements">
+        <div className="muted" style={{ fontSize: 11 }}>STOP ACKNOWLEDGEMENTS</div>
+        <b style={{ fontSize: 20 }}>{cancellations.headline}</b>
+        <div className="muted">{cancellations.detail}</div>
       </div>
       <div className="panel" style={{ padding: 12 }} aria-label="Workflow data linkage">
         <div className="muted" style={{ fontSize: 11 }}>WORKFLOW WIRING</div>
