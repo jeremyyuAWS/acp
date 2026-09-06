@@ -119,11 +119,12 @@ offerable now**, and it took three things, landed in that order and gated on eac
 on the catalog alone would have produced a document naming a standard it could not print, which is
 the defect `734fec29` fixed arriving by another route.
 
-Chapter 4 is hardware, and 69 of the 120 rows end there for a hosted web application. The matrix
-carries them anyway: PRD §10 makes applicability a human's call with a stated reason, so a system
-that dropped the chapter would be making it. Grouping those rows by chapter in the criteria list,
-and marking a chapter in one decision, is the workspace half of 6.3 and is the piece still
-landing — the document already prints them that way.
+The criteria list groups the rows into the same chapters the document does, and a chapter can be
+marked Not Applicable in one decision with one stated reason. Chapter 4 is hardware, and 69 of the
+120 rows end there for a hosted web application — the matrix carries them anyway, because PRD §10
+makes applicability a human's call with a stated reason and a system that dropped the chapter would
+be making it. The bulk control does the typing, not the deciding, and writes one decision per row
+so the audit history says what actually happened.
 
 **What is held is EN 301 549**, the requirement set the EU and INT editions oblige. This is the
 same shape of question as ADR 0053 and not the same answer: 36 CFR is a work of the United States
