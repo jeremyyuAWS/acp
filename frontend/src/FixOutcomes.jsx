@@ -82,7 +82,7 @@ function OutcomeRow({ r, autoLane, onRetry, retried, busy }) {
           gap — a guess dressed as a finding is what sent a whole investigation to the wrong place. */}
       {r.reason
         ? <div className="fixoutcome-reason" style={{
-            fontSize: 12, marginTop: 6, color: r.reasonSource === 'job' ? '#8A2A20' : 'var(--fg)',
+            fontSize: 12, marginTop: 6, color: r.reasonSource === 'job' ? '#8A2A20' : 'var(--ink)',
             fontFamily: r.reasonSource === 'job' ? 'ui-monospace, monospace' : 'inherit',
             wordBreak: 'break-word',
           }}>{r.reason}</div>

@@ -179,7 +179,7 @@ export default function FolderPicker({
           {i > 0 && <span>›</span>}
           <button type="button" style={{ background: 'none', border: 'none', padding: 0, fontSize: 12,
             cursor: i < stack.length - 1 ? 'pointer' : 'default',
-            color: i < stack.length - 1 ? 'var(--accent)' : 'var(--ink)',
+            color: i < stack.length - 1 ? 'var(--info-fg)' : 'var(--ink)',
             fontWeight: i === stack.length - 1 ? 600 : 400 }}
             onClick={() => i < stack.length - 1 && goTo(i)}>
             {f.name}

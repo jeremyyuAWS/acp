@@ -1971,7 +1971,7 @@ export default function App() {
                 onChange={(e) => switchScan(e.target.value)}
                 disabled={scanLoading || busy}
                 aria-label="Select scan run"
-                style={{ fontSize: 12, padding: '2px 6px', borderRadius: 4, border: '1px solid var(--border)', background: 'var(--surface)', color: 'inherit', cursor: 'pointer' }}
+                style={{ fontSize: 12, padding: '2px 6px', borderRadius: 4, border: '1px solid var(--line)', background: 'var(--surface)', color: 'inherit', cursor: 'pointer' }}
               >
                 {scanList.map((s, i) => {
                   // scanOptionDate.js: `at` is completed_at when assessed, discovered_at (ADR

@@ -133,8 +133,8 @@ export function MetricChart({ values = [], field, label, color }) {
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}><b style={{ fontSize: 12 }}>{label}</b>
       <span style={{ color, fontWeight: 700 }}>{points.at(-1) ?? 0}</span></div>
     {points.length > 1 ? <svg role="img" aria-label={`${label} over recent live updates`} viewBox="0 0 282 116" style={{ width: '100%', height: 116 }}>
-      <line x1="24" y1="12" x2="24" y2="94" stroke="var(--border)" />
-      <line x1="24" y1="94" x2="270" y2="94" stroke="var(--border)" />
+      <line x1="24" y1="12" x2="24" y2="94" stroke="var(--line)" />
+      <line x1="24" y1="94" x2="270" y2="94" stroke="var(--line)" />
       <text x="2" y="17" fontSize="9" fill="var(--muted)">{max}</text>
       <text x="10" y="96" fontSize="9" fill="var(--muted)">0</text>
       <text x="24" y="109" fontSize="9" fill="var(--muted)">earlier</text>
@@ -217,7 +217,7 @@ function AzureCapacity({ capacity, state }) {
       <span className="muted" style={{ fontSize: 11 }}>{capacity.measured_at ? `Measured ${age(capacity.measured_at)} ago` : 'Measurement time unavailable'}</span>
     </div>
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(190px,1fr))', gap: 8 }}>
-      {tiles.map(([label, value, detail]) => <div key={label} style={{ minWidth: 0, padding: 10, border: '1px solid var(--border)', borderRadius: 9 }}>
+      {tiles.map(([label, value, detail]) => <div key={label} style={{ minWidth: 0, padding: 10, border: '1px solid var(--line)', borderRadius: 9 }}>
         <div className="muted" style={{ fontSize: 10.5 }}>{label}</div>
         <b style={{ display: 'block', fontSize: 17, overflowWrap: 'anywhere' }}>{value}</b>
         <div className="muted" style={{ fontSize: 11, overflowWrap: 'anywhere' }}>{detail}</div>
@@ -262,8 +262,8 @@ export function tileStyle(kind, color) {
   const spec = TILE_KINDS[tileKind(kind)] || TILE_KINDS.service
   return {
     background: spec.tint
-      ? `color-mix(in srgb, ${color} ${spec.tint}%, var(--panel))`
-      : 'var(--panel)',
+      ? `color-mix(in srgb, ${color} ${spec.tint}%, var(--surface))`
+      : 'var(--surface)',
     borderLeft: spec.accent ? `${spec.accent}px solid ${color}` : undefined,
     borderRadius: spec.radius,
     label: spec.label,
@@ -292,7 +292,7 @@ function RunNode({ data }) {
         fontWeight: 700 }}>{statusLabel}</span>
     </div>
     <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{data.run.owner}</div>
-    <div style={{ height: 5, background: 'var(--border)', borderRadius: 4, margin: '9px 0 7px' }}>
+    <div style={{ height: 5, background: 'var(--line)', borderRadius: 4, margin: '9px 0 7px' }}>
       <div style={{ width: `${pct}%`, height: '100%', background: cfg.color, borderRadius: 4 }} />
     </div>
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'end' }}>
@@ -311,7 +311,7 @@ function RunNode({ data }) {
 function WorkflowNode({ data }) {
   return <div style={{ width: 225, minHeight: 112, padding: 12, borderRadius: 9,
     border: `2px solid ${data.color}`, borderLeft: `7px solid ${data.color}`,
-    background: 'var(--panel)', boxShadow: '0 2px 8px rgba(24,20,28,.07)' }}>
+    background: 'var(--surface)', boxShadow: '0 2px 8px rgba(24,20,28,.07)' }}>
     <div style={{ color: data.color, fontSize: 9.5, fontWeight: 800, letterSpacing: '.09em' }}>WORKFLOW</div>
     <b style={{ display: 'block', marginTop: 4, overflowWrap: 'anywhere' }}>{data.owner}</b>
     <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>{data.source}</div>
@@ -885,7 +885,7 @@ export default function AdminLiveTraffic() {
       <div className="muted" style={{ fontSize: 11, padding: '9px 12px 5px' }}>WORKER SERVICES</div>
       {services.map((service) => <div key={service.role} style={{ display: 'grid',
         gridTemplateColumns: 'minmax(110px,1fr) minmax(180px,2fr) minmax(130px,1fr)', gap: 12,
-        alignItems: 'center', padding: '8px 12px', borderTop: '1px solid var(--border)', fontSize: 12 }}>
+        alignItems: 'center', padding: '8px 12px', borderTop: '1px solid var(--line)', fontSize: 12 }}>
         <span><b>{STAGE[service.stage]?.label || service.role}</b><br />
           <span style={{ color: service.alive ? PRESSURE.healthy.color : PRESSURE.stalled.color }}>
             ● {service.alive ? 'Online' : 'Offline'}
@@ -896,7 +896,7 @@ export default function AdminLiveTraffic() {
       </div>)}
     </div>}
     {concentration.pct >= 70 && concentration.total > 1 && <div role="status" style={{ padding: '9px 11px', marginBottom: 12,
-      borderLeft: `4px solid ${PRESSURE.busy.color}`, background: 'var(--page)', fontSize: 12 }}>
+      borderLeft: `4px solid ${PRESSURE.busy.color}`, background: 'var(--bg)', fontSize: 12 }}>
       <b>Queue concentration:</b> one user holds {concentration.pct}% of waiting jobs. Tenant-fair scheduling gives other waiting users the next equally prioritized capacity.
     </div>}
     <div role="tablist" aria-label="Live Operations flow views" style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
@@ -912,7 +912,7 @@ export default function AdminLiveTraffic() {
     </div>}
     <div style={{ height: flowTab === 'infrastructure' ? 590
       : Math.max(360, 100 + visibleGraph.nodes.filter((node) => node.type === 'workflow').length * 185), maxHeight: 760,
-      border: '1px solid var(--border)', borderRadius: 10, overflow: 'hidden', background: 'var(--page)' }}>
+      border: '1px solid var(--line)', borderRadius: 10, overflow: 'hidden', background: 'var(--bg)' }}>
       <ReactFlow key={flowTab} nodes={visibleGraph.nodes} edges={visibleGraph.edges} nodeTypes={nodeTypes}
         defaultEdgeOptions={EDGE_ROUTING}
         fitView minZoom={0.35} maxZoom={1.5}
@@ -929,8 +929,8 @@ export default function AdminLiveTraffic() {
         }}>
         <Background gap={18} size={1} /><MiniMap pannable zoomable /><Controls showInteractive={false} />
         {flowTab === 'infrastructure' && <div aria-label="Map key" style={{ position: 'absolute', zIndex: 3, right: 12, top: 12,
-          display: 'flex', gap: 12, padding: '6px 9px', border: '1px solid var(--border)',
-          borderRadius: 7, background: 'var(--panel)', boxShadow: '0 2px 7px rgba(24,20,28,.07)',
+          display: 'flex', gap: 12, padding: '6px 9px', border: '1px solid var(--line)',
+          borderRadius: 7, background: 'var(--surface)', boxShadow: '0 2px 7px rgba(24,20,28,.07)',
           color: 'var(--muted)', fontSize: 10.5 }}>
           <span><b style={{ color: 'var(--ink)' }}>SERVICE</b> · capacity</span>
           <span><b style={{ color: 'var(--ink)' }}>DATA</b> · sources and outputs</span>

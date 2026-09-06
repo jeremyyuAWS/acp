@@ -459,7 +459,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                   <dt>Destination path</dt><dd>{selectedResult?.released_relative_path || `Remediated / ${releaseFolder?.name || '<release timestamp>'} / ${sourcePath(sel)}`}</dd>
                   <dt>Verification</dt><dd>{selectedResult?.verification || 'Pending release'}</dd>
                 </dl>
-                {selectedResult?.status === 'failed' && <div role="alert" style={{ marginTop: 14, color: 'var(--danger-fg)' }}><b>Needs attention:</b> {selectedResult.explanation}</div>}
+                {selectedResult?.status === 'failed' && <div role="alert" style={{ marginTop: 14, color: 'var(--error-fg-strong)' }}><b>Needs attention:</b> {selectedResult.explanation}</div>}
                 {selectedResult?.published_url && <a href={selectedResult.published_url} target="_blank" rel="noopener noreferrer" aria-label={`Open released document ${sel.file}`}>Open released document ↗</a>}
                 <details style={{ marginTop: 16 }}><summary>Audit history</summary><p className="muted">{selectedResult?.published_at ? `Released ${new Date(selectedResult.published_at).toLocaleString()} · ${selectedResult.created ? 'created' : 'reused'}` : 'No release event yet.'}</p></details>
               </> : <p className="muted">Select a document to see its original path, destination, verification, and audit history.</p>}
@@ -470,7 +470,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           <div style={{ marginTop: 14 }}>
             {Object.keys(done).length === ready.length && ready.length > 0 && <div className="okline" style={{ marginBottom: 10 }}><b>{ready.length} corrected {ready.length === 1 ? 'copy' : 'copies'} released</b>{releaseFolder?.url && <> · <a href={releaseFolder.url} target="_blank" rel="noopener noreferrer">Open release folder ↗</a></>}</div>}
             <button className="ghost small" onClick={downloadReleaseManifest}>Download release manifest</button>
-            {manifestError && <div role="alert" style={{ color: 'var(--danger-fg)', marginTop: 8 }}>{manifestError}</div>}
+            {manifestError && <div role="alert" style={{ color: 'var(--error-fg-strong)', marginTop: 8 }}>{manifestError}</div>}
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 6 }}>📋 Audit trail · {publishedEntries.length} released</div>
             {publishedEntries.slice(0, 8).map((e) => (
               <div key={e.file} style={{ fontSize: 12.5, padding: '5px 0', borderBottom: '1px solid var(--line)' }}>
