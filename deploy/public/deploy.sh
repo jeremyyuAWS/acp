@@ -235,9 +235,23 @@ if ! [[ "$BUILD_VERSION" =~ ^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}\.[0-9]{1,6}$ ]]; t
   echo "refusing to deploy: BUILD_VERSION '$BUILD_VERSION' is not a CalVer stamp (YYYY.M.D.N)" >&2
   exit 1
 fi
-echo "   version $BUILD_VERSION · built $BUILD_TIME"
+# The COMMIT this image is built from, surfaced by /healthz so "is commit X live?" is a read
+# rather than an inference from timestamps.
+#
+# `-dirty` IS NOT DECORATION. Unlike redeploy.sh — which builds from a fresh clone checked out at
+# a resolved pin, and so is clean by construction — this script uploads the WORKING DIRECTORY as
+# the build context. A sha alone would then name a commit whose content is not what shipped, and
+# a build identity that can be wrong in that direction is worse than none: it invites someone to
+# diff the wrong tree against a production incident. An empty result (no git, no commit) stays
+# empty rather than guessing.
+BUILD_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
+if [ -n "$BUILD_SHA" ] && ! git diff-index --quiet HEAD -- 2>/dev/null; then
+  BUILD_SHA="$BUILD_SHA-dirty"
+fi
+echo "   version $BUILD_VERSION · built $BUILD_TIME · commit ${BUILD_SHA:-unknown}"
 az acr build "${AZ[@]}" -r "$ACR" -t "$IMAGE" -f deploy/public/Dockerfile \
-  --build-arg BUILD_VERSION="$BUILD_VERSION" --build-arg BUILD_TIME="$BUILD_TIME" . -o none
+  --build-arg BUILD_VERSION="$BUILD_VERSION" --build-arg BUILD_TIME="$BUILD_TIME" \
+  --build-arg BUILD_SHA="$BUILD_SHA" . -o none
 
 echo "== 3/5 registry creds =="
 ACRSERVER="$(az acr show "${AZ[@]}" -n "$ACR" --query loginServer -o tsv)"
