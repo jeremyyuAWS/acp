@@ -274,10 +274,11 @@ rows had gone stale: 11 and 12 still deferred to Phase 4 *after* Phase 4 shipped
 excepted the snapshot and export tests that now exist. A status table is the artifact people read
 *instead of* checking, so where this and the code disagree, the code wins.
 
-Re-run it with `python -m pytest tests/ -k acr`, which sweeps the 18 `test_acr_*.py` files. The
-count is deliberately not written down here: the first draft of this line said 373 and the suite
-answered 381, because the guard file named below had landed in between. A number in a document is
-a claim that decays; the command is one that cannot.
+Re-run it with `python -m pytest tests/ -k acr`, which sweeps every `test_acr_*.py` file. No count
+is given, and the reason is this line's own history: its first draft said "373 tests", the suite
+answered 381, so it was rewritten to give a file count instead — and by 2026-09-06 that had gone
+from 18 to 21 as the Word export landed. The lesson took two attempts. A number in a document is a
+claim that decays; the command is one that cannot.
 
 Rows 4, 6–11 and the digest behind 12 were additionally confirmed by mutation on 2026-09-05: the
 rule enforcing each was broken in turn and the whole ACR suite run against it, and every one
@@ -304,7 +305,7 @@ already been read as evidence that the guard worked.
 | 13 | Exported Word document follows the official VPAT structure | ⬜ **ADR 0053** — three separable questions, not one: may a generated document be CALLED a VPAT (counsel), may the template FILE be redistributed here (counsel), does the STRUCTURE need the file (no — already rendered). The renderer and table shape exist; the ITI template does not |
 | 14 | Generated Word document passes ACP's accessibility checks | ✅ enforced at `GET /acr/{id}/preview?format=docx`, which refuses to serve a document that FAILs — it does NOT depend on 13 |
 | 15 | Report identifies version, methods, tools, environments, reviewers | ✅ required to publish |
-| 16 | Automated tests for authorization, decision rules, freshness, validation, snapshots, export | ✅ all six — 18 `test_acr_*.py` files |
+| 16 | Automated tests for authorization, decision rules, freshness, validation, snapshots, export | ✅ all six — `pytest tests/ -k acr` |
 | 17 | UI has keyboard, focus, screen-reader, reflow and automated accessibility tests | ✅ |
 | 18 | No existing scan, assessment, remediation or reporting workflow regresses | ✅ `test_acr_no_regression.py` |
 
