@@ -1,5 +1,11 @@
-# Test-only dependencies. NOT shipped — api/requirements.txt is the runtime set, and
-# nothing under api/ imports these (verified: only scripts/ and tests/ do).
+# Test-only dependencies. NOT shipped — api/requirements.txt is the runtime set.
+#
+# ONE EXCEPTION, and it is here rather than left implicit because this header used to say
+# "nothing under api/ imports these" and that stopped being true: api/acr_export_docx.py imports
+# python-docx at runtime for the ACR Word export, so python-docx is ALSO declared in
+# api/requirements.txt (pinned there). It stays listed below because the fixture builders still
+# need it, and because dropping it here would make the test set depend on the runtime set by
+# accident. python-pptx and openpyxl remain genuinely test-only.
 #
 # The OOXML authoring libraries build fixtures on the fly (scripts/gen_demo_fixtures.py
 # and ~12 test modules construct .docx/.pptx/.xlsx inputs rather than committing
