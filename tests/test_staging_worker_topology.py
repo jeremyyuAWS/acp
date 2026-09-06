@@ -81,6 +81,14 @@ def test_first_deploy_stamps_the_role_before_worker_startup():
     assert '--cpu "$WK_CPU" --memory "$WK_MEMORY"' in worker
 
 
+def test_worker_create_uses_only_supported_containerapp_resource_flags():
+    script = (ROOT / "deploy/public/deploy.sh").read_text()
+    worker = script[script.index('WORKER_APP="'):script.index("_apply_readiness_probe")]
+    assert '--cpu "$WK_CPU" --memory "$WK_MEMORY"' in worker
+    assert "--ephemeral-storage" not in worker, (
+        "az containerapp create rejects this flag even with the latest containerapp extension")
+
+
 def test_migration_overlap_stays_inside_one_cpu_until_legacy_retires():
     script = (ROOT / "deploy/public/staging_up.sh").read_text()
     assert 'ACP_WORKER_CPU="${ACP_STAGING_WORKER_CPU:-0.25}"' in script
