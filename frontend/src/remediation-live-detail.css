@@ -11,7 +11,8 @@
 .remops-milestones{display:flex;flex-wrap:wrap;gap:7px;padding:10px 18px 0}.remops-milestones>div{display:flex;align-items:center;gap:7px;padding:5px 6px 5px 8px;border:1px solid var(--success-fg);border-radius:6px;color:var(--success-fg);background:var(--success-bg);font-size:11px}
 .remops-milestones button{padding:0 3px;border:0;color:inherit;background:transparent;font-size:14px;line-height:1}
 .remops-pulse-strip{display:flex;align-items:center;gap:10px;padding:7px 18px;border-bottom:1px solid var(--line);color:var(--muted);font-size:10.5px}
-.remops-pulse-bars{display:flex;align-items:flex-end;gap:2px;height:12px}.remops-pulse-bars i{width:4px;border-radius:1px;background:var(--info-fg)}
+.remops-pulse-bars{display:flex;align-items:flex-end;gap:3px;height:12px}.remops-pulse-bars i{width:2px;flex:0 0 2px;border-radius:1px;background:var(--info-fg)}
+.remops-pulse-remediate .remops-pulse-bars i{background:var(--amber-ink,#8a5a00)}
 /* The persistent card's variant. The strip above is a full-width divider inside the ops panel;
    in the card it sits inline in the header beside the freshness words, where that padding and
    rule would draw a stray line across a panel that already has its own edges. Presentation only

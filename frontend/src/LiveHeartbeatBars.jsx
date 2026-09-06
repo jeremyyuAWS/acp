@@ -13,19 +13,26 @@ export function heartbeatBuckets(updates = [], now = Date.now(), slots = 12, buc
   return values
 }
 
+function timestamp(value) {
+  const numeric = Number(value)
+  if (Number.isFinite(numeric) && numeric > 0) return numeric
+  const parsed = Date.parse(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 // A rolling record of successful snapshot heartbeats, not document throughput. Assess can stay
 // live while a large file produces no completed-document delta; this strip still proves that the
 // authenticated feed is answering. Twelve five-second buckets shift left as time advances.
-export default function LiveHeartbeatBars({ measuredAt, slots = 12 }) {
+export default function LiveHeartbeatBars({ measuredAt, slots = 12, stage = 'assess' }) {
   const [updates, setUpdates] = useState(() => {
-    const stamp = Number(measuredAt)
-    return Number.isFinite(stamp) && stamp > 0 ? [stamp] : []
+    const stamp = timestamp(measuredAt)
+    return stamp ? [stamp] : []
   })
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
-    const stamp = Number(measuredAt)
-    if (!Number.isFinite(stamp) || stamp <= 0) return
+    const stamp = timestamp(measuredAt)
+    if (!stamp) return
     setUpdates((current) => current.at(-1) === stamp
       ? current
       : [...current, stamp].filter((at) => stamp - at < slots * 5000).slice(-slots * 3))
@@ -44,7 +51,7 @@ export default function LiveHeartbeatBars({ measuredAt, slots = 12 }) {
   const max = Math.max(1, ...buckets)
 
   return (
-    <span className="live-heartbeat-bars"
+    <span className="live-heartbeat-bars" data-stage={stage}
           role="img" aria-label={`Last 60 seconds: ${total} successful live update${total === 1 ? '' : 's'}`}>
       {buckets.map((value, index) => (
         <i key={index} aria-hidden="true"
