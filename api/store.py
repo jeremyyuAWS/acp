@@ -1043,8 +1043,10 @@ _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS release_executions (
       id TEXT PRIMARY KEY, scan_id TEXT NOT NULL, owner_email TEXT NOT NULL,
       source TEXT NOT NULL, folder_name TEXT NOT NULL, documents_total INT NOT NULL,
-      status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      acp_version TEXT
     )""",
+    "ALTER TABLE release_executions ADD COLUMN IF NOT EXISTS acp_version TEXT",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_release_scan_owner ON release_executions(scan_id,owner_email)",
     "CREATE INDEX IF NOT EXISTS idx_release_owner ON release_executions(owner_email,created_at)",
     """CREATE TABLE IF NOT EXISTS release_roots (
@@ -2067,8 +2069,11 @@ class _PgAdapter:
     # v22 is the union of the v20 archive tables and main's v20/v21 remediation-event and
     # delivery-retry migrations. All are additive and retain the rolling-deployment behaviour
     # documented above; a single version/checksum must identify the complete merged DDL.
-    _SCHEMA_VERSION = 22
-    _SCHEMA_CHECKSUM_AT_VERSION = "044ad524ee742356da86fc1e83b1f828"
+    # v23 adds the optional ACP build version to release executions so an exported manifest can
+    # identify the exact application build that performed the publication. Older replicas ignore
+    # the nullable column and newer replicas safely read NULL for releases created before v23.
+    _SCHEMA_VERSION = 23
+    _SCHEMA_CHECKSUM_AT_VERSION = "228edf1454263b69f9b8dfee892f4b34"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -7501,11 +7506,12 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO release_executions(id,scan_id,owner_email,source,folder_name,"
-                "documents_total,status,created_at,updated_at) "
-                "VALUES(%s,%s,%s,%s,%s,%s,'running',%s,%s) "
+                "documents_total,status,created_at,updated_at,acp_version) "
+                "VALUES(%s,%s,%s,%s,%s,%s,'running',%s,%s,%s) "
                 "ON CONFLICT(scan_id,owner_email) DO NOTHING",
                 (release_id, scan_id, owner, source, folder_name,
-                 max(0, int(documents_total)), now, now))
+                 max(0, int(documents_total)), now, now,
+                 os.environ.get("ACP_BUILD_VERSION") or os.environ.get("ACP_VERSION") or "dev"))
             self._db.execute(cur,
                 "SELECT * FROM release_executions WHERE scan_id=%s AND owner_email=%s",
                 (scan_id, owner))
