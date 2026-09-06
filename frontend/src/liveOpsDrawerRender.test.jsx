@@ -1856,6 +1856,29 @@ describe('What the worker service is doing', () => {
     ] }],
   }
 
+  it('keeps durable work and replica attribution visible when slot capacity is unavailable', async () => {
+    const degraded = { ...busy, summary: { ...busy.summary, job_attribution: {
+      available: true, attributed: 2, unattributed: 0, reason: null,
+      replicas: [{ replica_id: 'assess-replica-a', roles: ['assess'], running: 2,
+        processes: 1, oldest_claim_age_s: 45, job_types: { assess_file: 2 } }],
+    } } }
+    const legacyService = { ...service, active: null, slots: null, jobs_in_flight: 2,
+      instances: [{ replica_id: 'assess-replica-a', healthy: true, fresh: true,
+        process_count: null, concurrency_limit: null, active_job_count: null,
+        last_heartbeat_at: iso(-3) }] }
+    const container = await mount({ nodeId: 'stage:assess', snapshot: degraded,
+      node: { kind: 'worker', label: 'Assess workers', service: legacyService } })
+
+    const gauge = container.querySelector('[aria-label="Worker slot utilization"]')
+    expect(gauge.textContent).toContain('Worker utilization unavailable')
+    expect(gauge.textContent).toContain('Employee Handbook.docx')
+    expect(gauge.textContent).toContain('Benefits Policy.pdf')
+    expect(gauge.textContent).toContain('assess-replica-a')
+    expect(gauge.textContent).toContain('2 jobs')
+    expect(gauge.textContent).toContain('Slot capacity not reported')
+    expect(gauge.textContent).not.toContain('0 of 0 slots busy')
+  })
+
   it('names every document in flight, its criterion, and what is happening to it', async () => {
     const container = await mount({ nodeId: 'stage:assess', snapshot: busy,
       node: { kind: 'worker', label: 'Assess workers', service } })
