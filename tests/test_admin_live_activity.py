@@ -219,6 +219,27 @@ def test_workflow_contract_uses_the_durable_stage_execution_and_completion_time(
     assert stage["completion_recorded"] is True
 
 
+def test_workflow_contract_keeps_completed_stage_after_queue_tail_expires():
+    events = [
+        {"event_id": "start", "kind": "job.stage_started", "scan_id": "scan-old",
+         "stage": "discover", "correlation_id": "batch-old", "owner_email": "a@example.org",
+         "source": "sharepoint", "occurred_at": "2026-09-05T08:00:00+00:00"},
+        {"event_id": "done", "kind": "job.stage_completed", "scan_id": "scan-old",
+         "stage": "discover", "correlation_id": "batch-old", "owner_email": "a@example.org",
+         "source": "sharepoint", "occurred_at": "2026-09-05T08:02:00+00:00",
+         "attempt": 1, "detail": {"documents": 12}},
+    ]
+
+    workflow = system._workflow_rows([], events)[0]
+    assert workflow["workflow_id"] == "scan-old"
+    assert workflow["owner_display_name"] == "a@example.org"
+    assert workflow["source"] == "sharepoint"
+    assert workflow["status"] == "completed"
+    assert workflow["stages"][0]["stage_run_id"] == "batch-old"
+    assert workflow["stages"][0]["completed"] == 12
+    assert workflow["stages"][0]["completion_recorded"] is True
+
+
 def test_admin_activity_summary_reports_capacity_stage_load_and_waiting_users(monkeypatch):
     class ActivityStore:
         def worker_tier_status(self):

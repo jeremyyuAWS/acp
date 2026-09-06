@@ -2206,6 +2206,52 @@ export const RUN_STAGES = [
 ]
 
 /**
+ * One stage-row list for both the map and drawer.
+ *
+ * Live queue rows carry the richest in-flight detail, so they win while present. The durable
+ * workflow contract fills stages that have fallen out of the queue's recent tail. This is what
+ * lets a Discover card remain connected to a later Assess card after Discover's jobs are purged,
+ * without inventing progress fields the durable record does not contain.
+ */
+export function workflowStageRuns(snapshot = {}) {
+  const live = Array.isArray(snapshot?.runs) ? snapshot.runs : []
+  const rows = new Map(live.map((run) => [`${run.scan_id}:${run.stage}`, { ...run }]))
+  for (const workflow of snapshot?.workflows || []) {
+    for (const stage of workflow?.stages || []) {
+      const key = `${workflow.scan_id}:${stage.stage}`
+      const held = rows.get(key)
+      const durable = {
+        scan_id: workflow.scan_id,
+        owner: workflow.owner_display_name,
+        source: workflow.source,
+        stage: stage.stage,
+        stage_run_id: stage.stage_run_id,
+        status: stage.status === 'completed' ? 'recent'
+          : stage.status === 'failed' ? 'failed' : 'active',
+        total: num(stage.total) ?? 0,
+        completed: num(stage.completed) ?? 0,
+        running: num(stage.active) ?? 0,
+        queued: num(stage.waiting) ?? 0,
+        failed: num(stage.failed),
+        started_at: stage.started_at || workflow.created_at || null,
+        updated_at: stage.latest_progress_at || stage.completed_at || workflow.updated_at || null,
+        completed_at: stage.completed_at || null,
+        completion_recorded: stage.completion_recorded === true,
+        max_attempts_seen: num(stage.attempt),
+      }
+      // Never replace live-only operational facts such as current_file, worker heartbeat, queue
+      // position or classified error. The durable fields enrich that row; they replace absence.
+      rows.set(key, held ? { ...durable, ...held,
+        stage_run_id: stage.stage_run_id || held.stage_run_id,
+        completed_at: stage.completed_at || held.completed_at,
+        completion_recorded: stage.completion_recorded === true || held.completion_recorded === true,
+      } : durable)
+    }
+  }
+  return [...rows.values()]
+}
+
+/**
  * Where this scan is in the pipeline, from the OTHER stage rows the snapshot carries for it.
  *
  * A run node is one (scan, stage) pair, so the drawer for an Assess run knows nothing about the
@@ -2220,7 +2266,7 @@ export const RUN_STAGES = [
  * reported as not carried by this snapshot, and the reason travels with it.
  */
 export function runStagePipeline(scanId, snapshot = {}) {
-  const rows = (snapshot?.runs || []).filter((run) => run.scan_id === scanId)
+  const rows = workflowStageRuns(snapshot).filter((run) => run.scan_id === scanId)
   const byStage = new Map(rows.map((run) => [run.stage, run]))
   const stages = RUN_STAGES.map((stage) => {
     const row = byStage.get(stage.key)
@@ -2243,7 +2289,7 @@ export function runStagePipeline(scanId, snapshot = {}) {
     present: stages.filter((s) => s.present),
     missing: stages.filter((s) => !s.present).map((s) => s.label),
     // Said once, under the row, rather than repeated per stage.
-    missingReason: 'A stage that finished before this snapshot’s recent tail is not carried in it. '
+    missingReason: 'This workflow has no durable or recent record for the stage. '
       + 'Absent here means not reported, never “did not run”.',
   }
 }

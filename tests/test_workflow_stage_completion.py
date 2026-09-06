@@ -92,3 +92,17 @@ def test_release_jobs_use_the_release_stage(isolated_store):
     events = isolated_store.list_orchestration_events(
         owner_email="owner@example.com", kind="job.stage_completed")
     assert len(events) == 1 and events[0]["stage"] == "release"
+
+
+def test_discover_completion_projects_its_existing_finalize_once_fact(isolated_store):
+    _scan(isolated_store)
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "UPDATE scan_runs SET discovered_at=%s WHERE id=%s",
+            ("2026-09-05T12:03:00+00:00", "stage-scan"))
+
+    events = isolated_store.list_workflow_stage_events()
+    discover = [event for event in events if event.get("stage") == "discover"]
+    assert [event["kind"] for event in discover] == ["job.stage_started", "job.stage_completed"]
+    assert discover[1]["occurred_at"] == "2026-09-05T12:03:00+00:00"
+    assert discover[1]["detail"] == {"documents": 2}

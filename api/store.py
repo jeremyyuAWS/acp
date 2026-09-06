@@ -10073,6 +10073,63 @@ class Store:
             r.pop("detail_json", None)
         return rows
 
+    def list_workflow_stage_events(self, *, recent_hours: int = 24, limit: int = 5000) -> list[dict]:
+        """Durable workflow-stage transitions for the Live Ops projection, oldest first.
+
+        Unlike the general operational feed's small mixed-event window, this read selects only
+        stage transitions. Completed stages therefore remain available after their queue rows
+        fall out of admin_live_activity's recent tail. The scan join adds source without putting
+        it into event detail, and owner_email remains the tenant boundary used by the route.
+        """
+        from datetime import datetime, timedelta, timezone
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=max(1, recent_hours))).isoformat()
+        try:
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "SELECT e.*,s.source FROM orchestration_events e "
+                    "LEFT JOIN scan_runs s ON s.id=e.scan_id "
+                    "WHERE e.kind IN ('job.stage_started','job.stage_completed') "
+                    "AND e.occurred_at>=%s "
+                    "ORDER BY e.occurred_at DESC,e.event_id DESC LIMIT %s", (cutoff, int(limit)))
+                rows = self._db.fetchall(cur)
+                # Discover predates the stage-event emitter, but already owns an idempotent,
+                # durable completion fact: scan_runs.discovered_at. Project that fact into the
+                # same contract so the first card does not disappear while Assess is still live.
+                self._db.execute(cur,
+                    "SELECT id,owner_email,source,started_at,discovered_at,files FROM scan_runs "
+                    "WHERE discovered_at IS NOT NULL AND discovered_at>=%s "
+                    "ORDER BY discovered_at DESC LIMIT %s", (cutoff, int(limit)))
+                discoveries = self._db.fetchall(cur)
+        except Exception:
+            return []
+        import json as _json
+        for row in rows:
+            raw = row.get("detail_json")
+            try:
+                row["detail"] = _json.loads(raw) if raw else None
+            except (TypeError, ValueError):
+                row["detail"] = None
+            row.pop("detail_json", None)
+        completed_discoveries = {(str(row.get("scan_id")), str(row.get("stage"))) for row in rows
+                                 if row.get("kind") == "job.stage_completed"}
+        for scan in discoveries:
+            key = (str(scan.get("id")), "discover")
+            if key in completed_discoveries:
+                continue
+            correlation = f"{scan['id']}:discover"
+            common = {"owner_email": scan.get("owner_email"), "scan_id": scan["id"],
+                      "workflow": scan["id"], "stage": "discover",
+                      "correlation_id": correlation, "source": scan.get("source"),
+                      "attempt": 1, "detail": {"documents": int(scan.get("files") or 0)}}
+            rows.extend([
+                {**common, "event_id": self._stage_event_id(scan["id"], "discover", correlation, "started"),
+                 "kind": "job.stage_started", "occurred_at": scan.get("started_at")},
+                {**common, "event_id": self._stage_event_id(scan["id"], "discover", correlation, "completed"),
+                 "kind": "job.stage_completed", "occurred_at": scan.get("discovered_at")},
+            ])
+        rows.sort(key=lambda row: (str(row.get("occurred_at") or ""), str(row.get("event_id") or "")))
+        return rows
+
     # Columns upsert_worker_instance may write. A whitelist, not the caller's kwarg names taken
     # on faith — **fields feeds directly into a dynamically-built SQL column list, and this is
     # what keeps that safe.

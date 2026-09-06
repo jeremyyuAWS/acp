@@ -1495,6 +1495,8 @@ def _admin_activity_snapshot() -> dict:
     running_by_type = _running_by_type() if callable(_running_by_type) else None
     _list_events = getattr(core.store, "list_orchestration_events", None)
     lifecycle_events = _list_events(limit=200) if callable(_list_events) else []
+    _list_stage_events = getattr(core.store, "list_workflow_stage_events", None)
+    stage_events = _list_stage_events() if callable(_list_stage_events) else lifecycle_events
     for role, row in per_role.items():
         stage = "discover" if role == "discovery" else role
         if running_by_type is None:
@@ -1580,7 +1582,7 @@ def _admin_activity_snapshot() -> dict:
         pressure = "busy"
     else:
         pressure = "healthy"
-    workflows = _workflow_rows(runs, lifecycle_events)
+    workflows = _workflow_rows(runs, stage_events)
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "runs": runs,
@@ -1635,6 +1637,9 @@ def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None)
     identity that could drift.  Stage ids are deterministic because the current queue model has
     one aggregate stage per scan; individual attempts remain inspectable in the stage detail.
     """
+    # Event-only stages are projection inputs, not queue rows. Work on a copy so returning the
+    # canonical workflow history cannot silently widen the endpoint's separate `runs` contract.
+    runs = list(runs)
     grouped: dict[str, dict] = {}
     durable_stages: dict[tuple[str, str], dict] = {}
     for event in lifecycle_events or []:
@@ -1649,6 +1654,24 @@ def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None)
         if not previous or (str(event.get("occurred_at") or ""), str(event.get("event_id") or "")) > \
                 (str(previous.get("occurred_at") or ""), str(previous.get("event_id") or "")):
             state[transition] = event
+    represented = {(str(run.get("scan_id") or ""), str(run.get("stage") or "")) for run in runs}
+    # A completed stage remains part of the flow after its queue rows leave the recent tail. Only
+    # completion can be reconstructed without live jobs; a lone old start is not evidence that
+    # work is still active, so it is deliberately not synthesized.
+    for key, state in durable_stages.items():
+        if key in represented or not state.get("completed"):
+            continue
+        completed = state["completed"]
+        started = state.get("started") or {}
+        detail = completed.get("detail") or {}
+        runs.append({
+            "scan_id": key[0], "stage": key[1], "owner": completed.get("owner_email"),
+            "source": completed.get("source") or "unknown", "status": "recent",
+            "running": 0, "queued": 0, "failed": 0,
+            "completed": int(detail.get("documents") or 0),
+            "total": int(detail.get("documents") or 0), "max_attempts_seen": completed.get("attempt"),
+            "started_at": started.get("occurred_at"), "updated_at": completed.get("occurred_at"),
+        })
     stage_order = {"discover": 0, "assess": 1, "remediate": 2, "release": 3}
     for run in runs:
         scan_id = str(run.get("scan_id") or "").strip()
