@@ -276,7 +276,9 @@ def render(projection: dict, *, language: str = DOCUMENT_LANGUAGE,
                        f"for audit history").strip()
         row.cells[3].text = remarks
 
-    _add_section_508(document, projection)
+    _add_requirement_section(document, projection.get("section_508"),
+                             "Revised Section 508 Report")
+    _add_requirement_section(document, projection.get("en_301_549"), "EN 301 549 Report")
 
     for paragraph in document.paragraphs:
         for run in paragraph.runs:
@@ -288,28 +290,29 @@ def render(projection: dict, *, language: str = DOCUMENT_LANGUAGE,
     return buffer.getvalue()
 
 
-def _add_section_508(document, projection: dict) -> None:
-    """The Revised Section 508 Report — one table per chapter, or nothing at all.
+def _add_requirement_section(document, section: dict | None, heading: str) -> None:
+    """A standard's report — one table per division, or nothing at all.
 
-    Three columns, not four: a 508 requirement has no WCAG level, and an empty Level column would
-    read as a missing value rather than as a category that does not apply. Each chapter is its own
-    table with its own heading, matching how the standard is organised and how a screen-reader user
-    navigates a long Word document — by heading, not by scrolling one 120-row table.
+    Three columns, not four: neither a Section 508 requirement nor an EN 301 549 clause has a WCAG
+    level, and an empty Level column would read as a missing value rather than as a category that
+    does not apply. Each division is its own table with its own heading, matching how the standard
+    is organised and how a screen-reader user navigates a long Word document — by heading, not by
+    scrolling one 120-row table.
 
-    The accessibility gate in `check()` runs over whatever this produces, unchanged: heading
-    structure, table header rows and repeat-header are the very things it inspects, so the tables
-    below are built the same way the WCAG one is rather than by a shortcut.
+    One function for both standards. The accessibility gate in `check()` runs over whatever this
+    produces, unchanged: heading structure, table header rows and repeat-header are the very things
+    it inspects, so a second copy of this would be a second chance to emit a table it fails on.
     """
-    section = projection.get("section_508")
     if not section:
         return
 
-    document.add_heading("Revised Section 508 Report", level=2)
+    document.add_heading(heading, level=2)
     document.add_paragraph(f"Requirements from {section['citation']}.")
     document.add_paragraph(", ".join(f"{k}: {v}" for k, v in section["totals"].items()))
 
     for chapter in section["chapters"]:
-        document.add_heading(f"Chapter {chapter['num']}: {chapter['name']}", level=3)
+        label = chapter.get("label") or "Chapter"
+        document.add_heading(f"{label} {chapter['num']}: {chapter['name']}", level=3)
         document.add_paragraph(", ".join(f"{k}: {v}" for k, v in chapter["totals"].items()))
         table = document.add_table(rows=1, cols=3)
         table.style = "Table Grid"

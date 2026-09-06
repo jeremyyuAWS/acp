@@ -19,20 +19,40 @@
       "clause": "the top-level clause this row belongs to, e.g. \"9\" — the EU report's tables are organised by clause the way the 508 report's are by chapter",
       "kind": "\"requirement\" or \"scope\", matching config/section-508.json so one renderer can serve both"
     },
-    "reportable_clauses": {
-      "note": "Recorded from the standard's own table of contents so the eventual parse has something to be checked against, NOT transcribed from its requirement text.",
-      "4": "Principles",
-      "5": "Generic requirements",
-      "6": "ICT with two-way voice communication",
-      "7": "ICT with video capabilities",
-      "8": "Hardware",
-      "9": "Web",
-      "10": "Non-web documents",
-      "11": "Software",
-      "12": "Documentation and support services",
-      "13": "ICT providing relay or emergency service access"
-    },
-    "total": 0
+    "total": 0,
+    "clauses_note": "Recorded from the standard's own table of contents so the eventual parse has something to be checked against, NOT transcribed from its requirement text.",
+    "clauses": {
+      "4": {
+        "name": "Principles"
+      },
+      "5": {
+        "name": "Generic requirements"
+      },
+      "6": {
+        "name": "ICT with two-way voice communication"
+      },
+      "7": {
+        "name": "ICT with video capabilities"
+      },
+      "8": {
+        "name": "Hardware"
+      },
+      "9": {
+        "name": "Web"
+      },
+      "10": {
+        "name": "Non-web documents"
+      },
+      "11": {
+        "name": "Software"
+      },
+      "12": {
+        "name": "Documentation and support services"
+      },
+      "13": {
+        "name": "ICT providing relay or emergency service access"
+      }
+    }
   },
   "requirements": []
 }

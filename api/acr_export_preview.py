@@ -35,7 +35,8 @@ import html
 import json
 
 import acr_catalog
-from acr_catalog import FINAL_STATUSES, REQ_SECTION_508, REQ_WCAG, WORKFLOW_STATES
+from acr_catalog import (FINAL_STATUSES, REQ_EN_301_549, REQ_SECTION_508, REQ_WCAG,
+                         WORKFLOW_STATES)
 
 # Rendered where a conformance level would go for a criterion nobody has decided yet. NOT one of
 # the four VPAT terms, and deliberately not word-shaped like one — a preview reader must be unable
@@ -108,11 +109,14 @@ def project(report: dict, criteria: list[dict], *, evidence_by_criterion: dict[s
     # report published then readable now, which PRD §17 requires of anything already issued.
     wcag = [c for c in criteria if (c.get("requirement_set") or REQ_WCAG) == REQ_WCAG]
     five_oh_eight = [c for c in criteria if c.get("requirement_set") == REQ_SECTION_508]
+    european = [c for c in criteria if c.get("requirement_set") == REQ_EN_301_549]
 
     rows = [_row(c) for c in sorted(wcag, key=lambda r: (_PRINCIPLE_ORDER.get(r.get("principle"), 9),
                                                          _sortkey(r["criterion_num"])))]
     section_508 = _section_508(
         [_row(c) for c in sorted(five_oh_eight, key=lambda r: _sortkey(r["criterion_num"]))])
+    en_301_549 = _en_301_549(
+        [_row(c) for c in sorted(european, key=lambda r: _sortkey(r["criterion_num"]))])
 
     return {
         "template": {
@@ -135,47 +139,89 @@ def project(report: dict, criteria: list[dict], *, evidence_by_criterion: dict[s
         # projection is byte-identical to what it was before Phase 6 and a renderer written
         # against it cannot accidentally print an empty "Revised Section 508 Report" heading.
         **({"section_508": section_508} if section_508 else {}),
+        **({"en_301_549": en_301_549} if en_301_549 else {}),
         # Over EVERY row the report contains, not just the WCAG table's. Identical to the old
         # value for a WCAG-only report; for a 508 report, a total that counted 55 of 175 rows
         # would be the understatement PRD §4.4 exists to prevent.
-        "totals": _totals(rows + [r for ch in (section_508 or {}).get("chapters", [])
-                                  for r in ch["rows"]]),
+        "totals": _totals(rows + [r for section in (section_508, en_301_549) if section
+                                  for ch in section["chapters"] for r in ch["rows"]]),
     }
 
 
-def _section_508(rows: list[dict]) -> dict | None:
-    """The Section 508 rows grouped into the chapters a VPAT's 508 report is organised by.
+def _grouped_section(rows: list[dict], *, citation: str, names: dict, label: str) -> dict | None:
+    """Rows grouped into the divisions their standard is organised by, or nothing at all.
 
-    Grouped rather than left flat because the chapters are the document's structure: ITI's 508
-    edition prints Chapter 3 (functional performance), 4 (hardware), 5 (software) and 6 (support
-    documentation) as separate tables, and a flat list would have to be regrouped identically by
-    each of the three renderers.
+    ONE IMPLEMENTATION, TWO STANDARDS. Section 508 prints Chapters 3-6 as separate tables and
+    EN 301 549 prints Clauses 4-13 the same way; the only differences are what the division is
+    called and where its names come from. Two copies of this would be two places for the honesty
+    checks to drift apart, and the rows on both sides carry the same shape by construction —
+    `acr_catalog._blank_row` builds them.
 
-    Chapter NAMES come from the catalog rather than the stored row. They are regulation text and do
-    not drift, and a row stores its chapter NUMBER — which is the durable half. A chapter the
-    catalog does not name still renders, under its number, rather than vanishing.
+    Division NAMES come from the catalog; a row stores its NUMBER, which is the durable half. A
+    division the catalog does not name still renders, under `label` and its number, rather than
+    vanishing — a requirement must never disappear from a conformance report because a heading is
+    missing.
+
+    Grouped rather than left flat because the divisions ARE the document's structure. A flat list
+    would have to be regrouped identically by the HTML renderer, the Word renderer and the PDF
+    path, which is three chances to disagree about what the document contains.
     """
     if not rows:
         return None
-    names = {}
-    try:
-        names = {k: v.get("name") for k, v in acr_catalog.section_508_meta()["chapters"].items()}
-    except (FileNotFoundError, KeyError, ValueError):  # pragma: no cover — catalog absent
-        names = {}
-    chapters: list[dict] = []
-    for num in sorted({r["chapter"] for r in rows if r["chapter"]}, key=int):
-        in_chapter = [r for r in rows if r["chapter"] == num]
-        chapters.append({
+    groups: list[dict] = []
+    for num in sorted({r["chapter"] for r in rows if r["chapter"]}, key=_division_sortkey):
+        in_group = [r for r in rows if r["chapter"] == num]
+        groups.append({
             "num": num,
-            "name": names.get(num) or f"Chapter {num}",
-            "rows": in_chapter,
-            "totals": _totals(in_chapter),
+            "name": names.get(num) or f"{label} {num}",
+            "label": label,
+            "rows": in_group,
+            "totals": _totals(in_group),
         })
-    return {
-        "citation": "36 CFR Part 1194, Appendix C (Revised Section 508 Standards)",
-        "chapters": chapters,
-        "totals": _totals(rows),
-    }
+    return {"citation": citation, "chapters": groups, "totals": _totals(rows)}
+
+
+def _division_sortkey(num: str) -> tuple:
+    """Numeric where the division is a number, which both standards' are. Falls back to the string
+    so an unexpected value sorts predictably instead of raising in the middle of an export."""
+    try:
+        return (0, int(num), "")
+    except (TypeError, ValueError):
+        return (1, 0, str(num))
+
+
+def _catalog_division_names(meta_fn, key: str) -> dict:
+    """`{number: name}` from a catalog's own metadata, or empty when it cannot be read.
+
+    Empty is a working answer, not a failure: `_grouped_section` falls back to the number, so a
+    deployment whose catalog is absent still exports every row it holds.
+    """
+    try:
+        return {k: v.get("name") for k, v in (meta_fn() or {}).get(key, {}).items()}
+    except (FileNotFoundError, KeyError, ValueError, AttributeError):  # pragma: no cover
+        return {}
+
+
+def _section_508(rows: list[dict]) -> dict | None:
+    return _grouped_section(
+        rows,
+        citation="36 CFR Part 1194, Appendix C (Revised Section 508 Standards)",
+        names=_catalog_division_names(acr_catalog.section_508_meta, "chapters"),
+        label="Chapter")
+
+
+def _en_301_549(rows: list[dict]) -> dict | None:
+    """The EU report. Nothing renders unless the rows are there, and they are not yet —
+    `config/en-301-549.json` is committed empty while its reproduction question is open, so this
+    returns None in every deployment today. It is written now so that the day the requirements
+    land, the edition opens by adding one member to `acr_catalog._RENDERABLE` rather than by
+    writing a renderer under time pressure."""
+    return _grouped_section(
+        rows,
+        citation=(f"{acr_catalog.en_301_549_meta().get('citation') or 'EN 301 549'} "
+                  f"({acr_catalog.en_301_549_meta().get('publisher') or 'CEN, CENELEC and ETSI'})"),
+        names=_catalog_division_names(acr_catalog.en_301_549_meta, "clauses"),
+        label="Clause")
 
 
 def _sortkey(num: str) -> tuple:
@@ -237,6 +283,8 @@ def to_html(projection: dict) -> str:
     t = projection["totals"]
     totals = ", ".join(f"{e(k)}: {v}" for k, v in t.items())
     section_508 = _section_508_html(projection, e)
+    en_301_549 = _requirement_section_html(
+        projection.get("en_301_549"), "EN 301 549 Report", e)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -268,23 +316,32 @@ def to_html(projection: dict) -> str:
   </thead>
   <tbody>{body_rows}</tbody>
 </table>
-{section_508}</body>
+{section_508}{en_301_549}</body>
 </html>
 """
 
 
 def _section_508_html(projection: dict, e) -> str:
-    """The Revised Section 508 Report — one table per chapter, or nothing at all.
+    return _requirement_section_html(
+        projection.get("section_508"), "Revised Section 508 Report", e)
 
-    No Level column: a 508 requirement has no WCAG conformance level, and an empty column under
-    that heading would read as an omission rather than as a category error. The chapters are
-    separate tables, each with its own <caption>, because that is how the standard is organised and
-    because a 200-row single table is unusable with a screen reader.
+
+def _requirement_section_html(section: dict | None, heading: str, e) -> str:
+    """A standard's report — one table per division, or nothing at all.
+
+    No Level column: neither a Section 508 requirement nor an EN 301 549 clause has a WCAG
+    conformance level, and an empty column under that heading would read as an omission rather
+    than as a category error. The divisions are separate tables, each with its own <caption>,
+    because that is how each standard is organised and because a 200-row single table is unusable
+    with a screen reader.
+
+    One function for both standards, for the reason `_grouped_section` gives: two copies are two
+    places for the honesty checks — the undecided cell, the labelled draft suggestion, the stale
+    evidence note — to drift apart.
     """
-    section = projection.get("section_508")
     if not section:
         return ""
-    out = [f'<h2>Revised Section 508 Report</h2>\n'
+    out = [f'<h2>{e(heading)}</h2>\n'
            f'<p>Requirements from {e(section["citation"])}. '
            f'{e(", ".join(f"{k}: {v}" for k, v in section["totals"].items()))}</p>\n']
     for chapter in section["chapters"]:
@@ -304,8 +361,8 @@ def _section_508_html(projection: dict, e) -> str:
                      f"<td>{e(r['remarks'])}{stale}</td></tr>")
         counts = ", ".join(f"{k}: {v}" for k, v in chapter["totals"].items())
         out.append(
-            f'<table>\n  <caption>Chapter {e(chapter["num"])}: {e(chapter["name"])} — '
-            f'{e(counts)}</caption>\n'
+            f'<table>\n  <caption>{e(chapter.get("label") or "Chapter")} {e(chapter["num"])}: '
+            f'{e(chapter["name"])} — {e(counts)}</caption>\n'
             f'  <thead>\n    <tr><th scope="col">Criteria</th>'
             f'<th scope="col">Conformance Level</th>'
             f'<th scope="col">Remarks and Explanations</th></tr>\n  </thead>\n'
