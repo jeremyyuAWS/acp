@@ -65,8 +65,10 @@ parser that silently finds fewer apps produces a *shorter* table with *fewer* di
 reads like progress. The anti-vacuous guard is the only reason it read as a failure instead.
 
 **#1370's scale rule and this repo's Helm chart agree, independently.** The production rule filters
-`type IN ('remediate_file','rescore_file','apply_approved_values')`; the chart's KEDA query takes
-that same list from `inventory.LANE_JOB_TYPES`. Two people reached the same shape from opposite
+on the remediate lane's job types; the chart's KEDA query takes that same list from
+`inventory.LANE_JOB_TYPES`. Both are derived from `core.REMEDIATE_LANE_JOB_TYPES` — the list is
+deliberately not spelled out here, because it was, and it went stale the first two times a job
+type was added to that lane. `test_packaging_chart.py` asserts the script against core's tuple. Two people reached the same shape from opposite
 ends without coordinating, including the same correction — the `jobs` table has a `type` column and
 no `role` column, which is exactly what the chart's first KEDA query got wrong. That agreement is
 the strongest evidence available here that the remediate lane's autoscaling signal is right, and it
