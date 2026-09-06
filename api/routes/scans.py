@@ -167,7 +167,8 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                pii: bool = Query(False), fanout: bool = Query(False),
                batch: bool = Query(False), exclude_remediated: bool = Query(False),
                incremental: bool = Query(True),
-               replace_active: bool = Query(False)):
+               replace_active: bool = Query(False),
+               prefer_recent: bool = Query(False)):
     token = request.headers.get("x-drive-token")      # per-user Drive token (GIS)
     sp_token = request.headers.get("x-sp-token")      # per-user MS Graph token (MSAL)
     # ACP_DEMO_DRIVE_KEY lets the E2E test and demo scripts trigger a server-side
@@ -270,6 +271,8 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                 "code": "discovery_workflow_active",
                 "active_scan_id": prior_scan_id,
                 "active_stage": "discover",
+                "workflow_id": (prior_workflow or {}).get("id", prior_scan_id),
+                "workflow_revision": int((prior_workflow or {}).get("revision") or 1),
                 "message": ("Discovery is already active. Continue that workflow, or confirm "
                             "that it should be replaced before starting a separate Discovery."),
             })
@@ -321,6 +324,25 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
             "lifecycle_rules": _lifecycle,
             "app_version": os.environ.get("ACP_APP_VERSION") or None,
         }
+        # The UI asks for continuity guidance before repeating the exact same frozen work.  This
+        # comes after the snapshot is assembled so "compatible" means every execution-governing
+        # input agrees, not merely the same source label. API clients keep their existing behavior
+        # unless they explicitly opt into prefer_recent.
+        if prefer_recent and not prior_scan_id:
+            recent = core.store.recent_compatible_workflow(user, source, _scan_inputs)
+            if recent and not replace_active:
+                raise HTTPException(status_code=409, detail={
+                    "code": "recent_compatible_workflow",
+                    "active_scan_id": recent["scan_id"],
+                    "active_stage": recent.get("current_stage") or "discover",
+                    "workflow_id": recent["workflow_id"],
+                    "workflow_revision": int(recent.get("revision") or 1),
+                    "message": ("The same source, scope, settings, and lifecycle policy were "
+                                "used recently. Continue that workflow or start a new revision."),
+                })
+            if recent:
+                prior_scan_id = recent["scan_id"]
+                prior_workflow = core.store.workflow_for_scan(prior_scan_id, user)
         scan_id, job_id = core.store.enqueue_scan(
             scan_id, source, user, jtype,
             {"source": source, "scan_id": scan_id, "folder": folder, "folders": folders,

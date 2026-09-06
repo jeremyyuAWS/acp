@@ -2823,6 +2823,34 @@ class Store:
         workflow.update(self.lifecycle_policy_snapshot(scan_id))
         return workflow
 
+    def recent_compatible_workflow(self, owner: str, source: str, inputs: dict,
+                                   within_seconds: int = 300) -> dict | None:
+        """Return the freshest workflow with the exact same frozen inputs.
+
+        This is advisory continuity, not deduplication: callers still make the user choose
+        whether to continue that result or create a new revision.  Matching the same digest used
+        by ``enqueue_scan`` means folders, exclusions, scan options, lifecycle policy, feature
+        flags, and enabled provider configuration all have to agree; source alone is never enough.
+        """
+        import hashlib as _hashlib
+        import json as _json
+        from datetime import datetime as _datetime, timedelta as _timedelta, timezone as _timezone
+
+        fingerprint = _hashlib.sha256(_json.dumps(
+            inputs or {"source": source}, sort_keys=True, separators=(",", ":"),
+            default=str).encode()).hexdigest()
+        cutoff = (_datetime.now(_timezone.utc) - _timedelta(
+            seconds=max(1, int(within_seconds)))).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT we.id AS workflow_id,we.scan_id,we.revision,we.current_stage,we.state,"
+                "we.updated_at FROM workflow_executions we JOIN scan_runs sr ON sr.id=we.scan_id "
+                "WHERE we.owner_email=%s AND we.source=%s AND we.scope_fingerprint=%s "
+                "AND we.updated_at>=%s AND sr.status NOT IN ('superseded','cancelled','interrupted') "
+                "ORDER BY we.updated_at DESC LIMIT 1",
+                (owner, source, fingerprint, cutoff))
+            return self._db.fetchone(cur)
+
     def _update_workflow_stage(self, scan_id: str, stage: str, state: str) -> None:
         """Advance the workflow projection without making it a prerequisite for old scans."""
         now = self._now()
