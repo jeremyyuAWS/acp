@@ -3210,9 +3210,9 @@ def clear_scan_tokens(sid: str, request: Request):
 
 
 def _release_timezone(owner: str) -> str:
-    """Read the additive preference while remaining compatible with minimal store adapters."""
+    """Read the preference; minimal/older adapters use the product's US Central default."""
     getter = getattr(core.store, "get_user_setting", None)
-    return (getter(owner, "release_timezone") if callable(getter) else None) or "UTC"
+    return (getter(owner, "release_timezone") if callable(getter) else None) or "America/Chicago"
 
 
 @router.post("/scans/{sid}/publish")

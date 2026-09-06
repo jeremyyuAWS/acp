@@ -41,7 +41,9 @@ _AUTH = {"Authorization": "Bearer tok"}
 
 def test_round_trip_get_put_get(monkeypatch, isolated_store):
     c = _client(monkeypatch, isolated_store)
-    assert c.get("/settings/mine", headers=_AUTH).json()["scan_scope"] == ""     # none to start
+    initial = c.get("/settings/mine", headers=_AUTH).json()
+    assert initial["scan_scope"] == ""     # none to start
+    assert initial["release_timezone"] == "America/Chicago"
     put = c.put("/settings/mine", headers=_AUTH, json={"scan_scope": {"1.4.3": ["docx", "pdf"]}})
     assert put.status_code == 200, put.text
     got = c.get("/settings/mine", headers=_AUTH).json()

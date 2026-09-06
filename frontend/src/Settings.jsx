@@ -1022,10 +1022,10 @@ function WorkerConfiguration({ me }) {
 
 
 function ReleasePreferences() {
-  const [zone, setZone] = useState('UTC')
-  const [saved, setSaved] = useState('UTC')
+  const [zone, setZone] = useState('America/Chicago')
+  const [saved, setSaved] = useState('America/Chicago')
   const [msg, setMsg] = useState('')
-  useEffect(() => { getMyScope().then((r) => { setZone(r.release_timezone || 'UTC'); setSaved(r.release_timezone || 'UTC') }).catch(() => {}) }, [])
+  useEffect(() => { getMyScope().then((r) => { setZone(r.release_timezone || 'America/Chicago'); setSaved(r.release_timezone || 'America/Chicago') }).catch(() => {}) }, [])
   const options = [
     ['UTC', 'UTC'], ['America/Los_Angeles', 'US Pacific'], ['America/Denver', 'US Mountain'],
     ['America/Chicago', 'US Central'], ['America/New_York', 'US Eastern'], ['Asia/Kolkata', 'India'],

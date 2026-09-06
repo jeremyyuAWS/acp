@@ -1159,7 +1159,7 @@ def get_my_settings(request: Request):
     return {
         "scan_scope": core.store.get_user_setting(user, "scan_scope") or "",
         "owner_default": core.store.get_setting("scan_scope", "") or "",
-        "release_timezone": core.store.get_user_setting(user, "release_timezone") or "UTC",
+        "release_timezone": core.store.get_user_setting(user, "release_timezone") or "America/Chicago",
     }
 
 
@@ -1171,7 +1171,7 @@ def update_my_settings(body: MyScopeUpdate, request: Request):
     user = _require_user(request)
     if body.release_timezone is not None:
         import publish as _publish
-        zone = body.release_timezone.strip() or "UTC"
+        zone = body.release_timezone.strip() or "America/Chicago"
         if zone not in _publish.RELEASE_TIMEZONES:
             raise HTTPException(422, "release_timezone must be UTC, a US timezone, or Asia/Kolkata")
         core.store.set_user_setting(user, "release_timezone", zone)
