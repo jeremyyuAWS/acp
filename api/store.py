@@ -592,6 +592,15 @@ _SCHEMA = [
       UNIQUE(execution_id,input_id)
     )""",
     "CREATE INDEX IF NOT EXISTS idx_stage_work_items_execution ON stage_work_items(execution_id,state)",
+    """CREATE TABLE IF NOT EXISTS stage_attempts (
+      attempt_id TEXT PRIMARY KEY, execution_id TEXT NOT NULL, work_item_id TEXT NOT NULL,
+      job_id TEXT NOT NULL, attempt INT NOT NULL, worker_id TEXT NOT NULL,
+      state TEXT NOT NULL, started_at TEXT NOT NULL, heartbeat_at TEXT,
+      cancel_requested_at TEXT, cancel_deadline_at TEXT, cancel_acknowledged_at TEXT,
+      ended_at TEXT, outcome TEXT, terminal_reason TEXT, escalated_at TEXT,
+      UNIQUE(job_id,attempt)
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_stage_attempts_execution ON stage_attempts(execution_id,state)",
     """CREATE TABLE IF NOT EXISTS stage_events (
       event_id TEXT PRIMARY KEY, execution_id TEXT NOT NULL, work_item_id TEXT,
       event_type TEXT NOT NULL, expected_revision INT, resulting_revision INT,
@@ -2218,8 +2227,8 @@ class _PgAdapter:
     # v27 is the union of main's v26 workflow-lineage migration and release_root_claims, the
     # pre-provider name reservation that closes the
     # SharePoint-folder creation crash window.
-    _SCHEMA_VERSION = 28
-    _SCHEMA_CHECKSUM_AT_VERSION = "584d38ac5dcabbf948a7055ea1137d1e"
+    _SCHEMA_VERSION = 29
+    _SCHEMA_CHECKSUM_AT_VERSION = "5a1df0d4df99ed5b2d5312844fff7f64"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -11043,6 +11052,16 @@ class Store:
                 "SELECT state,COUNT(*) AS count FROM stage_work_items WHERE execution_id=%s "
                 "GROUP BY state", (execution_id,))
             partitions = {r["state"]: int(r["count"]) for r in self._db.fetchall(cur)}
+            self._db.execute(cur,
+                "SELECT state,COUNT(*) AS count FROM stage_attempts WHERE execution_id=%s "
+                "GROUP BY state", (execution_id,))
+            attempt_partitions = {r["state"]: int(r["count"]) for r in self._db.fetchall(cur)}
+            self._db.execute(cur,
+                "SELECT MIN(cancel_deadline_at) AS deadline,COUNT(*) AS awaiting,"
+                "SUM(CASE WHEN escalated_at IS NOT NULL THEN 1 ELSE 0 END) AS escalated "
+                "FROM stage_attempts WHERE execution_id=%s AND state='cancel_requested'",
+                (execution_id,))
+            cancellation = self._db.fetchone(cur) or {}
         expected = execution.get("expected_items")
         observed = sum(partitions.values())
         terminal = sum(partitions.get(s, 0) for s in ("completed", "failed", "cancelled", "skipped"))
@@ -11059,13 +11078,18 @@ class Store:
             "revision": int(execution["revision"]), "state": execution["state"],
             "generated_at": self._now(), "last_durable_update_at": execution["updated_at"],
             "control": {"cancel_requested": bool(execution.get("cancel_requested_at")),
-                        "cancel_requested_at": execution.get("cancel_requested_at")},
+                        "cancel_requested_at": execution.get("cancel_requested_at"),
+                        "acknowledgement_deadline_at": cancellation.get("deadline"),
+                        "awaiting_acknowledgement": int(cancellation.get("awaiting") or 0),
+                        "escalated_attempts": int(cancellation.get("escalated") or 0)},
             "counts": {"work_items": {"unit": "work items", "total": expected,
                        "terminal": terminal, "queued": partitions.get("queued", 0),
                        "processing": partitions.get("processing", 0),
                        "completed": partitions.get("completed", 0),
                        "failed": partitions.get("failed", 0),
                        "cancelled": partitions.get("cancelled", 0)}},
+            "attempts": {"unit": "worker attempts", "total": sum(attempt_partitions.values()),
+                         **attempt_partitions},
             "integrity": {"ok": not violations,
                           "affected": ["work_item_partition"] if violations else [],
             "violations": violations},
@@ -11082,6 +11106,8 @@ class Store:
         if not item_state:
             return
         now = self._now()
+        import hashlib as _hashlib
+        import json as _json
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "UPDATE stage_work_items SET state=%s,revision=revision+1,attempt=%s,"
@@ -11090,6 +11116,22 @@ class Store:
                 (item_state, int(job.get("attempts") or 0), job.get("locked_by"),
                  job.get("lease_expires_at"), job.get("error_class") or job.get("last_error"),
                  now, job_id, item_state))
+            self._db.execute(cur,
+                "SELECT work_item_id,revision FROM stage_work_items WHERE job_id=%s", (job_id,))
+            work_item = self._db.fetchone(cur) or {}
+            event_type = f"work_item.{item_state}"
+            event_id = _hashlib.sha256(
+                f"job-stage\0{job_id}\0{int(job.get('attempts') or 0)}\0{item_state}".encode()).hexdigest()
+            payload = {"job_id": job_id, "attempt": int(job.get("attempts") or 0),
+                       "worker_id": job.get("locked_by"), "state": item_state,
+                       "reason": job.get("error_class") or None}
+            raw = _json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+            self._db.execute(cur,
+                "INSERT INTO stage_events(event_id,execution_id,work_item_id,event_type,"
+                "expected_revision,resulting_revision,payload_digest,payload,occurred_at,recorded_at) "
+                "VALUES(%s,%s,%s,%s,NULL,%s,%s,%s,%s,%s) ON CONFLICT(event_id) DO NOTHING",
+                (event_id, job["batch_id"], work_item.get("work_item_id"), event_type,
+                 work_item.get("revision"), _hashlib.sha256(raw.encode()).hexdigest(), raw, now, now))
             self._db.execute(cur,
                 "SELECT COUNT(*) AS total,"
                 "SUM(CASE WHEN state IN ('completed','failed','cancelled','skipped') THEN 1 ELSE 0 END) AS terminal,"
@@ -11111,6 +11153,62 @@ class Store:
                 "UPDATE stage_executions SET state=%s,terminal_items=%s,revision=revision+1,updated_at=%s "
                 "WHERE execution_id=%s AND (state<>%s OR terminal_items<>%s)",
                 (state, terminal, now, job["batch_id"], state, terminal))
+
+    def _start_stage_attempt(self, job: dict) -> None:
+        """Append the immutable identity of a worker claim; retries get distinct rows."""
+        if not job.get("batch_id") or not job.get("locked_by") or not job.get("attempts"):
+            return
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT work_item_id FROM stage_work_items WHERE job_id=%s",
+                             (job["id"],))
+            item = self._db.fetchone(cur)
+            if not item:
+                return
+            attempt_id = f"{job['id']}:{int(job['attempts'])}"
+            started = job.get("claimed_at") or self._now()
+            self._db.execute(cur,
+                "INSERT INTO stage_attempts(attempt_id,execution_id,work_item_id,job_id,attempt,"
+                "worker_id,state,started_at,heartbeat_at) VALUES(%s,%s,%s,%s,%s,%s,'processing',%s,%s) "
+                "ON CONFLICT(job_id,attempt) DO NOTHING",
+                (attempt_id, job["batch_id"], item["work_item_id"], job["id"],
+                 int(job["attempts"]), job["locked_by"], started, job.get("locked_at") or started))
+
+    def _finish_stage_attempt(self, job_id: str, worker_id: str, attempt: int,
+                              outcome: str, reason: str | None = None) -> None:
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE stage_attempts SET state='terminal',outcome=%s,terminal_reason=%s,ended_at=%s,"
+                "cancel_acknowledged_at=CASE WHEN %s='cancelled' THEN %s ELSE cancel_acknowledged_at END "
+                "WHERE job_id=%s AND worker_id=%s AND attempt=%s AND state<>'terminal'",
+                (outcome, reason, now, outcome, now, job_id, worker_id, attempt))
+
+    def escalate_overdue_stage_cancellations(self, *, now: str | None = None) -> list[dict]:
+        """Mark missed acknowledgement deadlines once; never infer worker termination."""
+        import hashlib
+        now = now or self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM stage_attempts WHERE state='cancel_requested' AND "
+                "cancel_deadline_at IS NOT NULL AND cancel_deadline_at<=%s AND escalated_at IS NULL",
+                (now,))
+            rows = self._db.fetchall(cur)
+            for row in rows:
+                self._db.execute(cur,
+                    "UPDATE stage_attempts SET escalated_at=%s WHERE attempt_id=%s AND escalated_at IS NULL",
+                    (now, row["attempt_id"]))
+                payload = json.dumps({"attempt_id": row["attempt_id"],
+                                      "cancel_deadline_at": row["cancel_deadline_at"]},
+                                     sort_keys=True, separators=(",", ":"))
+                event_id = f"cancel-deadline:{row['attempt_id']}"
+                self._db.execute(cur,
+                    "INSERT INTO stage_events(event_id,execution_id,work_item_id,event_type,"
+                    "payload_digest,payload,occurred_at,recorded_at) VALUES(%s,%s,%s,"
+                    "'attempt.cancellation_deadline_exceeded',%s,%s,%s,%s) "
+                    "ON CONFLICT(event_id) DO NOTHING",
+                    (event_id, row["execution_id"], row["work_item_id"],
+                     hashlib.sha256(payload.encode()).hexdigest(), payload, now, now))
+        return [{**row, "escalated_at": now} for row in rows]
 
     _EXECUTION_TRANSITIONS = {
         "accepted": {"queued", "cancelled"}, "queued": {"processing", "paused", "cancelled"},
@@ -11161,6 +11259,12 @@ class Store:
                     "updated_at=%s WHERE batch_id=%s AND status='queued'",
                     (now, now, execution_id))
         elif action == "cancel":
+            from datetime import datetime, timezone, timedelta
+            requested_at = datetime.fromisoformat(str(now).replace("Z", "+00:00"))
+            if requested_at.tzinfo is None:
+                requested_at = requested_at.replace(tzinfo=timezone.utc)
+            deadline = (requested_at + timedelta(
+                seconds=max(1, int(os.environ.get("ACP_CANCEL_ACK_DEADLINE_S", "120"))))).isoformat()
             with self._db.cursor() as cur:
                 self._db.execute(cur,
                     "UPDATE stage_executions SET cancel_requested_at=COALESCE(cancel_requested_at,%s),"
@@ -11169,6 +11273,10 @@ class Store:
                     (now, now, execution_id, expected_revision))
                 if not (getattr(cur, "rowcount", 0) or 0):
                     raise RuntimeError("stage execution revision conflict")
+                self._db.execute(cur,
+                    "UPDATE stage_attempts SET state='cancel_requested',cancel_requested_at=%s,"
+                    "cancel_deadline_at=%s WHERE execution_id=%s AND state='processing'",
+                    (now, deadline, execution_id))
             result = self.request_stage_cancel(execution["scan_id"], execution["stage"], actor=owner)
             current = self.get_stage_execution(execution_id, owner=owner)
             # Running attempts have only been ASKED to stop. _sync_stage_execution_for_job marks
@@ -11673,7 +11781,9 @@ class Store:
             if not row:
                 return None
             self._sync_stage_execution_for_job(row["id"])
-            return self.get_job(row["id"])
+            claimed_job = self.get_job(row["id"])
+            self._start_stage_attempt(claimed_job)
+            return claimed_job
         else:
             # SQLite path: optimistic two-step CAS.
             with self._db.cursor() as cur:
@@ -11697,7 +11807,9 @@ class Store:
                     self._db.execute(cur, record_claim, (lane_key, now, jid))
             if claimed:
                 self._sync_stage_execution_for_job(jid)
-                return self.get_job(jid)
+                claimed_job = self.get_job(jid)
+                self._start_stage_attempt(claimed_job)
+                return claimed_job
             return None
 
     def set_job_phase(self, job_id: str, phase: str | None) -> None:
@@ -11798,6 +11910,7 @@ class Store:
         if not won:
             print(f"[acp] complete_job: job {job_id} already terminal — zombie-worker no-op", flush=True)
         else:
+            self._finish_stage_attempt(job_id, worker_id, attempt, "completed")
             self._sync_stage_execution_for_job(job_id)
             self._record_stage_completed_if_ready(job)
         return won
@@ -11845,6 +11958,7 @@ class Store:
         if not won:
             print(f"[acp] mark_job_cancelled: job {job_id} already terminal — zombie-worker no-op", flush=True)
         else:
+            self._finish_stage_attempt(job_id, worker_id, attempt, "cancelled", "worker_acknowledged")
             self._sync_stage_execution_for_job(job_id)
             self._record_stage_terminal_if_ready(job)
         return won
@@ -12033,6 +12147,13 @@ class Store:
                 "UPDATE jobs SET locked_at=%s, updated_at=%s, lease_expires_at=%s "
                 "WHERE id=%s AND status='running' AND locked_by=%s AND attempts=%s",
                 (now, now, expires, job_id, worker_id, attempt))
+            renewed = (getattr(cur, "rowcount", 0) or 0) > 0
+        if renewed:
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "UPDATE stage_attempts SET heartbeat_at=%s WHERE job_id=%s AND worker_id=%s "
+                    "AND attempt=%s AND state IN ('processing','cancel_requested')",
+                    (now, job_id, worker_id, attempt))
 
     # Job types whose payload names documents that COUNT toward a scan's finalize total.
     # A dead-letter on one of these has to leave a file_records row behind — see
@@ -12270,6 +12391,7 @@ class Store:
                     # best-effort — the dead-letter itself must still be recorded
                     swallowed("store.fail_job: rolling back the fail_job transaction failed")
             self._sync_stage_execution_for_job(job_id)
+            self._finish_stage_attempt(job_id, worker_id, attempt, "failed", error_class or error[:200])
             self._record_stage_terminal_if_ready({**job, "error_class": error_class})
             return "dead"
         run_after = (now + timedelta(seconds=backoff_seconds)).isoformat()
@@ -12286,6 +12408,9 @@ class Store:
         if not won:
             print(f"[acp] fail_job: job {job_id} already terminal — zombie-worker "
                   "no-op (requeue suppressed)", flush=True)
+        else:
+            self._finish_stage_attempt(job_id, worker_id, attempt, "retrying", error_class or error[:200])
+            self._sync_stage_execution_for_job(job_id)
         return "queued"
 
     DEPLOYMENT_REQUEUE_PHASE = "deployment_requeue"

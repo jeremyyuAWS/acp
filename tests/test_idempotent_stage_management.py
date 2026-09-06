@@ -142,3 +142,66 @@ def test_stop_is_requested_then_acknowledged_not_instantly_claimed(isolated_stor
     finished = isolated_store.get_stage_execution(execution["batch_id"], owner=OWNER)
     assert finished["state"] == "cancelled"
     assert finished["terminal_items"] == 2
+
+
+def test_worker_attempts_are_append_only_across_retry(isolated_store):
+    sid = _scan(isolated_store)
+    execution = _submit(isolated_store, sid)
+    first = isolated_store.claim_job("worker-1", job_types=("remediate_file",))
+    assert isolated_store.fail_job(
+        first["id"], "temporary", worker_id="worker-1", attempt=first["attempts"]) == "queued"
+    other = isolated_store.claim_job("worker-2", job_types=("remediate_file",))
+    assert isolated_store.complete_job(
+        other["id"], worker_id="worker-2", attempt=other["attempts"])
+    second = isolated_store.claim_job("worker-2", job_types=("remediate_file",))
+    assert second["id"] == first["id"] and second["attempts"] == 2
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "SELECT attempt,worker_id,state,outcome FROM stage_attempts WHERE job_id=%s ORDER BY attempt",
+            (first["id"],))
+        attempts = isolated_store._db.fetchall(cur)
+    assert attempts == [
+        {"attempt": 1, "worker_id": "worker-1", "state": "terminal", "outcome": "retrying"},
+        {"attempt": 2, "worker_id": "worker-2", "state": "processing", "outcome": None},
+    ]
+    snapshot = isolated_store.stage_execution_snapshot(execution["batch_id"], owner=OWNER)
+    assert snapshot["attempts"]["total"] == 3
+    assert snapshot["attempts"]["processing"] == 1
+    assert snapshot["attempts"]["terminal"] == 2
+    event_types = [event["event_type"] for event in
+                   isolated_store.stage_execution_events(execution["batch_id"], owner=OWNER)]
+    assert "work_item.processing" in event_types
+    assert "work_item.queued" in event_types
+
+
+def test_cancellation_deadline_escalates_without_claiming_worker_stopped(
+        isolated_store, monkeypatch):
+    monkeypatch.setenv("ACP_CANCEL_ACK_DEADLINE_S", "30")
+    sid = _scan(isolated_store)
+    execution = _submit(isolated_store, sid)
+    running = isolated_store.claim_job("worker-1", job_types=("remediate_file",))
+    current = isolated_store.get_stage_execution(execution["batch_id"], owner=OWNER)
+    isolated_store.control_stage_execution(
+        execution["batch_id"], "cancel", expected_revision=current["revision"], owner=OWNER)
+    pending = isolated_store.stage_execution_snapshot(execution["batch_id"], owner=OWNER)
+    assert pending["control"]["awaiting_acknowledgement"] == 1
+    assert pending["control"]["acknowledgement_deadline_at"]
+
+    escalated = isolated_store.escalate_overdue_stage_cancellations(
+        now="9999-01-01T00:00:00+00:00")
+    assert len(escalated) == 1
+    assert isolated_store.escalate_overdue_stage_cancellations(
+        now="9999-01-01T00:00:00+00:00") == []
+    still_running = isolated_store.stage_execution_snapshot(execution["batch_id"], owner=OWNER)
+    assert still_running["state"] == "processing"
+    assert still_running["control"]["awaiting_acknowledgement"] == 1
+    assert still_running["control"]["escalated_attempts"] == 1
+    events = isolated_store.stage_execution_events(execution["batch_id"], owner=OWNER)
+    assert sum(event["event_type"] == "attempt.cancellation_deadline_exceeded"
+               for event in events) == 1
+
+    assert isolated_store.mark_job_cancelled(
+        running["id"], worker_id="worker-1", attempt=running["attempts"])
+    stopped = isolated_store.stage_execution_snapshot(execution["batch_id"], owner=OWNER)
+    assert stopped["state"] == "cancelled"
+    assert stopped["control"]["awaiting_acknowledgement"] == 0
