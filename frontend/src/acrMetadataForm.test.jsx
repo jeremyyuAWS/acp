@@ -18,7 +18,29 @@ import { createTestRoot, unmountAll } from './testRoots.js'
  */
 
 const patchAcrReport = vi.fn()
-vi.mock('./acrApi', () => ({ patchAcrReport: (...a) => patchAcrReport(...a) }))
+const getAcrEditions = vi.fn()
+// NON-PARTIAL MOCK: every export this component imports must appear here. An omitted one is
+// `undefined` at the call site, and a component that calls it from an effect throws during
+// commit — which surfaces as all 14 tests failing on unrelated assertions rather than as
+// "you forgot an export". Adding `getAcrEditions` to the component without adding it here did
+// exactly that.
+vi.mock('./acrApi', () => ({
+  patchAcrReport: (...a) => patchAcrReport(...a),
+  getAcrEditions: (...a) => getAcrEditions(...a),
+}))
+
+// The four ITI editions as the server reports them: only WCAG is producible while
+// config/wcag-2.2-aa.json is the only requirement catalog in the repo.
+const EDITIONS = [
+  { edition: 'VPAT 2.5Rev WCAG', offered: true, requires: ['wcag-2.2-aa'], missing: [] },
+  { edition: 'VPAT 2.5Rev 508', offered: false, requires: ['section-508', 'wcag-2.2-aa'],
+    missing: ['section-508'] },
+  { edition: 'VPAT 2.5Rev EU', offered: false, requires: ['en-301-549', 'wcag-2.2-aa'],
+    missing: ['en-301-549'] },
+  { edition: 'VPAT 2.5Rev INT', offered: false,
+    requires: ['en-301-549', 'section-508', 'wcag-2.2-aa'],
+    missing: ['en-301-549', 'section-508'] },
+]
 
 const { default: AcrMetadataForm } = await import('./AcrMetadataForm.jsx')
 
@@ -28,8 +50,13 @@ const REPORT = {
 }
 
 let container
-const mount = async (props = {}) => {
+const mount = async (props = {}, { editionsFail = false } = {}) => {
   patchAcrReport.mockReset().mockResolvedValue({ updated: 1 })
+  // mockReset() here wipes anything a test set up BEFORE calling mount, which is why the
+  // editions failure is an explicit option rather than a mockRejectedValueOnce at the call site.
+  getAcrEditions.mockReset()
+  if (editionsFail) getAcrEditions.mockRejectedValue(new Error('offline'))
+  else getAcrEditions.mockResolvedValue({ editions: EDITIONS })
   const created = createTestRoot()
   container = created.container
   await act(async () => {
@@ -137,6 +164,62 @@ describe('editing', () => {
   })
 })
 
+describe('VPAT edition', () => {
+  // ── VPAT edition: a claim about content, not a label ────────────────────────────────────────
+  //
+  // The defect this replaced: `vpat_edition` was a free-text input, so an author could type
+  // "VPAT 2.5Rev 508" onto a report holding 55 WCAG rows and no Section 508 chapter, and the
+  // export printed that edition on its face. A select cannot express that claim.
+
+  it('renders the edition as a select over ITI four editions, not a text box', async () => {
+    await mount()
+    const el = container.querySelector('#acr-meta-vpat_edition')
+    expect(el.tagName).toBe('SELECT')
+    expect([...el.options].map((o) => o.value)).toEqual([
+      'VPAT 2.5Rev WCAG', 'VPAT 2.5Rev 508', 'VPAT 2.5Rev EU', 'VPAT 2.5Rev INT',
+    ])
+  })
+
+  it('disables an edition this build cannot produce, and says why', async () => {
+    await mount()
+    const opts = [...container.querySelector('#acr-meta-vpat_edition').options]
+    const byValue = Object.fromEntries(opts.map((o) => [o.value, o]))
+    expect(byValue['VPAT 2.5Rev WCAG'].disabled).toBe(false)
+    expect(byValue['VPAT 2.5Rev 508'].disabled).toBe(true)
+    expect(byValue['VPAT 2.5Rev 508'].textContent).toMatch(/not available in this build/i)
+  })
+
+  it('keeps an unavailable edition VISIBLE rather than omitting it', async () => {
+    // Omitting would make an unbuilt edition look like one nobody considered. Disabled with a
+    // reason says "this exists, and this build cannot honestly produce it yet".
+    await mount()
+    const values = [...container.querySelector('#acr-meta-vpat_edition').options]
+      .map((o) => o.value)
+    expect(values).toContain('VPAT 2.5Rev EU')
+    expect(values).toContain('VPAT 2.5Rev INT')
+  })
+
+  it('still shows a stored edition that is not one of the four', async () => {
+    // A report predating this control. The form must show what the report actually says; the
+    // publish gate is what refuses it, and it names the standard that is missing.
+    await mount({ report: { ...REPORT, vpat_edition: 'VPAT 2.5Rev Section 508' } })
+    const opts = [...container.querySelector('#acr-meta-vpat_edition').options]
+    const stored = opts.find((o) => o.value === 'VPAT 2.5Rev Section 508')
+    expect(stored).toBeTruthy()
+    expect(stored.textContent).toMatch(/not a VPAT 2\.5Rev edition/i)
+  })
+
+  it('falls back to a text input when the editions request fails', async () => {
+    // A failed fetch must not erase the value on screen: a select with no options cannot show
+    // the edition the report already has.
+    await mount({ report: { ...REPORT, vpat_edition: 'VPAT 2.5Rev WCAG' } },
+                { editionsFail: true })
+    const el = container.querySelector('#acr-meta-vpat_edition')
+    expect(el.tagName).toBe('INPUT')
+    expect(el.value).toBe('VPAT 2.5Rev WCAG')
+  })
+})
+
 describe('accessibility', () => {
   it('gives every control an accessible name (4.1.2, 3.3.2)', async () => {
     await mount()
@@ -172,6 +255,7 @@ describe('accessibility', () => {
     await mount()
     expect(container.querySelector('[role="status"]').getAttribute('aria-live')).toBe('polite')
   })
+
 
   it('has no axe-detectable violations', async () => {
     await mount()

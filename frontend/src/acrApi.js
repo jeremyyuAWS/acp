@@ -37,6 +37,11 @@ async function call(path, { method = 'GET', body } = {}) {
   return res.status === 204 ? null : res.json()
 }
 
+// The four VPAT editions and which the backend can actually produce. Fetched rather than
+// hardcoded so the form can never offer an edition the server would refuse — one source of truth
+// for "what content exists", which is the backend's question to answer, not the browser's.
+export const getAcrEditions = () => call('/acr/editions')
+
 export const listAcrReports = () => call('/acr')
 export const createAcrReport = (metadata) => call('/acr', { method: 'POST', body: { metadata } })
 export const getAcrReport = (id) => call(`/acr/${id}`)
