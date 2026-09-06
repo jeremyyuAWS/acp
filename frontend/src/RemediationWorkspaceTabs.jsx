@@ -58,8 +58,12 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
   }
 
   return <>
-    <RemediationRunCard snapshot={snapshot} receivedAt={receivedAt} connected={connected}
-      events={events} onOpen={() => select('live', { focusPanel: true })} />
+    {/* Keep this mounted so its counters retain their previous values while the user inspects the
+        full panel, but hide the duplicate surface in Live Processing itself. */}
+    <div hidden={mode === 'live'} data-testid="rem-compact-card-slot">
+      <RemediationRunCard snapshot={snapshot} receivedAt={receivedAt} connected={connected}
+        events={events} onOpen={() => select('live', { focusPanel: true })} />
+    </div>
     <div className="rem-workspace-tabs" role="tablist" aria-label="Remediation workspace">
       <button ref={(node) => { tabs.current[0] = node }} type="button" role="tab"
         id="rem-mode-review" aria-controls="rem-panel-review" aria-selected={mode === 'review'}
