@@ -34,6 +34,7 @@ export const SECONDARY = [
   { key: 'documentsVerified', label: 'Documents verified', path: ['fixes', 'documents_verified'] },
   { key: 'delivered', label: 'Corrected copies delivered', path: ['delivery', 'delivered'] },
   { key: 'pendingDelivery', label: 'Corrected copies pending delivery', path: ['delivery', 'pending'] },
+  { key: 'awaitingRelease', label: 'Corrected copies awaiting Release', path: ['delivery', 'awaiting_release'] },
   { key: 'reviewItems', label: 'Review items', path: ['review', 'items'] },
 ]
 

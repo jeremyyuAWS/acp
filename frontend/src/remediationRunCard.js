@@ -81,14 +81,16 @@ export const MIN_DOCUMENTS_FOR_ETA = 5
  * that through.
  */
 export function etaGate(snapshot, throughput) {
-  const completed = num(snapshot?.documents?.completed) ?? 0
-  if (completed < MIN_DOCUMENTS_FOR_ETA) {
+  const documents = snapshot?.documents || {}
+  const processed = ['completed', 'review', 'failed', 'skipped']
+    .reduce((sum, key) => sum + (num(documents[key]) ?? 0), 0)
+  if (processed < MIN_DOCUMENTS_FOR_ETA) {
     return { show: false, note: 'Estimating after the first results' }
   }
   if (!throughput || throughput.calibrating || !throughput.etaText) {
     return { show: false, note: 'Estimating after the first results' }
   }
-  return { show: true, text: throughput.etaText, basis: `based on ${completed} completed documents` }
+  return { show: true, text: throughput.etaText, basis: `based on ${processed} processed documents` }
 }
 
 // ── what the card says the run is doing ──────────────────────────────────────
