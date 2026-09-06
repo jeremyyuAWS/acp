@@ -40,9 +40,11 @@ status — the same "a check that cannot fail" shape CLAUDE.md documents for she
 """
 from __future__ import annotations
 
+import functools
 import shutil
 import subprocess
 import sys
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -59,11 +61,58 @@ CORPUS = ACP / "test-corpus/oracle"
 #: availability check and the documentation cannot drift apart.
 SOFFICE = "soffice"
 
-pytestmark = pytest.mark.skipif(
-    shutil.which(SOFFICE) is None,
-    reason=(f"{SOFFICE} is not installed, so the independent OOXML round-trip cannot run. This is "
-            f"expected in CI, which deliberately does not install LibreOffice — see the module "
-            f"docstring. Install libreoffice-writer to run these locally."))
+
+@functools.lru_cache(maxsize=1)
+def _soffice_can_convert() -> bool:
+    """Can LibreOffice actually re-serialise a document here — not merely: is the binary present?
+
+    THE THIRD STATE THIS EXISTS FOR. `shutil.which(SOFFICE) is not None` was the whole condition,
+    and it treats "installed" and "able to open a document" as the same thing. They are not. A
+    container with `libreoffice-core` but no `libreoffice-writer` ships the `soffice` binary and
+    cannot load anything — the module docstring already names this as the cause of the errors seen
+    while it was being written. In that state the guard did not skip, and every test in this module
+    failed with `LibreOffice produced no output`, which reads as a detector regression rather than
+    a missing package.
+
+    Measured in this container on 2026-09-06: with `libreoffice-common` and `libreoffice-core`
+    only, `soffice --convert-to` returned exit 0 and produced nothing for a .docx AND for a
+    one-line .txt; `apt-get install libreoffice-writer` made all 14 tests pass unchanged. The
+    tests were never wrong — the environment was, and the guard could not tell.
+
+    A TRIVIAL DOCUMENT OF ITS OWN, deliberately: not a corpus fixture and nothing ACP produced. A
+    probe that fed this the same files the assertions use could fail for a reason the assertions
+    are about, which would turn a real detector regression into a silent skip — the one outcome
+    worse than the wall of red this replaces. If this probe converts, every failure below is real.
+
+    The output file is the success signal, not the exit status, for the reason `_round_trip`
+    records: soffice returns 0 when it could not load the source.
+    """
+    if shutil.which(SOFFICE) is None:
+        return False
+    with tempfile.TemporaryDirectory() as scratch:
+        workdir = Path(scratch)
+        probe = workdir / "probe.txt"
+        probe.write_text("probe\n", encoding="utf-8")
+        try:
+            subprocess.run(
+                [SOFFICE, f"-env:UserInstallation=file://{workdir / 'profile'}", "--headless",
+                 "--norestore", "--convert-to", "docx", str(probe), "--outdir", str(workdir)],
+                capture_output=True, text=True, timeout=300)
+        except (OSError, subprocess.SubprocessError):
+            return False
+        return (workdir / "probe.docx").exists()
+
+
+#: One reason for both states, so it stays actionable whichever one a reader hits — and so
+#: `test_the_skip_guard_names_the_binary_it_needs` keeps checking a string that is always present.
+SKIP_REASON = (
+    f"{SOFFICE} cannot re-serialise a document here, so the independent OOXML round-trip cannot "
+    f"run: either it is not installed, or only libreoffice-core is — that package ships the "
+    f"{SOFFICE} binary but cannot load a document at all, and exits 0 while failing. This is "
+    f"expected in CI, which deliberately does not install LibreOffice — see the module docstring. "
+    f"Install libreoffice-writer to run these locally.")
+
+pytestmark = pytest.mark.skipif(not _soffice_can_convert(), reason=SKIP_REASON)
 
 
 def _corpus_docx() -> list[Path]:
@@ -229,3 +278,40 @@ def test_the_skip_guard_names_the_binary_it_needs():
     reason = pytestmark.kwargs["reason"]
     assert SOFFICE in reason
     assert "libreoffice-writer" in reason, "the skip must name the package that fixes it"
+    # The state that used to produce a wall of red instead of a skip has to be named too, or a
+    # reader in it is told to install a package they can see is already installed.
+    assert "libreoffice-core" in reason, "the skip must name the half-installed state"
+
+
+def test_the_guard_probes_capability_rather_than_presence(monkeypatch, tmp_path):
+    """A `soffice` that exits 0 and produces nothing must read as unavailable, not as working.
+
+    This is the exact behaviour of a container with `libreoffice-core` and no
+    `libreoffice-writer`, measured here on 2026-09-06: exit 0, no output file, for both a .docx
+    and a one-line .txt. `shutil.which` cannot see the difference, which is why the old guard let
+    eleven tests fail with `LibreOffice produced no output` — a message that reads as a detector
+    regression rather than a missing package.
+
+    `/bin/true` stands in for that binary: present, exits 0, writes nothing. If the probe returned
+    True for it, the probe would be measuring presence again.
+    """
+    _soffice_can_convert.cache_clear()
+    monkeypatch.setattr(sys.modules[__name__], "SOFFICE", "/bin/true")
+    try:
+        assert _soffice_can_convert() is False, (
+            "a binary that exits 0 without producing a document was read as usable")
+    finally:
+        _soffice_can_convert.cache_clear()
+
+
+def test_the_probe_says_yes_where_libreoffice_really_works():
+    """The other direction — with a limitation worth stating rather than implying.
+
+    A guard that always answered "unavailable" would turn every test here into a permanent skip
+    and look exactly like success. This assertion does NOT catch that: `pytestmark` skips the whole
+    module first, and this test skips with it. What it does catch is a probe that returns
+    something other than True while the module is running — and what actually guards the
+    always-false case is the skip REASON being specific enough that a reader in a working
+    environment notices it is wrong.
+    """
+    assert _soffice_can_convert() is True
