@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { confirm, notify } from './ConfirmDialog.jsx'
+import ArchiveAutofireOption from './ArchiveAutofireOption.jsx'
 
 // Mirrors disposition.SOURCE_MUTATING (api/disposition.py): the actions that change the source
 // file. Only used to decide what to OFFER — the server refuses regardless of what this says, so
@@ -903,6 +904,14 @@ export default function DispositionRules({ embedded = false }) {
                   )))}
             </div>
           )}
+
+          {/* R9 — the one control on this screen that authorises UNATTENDED file movement. It
+              sits below the rule list rather than inside a rule, because it is a tenant-level
+              policy that names which rules it applies to: putting a per-rule toggle here would
+              suggest each rule carries its own destination and ceilings, and it does not. Its own
+              copy states, at the point of the choice, that age never triggers a move — see
+              ArchiveAutofireOption.jsx for why that cannot be a footnote. */}
+          <ArchiveAutofireOption rules={(rules || []).filter((p) => p.action === 'archive')} />
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, borderTop: line,
                         paddingTop: 12, marginTop: 14 }}>

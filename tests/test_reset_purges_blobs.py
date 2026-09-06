@@ -32,6 +32,18 @@ _CONFIG_SURVIVORS = {
     "campaign",            # admin-authored remediation programs
     "campaign_batch",
     "scope_rule",          # per-file WCAG scope RULES (config, like disposition_policy)
+    # The archive auto-fire POLICY (R9) — administrator-authored configuration, the same class as
+    # disposition_policy beside it, and split from its records the same way: archive_execution and
+    # archive_policy_snapshot are in _ANALYTICS_TABLES and go.
+    #
+    # SURVIVING IS THE SAFE DIRECTION HERE, which is not obvious and is why it is written down.
+    # This row is where the KILL SWITCH lives. A reset that wiped it would silently return the
+    # tenant to the shipped defaults — and those are `enabled: False`, so the feature would be off
+    # rather than running unsupervised; the switch is not load-bearing after a wipe. What a wipe
+    # would actually destroy is the administrator's confirmed document-family mappings, which are
+    # evidence somebody signed off on, and their archive destination. Both are configuration a
+    # customer authored, not a record of their scans.
+    "archive_autofire_policy",
     # Schema metadata, not customer data: one row holding a checksum of the DDL this build
     # applies, so a booting replica can verify the schema instead of replaying it (see
     # _PgAdapter.init_schema — replaying it on every boot deadlocked production). Nothing here

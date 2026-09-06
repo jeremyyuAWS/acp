@@ -4,6 +4,7 @@ import { LIFECYCLE_ACTIONS } from './lifecycleRules.js'
 import { formatBucketOf } from './discoveryRecommendations.js'
 import LifecycleEstateSummary from './LifecycleEstateSummary.jsx'
 import LifecycleRuleLedger from './LifecycleRuleLedger.jsx'
+import ArchiveAutofirePanel from './ArchiveAutofirePanel.jsx'
 
 const FORMATS = new Set(['pdf', 'docx', 'xlsx', 'pptx'])
 const NATIVE = { 'application/vnd.google-apps.document': 'docx', 'application/vnd.google-apps.spreadsheet': 'xlsx', 'application/vnd.google-apps.presentation': 'pptx' }
@@ -53,6 +54,12 @@ export default function DiscoveryLifecycleResults({ rows, policies, scanId, sour
     {summary && <LifecycleEstateSummary summary={summary}
       onRules={() => document.getElementById('lifecycle-rules')?.scrollIntoView()} />}
     {summary && <div id="lifecycle-rules"><LifecycleRuleLedger rules={ruleResults} integrity={summary.integrity} /></div>}
+    {/* R9 — the archive auto-fire lane, above the inventory rather than inside it. The list below
+        is every supported document; this is the much smaller set a machine may act on, and
+        burying that distinction in a column of a 50-row table is how it would be missed. It
+        renders nothing when the tenant has no eligible candidates beyond the recommendation
+        lane, which is the shipped default. */}
+    <ArchiveAutofirePanel scanId={scanId} />
     <h2>Lifecycle results · supported documents</h2>
     <p className="muted">PDF, Word (DOCX), Excel (XLSX), PowerPoint (PPTX), including their Google equivalents. Results are saved from this scan; changing a rule requires a new scan.</p>
     {error && <p role="alert">{error}</p>}
