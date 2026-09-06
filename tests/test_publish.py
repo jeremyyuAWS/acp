@@ -8,6 +8,8 @@ import io
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "api"))
 
 import publish  # noqa: E402
@@ -59,6 +61,20 @@ def test_mime_for():
     assert publish._mime_for("d.unknown") == "application/octet-stream"
 
 
+def test_release_names_allow_human_labels_but_reject_paths():
+    assert publish.normalize_release_name(
+        "  Q3 Accessibility Release  ", field="Release folder name") == "Q3 Accessibility Release"
+    assert publish.normalize_release_name("", field="ZIP filename") is None
+    try:
+        publish.normalize_release_name("Q3/exports", field="ZIP filename")
+    except publish.UnsafeReleasePath as exc:
+        assert "ZIP filename" in str(exc)
+    else:
+        raise AssertionError("a path must not be accepted as a release name")
+    with pytest.raises(publish.UnsafeReleasePath, match="cannot end"):
+        publish.normalize_release_name("Q3 release.", field="Release folder name")
+
+
 def test_ensure_folder_reuses_existing():
     svc = _FakeSvc(list_result=[{"id": "folder-1"}])
     assert publish.ensure_published_folder(svc) == "folder-1"
@@ -69,6 +85,14 @@ def test_ensure_folder_creates_when_absent():
     svc = _FakeSvc(list_result=[])
     assert publish.ensure_published_folder(svc) == "new-id"
     assert any(c[0] == "create" for c in svc.calls)
+
+
+def test_ensure_release_folder_uses_the_reviewed_custom_name():
+    svc = _FakeSvc(list_result=[])
+    details = publish.ensure_published_folder(
+        svc, "release-1", folder_name="Q3 Accessibility Release", return_details=True)
+    assert details["name"] == "Q3 Accessibility Release"
+    assert ("create", "Q3 Accessibility Release") in svc.calls
 
 
 def test_upload_published_upserts_existing():

@@ -1438,12 +1438,12 @@ export const publishFile = (scanId, file) => (SIM
       headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ file }),
     }).then(j))
-export const publishAllFiles = (scanId, files) => (SIM
+export const publishAllFiles = (scanId, files, releaseFolderName = '') => (SIM
   ? sim({ published: files.map((f) => ({ file: f, published_at: new Date().toISOString() })) }, 150)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/publish`, {
       method: 'POST',
       headers: headers({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ files }),
+      body: JSON.stringify({ files, ...(releaseFolderName.trim() ? { release_folder_name: releaseFolderName.trim() } : {}) }),
     }).then(j))
 export const getReleaseStatus = (scanId) => (SIM
   ? sim({ release_id: null, roots: [], documents: [], documents_total: 0, published: 0, failed: 0, remaining: 0 }, 50)
@@ -1453,12 +1453,12 @@ export const getReleaseManifest = (scanId) => (SIM
       content_digest: { algorithm: 'SHA-256', value: 'simulation' },
       digest_note: 'Simulation manifest.' }, 50)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/manifest`, { headers: headers() }).then(j))
-export const downloadReleasePackage = (scanId, files) => {
+export const downloadReleasePackage = (scanId, files, packageName = '') => {
   if (SIM) return Promise.resolve()
   return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/package`, {
     method: 'POST',
     headers: headers({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ files }),
+    body: JSON.stringify({ files, ...(packageName.trim() ? { package_name: packageName.trim() } : {}) }),
   })
     .then(async (r) => {
       if (!r.ok) {
@@ -1472,7 +1472,8 @@ export const downloadReleasePackage = (scanId, files) => {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = match?.[1] || `acp-release-${scanId}.zip`
+      const requestedName = packageName.trim().replace(/\.zip$/i, '')
+      a.download = requestedName ? `${requestedName}.zip` : (match?.[1] || `acp-release-${scanId}.zip`)
       document.body.appendChild(a); a.click(); a.remove()
       setTimeout(() => URL.revokeObjectURL(url), 60000)
     })

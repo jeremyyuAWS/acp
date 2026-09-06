@@ -35,6 +35,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [downloading, setDownloading] = useState(false)
   const [builderStep, setBuilderStep] = useState(1)
   const [deliveryMethod, setDeliveryMethod] = useState('publish')
+  const [packageName, setPackageName] = useState('')
+  const [releaseFolderName, setReleaseFolderName] = useState('')
   const [selectedFiles, setSelectedFiles] = useState(() => new Set())
   const builderRef = useRef(null)
   const [sel, setSel] = useState(null)
@@ -217,13 +219,15 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       if (successful.some((row) => row.file === file)) onPublish?.(file)
     } catch { setReleaseAnnouncement('Release failed. The original file is unchanged; retry when the connection is available.') }
   }
-  const publishAll = async (fileNames = null) => {
+  const publishAll = async (fileNames = null, preferredFolderName = '') => {
     if (publishing) return
     setPublishing(true)
     const requested = fileNames ? new Set(fileNames) : null
     const pending = ready.filter((f) => !done[f.file] && (!requested || requested.has(f.file))).map((f) => f.file)
     try {
-      const res = await publishAllFiles(run?.id, pending)
+      const res = preferredFolderName
+        ? await publishAllFiles(run?.id, pending, preferredFolderName)
+        : await publishAllFiles(run?.id, pending)
       const successful = rememberRelease(res, pending)
       if (releaseProvider === 'sharepoint' && res?.queued) {
         const status = await followSharePointRelease(pending)
@@ -240,7 +244,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     if (downloading || !selectedReady.length) return
     setDownloading(true)
     try {
-      await downloadReleasePackage(run?.id, selectedReady.map((file) => file.file))
+      await downloadReleasePackage(run?.id, selectedReady.map((file) => file.file), packageName)
       setReleaseAnnouncement(`Package downloaded with ${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file' : 'files'} and a release manifest.`)
     } catch (error) {
       setReleaseAnnouncement(error?.message || 'The corrected files could not be packaged for download.')
@@ -325,6 +329,17 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     if (!selectedPublishable.length) setDeliveryMethod('download')
     setBuilderStep(2)
   }
+  const validateDeliveryName = (value, label) => {
+    const name = value.trim().replace(label === 'ZIP filename' ? /\.zip$/i : /$^/, '').trim()
+    if (!name) return ''
+    if (name.endsWith('.')) return `${label} cannot end with a period.`
+    if (name.length > 100) return `${label} must be 100 characters or fewer.`
+    if (/[<>:"/\\|?*\u0000-\u001f\u007f]/.test(name)) return `${label} contains a character that cannot be used in a file or folder name.`
+    return ''
+  }
+  const deliveryNameError = deliveryMethod === 'download'
+    ? validateDeliveryName(packageName, 'ZIP filename')
+    : releaseFolder ? '' : validateDeliveryName(releaseFolderName, 'Release folder name')
   const reviewFailedRelease = () => {
     setSelectedFiles(new Set(failedReady.map((f) => f.file)))
     setDeliveryMethod('publish')
@@ -584,22 +599,38 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                   <b>Not ready to deliver?</b><span>Do nothing—corrected copies remain safely stored in ACP.</span>
                 </div>
               </fieldset>
+              <div className="release-name-field">
+                {deliveryMethod === 'download' ? <>
+                  <label htmlFor="release-package-name"><b>ZIP filename</b> <span>Optional</span></label>
+                  <input id="release-package-name" value={packageName} onChange={(e) => setPackageName(e.target.value)} placeholder={`acp-release-${run?.id || 'scan'}.zip`} aria-describedby="release-name-help release-name-error" />
+                  <small id="release-name-help">“.zip” is added automatically. Leave blank to use the scan-based name.</small>
+                </> : releaseFolder ? <>
+                  <label><b>Release folder name</b></label>
+                  <div className="release-name-existing">{releaseFolder.name}</div>
+                  <small>This scan’s release has started, so retries keep the same destination.</small>
+                </> : <>
+                  <label htmlFor="release-folder-name"><b>Release folder name</b> <span>Optional</span></label>
+                  <input id="release-folder-name" value={releaseFolderName} onChange={(e) => setReleaseFolderName(e.target.value)} placeholder="Automatic: release date and time" aria-describedby="release-name-help release-name-error" />
+                  <small id="release-name-help">This name becomes permanent when this scan’s first release starts.</small>
+                </>}
+                {deliveryNameError && <div id="release-name-error" className="release-name-error" role="alert">{deliveryNameError}</div>}
+              </div>
               <div className="release-builder__continue release-builder__navigation">
                 <button className="ghost" onClick={() => setBuilderStep(1)}>Back to files</button>
-                <button className="qbtn approve" onClick={() => setBuilderStep(3)}>Review release</button>
+                <button className="qbtn approve" disabled={Boolean(deliveryNameError)} onClick={() => setBuilderStep(3)}>Review release</button>
               </div>
             </> : <>
               <div className="release-plan">
                 <div>
                   <b>Review your release plan</b>
                   <p>{deliveryMethod === 'publish'
-                    ? `${selectedPublishable.length} unreleased corrected ${selectedPublishable.length === 1 ? 'copy' : 'copies'} will be published to ${releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}. Already released files are excluded. Original files will not be changed.`
-                    : `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file' : 'files'} will be packaged in one ZIP with folder structure and a manifest. Original files will not be changed.`}</p>
+                    ? `${selectedPublishable.length} unreleased corrected ${selectedPublishable.length === 1 ? 'copy' : 'copies'} will be published to ${(releaseFolder?.name || releaseFolderName.trim()) ? `the “${releaseFolder?.name || releaseFolderName.trim()}” release folder` : releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}. Already released files are excluded. Original files will not be changed.`
+                    : `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file' : 'files'} will be packaged in “${packageName.trim().replace(/\.zip$/i, '') || `acp-release-${run?.id || 'scan'}`}.zip” with folder structure and a manifest. Original files will not be changed.`}</p>
                 </div>
                 <div className="release-plan__actions">
                   <button className="ghost" onClick={() => setBuilderStep(2)}>Back to delivery</button>
                   {deliveryMethod === 'publish'
-                    ? <button className="qbtn approve" disabled={readOnly || publishing || !selectedPublishable.length} onClick={() => setConfirm({ kind: 'selected', files: selectedPublishable.map((f) => f.file) })}>{publishing ? 'Publishing…' : `Publish ${selectedPublishable.length} ${selectedPublishable.length === 1 ? 'copy' : 'copies'}`}</button>
+                    ? <button className="qbtn approve" disabled={readOnly || publishing || !selectedPublishable.length} onClick={() => setConfirm({ kind: 'selected', files: selectedPublishable.map((f) => f.file), folderName: releaseFolder?.name || releaseFolderName.trim() })}>{publishing ? 'Publishing…' : `Publish ${selectedPublishable.length} ${selectedPublishable.length === 1 ? 'copy' : 'copies'}`}</button>
                     : <button className="qbtn approve" disabled={downloading || !selectedReady.length} onClick={downloadSelected}>{downloading ? 'Building package…' : `Download ZIP (${selectedReady.length})`}</button>}
                 </div>
               </div>
@@ -646,7 +677,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         const cnt = targets.length
         const batchAnyDrive = targets.some((f) => f.drive_file_id)
         const lines = releaseConfirmLines({ count: cnt, provider: releaseProvider, anyDrive: batchAnyDrive, driveMirrorEnabled, driveMirrorFolder })
-        const onGo = () => { setConfirm(null); if (isBatch) publishAll(targets.map((f) => f.file)); else publish(confirm.file) }
+        const onGo = () => { setConfirm(null); if (isBatch) publishAll(targets.map((f) => f.file), confirm.folderName || ''); else publish(confirm.file) }
         return (
           <div role="dialog" aria-modal="true" aria-label="Confirm release" onClick={() => setConfirm(null)}
                style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.42)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20 }}>
@@ -654,6 +685,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                  style={{ background: 'var(--panel, #fff)', color: 'var(--ink)', border: '1px solid var(--line)', borderRadius: 12, padding: '20px 22px', maxWidth: 520, width: '100%', boxShadow: '0 12px 40px rgba(0,0,0,0.25)' }}>
               <h3 style={{ margin: '0 0 12px' }}>{isBatch ? `Publish ${cnt} corrected ${cnt === 1 ? 'copy' : 'copies'}?` : `Release ${confirm.file}?`}</h3>
               <ul style={{ margin: '0 0 18px', paddingLeft: 18, fontSize: 13.5, lineHeight: 1.65 }}>
+                {confirm.folderName && <li>Release folder: “{confirm.folderName}”</li>}
                 {lines.map((l, i) => <li key={i}>{l}</li>)}
               </ul>
               <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
