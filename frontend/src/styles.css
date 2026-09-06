@@ -3212,7 +3212,7 @@ html[data-wcag="on"] .wcag-toggle--on {
 
 .release-history__execution{border-top:1px solid var(--line);padding:11px 0}
 .release-history__search{display:grid;gap:5px;margin:0 0 12px;font-size:12.5px;font-weight:650;max-width:520px}
-.release-history__search input{font:inherit;font-weight:400;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--ink)}
+.release-history__search input{font:inherit;font-weight:400;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--panel,#fff);color:var(--ink)}
 .release-history__execution:first-of-type{border-top:0}
 .release-history__execution>summary{cursor:pointer;display:flex;justify-content:space-between;gap:16px;align-items:center}
 .release-history__execution>summary span{display:flex;flex-direction:column;gap:3px}
