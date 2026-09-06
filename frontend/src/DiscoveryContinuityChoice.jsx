@@ -11,7 +11,7 @@ export default function DiscoveryContinuityChoice({ choice, onContinue, onReplac
           <strong id="discovery-continuity-title">Discovery is already running</strong>
           <div id="discovery-continuity-copy" className="muted" style={{ marginTop: 3, fontSize: 12.5 }}>
             Continue the current workflow to keep its progress. Start a new revision only if you
-            intend to stop and replace it.
+            intend to stop and replace it with a separate Discovery.
           </div>
           <div className="muted" style={{ marginTop: 5, fontSize: 11.5, fontFamily: 'monospace' }}>
             Scan {choice.scanId}
@@ -19,7 +19,7 @@ export default function DiscoveryContinuityChoice({ choice, onContinue, onReplac
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
           <button type="button" onClick={onContinue}>Continue current Discovery</button>
-          <button type="button" className="secondary" onClick={onReplace}>Replace with new revision</button>
+          <button type="button" className="secondary" onClick={onReplace}>Replace with new Discovery</button>
           <button type="button" className="ghost small" onClick={onDismiss}>Keep current screen</button>
         </div>
       </div>

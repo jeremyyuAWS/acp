@@ -269,7 +269,7 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                 "active_scan_id": prior_scan_id,
                 "active_stage": "discover",
                 "message": ("Discovery is already active. Continue that workflow, or confirm "
-                            "that it should be replaced before starting a new revision."),
+                            "that it should be replaced before starting a separate Discovery."),
             })
         scan_id = uuid.uuid4().hex[:12]
         # fanout=true → decompose into per-file jobs (ADR 0007); else the monolithic
