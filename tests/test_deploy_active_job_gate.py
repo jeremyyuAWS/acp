@@ -58,9 +58,10 @@ def test_legacy_probe_write_reads_redis_and_counts_queue_states(monkeypatch, cap
             return None
 
         def execute(self, query):
-            assert "status = 'running'" in query
-            assert "COALESCE(attempts, 0) = 0" in query
-            assert "COALESCE(attempts, 0) > 0" in query
+            compact = query.replace(" ", "")
+            assert "status='running'" in compact
+            assert "COALESCE(attempts,0)=0" in compact
+            assert "COALESCE(attempts,0)>0" in compact
 
         def fetchone(self):
             return 2, 3, 4

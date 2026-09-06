@@ -77,9 +77,10 @@ def test_probe_payload_fits_the_live_websocket_handshake_and_round_trips():
         f"__import__('base64').b64decode('{payload}')))"
     )
 
-    # The 3,432-character raw command was rejected before Azure printed its connected banner;
-    # the 1,457-character compressed command completed against that same live staging replica.
-    assert len(command) < 1_800
+    # The workflow identity still rejected the 1,457-character setup before Azure printed its
+    # connected banner. Keep ample room for its larger OIDC headers rather than testing at the
+    # handshake cliff; the exact compact command also completes against live staging.
+    assert len(command) < 1_000
     assert gzip.decompress(base64.b64decode(payload)) == source
 
 
