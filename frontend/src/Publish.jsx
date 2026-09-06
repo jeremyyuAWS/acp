@@ -470,7 +470,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           <div style={{ marginTop: 14 }}>
             {Object.keys(done).length === ready.length && ready.length > 0 && <div className="okline" style={{ marginBottom: 10 }}><b>{ready.length} corrected {ready.length === 1 ? 'copy' : 'copies'} released</b>{releaseFolder?.url && <> · <a href={releaseFolder.url} target="_blank" rel="noopener noreferrer">Open release folder ↗</a></>}</div>}
             <button className="ghost small" onClick={downloadReleaseManifest}>Download release manifest</button>
-            {manifestError && <div role="alert" style={{ color: 'var(--danger-fg)', marginTop: 8 }}>{manifestError}</div>}
+            {manifestError && <div role="alert" style={{ color: 'var(--error-fg-strong)', marginTop: 8 }}>{manifestError}</div>}
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 6 }}>📋 Audit trail · {publishedEntries.length} released</div>
             {publishedEntries.slice(0, 8).map((e) => (
               <div key={e.file} style={{ fontSize: 12.5, padding: '5px 0', borderBottom: '1px solid var(--line)' }}>
