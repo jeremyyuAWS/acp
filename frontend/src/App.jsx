@@ -44,7 +44,7 @@ import AssessRunner from './AssessRunner.jsx'
 import AssessSetup from './AssessSetup.jsx'
 import AssessFileFindings from './AssessFileFindings.jsx'
 import { inventorySnapshot } from './discoverRunTime.js'
-import { scanOptionAt } from './scanOptionDate.js'
+import { scanOptionAt, scanWorkflowContext } from './scanOptionDate.js'
 import AssessSummary from './AssessSummary.jsx'
 import AssessRunIntegrity, { useScanManifest } from './AssessRunIntegrity.jsx'
 import { runIntegrity, integrityCaveat } from './runIntegrity.js'
@@ -2012,12 +2012,13 @@ export default function App() {
                   // unassessed scan's own picker entry, from this label reading completed_at
                   // alone.
                   const at = scanOptionAt(s)
+                  const workflowContext = scanWorkflowContext(s)
                   return (
                     <option key={s.id} value={s.id}>
                       {i === 0 ? '★ ' : ''}
                       {at ? new Date(at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'not yet dated'}
                       {s.avg_score != null ? ` · ${s.avg_score}/100` : ''}
-                      {' · '}{at ? timeAgo(at) : ''}{i === 0 ? ' · latest' : ''}{s.published_at ? ' · verified' : ''}
+                      {' · '}{at ? timeAgo(at) : ''}{workflowContext ? ` · ${workflowContext}` : ''}{i === 0 ? ' · latest' : ''}{s.published_at ? ' · verified' : ''}
                     </option>
                   )
                 })}
@@ -2040,7 +2041,7 @@ export default function App() {
               {/* fmtStamp returns null for a missing stamp; the guard on isTimeTravel means that
                   can no longer happen here, but the fallback stays so a null can never again
                   render as a bold empty span followed by a bare period. */}
-              <span style={{ fontSize: 13.5 }}>🕐 <b>Scan History replay</b> — viewing the scan from <b>{fmtStamp(run.completed_at) ?? 'an earlier scan'}</b>{run.avg_score != null ? ` · ${run.avg_score}/100` : ''}. Every tab, the dashboard and your saved decisions reflect this past scan.</span>
+              <span style={{ fontSize: 13.5 }}>🕐 <b>Scan History replay</b> — viewing {scanWorkflowContext(run) ? <><b>{scanWorkflowContext(run)}</b> from </> : 'the scan from '}<b>{fmtStamp(run.completed_at) ?? 'an earlier scan'}</b>{run.avg_score != null ? ` · ${run.avg_score}/100` : ''}. Every tab, the dashboard and your saved decisions reflect this past scan.</span>
             </>
           ) : (
             <span style={{ fontSize: 13.5 }}>✨ <b>New scan available</b> from <b>{fmtStamp(scanList[0]?.completed_at) ?? 'just now'}</b> — a more recent scan finished while you were reviewing this one.</span>

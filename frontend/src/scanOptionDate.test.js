@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { scanOptionAt } from './scanOptionDate.js'
+import { scanOptionAt, scanWorkflowContext } from './scanOptionDate.js'
 
 describe('scanOptionAt', () => {
   it('prefers completed_at when the scan was assessed', () => {
@@ -20,5 +20,16 @@ describe('scanOptionAt', () => {
   it('returns null for a null/undefined scan entry rather than throwing', () => {
     expect(scanOptionAt(null)).toBeNull()
     expect(scanOptionAt(undefined)).toBeNull()
+  })
+})
+
+describe('scanWorkflowContext', () => {
+  it('names a linked workflow revision', () => {
+    expect(scanWorkflowContext({ workflow_id: 'workflow-1', workflow_revision: 3 }))
+      .toBe('Workflow revision 3')
+  })
+
+  it('does not invent lineage for legacy scans', () => {
+    expect(scanWorkflowContext({ workflow_revision: 1 })).toBe('')
   })
 })

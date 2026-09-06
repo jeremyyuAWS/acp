@@ -15,3 +15,12 @@
 export function scanOptionAt(s) {
   return (s && (s.completed_at ?? s.discovered_at)) ?? null
 }
+
+// Keep related rescans legible in the history picker. A revision is meaningful only when the
+// backend has attached it to a stable workflow; legacy scans should not all advertise "revision
+// 1" and imply a relationship that was never recorded.
+export function scanWorkflowContext(s) {
+  if (!s?.workflow_id) return ''
+  const revision = Math.max(1, Number(s.workflow_revision || 1))
+  return `Workflow revision ${revision}`
+}
