@@ -112,6 +112,7 @@ RESERVE_PROD = 15
 RESERVE_STAGING = 8
 
 PROD_LIMIT = 150
+CURRENT_PROD_LIMIT = 859
 STAGING_LIMIT = 50
 
 # Live shape as read on 2026-08-30 (carried, see module docstring).
@@ -228,13 +229,12 @@ def test_an_override_below_the_floor_is_still_clamped():
 # that on every run, and it is what caught the 2026-09-06 discovery change — the script moved and
 # every number in this section had to be recomputed rather than the constant edited to match.
 #
-# Discovery's ceiling of 6 is set BY THE OVERLAP FIGURE BELOW, not by steady state. Production was
-# found running 4-8, which is 138 during a rollout and 153 with the reserve — over the 150 the
-# server has. 6 is the largest ceiling that survives a deploy.
+# Discovery's 4-6 range remains the reviewed service decision after the database upgrade. Assess
+# can now use its intended 5-10 range because General Purpose removed the 150-connection block.
 RIGHTSIZE_REPLICAS = {
     "acp-app": (1, 3),
     "acp-discovery": (4, 6),
-    "acp-assess": (5, 5),
+    "acp-assess": (5, 10),
     "acp-remediate": (5, 10),
 }
 PLAUSIBLE_WORKER_THREADS = (2, 12)
@@ -260,15 +260,15 @@ def deployed_tiers(worker_threads: int, *, worker_override=None, api_override=No
 def test_explicit_worker_pools_keep_autoscaled_fleet_under_server_budget(threads):
     steady = fleet_ceiling_tiers(
         deployed_tiers(threads, worker_override=WORKER_DB_POOL), overlap=False)
-    assert steady == 90
-    assert steady + RESERVE_PROD <= PROD_LIMIT
+    assert steady == 100
+    assert steady + RESERVE_PROD <= CURRENT_PROD_LIMIT
 
 
 def test_autoscaled_fleet_fits_during_revision_overlap():
     overlap = fleet_ceiling_tiers(
         deployed_tiers(2, worker_override=WORKER_DB_POOL), overlap=True)
-    assert overlap == 134
-    assert overlap + RESERVE_PROD <= PROD_LIMIT
+    assert overlap == 144
+    assert overlap + RESERVE_PROD <= CURRENT_PROD_LIMIT
 
 
 def test_rightsize_script_sets_worker_pool_and_queue_autoscale():

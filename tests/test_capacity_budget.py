@@ -32,9 +32,10 @@ sys.path.insert(0, str(ROOT / "api"))
 
 from capacity_budget import Tier, connections, evaluate, vcpu, worst_case_tiers  # noqa: E402
 
-# Both from deploy/public/rightsize-production.sh, and both stated allowances rather than
-# measurements — the same two constants tests/test_db_connection_budget.py carries.
-PROD_LIMIT = 150
+# The production ceiling is the PostgreSQL 16 default measured after the General Purpose upgrade.
+# The reserve remains the stated operational allowance from docs/db-connection-budget.md.
+PROD_LIMIT = 859
+LEGACY_BURSTABLE_LIMIT = 150
 RESERVE_PROD = 15
 WORKER_DB_POOL = 2
 
@@ -161,7 +162,8 @@ def _prd_tiers() -> list[Tier]:
 def test_the_prd_capacity_table_fits_at_night_and_that_is_the_trap():
     """Validated in off-hours mode, the PRD's table passes. This is the reading that would let
     it be saved, and it is why validation must not use the mode it happens to be in."""
-    result = evaluate(_prd_tiers(), server_max_connections=PROD_LIMIT, reserve=RESERVE_PROD)
+    result = evaluate(_prd_tiers(), server_max_connections=LEGACY_BURSTABLE_LIMIT,
+                      reserve=RESERVE_PROD)
     assert not result["blocked"], result["findings"]
 
 
@@ -176,7 +178,8 @@ def test_the_prd_capacity_table_does_not_fit_during_business_hours():
         "business_hours": PRD_BUSINESS_FLOORS,
         "off_hours": PRD_OFF_HOURS_FLOORS,
     })
-    result = evaluate(worst, server_max_connections=PROD_LIMIT, reserve=RESERVE_PROD)
+    result = evaluate(worst, server_max_connections=LEGACY_BURSTABLE_LIMIT,
+                      reserve=RESERVE_PROD)
     assert result["blocked"], (
         "the PRD's capacity table now fits its server — update docs/prd-capacity-scheduling.md "
         "and this test together")
@@ -185,18 +188,13 @@ def test_the_prd_capacity_table_does_not_fit_during_business_hours():
     assert result["connection_headroom"] < 0
 
 
-def test_a_scaler_on_assess_is_inert_until_its_ceiling_is_raised():
-    """Phase 1 of the PRD asks for an Assess queue scaler. The tier is pinned at 5-5, so a rule
-    attached to it can compute any replica count it likes and Azure cannot act on it — which is
-    why deploy/public/rightsize-production.sh generates the rule but guards applying it."""
+def test_assess_has_a_real_autoscaling_range_after_the_database_upgrade():
+    """The General Purpose upgrade resolved R3's connection-budget blocker. Assess must retain
+    a ceiling above its warm floor or its queue rule becomes an expensive inert revision."""
     floor, ceiling = _rightsize_ranges()["acp-assess"]
-    assert ceiling == floor, (
-        "acp-assess is no longer pinned — rightsize-production.sh should now be applying the "
-        "assess-queue rule, and this test should assert that instead")
-    result = evaluate(deployed_tiers(), server_max_connections=PROD_LIMIT, reserve=RESERVE_PROD)
-    pinned = [f for f in result["findings"]
-              if f["code"] == "ceiling_equals_floor" and "acp-assess" in f["detail"]]
-    assert pinned, result["findings"]
+    assert (floor, ceiling) == (5, 10)
+    script = (ROOT / "deploy/public/rightsize-production.sh").read_text()
+    assert "apply_assess_autoscale 5 10" in script
 
 
 def test_the_budget_says_exactly_how_much_assess_ceiling_it_affords():
@@ -214,17 +212,17 @@ def test_the_budget_says_exactly_how_much_assess_ceiling_it_affords():
     tiers = deployed_tiers()
     pool = {t.name: t.pool for t in tiers}["acp-assess"]
     floor, ceiling = _rightsize_ranges()["acp-assess"]
-    headroom = evaluate(tiers, server_max_connections=PROD_LIMIT,
+    headroom = evaluate(tiers, server_max_connections=LEGACY_BURSTABLE_LIMIT,
                         reserve=RESERVE_PROD)["connection_headroom"]
     affordable = ceiling + headroom // pool
 
     fits = evaluate(deployed_tiers(**{"acp-assess": (floor, affordable)}),
-                    server_max_connections=PROD_LIMIT, reserve=RESERVE_PROD)
+                    server_max_connections=LEGACY_BURSTABLE_LIMIT, reserve=RESERVE_PROD)
     assert not fits["blocked"], (
         f"a ceiling of {affordable} was derived as affordable but does not fit: {fits['findings']}")
 
     over = evaluate(deployed_tiers(**{"acp-assess": (floor, affordable + 1)}),
-                    server_max_connections=PROD_LIMIT, reserve=RESERVE_PROD)
+                    server_max_connections=LEGACY_BURSTABLE_LIMIT, reserve=RESERVE_PROD)
     assert over["blocked"], (
         f"one replica past the derived ceiling of {affordable} still fits — the headroom "
         f"arithmetic and the evaluation disagree")
@@ -238,10 +236,11 @@ def test_the_prd_ceilings_and_the_prd_floors_compete_for_the_same_connections():
     individually reasonable numbers lands over the limit.
     """
     assess_only = evaluate(deployed_tiers(**{"acp-assess": (5, 10)}),
-                           server_max_connections=PROD_LIMIT, reserve=RESERVE_PROD)
+                           server_max_connections=LEGACY_BURSTABLE_LIMIT,
+                           reserve=RESERVE_PROD)
     everything = evaluate(worst_case_tiers(_prd_tiers(), {
         "business_hours": PRD_BUSINESS_FLOORS, "off_hours": PRD_OFF_HOURS_FLOORS,
-    }), server_max_connections=PROD_LIMIT, reserve=RESERVE_PROD)
+    }), server_max_connections=LEGACY_BURSTABLE_LIMIT, reserve=RESERVE_PROD)
     assert everything["deploy_connections"] > assess_only["deploy_connections"], (
         "the PRD's full table costs no more than raising assess alone — recheck the floors")
     assert everything["blocked"]

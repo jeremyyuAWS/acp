@@ -66,40 +66,23 @@ def test_the_derivation_covers_every_tier_the_contract_requires(document):
 def test_the_document_records_todays_replica_ranges_not_the_examples(document):
     """The point of deriving rather than adapting the example.
 
-    THE ORIGINAL WORDING NO LONGER HOLDS FOR ONE OF THESE THREE, and rewriting it is the honest
-    move rather than leaving a rationale that has quietly become false. It said: if these ever
-    equal the standard-production example's ranges, the derivation has stopped reading the
-    scripts. On 2026-09-05 the owner pinned the example's assess tier to 5-5 to match production
-    (packaging/docs/azure-parity.md), so assess NOW equals the example and that is correct — the
-    example moved to production, not the derivation to the example.
-
-    Discover (4-6 against the example's 1-3) and remediate (5-10 against 3-10) still differ, so
-    the guard keeps its discriminating power: a derivation that started copying the example would
-    still be caught by those two. Assess is now a fixed expectation like any other.
-
-    Discover moved from 1-2 on 2026-09-06. Production was found running 4-8, the owner kept the
-    floor of 4, and the ceiling was set to 6 by the deploy-time connection budget rather than by
-    preference — 4-8 wants 153 connections during a revision overlap against a server that has
-    150. See tests/test_db_connection_budget.py, which is where that arithmetic lives.
+    These are production's reviewed ranges after the General Purpose database upgrade resolved
+    Assess's former connection-budget block.
     """
-    assert document["workers"]["assess"]["replicas"] == {"min": 5, "max": 5}
+    assert document["workers"]["assess"]["replicas"] == {"min": 5, "max": 10}
     assert document["workers"]["remediate"]["replicas"] == {"min": 5, "max": 10}
     assert document["workers"]["discover"]["replicas"] == {"min": 4, "max": 6}
 
 
-def test_a_pinned_tier_gets_no_autoscale_block(document):
-    """Assess is pinned 5-5. Recording an autoscale block for it would misdescribe the warm pool
-    the operator deliberately chose — the finding azure-parity.md put to the owner, and which the
-    owner settled on 2026-09-05 by pinning the contract's example to match. The derived document
-    said this before the decision and says it after; that it needed no change is the evidence that
-    it was describing production rather than arguing for a position."""
-    assert "autoscale" not in document["workers"]["assess"]
+def test_assess_and_remediate_record_their_live_queue_scalers(document):
+    """Both variable worker tiers now have real queue rules in the production baseline."""
+    assert document["workers"]["assess"]["autoscale"] == {"signals": ["queue-depth"]}
     assert document["workers"]["remediate"]["autoscale"] == {"signals": ["queue-depth"]}
 
 
 def test_the_discovery_scale_rule_is_not_invented(document):
     """rightsize-production.sh REFERS to a discovery CPU scale rule that exists nowhere in this
-    repository (azure_parity.UNVERIFIABLE). Discovery does scale — 1-2 — but the signal is not
+    repository (azure_parity.UNVERIFIABLE). Discovery does scale — 4-6 — but the signal is not
     knowable from here, so no autoscale block is written. Guessing one would put a fabrication in
     a generated document, which is the failure mode this whole exercise is built against."""
     assert "autoscale" not in document["workers"]["discover"]
@@ -144,25 +127,21 @@ def test_the_override_replaces_the_formula_rather_than_capping_it():
 
 
 def test_todays_azure_fits_its_postgres_server(document):
-    """90 of 150. The number production runs at once discovery is 4-6 (2026-09-06)."""
+    """100 of 859 after the General Purpose upgrade and Assess 5-10 activation."""
     from acpctl.inventory import connection_budget
     budget = connection_budget(document)
-    assert budget["serverMaxConnections"] == 150, (
+    assert budget["serverMaxConnections"] == 859, (
         "the derived document no longer names the Postgres server production runs")
-    assert budget["worstCaseConnections"] == 90
+    assert budget["worstCaseConnections"] == 100
     assert budget["withinBudget"]
 
 
-def test_without_the_pinned_pools_the_same_fleet_reads_as_oversubscribed(document):
+def test_pinned_pools_still_bound_the_fleet_after_the_database_upgrade(document):
     """THE FINDING, EXECUTABLE — and the test that makes `connectionPool` load-bearing.
 
-    Strip the pools the scripts pin and nothing else changes: same tiers, same replica ranges, same
-    server. Demand goes from 90 to 456 against a 150-connection ceiling, and `acpctl plan` reports
-    today's Azure as 2.5x oversubscribed when it demonstrably is not.
-
-    That was the state of the contract before this slice. It is kept as a test rather than a
-    paragraph because a paragraph cannot fail: if `connectionPool` is ever dropped from the schema
-    or stops being read, this goes red instead of the claim quietly becoming false.
+    Strip the pools the scripts pin and nothing else changes: demand jumps from 100 to 556. The
+    larger server can absorb it, but that does not make the worker pool declaration disposable;
+    dropping it would misdescribe how production limits idle connection reservations.
     """
     from acpctl.inventory import connection_budget
 
@@ -171,10 +150,8 @@ def test_without_the_pinned_pools_the_same_fleet_reads_as_oversubscribed(documen
         tier.pop("connectionPool", None)
 
     budget = connection_budget(unpinned)
-    assert budget["worstCaseConnections"] == 456
-    assert not budget["withinBudget"], (
-        "the pre-slice-2 contract no longer misreports this fleet — if the formula changed, this "
-        "test's premise did too and the document's headline needs rewriting")
+    assert budget["worstCaseConnections"] == 556
+    assert budget["withinBudget"]
 
 
 def test_the_pinned_pool_reaches_the_container_not_just_the_arithmetic(document):

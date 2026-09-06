@@ -12,14 +12,12 @@ schema, and renders to a Helm release that would reproduce it. If no such docume
 contract is not a portability layer for Azure yet, and every parity number computed against it is
 a comparison with a target the deployment could not have hit.
 
-THE ANSWER TURNED OUT TO BE "NOT QUITE", AND THAT IS THE FINDING. Everything about today's Azure
-was expressible except one thing: the per-replica connection pool. `deploy/public/
-rightsize-production.sh` pins `ACP_DB_MAX_CONN=2` on all three worker tiers (PR #1370) to hold the
-fleet under Postgres's measured 150-connection ceiling. The contract had no vocabulary for it, so
-the honest document — real replica ranges, the real 150-connection server — computed **384**
-worst-case connections and read as 2.5x oversubscribed, while the deployment it described sits at
-**82** and has never exhausted its pool. `tier.connectionPool` closes that, and
-`inventory.pool_per_replica` mirrors `api/store.py`'s override semantics exactly.
+THE ANSWER ORIGINALLY TURNED OUT TO BE "NOT QUITE". The missing vocabulary was a per-replica
+connection pool. `deploy/public/rightsize-production.sh` pins `ACP_DB_MAX_CONN=2` on all three
+worker tiers, and `tier.connectionPool` now carries that fact into the contract. Production later
+moved to General Purpose PostgreSQL with an 859-connection ceiling, but the pool remains important:
+it makes the document describe the application's deliberate connection posture rather than a
+different fleet that merely happens to fit the larger server.
 
 Worth being precise about what that gap was: the contract was not WRONG about production, it was
 UNABLE TO DESCRIBE IT. The arithmetic was right for a fleet with no pinned pools. The failure mode
@@ -61,12 +59,9 @@ NOT_EXPRESSIBLE: dict[str, str] = {
         "deploy.sh takes the region from its environment, so the scripts do not record one."),
 }
 
-# The Postgres server production actually runs. NOT the number that makes the arithmetic
-# comfortable: `api/store.py`'s own docstring records 150 as confirmed live, the schema's
-# `maxConnections` description repeats it, and #1370 exists because of it. The standard-production
-# EXAMPLE declares 700, which is a plausible managed tier and not this server — one of the reasons
-# a document describing today's Azure had to be derived rather than adapted from that example.
-PRODUCTION_MAX_CONNECTIONS = 150
+# The Postgres server production actually runs. The 2026-09-06 General Purpose upgrade changed
+# PostgreSQL 16's live ceiling from the old explicit 150 override to the SKU default of 859.
+PRODUCTION_MAX_CONNECTIONS = 859
 
 # cpu/memory -> preset. The contract sizes tiers by preset, not by free-form quantities, so a
 # derived document has to land on one; an Azure app whose size matches no preset is a real finding
@@ -78,7 +73,7 @@ _BY_SIZE = {(float(row["cpu"]), row["memory"]): name for name, row in presets.PR
 # the lane's job types) — which is queue depth by any other name. Discovery's rule is referenced by
 # rightsize-production.sh but applied outside these scripts, so it is NOT recorded here: see
 # azure_parity.UNVERIFIABLE. Inventing a signal for it would put a guess in a generated document.
-_SIGNALS = {"remediate": ["queue-depth"]}
+_SIGNALS = {"assess": ["queue-depth"], "remediate": ["queue-depth"]}
 
 
 class NotExpressible(Exception):
@@ -106,7 +101,7 @@ def _tier(app, tier_name: str) -> dict[str, Any]:
         "replicas": {"min": app.min_replicas, "max": app.max_replicas},
         "resources": {"preset": _preset_for(app.cpu, app.memory, app=app.name)},
     }
-    # `autoscaled` is min < max, deliberately: a tier pinned at 5-5 does not scale whatever rules
+# `autoscaled` is min < max, deliberately: a pinned tier does not scale whatever rules
     # are attached to it, and recording an autoscale block for one would misdescribe the warm pool
     # the operator chose. Signals come from the scripts, never from what the tier "should" watch.
     if app.autoscaled and tier_name in _SIGNALS:
