@@ -1,3 +1,7 @@
-.live-heartbeat-bars{display:flex;align-items:flex-end;justify-content:flex-end;gap:3px;width:92px;height:18px;overflow:hidden}
-.live-heartbeat-bars i{display:block;width:4px;min-height:2px;border-radius:1px 1px 0 0;background:var(--success-fg);transition:height .25s ease,opacity .25s ease}
+.live-heartbeat-bars{--heartbeat-color:var(--success-fg,#397521);display:flex;align-items:flex-end;justify-content:flex-end;gap:3px;width:57px;height:18px;overflow:hidden}
+.live-heartbeat-bars[data-stage="discover"]{--heartbeat-color:var(--info-fg,#1f5fa8)}
+.live-heartbeat-bars[data-stage="assess"]{--heartbeat-color:var(--success-fg,#397521)}
+.live-heartbeat-bars[data-stage="remediate"]{--heartbeat-color:var(--amber-ink,#8a5a00)}
+.live-heartbeat-bars[data-stage="release"]{--heartbeat-color:var(--purple,#6f4a78)}
+.live-heartbeat-bars i{display:block;width:2px;flex:0 0 2px;min-height:2px;border-radius:1px 1px 0 0;background:var(--heartbeat-color);transition:height .25s ease,opacity .25s ease}
 @media(prefers-reduced-motion:reduce){.live-heartbeat-bars i{transition:none}}

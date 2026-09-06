@@ -5,6 +5,7 @@ import { nextMilestone } from './discoveryMilestone.js'
 import { deriveRunAge, submittedText, elapsedText, startedText } from './queueAge.js'
 import SourceVisibility from './SourceVisibility.jsx'
 import LiveThroughput from './LiveThroughput.jsx'
+import LiveHeartbeatBars from './LiveHeartbeatBars.jsx'
 import { useThroughput } from './useThroughput.js'
 
 // The Discover RUNNING screen: a per-step checklist showing what the discovery agent is doing.
@@ -732,6 +733,12 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, s
                       gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
           <div style={{ fontSize: 14.5, fontWeight: 650 }}>Discovering documents</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            {busy && (
+              <LiveHeartbeatBars
+                measuredAt={progress?.updated_at || progress?.heartbeat_at || progress?.last_progress_at}
+                stage="discover"
+              />
+            )}
             <span className="muted" style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}
                   aria-hidden="true">
               {elapsedText(runAge, fmtElapsedSecs)}

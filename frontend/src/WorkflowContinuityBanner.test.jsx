@@ -82,28 +82,30 @@ describe('workflow continuity', () => {
       stage: 'publish', source: 'sharepoint', running: 1, queued: 8,
     }, onReturn: () => {}, onLiveOps: () => {} })
     expect(container.textContent).toContain('Release is still running')
-    expect(container.textContent).toContain('Release throughput')
+    expect(container.textContent).toContain('Live updates')
     expect(container.querySelector('button').textContent).toContain('Release')
   })
 
-  it('draws Release throughput from completed publishing jobs', () => {
+  it('draws twelve purple heartbeat bars without a trend line for Release', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-06T12:00:00Z'))
     const { container, root } = createTestRoot()
     const props = { currentView: 'overview', onReturn: () => {}, onLiveOps: () => {} }
     act(() => root.render(createElement(WorkflowContinuityBanner, { ...props, workflow: {
       workflow_id: 'release-1', stage: 'publish', source: 'sharepoint', running: 1, queued: 8,
+      updated_at: '2026-09-06T12:00:00Z',
     } })))
-    expect(container.textContent).toContain('calibrating')
 
     for (const [seconds, queued] of [[20, 6], [40, 4], [59, 2]]) {
       vi.setSystemTime(new Date(`2026-09-06T12:00:${String(seconds).padStart(2, '0')}Z`))
       act(() => root.render(createElement(WorkflowContinuityBanner, { ...props, workflow: {
         workflow_id: 'release-1', stage: 'publish', source: 'sharepoint', running: 1, queued,
+        updated_at: `2026-09-06T12:00:${String(seconds).padStart(2, '0')}Z`,
       } })))
     }
-    expect(container.querySelector('polyline')).toBeTruthy()
-    expect(container.textContent).toContain('6 documents/min')
+    expect(container.querySelectorAll('.live-heartbeat-bars i')).toHaveLength(12)
+    expect(container.querySelector('[data-stage="release"]')).toBeTruthy()
+    expect(container.querySelector('polyline')).toBeNull()
     vi.useRealTimers()
   })
 })

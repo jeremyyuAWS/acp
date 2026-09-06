@@ -237,7 +237,7 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
               <strong style={{ fontSize: 14.5 }}>{isFinished ? 'Assessment complete' : 'Assessing documents'}</strong>
               <div style={{ display: 'grid', justifyItems: 'end', gap: 3 }}>
                 {!isFinished && (
-                  <LiveHeartbeatBars measuredAt={measuredAt} />
+                  <LiveHeartbeatBars measuredAt={measuredAt} stage="assess" />
                 )}
               <span role="status" style={{ fontSize: 11.5, padding: '2px 7px', borderRadius: 4,
                                             display: 'inline-flex', alignItems: 'center', gap: 5,
