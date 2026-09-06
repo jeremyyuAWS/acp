@@ -24,6 +24,12 @@ SC = "1.4.3"
 COMPLETE_METADATA = {f: f"{f}-value" for f in V.REQUIRED_METADATA}
 COMPLETE_METADATA.update({f: f"{f}-value" for f in V.ADVISORY_METADATA})
 COMPLETE_METADATA["product_version"] = "1.4.0"
+# `vpat_edition` is the one required field that is NOT prose: it names one of the four documents
+# ITI publishes, and each obliges the report to carry a different set of requirements. The generic
+# "<field>-value" placeholder above produced 'vpat_edition-value', which is not an edition — so
+# under the phase-6 gate this fixture described a report claiming a standard that does not exist,
+# and "a complete report" was not complete. See tests/test_acr_editions.py.
+COMPLETE_METADATA["vpat_edition"] = acr_catalog.EDITION_WCAG
 
 
 def _report(**kw):

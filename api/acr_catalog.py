@@ -52,6 +52,85 @@ NEEDS_REVIEW = "needs_review"
 DECIDED = "decided"
 WORKFLOW_STATES: frozenset[str] = frozenset({NOT_EVALUATED, NEEDS_REVIEW, DECIDED})
 
+# ── VPAT editions (PRD delivery phase 6) ──────────────────────────────────────────────────────
+#
+# ITI publishes VPAT 2.5Rev in four editions, and they are not four names for one document: each
+# obliges the report to carry a DIFFERENT set of requirements. The WCAG edition carries the WCAG
+# success criteria alone; 508 adds the Revised Section 508 chapters (302 functional performance,
+# 501-504 software, 601-602 support documentation); EU adds EN 301 549; INT carries all three.
+#
+# WHY THIS EXISTS AS A CLOSED VOCABULARY. `vpat_edition` was free text — required to be present,
+# never checked against anything, and read by nothing. Measured on 2026-09-06 against this repo at
+# c1dbe89c: a report whose author typed "VPAT 2.5Rev 508" projected `template.edition` =
+# "VPAT 2.5Rev 508" over 55 WCAG 2.2 A+AA rows and ZERO Section 508 chapter rows, with
+# `totals.total` = 55. The exported document declared itself the Section 508 edition and contained
+# none of Section 508. That is the "unsupported compliance claim" this product's problem statement
+# opens with, produced by the tool built to prevent it — and it went to a procurement file, where
+# PRD §17's reasoning applies: it cannot be recalled.
+#
+# So an edition is a CLAIM ABOUT CONTENT, and the claim is checked. The mapping below is what makes
+# it checkable; acr_validation turns it into a publication blocker.
+REQ_WCAG = "wcag-2.2-aa"
+REQ_SECTION_508 = "section-508"
+REQ_EN_301_549 = "en-301-549"
+
+EDITION_WCAG = "VPAT 2.5Rev WCAG"
+EDITION_508 = "VPAT 2.5Rev 508"
+EDITION_EU = "VPAT 2.5Rev EU"
+EDITION_INT = "VPAT 2.5Rev INT"
+
+EDITION_REQUIREMENT_SETS: dict[str, frozenset[str]] = {
+    EDITION_WCAG: frozenset({REQ_WCAG}),
+    EDITION_508: frozenset({REQ_WCAG, REQ_SECTION_508}),
+    EDITION_EU: frozenset({REQ_WCAG, REQ_EN_301_549}),
+    EDITION_INT: frozenset({REQ_WCAG, REQ_SECTION_508, REQ_EN_301_549}),
+}
+EDITIONS: frozenset[str] = frozenset(EDITION_REQUIREMENT_SETS)
+
+# Human-readable names for the requirement sets, for messages a report author has to act on.
+REQUIREMENT_SET_NAMES = {
+    REQ_WCAG: "WCAG 2.2 Level A and AA",
+    REQ_SECTION_508: "Revised Section 508 (chapters 3-6)",
+    REQ_EN_301_549: "EN 301 549",
+}
+
+
+def requirement_sets_available() -> frozenset[str]:
+    """The requirement sets this deployment can actually populate a matrix from.
+
+    Derived from the catalogs that exist, NOT from the editions we would like to offer — which is
+    the whole point. Today `config/wcag-2.2-aa.json` is the only catalog in the repo, so only the
+    WCAG edition can be honestly produced, and `missing_requirement_sets` refuses the other three
+    rather than emitting a document that names a standard it does not contain.
+
+    When a Section 508 catalog lands this returns one more member and the 508 edition becomes
+    offerable with no other change — the gate opens because the content arrived, which is the
+    ordering that keeps the claim true.
+    """
+    return frozenset({REQ_WCAG})
+
+
+def missing_requirement_sets(edition: str | None) -> frozenset[str]:
+    """Requirement sets `edition` obliges the report to carry that this deployment cannot supply.
+
+    Empty means the edition is honestly producible. An unknown edition is not this function's
+    business — `edition_known` answers that; conflating "misspelled" with "not yet built" would
+    give a report author one message for two different problems.
+    """
+    required = EDITION_REQUIREMENT_SETS.get(edition or "", frozenset())
+    return frozenset(required - requirement_sets_available())
+
+
+def edition_known(edition: str | None) -> bool:
+    """Is this one of the four editions ITI publishes?"""
+    return (edition or "") in EDITIONS
+
+
+def offerable_editions() -> list[str]:
+    """The editions a report can be created as today, in ITI's own order."""
+    return [e for e in (EDITION_WCAG, EDITION_508, EDITION_EU, EDITION_INT)
+            if not missing_requirement_sets(e)]
+
 
 @functools.lru_cache(maxsize=1)
 def _load() -> dict:

@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 
 import acr_freshness
 import acr_rules
+import acr_catalog
 from acr_catalog import (DECIDED, FINAL_STATUSES, NOT_EVALUATED, REMARKS_REQUIRED, SUPPORTS)
 
 # PRD §15's nine blocker categories, verbatim in intent.
@@ -30,6 +31,10 @@ CATEGORY_UNRESOLVED_FAILURE = "unresolved_failure_behind_supports"
 CATEGORY_INCOMPLETE_METADATA = "incomplete_metadata"
 CATEGORY_INCOMPLETE_MANUAL_PLAN = "incomplete_manual_test_plan"
 CATEGORY_UNAPPROVED = "unapproved_criterion"
+# PRD delivery phase 6. Not one of §15's original nine: those all ask "is this report finished?",
+# and this one asks "is the report the document it says it is?" — a report can be complete by every
+# other measure and still name a standard whose requirements it does not contain.
+CATEGORY_EDITION_MISMATCH = "edition_mismatch"
 
 CATEGORY_LABELS = {
     CATEGORY_MISSING_DECISION: "Missing decision",
@@ -41,6 +46,7 @@ CATEGORY_LABELS = {
     CATEGORY_INCOMPLETE_METADATA: "Incomplete metadata",
     CATEGORY_INCOMPLETE_MANUAL_PLAN: "Incomplete manual test plan",
     CATEGORY_UNAPPROVED: "Unapproved criterion",
+    CATEGORY_EDITION_MISMATCH: "Edition claims requirements the report does not contain",
 }
 
 # PRD §8's report metadata. Every one of these must be present to publish — §21.15 ("The report
@@ -102,6 +108,29 @@ def validate(report: dict, criteria: list[dict], evidence_by_criterion: dict[str
                                f"{fieldname.replace('_', ' ')} is empty — confirm this is "
                                f"intentional",
                                blocking=False))
+
+    # ── The edition is a claim about content, not a label (PRD phase 6) ───────────────────────
+    #
+    # Checked here rather than only at the route because the route guards the WAY IN, and this is
+    # the last gate before a document reaches somebody's procurement file. A report created before
+    # the route learned to refuse — or restored, imported, or migrated — reaches publication with
+    # whatever string it has, and the check that matters is the one standing at the exit.
+    edition = str(report.get("vpat_edition") or "").strip()
+    if edition and not acr_catalog.edition_known(edition):
+        out.append(Blocker(
+            CATEGORY_EDITION_MISMATCH,
+            f"{edition!r} is not a VPAT 2.5Rev edition. ITI publishes four: "
+            + ", ".join(sorted(acr_catalog.EDITIONS))))
+    elif edition:
+        absent = acr_catalog.missing_requirement_sets(edition)
+        if absent:
+            names = ", ".join(sorted(acr_catalog.REQUIREMENT_SET_NAMES.get(r, r) for r in absent))
+            out.append(Blocker(
+                CATEGORY_EDITION_MISMATCH,
+                f"this report is the {edition} edition, which must carry {names} — and this "
+                f"deployment has no catalog for it, so those requirements are absent from every "
+                f"table. Publishing would name a standard the document does not contain.",
+                detail={"edition": edition, "missing_requirement_sets": sorted(absent)}))
 
     all_evidence = [e for rows in evidence_by_criterion.values() for e in rows]
     stale_map = acr_freshness.evaluate(report, all_evidence, changed_workflows=changed_workflows,

@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { patchAcrReport } from './acrApi'
+import { useEffect, useState } from 'react'
+import { getAcrEditions, patchAcrReport } from './acrApi'
 
 // PRD §8's report metadata — the 21 fields a report needs before it can publish (§16:
 // "Publication must fail if required information is missing").
@@ -37,6 +37,15 @@ const GROUPS = [
 // for prose ("evaluation methods", "excluded functionality") and a constrained widget would
 // invite a shorter answer than the field is for.
 const DATE_FIELDS = new Set(['release_date', 'testing_period_start', 'testing_period_end'])
+
+// `vpat_edition` is the exception to the free-text rule above, and the reason is not tidiness.
+// It names one of the four documents ITI publishes, and each obliges the report to carry a
+// DIFFERENT set of requirements — so as free text it let an author type "VPAT 2.5Rev 508" onto a
+// report containing 55 WCAG rows and no Section 508 chapter at all, and the export said so on its
+// face. A select cannot express that claim. The options come from the server (see acrApi) because
+// which editions are producible depends on which requirement catalogs the build ships, which the
+// browser has no way to know.
+const EDITION_FIELD = 'vpat_edition'
 const LONG_FIELDS = new Set(['product_description', 'evaluation_scope', 'excluded_functionality',
                              'evaluation_methods', 'general_notes', 'known_dependencies'])
 
@@ -48,6 +57,18 @@ export default function AcrMetadataForm({ report, blockingFields, advisoryFields
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState(null)
   const [status, setStatus] = useState('')
+  const [editions, setEditions] = useState(null)
+
+  // Null until it answers, and the field stays a plain text input meanwhile rather than becoming
+  // an empty select — a select with no options cannot show the value the report already has, so
+  // failing this fetch must not erase what is on screen.
+  useEffect(() => {
+    let live = true
+    getAcrEditions()
+      .then((res) => { if (live) setEditions(res.editions || []) })
+      .catch(() => { if (live) setEditions(null) })
+    return () => { live = false }
+  }, [])
 
   const value = (f) => (f in draft ? draft[f] : (report?.[f] ?? '')) ?? ''
   const dirty = Object.keys(draft).length
@@ -101,9 +122,29 @@ export default function AcrMetadataForm({ report, blockingFields, advisoryFields
                   {isBlocking && <span aria-hidden="true"> *</span>}
                   {isBlocking && <span className="sr-only"> (required)</span>}
                 </label>
-                {LONG_FIELDS.has(f)
-                  ? <textarea {...common} rows={3} />
-                  : <input type={DATE_FIELDS.has(f) ? 'date' : 'text'} {...common} />}
+                {f === EDITION_FIELD && editions
+                  ? (
+                    <select {...common}>
+                      {/* An edition the server will not produce is rendered DISABLED rather than
+                          omitted. Omitting it would make an unavailable edition look like one
+                          nobody thought of; disabled with its reason says "this exists, and this
+                          build cannot honestly produce it yet". */}
+                      {editions.map((e) => (
+                        <option key={e.edition} value={e.edition} disabled={!e.offered}>
+                          {e.edition}{e.offered ? '' : ' — not available in this build'}
+                        </option>
+                      ))}
+                      {/* A stored value outside the list (a report predating this control) stays
+                          selectable so the form shows what the report actually says. The publish
+                          gate is what refuses it, and it names the standard that is missing. */}
+                      {value(f) && !editions.some((e) => e.edition === value(f)) && (
+                        <option value={value(f)}>{value(f)} — not a VPAT 2.5Rev edition</option>
+                      )}
+                    </select>
+                  )
+                  : LONG_FIELDS.has(f)
+                    ? <textarea {...common} rows={3} />
+                    : <input type={DATE_FIELDS.has(f) ? 'date' : 'text'} {...common} />}
                 {isBlocking && (
                   <p id={hint} className="acr-refusal">Required before this report can publish.</p>
                 )}
