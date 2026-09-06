@@ -12,7 +12,7 @@ import {
   revisionComparisonModel,
   arcPath, capacityMatchesService, chartModel,
   capacityForService, componentState, defaultMetricFor, eventClock, eventsForNode, filterEvents,
-  formatDuration, secondsSince,
+  formatDuration, num, secondsSince,
   REPLICA_STATES, gaugeModel, metricGroups, nodeTypeLabel, outputModel, provenance, queueModel,
   THROUGHPUT_SERIES, replicaLifecycle, reported, requestHealth, saturationModel, scaleEvents,
   replicaJobLoad, scaleExplanation, throughputModel, tracingModel, workerJobHealth,
@@ -112,11 +112,28 @@ function LiveHeader({ name, kind, state, connection, generatedAt, revision, nowM
 
 function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queueDepth, placement }) {
   if (!gauge.available) {
-    return <div style={{ ...PANEL, padding: 14 }} role="status">
-      <b>Worker utilization unavailable</b>
-      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{gauge.reason}</div>
+    const lifecycle = replicaLifecycle(capacity, service)
+    return <section aria-label="Worker slot utilization" style={{ ...PANEL, padding: 14 }}>
+      <div role="status" style={{ paddingBottom: 2 }}>
+        <b>Worker utilization unavailable</b>
+        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{gauge.reason}</div>
+        <p className="muted" style={{ fontSize: 11, margin: '5px 0 0' }}>
+          Capacity is unavailable; ACP activity and Azure observations below remain visible.
+        </p>
+      </div>
+      {/* Missing slot telemetry must not erase durable work. These panels come from job claims,
+          heartbeats and Azure respectively, and remain truthful even when no utilization ratio
+          can be calculated. */}
+      <JobHealth health={health} />
       <WorkerTelemetrySignals service={service} />
-    </div>
+      <ScalingActivity capacity={capacity} saturation={saturation} queueDepth={queueDepth}
+        lifecycle={lifecycle} nowMs={nowMs} />
+      <ReplicaJobLoad load={placement} />
+      <WorkerReplicaTable replicas={service?.instances} nowMs={nowMs} />
+      <ProvisioningTimeline timeline={provisioningTimeline(lifecycle)} />
+      <ReplicaLifecycle lifecycle={lifecycle} nowMs={nowMs} measuredAt={capacity?.measured_at} />
+      <AzureMetrics capacity={capacity} service={service} nowMs={nowMs} />
+    </section>
   }
   const color = TONE[gauge.tone]
   return <section aria-label="Worker slot utilization" style={{ ...PANEL, padding: 14 }}>
@@ -222,9 +239,10 @@ function WorkerReplicaTable({ replicas, nowMs }) {
     </p>}
     <ul style={{ listStyle: 'none', margin: '8px 0 0', padding: 0, display: 'grid', gap: 6 }}>
       {shown.map((replica) => {
-        const slots = Number(replica.concurrency_limit || 0)
-        const active = Math.min(slots, Number(replica.active_job_count || 0))
-        const processes = Number(replica.process_count || 1)
+        const slots = num(replica.concurrency_limit)
+        const reportedActive = num(replica.active_job_count)
+        const active = slots == null || reportedActive == null ? null : Math.min(slots, reportedActive)
+        const processes = num(replica.process_count)
         return <li key={replica.replica_id || replica.worker_id} style={{ ...PANEL, padding: 9 }}>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
             <b style={{ overflowWrap: 'anywhere' }}>{replica.replica_id || 'Replica identity unavailable'}</b>
@@ -236,7 +254,12 @@ function WorkerReplicaTable({ replicas, nowMs }) {
             </span>
           </div>
           <div className="muted" style={{ marginTop: 4, fontSize: 11 }}>
-            {processes} worker {processes === 1 ? 'process' : 'processes'} · {active} of {slots} slots busy
+            {processes == null ? 'Worker processes not reported'
+              : `${processes} worker ${processes === 1 ? 'process' : 'processes'}`}
+            {' · '}
+            {slots == null ? 'Slot capacity not reported'
+              : active == null ? `${slots} slots · busy count not reported`
+                : `${active} of ${slots} slots busy`}
             {replica.revision_name ? ` · ${replica.revision_name}` : ''}
             {replica.software_version ? ` · version ${replica.software_version}` : ''}
           </div>
