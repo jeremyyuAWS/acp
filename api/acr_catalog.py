@@ -103,20 +103,26 @@ def requirement_sets_available() -> frozenset[str]:
     offer — which is the whole point. `missing_requirement_sets` refuses an edition this returns
     nothing for, rather than emitting a document that names a standard it does not contain.
 
-    STILL WCAG-ONLY, THOUGH THE 508 CATALOG NOW EXISTS, and the distinction is the reason this
-    function is worth reading twice. An earlier version of this docstring said that landing a
-    Section 508 catalog would return one more member "with no other change". That is not true, and
-    acting on it would recreate the exact defect #1532 fixed: `build_matrix` reads
-    `config/wcag-2.2-aa.json` and nothing else, and `acr_export_preview` sorts rows by WCAG
-    principle, so a 508 report would still project 55 WCAG rows and zero Section 508 rows — while
-    now claiming a catalog backed it.
+    SECTION 508 IS IN, AND WHAT IT TOOK IS THE POINT. Three things have to exist before an edition
+    can be offered honestly, and this function was held at WCAG-only until all three did:
 
-    Populating a matrix takes three things, and the catalog is one: the requirements, a matrix
-    builder that emits their rows, and a projection that renders them in their own chapters. This
-    returns REQ_SECTION_508 when the other two land, not before. `section_508_requirements()` is
-    reachable meanwhile, so the catalog is testable rather than inert.
+      the requirements     config/section-508.json, from 36 CFR 1194 Appendix C     (6.1)
+      a matrix builder     build_matrix(report_id, edition) emitting their rows      (6.2)
+      a projection         acr_export_preview._section_508, rendered in every export (6.3)
+
+    An earlier docstring said the catalog alone would be enough, "with no other change". It would
+    not: `build_matrix` read `config/wcag-2.2-aa.json` and nothing else, and the projection sorted
+    by WCAG principle, so a 508 report would have carried 55 WCAG rows and zero Section 508 rows —
+    the exact defect #1532 fixed, now with a catalog appearing to back the claim.
+
+    EN 301 549 stays out, and not for want of a decision here: it is a separate requirement set
+    whose source cannot simply be vendored the way a US federal regulation can. The EU and INT
+    editions are refused until that is answered and its catalog lands.
     """
-    return frozenset({REQ_WCAG})
+    available = {REQ_WCAG}
+    if _SECTION_508_PATH.exists():
+        available.add(REQ_SECTION_508)
+    return frozenset(available)
 
 
 def missing_requirement_sets(edition: str | None) -> frozenset[str]:

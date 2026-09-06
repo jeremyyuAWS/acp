@@ -34,7 +34,8 @@ from __future__ import annotations
 import html
 import json
 
-from acr_catalog import FINAL_STATUSES, WORKFLOW_STATES
+import acr_catalog
+from acr_catalog import FINAL_STATUSES, REQ_SECTION_508, REQ_WCAG, WORKFLOW_STATES
 
 # Rendered where a conformance level would go for a criterion nobody has decided yet. NOT one of
 # the four VPAT terms, and deliberately not word-shaped like one — a preview reader must be unable
@@ -79,17 +80,17 @@ def project(report: dict, criteria: list[dict], *, evidence_by_criterion: dict[s
     ev = evidence_by_criterion or {}
     stale = stale_ids or set()
 
-    rows = []
-    for c in sorted(criteria, key=lambda r: (_PRINCIPLE_ORDER.get(r.get("principle"), 9),
-                                             _sortkey(r["criterion_num"]))):
+    def _row(c: dict) -> dict:
         crit_ev = ev.get(c["criterion_num"], [])
         live = [e for e in crit_ev if getattr(e, "id", None) not in stale]
-        rows.append({
+        return {
             "criterion_num": c["criterion_num"],
             "criterion_name": c.get("criterion_name"),
             "level": c.get("level"),
             "principle": c.get("principle"),
             "guideline": c.get("guideline"),
+            "requirement_set": c.get("requirement_set") or REQ_WCAG,
+            "chapter": c.get("chapter"),
             "conformance_level": _conformance_cell(c),
             "remarks": c.get("remarks") or "",
             "decided": bool(c.get("final_status")),
@@ -100,7 +101,18 @@ def project(report: dict, criteria: list[dict], *, evidence_by_criterion: dict[s
             "reviewer": c.get("reviewer"),
             "evidence_live": len(live),
             "evidence_stale": len(crit_ev) - len(live),
-        })
+        }
+
+    # A row with no requirement_set is a WCAG row: every matrix built before Phase 6 was WCAG-only,
+    # because build_matrix could read no other catalog. Defaulting rather than raising keeps a
+    # report published then readable now, which PRD §17 requires of anything already issued.
+    wcag = [c for c in criteria if (c.get("requirement_set") or REQ_WCAG) == REQ_WCAG]
+    five_oh_eight = [c for c in criteria if c.get("requirement_set") == REQ_SECTION_508]
+
+    rows = [_row(c) for c in sorted(wcag, key=lambda r: (_PRINCIPLE_ORDER.get(r.get("principle"), 9),
+                                                         _sortkey(r["criterion_num"])))]
+    section_508 = _section_508(
+        [_row(c) for c in sorted(five_oh_eight, key=lambda r: _sortkey(r["criterion_num"]))])
 
     return {
         "template": {
@@ -119,6 +131,49 @@ def project(report: dict, criteria: list[dict], *, evidence_by_criterion: dict[s
             "testing_period_end", "evaluators", "approver", "general_notes",
             "known_dependencies", "status", "published_at", "catalog_hash", "revision")},
         "criteria": rows,
+        # Present only when the report actually carries Section 508 rows, so a WCAG report's
+        # projection is byte-identical to what it was before Phase 6 and a renderer written
+        # against it cannot accidentally print an empty "Revised Section 508 Report" heading.
+        **({"section_508": section_508} if section_508 else {}),
+        # Over EVERY row the report contains, not just the WCAG table's. Identical to the old
+        # value for a WCAG-only report; for a 508 report, a total that counted 55 of 175 rows
+        # would be the understatement PRD §4.4 exists to prevent.
+        "totals": _totals(rows + [r for ch in (section_508 or {}).get("chapters", [])
+                                  for r in ch["rows"]]),
+    }
+
+
+def _section_508(rows: list[dict]) -> dict | None:
+    """The Section 508 rows grouped into the chapters a VPAT's 508 report is organised by.
+
+    Grouped rather than left flat because the chapters are the document's structure: ITI's 508
+    edition prints Chapter 3 (functional performance), 4 (hardware), 5 (software) and 6 (support
+    documentation) as separate tables, and a flat list would have to be regrouped identically by
+    each of the three renderers.
+
+    Chapter NAMES come from the catalog rather than the stored row. They are regulation text and do
+    not drift, and a row stores its chapter NUMBER — which is the durable half. A chapter the
+    catalog does not name still renders, under its number, rather than vanishing.
+    """
+    if not rows:
+        return None
+    names = {}
+    try:
+        names = {k: v.get("name") for k, v in acr_catalog.section_508_meta()["chapters"].items()}
+    except (FileNotFoundError, KeyError, ValueError):  # pragma: no cover — catalog absent
+        names = {}
+    chapters: list[dict] = []
+    for num in sorted({r["chapter"] for r in rows if r["chapter"]}, key=int):
+        in_chapter = [r for r in rows if r["chapter"] == num]
+        chapters.append({
+            "num": num,
+            "name": names.get(num) or f"Chapter {num}",
+            "rows": in_chapter,
+            "totals": _totals(in_chapter),
+        })
+    return {
+        "citation": "36 CFR Part 1194, Appendix C (Revised Section 508 Standards)",
+        "chapters": chapters,
         "totals": _totals(rows),
     }
 
@@ -181,6 +236,7 @@ def to_html(projection: dict) -> str:
 
     t = projection["totals"]
     totals = ", ".join(f"{e(k)}: {v}" for k, v in t.items())
+    section_508 = _section_508_html(projection, e)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -212,6 +268,46 @@ def to_html(projection: dict) -> str:
   </thead>
   <tbody>{body_rows}</tbody>
 </table>
-</body>
+{section_508}</body>
 </html>
 """
+
+
+def _section_508_html(projection: dict, e) -> str:
+    """The Revised Section 508 Report — one table per chapter, or nothing at all.
+
+    No Level column: a 508 requirement has no WCAG conformance level, and an empty column under
+    that heading would read as an omission rather than as a category error. The chapters are
+    separate tables, each with its own <caption>, because that is how the standard is organised and
+    because a 200-row single table is unusable with a screen reader.
+    """
+    section = projection.get("section_508")
+    if not section:
+        return ""
+    out = [f'<h2>Revised Section 508 Report</h2>\n'
+           f'<p>Requirements from {e(section["citation"])}. '
+           f'{e(", ".join(f"{k}: {v}" for k, v in section["totals"].items()))}</p>\n']
+    for chapter in section["chapters"]:
+        body = ""
+        for r in chapter["rows"]:
+            draft = ""
+            if not r["decided"] and r["draft_status"]:
+                draft = (f"<br><span class='draft'>ACP draft suggestion (not a decision): "
+                         f"{e(r['draft_status'])}</span>")
+            stale = ""
+            if r["evidence_stale"]:
+                stale = (f"<br><span class='stale'>{r['evidence_stale']} stale evidence record(s), "
+                         f"retained for audit history</span>")
+            body += (f'<tr><th scope="row">{e(r["criterion_num"])} '
+                     f'{e(r["criterion_name"] or "")}</th>'
+                     f"<td>{e(r['conformance_level'])}{draft}</td>"
+                     f"<td>{e(r['remarks'])}{stale}</td></tr>")
+        counts = ", ".join(f"{k}: {v}" for k, v in chapter["totals"].items())
+        out.append(
+            f'<table>\n  <caption>Chapter {e(chapter["num"])}: {e(chapter["name"])} — '
+            f'{e(counts)}</caption>\n'
+            f'  <thead>\n    <tr><th scope="col">Criteria</th>'
+            f'<th scope="col">Conformance Level</th>'
+            f'<th scope="col">Remarks and Explanations</th></tr>\n  </thead>\n'
+            f'  <tbody>{body}</tbody>\n</table>\n')
+    return "".join(out)

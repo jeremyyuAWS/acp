@@ -56,9 +56,12 @@ def test_the_editions_route_says_which_are_offered_and_what_is_missing(client):
     by_name = {e["edition"]: e for e in client.get("/acr/editions").json()["editions"]}
     assert by_name["VPAT 2.5Rev WCAG"]["offered"] is True
     assert by_name["VPAT 2.5Rev WCAG"]["missing"] == []
-    assert by_name["VPAT 2.5Rev 508"]["offered"] is False
-    assert by_name["VPAT 2.5Rev 508"]["missing"] == ["section-508"]
-    assert by_name["VPAT 2.5Rev INT"]["missing"] == ["en-301-549", "section-508"]
+    assert by_name["VPAT 2.5Rev 508"]["offered"] is True
+    assert by_name["VPAT 2.5Rev 508"]["missing"] == []
+    assert by_name["VPAT 2.5Rev EU"]["offered"] is False
+    assert by_name["VPAT 2.5Rev EU"]["missing"] == ["en-301-549"]
+    # INT obliges all three sets; only the one genuinely absent is named.
+    assert by_name["VPAT 2.5Rev INT"]["missing"] == ["en-301-549"]
 
 
 def test_a_new_report_defaults_to_the_wcag_edition(client):
@@ -66,11 +69,29 @@ def test_a_new_report_defaults_to_the_wcag_edition(client):
     assert client.get(f"/acr/{rid}").json()["report"]["vpat_edition"] == "VPAT 2.5Rev WCAG"
 
 
-def test_creating_a_508_report_is_refused_and_says_what_is_absent(client):
+def test_creating_a_508_report_is_allowed_and_carries_the_508_rows(client):
+    """The other side of #1532: it refused this edition because the rows did not exist. They do.
+
+    Asserted through HTTP and by COUNT rather than by the edition string, because the string is
+    the claim and the rows are what make it true — 55 WCAG criteria plus 120 Section 508
+    requirements from 36 CFR 1194 Appendix C.
+    """
     r = client.post("/acr", json={"product_version": "1.4.0",
                                   "metadata": {"vpat_edition": "VPAT 2.5Rev 508"}})
+    assert r.status_code == 200, r.text
+    rid = r.json()["report_id"]
+    rows = client.get(f"/acr/{rid}/criteria").json()["criteria"]
+    by_set = {}
+    for row in rows:
+        by_set[row["requirement_set"]] = by_set.get(row["requirement_set"], 0) + 1
+    assert by_set == {"wcag-2.2-aa": 55, "section-508": 120}
+
+
+def test_creating_an_eu_report_is_refused_and_says_what_is_absent(client):
+    r = client.post("/acr", json={"product_version": "1.4.0",
+                                  "metadata": {"vpat_edition": "VPAT 2.5Rev EU"}})
     assert r.status_code == 400, r.text
-    assert "Section 508" in r.json()["detail"]
+    assert "EN 301 549" in r.json()["detail"]
     assert "VPAT 2.5Rev WCAG" in r.json()["detail"]   # what they CAN pick
 
 
