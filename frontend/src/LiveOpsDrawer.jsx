@@ -1277,14 +1277,20 @@ function RunTrouble({ trouble }) {
 /** Explicit, stage-scoped operator recovery. The second click is intentional: stopping a live
  * cross-user workflow must never be a one-click accident, and the copy says exactly what will
  * continue. Running work cooperates at its next checkpoint; queued work stops immediately. */
-function RunRecovery({ run, onCancel, onResume }) {
+function RunRecovery({ run, onCancel, onResume, onRecover }) {
   const [confirming, setConfirming] = useState(null)
   const [state, setState] = useState({ kind: 'idle', message: '' })
   const stage = String(run?.stage || '').toLowerCase()
   const active = run?.status === 'active' && (Number(run?.queued || 0) + Number(run?.running || 0) > 0)
-  const canCancel = active && ['assess', 'remediate', 'release'].includes(stage) && onCancel
+  const canCancel = active && ['discover', 'assess', 'remediate', 'release'].includes(stage) && onCancel
   const canResume = stage === 'remediate' && run?.paused === true && onResume
-  if (!canCancel && !canResume && state.kind === 'idle') return null
+  const canRecover = run?.status === 'failed' && ['assess', 'remediate', 'release'].includes(stage) && onRecover
+  const actionFinished = state.kind === 'done'
+  useEffect(() => {
+    setConfirming(null)
+    setState({ kind: 'idle', message: '' })
+  }, [run?.scan_id, stage])
+  if (!canCancel && !canResume && !canRecover && state.kind === 'idle') return null
 
   const act = async (kind) => {
     const action = kind === 'cancel' ? onCancel : onResume
@@ -1303,18 +1309,24 @@ function RunRecovery({ run, onCancel, onResume }) {
 
   return <div style={{ ...PANEL, marginTop: 10, borderColor: confirming ? TONE.warn : 'var(--line)' }}>
     <span style={LABEL}>OPERATOR RECOVERY</span>
-    {canResume && <button type="button" className="ghost small" disabled={state.kind === 'working'}
+    {canRecover && <button type="button" className="ghost small" onClick={() => onRecover(run)}>
+      {stage === 'remediate' ? 'Open remediation exceptions' : `Open ${stage} recovery`}
+    </button>}
+    {canResume && <button type="button" className="ghost small" disabled={state.kind === 'working' || actionFinished}
+      style={{ marginLeft: canRecover ? 7 : 0 }}
       onClick={() => confirming === 'resume' ? act('resume') : setConfirming('resume')}>
       {confirming === 'resume' ? 'Confirm resume' : 'Resume remediation'}
     </button>}
-    {canCancel && <button type="button" className="ghost small" disabled={state.kind === 'working'}
-      style={{ marginLeft: canResume ? 7 : 0 }}
+    {canCancel && <button type="button" className="ghost small" disabled={state.kind === 'working' || actionFinished}
+      style={{ marginLeft: canResume || canRecover ? 7 : 0 }}
       onClick={() => confirming === 'cancel' ? act('cancel') : setConfirming('cancel')}>
       {confirming === 'cancel' ? `Confirm stop ${stage}` : `Stop ${stage} stage`}
     </button>}
     {confirming && <div role="alert" style={{ marginTop: 8, fontSize: 12 }}>
       {confirming === 'cancel'
-        ? 'Waiting jobs stop immediately. Running work stops cooperatively at its next safe checkpoint. Other workflow stages are not changed.'
+        ? stage === 'discover'
+          ? 'This stops the active discovery and preserves everything already found. Downstream completed work is not removed.'
+          : 'Waiting jobs stop immediately. Running work stops cooperatively at its next safe checkpoint. Other workflow stages are not changed.'
         : 'This releases only remediation jobs held by the durable pause control.'}
       <button type="button" className="ghost small" style={{ marginLeft: 7 }}
         onClick={() => setConfirming(null)}>Keep current state</button>
@@ -1346,7 +1358,7 @@ function RunCoverage({ coverage }) {
 }
 
 function RunRadial({ model, run, accent, pipeline, flow, timing, trouble, coverage, nowMs,
-  onCancelStage, onResumeStage }) {
+  onCancelStage, onResumeStage, onRecover }) {
   const radius = 46
   const circumference = 2 * Math.PI * radius
   const dash = model.total ? circumference * model.fraction : 0
@@ -1399,7 +1411,7 @@ function RunRadial({ model, run, accent, pipeline, flow, timing, trouble, covera
       past {formatDuration(timing.staleThresholdS)}. The job is still claimed, so nothing else can pick it up.
     </p>}
     <RunTrouble trouble={trouble} />
-    <RunRecovery run={run} onCancel={onCancelStage} onResume={onResumeStage} />
+    <RunRecovery run={run} onCancel={onCancelStage} onResume={onResumeStage} onRecover={onRecover} />
     <RunPipeline pipeline={pipeline} />
     <RunCoverage coverage={coverage} />
   </section>
@@ -1798,7 +1810,7 @@ function OperationalFacts({ groups }) {
 
 export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connection = 'connecting',
   samples = [], events = [], facts = [], accent = 'var(--plum)', onClose, onCancelStage,
-  onResumeStage, nowMs = Date.now() }) {
+  onResumeStage, onRecover, nowMs = Date.now() }) {
   const panelRef = useRef(null)
   const [metricKey, setMetricKey] = useState(() => defaultMetricFor(node?.kind))
   const [filter, setFilter] = useState('all')
@@ -1859,7 +1871,7 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
       timing={runTiming(node.run || {}, { nowMs })}
       trouble={runTrouble(node.run || {})}
       coverage={runCoverage(node.run || {})}
-      onCancelStage={onCancelStage} onResumeStage={onResumeStage}
+      onCancelStage={onCancelStage} onResumeStage={onResumeStage} onRecover={onRecover}
       pipeline={runStagePipeline(node.run?.scan_id, snapshot)} />
   } else if (node?.kind === 'intake') {
     primary = <><IntakeSummary snapshot={snapshot} state={state} />

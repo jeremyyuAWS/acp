@@ -163,3 +163,19 @@ def test_operator_cancel_rejects_a_stage_that_is_already_terminal(isolated_store
         isolated_store.complete_job(job_id, **_hold(isolated_store, job_id))
     assert isolated_store.request_stage_cancel("stage-scan", "assess") == {
         "found": False, "cancelled": 0, "requested": 0}
+
+
+def test_operator_cancel_audits_the_real_actor_without_document_payload(isolated_store):
+    _scan(isolated_store)
+    execution = _execution(isolated_store)
+    isolated_store.request_stage_cancel(
+        "stage-scan", "assess", actor="admin@example.org")
+    events = isolated_store.list_orchestration_events(
+        owner_email="owner@example.com", scan_id="stage-scan",
+        kind="workflow.stage_cancel_requested")
+    assert len(events) == 1
+    assert events[0]["correlation_id"] == execution["batch_id"]
+    assert events[0]["detail"] == {
+        "requested_by": "admin@example.org", "waiting_cancelled": 2,
+        "running_requested": 0, "stage_execution_id": execution["batch_id"]}
+    assert "a.docx" not in str(events[0])

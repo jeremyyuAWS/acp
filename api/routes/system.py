@@ -1839,11 +1839,36 @@ def admin_activity(request: Request, response: Response):
 def cancel_workflow_stage(scan_id: str, stage: str, request: Request):
     """Platform-admin recovery action: stop only the selected workflow stage."""
     _require_admin(request)
-    if stage not in ("assess", "remediate", "release"):
+    if stage not in ("discover", "assess", "remediate", "release"):
         raise HTTPException(400, "this stage cannot be cancelled here")
-    if core.store.get_scan(scan_id) is None:
+    scan = core.store.get_scan(scan_id)
+    if scan is None:
         raise HTTPException(404, "workflow not found")
-    result = core.store.request_stage_cancel(scan_id, stage)
+    actor = str(getattr(request.state, "user_email", "") or "").strip().lower()
+    if stage == "discover":
+        if not core.store.cancel_scan(scan_id):
+            raise HTTPException(409, "no active discovery execution was found")
+        core.store._update_workflow_stage(scan_id, "discover", "cancelled")
+        owner = core.store._stage_owner(scan_id)
+        if owner:
+            document_count = scan.get("files")
+            if not isinstance(document_count, (int, float)):
+                document_count = (scan.get("summary") or {}).get("files", 0)
+            core.store.append_orchestration_event(
+                event_id=core.store._stage_event_id(
+                    scan_id, "discover", f"{scan_id}:discover", "cancelled"),
+                owner_email=owner, kind="job.stage_cancelled", scan_id=scan_id,
+                workflow=scan_id, stage="discover", correlation_id=f"{scan_id}:discover",
+                error_class="cancelled",
+                detail={"documents": int(document_count or 0), "cancelled": 1,
+                        "stage_execution_id": f"{scan_id}:discover"})
+            core.store.append_orchestration_event(
+                owner_email=owner, kind="workflow.stage_cancel_requested", scan_id=scan_id,
+                workflow=scan_id, stage="discover", correlation_id=f"{scan_id}:discover",
+                detail={"requested_by": actor, "scope": "active discovery"})
+        return {"workflow_id": scan_id, "stage": stage, "found": True,
+                "cancelled": 1, "requested": 0}
+    result = core.store.request_stage_cancel(scan_id, stage, actor=actor)
     if not result.get("found"):
         raise HTTPException(409, "no durable stage execution was found")
     return {"workflow_id": scan_id, "stage": stage, **result}
@@ -1855,7 +1880,16 @@ def resume_workflow_remediation(scan_id: str, request: Request):
     _require_admin(request)
     if core.store.get_scan(scan_id) is None:
         raise HTTPException(404, "workflow not found")
-    result = core.store.resume_remediation_run(scan_id, actor="platform-admin")
+    if not core.store.remediation_run_paused(scan_id):
+        raise HTTPException(409, "remediation is not paused")
+    actor = str(getattr(request.state, "user_email", "") or "").strip().lower()
+    result = core.store.resume_remediation_run(scan_id, actor=actor)
+    owner = core.store._stage_owner(scan_id)
+    if owner:
+        core.store.append_orchestration_event(
+            owner_email=owner, kind="workflow.stage_resumed", scan_id=scan_id,
+            workflow=scan_id, stage="remediate", correlation_id=scan_id,
+            detail={"requested_by": actor, "released": result.get("released", 0)})
     return {"workflow_id": scan_id, "stage": "remediate", "paused": False, **result}
 
 

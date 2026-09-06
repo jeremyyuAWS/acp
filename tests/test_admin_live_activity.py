@@ -99,32 +99,68 @@ def test_live_activity_read_still_rejects_anonymous_users():
 def test_live_ops_cancel_is_admin_gated_and_stage_scoped(monkeypatch):
     calls = []
     monkeypatch.setattr(system, "_require_admin", lambda request: calls.append(("guard", request)))
-    monkeypatch.setattr(system.core.store, "get_scan", lambda scan_id: {"_scan_id": scan_id})
+    monkeypatch.setattr(system.core.store, "get_scan",
+                        lambda scan_id: {"_scan_id": scan_id, "files": 4})
     monkeypatch.setattr(system.core.store, "request_stage_cancel",
-                        lambda scan_id, stage: {"found": True, "batch_id": "b1",
-                                                "cancelled": 3, "requested": 1})
+                        lambda scan_id, stage, actor: {"found": True, "batch_id": "b1",
+                                                       "cancelled": 3, "requested": 1,
+                                                       "actor": actor})
     request = _Request("admin@example.org")
     result = system.cancel_workflow_stage("scan-1", "assess", request)
     assert calls == [("guard", request)]
     assert result == {"workflow_id": "scan-1", "stage": "assess", "found": True,
-                      "batch_id": "b1", "cancelled": 3, "requested": 1}
+                      "batch_id": "b1", "cancelled": 3, "requested": 1,
+                      "actor": "admin@example.org"}
 
 
-def test_live_ops_cancel_refuses_non_cancellable_stage(monkeypatch):
+def test_live_ops_discover_cancel_uses_the_existing_whole_scan_stop(monkeypatch):
+    monkeypatch.setattr(system, "_require_admin", lambda request: None)
+    monkeypatch.setattr(system.core.store, "get_scan", lambda scan_id: {"_scan_id": scan_id})
+    monkeypatch.setattr(system.core.store, "cancel_scan", lambda scan_id: True)
+    workflow_updates = []
+    monkeypatch.setattr(system.core.store, "_update_workflow_stage",
+                        lambda *args: workflow_updates.append(args))
+    monkeypatch.setattr(system.core.store, "_stage_owner", lambda scan_id: "owner@example.org")
+    events = []
+    monkeypatch.setattr(system.core.store, "append_orchestration_event",
+                        lambda **event: events.append(event))
+    result = system.cancel_workflow_stage("scan-1", "discover", _Request("admin@example.org"))
+    assert result["stage"] == "discover" and result["cancelled"] == 1
+    assert events[0]["kind"] == "job.stage_cancelled"
+    assert events[1]["detail"]["requested_by"] == "admin@example.org"
+    assert workflow_updates == [("scan-1", "discover", "cancelled")]
+
+
+def test_live_ops_cancel_still_refuses_an_unknown_stage(monkeypatch):
     monkeypatch.setattr(system, "_require_admin", lambda request: None)
     with pytest.raises(HTTPException) as denied:
-        system.cancel_workflow_stage("scan-1", "discover", _Request("admin@example.org"))
+        system.cancel_workflow_stage("scan-1", "archive", _Request("admin@example.org"))
     assert denied.value.status_code == 400
 
 
 def test_live_ops_resume_uses_existing_durable_remediation_hold(monkeypatch):
     monkeypatch.setattr(system, "_require_admin", lambda request: None)
     monkeypatch.setattr(system.core.store, "get_scan", lambda scan_id: {"_scan_id": scan_id})
+    monkeypatch.setattr(system.core.store, "remediation_run_paused", lambda scan_id: True)
+    monkeypatch.setattr(system.core.store, "_stage_owner", lambda scan_id: "owner@example.org")
+    events = []
+    monkeypatch.setattr(system.core.store, "append_orchestration_event",
+                        lambda **event: events.append(event))
     monkeypatch.setattr(system.core.store, "resume_remediation_run",
                         lambda scan_id, actor: {"resumed_at": "now", "released": 2})
     result = system.resume_workflow_remediation("scan-1", _Request("admin@example.org"))
     assert result["paused"] is False
     assert result["released"] == 2
+    assert events[0]["detail"]["requested_by"] == "admin@example.org"
+
+
+def test_live_ops_resume_refuses_to_invent_a_pause(monkeypatch):
+    monkeypatch.setattr(system, "_require_admin", lambda request: None)
+    monkeypatch.setattr(system.core.store, "get_scan", lambda scan_id: {"_scan_id": scan_id})
+    monkeypatch.setattr(system.core.store, "remediation_run_paused", lambda scan_id: False)
+    with pytest.raises(HTTPException) as denied:
+        system.resume_workflow_remediation("scan-1", _Request("admin@example.org"))
+    assert denied.value.status_code == 409
 
 
 def test_admin_live_activity_groups_active_stage_without_exposing_payload(isolated_store):

@@ -760,7 +760,7 @@ export function trafficGraphForTab(graph = { nodes: [], edges: [] }, tab = 'infr
   return { nodes, edges: graph.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target)) }
 }
 
-export default function AdminLiveTraffic() {
+export default function AdminLiveTraffic({ me = null, currentScanId = null, onNavigateRecovery = null }) {
   const [snapshot, setSnapshot] = useState(null)
   const [selectedKey, setSelectedKey] = useState(null)
   const [connection, setConnection] = useState('connecting')
@@ -950,7 +950,9 @@ export default function AdminLiveTraffic() {
       capacity={liveCapacity} connection={connection}
       samples={trends.current.get(selectedKey) || []} events={eventLog.current}
       facts={selectedFacts} accent={selectedAccent} onClose={() => setSelectedKey(null)}
-      onCancelStage={(run) => cancelLiveOpsStage(run.scan_id, run.stage)}
-      onResumeStage={(run) => resumeLiveOpsRemediation(run.scan_id)} />}
+      onCancelStage={me?.is_admin ? (run) => cancelLiveOpsStage(run.scan_id, run.stage) : null}
+      onResumeStage={me?.is_admin ? (run) => resumeLiveOpsRemediation(run.scan_id) : null}
+      onRecover={currentScanId && selectedNode?.run?.scan_id === currentScanId
+        ? (run) => onNavigateRecovery?.(run.stage) : null} />}
   </section>
 }

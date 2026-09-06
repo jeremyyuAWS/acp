@@ -294,6 +294,30 @@ describe('Primary visualization per node', () => {
     await click(buttonNamed(container, 'Confirm stop assess'))
     expect(calls).toEqual([['s1', 'assess']])
     expect(container.textContent).toContain('10 waiting and 2 running job(s) were targeted')
+    expect(buttonNamed(container, 'Stop assess stage').disabled).toBe(true)
+  })
+
+  it('does not render operator controls when the caller has no authorized action handlers', async () => {
+    const container = await mount({ nodeId: 's1:assess', node: runNode })
+    expect(container.textContent).not.toContain('OPERATOR RECOVERY')
+    expect(buttonNamed(container, 'Stop assess stage')).toBeFalsy()
+  })
+
+  it('offers the existing discovery stop with scope-specific confirmation copy', async () => {
+    const run = { ...snapshot.runs[0], stage: 'discover' }
+    const container = await mount({ nodeId: 's1:discover', node: { kind: 'run', run },
+      onCancelStage: async () => ({ cancelled: 1, requested: 0 }) })
+    await click(buttonNamed(container, 'Stop discover stage'))
+    expect(container.textContent).toContain('preserves everything already found')
+  })
+
+  it('links a failed current workflow to its stage-specific recovery screen', async () => {
+    const calls = []
+    const run = { ...snapshot.runs[0], status: 'failed', queued: 0, running: 0, stage: 'remediate' }
+    const container = await mount({ nodeId: 's1:remediate', node: { kind: 'run', run },
+      onRecover: (selected) => calls.push(selected.stage) })
+    await click(buttonNamed(container, 'Open remediation exceptions'))
+    expect(calls).toEqual(['remediate'])
   })
 
   it('offers durable resume only when a remediation run is actually paused', async () => {

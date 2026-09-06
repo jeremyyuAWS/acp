@@ -958,7 +958,8 @@ export default function App() {
       if (m2?.is_admin) setMe((m) => {
         const allow = m.allow || []
         const adminViews = ['analytics', 'liveops'].filter((view) => !allow.includes(view))
-        return adminViews.length ? { ...m, allow: [...allow, ...adminViews] } : m
+        return { ...m, is_admin: true,
+          allow: adminViews.length ? [...allow, ...adminViews] : allow }
       })
     }).catch(() => {})
   }
@@ -2337,7 +2338,9 @@ export default function App() {
         {/* Live Azure traffic is read-only and payload-sanitized. Its API and SSE endpoints still
             require an authenticated user, and the stream starts only when this tab is opened. */}
         {view === 'liveops' &&
-          <Suspense fallback={<Loading />}><AdminLiveTraffic /></Suspense>}
+          <Suspense fallback={<Loading />}><AdminLiveTraffic me={me} currentScanId={run?.id || null}
+            onNavigateRecovery={(stage) => setView({ assess: 'assess', remediate: 'remediate',
+              release: 'publish' }[stage] || 'overview')} /></Suspense>}
 
         {/* ACP's own Accessibility Conformance Report (ADR 0047). No `run` gate: it is not about a
             scan, and requiring one would make the tab unreachable on a fresh deploy. Every write
