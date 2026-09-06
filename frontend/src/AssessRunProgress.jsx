@@ -284,7 +284,7 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
               )}
 
               <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 10, marginTop: 12 }}>
-                <LiveThroughput points={throughput?.points || []} ratePerMin={throughput?.ratePerMin}
+                <LiveThroughput compact points={throughput?.points || []} ratePerMin={throughput?.ratePerMin}
                                 label="Assessment throughput" />
               </div>
             </details>

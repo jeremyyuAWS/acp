@@ -1,12 +1,14 @@
 // Small, dependency-free progress history for the live stage cards. Values are cumulative
 // completed-document counts sampled by useThroughput; the line therefore shows measured movement,
 // not a decorative animation or a model-generated estimate.
-export default function LiveThroughput({ points = [], ratePerMin = null, label = 'Throughput', unitLabel = 'completed' }) {
+export default function LiveThroughput({ points = [], ratePerMin = null, label = 'Throughput', unitLabel = 'completed', compact = false }) {
   if (points.length < 2) return (
     <div className="muted" style={{ fontSize: 12.5 }}>{label} · calibrating…</div>
   )
-  const width = 260, height = 72
-  const plot = { left: 30, right: 6, top: 6, bottom: 18 }
+  const width = compact ? 220 : 260, height = compact ? 42 : 72
+  const plot = compact
+    ? { left: 4, right: 4, top: 4, bottom: 4 }
+    : { left: 30, right: 6, top: 6, bottom: 18 }
   const lo = Math.min(...points), hi = Math.max(...points)
   const range = Math.max(1, hi - lo)
   const coords = points.map((value, index) => {
@@ -27,28 +29,28 @@ export default function LiveThroughput({ points = [], ratePerMin = null, label =
   })
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-      <div style={{ minWidth: 145 }}>
+      <div style={{ minWidth: compact ? 120 : 145 }}>
         <div className="muted" style={{ fontSize: 12.5 }}>{label}</div>
         <strong style={{ fontSize: 12.5, fontVariantNumeric: 'tabular-nums' }}>{rate}</strong>
-        <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
+        {!compact && <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
           {lo.toLocaleString()} → {hi.toLocaleString()} {unitLabel} · {points.length} live updates
-        </div>
+        </div>}
       </div>
       <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img"
            aria-label={`${label}: ${rate}; ${unitLabel} count moved from ${lo} to ${hi} across ${points.length} live updates`}>
-        <line x1={plot.left} y1={plot.top} x2={plot.left} y2={height - plot.bottom}
+        {!compact && <><line x1={plot.left} y1={plot.top} x2={plot.left} y2={height - plot.bottom}
               stroke="var(--line,#d9dde3)" />
         <line x1={plot.left} y1={height - plot.bottom} x2={width - plot.right} y2={height - plot.bottom}
               stroke="var(--line,#d9dde3)" />
         <text x={plot.left - 5} y={plot.top + 4} textAnchor="end" fontSize="9" fill="var(--muted,#667085)">{hi}</text>
         <text x={plot.left - 5} y={height - plot.bottom + 3} textAnchor="end" fontSize="9" fill="var(--muted,#667085)">{lo}</text>
         <text x={plot.left} y={height - 4} textAnchor="start" fontSize="9" fill="var(--muted,#667085)">Earlier</text>
-        <text x={width - plot.right} y={height - 4} textAnchor="end" fontSize="9" fill="var(--muted,#667085)">Now</text>
+        <text x={width - plot.right} y={height - 4} textAnchor="end" fontSize="9" fill="var(--muted,#667085)">Now</text></>}
         {bars.map((bar, index) => <rect key={index} x={bar.x} y={bar.y} width={bar.width}
           height={Math.max(bar.height, bar.value ? 1 : 0)} rx="1.5" fill="var(--purple-soft,#d9c9df)" />)}
         <polyline points={coords} fill="none" stroke="var(--purple,#6f4a78)" strokeWidth="2.25"
                   strokeLinecap="round" strokeLinejoin="round" />
-        <text x={plot.left + 4} y={plot.top + 10} fontSize="8.5" fill="var(--muted,#667085)">bars: movement/update</text>
+        {!compact && <text x={plot.left + 4} y={plot.top + 10} fontSize="8.5" fill="var(--muted,#667085)">bars: movement/update</text>}
       </svg>
     </div>
   )
