@@ -34,7 +34,9 @@ configuration the gate exists to survive.
 from __future__ import annotations
 
 import json
+import tempfile
 import uuid
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response
@@ -43,6 +45,7 @@ from pydantic import BaseModel
 import acr_authz
 import acr_axe
 import acr_catalog
+import acr_export_docx
 import acr_export_pdf
 import acr_export_preview
 import acr_freshness
@@ -828,13 +831,25 @@ def audit(report_id: str, request: Request):
 def preview(report_id: str, request: Request, format: str = "json"):
     """The draft structural export (PRD §15 publication review).
 
-    NOT a VPAT and not a .docx — the official ITI template is Phase 5, gated on a licensing
-    decision. The output says so on its face; see api/acr_export_preview.py.
+    STILL NOT A VPAT. The official ITI VPAT 2.5Rev template is blocked on a licensing decision,
+    not on engineering, and vendoring a third-party artifact under that trademark is something
+    this repo decides in an ADR first (ADR 0029 is the precedent). Every format below says so on
+    its face; see api/acr_export_preview.py.
+
+    `format=docx` is no longer excluded by that, and the distinction is the whole reason it can
+    ship now: the licence governs the TEMPLATE, while this renders ACP's own content into an
+    accessible Word document that states in its first paragraph that it is not a VPAT. When the
+    template lands it replaces the renderer, not the projection.
 
     `format=pdf` returns the SAME projection rendered as a tagged PDF/UA-1 document, which is what
-    PRD §16's "the exported report is itself accessible" asks for. All three formats are built
+    PRD §16's "the exported report is itself accessible" asks for. All four formats are built
     from one `project()` call below — a reviewer who approves the HTML and a customer who receives
     the PDF are looking at the same rows, and no code path exists in which they could differ.
+
+    `format=docx-gate` returns the accessibility gate's verdict as JSON WITHOUT the document. It
+    exists because the gate's REVIEW findings have nowhere else to go: a .docx download is bytes,
+    and an approver who has to sign off on "ACP could not decide these five things" cannot read
+    them out of an attachment. The download carries the count in a header; this carries the list.
     """
     owner = _tenant()
     report = _report_or_404(report_id, owner)
@@ -849,6 +864,45 @@ def preview(report_id: str, request: Request, format: str = "json"):
 
     if format == "html":
         return HTMLResponse(acr_export_preview.to_html(projection))
+    if format in ("docx", "docx-gate"):
+        try:
+            document = acr_export_docx.render(projection)
+        except acr_export_docx.RendererUnavailable as exc:
+            # 503 for the same reason the PDF branch gives: a deployment that cannot produce the
+            # accessible form of a conformance document must say so, rather than substitute one
+            # whose structure is missing in exactly the way its readers depend on.
+            raise HTTPException(503, str(exc)) from exc
+
+        # The temp directory is passed EXPLICITLY and cleaned up. acr_export_docx.check() falls
+        # back to tempfile.mkdtemp() with no cleanup, which is harmless in a test that hands it
+        # tmp_path and a slow leak of one directory and one .docx per download here.
+        with tempfile.TemporaryDirectory() as scratch:
+            gate = acr_export_docx.check(document, tmp_dir=Path(scratch))
+
+        if format == "docx-gate":
+            return gate
+
+        if not gate["ok"]:
+            # 500, not 503 and not a served file. This is ACP failing its own document
+            # accessibility checks on a document ACP just generated — a defect in this renderer,
+            # not a capability the deployment lacks. Serving it anyway would ship an inaccessible
+            # accessibility report, which is the one artifact that cannot be allowed through.
+            names = ", ".join(sorted({str(f.get("rule") or f.get("criterion") or "?")
+                                      for f in gate["failures"]})) or "unnamed checks"
+            raise HTTPException(
+                500, f"refusing to serve the Word export: it fails ACP's own document "
+                     f"accessibility checks ({names}). See format=docx-gate for the detail.")
+
+        return Response(
+            document,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition":
+                     f'attachment; filename="{acr_export_docx.filename_for(report)}"',
+                     # The gate passed, but REVIEW is not PASS: it is "a human has to look". The
+                     # count travels with the file so a download cannot silently imply that
+                     # nothing needs signing off; format=docx-gate has the list.
+                     "X-ACP-Accessibility-Reviews": str(len(gate["reviews"]))})
+
     if format == "pdf":
         # 503 and not a fallback. An untagged PDF is indistinguishable from this one to everyone
         # except the reader it exists for, so a deployment that cannot tag must say so rather than
