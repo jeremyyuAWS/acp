@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 import DiscoverRunProgress from './DiscoverRunProgress.jsx'
 import AssessRunProgress from './AssessRunProgress.jsx'
 import RemediationRunProgress from './RemediationRunProgress.jsx'
+
+const here = dirname(fileURLToPath(import.meta.url))
+const appSource = readFileSync(join(here, 'App.jsx'), 'utf8')
 
 // One contract across all three workflow cards. Separate component tests protect each card's
 // layout; this protects the handoff vocabulary they share. A future prop rename must not leave
@@ -38,6 +44,12 @@ const remediate = () => renderToStaticMarkup(
 )
 
 describe('SharePoint stays identified across the workflow', () => {
+  it('passes the persisted source boundary to the compact Discover card on every tab', () => {
+    const compactCard = appSource.match(/view !== 'discover'[\s\S]{0,900}?<DiscoverRunProgress[\s\S]{0,900}?\/>/)?.[0] || ''
+    expect(compactCard).toContain('source={run?.source ?? null}')
+    expect(compactCard).toContain('scope={run?.scope ?? null}')
+  })
+
   it('carries the same multi-site estate through Discover, Assess, and Remediate', () => {
     const cards = [discover(), assess(), remediate()]
     for (const html of cards) {

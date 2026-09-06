@@ -1,4 +1,4 @@
-import { scopeLabel } from './scanScope.js'
+import { isNarrowScope, isTruncated, scopeLabel } from './scanScope.js'
 
 export function sourceDisplayName(source, scope) {
   if (scope?.kind === 'sharepoint') {
@@ -33,6 +33,9 @@ export default function SourceVisibility({ source, scope }) {
   const boundary = scopeLabel(scope)
   const libraries = scope?.kind === 'sharepoint' ? libraryCount(scope) : 0
   const libraryRows = librariesBySite(scope)
+  const narrow = isNarrowScope(scope)
+  const pickedFolders = Array.isArray(scope?.folders) ? scope.folders.filter(Boolean) : []
+  const excluded = Array.isArray(scope?.excluded) ? scope.excluded.length : 0
   if (!name && !boundary) return null
 
   return (
@@ -52,6 +55,18 @@ export default function SourceVisibility({ source, scope }) {
             ))}
           </ul>
         </details>
+      )}
+      {narrow && (
+        <div role="status" style={{ marginTop: 4, color: 'var(--muted)' }}>
+          <strong style={{ color: 'var(--ink)' }}>Scope locked for this run.</strong>{' '}
+          {pickedFolders.length
+            ? 'Selected folders include everything beneath them recursively'
+            : 'Only the selected source locations are included'}
+          {excluded > 0 ? `, except ${excluded.toLocaleString()} explicit exclusion${excluded === 1 ? '' : 's'}` : ''}.
+          {' '}{isTruncated(scope)
+            ? 'The result is incomplete because the configured scan limit was reached.'
+            : 'No broader source location is being scanned.'}
+        </div>
       )}
     </div>
   )
