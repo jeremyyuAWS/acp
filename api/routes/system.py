@@ -1833,6 +1833,30 @@ def admin_activity(request: Request, response: Response):
     return snapshot
 
 
+@router.post("/admin/activity/workflows/{scan_id}/stages/{stage}/cancel")
+def cancel_workflow_stage(scan_id: str, stage: str, request: Request):
+    """Platform-admin recovery action: stop only the selected workflow stage."""
+    _require_admin(request)
+    if stage not in ("assess", "remediate", "release"):
+        raise HTTPException(400, "this stage cannot be cancelled here")
+    if core.store.get_scan(scan_id) is None:
+        raise HTTPException(404, "workflow not found")
+    result = core.store.request_stage_cancel(scan_id, stage)
+    if not result.get("found"):
+        raise HTTPException(409, "no durable stage execution was found")
+    return {"workflow_id": scan_id, "stage": stage, **result}
+
+
+@router.post("/admin/activity/workflows/{scan_id}/stages/remediate/resume")
+def resume_workflow_remediation(scan_id: str, request: Request):
+    """Platform-admin recovery action: release a remediation hold already recorded by ACP."""
+    _require_admin(request)
+    if core.store.get_scan(scan_id) is None:
+        raise HTTPException(404, "workflow not found")
+    result = core.store.resume_remediation_run(scan_id, actor="platform-admin")
+    return {"workflow_id": scan_id, "stage": "remediate", "paused": False, **result}
+
+
 @router.get("/admin/activity/stream")
 async def admin_activity_stream(request: Request):
     """Authenticated SSE snapshots for the live multi-user traffic map."""

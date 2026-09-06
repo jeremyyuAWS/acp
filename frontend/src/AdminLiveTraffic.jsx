@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Background, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { getAdminActivity, getWorkerCapacity, openAdminActivityStream } from './api.js'
+import { cancelLiveOpsStage, getAdminActivity, getWorkerCapacity, openAdminActivityStream,
+  resumeLiveOpsRemediation } from './api.js'
 import { ensureResizeObserver } from './resizeObserverFallback.js'
 import LiveOpsDrawer from './LiveOpsDrawer.jsx'
 import LiveOpsCostSummary from './LiveOpsCostSummary.jsx'
@@ -948,6 +949,8 @@ export default function AdminLiveTraffic() {
     {selectedNode && <LiveOpsDrawer nodeId={selectedKey} node={selectedNode} snapshot={snapshot}
       capacity={liveCapacity} connection={connection}
       samples={trends.current.get(selectedKey) || []} events={eventLog.current}
-      facts={selectedFacts} accent={selectedAccent} onClose={() => setSelectedKey(null)} />}
+      facts={selectedFacts} accent={selectedAccent} onClose={() => setSelectedKey(null)}
+      onCancelStage={(run) => cancelLiveOpsStage(run.scan_id, run.stage)}
+      onResumeStage={(run) => resumeLiveOpsRemediation(run.scan_id)} />}
   </section>
 }

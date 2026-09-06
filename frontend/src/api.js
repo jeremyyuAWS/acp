@@ -1054,6 +1054,12 @@ export const retryRemediationDocuments = (scanId, files) =>
 export const cancelRemediationRun = (scanId) => remediationAction(scanId, 'cancel')
 export const pauseRemediationRun = (scanId) => remediationAction(scanId, 'pause')
 export const resumeRemediationRun = (scanId) => remediationAction(scanId, 'resume')
+export const cancelLiveOpsStage = (scanId, stage) => fetch(
+  `${BASE}/admin/activity/workflows/${encodeURIComponent(scanId)}/stages/${encodeURIComponent(stage)}/cancel`,
+  { method: 'POST', headers: headers() }).then(j)
+export const resumeLiveOpsRemediation = (scanId) => fetch(
+  `${BASE}/admin/activity/workflows/${encodeURIComponent(scanId)}/stages/remediate/resume`,
+  { method: 'POST', headers: headers() }).then(j)
 // Authenticated Remediate progress stream.  Native EventSource cannot send ACP's bearer header,
 // so this shares Discover's fetch + ReadableStream SSE parser and exposes the same close contract.
 // `lastEventId` resumes the durable lifecycle log (ADR 0051): pass the last id this client

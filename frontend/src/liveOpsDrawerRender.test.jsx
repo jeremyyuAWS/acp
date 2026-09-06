@@ -281,6 +281,41 @@ describe('Primary visualization per node', () => {
 
   const runNode = { kind: 'run', run: snapshot.runs[0] }
 
+  it('requires an explicit second click before cancelling only the selected stage', async () => {
+    const calls = []
+    const container = await mount({ nodeId: 's1:assess', node: runNode,
+      onCancelStage: async (run) => {
+        calls.push([run.scan_id, run.stage])
+        return { cancelled: 10, requested: 2 }
+      } })
+    await click(buttonNamed(container, 'Stop assess stage'))
+    expect(calls).toEqual([])
+    expect(container.textContent).toContain('Other workflow stages are not changed')
+    await click(buttonNamed(container, 'Confirm stop assess'))
+    expect(calls).toEqual([['s1', 'assess']])
+    expect(container.textContent).toContain('10 waiting and 2 running job(s) were targeted')
+  })
+
+  it('offers durable resume only when a remediation run is actually paused', async () => {
+    const calls = []
+    const run = { ...snapshot.runs[0], stage: 'remediate', paused: true }
+    const container = await mount({ nodeId: 's1:remediate', node: { kind: 'run', run },
+      onResumeStage: async (selected) => { calls.push(selected.scan_id); return { released: 4 } } })
+    await click(buttonNamed(container, 'Resume remediation'))
+    expect(calls).toEqual([])
+    expect(container.textContent).toContain('releases only remediation jobs held by the durable pause control')
+    await click(buttonNamed(container, 'Confirm resume'))
+    expect(calls).toEqual(['s1'])
+    expect(container.textContent).toContain('4 waiting job(s) were released')
+  })
+
+  it('does not offer a stop action after a stage is terminal', async () => {
+    const run = { ...snapshot.runs[0], status: 'failed', queued: 0, running: 0 }
+    const container = await mount({ nodeId: 's1:assess', node: { kind: 'run', run },
+      onCancelStage: async () => ({}) })
+    expect(buttonNamed(container, 'Stop assess stage')).toBeFalsy()
+  })
+
   it('labels the remaining-time figure as an estimate, and names what it projects from', async () => {
     // WRITTEN WRONG FIRST, and the bite-check caught it: the original asserted /estimate/i against
     // the whole tile, which the LABEL "ESTIMATED REMAINING" satisfies on its own — so it passed
