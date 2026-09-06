@@ -210,7 +210,10 @@ def _scan(payload: dict, job: dict) -> None:
         folder=payload.get("folder"),
         **({"folders": payload["folders"]} if payload.get("folders") else {}),
         **({"exclude_folders": payload["exclude_folders"]} if payload.get("exclude_folders") else {}),
-        include_subfolders=payload.get("include_subfolders", True),
+        # Omit the new keyword for legacy/default jobs so older test doubles and downstream
+        # wrappers retain the exact call shape they already support.
+        **({"include_subfolders": False}
+           if payload.get("include_subfolders", True) is False else {}),
         ai_enabled=effective_ai,
         scan_id=scan_id,
         user=payload.get("user"),
