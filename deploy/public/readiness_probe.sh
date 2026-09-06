@@ -58,6 +58,23 @@ _aca_retry() {
   cat "$err" >&2; rm -f "$err"; return 1
 }
 
+# `az containerapp exec` is implemented as an interactive websocket session. Even with
+# `--command`, Azure CLI unconditionally puts stdin in cbreak mode; a GitHub Actions pipe has no
+# terminal and dies with `termios.error: Operation not supported by device` before the command
+# reaches the container. Give only this exec call a disposable pseudo-terminal. Both script(1)
+# variants used by our deploy hosts are supported: util-linux in Actions and BSD on macOS.
+_aca_exec_tty() {
+  command -v script >/dev/null 2>&1 \
+    || { echo "script(1) is required for non-interactive Azure container exec" >&2; return 1; }
+  if script --version 2>/dev/null | grep -qi util-linux; then
+    local rendered
+    printf -v rendered '%q ' "$@"
+    script -q -e -c "$rendered" /dev/null
+  else
+    script -q /dev/null "$@"
+  fi
+}
+
 # Kept as the readiness probe's own name, delegating, so there is ONE matcher. When this had its
 # own copy it recognised "conflicting concurrent write" and not ContainerAppOperationInProgress —
 # so the probe write survived a busy ACA and the image update beside it did not.

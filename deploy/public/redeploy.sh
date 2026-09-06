@@ -332,8 +332,11 @@ except Exception: print("")' <<<"$HEALTH_BEFORE")"
   # DATABASE_URL already resolve to the same shared services used by the workers. The source is
   # transmitted because, by definition, this old image does not contain the new probe yet.
   LEGACY_PROBE_B64="$(python3 -c 'import base64,pathlib; print(base64.b64encode(pathlib.Path("deploy/public/legacy_bootstrap_probe.py").read_bytes()).decode())')"
-  LEGACY_PROBE_RAW="$(az containerapp exec "${AZ[@]}" -g "$RG" -n "$APP" \
-    --command "python -c \"import base64;exec(base64.b64decode('$LEGACY_PROBE_B64'))\"" 2>&1)" \
+  # ACA splits --command on spaces itself; quoting the -c program is passed to Python literally.
+  # Keep the program space-free so it remains one argument after Azure's parser handles it.
+  LEGACY_PROBE_COMMAND="python -c exec(__import__('base64').b64decode('$LEGACY_PROBE_B64'))"
+  LEGACY_PROBE_RAW="$(_aca_exec_tty az containerapp exec "${AZ[@]}" -g "$RG" -n "$APP" \
+    --command "$LEGACY_PROBE_COMMAND" 2>&1)" \
     || die "legacy bootstrap could not independently verify shared Redis and queue state"
   LEGACY_PROBE_JSON="$(printf '%s\n' "$LEGACY_PROBE_RAW" | sed -n 's/^ACP_LEGACY_BOOTSTRAP=//p' | tail -1)"
   read -r BOOTSTRAP_REDIS BOOTSTRAP_QUEUED BOOTSTRAP_RETRYING BOOTSTRAP_RUNNING <<EOF
