@@ -243,33 +243,75 @@ def section_508_hash() -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def build_matrix(report_id: str) -> list[dict]:
-    """The initial criteria matrix for a new report — one row per applicable criterion.
+def _blank_row(report_id: str, num: str, name: str, requirement_set: str) -> dict:
+    """The fields every matrix row carries whatever standard it came from.
 
     Every row starts at NOT_EVALUATED with no final status. PRD §10 is explicit that this is an
     internal draft state and that a report containing applicable criteria in it cannot be
     published; acr_validation enforces that, and this function is why the state exists at all.
-
-    `applicable` starts True for every criterion in the catalog. Marking one Not Applicable is a
-    human DECISION (with required remarks, PRD §10), not a default the system picks — so there is
-    no applicability heuristic here, deliberately.
     """
-    return [
-        {
-            "report_id": report_id,
-            "criterion_num": row["num"],
-            "criterion_name": row["name"],
-            "level": row["level"],
-            "principle": row["principle"],
-            "guideline": row["guideline"],
-            "applicable": True,
-            "workflow_state": NOT_EVALUATED,
-            "draft_status": None,
-            "final_status": None,
-            "remarks": None,
-            "evaluator": None,
-            "reviewer": None,
-            "approval_state": "unapproved",
-        }
-        for row in _load()["criteria"]
-    ]
+    return {
+        "report_id": report_id,
+        "criterion_num": num,
+        "criterion_name": name,
+        "applicable": True,
+        "workflow_state": NOT_EVALUATED,
+        "draft_status": None,
+        "final_status": None,
+        "remarks": None,
+        "evaluator": None,
+        "reviewer": None,
+        "approval_state": "unapproved",
+        "requirement_set": requirement_set,
+        # WCAG axes; None on a 508 row, which has a chapter instead. Both are carried on the row
+        # rather than looked up later because a published snapshot has to stay readable after the
+        # catalog advances — the same reason criterion_name is stored and not joined.
+        "level": None,
+        "principle": None,
+        "guideline": None,
+        "chapter": None,
+    }
+
+
+def build_matrix(report_id: str, edition: str | None = None) -> list[dict]:
+    """The initial criteria matrix for a new report — one row per requirement the edition obliges.
+
+    `applicable` starts True for every row. Marking one Not Applicable is a human DECISION (with
+    required remarks, PRD §10), not a default the system picks — so there is no applicability
+    heuristic here, deliberately, and that holds for Section 508 exactly as it holds for WCAG.
+    The consequence is worth stating plainly rather than discovering: the 508 edition's Chapter 4
+    is hardware, 69 of its 120 rows, and for a hosted web application every one of them ends Not
+    Applicable. Deciding them one at a time is the honest default and a poor experience; the fix
+    is a bulk-mark affordance in the UI, where a human still makes the decision and states the
+    reason once, NOT a chapter this function quietly drops.
+
+    REFUSES AN EDITION IT CANNOT BUILD, and that is the point of taking `edition` at all. #1532
+    put the same check on the routes; this is the layer below, for the reason its commit message
+    gave — "a report created before this change, or restored, imported, migrated, never passed
+    them". Returning a WCAG-only matrix for a 508 edition is precisely the defect that produced a
+    document declaring Section 508 and containing none of it.
+
+    `edition=None` means the WCAG edition, so every pre-Phase-6 caller keeps its behaviour.
+    """
+    edition = edition or EDITION_WCAG
+    if not edition_known(edition):
+        raise ValueError(f"{edition!r} is not one of the four VPAT editions {sorted(EDITIONS)}")
+    missing = missing_requirement_sets(edition)
+    if missing:
+        names = ", ".join(sorted(REQUIREMENT_SET_NAMES.get(m, m) for m in missing))
+        raise ValueError(
+            f"{edition} obliges the report to carry {names}, which this build cannot supply — "
+            f"a matrix without those rows would make the document's own edition a false claim")
+
+    required = EDITION_REQUIREMENT_SETS[edition]
+    rows: list[dict] = []
+    for row in _load()["criteria"]:
+        r = _blank_row(report_id, row["num"], row["name"], REQ_WCAG)
+        r.update(level=row["level"], principle=row["principle"], guideline=row["guideline"])
+        rows.append(r)
+    if REQ_SECTION_508 in required:
+        for row in _load_508()["requirements"]:
+            r = _blank_row(report_id, row["num"], row["name"], REQ_SECTION_508)
+            r["chapter"] = row["chapter"]
+            rows.append(r)
+    return rows

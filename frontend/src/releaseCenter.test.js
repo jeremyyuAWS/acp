@@ -105,4 +105,36 @@ describe('Release builder', () => {
     expect(s).toMatch(/srcOf\(f\) !== 'stale'/)
     expect(s).toMatch(/disabled=\{done\[f\.file\] \|\| srcOf\(f\) === 'stale'\}/)
   })
+
+  it('moves focus from the overview action to the real builder', () => {
+    const s = pub()
+    expect(s).toMatch(/const builderRef = useRef\(null\)/)
+    expect(s).toMatch(/onClick=\{startRelease\}>Start a release/)
+    expect(s).toMatch(/builderRef\.current\?\.scrollIntoView/)
+    expect(s).toMatch(/builderRef\.current\?\.focus/)
+    expect(s).toMatch(/ref=\{builderRef\} tabIndex=\{-1\} aria-labelledby="release-workspace-title"/)
+  })
+
+  it('collapses the secondary record so it no longer buries the workflow', () => {
+    const s = pub()
+    expect(s).toMatch(/<details className="panel release-record"/)
+    expect(s).toMatch(/Release details and evidence/)
+    expect(s).toMatch(/<summary className="release-record__summary">/)
+  })
+
+  it('uses three distinct steps instead of combining delivery and review', () => {
+    const s = pub()
+    expect(s).toMatch(/const \[builderStep, setBuilderStep\] = useState\(1\)/)
+    expect(s).toMatch(/builderStep === 1 \? \(/)
+    expect(s).toMatch(/builderStep === 2 \? <>/)
+    expect(s).toMatch(/setBuilderStep\(2\)\}>Choose delivery/)
+    expect(s).toMatch(/setBuilderStep\(3\)\}>Review release/)
+    expect(s).toMatch(/setBuilderStep\(1\)\}>Back to files/)
+    expect(s).toMatch(/setBuilderStep\(2\)\}>Back to delivery/)
+  })
+
+  it('announces the active step to assistive technology', () => {
+    const s = pub()
+    expect(s.match(/aria-current=\{builderStep === [123] \? 'step' : undefined\}/g)).toHaveLength(3)
+  })
 })
