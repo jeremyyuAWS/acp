@@ -50,16 +50,16 @@ describe('scan superseding — background poll + banner differentiation', () => 
     expect(app).toContain('New scan available')
   })
 
-  it('explains when a narrow scan is preserved without replacing the workspace default', () => {
-    expect(app).toContain('Narrow scan saved without replacing your workspace')
-    expect(app).toContain('Both remain in Scan History')
+  it('keeps narrow scans in history without mounting a second status banner', () => {
+    expect(app).not.toContain('Narrow scan saved without replacing your workspace')
+    expect(app).not.toContain('View narrow scan')
     expect(app).toContain("narrowScanDefaultContext(scanList, run?.id)")
-    expect(app).toContain("narrowDefault ? 'View narrow scan' : '↩ Return to latest scan'")
-    expect(app).toContain('|| !!narrowDefault')
+    expect(app).toMatch(/showScanHistoryBanner = isTimeTravel && !narrowDefault/)
+    expect(app).toContain('The durable Discover / Assess / Remediate card directly below the tabs owns workflow status')
   })
 
   it('defers the passive new-scan notice while a durable workflow card is active', () => {
-    expect(app).toMatch(/showScanHistoryBanner = \(isTimeTravel && \(explicitTimeTravel \|\| !primaryWorkflow\)\)/)
+    expect(app).toMatch(/showScanHistoryBanner = isTimeTravel && !narrowDefault[\s\S]{0,80}\(explicitTimeTravel \|\| !primaryWorkflow\)/)
   })
 
   it('"new scan available" banner is gated on !explicitTimeTravel', () => {

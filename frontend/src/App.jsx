@@ -1701,8 +1701,11 @@ export default function App() {
   // the useful foreground truth in that moment; stacking "New scan available" above it makes
   // the completed inventory sound like a second live run. Keep deliberate replay and the narrow-
   // scan safeguard visible, but defer the passive new-scan notice until active work is finished.
-  const showScanHistoryBanner = (isTimeTravel && (explicitTimeTravel || !primaryWorkflow))
-    || !!narrowDefault
+  // A narrow run remains available in Scan History but no longer gets a separate status banner.
+  // The durable Discover / Assess / Remediate card directly below the tabs owns workflow status;
+  // stacking a scope-policy explanation above it made the newest run look like a second alert.
+  const showScanHistoryBanner = isTimeTravel && !narrowDefault
+    && (explicitTimeTravel || !primaryWorkflow)
 
 
   return (
@@ -2058,13 +2061,11 @@ export default function App() {
                   render as a bold empty span followed by a bare period. */}
               <span style={{ fontSize: 13.5 }}>🕐 <b>Viewing an earlier scan</b> — {scanWorkflowContext(run) ? <><b>{scanWorkflowContext(run)}</b> from </> : 'results from '}<b>{fmtStamp(run.completed_at) ?? 'an earlier date'}</b>{run.avg_score != null ? ` · ${run.avg_score}/100` : ''}. Changes are unavailable until you return to the latest scan.</span>
             </>
-          ) : narrowDefault ? (
-            <span style={{ fontSize: 13.5 }}>✓ <b>Narrow scan saved without replacing your workspace</b> — the newer run contains <b>{narrowDefault.newestFiles} documents</b>, compared with <b>{narrowDefault.referenceFiles}</b> in the full scan ACP kept as your default. Both remain in Scan History.</span>
           ) : (
             <span style={{ fontSize: 13.5 }}>✨ <b>New scan available</b> from <b>{fmtStamp(scanList[0]?.completed_at) ?? 'just now'}</b> — a more recent scan finished while you were reviewing this one.</span>
           )}
           <button className="ttexit" onClick={() => switchScan(scanList[0].id)}>
-            {narrowDefault ? 'View narrow scan' : '↩ Return to latest scan'}
+            ↩ Return to latest scan
           </button>
         </div>
       )}
