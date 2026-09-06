@@ -188,6 +188,7 @@ def test_a_reclaimed_job_is_not_also_reported_as_stalled():
     import core
     assert core._job_is_stale({"phase": "reclaimed", "updated_at": None}) is False
     assert core._job_is_stale({"phase": "retrying", "updated_at": None}) is False
+    assert core._job_is_stale({"phase": "deployment_requeue", "updated_at": None}) is False
     # The control: an ordinary phase with no liveness signal IS stale, or the exemption above
     # would be indistinguishable from the check being switched off.
     assert core._job_is_stale({"phase": "discovering", "updated_at": None}) is True

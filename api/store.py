@@ -11673,6 +11673,36 @@ class Store:
                   "no-op (requeue suppressed)", flush=True)
         return "queued"
 
+    DEPLOYMENT_REQUEUE_PHASE = "deployment_requeue"
+
+    def requeue_job_for_deployment(self, job_id: str, *, worker_id: str, attempt: int) -> str:
+        """Return a cooperatively stopped job to the queue without spending a retry.
+
+        The caller has already left its handler at a declared safe checkpoint.  The ownership
+        fence is still essential: if a lease expired just before shutdown, the old process must
+        not clear a replacement worker's live claim.  Decrementing ``attempts`` refunds the claim
+        consumed by the rollout, so routine releases cannot exhaust a customer's retry budget.
+
+        Returns ``queued`` when this claim performed the handoff, ``missing`` if the row no
+        longer exists, or ``stale`` when another claim/outcome already owns the row.
+        """
+        if self.get_job(job_id) is None:
+            return "missing"
+        now = self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE jobs SET status='queued', run_after=%s, locked_at=NULL, "
+                "locked_by=NULL, lease_expires_at=NULL, attempts=CASE WHEN attempts>0 "
+                "THEN attempts-1 ELSE 0 END, phase=%s, last_error=NULL, error_class=NULL, "
+                "updated_at=%s WHERE id=%s" + self._CLAIM_OWNED,
+                (now, self.DEPLOYMENT_REQUEUE_PHASE, now, job_id, worker_id, attempt))
+            won = (getattr(cur, "rowcount", 0) or 0) > 0
+        if not won:
+            print(f"[acp] deployment handoff refused for job {job_id}: stale claim "
+                  f"worker={worker_id} attempt={attempt}", flush=True)
+            return "stale"
+        return "queued"
+
     # The phase a reclaimed job carries while it waits to be picked up again.
     #
     # DISTINCT FROM 'retrying' ON PURPOSE. Both are legitimate waiting states, but they answer

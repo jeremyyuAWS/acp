@@ -543,6 +543,21 @@ def readyz():
     on one condition without pattern-matching a sentence.
     """
     workers = core.store.worker_tier_status()
+    # Aggregate only: deployment automation needs to know whether replacing worker revisions
+    # would interrupt customer work, but a public readiness response must never expose tenant,
+    # filename, job id, or payload data. PostgreSQL is authoritative; Redis is intentionally not
+    # consulted here because a Redis rollover is one of the failures this gate must detect.
+    try:
+        _queue_stats = core.store.job_stats(owner=None)
+        queue = {
+            "queued": int(_queue_stats.get("queued") or 0),
+            "running": int(_queue_stats.get("running") or 0),
+        }
+        queue["active"] = queue["queued"] + queue["running"]
+        queue["available"] = True
+    except Exception as exc:  # fail closed in deploy automation; keep readiness diagnostic alive
+        queue = {"queued": None, "running": None, "active": None, "available": False,
+                 "error": f"{exc.__class__.__name__}: queue status unavailable"}
     # Defended: a per-role read must never be able to 500 the readiness endpoint, the same posture
     # the source and vision probes below take. An empty dict reads as "no role ever beaten", which
     # is the honest answer when this cannot be established.
@@ -571,6 +586,14 @@ def readyz():
     pdf = pdf_engine_status()
     if not pdf["available"]:
         degraded.append("pdf_engine_missing")
+    try:
+        redis_status = core.redis_dependency_status()
+    except Exception as exc:  # pragma: no cover - diagnostics must not 500 readiness
+        redis_status = {"configured": bool(getattr(core, "REDIS_URL", "")),
+                        "reachable": False, "tls": None, "topology": "unknown",
+                        "reason": f"{exc.__class__.__name__}: Redis status unavailable"}
+    if redis_status["configured"] and not redis_status["reachable"]:
+        degraded.append("redis_unavailable")
 
     # Source-adapter readiness, reported INFORMATIONALLY — deliberately NOT folded into `degraded`.
     # A deployment that scans only Drive/SharePoint legitimately has no SMB config, so an
@@ -641,6 +664,8 @@ def readyz():
                     # beat last — measured flapping between two services' answers in production on
                     # 2026-09-01. See store.worker_roles_status.
                     "roles": role_status},
+        "queue": queue,
+        "dependencies": {"redis": redis_status},
         # `pdf` is the ANALYSER (can this deployment read a PDF); `pdf_renderer` is the tagged-PDF
         # WRITER (can it produce one). Deliberately not both under "pdf": they fail independently,
         # for unrelated reasons, and a single key would make one of them unanswerable.
