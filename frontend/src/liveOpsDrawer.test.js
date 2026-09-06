@@ -1937,6 +1937,21 @@ describe('workflowStageRuns', () => {
       current_file: 'live.docx', running: 1, stage_run_id: 'a1',
     })
   })
+
+  it('preserves failed and cancelled terminal outcomes as distinct states', () => {
+    const rows = workflowStageRuns({ workflows: [{ scan_id: 's1', stages: [
+      { stage: 'assess', status: 'failed', terminal_outcome: 'failed', error_class: 'timeout' },
+      { stage: 'remediate', status: 'cancelled', terminal_outcome: 'cancelled' },
+    ] }] })
+    expect(rows.map((row) => [row.stage, row.status, row.terminal_outcome])).toEqual([
+      ['assess', 'failed', 'failed'], ['remediate', 'cancelled', 'cancelled'],
+    ])
+    const pipeline = runStagePipeline('s1', { workflows: [{ scan_id: 's1', stages: [
+      { stage: 'assess', status: 'failed' }, { stage: 'remediate', status: 'cancelled' },
+    ] }] })
+    expect(pipeline.stages.find((stage) => stage.key === 'assess').state).toBe('failed')
+    expect(pipeline.stages.find((stage) => stage.key === 'remediate').state).toBe('cancelled')
+  })
 })
 
 describe('runFlow', () => {
@@ -1959,6 +1974,15 @@ describe('runFlow', () => {
     const f = runFlow({ completed: 5, running: 0, queued: 0, failed: 0 })
     expect(f.segments.map((s) => s.key)).toEqual(['completed'])
     expect(f.rows).toHaveLength(4)
+  })
+})
+
+describe('runTrouble stalled stages', () => {
+  it('surfaces a stale worker heartbeat as operator attention, without needing an error class', () => {
+    expect(runTrouble({ stalled: true })).toMatchObject({
+      stalled: true,
+      note: 'Worker heartbeat is stale. This stage may be wedged and needs operator attention.',
+    })
   })
 })
 

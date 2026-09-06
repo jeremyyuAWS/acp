@@ -106,3 +106,29 @@ def test_discover_completion_projects_its_existing_finalize_once_fact(isolated_s
     assert [event["kind"] for event in discover] == ["job.stage_started", "job.stage_completed"]
     assert discover[1]["occurred_at"] == "2026-09-05T12:03:00+00:00"
     assert discover[1]["detail"] == {"documents": 2}
+
+
+def test_failed_stage_is_recorded_once_after_the_whole_batch_is_terminal(isolated_store):
+    _scan(isolated_store)
+    execution = _execution(isolated_store)
+    for job_id in execution["job_ids"]:
+        isolated_store.fail_job(job_id, "timed out", force_dead=True, error_class="timeout",
+                                **_hold(isolated_store, job_id))
+    events = isolated_store.list_workflow_stage_events()
+    failed = [event for event in events if event.get("kind") == "job.stage_failed"]
+    assert len(failed) == 1
+    assert failed[0]["correlation_id"] == execution["batch_id"]
+    assert failed[0]["error_class"] == "timeout"
+    assert failed[0]["detail"] == {"documents": 2, "completed": 0, "failed": 2,
+                                    "cancelled": 0, "stage_execution_id": execution["batch_id"]}
+
+
+def test_cancelled_stage_is_distinct_from_failed(isolated_store):
+    _scan(isolated_store)
+    execution = _execution(isolated_store)
+    for job_id in execution["job_ids"]:
+        isolated_store.mark_job_cancelled(job_id, **_hold(isolated_store, job_id))
+    events = isolated_store.list_workflow_stage_events()
+    cancelled = [event for event in events if event.get("kind") == "job.stage_cancelled"]
+    assert len(cancelled) == 1
+    assert cancelled[0]["error_class"] == "cancelled"

@@ -274,7 +274,9 @@ function RunNode({ data }) {
   const accent = data.workflowColor || cfg.color
   const pct = data.run.total ? Math.round((data.run.completed / data.run.total) * 100) : 0
   const statusLabel = data.run.status === 'recent' ? 'Complete'
-    : data.run.status === 'failed' ? 'Failed' : `${pct}%`
+    : data.run.status === 'failed' ? 'Failed'
+      : data.run.status === 'cancelled' ? 'Cancelled'
+        : data.run.stalled ? 'Stalled' : `${pct}%`
   return <div title="Select for live run details; double-click to open charts"
     style={{ width: 225, padding: 12,
       ...tileStyle('run', accent),

@@ -1182,7 +1182,8 @@ function RunPipeline({ pipeline }) {
           color: stage.present ? 'var(--ink)' : 'var(--muted)' }}>
           {/* Shape carries the state, not colour (1.4.1): done, working, unreported. */}
           <span aria-hidden="true">
-            {stage.state === 'complete' ? '●' : stage.state === 'active' ? '◐' : '○'}
+            {stage.state === 'complete' ? '●' : stage.state === 'active' ? '◐'
+              : stage.state === 'failed' ? '■' : stage.state === 'cancelled' ? '×' : '○'}
           </span>
           {stage.label}
           {stage.present && <span className="muted">
@@ -1260,10 +1261,12 @@ function RunTiming({ timing, nowMs }) {
  * cannot. Nothing here shows the error text, and nothing here shows a document.
  */
 function RunTrouble({ trouble }) {
-  if (!trouble.kind && !trouble.retrying) return null
+  if (!trouble.kind && !trouble.retrying && !trouble.stalled) return null
   return <p role="status" style={{ margin: '10px 0 0', padding: '9px 11px', fontSize: 12,
     borderLeft: `4px solid ${TONE.warn}`, background: 'var(--warn-bg)', color: 'var(--ink)' }}>
     <span aria-hidden="true">▲ </span>
+    {trouble.stalled && <b>Stage appears stalled</b>}
+    {trouble.stalled && trouble.label ? ' · ' : ''}
     {trouble.label && <b>{trouble.label}</b>}
     {trouble.label && trouble.attempts != null ? ' · ' : ''}
     {trouble.attempts != null && `${trouble.attempts} attempt${trouble.attempts === 1 ? '' : 's'}`}
