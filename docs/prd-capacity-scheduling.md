@@ -385,10 +385,18 @@ Phase 1 asks for an Assess queue scaler. `acp-assess` runs **5–5**: floor equa
 scale rule attached to it cannot add a replica no matter what it computes, and applying one costs
 a revision — a worker restart — for a rule that provably cannot fire.
 
-Raising the ceiling spends the same connections §5.3's floors want, and there is a second claim on
-them: `acp-discovery`'s replica range is under review in an open pull request that moves it from
-1–2 to 4–6, which spends **14 of the 15 remaining connections**. Whichever lands first takes the
-budget.
+Raising the ceiling spends the same connections §5.3's floors want, and there was a second claim
+on them. **That claim has now landed.** #1533 moved `acp-discovery` from 1–2 to 4–6 on
+2026-09-06, spending 14 of the 15 connections that were spare:
+
+| | Steady | During overlap | + reserve | Headroom |
+|---|---:|---:|---:|---:|
+| Before #1533 | 82 | 120 | 135 | 15 |
+| **After #1533 (today)** | **90** | **134** | **149** | **1** |
+
+One connection is not a replica. `acp-assess` is pinned at 2 connections per replica, so the
+budget now affords **zero** additional assess ceiling — the question is no longer "how much" but
+"where from".
 
 **This needs an owner decision, and it is a capacity-purchasing decision, not an engineering one.**
 The options, in order of preference:
@@ -421,6 +429,11 @@ The options, in order of preference:
 
 Until one is chosen, `rightsize-production.sh` generates the assess rule and **skips applying it**,
 printing why. That is Phase 1 delivered as far as it can honestly go.
+
+> **Confirmed through the shipped code, 2026-09-06.** `GET /control/capacity-schedule` returns
+> the §5.3 table with `blocked: true`, `over_connection_budget`, and a headroom of **-17**. The
+> validator that Phase 3's write will call already refuses the schedule this PRD proposes, which
+> is what the read-only phase was for.
 
 ## R4 — The queue scalers counted work no worker could claim (fixed)
 
@@ -491,7 +504,7 @@ Phase 3 should say so explicitly, because the obvious implementation — a cron 
 | Phase | Change from §14 |
 |---|---|
 | 1 | **Delivered except the Assess ceiling**, which is blocked on the R3 decision. Adds: predicate fix across four scalers, generator + `--check` guard, importable fleet budget, scale-in drain settings, verification runbook. |
-| 1b | **New.** Owner decides R3. Then: raise the assess ceiling, apply the rule, run the runbook against staging. |
-| 2 | Unchanged, plus: the Live Operations capacity-mode strip (R1), and the DST unit tests moved forward (R8). |
+| 1b | **New, and now the critical path.** Owner decides R3 — after #1533 the headroom is one connection, so assess cannot gain any ceiling at all. Then: raise the ceiling, apply the rule, run the runbook against staging. |
+| 2 | **Delivered.** Read-only Scheduling tab in Settings, `GET /control/capacity-schedule` and the admin-only `POST …/validate`, scaler health (with the `pinned` state AC 10 was missing), the Live Operations capacity-mode strip (R1), and the DST tests moved forward (R8). No infrastructure changes, no persistence, no writes. |
 | 3 | Unchanged, plus: name the cron+queue rule mechanism explicitly (R7); validate against the worst mode, not the current one (R2). |
 | 4 | Unchanged. |

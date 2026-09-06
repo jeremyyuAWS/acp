@@ -62,8 +62,12 @@ describe('the settings panel includes access, worker and AI governance', () => {
     // People"). This assertion is deliberately exact, which is why adding a tab has to be a
     // decision recorded in a diff rather than something that quietly appears — the tab list is
     // the whole navigation of the admin panel.
+    // `Scheduling` joined on 2026-09-06, immediately after Worker Configuration, per the
+    // Settings -> Scheduling PRD §4. The two are one job: Worker Configuration sets warm
+    // capacity now, Scheduling says when ACP should hold more of it. It is READ-ONLY — the
+    // writable capacity control stays where it is (queuePanelCapacity.test.jsx).
     expect(tabTexts(await render())).toEqual(
-      ['Owners', 'Users', 'Roles', 'My Data', 'My Scope', 'Worker Configuration', 'AI Governance', 'Review Memory'])
+      ['Owners', 'Users', 'Roles', 'My Data', 'My Scope', 'Worker Configuration', 'Scheduling', 'AI Governance', 'Review Memory'])
   })
 
   it('no longer offers any of the removed ADMIN-ONLY tabs', async () => {

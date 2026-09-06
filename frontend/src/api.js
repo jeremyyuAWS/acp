@@ -1550,6 +1550,20 @@ export const setWorkerReplicas = (minReplicas) => (SIM
       headers: { ...headers(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ min_replicas: minReplicas }),
     }).then(j))
+// The capacity SCHEDULE — what warm capacity ACP intends and when, plus what Azure actually
+// runs and whether the two agree. Read-only in Phase 2: this endpoint writes nothing, and the
+// schedule it returns is the PRD's proposal, which is why `applied` is false and `drift` is
+// empty. A caller must not render this as a live schedule — see CapacitySchedule.jsx.
+//
+// SIM returns the same SHAPE with nothing configured, so the demo renders the tab's honest
+// "not configured" state rather than a blank panel or a fabricated schedule.
+export const getCapacitySchedule = () => (SIM
+  ? sim({ enabled: false, timezone: 'America/Los_Angeles', days: [], start: null, end: null,
+          business_hours: {}, off_hours: {}, maximums: {}, effective_mode: 'off_hours',
+          next_transition_at: null, next_transition_to: null, version: 0, applied: false,
+          validation: null, scalers: {}, observed: {}, drift: [], drift_evaluated: false,
+          azure_configured: false })
+  : fetch(`${BASE}/control/capacity-schedule`, { headers: headers() }).then(j))
 // Azure-side capacity EVIDENCE — how many replicas are actually running right now and recent
 // CPU/memory utilization — distinct from getWorkerReplicas' CONFIGURED min/max. Read-only, open
 // to any signed-in user (same reasoning as getWorkerReplicas). Individual fields (current_replicas,
