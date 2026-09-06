@@ -147,21 +147,8 @@ describe('every mount site passes the events through', () => {
     expect(app).toMatch(/<RemediationRunCard[^>]*events=\{remRun\.events\}/s)
   })
 
-  it('Remediate.jsx feeds the workspace tabs', () => {
-    // SCOPED TO THE TABS' OWN PROPS, deliberately. `<RemediationOpsPanel events={...}/>` is
-    // nested INSIDE this element's `live=` prop with an identical expression, so a lazy
-    // `<RemediationWorkspaceTabs[\s\S]*?events=` matches that inner one and passes with the
-    // tabs' own prop deleted — which is what the mutation harness caught. Slice the element's
-    // attribute region and assert within it.
-    const remediate = readFileSync(join(here, 'Remediate.jsx'), 'utf8')
-    const open = remediate.indexOf('<RemediationWorkspaceTabs')
-    expect(open).toBeGreaterThan(-1)
-    const attrs = remediate.slice(open, remediate.indexOf('review={reviewWorkspace}', open))
-    expect(attrs).toContain('events={runStream?.events || []}')
-  })
-
-  it('the workspace tabs feed their copy of the card', () => {
+  it('the workspace tabs do not render a second compact card', () => {
     const tabs = readFileSync(join(here, 'RemediationWorkspaceTabs.jsx'), 'utf8')
-    expect(tabs).toMatch(/<RemediationRunCard[\s\S]*?events=\{events\}/)
+    expect(tabs).not.toContain('RemediationRunCard')
   })
 })

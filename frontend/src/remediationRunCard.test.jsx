@@ -151,18 +151,10 @@ describe('freshness is reported honestly while polling', () => {
 })
 
 describe('the card outlives a tab change', () => {
-  it('keeps a compact live five-minute throughput view on every tab', () => {
+  it('uses the status-corner heartbeat instead of a second full-width throughput chart', () => {
     const html = render({ snapshot: SNAP, receivedAt: Date.now() })
-    expect(html).toContain('rem-card-throughput')
-    expect(html).toContain('Throughput')
-    expect(html).toContain('last 5 minutes')
-    expect(html).toContain('1.8 documents/min')
-    expect(html).toMatch(/aria-label="1.8 documents per minute over the last 5 minutes"/)
-  })
-
-  it('removes the live throughput strip after the run becomes terminal', () => {
-    const html = render({ snapshot: { ...SNAP, terminal: true, state: 'completed' }, receivedAt: Date.now() })
     expect(html).not.toContain('rem-card-throughput')
+    expect(html).not.toContain('Throughput · last 5 minutes')
   })
 
   it('is mounted outside the tab panel, so a tab change cannot unmount it', () => {
