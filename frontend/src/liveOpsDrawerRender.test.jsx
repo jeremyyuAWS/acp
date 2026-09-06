@@ -146,7 +146,9 @@ describe('Primary visualization per node', () => {
       node: { kind: 'worker', label: 'Assess workers', service: measured } })
     const panel = container.querySelector('[aria-label="ACP worker replicas"]')
     expect(panel).toBeTruthy()
-    expect(panel.textContent).toContain('1 unique reported')
+    // "reporting", not "unique reported": the header now counts the replicas that are actually
+    // heartbeating and summarises the rest, because the registry prunes nothing.
+    expect(panel.textContent).toContain('1 reporting')
     expect(panel.textContent).toContain('assess-replica-a')
     expect(panel.textContent).toContain('2 worker processes')
     expect(panel.textContent).toContain('3 of 4 slots busy')
@@ -1835,6 +1837,88 @@ describe('Job placement', () => {
     const panel = container.querySelector('[aria-label="Per-replica job placement"]')
     expect(panel.textContent).toMatch(/does not report which replica/i)
     // No fabricated rows, and no "0 replicas" that would read as an idle fleet.
+    expect(panel.querySelectorAll('li')).toHaveLength(0)
+  })
+})
+
+describe('What the worker service is doing', () => {
+  // Asked for 2026-09-06 with a screenshot: the drawer led with 1000 stale replica names and
+  // buried the work. These assert the reordering and the content, at the DOM level.
+  const busy = {
+    ...snapshot,
+    runs: [{ ...snapshot.runs[0], in_flight: [
+      { job_id: 'j1', file: 'Employee Handbook.docx', rule_id: 'WCAG 1.4.3',
+        job_type: 'assess_file', phase: 'remediating', started_at: iso(-45),
+        heartbeat_at: iso(-2), attempts: 0 },
+      { job_id: 'j2', file: 'Benefits Policy.pdf', rule_id: 'WCAG 1.1.1',
+        job_type: 'assess_file', phase: 'verifying', started_at: iso(-300),
+        heartbeat_at: iso(-6), attempts: 1 },
+    ] }],
+  }
+
+  it('names every document in flight, its criterion, and what is happening to it', async () => {
+    const container = await mount({ nodeId: 'stage:assess', snapshot: busy,
+      node: { kind: 'worker', label: 'Assess workers', service } })
+    const work = container.querySelector('[aria-label="Current work"]')
+
+    expect(work.textContent).toContain('2 documents in flight')
+    expect(work.textContent).toContain('Employee Handbook.docx')
+    expect(work.textContent).toContain('Benefits Policy.pdf')
+    expect(work.textContent).toContain('WCAG 1.4.3')
+    expect(work.textContent).toContain('WCAG 1.1.1')
+    // The handler's own phase, in words rather than as a raw enum.
+    expect(work.textContent).toContain('Applying fixes')
+    expect(work.textContent).toContain('Verifying the fix')
+    // Runtime and lease freshness as two facts, because they answer different questions.
+    expect(work.textContent).toMatch(/running 5m/)
+    expect(work.textContent).toMatch(/lease 6s old/)
+    expect(work.textContent).toContain('attempt 2')
+  })
+
+  it('puts the work above the fleet inventory', async () => {
+    // The reordering IS the fix. Four panels about the fleet's size used to come before the one
+    // about its work, so this asserts document order, not just presence.
+    const container = await mount({ nodeId: 'stage:assess', snapshot: busy,
+      node: { kind: 'worker', label: 'Assess workers',
+        service: { ...service, instances: [{ replica_id: 'rep-a', healthy: true, fresh: true,
+          process_count: 1, concurrency_limit: 2, active_job_count: 1,
+          last_heartbeat_at: iso(-3) }] } } })
+    const html = container.innerHTML
+    expect(html.indexOf('Current work')).toBeGreaterThan(-1)
+    expect(html.indexOf('ACP worker replicas')).toBeGreaterThan(-1)
+    expect(html.indexOf('Current work')).toBeLessThan(html.indexOf('ACP worker replicas'))
+  })
+
+  it('counts stale replica rows instead of listing a thousand of them', async () => {
+    // Production reported 1000 rows, every one Stale and `0 of 0 slots busy`, from revisions
+    // retired a day earlier — worker_instances is written on every heartbeat and pruned by
+    // nothing. Counted, not dropped: "none of them are live" is itself a signal.
+    const instances = [{ replica_id: 'live-a', healthy: true, fresh: true, process_count: 1,
+      concurrency_limit: 2, active_job_count: 1, last_heartbeat_at: iso(-3) }]
+    for (let i = 0; i < 40; i += 1) {
+      instances.push({ replica_id: `dead-${i}`, healthy: false, fresh: false, process_count: 1,
+        concurrency_limit: 0, active_job_count: 0, last_heartbeat_at: iso(-90000) })
+    }
+    const container = await mount({ nodeId: 'stage:assess',
+      node: { kind: 'worker', label: 'Assess workers', service: { ...service, instances } } })
+    const panel = container.querySelector('[aria-label="ACP worker replicas"]')
+
+    expect(panel.textContent).toContain('1 reporting')
+    expect(panel.textContent).toContain('40 stale')
+    expect(panel.textContent).toContain('live-a')
+    expect(panel.textContent).not.toContain('dead-0')
+    expect(panel.querySelectorAll('li')).toHaveLength(1)
+  })
+
+  it('says so when every replica row is stale', async () => {
+    const instances = Array.from({ length: 5 }, (_, i) => ({ replica_id: `dead-${i}`,
+      healthy: false, fresh: false, process_count: 1, concurrency_limit: 0,
+      active_job_count: 0, last_heartbeat_at: iso(-90000) }))
+    const container = await mount({ nodeId: 'stage:assess',
+      node: { kind: 'worker', label: 'Assess workers', service: { ...service, instances } } })
+    const panel = container.querySelector('[aria-label="ACP worker replicas"]')
+    expect(panel.textContent).toContain('No replica is currently reporting')
+    expect(panel.textContent).toContain('5 stale')
     expect(panel.querySelectorAll('li')).toHaveLength(0)
   })
 })

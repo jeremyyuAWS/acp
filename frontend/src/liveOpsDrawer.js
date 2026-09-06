@@ -510,18 +510,46 @@ export const PRODUCED_ERROR_CLASSES = ['rate_limit', 'auth', 'corrupt', 'transie
  * function reads is the per-run `current_*` fields, which name a file and are therefore kept to
  * the service level. Per-replica placement lives in replicaJobLoad, which carries no filenames.
  */
+export const PHASE_LABELS = {
+  discovering: 'Listing documents', downloading: 'Downloading', remediating: 'Applying fixes',
+  verifying: 'Verifying the fix', saving: 'Saving corrected copy', storing: 'Storing output',
+  lifecycle: 'Applying lifecycle rules', queued: 'Waiting to start', done: 'Finishing',
+  error: 'Failed', cancelled: 'Cancelling',
+}
+
 export function workerJobHealth(snapshot = {}, stage, { nowMs = Date.now() } = {}) {
   const runs = (snapshot?.runs || []).filter((run) => run.stage === stage)
-  const jobs = runs
-    .filter((run) => run.current_file || run.current_job_started_at)
-    .map((run) => ({
+  // One row per IN-FLIGHT JOB, not one per run. `current_file` names whichever running row the
+  // store happened to read first, so a stage with forty jobs in flight showed one document and
+  // the panel read as though the service were barely working. `in_flight` carries them all (up
+  // to the store's own bound); a snapshot from before that field existed still renders, from the
+  // single current_* job, rather than going blank on an older backend mid-rollout.
+  const jobs = runs.flatMap((run) => {
+    const rows = Array.isArray(run.in_flight) && run.in_flight.length
+      ? run.in_flight
+      : (run.current_file || run.current_job_started_at
+        ? [{ file: run.current_file, rule_id: run.current_rule_id,
+          job_type: run.current_job_type, started_at: run.current_job_started_at,
+          heartbeat_at: run.current_job_heartbeat_at, phase: null, attempts: null }]
+        : [])
+    return rows.map((row, index) => ({
+      key: row.job_id || `${run.scan_id}:${index}`,
       scanId: run.scan_id,
       owner: run.owner || null,
-      file: run.current_file || null,
-      ruleId: run.current_rule_id || null,
-      jobType: run.current_job_type ? String(run.current_job_type).replaceAll('_', ' ') : null,
-      runtimeS: secondsSince(run.current_job_started_at, nowMs),
+      file: row.file || null,
+      ruleId: row.rule_id || null,
+      jobType: row.job_type ? String(row.job_type).replaceAll('_', ' ') : null,
+      // What the handler says it is doing. Unmapped values pass through as themselves rather
+      // than being dropped — a new phase should read as itself, not disappear.
+      phase: row.phase ? (PHASE_LABELS[row.phase] || String(row.phase)) : null,
+      runtimeS: secondsSince(row.started_at, nowMs),
+      // Lease freshness is a DIFFERENT fact from runtime: a job running an hour with a heartbeat
+      // two seconds old is healthy, and one running a minute with a heartbeat two minutes old is
+      // not. Showing only runtime made those look identical.
+      heartbeatS: secondsSince(row.heartbeat_at, nowMs),
+      attempts: row.attempts == null ? null : num(row.attempts),
     }))
+  })
   const failing = runs
     .filter((run) => run.last_error_class)
     .map((run) => ({ scanId: run.scan_id, kind: run.last_error_class,
