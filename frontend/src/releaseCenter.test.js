@@ -53,7 +53,16 @@ describe('Release Center: confirmation before a release', () => {
     expect(s).toMatch(/releaseConfirmLines\(\{ count: cnt, provider: releaseProvider, anyDrive: batchAnyDrive/)
     expect(s).toMatch(/setConfirm\(null\); if \(isBatch\) publishAll\(targets\.map\(\(f\) => f\.file\), confirm\.folderName \|\| ''\); else publish\(confirm\.file\)/)
     // Escape closes it.
-    expect(s).toMatch(/if \(e\.key === 'Escape'\) setConfirm\(null\)/)
+    expect(s).toMatch(/if \(e\.key === 'Escape'\)/)
+  })
+
+  it('traps keyboard focus and restores it when confirmation closes', () => {
+    const s = pub()
+    expect(s).toMatch(/confirmDialogRef\.current\?\.querySelectorAll/)
+    expect(s).toMatch(/e\.shiftKey && document\.activeElement === first/)
+    expect(s).toMatch(/document\.activeElement === last/)
+    expect(s).toMatch(/previousFocus\?\.isConnected/)
+    expect(s).toMatch(/ref=\{confirmCancelRef\}/)
   })
 
   it('labels each row with where its corrected copy will land', () => {
@@ -78,6 +87,40 @@ describe('Release Center: confirmation before a release', () => {
     expect(s).toMatch(/await getReleaseStatus\(run\.id\)/)
     expect(s).toMatch(/row\.status === 'queued' \|\| row\.status === 'running'/)
     expect(s).toMatch(/still running safely in the background/)
+  })
+
+  it('resumes polling a durable release after navigation or reload', () => {
+    const s = pub()
+    expect(s).toMatch(/const refresh = async \(\) =>/)
+    expect(s).toMatch(/\(status\.documents \|\| \[\]\)\.some\(\(row\) => row\.status === 'queued' \|\| row\.status === 'running'\)/)
+    expect(s).toMatch(/window\.setTimeout\(refresh, 2000\)/)
+    expect(s).toMatch(/window\.clearTimeout\(timer\)/)
+  })
+
+  it('shows actionable recovery controls instead of hiding release errors', () => {
+    const s = pub()
+    expect(s).toMatch(/className="release-recovery" role="alert"/)
+    expect(s).toMatch(/>Retry<\/button>/)
+    expect(s).toMatch(/<summary>View details<\/summary>/)
+    expect(s).toMatch(/Open Live Operations/)
+    expect(s).toMatch(/workflow-tab-liveops/)
+  })
+
+  it('uses the real source provider in freshness and released-file actions', () => {
+    const s = pub()
+    expect(s).toMatch(/sourceProduct = releaseProvider === 'sharepoint' \? 'SharePoint'/)
+    expect(s).toMatch(/changed at the source in \{sourceProduct\}/)
+    expect(s).toMatch(/Open in \{sourceProduct\}/)
+    expect(s).not.toMatch(/changed at the source in Drive/)
+  })
+
+  it('offers visible and optional system completion notifications', () => {
+    const s = pub()
+    expect(s).toMatch(/className="release-notice" role="status"/)
+    expect(s).toMatch(/new Notification\(/)
+    expect(s).toMatch(/document\.hidden/)
+    expect(s).toMatch(/Play a short sound when a release finishes/)
+    expect(s).toMatch(/Enable browser notifications/)
   })
 })
 

@@ -30,6 +30,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [releaseFolders, setReleaseFolders] = useState([])
   const [releaseResults, setReleaseResults] = useState({})
   const [releaseAnnouncement, setReleaseAnnouncement] = useState('')
+  const [releaseError, setReleaseError] = useState(null)
   const [manifestError, setManifestError] = useState('')
   const [publishing, setPublishing] = useState(false)
   const [downloading, setDownloading] = useState(false)
@@ -41,6 +42,12 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [previewingRelease, setPreviewingRelease] = useState(false)
   const [selectedFiles, setSelectedFiles] = useState(() => new Set())
   const builderRef = useRef(null)
+  const confirmDialogRef = useRef(null)
+  const confirmCancelRef = useRef(null)
+  const releaseHadPendingRef = useRef(false)
+  const [completionSound, setCompletionSound] = useState(() => {
+    try { return window.localStorage.getItem('acp.release.completionSound') === 'on' } catch { return false }
+  })
   const [sel, setSel] = useState(null)
   // Why is the publish queue empty? A remediated file only becomes certifiable once its
   // human-review findings are approved. Fetch the pending HITL queue so the empty state can
@@ -68,15 +75,31 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const driveMirrorEnabled = ms === MIRROR.ON
   const driveMirrorFolder = settings?.drive_mirror_folder?.trim() || 'Remediated'
   const releaseProvider = run?.source
+  const sourceProduct = releaseProvider === 'sharepoint' ? 'SharePoint'
+    : releaseProvider === 'drive' ? 'Google Drive' : run?.sourceName || 'connected source'
   const anyDrive = releaseProvider === 'drive' && ready.some((f) => f.drive_file_id)
   // A release is confirmed before it runs: { kind: 'all' } or { kind: 'file', file }. The buttons
   // set this; the modal's confirm calls the real publish path below.
   const [confirm, setConfirm] = useState(null)
   useEffect(() => {
     if (!confirm) return
-    const onKey = (e) => { if (e.key === 'Escape') setConfirm(null) }
+    const previousFocus = document.activeElement
+    const frame = window.requestAnimationFrame(() => confirmCancelRef.current?.focus())
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); setConfirm(null); return }
+      if (e.key !== 'Tab') return
+      const focusable = [...(confirmDialogRef.current?.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), [tabindex]:not([tabindex="-1"])') || [])]
+      if (!focusable.length) return
+      const first = focusable[0]; const last = focusable[focusable.length - 1]
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+    }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    return () => {
+      window.cancelAnimationFrame(frame)
+      window.removeEventListener('keydown', onKey)
+      if (previousFocus?.isConnected) window.requestAnimationFrame(() => previousFocus.focus())
+    }
   }, [confirm])
   // Source-staleness (Phase 3): has each file's SOURCE changed in Drive since the scan? Best-effort
   // — a scan with nothing trackable returns all-untracked, and any error leaves the map empty (no
@@ -126,6 +149,21 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const orgLabel = me?.email
     ? me.email.split('@')[1]?.replace(/\.[^.]+$/, '') || me.name || 'your organisation'
     : me?.name || 'your organisation'
+  const notifyReleaseComplete = (successful, failed) => {
+    const body = `${successful} ${successful === 1 ? 'copy' : 'copies'} delivered${failed ? `; ${failed} need attention` : ''}.`
+    if (document.hidden && typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      const notice = new Notification(failed ? 'Release completed with issues' : 'Release complete', { body })
+      notice.onclick = () => { window.focus(); document.getElementById('workflow-tab-publish')?.click() }
+    }
+    if (completionSound) {
+      try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext
+        const audio = new AudioContext(); const oscillator = audio.createOscillator(); const gain = audio.createGain()
+        oscillator.frequency.value = failed ? 330 : 660; gain.gain.value = 0.04
+        oscillator.connect(gain); gain.connect(audio.destination); oscillator.start(); oscillator.stop(audio.currentTime + 0.14)
+      } catch { /* sound is optional */ }
+    }
+  }
   const rememberRelease = (res, expectedFiles = []) => {
     if (res?.release_id) setReleaseId(res.release_id)
     const roots = res?.release_folders || res?.roots || []
@@ -162,6 +200,11 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     }
     const failed = rows.filter((row) => row.status === 'failed').length
     const inFlight = rows.filter((row) => row.status === 'queued' || row.status === 'running').length
+    if (inFlight) releaseHadPendingRef.current = true
+    else if (rows.length && releaseHadPendingRef.current) {
+      releaseHadPendingRef.current = false
+      notifyReleaseComplete(successful.length, failed)
+    }
     setReleaseAnnouncement(inFlight
       ? `${inFlight} corrected ${inFlight === 1 ? 'copy is' : 'copies are'} being released.`
       : `${successful.length} corrected ${successful.length === 1 ? 'copy' : 'copies'} released${failed ? `; ${failed} need attention` : ''}.`)
@@ -198,13 +241,28 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   }
   useEffect(() => {
     let live = true
+    let timer = null
     if (!run?.id) return undefined
-    getReleaseStatus(run.id).then((status) => {
-      if (!live || !status?.release_id) return
-      applyReleaseStatus(status)
-    }).catch(() => {})
-    return () => { live = false }
-    // Release state is durable; reload it when the selected scan changes.
+    const refresh = async () => {
+      try {
+        const status = await getReleaseStatus(run.id)
+        if (!live || !status?.release_id) return
+        applyReleaseStatus(status)
+        setReleaseError(null)
+        const pending = (status.documents || []).some((row) => row.status === 'queued' || row.status === 'running')
+        if (pending) timer = window.setTimeout(refresh, 2000)
+      } catch (error) {
+        if (!live) return
+        setReleaseError({
+          summary: 'Release progress could not be refreshed.',
+          details: error?.message || 'ACP could not reach the release status service.',
+          retry: refresh,
+        })
+      }
+    }
+    refresh()
+    return () => { live = false; if (timer) window.clearTimeout(timer) }
+    // Release state is durable; reload and resume polling when the selected scan changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run?.id])
   const publish = async (file) => {
@@ -219,7 +277,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         return
       }
       if (successful.some((row) => row.file === file)) onPublish?.(file)
-    } catch { setReleaseAnnouncement('Release failed. The original file is unchanged; retry when the connection is available.') }
+    } catch (error) {
+      setReleaseAnnouncement('Release failed. The original file is unchanged; retry when the connection is available.')
+      setReleaseError({ summary: 'The corrected copy could not be released.', details: error?.message || 'The release service did not complete the request.', retry: () => publish(file) })
+    }
   }
   const publishAll = async (fileNames = null, preferredFolderName = '') => {
     if (publishing) return
@@ -239,7 +300,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         return
       }
       successful.forEach((row) => onPublish?.(row.file))
-    } catch { /* best-effort */ }
+    } catch (error) {
+      setReleaseError({ summary: 'The selected copies could not be released.', details: error?.message || 'The release service did not complete the request.', retry: () => publishAll(fileNames, preferredFolderName) })
+    }
     setPublishing(false)
   }
   const downloadSelected = async () => {
@@ -250,6 +313,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       setReleaseAnnouncement(`Package downloaded with ${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file' : 'files'} and a release manifest.`)
     } catch (error) {
       setReleaseAnnouncement(error?.message || 'The corrected files could not be packaged for download.')
+      setReleaseError({ summary: 'The ZIP package could not be downloaded.', details: error?.message || 'ACP could not build the release package.', retry: downloadSelected })
     }
     setDownloading(false)
   }
@@ -355,6 +419,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       setBuilderStep(3)
     } catch (error) {
       setReleaseAnnouncement(error?.message || 'The release destination could not be previewed.')
+      setReleaseError({ summary: 'The destination could not be checked.', details: error?.message || 'ACP could not preview the release destination.', retry: reviewDelivery })
     }
     setPreviewingRelease(false)
   }
@@ -397,6 +462,26 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           <div className={failedCount ? 'release-metric--warn' : ''}><b>{failedCount}</b><span>Failed</span></div>
         </div>
       </section>
+      {releaseError && (
+        <section className="release-recovery" role="alert" aria-labelledby="release-error-title">
+          <div>
+            <b id="release-error-title">{releaseError.summary}</b>
+            <p>{releaseError.details}</p>
+            <details><summary>View details</summary><p>Scan {run?.id || 'unknown'} · {sourceProduct}. Completed copies remain safe and original files are unchanged.</p></details>
+          </div>
+          <div className="release-recovery__actions">
+            <button className="qbtn approve" onClick={() => { const retry = releaseError.retry; setReleaseError(null); retry?.() }}>Retry</button>
+            <button className="ghost" onClick={() => document.getElementById('workflow-tab-liveops')?.click()}>Open Live Operations</button>
+            <button className="ghost" onClick={() => setReleaseError(null)}>Dismiss</button>
+          </div>
+        </section>
+      )}
+      {releaseAnnouncement && !releaseError && (
+        <div className="release-notice" role="status">
+          <span>{releaseAnnouncement}</span>
+          <button className="ghost small" onClick={() => setReleaseAnnouncement('')}>Dismiss</button>
+        </div>
+      )}
       {/* Release Center — the controlled-release summary. NOT a conformance certificate: ACP's
           automated checks verify WITHIN the selected scope; they cannot certify overall WCAG
           conformance. The estate score and "certifiable/conformant" language are gone for exactly
@@ -420,7 +505,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           <div style={{ textAlign: 'right', minWidth: 150, fontSize: 13.5, lineHeight: 1.9 }}>
             <div><b style={{ color: 'var(--success-fg)', fontSize: 17 }}>{ready.length}</b> ready for release</div>
             <div><b style={{ color: pubStarted ? 'var(--success-fg)' : 'var(--muted)', fontSize: 17 }}>{pubStarted ? publishedCount : 0}</b> released</div>
-            <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Policy: remediated copy → {driveMirrorEnabled && anyDrive ? <>Drive “{driveMirrorFolder}” + Blob</> : 'Blob'}</div>
+            <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Policy: remediated copy → {releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}</div>
           </div>
         </div>
         <div style={{ marginTop: 14, fontSize: 12.5 }}>
@@ -500,6 +585,15 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         <div className="muted" style={{ fontSize: 12.5, marginTop: 6, lineHeight: 1.6 }}>
           The source file is <b>never overwritten</b>. ACP verifies the criteria in scope — it does not certify overall WCAG conformance.
         </div>
+        <div className="release-notification-settings">
+          <label><input type="checkbox" checked={completionSound} onChange={(e) => {
+            setCompletionSound(e.target.checked)
+            try { window.localStorage.setItem('acp.release.completionSound', e.target.checked ? 'on' : 'off') } catch { /* preference stays in this tab */ }
+          }} /> Play a short sound when a release finishes</label>
+          {typeof Notification !== 'undefined' && Notification.permission === 'default' && (
+            <button className="ghost small" onClick={() => Notification.requestPermission()}>Enable browser notifications</button>
+          )}
+        </div>
         <details style={{ marginTop: 8 }}>
           <summary className="linklike" style={{ cursor: 'pointer', fontSize: 12.5 }}>Why can’t I replace the original?</summary>
           <div className="muted" style={{ fontSize: 12.5, marginTop: 6, lineHeight: 1.6, maxWidth: 640 }}>
@@ -528,7 +622,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         </div>
         {staleReady.length > 0 && (
           <div style={{ marginTop: 10, padding: '10px 14px', borderRadius: 9, background: '#FDECEC', border: '1px solid #E9A8A8', color: '#8A1F1F', display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-            <span>⚠ <b>{staleReady.length} document{staleReady.length !== 1 ? 's' : ''}</b> changed at the source in Drive since this scan — re-scan before releasing, or a released fix may be built on an out-of-date version.</span>
+            <span>⚠ <b>{staleReady.length} document{staleReady.length !== 1 ? 's' : ''}</b> changed at the source in {sourceProduct} since this scan — re-scan before releasing, or a released fix may be built on an out-of-date version.</span>
             <button className="ghost small" disabled={readOnly || rescanBusy} onClick={rescanStale}>
               {rescanBusy ? 'Re-scanning…' : `↻ Re-scan changed sources (${staleReady.length})`}
             </button>
@@ -565,7 +659,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                     {srcOf(f) === 'stale' && <span className="release-file-warning" title="The source file changed after this scan — re-scan before releasing">⚠ source changed</span>}
                     {srcOf(f) === 'unavailable' && <span className="release-file-warning" title="ACP could not read the source now (moved, deleted, or access lost)">source unreachable</span>}
                   </div>
-                  {done[f.file] && <div className="release-file-outcome">✓ Released · audit recorded{pubUrls[f.file] && <> · <a href={pubUrls[f.file]} target="_blank" rel="noopener noreferrer">Open in Drive ↗</a></>}</div>}
+                  {done[f.file] && <div className="release-file-outcome">✓ Released · audit recorded{pubUrls[f.file] && <> · <a href={pubUrls[f.file]} target="_blank" rel="noopener noreferrer">Open in {sourceProduct} ↗</a></>}</div>}
                 </div>
                 <button className="ghost small release-file-action" onClick={() => setSel(f)}>View details</button>
               </div>)}
@@ -682,13 +776,13 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
             <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--muted)', marginBottom: 6 }}>📋 Audit trail · {publishedEntries.length} released</div>
             {publishedEntries.slice(0, 8).map((e) => (
               <div key={e.file} style={{ fontSize: 12.5, padding: '5px 0', borderBottom: '1px solid var(--line)' }}>
-                ✓ <b>{e.file}</b> <span className="muted">· fixed copy in Blob · source not overwritten · audit recorded · {fmtPublished(e)}{pubUrls[e.file] && <> · <a href={pubUrls[e.file]} target="_blank" rel="noopener noreferrer">↗ open in Drive</a></>}</span>
+                ✓ <b>{e.file}</b> <span className="muted">· fixed copy in Blob · source not overwritten · audit recorded · {fmtPublished(e)}{pubUrls[e.file] && <> · <a href={pubUrls[e.file]} target="_blank" rel="noopener noreferrer">↗ open in {sourceProduct}</a></>}</span>
               </div>
             ))}
             {publishedEntries.length > 8 && <div className="muted" style={{ fontSize: 12, marginTop: 5 }}>+{publishedEntries.length - 8} more</div>}
           </div>
         ) : (
-          <p className="muted" style={{ marginTop: 12 }}>{driveMirrorEnabled ? `Releasing writes the fixed copy to the Drive “${driveMirrorFolder}” folder and Azure Blob storage and records each release in the audit trail here.` : 'Releasing writes the fixed copy to Azure Blob storage and records each release in the audit trail here.'}</p>
+          <p className="muted" style={{ marginTop: 12 }}>Releasing writes the fixed copy to {releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })} and records each release in the audit trail here.</p>
         )}
       </section>
 
@@ -706,7 +800,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         return (
           <div role="dialog" aria-modal="true" aria-label="Confirm release" onClick={() => setConfirm(null)}
                style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.42)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: 20 }}>
-            <div onClick={(e) => e.stopPropagation()}
+            <div ref={confirmDialogRef} onClick={(e) => e.stopPropagation()}
                  style={{ background: 'var(--panel, #fff)', color: 'var(--ink)', border: '1px solid var(--line)', borderRadius: 12, padding: '20px 22px', maxWidth: 520, width: '100%', boxShadow: '0 12px 40px rgba(0,0,0,0.25)' }}>
               <h3 style={{ margin: '0 0 12px' }}>{isBatch ? `Publish ${cnt} corrected ${cnt === 1 ? 'copy' : 'copies'}?` : `Release ${confirm.file}?`}</h3>
               <ul style={{ margin: '0 0 18px', paddingLeft: 18, fontSize: 13.5, lineHeight: 1.65 }}>
@@ -714,7 +808,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                 {lines.map((l, i) => <li key={i}>{l}</li>)}
               </ul>
               <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
-                <button className="ghost" onClick={() => setConfirm(null)}>Cancel</button>
+                <button ref={confirmCancelRef} className="ghost" onClick={() => setConfirm(null)}>Cancel</button>
                 <button className="qbtn approve" onClick={onGo} disabled={cnt === 0}>{isBatch ? `Publish ${cnt}` : 'Release'}</button>
               </div>
             </div>
