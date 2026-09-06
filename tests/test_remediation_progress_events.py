@@ -515,6 +515,81 @@ def test_work_still_in_flight_always_holds_the_stream_open():
     assert _finished(in_flight=2, state="completed", also=[], delivery={"pending": 0}) is False
 
 
+# ── an operator hold is a wait on a human, and closes like one ───────────────
+#
+# `paused` arrived in #1474, after this close rule shipped, and landed on the wrong side of it.
+# Pause defers a held run's queued jobs to a year-9999 sentinel rather than removing them, so
+# `in_flight` (queued + running) stays positive and the FIRST clause held the stream open for up
+# to the iteration cap against work that cannot be claimed while the hold stands — the exact
+# "leak dressed up as liveness" the `needs_attention` rule exists to prevent.
+
+def test_an_operator_hold_closes_the_stream_once_nothing_is_running():
+    """Held work is queued-but-unclaimable, so `in_flight` is positive and must not decide this."""
+    assert _finished(in_flight=3, state="paused", also=["waiting"],
+                     documents={"processing": 0, "waiting": 3},
+                     delivery={"pending": 0}) is True
+
+
+def test_a_hold_taken_mid_flight_keeps_streaming_until_the_attempts_drain():
+    """The half that must NOT close. `paused` is derived while there is work a hold could be
+    holding, and attempts already claimed keep running after the hold is taken — #1474's own
+    comment says a pause taken while three attempts are in flight should say so. Cutting the
+    stream there would drop live frames from work that is genuinely still moving."""
+    assert _finished(in_flight=5, state="paused", also=["running"],
+                     documents={"processing": 2, "waiting": 3},
+                     delivery={"pending": 0}) is False
+
+
+def test_a_hold_with_an_unknown_processing_count_keeps_the_stream_open():
+    """Unknown is never success, here as everywhere else in this function: without a count there
+    is no evidence the attempts have drained, and closing would assert one."""
+    assert _finished(in_flight=3, state="paused", also=[], delivery={"pending": 0}) is False
+    assert _finished(in_flight=3, state="paused", also=[], documents={},
+                     delivery={"pending": 0}) is False
+
+
+def test_only_the_headline_paused_closes_early_not_a_paused_mention_in_also():
+    """`paused` outranks everything but cancellation in `derive_run_state`, so it is the headline
+    whenever it applies. Reading `also` here — as the `completing` clause deliberately does —
+    would close a running run that merely satisfies some other predicate."""
+    assert _finished(in_flight=2, state="running", also=["paused", "waiting"],
+                     documents={"processing": 2}, delivery={"pending": 0}) is False
+
+
+def test_the_hold_clause_is_the_only_thing_that_changed():
+    """The bite check. Every input the rule answered before must answer the same way now, or this
+    is not a narrowed exception but a rewrite — and the client's `onDone` finalizes the batch, so
+    a rule that closes early is worse than one that closes late."""
+    unchanged = [
+        (dict(in_flight=2, state="completed", also=[], delivery={"pending": 0}), False),
+        (dict(in_flight=0, state="completed", also=[], delivery={"pending": 0}), True),
+        (dict(in_flight=0, state="completing", also=[], delivery={"pending": 2}), False),
+        (dict(in_flight=0, state="needs_attention", also=["completing"],
+              delivery={"pending": 1}), False),
+        (dict(in_flight=0, state="needs_attention", also=[], delivery={"pending": 0}), True),
+        (dict(in_flight=0, state="completed", also=[], delivery={}), False),
+        (dict(in_flight=0, state="completed", also=[]), False),
+    ]
+    for kwargs, expected in unchanged:
+        assert _finished(**kwargs) is expected, kwargs
+
+
+def test_a_paused_run_really_does_reach_the_paused_state_with_queued_work():
+    """The bite check on the fixtures above: every one asserts against a literal `paused`, so if
+    a held run with queued documents never actually reaches that state, they test nothing."""
+    import remediation_run
+    counters = {k: 0 for k in remediation_run.DOCUMENT_OUTCOMES}
+    counters["waiting"] = 3
+    resolved = remediation_run.derive_run_state(
+        counters, total=3, claimed_any=True, paused=True)
+    assert resolved["state"] == "paused"
+    assert resolved["reason"] == "held_by_operator"
+    # ...and without the durable hold row the same run is not paused, so the state really is
+    # carrying the operator's decision rather than an idle queue.
+    assert remediation_run.derive_run_state(
+        counters, total=3, claimed_any=True, paused=False)["state"] != "paused"
+
+
 def test_an_unknown_pending_count_is_not_treated_as_zero():
     """Unknown is never success. Closing on a missing count would tell the client delivery
     finished when nothing said so."""

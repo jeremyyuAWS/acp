@@ -2080,17 +2080,40 @@ def _stream_is_finished(out: dict) -> bool:
     dressed up as liveness. A run parked in review closes exactly as it does today and the
     client's fallback poll takes it from there.
 
-    THIS CAN ONLY EVER EXTEND THE STREAM, never shorten it. The first clause is the condition
-    that shipped; everything after it can only answer "not yet".
+    `paused` (added by #1474 after this rule shipped) is the SAME CATEGORY reached by a different
+    mechanism, and it was being treated as the opposite — see the operator-hold clause below for
+    why the queue depth made it so. Both now close; the wait being on a person is what decides
+    it, not how the queue happens to represent that wait.
+
+    THIS CAN ONLY EVER EXTEND THE STREAM, never shorten it — with ONE deliberate exception, the
+    operator hold below, which is that same rule applied to a state this function predates.
 
     NO SNAPSHOT MEANS FALL BACK TO `in_flight`, never to "finished". The snapshot build is
     wrapped in a try/except above precisely so a stream failure cannot take the stream down; if
     that swallowed, this must degrade to the behaviour that shipped rather than assert completion
     it has no evidence for.
     """
+    snapshot = out.get("snapshot")
+    # AN OPERATOR HOLD IS A WAIT ON A HUMAN, so it closes for the same reason `needs_attention`
+    # does — and it has to be decided BEFORE the `in_flight` clause, because that clause is what
+    # made pause the exception to the rule. `store` defers a held run's queued jobs to a
+    # year-9999 sentinel rather than removing them, so `in_flight` (queued + running) stays
+    # positive and the stream was held open for up to the iteration cap against work that
+    # definitionally cannot be claimed while the hold stands.
+    #
+    # `processing` is what distinguishes the two halves of a pause. Attempts already claimed keep
+    # draining after the hold (that is why `paused` is derived only while there is work a hold
+    # could be holding), and cutting the stream mid-drain would drop live frames from real work.
+    # So: close once nothing is actually running, and only then.
+    if isinstance(snapshot, dict) and snapshot.get("state") == "paused":
+        documents = snapshot.get("documents")
+        processing = documents.get("processing") if isinstance(documents, dict) else None
+        # An unknown count is not zero, here as everywhere else in this function.
+        if processing is not None and int(processing) <= 0:
+            return True
+        return False
     if out.get("in_flight"):
         return False
-    snapshot = out.get("snapshot")
     if not isinstance(snapshot, dict):
         return True
     # `completing` reads exactly "delivery_reconciliation_outstanding". Checked in `also` as well
