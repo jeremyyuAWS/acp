@@ -4749,6 +4749,69 @@ class Store:
             out.setdefault(r["file"], {})[r["kind"]] = r["value"]
         return out
 
+    def remediation_decision_digest(self, scan_id: str, files: list[str],
+                                    owner: str | None = None) -> str:
+        """Digest the human intent that can change remediation for ``files``.
+
+        Filenames alone are not an execution identity: a reviewer can edit an approved value
+        and submit the same file set again. The old fingerprint then reused a completed batch
+        and silently skipped the new instruction. This digest includes only durable semantic
+        decisions—not timestamps, assignments, notes, thumbnails, pending AI drafts, or the
+        ``applied`` flag that remediation itself changes—so an equivalent retry remains stable.
+        """
+        import hashlib as _hashlib
+        import json as _json
+
+        selected = {str(file) for file in files}
+        decision_where, params = "scan_id=%s", [scan_id]
+        if owner is not None:
+            decision_where += " AND owner_email=%s"
+            params.append(owner)
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"SELECT file,kind,value FROM scan_decisions WHERE {decision_where} "
+                "ORDER BY file,kind", tuple(params))
+            decisions = self._db.fetchall(cur)
+            self._db.execute(cur,
+                "SELECT file,rule_id,status,approved_value,proposals,evidence,resolution "
+                "FROM hitl_queue WHERE scan_id=%s AND status IN "
+                "('approved','rejected','skipped') ORDER BY file,rule_id,id", (scan_id,))
+            reviews = self._db.fetchall(cur)
+
+        def _semantic(value):
+            if not isinstance(value, str):
+                return value
+            try:
+                return _json.loads(value)
+            except (TypeError, ValueError):
+                return value
+
+        saved = [{"file": row["file"], "kind": row["kind"],
+                  "value": _semantic(row.get("value"))}
+                 for row in decisions if row.get("file") in selected]
+        reviewed = []
+        for original in reviews:
+            if original.get("file") not in selected:
+                continue
+            row = dict(original)
+            for field in ("proposals", "evidence"):
+                decoded = _semantic(row.get(field) or "[]")
+                row[field] = decoded if isinstance(decoded, list) else []
+            status = row.get("status")
+            reviewed.append({
+                "file": row.get("file"), "rule_id": row.get("rule_id"),
+                "status": status, "resolution": row.get("resolution") or None,
+                "approved_values": (self._row_approved_values(row)
+                                    if status == "approved" else {}),
+                "legacy_approved_value": ((row.get("approved_value") or "").strip()
+                                           if status == "approved"
+                                           and not self._row_is_resolved(row) else ""),
+            })
+        document = {"schema": 1, "files": sorted(selected),
+                    "scan_decisions": saved, "review_decisions": reviewed}
+        encoded = _json.dumps(document, sort_keys=True, separators=(",", ":"), default=str)
+        return _hashlib.sha256(encoded.encode()).hexdigest()
+
     def save_decision(self, scan_id: str, file: str, kind: str, value: str,
                       owner: str | None, when: str) -> None:
         with self._db.cursor() as cur:

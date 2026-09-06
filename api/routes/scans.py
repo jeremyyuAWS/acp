@@ -594,9 +594,16 @@ async def remediate_scan(sid: str, request: Request):
              "checksum": checksums.get(f["file"]) or f.get("checksum")})
     snapshot_id = core.store.stage_snapshot_id(sid)
     # Fingerprint the EFFECTIVE file set, not raw request spelling: adding a nonexistent name or
-    # reordering the same names is still the same work and must reuse the same execution.
+    # reordering the same names is still the same work and must reuse the same execution. Human
+    # intent is part of that identity too: editing an approved value for the same file set must
+    # create new work rather than hand back a completed execution for the old value.
+    selected_files = sorted(p["file"] for p in payloads)
+    decision_digest = core.store.remediation_decision_digest(sid, selected_files, owner=owner)
     request_fingerprint = _json.dumps(
-        {"files": sorted(p["file"] for p in payloads)}, sort_keys=True)
+        {"files": selected_files, "decision_digest": decision_digest}, sort_keys=True)
+    for payload in payloads:
+        # Provenance only; no decision content enters the queue payload.
+        payload["decision_digest"] = decision_digest
     execution = core.store.enqueue_stage_batch(
         sid, "remediate", "remediate_file", payloads, snapshot_id=snapshot_id,
         request_fingerprint=request_fingerprint)
@@ -618,7 +625,8 @@ async def remediate_scan(sid: str, request: Request):
                                     "batch_id": execution["batch_id"]})
     return {"scan_id": sid, "enqueued": len(execution["job_ids"]),
             "job_ids": execution["job_ids"], "batch_id": execution["batch_id"],
-            "snapshot_id": snapshot_id, "reused": execution["reused"],
+            "snapshot_id": snapshot_id, "decision_digest": decision_digest,
+            "reused": execution["reused"],
             # How many DEAD documents this call revived. `enqueued` counts the execution's
             # documents either way, so on its own it cannot tell a retry that queued work from one
             # that matched an existing execution and queued none — which is exactly the question
