@@ -3082,3 +3082,11 @@ html[data-wcag="on"] .wcag-toggle--on {
 /* The stroke is 1.4-2.4px; ReactFlow's own interaction layer widens the hit area, and this makes
    the pointer say so before the click. */
 .react-flow__edge.animated { cursor: pointer; }
+
+/* Visually hidden, still announced. Used by the remediation panel's live region, the ACR manual
+   test plan and the lifecycle table's caption — all of which have been rendering their
+   screen-reader-only text ON SCREEN, because this class was referenced in five components and
+   defined in none. The clip/clip-path pair is the standard belt-and-braces form: `clip` for
+   older engines, `clip-path` for current ones, and `white-space:nowrap` so a hidden string is
+   not collapsed into the layout by a stray line break. */
+.sr-only{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0}

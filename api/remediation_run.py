@@ -29,9 +29,14 @@ import datetime as _dt
 DOCUMENT_OUTCOMES = ("completed", "processing", "waiting", "review", "failed", "skipped")
 
 #: Every run state the panel can display. `draft` and `accepted` are entry states (no work has
-#: been claimed yet); `paused` is declared but NEVER derived — ACP has no pause control for a
-#: remediation run, and a state nothing can produce must not be inferred from an idle queue.
-#: See PRD §18's first open decision.
+#: been claimed yet).
+#:
+#: `paused` WAS declared and never derived, because ACP had no pause control and a state nothing
+#: can produce must not be inferred from an idle queue. That is still the rule, and it is why
+#: this comment changed rather than being deleted: `paused` is derived now ONLY from
+#: `store.remediation_run_hold`, a row an operator's Pause writes. An idle queue with no hold row
+#: is still `waiting`, exactly as before. The state moved because something can produce it, not
+#: because the panel wanted a word for quiet.
 RUN_STATES = (
     "draft", "accepted", "running", "waiting", "retry_scheduled", "needs_attention",
     "paused", "stalled", "completing", "completed", "completed_with_exceptions", "failed",
@@ -350,7 +355,7 @@ def _applicable_states(counters: dict, *, total: int, claimed_any: bool,
 def derive_run_state(counters: dict, *, total: int, claimed_any: bool = False,
                      progress_age_s: float | None = None, retry_at=None,
                      cancel_requested: bool = False, cancelled: bool = False,
-                     corrected_pending_delivery: int = 0,
+                     paused: bool = False, corrected_pending_delivery: int = 0,
                      stall_after_s: int = STALL_AFTER_S,
                      lease_healthy: bool = False) -> dict:
     """The run's single displayed state, its reason code, and the states it also satisfies.
@@ -359,6 +364,14 @@ def derive_run_state(counters: dict, *, total: int, claimed_any: bool = False,
     STATE_PRECEDENCE. `also` is returned so the panel can say "Review required · 20 documents
     still processing" instead of hiding live progress behind the more severe headline — the
     precedence order decides the HEADLINE, not what the run is allowed to mention.
+
+    `paused` is a DURABLE HOLD, passed in from store.remediation_run_hold, and it ranks below
+    cancellation and above everything else — but only while there is still work a hold could be
+    holding. A run whose documents are all terminal is finished, not paused; reporting "Run
+    paused" over a completed run would be the same class of error as reporting "Applying fixes"
+    over an idle queue, which is the defect this module exists to close. The states the run also
+    satisfies still come back in `also`, so a pause taken while three attempts are in flight can
+    say so rather than pretending the work stopped instantly.
     """
     if cancelled:
         return {"state": "cancelled", "reason": "cancelled", "also": []}
@@ -372,6 +385,9 @@ def derive_run_state(counters: dict, *, total: int, claimed_any: bool = False,
         retry_at=retry_at, stall_after_s=stall_after_s,
         corrected_pending_delivery=corrected_pending_delivery,
         lease_healthy=lease_healthy)
+
+    if paused and counters["processing"] + counters["waiting"] > 0:
+        return {"state": "paused", "reason": "held_by_operator", "also": sorted(applicable)}
 
     # Entry state: a durable run exists and nothing has ever been claimed. More precise than
     # `waiting`, which also covers a run whose workers went away mid-flight.
@@ -640,8 +656,9 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
     resolved = derive_run_state(
         counters, total=total, claimed_any=claimed_any, progress_age_s=progress_age,
         retry_at=retry_at, cancel_requested=bool(facts.get("cancel_requested")),
-        cancelled=bool(facts.get("cancelled")), corrected_pending_delivery=pending_delivery,
-        stall_after_s=stall_after_s, lease_healthy=lease_healthy)
+        cancelled=bool(facts.get("cancelled")), paused=bool(facts.get("paused")),
+        corrected_pending_delivery=pending_delivery, stall_after_s=stall_after_s,
+        lease_healthy=lease_healthy)
     state = resolved["state"]
 
     applied = int(facts.get("fixes_applied") or 0)
@@ -660,6 +677,11 @@ def build_snapshot(facts: dict, *, now: _dt.datetime | None = None,
         "also": resolved["also"],
         "message": STATE_MESSAGES.get(state, state),
         "terminal": state in TERMINAL_STATES,
+        # The hold itself, separately from the headline. A run paused WITH attempts in flight
+        # displays `paused` and still has `processing > 0`, and a client that wants to say
+        # "Paused · 3 attempts finishing" needs both facts rather than inferring the second from
+        # the first.
+        "paused": bool(facts.get("paused")),
         "started_at": facts.get("started_at") or None,
         "assessed_at": facts.get("assessed_at") or None,
         "policy_version": facts.get("policy_version") or None,

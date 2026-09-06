@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import LiveCounter from './LiveCounter.jsx'
 import { counterRows, secondaryRows, freshness, headline, partitionSums } from './remediationSnapshot.js'
 import { activityBuckets, attemptStage, milestoneCrossings, retrySeconds } from './remediationLivePanel.js'
+import RemediationExceptions, { useRemediationExceptions, exceptionCount } from './RemediationExceptions.jsx'
 import './remediation-ops-panel.css'
 import './remediation-live-detail.css'
 
@@ -118,12 +119,13 @@ function Activity({ events = [] }) {
   return <section className="remops-activity"><h3>Live activity</h3>{events.length ? <ol aria-label="Recent remediation activity">{events.slice(0, 10).map((event) => <li key={event.key}><time dateTime={event.occurredAt || undefined}>{event.occurredAt ? new Date(event.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : 'Now'}</time><span aria-hidden="true">{event.tone === 'error' ? '×' : event.tone === 'attention' ? '!' : event.tone === 'success' ? '✓' : '·'}</span><span>{event.line}</span></li>)}</ol> : <p className="muted">New durable remediation events will appear here.</p>}</section>
 }
 
-function Exceptions({ snapshot }) {
-  const groups = [['Manual decisions', snapshot.review?.items], ['Verification failures', snapshot.fixes?.verification_failures], ['Delivery failures', snapshot.delivery?.failures], ['Failed documents', snapshot.documents?.failed]].filter(([, value]) => typeof value === 'number' && value > 0)
-  return groups.length ? <section className="remops-exceptions"><h3>Needs attention · {groups.reduce((sum, [, value]) => sum + value, 0)}</h3><ul>{groups.map(([label, value]) => <li key={label}><strong>{value}</strong> {label}</li>)}</ul></section> : null
-}
+// The stub this replaces summed four numbers into "Needs attention · N" and offered nothing to do
+// about any of them — and one of its four, `snapshot.delivery.failures`, is a field the snapshot
+// has never carried, so the delivery group silently never rendered at all. Region E is now served
+// by its own endpoint, which groups the exceptions BY RESPONSE and decides on the server which of
+// them ACP may act on. See RemediationExceptions.jsx.
 
-export default function RemediationOpsPanel({ snapshot = null, connected = false, receivedAt = null, events = [], updateMode = 'idle', onViewMonitor = null, compactLayout = null }) {
+export default function RemediationOpsPanel({ snapshot = null, connected = false, receivedAt = null, events = [], updateMode = 'idle', onViewMonitor = null, compactLayout = null, exceptions = null }) {
   const [paused, setPaused] = useState(false)
   const [hidden, setHidden] = useState(() => typeof document !== 'undefined' && document.hidden)
   const [clock, setClock] = useState(() => Date.now())
@@ -134,13 +136,30 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
   useEffect(() => { if (typeof document === 'undefined') return undefined; const change = () => setHidden(document.hidden); document.addEventListener('visibilitychange', change); return () => document.removeEventListener('visibilitychange', change) }, [])
   useEffect(() => { if (paused || hidden || !snapshot?.retry_at) return undefined; const timer = setInterval(() => setClock(Date.now()), 1_000); return () => clearInterval(timer) }, [paused, hidden, snapshot?.retry_at])
   useEffect(() => { const previous = previousSnapshot.current; previousSnapshot.current = snapshot; const crossed = milestoneCrossings(previous, snapshot); if (crossed.length) setMilestones((current) => [...current, ...crossed.filter((next) => !current.some((item) => item.key === next.key))]) }, [snapshot])
+  // Above the early return, because hooks are not conditional. It follows the snapshot's own
+  // revision rather than opening a second stream — one connection, and the exception set is
+  // re-read only when the run has actually moved.
+  // `exceptions` as a prop is the injection seam for tests and for a caller that already holds
+  // the view; the hook is what a mounted panel uses. Both, rather than either, because the hook
+  // cannot be called conditionally and a test cannot run an effect through renderToStaticMarkup.
+  const fetchedExceptions = useRemediationExceptions(
+    exceptions ? null : (snapshot?.run_id || null), snapshot?.revision ?? null)
+  const exceptionState = exceptions || fetchedExceptions
+  // ONE LIVE REGION FOR THE WHOLE PANEL. PRD §12 asks for "a polite live region" — singular —
+  // and two of them do not add up to one: a screen reader interleaves their updates, so the
+  // sentence that matters ("two of your twelve retries were refused") arrives inside a stream of
+  // headline changes. The exception region therefore reports UP to here rather than owning a
+  // region of its own, and a material state change supersedes a stale action outcome.
+  const [announcement, setAnnouncement] = useState('')
+  const line = headline(snapshot)
+  useEffect(() => { setAnnouncement('') }, [line])
   if (!snapshot || snapshot.state === 'draft') return null
   const fresh = freshness({ snapshot, connected, receivedAt })
-  const line = headline(snapshot)
   const suspect = snapshot.integrity?.ok === false
-  const hasExceptions = [snapshot.review?.items, snapshot.fixes?.verification_failures,
-    snapshot.delivery?.failures, snapshot.documents?.failed]
-    .some((value) => typeof value === 'number' && value > 0)
+  // The count comes from the exception ENDPOINT, which groups by response and knows which rows
+  // are actionable. The predicate this replaces read `snapshot.delivery.failures` — a field the
+  // snapshot has never carried — so its delivery term was always false.
+  const exceptionTotal = exceptionCount(exceptionState.view)
   return <section className={`panel remops${paused || hidden ? ' remops-motion-paused' : ''}`} aria-label="Remediation run status">
     <header className="remops-header"><div><span className="remops-eyebrow">Remediation {snapshot.terminal ? 'complete' : 'in progress'}</span><h2>{line}</h2>{snapshot.source?.breadcrumb && <p>{snapshot.source.breadcrumb}</p>}<p className="muted">{snapshot.source?.locked_at ? `Snapshot locked ${new Date(snapshot.source.locked_at).toLocaleString()} · ` : ''}{snapshot.run_id}</p></div><div className="remops-actions"><FreshnessBadge state={fresh} updateMode={updateMode} /><button type="button" className="ghost" aria-pressed={paused} onClick={() => setPaused((value) => !value)}>{paused ? 'Resume visual updates' : 'Pause visual updates'}</button>{onViewMonitor && <button type="button" className="linklike" onClick={onViewMonitor}>View in Monitor →</button>}</div></header>
     {suspect && <div className="remops-integrity" role="status"><b>Status temporarily inconsistent.</b> ACP cannot currently reconcile {(snapshot.integrity.affected || []).join(', ') || 'one or more values'}. The values below are the last ACP confirmed.</div>}
@@ -151,7 +170,12 @@ export default function RemediationOpsPanel({ snapshot = null, connected = false
     {snapshot.phases?.length > 0 && <Disclosure title="Phases" compact={compact}><Pipeline phases={snapshot.phases} attempts={snapshot.active_attempts || []} moving={connected && snapshot.state !== 'stalled' && (snapshot.active_attempts || []).length > 0} /></Disclosure>}
     <div className="remops-two"><Workstream attempts={snapshot.active_attempts || []} generatedAt={snapshot.generated_at} compact={compact} /><Throughput snapshot={snapshot} frozen={paused || hidden} /></div>
     <Disclosure title="Fix and delivery totals" compact={compact}><Secondary snapshot={snapshot} /></Disclosure>
-    <div className="remops-bottom"><Disclosure title="Live activity" compact={compact}><Activity events={events} /></Disclosure>{hasExceptions && <Disclosure title="Needs attention" compact={compact}><Exceptions snapshot={snapshot} /></Disclosure>}</div>
-    <p aria-live="polite" className="sr-only" data-testid="rem-ops-announce">{line}</p>
+    {/* The exception region is ALWAYS offered, unlike the stub it replaces: it names its own
+        empty state ("nothing needs a decision or a retry"), which is an answer worth giving on a
+        run that is going well, and a heading that only appears once something is wrong is one
+        nobody has learned where to look for. The Disclosure's summary is this region's name, so
+        the region itself renders no second heading under it. */}
+    <div className="remops-bottom"><Disclosure title="Live activity" compact={compact}><Activity events={events} /></Disclosure><Disclosure title={`Needs attention${exceptionTotal ? ` · ${exceptionTotal}` : ''}`} compact={compact}><RemediationExceptions view={exceptionState.view} error={exceptionState.error} onReload={exceptionState.reload} runId={snapshot.run_id} onAnnounce={setAnnouncement} heading={null} /></Disclosure></div>
+    <p aria-live="polite" className="sr-only" data-testid="rem-ops-announce">{announcement || line}</p>
   </section>
 }

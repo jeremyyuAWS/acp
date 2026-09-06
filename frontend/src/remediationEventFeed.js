@@ -48,6 +48,21 @@ export function remediationEventLine(event) {
       return `Manual review requested for ${file(event)}${detail.criterion ? ` · WCAG ${detail.criterion}` : ''}`
     case 'remediate.document_completed':
       return `${file(event)} remediation finished`
+    // ── human actions on the run ──────────────────────────────────────────────
+    // The ACTOR is deliberately absent from these lines, and from the events behind them: the
+    // feed is replayed to every authorised viewer of the run, and naming who pressed the button
+    // would put one user's identity on another's screen. The audit trail records it (PRD §13);
+    // the narrative records that it happened.
+    case 'remediate.delivery_retry_requested':
+      return `Re-sending the corrected copy of ${file(event)}${detail.destination_provider ? ` to ${detail.destination_provider}` : ''} — no fix re-applied`
+    case 'remediate.delivery_retry_refused':
+      return `Delivery of ${file(event)} was not retried${detail.reason ? ` · ${detail.reason.replace(/_/g, ' ')}` : ''}`
+    case 'remediate.cancel_requested':
+      return 'Stopping the run · corrected copies already made are kept'
+    case 'remediate.paused':
+      return 'Run paused · work not yet started is held'
+    case 'remediate.resumed':
+      return 'Run resumed'
     default:
       return null
   }
@@ -55,7 +70,8 @@ export function remediationEventLine(event) {
 
 export function eventTone(kind) {
   if (kind === 'remediate.verification_failed' || kind === 'remediate.delivery_failed') return 'error'
-  if (kind === 'remediate.review_requested') return 'attention'
+  if (kind === 'remediate.review_requested' || kind === 'remediate.delivery_retry_refused'
+      || kind === 'remediate.cancel_requested' || kind === 'remediate.paused') return 'attention'
   if (kind === 'remediate.verified' || kind === 'remediate.delivered' || kind === 'remediate.document_completed') return 'success'
   return 'neutral'
 }
