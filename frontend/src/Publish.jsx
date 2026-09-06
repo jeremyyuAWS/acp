@@ -451,16 +451,35 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           </div>
           <div className="release-overview__actions">
             <button className="ghost" onClick={() => run?.id && openReport(run.id)}>Download report</button>
-            <button className="qbtn approve" disabled={!selectableReady.length} onClick={startRelease}>Start a release</button>
+            <button className="qbtn approve" disabled={!selectableReady.length}
+                    title={!selectableReady.length ? `${pendingReview.files || 'No'} files still need review before Release` : 'Choose files and delivery'}
+                    onClick={startRelease}>Start a release</button>
           </div>
         </div>
-        <div className="release-metrics" aria-label="Release status overview">
-          <div><b>{publishableReady.length}</b><span>Ready</span></div>
-          <div><b>{pendingReview.files}</b><span>Need review</span></div>
-          <div className={staleReady.length ? 'release-metric--warn' : ''}><b>{staleReady.length}</b><span>Source changed</span></div>
-          <div><b>{pubStarted ? publishedCount : 0}</b><span>Released</span></div>
-          <div className={failedCount ? 'release-metric--warn' : ''}><b>{failedCount}</b><span>Failed</span></div>
-        </div>
+        <p aria-label="Release status overview" style={{ margin: '14px 0 0', fontSize: 13 }}>
+          <b>{publishableReady.length}</b> ready <span className="muted"> · </span>
+          <b>{pendingReview.files}</b> need review <span className="muted"> · </span>
+          <b>{staleReady.length}</b> source changed <span className="muted"> · </span>
+          <b>{pubStarted ? publishedCount : 0}</b> released
+          {failedCount > 0 && <><span className="muted"> · </span><b style={{ color: 'var(--error-fg-strong)' }}>{failedCount}</b> failed</>}
+        </p>
+        <details className="release-safeguards" style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
+          <summary style={{ cursor: 'pointer', fontSize: 12.5, fontWeight: 600 }}>Release safeguards, destination, and evidence</summary>
+          <div style={{ marginTop: 8, fontSize: 12.5, lineHeight: 1.6 }}>
+            <p style={{ margin: 0 }}><b>Destination:</b> {releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}</p>
+            <p style={{ margin: '4px 0' }}><b>Record:</b> {orgLabel} · WCAG 2.1 Level AA · {reportDate}. Original files are never overwritten.</p>
+            <button className="linklike" onClick={() => run?.id && openReport(run.id)}>Download scope-limited report (PDF)</button>
+            <div className="release-notification-settings">
+              <label><input type="checkbox" checked={completionSound} onChange={(e) => {
+                setCompletionSound(e.target.checked)
+                try { window.localStorage.setItem('acp.release.completionSound', e.target.checked ? 'on' : 'off') } catch { /* preference stays in this tab */ }
+              }} /> Play a short sound when a release finishes</label>
+              {typeof Notification !== 'undefined' && Notification.permission === 'default' && (
+                <button className="ghost small" onClick={() => Notification.requestPermission()}>Enable browser notifications</button>
+              )}
+            </div>
+          </div>
+        </details>
       </section>
       {releaseError && (
         <section className="release-recovery" role="alert" aria-labelledby="release-error-title">
@@ -486,7 +505,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           automated checks verify WITHIN the selected scope; they cannot certify overall WCAG
           conformance. The estate score and "certifiable/conformant" language are gone for exactly
           that reason, and the PDF is a secondary evidence artifact, not the headline. */}
-      <details className="panel release-record" style={{ borderLeft: '4px solid var(--success-fg)' }}>
+      <details hidden className="panel release-record" style={{ borderLeft: '4px solid var(--success-fg)' }}>
         <summary className="release-record__summary">
           <span><b>Release details and evidence</b><small>{orgLabel} · WCAG 2.1 Level AA · {reportDate}</small></span>
           <span>{ready.length} ready · {pubStarted ? publishedCount : 0} released</span>
@@ -573,7 +592,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           real settings, not a selector for a behaviour ACP can't perform. There is one policy:
           write a corrected COPY; the original is never overwritten. The explainer says plainly why
           replace-in-place isn't on offer. */}
-      <details className="panel" style={{ borderLeft: '3px solid var(--info-fg)' }}>
+      <details hidden className="panel" style={{ borderLeft: '3px solid var(--info-fg)' }}>
         <summary style={{ cursor: 'pointer' }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
           <b style={{ fontSize: 13.5 }}>Release policy</b>
@@ -602,7 +621,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         </details>
       </details>
 
-      <details className="panel">
+      <details hidden className="panel">
         <summary style={{ cursor: 'pointer', fontWeight: 600, listStyle: 'revert' }}>What “release” does <span className="muted" style={{ fontWeight: 400 }}>· what happens to every verified document</span></summary>
         <div className="pubsteps" style={{ marginTop: 12 }}>
           <div className="pubstep"><b>✓ Marked released</b><span className="muted">the re-validated fixed copy becomes the document of record</span></div>
@@ -634,8 +653,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
         )}
         {ready.length === 0 ? (
           pendingReview.items > 0 ? (
-            <div className="muted" style={{ marginTop: 10, padding: '10px 14px', borderRadius: 9, background: '#FBF1DF', border: '1px solid #EAD9BF', color: '#7A5A12' }}>
-              ⚑ <b>{pendingReview.items} finding{pendingReview.items !== 1 ? 's' : ''} await{pendingReview.items === 1 ? 's' : ''} human review</b> across {pendingReview.files} document{pendingReview.files !== 1 ? 's' : ''} — approve {pendingReview.items === 1 ? 'it' : 'them'} in <b>Remediate → step 3 · Review queue</b> first. A document is verified in scope — and appears here — only once its every review item is approved.
+            <div className="muted" style={{ marginTop: 10, padding: '12px 14px', borderRadius: 9, background: '#FBF1DF', border: '1px solid #EAD9BF', color: '#7A5A12' }}>
+              <b>No files are ready for release.</b> {pendingReview.items} finding{pendingReview.items !== 1 ? 's' : ''} await{pendingReview.items === 1 ? 's' : ''} human review across {pendingReview.files} document{pendingReview.files !== 1 ? 's' : ''}. A document appears here after all its review items are approved.
+              <div style={{ marginTop: 9 }}><button className="qbtn approve" onClick={() => document.getElementById('workflow-tab-remediate')?.click()}>Review {pendingReview.files} files</button></div>
             </div>
           ) : (
             <p className="muted" style={{ marginTop: 10 }}>Nothing verified yet — remediate documents and approve their review items in Remediate first.</p>

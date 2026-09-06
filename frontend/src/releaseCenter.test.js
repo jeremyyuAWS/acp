@@ -159,11 +159,19 @@ describe('Release builder', () => {
     expect(s).toMatch(/ref=\{builderRef\} tabIndex=\{-1\} aria-labelledby="release-workspace-title"/)
   })
 
-  it('collapses the secondary record so it no longer buries the workflow', () => {
+  it('keeps one compact safeguards disclosure and retires the stacked legacy panels', () => {
     const s = pub()
-    expect(s).toMatch(/<details className="panel release-record"/)
-    expect(s).toMatch(/Release details and evidence/)
-    expect(s).toMatch(/<summary className="release-record__summary">/)
+    expect(s).toMatch(/className="release-safeguards"/)
+    expect(s).toMatch(/Release safeguards, destination, and evidence/)
+    expect(s).toMatch(/<details hidden className="panel release-record"/)
+    expect(s).toMatch(/<details hidden className="panel"/)
+  })
+
+  it('uses an actionable blocked state when review is the reason nothing is selectable', () => {
+    const s = pub()
+    expect(s).toMatch(/No files are ready for release/)
+    expect(s).toMatch(/Review \{pendingReview\.files\} files/)
+    expect(s).toMatch(/workflow-tab-remediate/)
   })
 
   it('uses three distinct steps instead of combining delivery and review', () => {
