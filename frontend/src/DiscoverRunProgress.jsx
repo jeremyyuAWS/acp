@@ -33,6 +33,23 @@ function secsSince(iso) {
 
 function n(count) { return count.toLocaleString() }
 
+function folderTraversalText(count, scope) {
+  const picked = Array.isArray(scope?.folders) ? scope.folders.filter(Boolean) : []
+  if (!picked.length) return `${n(count)} folder${count === 1 ? '' : 's'} visited`
+  const names = picked.map((folder) => folder?.name).filter(Boolean)
+  const boundary = names.length === 1 ? `“${names[0]}”`
+    : names.length > 1 ? `${names.length} selected folders`
+      : picked.length === 1 ? 'the selected folder' : `${picked.length} selected folders`
+  return `${n(count)} folder${count === 1 ? '' : 's'} visited within ${boundary} (selected root${picked.length === 1 ? '' : 's'} included)`
+}
+
+function folderTraversalSuffix(count, scope) {
+  const picked = Array.isArray(scope?.folders) ? scope.folders.filter(Boolean) : []
+  if (!picked.length) return ' visited'
+  const full = folderTraversalText(count, scope)
+  return full.slice(n(count).length)
+}
+
 const ASSESSABLE_CLASSES = new Set(['slide-deck', 'text-document', 'pdf-document', 'spreadsheet', 'web-page'])
 
 // Phases during which the backend emits `current` (the file being processed).
@@ -366,7 +383,7 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, s
 
     const sublines = []
     if (status !== 'pending' && s.key === 'inventory') {
-      if (foldersFound !== null) sublines.push(`${n(foldersFound)} folder${foldersFound === 1 ? '' : 's'} visited`)
+      if (foldersFound !== null) sublines.push(folderTraversalText(foldersFound, scope))
       if (hasClassStats) {
         sublines.push(`${n(clsAssessable ?? 0)} assessable · ${n(clsMetadataOnly ?? 0)} metadata only · ${n(clsUnsupported ?? 0)} unsupported`)
       } else if (assessableCount !== null) {
@@ -550,7 +567,7 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, s
                         fontSize: 12.5, color: 'var(--muted)', lineHeight: 1.6 }}>
             {deploymentHandoff
               ? 'The service reached a safe checkpoint before updating. This run was returned to the queue without consuming a retry and will continue on the new version.'
-              : 'The worker processing this run stopped without reporting. The job has been returned to the queue and will be picked up again.'}
+              : 'The worker processing this run stopped without reporting. ACP retained the durable checkpoint, returned the same job to the queue, and will resume it without creating a second Discovery run.'}
           </div>
           <StopAcknowledgment />
         </div>
@@ -780,9 +797,10 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, s
                         gap: 5, fontSize: 12.5, color: 'var(--muted)' }}>
             {(foldersFound !== null || (progress.folder_requests_active ?? null) !== null) && (
               <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>Listing folders</span>
+                <span>{Array.isArray(scope?.folders) && scope.folders.length
+                  ? 'Listing selected folder tree' : 'Listing folders'}</span>
                 <span style={{ fontVariantNumeric: 'tabular-nums' }}>
-                  {foldersFound !== null && <><LiveCounter value={foldersFound} /> visited</>}
+                  {foldersFound !== null && <><LiveCounter value={foldersFound} />{folderTraversalSuffix(foldersFound, scope)}</>}
                   {(progress.folder_requests_active ?? 0) > 0
                     ? ` · ${n(progress.folder_requests_active)} active` : null}
                 </span>

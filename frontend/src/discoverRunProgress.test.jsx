@@ -75,6 +75,26 @@ describe('the discovery step checklist', () => {
     expect(html).toContain('1 document library')
   })
 
+  it('names a selected folder tree instead of making its recursive walk look like a whole-source scan', () => {
+    const html = renderToStaticMarkup(createElement(DiscoverRunProgress, {
+      progress: { phase: 'discovering', files_found: 62, folders_found: 336 },
+      busy: true,
+      source: 'sharepoint',
+      scope: {
+        kind: 'sharepoint',
+        folders: [{ id: 'drive/item', name: 'Clinical policies' }],
+        excluded: ['drive/excluded'],
+        truncated: false,
+      },
+    }))
+    expect(html).toContain('in “Clinical policies” in OneDrive')
+    expect(html).toContain('Scope locked for this run')
+    expect(html).toContain('except 1 explicit exclusion')
+    expect(html).toContain('No broader source location is being scanned')
+    expect(html).toContain('336 folders visited within “Clinical policies” (selected root included)')
+    expect(html).toContain('Listing selected folder tree')
+  })
+
   it('summarizes live SharePoint coverage, enumeration and Graph retries', () => {
     const html = renderToStaticMarkup(createElement(DiscoverRunProgress, {
       busy: true, source: 'sharepoint', freshness: 'live',

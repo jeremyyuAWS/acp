@@ -2165,6 +2165,8 @@ export default function App() {
             progress={progress}
             busy={busy}
             sources={sources}
+            source={run?.source ?? null}
+            scope={run?.scope ?? null}
             inv={inventorySnapshot({ run, inventory: run?.scope?.inventory ?? null })}
             onStop={liveScanId ? () => stopScan(liveScanId) : undefined}
             onReview={() => { setView('discover'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}

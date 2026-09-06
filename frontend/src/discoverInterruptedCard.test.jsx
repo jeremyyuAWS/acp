@@ -75,6 +75,7 @@ describe('when the server did not supply an attempt number', () => {
     // "attempt 2" would be a guess about how many times this estate has been walked.
     const c = await mount({ progress: { phase: 'reclaimed' }, busy: true })
     expect(c.textContent).toMatch(/Worker interrupted; retrying/)
+    expect(c.textContent).toMatch(/retained the durable checkpoint/)
     expect(c.textContent).not.toMatch(/attempt \d/)
     expect(c.textContent).not.toMatch(/attempt (null|undefined|NaN)/)
   })

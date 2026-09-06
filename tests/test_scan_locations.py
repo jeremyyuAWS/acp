@@ -220,6 +220,27 @@ def test_onedrive_folder_narrowing_is_recorded_as_a_boundary(monkeypatch):
         "a narrowed OneDrive scan recorded no boundary"
 
 
+def test_a_selected_sharepoint_folder_never_falls_through_to_whole_onedrive(monkeypatch):
+    """The folder identifier is an execution boundary, not a presentation hint.
+
+    A regression here would make the UI truthfully display the requested folder while Graph
+    enumerated /me/drive/root behind it—the most dangerous possible scope mismatch.
+    """
+    calls = []
+
+    def fake_list(token, max_files, **kwargs):
+        calls.append(kwargs)
+        return []
+
+    monkeypatch.setattr(scanner, "_sp_list", fake_list, raising=True)
+    monkeypatch.setattr(scanner, "_sp_folder_name", lambda *a: "Policies", raising=True)
+    scanner._list("sharepoint", None, folders=["b!d/01A"], sp_token="t", scope_out={})
+
+    assert len(calls) == 1
+    assert calls[0]["locations"] == [("b!d", "01A")]
+    assert calls[0].get("site") is None
+
+
 def test_a_label_lookup_failure_does_not_fail_the_scan(monkeypatch):
     """Best-effort, like _sp_site_name: this exists so the UI can NAME a boundary, and a scan
     must never die because a label lookup did."""
