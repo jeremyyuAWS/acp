@@ -975,6 +975,18 @@ export const updateWorkspaceRole = (roleId, body) => (SIM
 export const deleteWorkspaceRole = (roleId) => (SIM
   ? sim({ deleted: roleId })
   : fetch(`${BASE}/admin/roles/${encodeURIComponent(roleId)}`, { method: 'DELETE', headers: headers() }).then(j))
+// Owner-only rollout controls. Preflight is read once on demand (never polled); bootstrap is dry
+// by default and writes only when the caller sends the literal boolean `true`.
+export const getWorkspaceRolePreflight = () => (SIM
+  ? sim({ rollout: { mode: 'off', next: 'observe' }, ready: false, blockers: 1, warnings: 0,
+      findings: [{ code: 'roles_not_seeded', severity: 'blocker', detail: 'Built-in roles are not seeded.' }] })
+  : fetch(`${BASE}/admin/workspace-roles/preflight`, { headers: headers() }).then(j))
+export const bootstrapWorkspaceRoles = (apply = false) => (SIM
+  ? sim({ dry_run: !apply, roles_created: [], assignments: [] })
+  : fetch(`${BASE}/admin/workspace-roles/bootstrap`, {
+      method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ apply: apply === true }),
+    }).then(j))
 export const assignWorkspaceRole = (email, roleId) => (SIM
   ? sim({ person: { email, workspace_role_id: roleId } })
   : fetch(`${BASE}/admin/people/${encodeURIComponent(email)}/role`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({ role_id: roleId }) }).then(j))

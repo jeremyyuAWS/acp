@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import {
   getWorkspaceRoles, getRoleCapabilities, createWorkspaceRole,
   updateWorkspaceRole, deleteWorkspaceRole,
+  getWorkspaceRolePreflight, bootstrapWorkspaceRoles,
 } from './api.js'
 
 // The Roles screen (PRD §8) — a list of roles and a drawer for editing one.
@@ -30,6 +31,10 @@ export default function WorkspaceRoles() {
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [loaded, setLoaded] = useState(false)
+  const [readiness, setReadiness] = useState(null)
+  const [readinessError, setReadinessError] = useState('')
+  const [checking, setChecking] = useState(false)
+  const [bootstrapPreview, setBootstrapPreview] = useState(null)
   const createRef = useRef(null)
 
   const load = () => Promise.all([getWorkspaceRoles(), getRoleCapabilities()])
@@ -45,6 +50,25 @@ export default function WorkspaceRoles() {
   const remove = (role) => {
     if (!window.confirm(`Delete the ${role.name} role? This cannot be undone.`)) return
     deleteWorkspaceRole(role.id).then(() => afterWrite(`${role.name} was deleted.`)).catch(fail)
+  }
+
+  const checkReadiness = () => {
+    setChecking(true); setReadinessError('')
+    return getWorkspaceRolePreflight()
+      .then((value) => { setReadiness(value); setBootstrapPreview(null) })
+      .catch((e) => setReadinessError(e.message || 'Only the workspace owner can check rollout readiness.'))
+      .finally(() => setChecking(false))
+  }
+
+  const previewBootstrap = () => bootstrapWorkspaceRoles(false)
+    .then(setBootstrapPreview)
+    .catch((e) => setReadinessError(e.message || 'Role setup could not be previewed.'))
+
+  const applyBootstrap = () => {
+    if (!window.confirm('Create the missing built-in roles and suggested assignments? Existing assignments will not be changed.')) return
+    bootstrapWorkspaceRoles(true)
+      .then(() => { setMessage('Built-in roles were created.'); load(); checkReadiness() })
+      .catch((e) => setReadinessError(e.message || 'Role setup could not be applied.'))
   }
 
   return <section aria-labelledby="roles-title" style={{ maxWidth: 860 }}>
@@ -92,6 +116,49 @@ export default function WorkspaceRoles() {
         {' '}<code>{rollout.mode}</code>.
       </div>
     )}
+
+    <section aria-labelledby="rollout-readiness-title" style={{ marginTop: 12, padding: 14,
+      border: '1px solid var(--line)', borderRadius: 9, background: 'var(--card, #fff)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        gap: 12, flexWrap: 'wrap' }}>
+        <div>
+          <b id="rollout-readiness-title">Rollout readiness</b>
+          <div className="muted" style={{ fontSize: 12, marginTop: 3 }}>
+            Check what would change before moving roles to the next stage. This check changes nothing.
+          </div>
+        </div>
+        <button className="ghost small" disabled={checking} onClick={checkReadiness}>
+          {checking ? 'Checking…' : 'Check readiness'}
+        </button>
+      </div>
+      {readinessError && <p role="alert" style={{ color: 'var(--error-fg-strong)', fontSize: 12 }}>
+        {readinessError}
+      </p>}
+      {readiness && <div style={{ marginTop: 12 }}>
+        <p style={{ margin: '0 0 8px', fontSize: 13 }}>
+          <b>{readiness.ready ? 'Ready for the next stage' : 'Not ready to advance'}</b>
+          {' · '}Current: <code>{readiness.rollout?.mode || 'unknown'}</code>
+          {readiness.rollout?.next && <> · Next: <code>{readiness.rollout.next}</code></>}
+          {' · '}{readiness.blockers || 0} blocker{readiness.blockers === 1 ? '' : 's'}
+          {' · '}{readiness.warnings || 0} warning{readiness.warnings === 1 ? '' : 's'}
+        </p>
+        {!!readiness.findings?.length && <ul style={{ margin: '0 0 10px', paddingLeft: 20,
+          display: 'grid', gap: 6, fontSize: 12 }}>
+          {readiness.findings.map((finding) => <li key={finding.code}>
+            <b>{finding.severity === 'blocker' ? 'Blocker' : 'Review'}:</b> {finding.detail}
+          </li>)}
+        </ul>}
+        {readiness.findings?.some((finding) => finding.code === 'roles_not_seeded') && (
+          <button className="ghost small" onClick={previewBootstrap}>Preview role setup</button>
+        )}
+        {bootstrapPreview && <div role="status" style={{ marginTop: 9, padding: 10,
+          background: 'var(--surface)', borderRadius: 7, fontSize: 12 }}>
+          Preview: {(bootstrapPreview.roles_created || []).length} built-in role(s) and
+          {' '}{(bootstrapPreview.assignments || []).filter((item) => item.applied !== false).length} suggested assignment(s).
+          <button className="small" style={{ marginLeft: 10 }} onClick={applyBootstrap}>Apply role setup</button>
+        </div>}
+      </div>}
+    </section>
 
     <div role="status" aria-live="polite" style={{ minHeight: 22, marginTop: 10, fontSize: 13,
                                                    color: error ? 'var(--error-fg-strong)' : '#287D3C' }}>

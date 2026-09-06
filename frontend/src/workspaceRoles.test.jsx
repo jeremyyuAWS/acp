@@ -25,6 +25,8 @@ let CATALOG = null
 const createWorkspaceRole = vi.fn(async (b) => b)
 const updateWorkspaceRole = vi.fn(async (id, b) => b)
 const deleteWorkspaceRole = vi.fn(async (id) => ({ deleted: id }))
+const getWorkspaceRolePreflight = vi.fn()
+const bootstrapWorkspaceRoles = vi.fn()
 
 vi.mock('./api.js', async (importActual) => ({
   ...(await importActual()),
@@ -33,6 +35,8 @@ vi.mock('./api.js', async (importActual) => ({
   createWorkspaceRole,
   updateWorkspaceRole,
   deleteWorkspaceRole,
+  getWorkspaceRolePreflight,
+  bootstrapWorkspaceRoles,
 }))
 
 const { default: WorkspaceRoles } = await import('./WorkspaceRoles.jsx')
@@ -75,6 +79,11 @@ afterEach(() => { unmountAll(); vi.clearAllMocks() })
 beforeEach(() => {
   CATALOG = CATALOG_FULL
   ROLES = { roles: [OWNER_ROLE, REVIEWER_ROLE, SPARE_ROLE], enforced: true }
+  getWorkspaceRolePreflight.mockResolvedValue({ rollout: { mode: 'off', next: 'observe' },
+    ready: false, blockers: 1, warnings: 0, findings: [{ code: 'roles_not_seeded',
+      severity: 'blocker', detail: 'The built-in roles are missing.' }] })
+  bootstrapWorkspaceRoles.mockResolvedValue({ dry_run: true, roles_created: ['owner', 'platform-user'],
+    assignments: [{ email: 'owner@example.org', applied: true }] })
 })
 
 const flush = async () => { for (let i = 0; i < 4; i++) await act(async () => { await Promise.resolve() }) }
@@ -117,6 +126,20 @@ describe('the roles list', () => {
   it('marks the protected role as protected', async () => {
     const c = await mount()
     expect(rowFor(c, 'Owner').querySelector('.roles-chip').textContent).toBe('Protected')
+  })
+})
+
+describe('rollout readiness', () => {
+  it('shows owner preflight blockers and previews setup without writing', async () => {
+    const c = await mount()
+    await click(byText(c, 'button', /^Check readiness$/))
+    expect(c.textContent).toContain('Not ready to advance')
+    expect(c.textContent).toContain('The built-in roles are missing.')
+    await click(byText(c, 'button', /^Preview role setup$/))
+    expect(c.textContent).toContain('2 built-in role(s)')
+    expect(c.textContent).toContain('1 suggested assignment(s)')
+    expect(bootstrapWorkspaceRoles).toHaveBeenCalledWith(false)
+    expect(bootstrapWorkspaceRoles).not.toHaveBeenCalledWith(true)
   })
 })
 
