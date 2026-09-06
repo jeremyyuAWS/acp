@@ -137,4 +137,21 @@ describe('Release builder', () => {
     const s = pub()
     expect(s.match(/aria-current=\{builderStep === [123] \? 'step' : undefined\}/g)).toHaveLength(3)
   })
+
+  it('turns a partial release into a reviewable retry plan for only failed files', () => {
+    const s = pub()
+    expect(s).toMatch(/releaseResults\[f\.file\]\?\.status === 'failed'/)
+    expect(s).toMatch(/setSelectedFiles\(new Set\(failedReady\.map/)
+    expect(s).toMatch(/setDeliveryMethod\('publish'\)/)
+    expect(s).toMatch(/setBuilderStep\(3\)/)
+    expect(s).toMatch(/Successful files remain published/)
+    expect(s).toMatch(/completed work is not duplicated/)
+    expect(s).toMatch(/Review and retry failed/)
+  })
+
+  it('keeps stale failed files out of retry and explains the rescan dependency', () => {
+    const s = pub()
+    expect(s).toMatch(/releaseResults\[f\.file\]\?\.status === 'failed' && srcOf\(f\) !== 'stale'/)
+    expect(s).toMatch(/no longer retryable until the changed source is rescanned/)
+  })
 })
