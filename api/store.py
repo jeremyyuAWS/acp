@@ -2102,8 +2102,10 @@ class _PgAdapter:
     # v24 introduces a first-class workflow execution and attaches each scan to its revision.
     # The relationship is additive: older replicas ignore both the table and nullable scan
     # columns, while newer replicas fall back to the scan id for pre-v24 rows.
-    _SCHEMA_VERSION = 24
-    _SCHEMA_CHECKSUM_AT_VERSION = "ff58b8694b3aa72c1d7d192606977240"
+    # v25 adds scan_inventory.source_name so provider basenames survive ACP's internal
+    # same-name disambiguation and can be restored when corrected copies are published.
+    _SCHEMA_VERSION = 25
+    _SCHEMA_CHECKSUM_AT_VERSION = "b2d77139073d635b67c3c7389644bd28"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
