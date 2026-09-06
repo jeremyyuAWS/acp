@@ -80,8 +80,31 @@ Stale records stay visible for audit history and cannot independently support pu
 | 2 | Evidence workspace — **rescoped**, see below | **delivered** |
 | 3 | Guided manual test plans, tester metadata, and the publish gate that consumes them | **delivered** |
 | 4 | Publication, reviewer sign-off, immutable snapshots, revision history | **delivered** |
-| 5 | Vendored ITI VPAT 2.5Rev template + accessible Word export + export accessibility gate | planned |
+| 5 | ITI VPAT 2.5Rev template + accessible Word export + export accessibility gate | **part delivered** — see below |
 | 6 | Section 508, EU and International editions | planned |
+
+**Phase 5 is three deliverables and only one of them is blocked**, which is why its row can read
+neither `planned` nor `delivered`. The export and the gate ship today, across these surfaces:
+
+- `GET /acr/{id}/preview?format=docx` renders the Word document and **refuses to serve one that
+  FAILs** ACP's own docx checks, naming the failing checks.
+- `GET /acr/{id}/preview?format=docx-gate` returns that verdict as JSON without the document, so
+  the endpoint that explains a refusal does not refuse for the same reason.
+- `GET /acr/{id}/revisions/{revision}/export?format=docx` does the same for a published revision,
+  behind the snapshot digest.
+- The publish screen's revision table offers the Word download beside the PDF one.
+
+The gate is **"no FAIL"** rather than "all PASS", because no docx registration declares
+`Coverage.FULL` and an all-PASS gate could never go green — the reasoning is under *Phase 5 note*
+below, and it is the same evidence rule the rest of this document runs on.
+
+What is held is the **template file**: no `.docx` or `.dotx` VPAT template exists in this
+repository, and whether one may be vendored is **ADR 0053**, which is a licensing question for
+counsel and not an engineering one. Acceptance row 13 tracks it; row 14 does not depend on it,
+because the gate runs over whatever document ACP generates.
+
+Phase 6 is being worked separately — `734fec29` landed its first slice — so its row is left as its
+own author finds it rather than updated from here.
 
 ## Phase 1 — what shipped
 
