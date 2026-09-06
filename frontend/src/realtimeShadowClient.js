@@ -4,8 +4,6 @@ import { getRealtimeAuthoritativeSnapshot, getRealtimeStreamRequest } from './ap
 
 const SEEN_LIMIT = 2048
 
-export const REALTIME_SHADOW_ENABLED = import.meta.env.VITE_REALTIME_SHADOW_ENABLED === 'true'
-
 function parseFrame(block) {
   const lines = block.split(/\r?\n/)
   const type = lines.find((line) => line.startsWith('event:'))?.slice(6).trim() || 'message'

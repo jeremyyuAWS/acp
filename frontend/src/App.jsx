@@ -591,6 +591,7 @@ export default function App() {
   const notifyArmedRef = useRef(false)
   const [tick, setTick] = useState(0)                  // bumped every minute to keep timeAgo labels fresh
   const [platformVersion, setPlatformVersion] = useState(null)  // full git-derived CalVer from /config (with the daily .N)
+  const [realtimeShadowEnabled, setRealtimeShadowEnabled] = useState(false)
   // Bumped once if /config reports a scope different from activeScope.js's fallback. React cannot
   // observe a module-level binding, so this is what makes the server-driven scope actually reach
   // the rendered denominators instead of sitting in a variable nothing re-reads.
@@ -667,6 +668,7 @@ export default function App() {
   useEffect(() => {
     getConfig().then((c) => {
       if (c?.version) setPlatformVersion(c.version)
+      setRealtimeShadowEnabled(c?.realtime_shadow_enabled === true)
       adoptScopeConfig(c)
       // Ownership of the owner-only `scan_scope` setting. Only trust an explicit boolean; a build
       // whose backend predates this field leaves `scopeOwner` null → scope editing stays enabled.
@@ -2512,7 +2514,7 @@ export default function App() {
         <LiveOperationsNotifier onOpen={() => { setView('liveops'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
       </Suspense>}
       <VersionToast currentVersion={platformVersion} />
-      <RealtimeShadowPanel currentSnapshot={{
+      <RealtimeShadowPanel enabled={realtimeShadowEnabled} currentSnapshot={{
         scan_id: run?.id ?? null,
         scan_status: run?.status ?? null,
         progress_phase: progress?.phase ?? null,

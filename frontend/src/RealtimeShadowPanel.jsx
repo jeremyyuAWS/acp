@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { getRealtimeShadowClient, REALTIME_SHADOW_ENABLED } from './realtimeShadowClient.js'
+import { getRealtimeShadowClient } from './realtimeShadowClient.js'
 
 function differences(current, incoming) {
   if (!incoming || typeof incoming !== 'object') return 0
@@ -9,7 +9,7 @@ function differences(current, incoming) {
   }, 0)
 }
 
-export default function RealtimeShadowPanel({ enabled = REALTIME_SHADOW_ENABLED, currentSnapshot, client = getRealtimeShadowClient() }) {
+export default function RealtimeShadowPanel({ enabled = false, currentSnapshot, client = getRealtimeShadowClient() }) {
   const [health, setHealth] = useState(client.snapshot())
   const [lastEvent, setLastEvent] = useState(null)
   const [mismatchCount, setMismatchCount] = useState(0)
