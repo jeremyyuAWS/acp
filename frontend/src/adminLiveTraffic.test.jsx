@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { JOB_STATE_FILTERS, TILE_KINDS, azureBytes, azureLatest, buildTrafficGraph, capacityValue, flowEdge, infrastructureDetail, nodeGauge, queueConcentration, runFacts, jobStateCounts, runOperationalState, sizeScopeNote, tileKind, tileStyle, trafficEdgeStyle, trafficGraphForTab, trendToggleLabel, workerServiceRows, workflowColor, workflowOperationalState } from './AdminLiveTraffic.jsx'
+import { JOB_STATE_FILTERS, TILE_KINDS, azureBytes, azureLatest, buildTrafficGraph, capacityValue, flowEdge, infrastructureDetail, nodeGauge, queueConcentration, runFacts, jobStateCounts, runOperationalState, runTileLabel, sizeScopeNote, tileKind, tileStyle, trafficEdgeStyle, trafficGraphForTab, trendToggleLabel, workerServiceRows, workflowColor, workflowOperationalState } from './AdminLiveTraffic.jsx'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(join(here, 'AdminLiveTraffic.jsx'), 'utf8')
@@ -77,7 +77,7 @@ describe('Admin live traffic graph', () => {
     // strings it used to inline, so the separation can be strengthened without the test reading as
     // a regression. The fill went from 8% to 16% with a left accent bar, because at 8% a job tile
     // and a service tile still read as the same white card on a real screen.
-    expect(TILE_KINDS.job.label).toBe('ACTIVE JOB')
+    expect(TILE_KINDS.job.label).toBe('JOB')
     expect(TILE_KINDS.service.label).toBe('SERVICE')
     expect(tileStyle('run', '#4C78C2').background).toMatch(/^color-mix\(in srgb, #4C78C2 \d+%/)
     expect(tileStyle('worker', '#4C78C2').background).toBe('var(--surface)')
@@ -241,6 +241,24 @@ describe('Admin live traffic graph', () => {
     expect(jobStateCounts(trafficGraphForTab(graph, 'jobs', { source: 'sharepoint' })))
       .toEqual({ all: 1, attention: 1 })
     expect(jobStateCounts({ nodes: [] })).toEqual({ all: 0 })
+  })
+
+  // Reported 2026-09-06: a card whose status line read "Complete" was headed ACTIVE JOB, because
+  // the header was the tile-kind constant rather than anything about the run.
+  it('does not head a finished job card with ACTIVE', () => {
+    expect(runTileLabel({ status: 'recent' })).toBe('COMPLETED JOB')
+    expect(runTileLabel({ status: 'cancelled' })).toBe('CANCELLED JOB')
+    expect(runTileLabel({ status: 'failed' })).toBe('FAILED JOB')
+    expect(runTileLabel({ status: 'active', cancel_requested: true })).toBe('STOPPING JOB')
+    expect(runTileLabel({ status: 'active', stalled: true })).toBe('STALLED JOB')
+    expect(runTileLabel({ status: 'active', paused: true })).toBe('PAUSED JOB')
+
+    // Still running, with some documents failed under it: that job IS active, and the failures are
+    // already said on its status line. Only a run that ENDED in failure stops reading as active.
+    expect(runTileLabel({ status: 'active', failed: 3, running: 9 })).toBe('ACTIVE JOB')
+    expect(runTileLabel({ status: 'active' })).toBe('ACTIVE JOB')
+    expect(runTileLabel({})).toBe('ACTIVE JOB')
+    expect(source).toContain('{runTileLabel(data.run)}')
   })
 
   it('uses the same state vocabulary for cards and workflow filters', () => {
@@ -782,9 +800,15 @@ describe('A scan job and a durable service do not look alike', () => {
     // WCAG 1.4.1. The fill makes the grouping visible at a glance; the typed label is what says
     // which is which, and the map key spells all three out.
     expect(Object.values(TILE_KINDS).map((spec) => spec.label))
-      .toEqual(['ACTIVE JOB', 'SERVICE', 'DATA'])
-    expect(tileStyle('run', '#000').label).toBe('ACTIVE JOB')
+      .toEqual(['JOB', 'SERVICE', 'DATA'])
+    expect(tileStyle('run', '#000').label).toBe('JOB')
     expect(tileStyle('source', '#000').label).toBe('DATA')
+    // The run card qualifies that type word with its state. Every variant still ENDS in JOB, so
+    // the type cue 1.4.1 relies on survives the qualifier.
+    for (const run of [{ status: 'active' }, { status: 'recent' }, { status: 'failed' },
+      { status: 'cancelled' }, { paused: true }, { stalled: true }, { cancel_requested: true }]) {
+      expect(runTileLabel(run)).toMatch(/ JOB$|^JOB$/)
+    }
     expect(source).toContain('{tileStyle(data.kind, color).label}')
     expect(source).toContain('<b style={{ color: \'var(--ink)\' }}>DATA</b>')
   })

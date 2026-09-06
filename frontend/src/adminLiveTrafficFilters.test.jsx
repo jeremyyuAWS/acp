@@ -48,6 +48,24 @@ async function openJobsTab() {
 const chip = (container, label) => [...container.querySelectorAll('[aria-label="Filter workflows by state"] button')]
   .find((node) => node.getAttribute('aria-label').startsWith(`${label},`))
 
+describe('Live Operations job cards', () => {
+  // Reported 2026-09-06: the finished discover card was headed ACTIVE JOB while its own status
+  // line read Complete, because the header was the tile-kind constant, not the run's state.
+  it('heads each card with what that job is actually doing', async () => {
+    const container = await openJobsTab()
+    const headers = [...container.querySelectorAll('.react-flow__node')]
+      .map((node) => node.textContent)
+      .filter((text) => text.includes('JOB'))
+
+    expect(headers).toHaveLength(3)
+    expect(headers.filter((text) => text.startsWith('COMPLETED JOB'))).toHaveLength(2)
+    expect(headers.filter((text) => text.startsWith('ACTIVE JOB'))).toHaveLength(1)
+    // The one headed ACTIVE is the remediate that is genuinely running.
+    expect(headers.find((text) => text.startsWith('ACTIVE JOB'))).toContain('174/188')
+    expect(headers.find((text) => text.startsWith('COMPLETED JOB'))).toContain('Complete')
+  })
+})
+
 describe('Live Operations job state filters', () => {
   it('hides a workflow that is still running from the completed chip', async () => {
     const container = await openJobsTab()
