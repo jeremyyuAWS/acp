@@ -351,7 +351,7 @@ describe('the v2 live operations hierarchy', () => {
       { key: '17', kind: 'remediate.delivered', tone: 'success',
         occurredAt: '2026-09-05T12:00:00Z', line: 'Corrected copy delivered for guide.docx' },
     ] })
-    const labels = ['documents complete', 'Active document pipeline', 'In flight now',
+    const labels = ['documents processed', 'Active document pipeline', 'In flight now',
       'Throughput', 'Live activity', 'Needs attention']
     const positions = labels.map((label) => html.indexOf(label))
     expect(positions.every((position) => position >= 0)).toBe(true)
@@ -384,7 +384,7 @@ describe('the v2 live operations hierarchy', () => {
     }))
     const html = render({ snapshot: { ...SNAP, active_attempts: attempts }, connected: true,
       receivedAt: Date.now(), compactLayout: true })
-    expect(html).toContain('4 of 10 documents complete')
+    expect(html).toContain('5 of 10 documents processed')
     expect(html).toContain('Throughput')
     for (const title of ['Phases', 'Fix and delivery totals', 'Live activity', 'Needs attention']) {
       expect(html).toContain(`<summary>${title}</summary>`)
@@ -395,6 +395,23 @@ describe('the v2 live operations hierarchy', () => {
     expect(work).toContain('long-document-name-1.docx')
     expect(work).not.toContain('long-document-name-2.docx')
     expect(html).toContain('and 2 more documents in flight')
+  })
+
+  it('advances run completeness when work finishes without an eligible automatic fix', () => {
+    const noFixesYet = {
+      ...SNAP,
+      documents: { completed: 0, processing: 10, waiting: 149, review: 0, failed: 0, skipped: 0 },
+      total_documents: 159,
+    }
+    const fourInspected = {
+      ...noFixesYet,
+      documents: { completed: 0, processing: 10, waiting: 145, review: 0, failed: 0, skipped: 4 },
+    }
+    expect(render({ snapshot: noFixesYet })).toContain('0 of 159 documents processed')
+    expect(render({ snapshot: fourInspected })).toContain('4 of 159 documents processed')
+    // The outcome remains explicit; "processed" must not relabel a no-fix document as corrected.
+    expect(render({ snapshot: fourInspected })).toContain('data-testid="rem-count-completed"')
+    expect(render({ snapshot: fourInspected })).toContain('data-testid="rem-count-skipped"')
   })
 
   it('keeps compact disclosure choices through live snapshot updates', async () => {

@@ -54,10 +54,19 @@ function Progress({ snapshot, suspect }) {
   const rows = counterRows(snapshot)
   if (!rows) return null
   const total = snapshot.total_documents
-  const completed = rows.find((r) => r.key === 'completed')?.value
   const known = typeof total === 'number' && total > 0 && rows.every((r) => typeof r.value === 'number')
+  // "Completed" is intentionally the successful-correction bucket. It must stay separate from
+  // review, failure and no-eligible-fix outcomes in the reconciled partition, but it is the wrong
+  // numerator for the large RUN-COMPLETENESS headline: a healthy SharePoint batch can inspect
+  // dozens of documents, place each in Skipped because there was no approved automatic fix, and
+  // leave that headline frozen at 0. Count every terminal outcome here; the six buckets below
+  // still say exactly how those processed documents ended.
+  const processed = known
+    ? rows.filter((row) => !['processing', 'waiting'].includes(row.key))
+      .reduce((sum, row) => sum + row.value, 0)
+    : null
   return <section className="remops-progress" aria-labelledby="remops-progress-title">
-    <div className="remops-progress-head"><strong id="remops-progress-title">{completed == null || total == null ? 'Document progress unavailable' : `${completed.toLocaleString()} of ${total.toLocaleString()} documents complete`}</strong><span className="muted">{snapshot.estimate?.available ? `Estimated ${snapshot.estimate.label || 'range available'}` : 'Estimating after the first results'}</span></div>
+    <div className="remops-progress-head"><strong id="remops-progress-title">{processed == null ? 'Document progress unavailable' : `${processed.toLocaleString()} of ${total.toLocaleString()} documents processed`}</strong><span className="muted">{snapshot.estimate?.available ? `Estimated ${snapshot.estimate.label || 'range available'}` : 'Estimating after the first results'}</span></div>
     {known && <div className="remops-segments" aria-label={`${total} documents: ${rows.map((r) => `${r.value} ${r.label.toLowerCase()}`).join(', ')}`}>{rows.filter((r) => r.value > 0).map((row) => <span key={row.key} tabIndex="0" role="img" aria-label={`${row.label}: ${row.value}`} className={`remops-segment remops-segment-${row.key}`} style={{ width: `${row.value / total * 100}%` }} data-detail={`${row.label}: ${row.value.toLocaleString()}`} />)}</div>}
     <dl className={`remops-counts${suspect ? ' remops-suspect' : ''}`}>{rows.map((row) => <div key={row.key} title={row.definition}><dt>{row.label}</dt><dd data-testid={`rem-count-${row.key}`}>{row.value == null ? '—' : row.key === 'completed' ? <LiveCounter value={row.value} /> : row.value.toLocaleString()}</dd></div>)}</dl>
     {partitionSums(snapshot) === false && <p className="remops-error">These counters do not add up to the documents in scope. ACP is reconciling them.</p>}
