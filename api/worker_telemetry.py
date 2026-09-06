@@ -23,6 +23,7 @@ class WorkerInstanceReporter:
         self.version = (os.environ.get("ACP_BUILD_VERSION") or "").strip() or "dev"
         self.started_at = datetime.now(timezone.utc).isoformat()
         self._last_state = None
+        self._forced_state = None
         self._stop = threading.Event()
         self._thread = None
 
@@ -45,7 +46,8 @@ class WorkerInstanceReporter:
         handles, active_workers, supported, unhealthy = self._pool()
         concurrency = len(handles)
         active = len(active_workers)
-        effective_state = state or ("unhealthy" if unhealthy else "busy" if active else "ready")
+        effective_state = state or self._forced_state or (
+            "unhealthy" if unhealthy else "busy" if active else "ready")
         now = datetime.now(timezone.utc).isoformat()
         self.store.upsert_worker_instance(
             self.process_id, replica_id=self.replica_id, revision_name=self.revision,
@@ -86,12 +88,26 @@ class WorkerInstanceReporter:
 
     def stop(self) -> None:
         self._stop.set()
+        # Do not let an already-running periodic record land after the caller writes `offline`.
+        # Setting the event normally wakes the reporter thread immediately.
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(timeout=self.interval_seconds + 1)
+
+    def draining(self) -> None:
+        """Keep heartbeating while workers finish their current handlers.
+
+        Shutdown can allow nine minutes for a safe drain. Stopping this reporter before that
+        wait made genuinely running jobs lose their process attribution after 30 seconds. The
+        forced state survives periodic records until the drain completes.
+        """
+        self._forced_state = "draining"
         try:
             self.record("draining")
         except Exception:
             swallowed("worker telemetry drain state failed")
 
     def offline(self) -> None:
+        self._forced_state = "offline"
         try:
             self.record("offline")
         except Exception:

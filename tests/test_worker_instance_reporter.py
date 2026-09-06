@@ -75,9 +75,35 @@ def test_a_slot_that_cannot_claim_marks_the_process_unhealthy(monkeypatch):
     assert core.store.events[-1]["kind"] == "worker.unhealthy"
 
 
+def test_draining_keeps_reporting_active_work_until_stopped(monkeypatch):
+    monkeypatch.setenv("ACP_WORKER_ROLE", "assess")
+    worker = _Worker("job-in-flight", ("scan_assess",))
+    core = _Core([worker])
+    reporter = WorkerInstanceReporter(core)
+
+    reporter.draining()
+    reporter.record()  # the next periodic heartbeat must not revert to busy or ready
+
+    assert core.store.rows[-1]["state"] == "draining"
+    assert core.store.rows[-1]["active_job_count"] == 1
+    assert core.store.rows[-1]["last_claimed_job_id"] == "job-in-flight"
+    assert [event["kind"] for event in core.store.events] == ["worker.draining"]
+
+
 def test_app_wires_the_same_reporter_around_embedded_workers():
     source = (Path(__file__).resolve().parent.parent / "api" / "app.py").read_text()
     assert "_embedded_worker_reporter = WorkerInstanceReporter(core)" in source
     assert "_embedded_worker_reporter.start()" in source
+    assert source.index("_embedded_worker_reporter.draining()") < source.index("core.stop_workers()")
+    assert source.index("core.stop_workers()") < source.index("_embedded_worker_reporter.stop()")
     assert "_embedded_worker_reporter.stop()" in source
     assert "_embedded_worker_reporter.offline()" in source
+
+
+def test_standalone_worker_reports_draining_until_workers_finish():
+    source = (Path(__file__).resolve().parent.parent / "api" / "worker_main.py").read_text()
+    drain = source.index("reporter.draining()")
+    workers = source.index("core.stop_workers()", drain)
+    stop = source.index("reporter.stop()", workers)
+    offline = source.index("reporter.offline()", stop)
+    assert drain < workers < stop < offline
