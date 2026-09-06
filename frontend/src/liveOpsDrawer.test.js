@@ -1952,6 +1952,15 @@ describe('workflowStageRuns', () => {
     expect(pipeline.stages.find((stage) => stage.key === 'assess').state).toBe('failed')
     expect(pipeline.stages.find((stage) => stage.key === 'remediate').state).toBe('cancelled')
   })
+
+  it('carries durable stop and pause state into a stage card', () => {
+    const [row] = workflowStageRuns({ workflows: [{ scan_id: 's1', stages: [{
+      stage: 'remediate', status: 'running', paused: true, cancel_requested: true,
+      cancel_requested_at: '2026-09-05T10:00:00Z',
+    }] }] })
+    expect(row).toMatchObject({ paused: true, cancel_requested: true,
+      cancel_requested_at: '2026-09-05T10:00:00Z' })
+  })
 })
 
 describe('runFlow', () => {

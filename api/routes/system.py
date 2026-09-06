@@ -1497,6 +1497,7 @@ def _admin_activity_snapshot() -> dict:
     lifecycle_events = _list_events(limit=200) if callable(_list_events) else []
     _list_stage_events = getattr(core.store, "list_workflow_stage_events", None)
     stage_events = _list_stage_events() if callable(_list_stage_events) else lifecycle_events
+    recovery = _recovery_summary(stage_events)
     for role, row in per_role.items():
         stage = "discover" if role == "discovery" else role
         if running_by_type is None:
@@ -1612,6 +1613,7 @@ def _admin_activity_snapshot() -> dict:
                 "unlinked_active_jobs": unlinked_active_jobs,
                 "complete": unlinked_active_jobs == 0 if unlinked_active_jobs is not None else None,
             },
+            "recovery": recovery,
             # During mixed-version rollout an empty registry is unavailable, not zero capacity.
             # Once any process has reported, worker_capacity_by_role contains the fresh/stale
             # split and every raw instance needed by the authorized operations drawer.
@@ -1626,6 +1628,50 @@ def _admin_activity_snapshot() -> dict:
             # Absent, not empty, when the store cannot answer — see the guard above.
             **({"queue": composition} if composition else {}),
         },
+    }
+
+
+def _recovery_summary(events: list[dict] | None) -> dict:
+    """Bounded aggregate over the same 24-hour durable stage stream used by the map.
+
+    No actor, owner, filename or error detail is returned. A completed cancellation is matched
+    to its request by workflow, stage and execution correlation so unrelated cancellations do
+    not inflate the recovery success figure.
+    """
+    events = events or []
+    def _key(row):
+        return (str(row.get("scan_id") or ""), str(row.get("stage") or ""),
+                str(row.get("correlation_id") or ""))
+
+    requested = {_key(row): row for row in events
+                 if row.get("kind") == "workflow.stage_cancel_requested"}
+    cancelled = {_key(row): row for row in events if row.get("kind") == "job.stage_cancelled"}
+    resolved_keys = requested.keys() & cancelled.keys()
+    resolved = len(resolved_keys)
+    durations = []
+    for key in resolved_keys:
+        try:
+            started = datetime.fromisoformat(str(requested[key].get("occurred_at")).replace("Z", "+00:00"))
+            ended = datetime.fromisoformat(str(cancelled[key].get("occurred_at")).replace("Z", "+00:00"))
+            durations.append(max(0, int((ended - started).total_seconds())))
+        except (TypeError, ValueError):
+            continue
+    durations.sort()
+    median_seconds = (durations[len(durations) // 2] if len(durations) % 2 else
+                      round((durations[len(durations) // 2 - 1] + durations[len(durations) // 2]) / 2)) \
+        if durations else None
+    actions = [row for row in events if row.get("kind") in (
+        "workflow.stage_cancel_requested", "workflow.stage_resumed")]
+    latest = max((str(row.get("occurred_at") or "") for row in actions), default="") or None
+    return {
+        "window_hours": 24,
+        "cancel_requests": len(requested),
+        "cancel_resolved": resolved,
+        "cancel_pending": max(0, len(requested) - resolved),
+        "cancel_success_pct": round(resolved / len(requested) * 100) if requested else None,
+        "median_cancel_seconds": median_seconds,
+        "resumes": sum(1 for row in events if row.get("kind") == "workflow.stage_resumed"),
+        "latest_action_at": latest,
     }
 
 
@@ -1750,6 +1796,9 @@ def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None)
             "error_class": durable_failure.get("error_class") or run.get("last_error_class"),
             "latest_progress_at": run.get("updated_at"),
             "stalled": stalled,
+            "paused": run.get("paused") is True,
+            "cancel_requested": run.get("cancel_requested") is True,
+            "cancel_requested_at": run.get("cancel_requested_at"),
             "waiting_reason": "worker_heartbeat_stale" if stalled else None,
             "next_retry_at": None,
         })
