@@ -6,8 +6,7 @@
 __pycache__/
 *.pyc
 .venv/
-.venv-drive/
-.venv-e2e/
+.venv-*/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
