@@ -1688,6 +1688,28 @@ def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None)
     # canonical workflow history cannot silently widen the endpoint's separate `runs` contract.
     runs = list(runs)
     grouped: dict[str, dict] = {}
+    event_rows: dict[str, list[dict]] = {}
+    safe_kinds = {"job.stage_started", "job.stage_completed", "job.stage_failed",
+                  "job.stage_cancelled", "workflow.stage_cancel_requested",
+                  "workflow.stage_resumed"}
+    # This is a cross-user operations endpoint, so project only the closed lifecycle vocabulary
+    # and counted detail. Free-text messages, filenames and raw payloads never cross this boundary.
+    for event in lifecycle_events or []:
+        scan_id = str(event.get("scan_id") or "")
+        if not scan_id or event.get("kind") not in safe_kinds:
+            continue
+        detail = event.get("detail") or {}
+        event_rows.setdefault(scan_id, []).append({
+            "event_id": event.get("event_id"), "kind": event.get("kind"),
+            "stage": event.get("stage"), "occurred_at": event.get("occurred_at"),
+            "correlation_id": event.get("correlation_id"), "attempt": event.get("attempt"),
+            "error_class": event.get("error_class"),
+            "detail": {key: detail[key] for key in ("documents", "completed", "failed")
+                       if key in detail},
+        })
+    for rows_for_scan in event_rows.values():
+        rows_for_scan.sort(key=lambda row: (str(row.get("occurred_at") or ""),
+                                            str(row.get("event_id") or "")))
     durable_stages: dict[tuple[str, str], dict] = {}
     for event in lifecycle_events or []:
         if event.get("kind") not in ("job.stage_started", "job.stage_completed",
@@ -1741,6 +1763,7 @@ def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None)
             "status": "completed",
             "current_stage": None,
             "available_next_actions": [],
+            "events": event_rows.get(scan_id, []),
             "stages": [],
         })
         if str(run.get("started_at") or "") < str(workflow.get("created_at") or run.get("started_at") or ""):
