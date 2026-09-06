@@ -196,10 +196,11 @@ def test_the_policy_is_off_by_default_so_ungrounded_defers(monkeypatch, tmp_path
 
 def test_a_deferred_figure_does_not_burn_the_vision_budget_forever(monkeypatch, tmp_path):
     # Budget counts model CALLS, not writes. It used to decrement only on a successful write,
-    # so a document of ungrounded figures would call the model once per figure unbounded.
+    # so a document of ungrounded figures would call the model once per figure unbounded. These
+    # figures share one page, so the byte-identical page evidence now spends only one call.
     monkeypatch.setattr(RP, "_VISION_MAX_FIGURES", 2)
     r = _caption(tmp_path, monkeypatch, "budget.pdf", grounded=False, n_figs=5)
-    assert r["calls"] == 2                     # budget spent → the rest defer without a call
+    assert r["calls"] == 1                     # one page → one cached OCR + vision result
     assert r["deferred"] == 5 and r["alts"] == ["", "", "", "", ""]
 
 
