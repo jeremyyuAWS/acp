@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { addPerson, getPeople, removePerson, updatePerson, getWorkspaceRoles, assignWorkspaceRole, roleImpact } from './api.js'
 
@@ -53,6 +53,81 @@ function Badge({ status }) {
 const Overlay = ({ children }) =>
   (typeof document === 'undefined' ? children : createPortal(children, document.body))
 
+/**
+ * ONE PERSON'S ROW, MEMOISED — and the memo is the bug fix, not an optimisation.
+ *
+ * REPORTED: "the dropdown to assign a role keeps closing before I can assign".
+ *
+ * MEASURED, by instrumenting the `selected` setter on HTMLOptionElement and re-rendering an
+ * ancestor while doing nothing to this screen:
+ *
+ *     selects rendered                        2
+ *     after ONE unrelated ancestor re-render  { optionSelected: 2 }
+ *     after THREE more                        { optionSelected: 6 }
+ *
+ * One `option.selected = …` write per select, per ancestor re-render, with no prop of the select
+ * changed. That is not React being wasteful — `diffProperties` returns a NON-NULL update payload
+ * for a `<select>` unconditionally (it is `updatePayload = []` in the 'select' case), so
+ * `commitUpdate` runs on every commit and `postUpdateWrapper` → `updateOptions` re-asserts the
+ * selection. Rewriting the selected option of a select whose popup is OPEN is what dismisses the
+ * popup, and the browser gives no event for it.
+ *
+ * WHAT DRIVES THOSE RE-RENDERS is App, on four unconditional timers, while People is on screen:
+ *
+ *     setActiveWorkflows(r?.active_workflows || [])   every 15 s   ← a fresh [] literal, so the
+ *                                                                    reference changes even idle
+ *     setBackendLastChecked(Date.now())               every 30 s   ← always a new value
+ *     setTick / setScanList                           every 60 s
+ *
+ * So the popup is torn down under the cursor several times a minute, forever, and reading down a
+ * list of role names takes longer than that. Nothing is wrong with the polling — a background
+ * refresh is the point of it — so the fix is to stop it REACHING the selects. A memoised row whose
+ * props are referentially stable bails out of reconciliation entirely, and React never commits to
+ * its host children, so no write happens and the popup survives.
+ *
+ * THE PROPS MUST STAY STABLE FOR THIS TO HOLD, which is why every callback below is useCallback'd
+ * with an empty dep array (they close over nothing but setState functions and module imports).
+ * A callback rebuilt each render would defeat the memo silently — the screen would look identical
+ * and the dropdown would go back to closing. peopleSelectStaysOpen.test.jsx asserts the write
+ * count directly for exactly that reason.
+ *
+ * `person` identity is stable between polls because `data` only changes when getPeople answers;
+ * after a real assignment every person object IS new and the row re-renders, which is correct —
+ * that is the truth arriving.
+ */
+const PersonRow = memo(function PersonRow({ person, roles, canManage, onChange, onChangeRole, onRemove }) {
+  return <div className={roles.length > 0 ? 'people-row has-role-column' : 'people-row'}>
+    <div><b className="people-email">{person.email}</b><div className="muted" style={{ fontSize: 12, marginTop: 3 }}>{person.provider === 'microsoft' ? 'Microsoft · SharePoint / OneDrive' : person.provider === 'google' ? 'Google · Drive' : person.role === 'owner' ? 'Workspace owner' : 'Provider not recorded'}</div></div>
+    <Badge status={person.status} />
+    {person.protected ? <b style={{ fontSize: 12 }}>Owner</b> : canManage ? <select className="people-select" aria-label={`Access level for ${person.email}`} value={person.role || 'user'} onChange={(e) => onChange(person, { role: e.target.value })}><option value="user">User</option><option value="admin">Platform Admin</option></select> : <span style={{ fontSize: 12 }}>{person.role === 'admin' ? 'Platform Admin' : 'User'}</span>}
+    {/* The WORKSPACE role (PRD §9), a different thing from the platform access level beside
+        it: that one decides whether they can touch platform settings, this one decides which
+        tabs they see. Shown only when roles exist — on a deployment that has not been
+        migrated there is nothing to choose from, and an empty select reads as a broken
+        control rather than an absent feature. */}
+    {roles.length > 0 && (
+      <div className="people-role-cell">
+        {person.protected ? (
+          <span style={{ fontSize: 12 }}>Owner — full access</span>
+        ) : (
+          <select className={`people-select${person.workspace_role_id ? '' : ' is-unassigned'}`}
+                  aria-label={`Workspace role for ${person.email}`}
+                  value={person.workspace_role_id || ''}
+                  onChange={(e) => onChangeRole(person, e.target.value)}>
+            <option value="">No role</option>
+            {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
+          </select>
+        )}
+      </div>
+    )}
+    <div className="people-row-actions">
+      {person.status === 'setup_required' && <a href="https://entra.microsoft.com/#view/Microsoft_AAD_UsersAndTenants/UserManagementMenuBlade/~/GuestUsers" target="_blank" rel="noreferrer">Invite in Entra ↗</a>}
+      {person.failure && <span title={person.failure} style={{ fontSize: 12, color: 'var(--error-fg-strong)' }}>Invitation needs attention</span>}
+      {canManage && !person.protected && <><button className="ghost small" onClick={() => onChange(person, { status: person.status === 'suspended' ? 'access_ready' : 'suspended' })}>{person.status === 'suspended' ? 'Restore' : 'Suspend'}</button><button className="ghost small" onClick={() => onRemove(person)}>Remove</button></>}
+    </div>
+  </div>
+})
+
 export default function PeopleAccess() {
   const [data, setData] = useState({ people: [], domains: [], invite_enabled: false, can_manage: false })
   const [open, setOpen] = useState(false)
@@ -91,8 +166,14 @@ export default function PeopleAccess() {
     return () => clearTimeout(timer)
   }, [roleToast])
 
-  const load = () => getPeople().then(setData).catch((e) => setError(e.message || 'Could not load people.'))
-  useEffect(() => { load() }, [])
+  // EVERY CALLBACK HANDED TO PersonRow IS useCallback'd WITH NO DEPS, and that is load-bearing
+  // rather than tidiness: PersonRow is memoised so an App poll cannot re-commit its <select> and
+  // shut the open dropdown (see the note on PersonRow). A callback rebuilt on each render is a
+  // new reference, the memo compares props and finds one changed, and the row re-renders anyway —
+  // restoring the bug with the fix apparently still in place. Each of these closes over nothing
+  // but setState functions and module imports, all of which React guarantees stable.
+  const load = useCallback(() => getPeople().then(setData).catch((e) => setError(e.message || 'Could not load people.')), [])
+  useEffect(() => { load() }, [load])
   // Best-effort: a caller without roles.manage gets a 403 here, and that is not an error worth
   // showing them — it means the role column is simply not theirs to use, and the People screen
   // still does everything else it did before.
@@ -110,13 +191,13 @@ export default function PeopleAccess() {
   // `person.workspace_role_id`, so without this it snaps back to the old value for the length of
   // the round trip — which, on the screen whose whole reported bug was "the dropdown does not
   // do anything", is the one thing it must not do.
-  const showPerson = (email, patch) => setData((old) => ({
+  const showPerson = useCallback((email, patch) => setData((old) => ({
     ...old,
     people: old.people.map((p) => (p.email === email ? { ...p, ...patch } : p)),
-  }))
-  const showRole = (email, roleId) => showPerson(email, { workspace_role_id: roleId || null })
+  })), [])
+  const showRole = useCallback((email, roleId) => showPerson(email, { workspace_role_id: roleId || null }), [showPerson])
 
-  const changeRole = (person, roleId) => {
+  const changeRole = useCallback((person, roleId) => {
     const previousRoleId = person.workspace_role_id || ''
     if (roleId === previousRoleId) return
     setError('')
@@ -135,7 +216,7 @@ export default function PeopleAccess() {
       // load() on failure too — the optimistic paint above has to be undone by the truth rather
       // than by guessing what the server kept.
       .catch((e) => { setRoleToast(null); setError(e.message || 'Could not change this role.'); load() })
-  }
+  }, [showRole, load])
 
   const undoRoleChange = () => {
     if (!roleToast) return
@@ -181,7 +262,7 @@ export default function PeopleAccess() {
       .catch((x) => setError(x.message || 'Could not add this person.'))
       .finally(() => setBusy(false))
   }
-  const change = (person, patch) => {
+  const change = useCallback((person, patch) => {
     setError('')
     // PAINT FIRST, exactly as showRole does for the workspace-role select beside this one.
     //
@@ -197,12 +278,12 @@ export default function PeopleAccess() {
       setData((old) => ({ ...old, ...d, people: d.people || old.people.map((p) => p.email === person.email ? d.person : p) }))
       setMessage(`${person.email} was updated.`)
     }).catch((e) => { setError(e.message || 'Could not update this person.'); load() })
-  }
-  const remove = (person) => {
+  }, [showPerson, load])
+  const remove = useCallback((person) => {
     if (!window.confirm(`Remove ${person.email} from ACP? They will lose access on their next request.`)) return
     removePerson(person.email).then((d) => { setData((old) => ({ ...old, ...d })); setMessage(`${person.email} was removed.`) })
       .catch((e) => setError(e.message || 'Could not remove this person.'))
-  }
+  }, [])
   const active = data.people.filter((p) => p.status !== 'suspended').length
   const pending = data.people.filter((p) => ['invited', 'setup_required', 'failed'].includes(p.status)).length
 
@@ -260,36 +341,10 @@ export default function PeopleAccess() {
           <span />
         </div>
       )}
-      {data.people.length === 0 ? <p className="muted" style={{ padding: 18, margin: 0 }}>No people have been added yet.</p> : data.people.map((person) => <div key={person.email} className={roles.length > 0 ? 'people-row has-role-column' : 'people-row'}>
-        <div><b className="people-email">{person.email}</b><div className="muted" style={{ fontSize: 12, marginTop: 3 }}>{person.provider === 'microsoft' ? 'Microsoft · SharePoint / OneDrive' : person.provider === 'google' ? 'Google · Drive' : person.role === 'owner' ? 'Workspace owner' : 'Provider not recorded'}</div></div>
-        <Badge status={person.status} />
-        {person.protected ? <b style={{ fontSize: 12 }}>Owner</b> : data.can_manage ? <select className="people-select" aria-label={`Access level for ${person.email}`} value={person.role || 'user'} onChange={(e) => change(person, { role: e.target.value })}><option value="user">User</option><option value="admin">Platform Admin</option></select> : <span style={{ fontSize: 12 }}>{person.role === 'admin' ? 'Platform Admin' : 'User'}</span>}
-        {/* The WORKSPACE role (PRD §9), a different thing from the platform access level beside
-            it: that one decides whether they can touch platform settings, this one decides which
-            tabs they see. Shown only when roles exist — on a deployment that has not been
-            migrated there is nothing to choose from, and an empty select reads as a broken
-            control rather than an absent feature. */}
-        {roles.length > 0 && (
-          <div className="people-role-cell">
-            {person.protected ? (
-              <span style={{ fontSize: 12 }}>Owner — full access</span>
-            ) : (
-              <select className={`people-select${person.workspace_role_id ? '' : ' is-unassigned'}`}
-                      aria-label={`Workspace role for ${person.email}`}
-                      value={person.workspace_role_id || ''}
-                      onChange={(e) => changeRole(person, e.target.value)}>
-                <option value="">No role</option>
-                {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-              </select>
-            )}
-          </div>
-        )}
-        <div className="people-row-actions">
-          {person.status === 'setup_required' && <a href="https://entra.microsoft.com/#view/Microsoft_AAD_UsersAndTenants/UserManagementMenuBlade/~/GuestUsers" target="_blank" rel="noreferrer">Invite in Entra ↗</a>}
-          {person.failure && <span title={person.failure} style={{ fontSize: 12, color: 'var(--error-fg-strong)' }}>Invitation needs attention</span>}
-          {data.can_manage && !person.protected && <><button className="ghost small" onClick={() => change(person, { status: person.status === 'suspended' ? 'access_ready' : 'suspended' })}>{person.status === 'suspended' ? 'Restore' : 'Suspend'}</button><button className="ghost small" onClick={() => remove(person)}>Remove</button></>}
-        </div>
-      </div>)}
+      {data.people.length === 0 ? <p className="muted" style={{ padding: 18, margin: 0 }}>No people have been added yet.</p> : data.people.map((person) => (
+        <PersonRow key={person.email} person={person} roles={roles} canManage={!!data.can_manage}
+                   onChange={change} onChangeRole={changeRole} onRemove={remove} />
+      ))}
     </div>
     <p className="muted" style={{ fontSize: 12, lineHeight: 1.5 }}>People sign in with their existing Google or Microsoft identity. Their Drive, OneDrive, and SharePoint access remains governed by that provider; adding them here does not grant access to source documents.</p>
 
