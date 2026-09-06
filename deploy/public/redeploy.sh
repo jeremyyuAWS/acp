@@ -33,6 +33,7 @@ DISCOVERY_WORKER="${ACP_DISCOVERY_WORKER:-acp-discovery}"
 ASSESS_WORKER="${ACP_ASSESS_WORKER:-acp-assess}"
 REMEDIATE_WORKER="${ACP_REMEDIATE_WORKER:-acp-remediate}"
 LANE_WORKERS=("$DISCOVERY_WORKER" "$ASSESS_WORKER" "$REMEDIATE_WORKER")
+DEPLOY_TARGET_ENV="${ACP_DEPLOY_TARGET_ENV:-production}"
 # The ACP_WORKER_ROLE each lane worker runs as, POSITIONALLY paired with LANE_WORKERS above —
 # LANE_WORKERS[i] reports its heartbeat under LANE_ROLES[i]. Step 9b needs the role, not the
 # service name: the services have no ingress, so the only way to ask one what it is running is
@@ -62,11 +63,39 @@ source "$(cd "$(dirname "$0")" && pwd)/readiness_probe.sh"
 say() { printf '\n\033[1m▸ %s\033[0m\n' "$*"; }
 die() { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 
+# Names are an isolation boundary. Staging once passed retired ACP_WORKER while this script read
+# the three lane variables, so all three silently fell back to PRODUCTION names. Refuse that
+# class of mistake before subscription reads, builds, queue probes, or Container App mutations.
+case "$DEPLOY_TARGET_ENV" in
+  staging)
+    for a in "$APP" "${LANE_WORKERS[@]}"; do
+      case "$a" in *-staging) ;; *) die "staging target '$a' must end in -staging; refusing cross-environment deployment" ;; esac
+    done ;;
+  production)
+    for a in "$APP" "${LANE_WORKERS[@]}"; do
+      case "$a" in *-staging) die "production target '$a' points at staging; refusing cross-environment deployment" ;; esac
+    done ;;
+  *) die "ACP_DEPLOY_TARGET_ENV must be 'production' or 'staging', got '$DEPLOY_TARGET_ENV'" ;;
+esac
+[ "$(printf '%s\n' "$APP" "${LANE_WORKERS[@]}" | sort -u | wc -l | tr -d ' ')" = 4 ] \
+  || die "app and discovery/assess/remediate worker targets must be four distinct names"
+
 # ── subscription: resolved per-call, never via `az account set` ────────────────────────────
 # `az account set` writes a global choice another concurrent process can change mid-deploy.
 SUB="$(az account show ${ACP_SUBSCRIPTION:+--subscription "$ACP_SUBSCRIPTION"} --query id -o tsv 2>/dev/null || true)"
 [ -n "$SUB" ] || die "no active Azure subscription — run 'az login', or set ACP_SUBSCRIPTION"
 AZ=(--subscription "$SUB")
+
+# Suffixes catch the common mistake; the live environment stamp catches a deliberately or
+# accidentally misleading name. Every target must already exist for redeploy, and all four must
+# agree before even the image build starts. First-time staging creation belongs to staging_up.sh.
+for a in "$APP" "${LANE_WORKERS[@]}"; do
+  ACTUAL_DEPLOY_ENV="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$a" \
+    --query "properties.template.containers[0].env[?name=='ACP_DEPLOY_ENV'].value | [0]" \
+    -o tsv 2>/dev/null || true)"
+  [ "$ACTUAL_DEPLOY_ENV" = "$DEPLOY_TARGET_ENV" ] \
+    || die "$a is missing or stamped '$ACTUAL_DEPLOY_ENV', expected '$DEPLOY_TARGET_ENV'; refusing cross-environment deployment"
+done
 
 # ── 1. pin ─────────────────────────────────────────────────────────────────────────────────
 SRC_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

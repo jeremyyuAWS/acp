@@ -166,6 +166,7 @@ jobs:
           # The resolved sha, so the script and the checkout above cannot pin different commits.
           # redeploy.sh resolves again and that is fine — resolving a full sha is a no-op.
           ACP_PIN: ${{ steps.pin.outputs.sha }}
+          ACP_DEPLOY_TARGET_ENV: production
           ACP_BLUE_GREEN: ${{ inputs.blue_green && '1' || '0' }}
           ACP_DEPLOY_WITH_ACTIVE_JOBS: ${{ inputs.deploy_with_active_jobs && '1' || '0' }}
           # Only reachable via an explicit manual dispatch with the checkbox set — `inputs` is

@@ -14,9 +14,9 @@
 #      shell that just deployed prod has prod's values exported. Pointing staging at the prod DB
 #      would have staging WRITE to production data. This wrapper takes ONLY staging-prefixed vars
 #      (ACP_STAGING_*), so nothing prod can leak in by inheritance — that isolation is the point.
-#   2. Staging mirrors prod's SPLIT TIER (acp-app-staging + acp-worker-staging), because that is
-#      what redeploy.sh — which the workflow runs unchanged — expects: it updates and health-checks
-#      BOTH apps. A single-container staging on SQLite would deploy fine and then fail to catch the
+#   2. Staging mirrors prod's role-owned SPLIT TIER (Discovery, Assess, and Remediate), because
+#      that is what redeploy.sh updates and health-checks. A mixed worker would deploy fine and
+#      fail to catch lane-specific startup, scaling, and heartbeat problems.
 #      worker-tier and Postgres problems staging exists to catch. Split tier REQUIRES a shared
 #      Postgres and Redis, so this script refuses SQLite rather than provision a staging that lies.
 #   3. It surfaces the exact `gh variable set STAGING_FQDN` line at the end — that variable is the
@@ -34,7 +34,17 @@ die() { printf '\033[31m✗ %s\033[0m\n' "$*" >&2; exit 1; }
 say() { printf '\n\033[1m▸ %s\033[0m\n' "$*"; }
 
 APP_NAME="${ACP_STAGING_APP_NAME:-acp-app-staging}"
-WORKER_NAME="${ACP_STAGING_WORKER_NAME:-acp-worker-staging}"
+DISCOVERY_NAME="${ACP_STAGING_DISCOVERY_WORKER_NAME:-acp-discovery-staging}"
+ASSESS_NAME="${ACP_STAGING_ASSESS_WORKER_NAME:-acp-assess-staging}"
+REMEDIATE_NAME="${ACP_STAGING_REMEDIATE_WORKER_NAME:-acp-remediate-staging}"
+LEGACY_WORKER_NAME="${ACP_STAGING_LEGACY_WORKER_NAME:-acp-worker-staging}"
+LANE_NAMES=("$DISCOVERY_NAME" "$ASSESS_NAME" "$REMEDIATE_NAME")
+LANE_ROLES=(discovery assess remediate)
+for _app in "$APP_NAME" "${LANE_NAMES[@]}" "$LEGACY_WORKER_NAME"; do
+  case "$_app" in *-staging) ;; *) die "staging resource '$_app' must end in -staging" ;; esac
+done
+[ "$(printf '%s\n' "$APP_NAME" "${LANE_NAMES[@]}" "$LEGACY_WORKER_NAME" | sort -u | wc -l | tr -d ' ')" = 5 ] \
+  || die "staging app, three role workers, and legacy worker must have distinct names"
 
 # ── required staging inputs (prefixed, so prod's exported env cannot leak in) ─────────────────
 DB="${ACP_STAGING_DATABASE_URL:-}"
@@ -71,7 +81,10 @@ cat <<PLAN
   subscription : $SUBNAME
   resource grp : ${ACP_RG:-mdk-accessibility}
   app          : $APP_NAME        (external ingress)
-  worker       : $WORKER_NAME     (no ingress, drains the job queue)
+  discovery    : $DISCOVERY_NAME
+  assess       : $ASSESS_NAME
+  remediate    : $REMEDIATE_NAME
+  legacy worker: $LEGACY_WORKER_NAME (kept until all role heartbeats are healthy)
   database     : Postgres @ $_db_host   (SEPARATE from production)
   redis        : set (cross-replica scan tokens)
   auth         : $_auth
@@ -88,36 +101,81 @@ fi
 # ACP_DEPLOY_WORKER=1 brings up the worker tier FIRST, then flips the API to ACP_WORKERS=0
 # (deploy.sh ADR 0013 §2). Only ACP_STAGING_* values are mapped in; nothing else from this shell
 # reaches deploy.sh's DATABASE_URL / REDIS_URL / LANGFUSE_* reads.
-say "handing off to deploy.sh (this builds the image in ACR and creates both staging apps)"
+say "handing off to deploy.sh (creates each isolated staging role worker)"
 # Build the mapped environment as an array so only ACP_STAGING_* (+ subscription) reach deploy.sh,
 # and any prod DATABASE_URL/REDIS_URL/LANGFUSE_* exported in this shell are explicitly unset. The
 # optional entries append only when their source var is set, so an unset one passes nothing rather
 # than an empty override deploy.sh would misread.
-DEPLOY_ENV=(
-  ACP_APP="$APP_NAME"
-  ACP_WORKER="$WORKER_NAME"
-  ACP_DEPLOY_WORKER=1
-  ACP_DATABASE_URL="$DB"
-  REDIS_URL="$REDIS"
-)
-[ -n "${ACP_SUBSCRIPTION:-}" ]               && DEPLOY_ENV+=(ACP_SUBSCRIPTION="$ACP_SUBSCRIPTION")
-[ -n "${ACP_STAGING_ACCESS_CODE:-}" ]        && DEPLOY_ENV+=(ACP_ACCESS_CODE="$ACP_STAGING_ACCESS_CODE")
-[ -n "${ACP_STAGING_GOOGLE_CLIENT_ID:-}" ]   && DEPLOY_ENV+=(ACP_GOOGLE_CLIENT_ID="$ACP_STAGING_GOOGLE_CLIENT_ID")
-[ -n "${ACP_STAGING_LANGFUSE_SECRET_KEY:-}" ] && DEPLOY_ENV+=(LANGFUSE_SECRET_KEY="$ACP_STAGING_LANGFUSE_SECRET_KEY")
-[ -n "${ACP_STAGING_LANGFUSE_PUBLIC_KEY:-}" ] && DEPLOY_ENV+=(LANGFUSE_PUBLIC_KEY="$ACP_STAGING_LANGFUSE_PUBLIC_KEY")
-env -u DATABASE_URL -u REDIS_URL -u LANGFUSE_SECRET_KEY -u LANGFUSE_PUBLIC_KEY -u ACP_ACCESS_CODE \
-  "${DEPLOY_ENV[@]}" bash deploy/public/deploy.sh
+for i in 0 1 2; do
+  DEPLOY_ENV=(
+    ACP_APP="$APP_NAME"
+    ACP_WORKER="${LANE_NAMES[$i]}"
+    ACP_WORKER_ROLE="${LANE_ROLES[$i]}"
+    ACP_DEPLOY_WORKER=1
+    # Keep the migration overlap inside one CPU: the legacy worker remains live until all three
+    # heartbeats prove healthy, so each temporary staging lane starts at the ACA minimum size.
+    ACP_WORKER_CPU="${ACP_STAGING_WORKER_CPU:-0.25}"
+    ACP_WORKER_MEMORY="${ACP_STAGING_WORKER_MEMORY:-0.5Gi}"
+    ACP_WORKER_MIN_REPLICAS=1
+    ACP_WORKER_MAX_REPLICAS="${ACP_STAGING_WORKER_MAX_REPLICAS:-1}"
+    ACP_DATABASE_URL="$DB"
+    REDIS_URL="$REDIS"
+  )
+  [ -n "${ACP_SUBSCRIPTION:-}" ]               && DEPLOY_ENV+=(ACP_SUBSCRIPTION="$ACP_SUBSCRIPTION")
+  [ -n "${ACP_STAGING_ACCESS_CODE:-}" ]        && DEPLOY_ENV+=(ACP_ACCESS_CODE="$ACP_STAGING_ACCESS_CODE")
+  [ -n "${ACP_STAGING_GOOGLE_CLIENT_ID:-}" ]   && DEPLOY_ENV+=(ACP_GOOGLE_CLIENT_ID="$ACP_STAGING_GOOGLE_CLIENT_ID")
+  [ -n "${ACP_STAGING_LANGFUSE_SECRET_KEY:-}" ] && DEPLOY_ENV+=(LANGFUSE_SECRET_KEY="$ACP_STAGING_LANGFUSE_SECRET_KEY")
+  [ -n "${ACP_STAGING_LANGFUSE_PUBLIC_KEY:-}" ] && DEPLOY_ENV+=(LANGFUSE_PUBLIC_KEY="$ACP_STAGING_LANGFUSE_PUBLIC_KEY")
+  env -u DATABASE_URL -u REDIS_URL -u LANGFUSE_SECRET_KEY -u LANGFUSE_PUBLIC_KEY -u ACP_ACCESS_CODE \
+    "${DEPLOY_ENV[@]}" bash deploy/public/deploy.sh
+done
 
 # deploy.sh stamps ACP_DEPLOY_ENV=production on every app it creates. That makes IS_PROD true,
 # which blocks TEST_BYPASS_ENABLED even when ACP_ENABLE_TEST_BYPASS=true is later set. Staging
 # must not be IS_PROD — override it immediately after deploy.sh so subsequent redeploy.sh runs
 # (which preserve all env vars) carry "staging" for the life of this environment.
 say "overriding ACP_DEPLOY_ENV=staging (deploy.sh stamps 'production'; staging must not be IS_PROD)"
-for _app in "$APP_NAME" "$WORKER_NAME"; do
+for _app in "$APP_NAME" "${LANE_NAMES[@]}"; do
   az containerapp update ${ACP_SUBSCRIPTION:+--subscription "$ACP_SUBSCRIPTION"} \
     -g "${ACP_RG:-mdk-accessibility}" -n "$_app" \
     --set-env-vars "ACP_DEPLOY_ENV=staging" -o none
 done
+
+# Do not retire the mixed worker merely because the new containers say Running. The application
+# heartbeat proves each process reached worker_main, registered the intended role against the
+# shared staging database, and is recent enough to accept work. Any failure leaves the legacy
+# worker untouched as the rollback drainer.
+say "proving all three staging role workers through fresh shared heartbeats"
+FQDN="$(az containerapp show ${ACP_SUBSCRIPTION:+--subscription "$ACP_SUBSCRIPTION"} \
+          -g "${ACP_RG:-mdk-accessibility}" -n "$APP_NAME" \
+          --query properties.configuration.ingress.fqdn -o tsv)"
+ROLES_READY=false
+for _ in $(seq 1 60); do
+  READY="$(curl -s --max-time 20 "https://$FQDN/readyz" || echo '{}')"
+  if READY="$READY" python3 -c 'import json,os,sys
+try:
+ r=json.loads(os.environ["READY"])["workers"]["roles"]
+ sys.exit(0 if all(r.get(x,{}).get("alive") is True for x in ("discovery","assess","remediate")) else 1)
+except Exception: sys.exit(1)'; then
+    ROLES_READY=true; break
+  fi
+  sleep 5
+done
+[ "$ROLES_READY" = true ] || die "role workers did not publish fresh discovery/assess/remediate heartbeats; legacy mixed worker remains unchanged"
+echo "  ✓ discovery, assess, and remediate heartbeats are fresh"
+
+# Recoverable retirement, never deletion. With no ingress traffic or scale rule, min=0 lets ACA
+# drain the old replica to zero; max=1 keeps the app recoverable until a later cleanup decision.
+if az containerapp show ${ACP_SUBSCRIPTION:+--subscription "$ACP_SUBSCRIPTION"} \
+     -g "${ACP_RG:-mdk-accessibility}" -n "$LEGACY_WORKER_NAME" -o none 2>/dev/null; then
+  say "retiring legacy mixed staging worker to a zero-replica floor"
+  az containerapp update ${ACP_SUBSCRIPTION:+--subscription "$ACP_SUBSCRIPTION"} \
+    -g "${ACP_RG:-mdk-accessibility}" -n "$LEGACY_WORKER_NAME" \
+    --min-replicas 0 --max-replicas 1 --set-env-vars \
+    "ACP_RETIRED_REASON=replaced-by-role-workers" -o none
+  az containerapp revision set-mode ${ACP_SUBSCRIPTION:+--subscription "$ACP_SUBSCRIPTION"} \
+    -g "${ACP_RG:-mdk-accessibility}" -n "$LEGACY_WORKER_NAME" --mode single -o none
+fi
 
 # ── tell the operator the one manual step left: flip the workflow on ─────────────────────────
 FQDN="$(az containerapp show ${ACP_SUBSCRIPTION:+--subscription "$ACP_SUBSCRIPTION"} \
@@ -133,7 +191,8 @@ if [ -n "$FQDN" ]; then
 
       gh variable set STAGING_FQDN --body "$FQDN"
 
-  (Optional overrides if you renamed the apps: STAGING_APP / STAGING_WORKER / STAGING_RG.)
+  (Optional overrides: STAGING_APP / STAGING_DISCOVERY_WORKER / STAGING_ASSESS_WORKER /
+   STAGING_REMEDIATE_WORKER / STAGING_RG.)
   From then on the workflow needs no approval — a \`staging\` GitHub Environment with no reviewers
   is created on its first run.
 NEXT
