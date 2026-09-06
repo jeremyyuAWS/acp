@@ -868,6 +868,14 @@ def _fix_pdf_figure_alt(pdf, source_path: str, *, ai_enabled: bool,
     budget = _VISION_MAX_FIGURES
     thumb_budget = _VISION_MAX_FIGURES        # bound page renders for deferred cards too
     page_cache: dict[int, bytes | None] = {}
+    # The vision input is a render of the WHOLE PAGE, not an isolated figure. Multiple
+    # /Figure elements on one page therefore used to send byte-identical PNGs through OCR,
+    # local/cloud vision and (when enabled) the independent validation call once per figure.
+    # Reuse that page-level result: it preserves the existing semantics exactly (each figure
+    # still receives the same page description / review draft it did before), while avoiding
+    # duplicate parsing and model waits. Cache misses too, so an unavailable model is not
+    # retried N times for N figures on the same page.
+    vision_cache: dict[int, tuple[dict | None, str | None]] = {}
 
     def _render(page_num):
         if page_num is None:
@@ -903,14 +911,20 @@ def _fix_pdf_figure_alt(pdf, source_path: str, *, ai_enabled: bool,
             _defer(fig, page_num, img)
             continue
         import ai as _ai
-        res = _ai.describe_image_structured(img, filename=file, scan_id=scan_id, file=file)
+        cached = vision_cache.get(page_num)
+        if cached is None:
+            res = _ai.describe_image_structured(img, filename=file, scan_id=scan_id, file=file)
+            # The spend is the call, including a miss. Count it before branching so a model
+            # returning no usable result cannot bypass the document's configured call cap.
+            budget -= 1
+            anchor = (_alt_write_anchor(res, img, scan_id=scan_id, file=file)
+                      if res is not None else None)
+            vision_cache[page_num] = (res, anchor)
+        else:
+            res, anchor = cached
         if not res:
             _defer(fig, page_num, img)
             continue
-        # The model call is the spend, so it is what the budget counts — otherwise a document
-        # whose figures all defer would call vision once per figure, unbounded.
-        budget -= 1
-        anchor = _alt_write_anchor(res, img, scan_id=scan_id, file=file)
         if anchor is None:
             # Ungrounded guess → the reviewer decides, we do not assert it (see helper).
             _defer(fig, page_num, img, draft=res.get("alt", ""))
