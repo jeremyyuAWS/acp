@@ -149,9 +149,26 @@ export function componentState(data = {}, ctx = {}) {
 
   if (data.kind === 'run') {
     const run = data.run || {}
+    // Keep the drawer's headline aligned with the job tile and filters.  A terminal run with
+    // failures has no queued or running work by definition; treating that absence as "Idle"
+    // hid the only fact that needed an operator's attention (the production 209/258 + 49 failed
+    // case).  Failure outranks terminal recency and queue activity here for the same reason it
+    // does in AdminLiveTraffic.runOperationalState.
+    if (run.status === 'failed' || (num(run.failed) || 0) > 0) {
+      const failed = num(run.failed)
+      return withLabel('degraded', 'Needs attention', failed
+        ? `${failed} document${failed === 1 ? '' : 's'} failed. Open the exceptions below for the recovery action.`
+        : 'This run ended with a failure. Open the exceptions below for the recovery action.')
+    }
     if (run.status === 'recent') return withLabel('idle', 'Completed', 'Finished within the last 15 minutes.')
     if ((num(run.running) || 0) > 0) return withLabel('online', 'Processing', 'A worker is on this run now.')
     if ((num(run.queued) || 0) > 0) return withLabel('waiting', 'Waiting for capacity', 'Queued and not yet claimed.')
+    // An active run with no visible work is only honestly idle while the activity stream is live.
+    // After a disconnect the zeroes are the last frame received, not proof that workers stopped.
+    if (connection !== 'live') {
+      return withLabel('degraded', 'Live status unavailable',
+        'The activity stream is reconnecting. ACP is preserving the last confirmed run state.')
+    }
     return withLabel('idle', 'Idle', 'No queued or running work on this run.')
   }
 
