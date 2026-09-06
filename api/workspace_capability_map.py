@@ -205,6 +205,7 @@ _map_many([("GET", "/ai/suggest"), ("GET", "/ai/explain"), ("GET", "/ai/validate
 # Publishing is a GRANT (PRD §5), never implied by seeing the Release tab.
 _map_many([("POST", "/scans/{sid}/publish")], {"release.publish"})
 _map_many([
+    ("GET", "/releases"),
     ("GET", "/scans/{sid}/release"),
     ("GET", "/scans/{sid}/release/manifest"),
     ("POST", "/scans/{sid}/release/preview"),
