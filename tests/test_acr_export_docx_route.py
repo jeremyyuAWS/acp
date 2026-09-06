@@ -269,3 +269,33 @@ def test_downloading_repeatedly_does_not_leak_a_temp_directory(client, report):
     after = set(root.iterdir()) if root.exists() else set()
     leaked = [p for p in (after - before) if p.is_dir() and (p / "acr-export.docx").exists()]
     assert leaked == [], f"the export leaked {len(leaked)} temp directories"
+
+
+def test_a_render_that_produced_an_unopenable_file_is_refused_not_served(client, report,
+                                                                        monkeypatch):
+    """The end of the path the gate's blind spot left open.
+
+    `office_structure.docx_checks` swallows the BadZipFile and reports nothing, and `check()` used
+    to read nothing as ok — so a render that produced bytes no Word could open would have been
+    served, with a 200 and a .docx filename. The refusal is the deliverable here: the caller gets a
+    500 naming the reason, and no bytes.
+
+    `render` is monkeypatched rather than the gate, because the point is the WHOLE path — gate
+    included — and patching the gate would be assuming the answer.
+    """
+    monkeypatch.setattr(acr_export_docx, "render", lambda *_a, **_k: b"PK\x03\x04 truncated")
+    r = client(OWNER).get(f"/acr/{report}/preview", params={"format": "docx"})
+    assert r.status_code == 500
+    assert "acr.export.unreadable" in r.text
+    assert not r.content.startswith(b"PK\x03\x04")
+
+
+def test_the_gate_verdict_endpoint_explains_an_unopenable_file(client, report, monkeypatch):
+    """`format=docx-gate` answers 200 with ok:false rather than refusing — the endpoint that
+    explains a refusal must not refuse for the same reason it is explaining."""
+    monkeypatch.setattr(acr_export_docx, "render", lambda *_a, **_k: b"not a zip")
+    r = client(OWNER).get(f"/acr/{report}/preview", params={"format": "docx-gate"})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is False
+    assert body["failures"][0]["ruleId"] == "acr.export.unreadable"
