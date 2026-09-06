@@ -123,7 +123,7 @@ describe('the submit path is wired to the intent', () => {
   it('App.jsx passes a retained key and only releases it on a known outcome', () => {
     const src = read('App.jsx')
     expect(src).toContain("beginOrResumeIntent('scan')")
-    expect(src).toContain('startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded, submitKey, replaceActive, true)')
+    expect(src).toContain('startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded, submitKey, replaceActive, true, includeSubfolders)')
     expect(src).toContain("['discovery_workflow_active', 'workflow_stage_active', 'recent_compatible_workflow'].includes(e?.detail?.code)")
     expect(src).toContain('doScan(pending.source, pending.folder, pending.runScope, true)')
     expect(src).toContain("completeIntent('scan')")

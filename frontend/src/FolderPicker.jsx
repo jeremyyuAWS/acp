@@ -53,6 +53,7 @@ export default function FolderPicker({
   // card's default) or an unfinished narrowing (the wizard's 'Specific folders'). Asked,
   // never inferred: the two look identical here and only the caller knows which it meant.
   requireSelection = false,
+  showRecursionNote = true,
   // Named in the error sentence, so a reader with several connections wired up knows
   // WHICH one failed. Defaults to the neutral phrase rather than guessing a provider.
   sourceName = 'the source',
@@ -423,7 +424,7 @@ export default function FolderPicker({
             )}
           </div>
           <div style={{ marginBottom: 12 }}>{chips}</div>
-          {recursionNote}
+          {showRecursionNote && recursionNote}
         </div>
       </div>
     )
@@ -447,7 +448,7 @@ export default function FolderPicker({
 
         {multi && <div style={{ marginBottom: 14 }}>{chips}</div>}
 
-        {recursionNote}
+        {showRecursionNote && recursionNote}
 
         {/* Footer */}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>

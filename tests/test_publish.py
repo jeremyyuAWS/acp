@@ -15,6 +15,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "api"))
 import publish  # noqa: E402
 
 
+def test_release_folder_name_uses_selected_us_or_india_timezone():
+    from datetime import datetime, timezone
+    at = datetime(2026, 9, 6, 14, 46, tzinfo=timezone.utc)
+    assert publish.release_folder_name(at, "Asia/Kolkata") == "2026-09-06 20-16 IST"
+    assert publish.release_folder_name(at, "America/Los_Angeles") == "2026-09-06 07-46 PDT"
+
+
+def test_release_folder_name_rejects_arbitrary_timezones():
+    with pytest.raises(ValueError, match="unsupported release timezone"):
+        publish.release_folder_name(timezone_name="Europe/London")
+
+
 class _Exec:
     def __init__(self, result):
         self._result = result

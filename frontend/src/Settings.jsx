@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { resetDemoData, resetMyData, getAllowlist, setAllowlist, inviteTester, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, putAiProviderSecret, testAiProvider, getSecondOpinionPolicy, putSecondOpinionPolicy, getAiStatus, getAdmins, setAdmins, getMe, getToken, getCapacitySchedule, validateCapacitySchedule, putCapacitySchedule } from './api.js'
+import { resetDemoData, resetMyData, getAllowlist, setAllowlist, inviteTester, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, putAiProviderSecret, testAiProvider, getSecondOpinionPolicy, putSecondOpinionPolicy, getAiStatus, getAdmins, setAdmins, getMe, getToken, getCapacitySchedule, validateCapacitySchedule, putCapacitySchedule, getMyScope, putMyReleaseTimezone } from './api.js'
 import { SIM } from './sim.js'
 import WorkerReplicaControl from './WorkerReplicaControl.jsx'
 import ReviewMemory from './ReviewMemory.jsx'
@@ -1021,6 +1021,37 @@ function WorkerConfiguration({ me }) {
 }
 
 
+function ReleasePreferences() {
+  const [zone, setZone] = useState('UTC')
+  const [saved, setSaved] = useState('UTC')
+  const [msg, setMsg] = useState('')
+  useEffect(() => { getMyScope().then((r) => { setZone(r.release_timezone || 'UTC'); setSaved(r.release_timezone || 'UTC') }).catch(() => {}) }, [])
+  const options = [
+    ['UTC', 'UTC'], ['America/Los_Angeles', 'US Pacific'], ['America/Denver', 'US Mountain'],
+    ['America/Chicago', 'US Central'], ['America/New_York', 'US Eastern'], ['Asia/Kolkata', 'India'],
+  ]
+  const save = () => putMyReleaseTimezone(zone).then((r) => {
+    setSaved(r.release_timezone || zone); setMsg(r.simulated ? SIM_NOT_WRITTEN : '✓ Saved')
+  }).catch((e) => setMsg(`⚠ ${e.message || 'Could not save'}`))
+  return (
+    <div style={{ maxWidth: 560 }}>
+      <h3 style={{ marginTop: 0 }}>Release folder timestamps</h3>
+      <p className="muted" style={{ fontSize: 13 }}>
+        New Remediated folders use your local timezone in their name. Audit timestamps remain UTC.
+      </p>
+      <label htmlFor="release-timezone" style={{ display: 'block', fontSize: 12, fontWeight: 700, marginBottom: 5 }}>TIMEZONE</label>
+      <select id="release-timezone" value={zone} onChange={(e) => { setZone(e.target.value); setMsg('') }}
+              style={{ minWidth: 230, padding: '7px 9px' }}>
+        {options.map(([value, label]) => <option key={value} value={value}>{label} · {value}</option>)}
+      </select>
+      <div style={{ marginTop: 12 }}>
+        <button className="primary" disabled={zone === saved} onClick={save}>Save timezone</button>
+        {msg && <span role="status" style={{ marginLeft: 10, fontSize: 12 }}>{msg}</span>}
+      </div>
+    </div>
+  )
+}
+
 export default function Settings({ onClose, files = [], onDelegationChange, me = null }) {
   const [tab, setTab] = useState('users')
   const panelRef = useRef(null)
@@ -1053,6 +1084,7 @@ export default function Settings({ onClose, files = [], onDelegationChange, me =
               (queuePanelCapacity.test.jsx); Live Operations gets a read-only mode strip, never a
               second place to change capacity. */}
           <button role="tab" aria-selected={tab === 'scheduling'} className={tab === 'scheduling' ? 'fchip on' : 'fchip'} onClick={() => setTab('scheduling')}>Scheduling</button>
+          <button role="tab" aria-selected={tab === 'release'} className={tab === 'release' ? 'fchip on' : 'fchip'} onClick={() => setTab('release')}>Release</button>
           <button role="tab" aria-selected={tab === 'ai'} className={tab === 'ai' ? 'fchip on' : 'fchip'} onClick={() => setTab('ai')}>AI Governance</button>
           {/* ADR 0021's "Settings → Review Memory". The tab renders for everyone because GET
               /org-memory has no admin gate — seeing which house style shaped a draft is not an
@@ -1068,6 +1100,7 @@ export default function Settings({ onClose, files = [], onDelegationChange, me =
           {tab === 'myscope' && <MyScanScope />}
           {tab === 'workers' && <WorkerConfiguration me={me} />}
           {tab === 'scheduling' && <CapacitySchedule me={me} />}
+          {tab === 'release' && <ReleasePreferences />}
           {tab === 'ai' && <AIProvidersPanel />}
           {tab === 'memory' && <ReviewMemory me={me} />}
         </div>

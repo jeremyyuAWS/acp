@@ -92,3 +92,19 @@ def test_anonymous_caller_is_401(monkeypatch, isolated_store):
     c = _client(monkeypatch, isolated_store)
     assert c.get("/settings/mine").status_code == 401
     assert c.put("/settings/mine", json={"scan_scope": ""}).status_code == 401
+
+
+def test_user_can_choose_a_supported_release_timezone(monkeypatch, isolated_store):
+    c = _client(monkeypatch, isolated_store)
+    saved = c.put("/settings/mine", headers=_AUTH,
+                  json={"release_timezone": "Asia/Kolkata"})
+    assert saved.status_code == 200
+    assert saved.json()["release_timezone"] == "Asia/Kolkata"
+    assert c.get("/settings/mine", headers=_AUTH).json()["release_timezone"] == "Asia/Kolkata"
+
+
+def test_user_cannot_store_an_unsupported_release_timezone(monkeypatch, isolated_store):
+    c = _client(monkeypatch, isolated_store)
+    response = c.put("/settings/mine", headers=_AUTH,
+                     json={"release_timezone": "Europe/London"})
+    assert response.status_code == 422
