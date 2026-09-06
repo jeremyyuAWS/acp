@@ -31,6 +31,7 @@ from pathlib import Path
 
 _CATALOG_PATH = Path(__file__).resolve().parent.parent / "config" / "wcag-2.2-aa.json"
 _SECTION_508_PATH = Path(__file__).resolve().parent.parent / "config" / "section-508.json"
+_EN_301_549_PATH = Path(__file__).resolve().parent.parent / "config" / "en-301-549.json"
 
 # The VPAT conformance vocabulary, verbatim. PRD §9: "Do not invent additional final statuses."
 SUPPORTS = "Supports"
@@ -96,6 +97,49 @@ REQUIREMENT_SET_NAMES = {
 }
 
 
+# Where each requirement set's catalog lives, and which of them the exports can actually lay out.
+#
+# `_RENDERABLE` is the half that is easy to forget and expensive to get wrong. A set belongs here
+# only once acr_export_preview knows how to project its rows into the document — for WCAG that is
+# the criteria table, for Section 508 the per-chapter tables `_section_508` builds. EN 301 549 is
+# absent because nothing renders a clause-organised EU report yet, and it stays absent until
+# something does, however complete its catalog becomes.
+_RENDERABLE: frozenset[str] = frozenset({REQ_WCAG, REQ_SECTION_508})
+
+
+def _catalog_path(requirement_set: str) -> Path | None:
+    """The file a requirement set is read from, resolved at CALL time and not at import.
+
+    A dict built at import captures the module's path constants as they were then, so a test that
+    points `_SECTION_508_PATH` at nothing would still be reading the original file — the gate would
+    look shut in the test and be open in fact, which is the direction that matters. Reading them
+    through globals() keeps the constants the single source of truth.
+    """
+    return {
+        REQ_WCAG: _CATALOG_PATH,
+        REQ_SECTION_508: _SECTION_508_PATH,
+        REQ_EN_301_549: _EN_301_549_PATH,
+    }.get(requirement_set)
+
+
+def _catalog_populated(requirement_set: str) -> bool:
+    """Does this deployment hold a catalog with requirements actually in it?
+
+    An ABSENT catalog and an EMPTY one are deliberately the same answer. `config/en-301-549.json`
+    is committed and holds zero requirements — it exists to record the shape and the open question,
+    not to supply content — and a rule keyed on the file's presence would read that as a standard
+    this build can report against. Presence is not supply.
+    """
+    path = _catalog_path(requirement_set)
+    if path is None or not path.exists():
+        return False
+    try:
+        loaded = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):                            # pragma: no cover — unreadable file
+        return False
+    return bool(loaded.get("requirements") or loaded.get("criteria"))
+
+
 def requirement_sets_available() -> frozenset[str]:
     """The requirement sets this deployment can actually populate a matrix from.
 
@@ -115,14 +159,24 @@ def requirement_sets_available() -> frozenset[str]:
     by WCAG principle, so a 508 report would have carried 55 WCAG rows and zero Section 508 rows —
     the exact defect #1532 fixed, now with a catalog appearing to back the claim.
 
-    EN 301 549 stays out, and not for want of a decision here: it is a separate requirement set
-    whose source cannot simply be vendored the way a US federal regulation can. The EU and INT
-    editions are refused until that is answered and its catalog lands.
+    EN 301 549 stays out, and `config/en-301-549.json` exists to say so precisely. Its source is
+    reachable — measured, not assumed — so what blocks it is whether the requirement text may be
+    reproduced here, which is a question for counsel of the same shape as ADR 0053's. The catalog
+    is present and EMPTY, and the rule below reads that as "nothing to offer".
+
+    TWO CONDITIONS, BECAUSE 6.1 THROUGH 6.3 COST ONE EACH TO LEARN. A requirement set is available
+    only when this build can BOTH populate a matrix from it and print it in a document:
+
+      populated    the catalog file parses and holds at least one requirement
+      renderable   acr_export_preview knows how to lay the rows out (`_RENDERABLE`)
+
+    Either alone is the defect #1532 fixed. A populated catalog with no renderer produces a
+    document naming a standard it does not print; a renderer with no catalog produces an empty
+    section under a heading that claims one. Landing EN 301 549's requirements will therefore NOT
+    open the EU edition on its own — its renderer has to arrive too, and `_RENDERABLE` is where
+    that is recorded rather than in a comment somebody has to notice.
     """
-    available = {REQ_WCAG}
-    if _SECTION_508_PATH.exists():
-        available.add(REQ_SECTION_508)
-    return frozenset(available)
+    return frozenset(s for s in _RENDERABLE if _catalog_populated(s))
 
 
 def missing_requirement_sets(edition: str | None) -> frozenset[str]:
@@ -277,6 +331,45 @@ def _blank_row(report_id: str, num: str, name: str, requirement_set: str) -> dic
         "guideline": None,
         "chapter": None,
     }
+
+
+# ── EN 301 549 (phase 6.4) ────────────────────────────────────────────────────────────────────
+#
+# config/en-301-549.json, committed EMPTY. The readers exist so the catalog is reachable and
+# testable before its content arrives — the same posture 6.1 took for Section 508, minus the
+# content, because the content is what is blocked.
+#
+# WHAT IS BLOCKED, PRECISELY. Not access: the standard is published free of charge and the PDF was
+# fetched from this repo's network on 2026-09-06 (HTTP 200, 2 285 361 bytes). What is open is
+# whether its requirement text may be REPRODUCED here — the same question ADR 0053 frames for the
+# ITI template, and one for counsel. The stub records the question rather than answering it, and
+# `_meta.reportable_clauses` records the standard's own clause headings so an eventual parse has
+# something to be checked against.
+
+
+@functools.lru_cache(maxsize=1)
+def _load_en() -> dict:
+    return json.loads(_EN_301_549_PATH.read_text(encoding="utf-8"))
+
+
+def en_301_549_meta() -> dict:
+    """The stub's provenance block — version, publisher, source URL, and what blocks it."""
+    return dict(_load_en()["_meta"])
+
+
+def en_301_549_requirements() -> list[dict]:
+    """Every EN 301 549 requirement this build holds. Empty today, and that is the honest answer."""
+    return [dict(r) for r in _load_en()["requirements"]]
+
+
+def en_301_549_sourced() -> bool:
+    """Has the requirement text actually landed?
+
+    Separate from `requirement_sets_available()` on purpose: this says the CONTENT is here, that
+    says the whole pipeline can produce the edition. Sourcing is necessary and not sufficient —
+    a renderer has to arrive too, which is what `_RENDERABLE` records.
+    """
+    return bool(_load_en()["requirements"])
 
 
 def build_matrix(report_id: str, edition: str | None = None) -> list[dict]:
