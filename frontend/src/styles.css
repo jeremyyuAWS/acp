@@ -1172,9 +1172,18 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .pubstep .muted { font-size: 12px; line-height: 1.4; }
 .publist { display: flex; flex-direction: column; max-height: 460px; overflow-y: auto; }
 .pubrow { display: grid; grid-template-columns: 1fr auto auto; gap: 12px; align-items: center; padding: 9px 4px; border-bottom: 1px solid var(--line); }
-.pubrow.release-file-row { grid-template-columns: auto minmax(0, 1fr) auto auto; }
+.pubrow.release-file-row { grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; padding: 12px 8px; }
+.release-file-check { align-self: start; margin-top: 3px; }
+.release-file-main { min-width: 0; display: grid; gap: 6px; }
+.release-file-main .remname { overflow-wrap: anywhere; line-height: 1.35; }
+.release-file-meta { color: var(--muted); display: flex; align-items: center; flex-wrap: wrap; gap: 5px 9px; font-size: 11.5px; line-height: 1.4; }
+.release-file-destination { flex-basis: 100%; overflow-wrap: anywhere; }
+.release-file-warning { color: var(--error-fg-strong); font-weight: 700; }
+.release-file-outcome { color: var(--success-fg); display: flex; flex-wrap: wrap; gap: 6px; font-size: 12px; font-weight: 600; }
+.release-file-action { align-self: start; white-space: nowrap; }
 .pubrow:last-child { border-bottom: none; }
 .pubrow.pubdone { opacity: 0.7; }
+.pubrow.release-file-row.pubdone { opacity: 1; }
 .release-overview { border-left: 4px solid var(--success-fg); }
 .release-overview__heading, .release-overview__actions, .release-builder__continue, .release-plan, .release-plan__actions { display: flex; align-items: center; gap: 10px; }
 .release-overview__heading, .release-builder__continue, .release-plan { justify-content: space-between; }
@@ -1199,6 +1208,7 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .release-methods legend { font-weight: 700; margin-bottom: 10px; }
 .release-methods label, .release-methods__resting { border: 1px solid var(--line); border-radius: 11px; padding: 14px; display: grid; grid-template-columns: auto 1fr; gap: 5px 9px; cursor: pointer; }
 .release-methods label.selected { border: 2px solid var(--plum); padding: 13px; background: color-mix(in srgb, var(--plum) 5%, var(--panel, #fff)); }
+.release-methods label.disabled { cursor: not-allowed; opacity: 0.62; }
 .release-methods label span, .release-methods__resting span { grid-column: 2; color: var(--muted); font-size: 12.5px; line-height: 1.45; }
 .release-methods__resting { grid-column: 1 / -1; cursor: default; background: var(--bg); }
 .release-plan { margin-top: 16px; border-radius: 11px; padding: 15px; background: var(--bg); border: 1px solid var(--line); align-items: flex-end; }

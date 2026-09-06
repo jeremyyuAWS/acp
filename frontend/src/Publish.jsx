@@ -95,8 +95,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   }, [run?.id, ready.length])
   const srcOf = (f) => srcStatus.byFile[f.file]?.state
   const staleReady = ready.filter((f) => !done[f.file] && srcOf(f) === 'stale')
-  const selectableReady = ready.filter((f) => !done[f.file] && srcOf(f) !== 'stale')
+  const publishableReady = ready.filter((f) => !done[f.file] && srcOf(f) !== 'stale')
+  const selectableReady = ready.filter((f) => srcOf(f) !== 'stale')
   const selectedReady = selectableReady.filter((f) => selectedFiles.has(f.file))
+  const selectedPublishable = selectedReady.filter((f) => !done[f.file])
   useEffect(() => {
     setSelectedFiles((old) => {
       const eligible = new Set(selectableReady.map((f) => f.file))
@@ -320,6 +322,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
       builderRef.current?.focus({ preventScroll: true })
     })
   }
+  const chooseDelivery = () => {
+    if (!selectedPublishable.length) setDeliveryMethod('download')
+    setBuilderStep(2)
+  }
   const reviewFailedRelease = () => {
     setSelectedFiles(new Set(failedReady.map((f) => f.file)))
     setDeliveryMethod('publish')
@@ -352,7 +358,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           </div>
         </div>
         <div className="release-metrics" aria-label="Release status overview">
-          <div><b>{selectableReady.length}</b><span>Ready</span></div>
+          <div><b>{publishableReady.length}</b><span>Ready</span></div>
           <div><b>{pendingReview.files}</b><span>Need review</span></div>
           <div className={staleReady.length ? 'release-metric--warn' : ''}><b>{staleReady.length}</b><span>Source changed</span></div>
           <div><b>{pubStarted ? publishedCount : 0}</b><span>Released</span></div>
@@ -515,17 +521,21 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
               <div key={folder}>
                 <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--muted)', padding: '8px 6px 4px' }}>{folder}</div>
                 {folderFiles.map((f) => <div className={`pubrow release-file-row${done[f.file] ? ' pubdone' : ''}`} key={f.file}>
-                <input type="checkbox" aria-label={`Select ${f.file}`} checked={selectedFiles.has(f.file)}
-                       disabled={done[f.file] || srcOf(f) === 'stale'}
+                <input className="release-file-check" type="checkbox" aria-label={`Select ${f.file}`} checked={selectedFiles.has(f.file)}
+                       disabled={srcOf(f) === 'stale'}
                        onChange={(e) => setSelectedFiles((old) => { const next = new Set(old); if (e.target.checked) next.add(f.file); else next.delete(f.file); return next })} />
-                <button className="remname" onClick={() => setSel(f)}>{f.file}<span className="muted"> · {f.sourceName} · {f.department}</span></button>
-                <span className="badge" style={{ background: 'var(--success-bg)', color: 'var(--success-fg)' }}>{f.score} / 100</span>
-                <span className="muted" title="Where this document’s corrected copy will be written" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>→ {releaseDestination({ provider: releaseProvider, driveFileId: f.drive_file_id, driveMirrorEnabled, driveMirrorFolder }).label}</span>
-                {srcOf(f) === 'stale' && <span title="The source file in Drive changed after this scan — re-scan before releasing" style={{ fontSize: 11.5, whiteSpace: 'nowrap', color: '#8A1F1F', fontWeight: 600 }}>⚠ source changed</span>}
-                {srcOf(f) === 'unavailable' && <span className="muted" title="ACP could not read the source now (moved, deleted, or access lost)" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>source unreachable</span>}
-                {done[f.file]
-                  ? <span className="okline" style={{ fontSize: 13 }}>✓ released · fixed copy in Blob · audit recorded{pubUrls[f.file] && <> · <a href={pubUrls[f.file]} target="_blank" rel="noopener noreferrer">↗ open in Drive</a></>}</span>
-                  : <button className="ghost small" onClick={() => setSel(f)}>View details</button>}
+                <div className="release-file-main">
+                  <button className="remname" onClick={() => setSel(f)}>{f.file}</button>
+                  <div className="release-file-meta">
+                    <span>{f.sourceName || 'Connected source'}{f.department ? ` · ${f.department}` : ''}</span>
+                    <span className="badge" style={{ background: 'var(--success-bg)', color: 'var(--success-fg)' }}>{f.score} / 100</span>
+                    <span className="release-file-destination" title="Where this document’s corrected copy will be written">→ {releaseDestination({ provider: releaseProvider, driveFileId: f.drive_file_id, driveMirrorEnabled, driveMirrorFolder }).label}</span>
+                    {srcOf(f) === 'stale' && <span className="release-file-warning" title="The source file changed after this scan — re-scan before releasing">⚠ source changed</span>}
+                    {srcOf(f) === 'unavailable' && <span className="release-file-warning" title="ACP could not read the source now (moved, deleted, or access lost)">source unreachable</span>}
+                  </div>
+                  {done[f.file] && <div className="release-file-outcome">✓ Released · audit recorded{pubUrls[f.file] && <> · <a href={pubUrls[f.file]} target="_blank" rel="noopener noreferrer">Open in Drive ↗</a></>}</div>}
+                </div>
+                <button className="ghost small release-file-action" onClick={() => setSel(f)}>View details</button>
               </div>)}
               </div>
             ))}
@@ -556,15 +566,15 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
             {builderStep === 1 ? (
               <div className="release-builder__continue">
                 <span className="muted">{selectedReady.length ? `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file is' : 'files are'} ready.` : 'Select at least one ready file.'}</span>
-                <button className="qbtn approve" disabled={!selectedReady.length} onClick={() => setBuilderStep(2)}>Choose delivery</button>
+                <button className="qbtn approve" disabled={!selectedReady.length} onClick={chooseDelivery}>Choose delivery</button>
               </div>
             ) : builderStep === 2 ? <>
               <fieldset className="release-methods">
                 <legend>How do you want to receive the corrected files?</legend>
-                <label className={deliveryMethod === 'publish' ? 'selected' : ''}>
-                  <input type="radio" name="delivery-method" value="publish" checked={deliveryMethod === 'publish'} onChange={() => setDeliveryMethod('publish')} />
+                <label className={`${deliveryMethod === 'publish' ? 'selected' : ''}${!selectedPublishable.length ? ' disabled' : ''}`}>
+                  <input type="radio" name="delivery-method" value="publish" checked={deliveryMethod === 'publish'} disabled={!selectedPublishable.length} onChange={() => setDeliveryMethod('publish')} />
                   <b>Publish copies</b>
-                  <span>{releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}</span>
+                  <span>{selectedPublishable.length ? `${selectedPublishable.length} unreleased · ${releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}` : 'Every selected file is already published. Choose download to retrieve another copy.'}</span>
                 </label>
                 <label className={deliveryMethod === 'download' ? 'selected' : ''}>
                   <input type="radio" name="delivery-method" value="download" checked={deliveryMethod === 'download'} onChange={() => setDeliveryMethod('download')} />
@@ -584,13 +594,13 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                 <div>
                   <b>Review your release plan</b>
                   <p>{deliveryMethod === 'publish'
-                    ? `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'copy' : 'copies'} will be published to ${releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}. Original files will not be changed.`
+                    ? `${selectedPublishable.length} unreleased corrected ${selectedPublishable.length === 1 ? 'copy' : 'copies'} will be published to ${releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}. Already released files are excluded. Original files will not be changed.`
                     : `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file' : 'files'} will be downloaded to this device. Original files will not be changed.`}</p>
                 </div>
                 <div className="release-plan__actions">
                   <button className="ghost" onClick={() => setBuilderStep(2)}>Back to delivery</button>
                   {deliveryMethod === 'publish'
-                    ? <button className="qbtn approve" disabled={readOnly || publishing || !selectedReady.length} onClick={() => setConfirm({ kind: 'selected', files: selectedReady.map((f) => f.file) })}>{publishing ? 'Publishing…' : `Publish ${selectedReady.length} ${selectedReady.length === 1 ? 'copy' : 'copies'}`}</button>
+                    ? <button className="qbtn approve" disabled={readOnly || publishing || !selectedPublishable.length} onClick={() => setConfirm({ kind: 'selected', files: selectedPublishable.map((f) => f.file) })}>{publishing ? 'Publishing…' : `Publish ${selectedPublishable.length} ${selectedPublishable.length === 1 ? 'copy' : 'copies'}`}</button>
                     : <button className="qbtn approve" disabled={downloading || !selectedReady.length} onClick={downloadSelected}>{downloading ? 'Downloading…' : `Download ${selectedReady.length} ${selectedReady.length === 1 ? 'file' : 'files'}`}</button>}
                 </div>
               </div>

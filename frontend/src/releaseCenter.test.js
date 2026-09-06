@@ -41,7 +41,7 @@ describe('Release Center: honest policy panel', () => {
 describe('Release Center: confirmation before a release', () => {
   it('routes the selected batch through a confirm step, not a direct write', () => {
     const s = pub()
-    expect(s).toMatch(/onClick=\{\(\) => setConfirm\(\{ kind: 'selected', files: selectedReady\.map/)
+    expect(s).toMatch(/onClick=\{\(\) => setConfirm\(\{ kind: 'selected', files: selectedPublishable\.map/)
     // The old direct-fire handlers are gone.
     expect(s).not.toMatch(/onClick=\{publishAll\}/)
     expect(s).not.toMatch(/onClick=\{\(\) => publish\(f\.file\)\}/)
@@ -94,16 +94,16 @@ describe('Release builder', () => {
 
   it('publishes only the selected files and states the consequence before writing', () => {
     const s = pub()
-    expect(s).toMatch(/setConfirm\(\{ kind: 'selected', files: selectedReady\.map/)
+    expect(s).toMatch(/setConfirm\(\{ kind: 'selected', files: selectedPublishable\.map/)
     expect(s).toMatch(/publishAll\(targets\.map/)
     expect(s).toMatch(/Original files will not be changed/)
-    expect(s).toMatch(/Publish \$\{selectedReady\.length\}/)
+    expect(s).toMatch(/Publish \$\{selectedPublishable\.length\}/)
   })
 
   it('does not allow changed sources into the releasable selection', () => {
     const s = pub()
     expect(s).toMatch(/srcOf\(f\) !== 'stale'/)
-    expect(s).toMatch(/disabled=\{done\[f\.file\] \|\| srcOf\(f\) === 'stale'\}/)
+    expect(s).toMatch(/disabled=\{srcOf\(f\) === 'stale'\}/)
   })
 
   it('moves focus from the overview action to the real builder', () => {
@@ -127,7 +127,8 @@ describe('Release builder', () => {
     expect(s).toMatch(/const \[builderStep, setBuilderStep\] = useState\(1\)/)
     expect(s).toMatch(/builderStep === 1 \? \(/)
     expect(s).toMatch(/builderStep === 2 \? <>/)
-    expect(s).toMatch(/setBuilderStep\(2\)\}>Choose delivery/)
+    expect(s).toMatch(/onClick=\{chooseDelivery\}>Choose delivery/)
+    expect(s).toMatch(/const chooseDelivery = \(\) =>/)
     expect(s).toMatch(/setBuilderStep\(3\)\}>Review release/)
     expect(s).toMatch(/setBuilderStep\(1\)\}>Back to files/)
     expect(s).toMatch(/setBuilderStep\(2\)\}>Back to delivery/)
@@ -153,5 +154,22 @@ describe('Release builder', () => {
     const s = pub()
     expect(s).toMatch(/releaseResults\[f\.file\]\?\.status === 'failed' && srcOf\(f\) !== 'stale'/)
     expect(s).toMatch(/no longer retryable until the changed source is rescanned/)
+  })
+
+  it('allows released files to be selected for download without republishing them', () => {
+    const s = pub()
+    expect(s).toMatch(/const selectableReady = ready\.filter\(\(f\) => srcOf\(f\) !== 'stale'\)/)
+    expect(s).toMatch(/const selectedPublishable = selectedReady\.filter\(\(f\) => !done\[f\.file\]\)/)
+    expect(s).toMatch(/if \(!selectedPublishable\.length\) setDeliveryMethod\('download'\)/)
+    expect(s).toMatch(/Every selected file is already published/)
+    expect(s).toMatch(/Already released files are excluded/)
+  })
+
+  it('gives long file names a dedicated readable layout', () => {
+    const s = pub()
+    expect(s).toMatch(/className="release-file-main"/)
+    expect(s).toMatch(/className="release-file-meta"/)
+    expect(s).toMatch(/className="release-file-destination"/)
+    expect(s).toMatch(/className="release-file-outcome"/)
   })
 })
