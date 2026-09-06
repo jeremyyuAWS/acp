@@ -26,7 +26,10 @@ const requiredLevel = (finding) => {
     sc,
     proposal: proposal && { validated: proposal.validated, subjective: proposal.subjective },
   })
-  if (method === 'deterministic' && confidence.level.key === 'high') return 1
+  // Strict means VERIFIED deterministic work, not merely a high-confidence deterministic
+  // detector. A proposal does not earn that label until the stored post-apply validation signal
+  // exists; without it the safest setting would promise more than the evidence proves.
+  if (method === 'deterministic' && proposal?.validated) return 1
   if (method === 'deterministic') return 2
   if (proposal?.validated) return 3
   if (confidence.level.key === 'medium') return 4
@@ -46,7 +49,9 @@ export function automationForecast(findings = [], level = DEFAULT_AUTOMATION_LEV
     total: rows.length,
     candidates,
     protected: protectedCount,
-    review: rows.length - candidates,
+    // The three forecast tiles are a partition. Protected work is always reviewed, but it has
+    // its own tile; counting it here too made the visible totals exceed the queue population.
+    review: rows.length - candidates - protectedCount,
   }
 }
 

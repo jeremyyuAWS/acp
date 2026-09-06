@@ -1614,7 +1614,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         primary={primary}
         readOnly={readOnly}
         onOpenRunDetails={() => setRunDetailsOpen((v) => !v)} />
-      <AutomationPolicyControl findings={reviewNeeds} runId={runId} />
+      <AutomationPolicyControl key={runId || 'current'} findings={reviewNeeds} runId={runId} />
       <RemediationWorkspaceTabs
         runId={runId}
         reviewCount={reviewCount}

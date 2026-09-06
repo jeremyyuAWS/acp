@@ -52,7 +52,7 @@ export default function AutomationPolicyControl({ findings = [], runId = null })
       {forecast.total > 0 ? (
         <div className="automation-policy__forecast" aria-live="polite">
           <div><b>{forecast.candidates}</b><span>automation candidates</span></div>
-          <div><b>{forecast.review}</b><span>stay in human review</span></div>
+          <div><b>{forecast.review}</b><span>retained by this setting</span></div>
           <div><b>{forecast.protected}</b><span>protected by safety rules</span></div>
         </div>
       ) : (
