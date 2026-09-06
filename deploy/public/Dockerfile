@@ -103,11 +103,17 @@ ENV ACP_DOTNET=/usr/local/bin/dotnet \
     DOTNET_NOLOGO=1 \
     PORT=8077
 EXPOSE 8077
-# Build provenance — passed by deploy.sh / az acr build; surfaced in /healthz and the UI.
+# Build provenance — passed by deploy.sh / redeploy.sh via az acr build; surfaced in /healthz
+# and the UI. BUILD_SHA defaults EMPTY, not to a placeholder: an image built by a bare
+# `docker build` has no commit to name, and /healthz reports that as null rather than as a
+# commit nobody can look up. (BUILD_VERSION's `dev` default is different on purpose — it is the
+# signal `version_stamped` reads to refuse an unstamped image.)
 ARG BUILD_VERSION=dev
 ARG BUILD_TIME=
+ARG BUILD_SHA=
 ENV ACP_BUILD_VERSION=$BUILD_VERSION \
-    ACP_BUILD_TIME=$BUILD_TIME
+    ACP_BUILD_TIME=$BUILD_TIME \
+    ACP_BUILD_SHA=$BUILD_SHA
 WORKDIR /app/api
 # Worker-tier launcher (#113): a SINGLE dash-free command token for `az containerapp --command
 # acp-worker` — az's --command can't carry "-c" or a JSON array (see worker-entry.sh header).

@@ -466,11 +466,24 @@ def _build_info() -> dict:
     deploy.sh. Such an image must not pass for a release: /healthz reports ok=false, so
     an operator sees it immediately instead of the app quietly serving "dev". ACA runs no
     health probe on this route, so this signal is advisory, not a rollout gate.
+
+    `commit` IS THE COMMIT THIS IMAGE WAS BUILT FROM, and it is here because `version` and
+    `built_at` cannot answer the question anybody actually asks after a merge: is THIS change
+    live? On 2026-09-06 establishing that took a CalVer stamp, two workflow-run timestamps and a
+    cancelled deploy run to disambiguate, and the answer was still an inference from when the
+    build happened rather than from what it contained. One sha turns that into a read.
+
+    It is a REPORT, never a gate. `ok` and `version_stamped` deliberately do not consider it: an
+    older image predating this field, or one built by a bare `docker build`, is not unhealthy —
+    it simply cannot name its commit, and says so with null rather than with a plausible string.
+    deploy.sh appends `-dirty` when it builds from a working directory with uncommitted changes,
+    because a sha that silently omits them names a tree that never shipped.
     """
     import os
     v = (os.environ.get("ACP_BUILD_VERSION") or "").strip()
     return {"version": v or "dev",
             "built_at": os.environ.get("ACP_BUILD_TIME") or None,
+            "commit": (os.environ.get("ACP_BUILD_SHA") or "").strip() or None,
             "version_stamped": v.lower() not in ("", "dev")}
 
 
