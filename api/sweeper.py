@@ -17,6 +17,10 @@ workers crash, are interrupted by deploys, or fail to finalise their scan runs:
   6. Event retention  — PRD "Remediation Real-Time Operations Panel" §22: keep resumable
                         remediation events for 24 hours OR 10,000 per run, whichever is greater.
                         Bounded per tick; see store.prune_scan_events.
+  7. Worker registry  — worker_instances is written on every heartbeat and was pruned by nothing,
+                        so a row accumulated per process per replica per revision. Production
+                        reported 1000 rows to Live Operations on 2026-09-06, all stale, all from
+                        revisions retired the day before. See store.prune_worker_instances.
 
 Typical use: call run_sweep(store) once per tick from a background thread or cron.
 The function is idempotent and safe to call concurrently — each sub-sweep uses
@@ -28,6 +32,8 @@ Environment variables:
   ACP_MEMORY_DERIVE_INTERVAL_S   — how often to run the derivation job (default 86400)
   ACP_EVENT_PRUNE_INTERVAL_S     — how often to apply event retention (default 3600)
   ACP_EVENT_PRUNE_MAX_RUNS       — scans visited per retention pass (default 200)
+  ACP_WORKER_PRUNE_INTERVAL_S    — how often to apply worker-registry retention (default 3600)
+  ACP_WORKER_RETENTION_HOURS     — age ceiling for a worker_instances row (default 24)
 """
 from __future__ import annotations
 import os
@@ -35,6 +41,7 @@ import time
 
 _last_derive_run: float = 0.0
 _last_event_prune: float = 0.0
+_last_worker_prune: float = 0.0
 
 
 def _int_env(name: str, default: int) -> int:
@@ -47,7 +54,8 @@ def _int_env(name: str, default: int) -> int:
 def run_sweep(store, *, lease_seconds: int | None = None,
               grace_seconds: int | None = None,
               derive_interval_seconds: int | None = None,
-              event_prune_interval_seconds: int | None = None) -> dict[str, int]:
+              event_prune_interval_seconds: int | None = None,
+              worker_prune_interval_seconds: int | None = None) -> dict[str, int]:
     """Run all reconciliation checks once and return per-check counts.
 
     Parameters override the corresponding env vars when provided.
@@ -60,7 +68,7 @@ def run_sweep(store, *, lease_seconds: int | None = None,
       memory_proposed    — new org_memory rows written by the derivation job
       events_pruned      — scan_events rows removed by the retention policy
     """
-    global _last_derive_run, _last_event_prune
+    global _last_derive_run, _last_event_prune, _last_worker_prune
     lease_s = lease_seconds if lease_seconds is not None else _int_env("ACP_SWEEP_LEASE_S", 600)
     grace_s = grace_seconds if grace_seconds is not None else _int_env("ACP_SWEEP_GRACE_S", 600)
     derive_s = (derive_interval_seconds if derive_interval_seconds is not None
@@ -98,6 +106,22 @@ def run_sweep(store, *, lease_seconds: int | None = None,
             print(f"[sweeper] event-retention error: {e}", flush=True)
         _last_event_prune = now
 
+    # Worker-registry retention, on its own clock for the same reason as the pass above: the
+    # policy's finest grain is 24 hours, so a per-tick DELETE would spend writes proving nothing
+    # has aged out. Its own interval rather than sharing the event one, because the two answer to
+    # different pressures — this one exists because a rollout storm can add rows in minutes.
+    worker_prune_s = (worker_prune_interval_seconds if worker_prune_interval_seconds is not None
+                      else _int_env("ACP_WORKER_PRUNE_INTERVAL_S", 3600))
+    workers_pruned = 0
+    if now - _last_worker_prune >= worker_prune_s:
+        prune = getattr(store, "prune_worker_instances", None)
+        if callable(prune):
+            try:
+                workers_pruned = prune(max_age_hours=_int_env("ACP_WORKER_RETENTION_HOURS", 24))
+            except Exception as e:
+                print(f"[sweeper] worker-retention error: {e}", flush=True)
+        _last_worker_prune = now
+
     result = {
         "reclaimed": reclaimed,
         "exhausted_dead": exhausted,
@@ -105,6 +129,7 @@ def run_sweep(store, *, lease_seconds: int | None = None,
         "scans_rescued": rescued,
         "memory_proposed": memory_proposed,
         "events_pruned": events_pruned,
+        "workers_pruned": workers_pruned,
     }
     total = sum(result.values())
     if total:

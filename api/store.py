@@ -10157,6 +10157,93 @@ class Store:
             return removed
         return removed
 
+    #: Retention for the worker registry. `worker_instances` is written on every heartbeat and
+    #: was pruned by NOTHING, so a row accumulated per process per replica per revision. On
+    #: 2026-09-06 production reported 1000 rows to the Live Operations drawer — every one stale,
+    #: every one `0 of 0 slots busy`, all from revisions retired the day before.
+    #:
+    #: 24 HOURS, NOT MINUTES. A row stops counting toward capacity as soon as it goes stale, so
+    #: the short window is tempting — but "this replica stopped reporting" is a real signal an
+    #: operator reads the morning after a bad rollout, and deleting it at the freshness threshold
+    #: would erase the evidence at exactly the moment it becomes interesting. A day is long enough
+    #: to investigate yesterday and short enough to bound the table.
+    #:
+    #: The COUNT ceiling is a second, independent bound for the case age cannot help with: a
+    #: rollout storm minting thousands of rows inside the window. Unlike scan-event retention —
+    #: where the two halves are "whichever is GREATER", protecting a busy run's recent history —
+    #: these are both ceilings, because there is no history here worth protecting: worker
+    #: lifecycle is durably recorded in orchestration_events, and this table only answers "what is
+    #: reporting now".
+    WORKER_INSTANCE_RETENTION_HOURS = 24
+    WORKER_INSTANCE_RETENTION_MAX = 2000
+    #: No row this recent is ever deleted, by either rule. The reporter beats every 15s at most
+    #: (worker_telemetry.WorkerInstanceReporter), so anything inside this window is a live process
+    #: — and a ceiling that could evict live rows would under-report capacity, which is a worse
+    #: failure than a large table.
+    WORKER_INSTANCE_RETENTION_FLOOR_S = 900
+
+    def prune_worker_instances(self, *, max_age_hours: int | None = None,
+                               max_rows: int | None = None, now=None) -> int:
+        """Drop worker registry rows that can no longer describe anything. Never raises.
+
+        Two independent ceilings, and NEITHER can touch a row inside the freshness floor:
+
+          * older than the retention window, or
+          * beyond the row ceiling, oldest first.
+
+        Returns how many rows went. Housekeeping that fails is a table left large; housekeeping
+        that RAISES would take the sweep that runs it down with it, and that sweep also reclaims
+        expired job leases — so this returns its partial count rather than propagating.
+        """
+        from datetime import datetime, timedelta, timezone  # noqa: PLC0415
+        moment = now or datetime.now(timezone.utc)
+        hours = self.WORKER_INSTANCE_RETENTION_HOURS if max_age_hours is None else int(max_age_hours)
+        ceiling = self.WORKER_INSTANCE_RETENTION_MAX if max_rows is None else int(max_rows)
+        age_cutoff = (moment - timedelta(hours=hours)).isoformat()
+        # Rows this side of the floor are live processes and are never candidates, whichever rule
+        # is being applied.
+        floor = (moment - timedelta(seconds=self.WORKER_INSTANCE_RETENTION_FLOOR_S)).isoformat()
+        removed = 0
+        try:
+            with self._db.cursor() as cur:
+                # A NULL last_heartbeat_at has never reported at all. It is prunable by age, but
+                # COALESCE'd to the empty string rather than compared directly: `NULL < %s` is
+                # NULL, not true, so a bare comparison would keep those rows forever — the one
+                # class of row most certainly dead.
+                self._db.execute(cur,
+                    "DELETE FROM worker_instances "
+                    "WHERE COALESCE(last_heartbeat_at,'')<%s AND COALESCE(last_heartbeat_at,'')<%s",
+                    (age_cutoff, floor))
+                removed += getattr(cur, "rowcount", 0) or 0
+        except Exception:
+            swallowed("store.prune_worker_instances: the age pass failed")
+            return removed
+        try:
+            with self._db.cursor() as cur:
+                self._db.execute(cur, "SELECT COUNT(*) AS n FROM worker_instances")
+                total = int((self._db.fetchone(cur) or {}).get("n") or 0)
+            if total <= ceiling:
+                return removed
+            with self._db.cursor() as cur:
+                # Oldest first, and only outside the floor. Deleting by an explicit id list rather
+                # than a correlated subquery keeps this identical on SQLite and Postgres, which is
+                # the same portability rule the rest of this file follows.
+                self._db.execute(cur,
+                    "SELECT worker_id FROM worker_instances "
+                    "WHERE COALESCE(last_heartbeat_at,'')<%s "
+                    "ORDER BY COALESCE(last_heartbeat_at,'') ASC LIMIT %s",
+                    (floor, max(0, total - ceiling)))
+                doomed = [row["worker_id"] for row in (self._db.fetchall(cur) or [])
+                          if row.get("worker_id")]
+            for worker_id in doomed:
+                with self._db.cursor() as cur:
+                    self._db.execute(cur, "DELETE FROM worker_instances WHERE worker_id=%s",
+                                     (worker_id,))
+                    removed += getattr(cur, "rowcount", 0) or 0
+        except Exception:
+            swallowed("store.prune_worker_instances: the row-ceiling pass failed")
+        return removed
+
     def latest_material_event_at(self, scan_id: str,
                                  correlation_id: str | None = None) -> str | None:
         """When this run last MOVED, from the durable log — or None when nothing is recorded.
