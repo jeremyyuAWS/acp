@@ -106,6 +106,46 @@ checkout, so it looks like the worktree is in play when the root is not.
 So: verify worktree changes at the DOM level in vitest, not in the browser pane, and say which you
 did. A screenshot from that server is evidence about `main`, not about your branch.
 
+**REMOTE-TRACKING REFS ARE THE SAME TRAP, and they outlive the thing they describe.**
+`refs/remotes/origin/*` is a CACHE written when you last fetched, not a view of the remote. A
+branch deleted upstream leaves its tracking ref behind indefinitely, and `git branch -r` prints
+it with no hint that it is a fossil. Ask the remote:
+
+```
+git -C <repo> ls-remote --heads origin "<branch>"    # prints the ref, or nothing
+```
+
+**Why.** On 2026-09-06 a session finished retiring its worktree after #1473 merged, checked
+whether the remote branch was gone, saw `origin/claude/acp-remediation-progress-events-7cs1az` in
+its tracking refs, and reported to the owner that a manual **Delete branch** click was still
+outstanding. It was not: GitHub's auto-delete had already removed it at merge. The session then
+recommended turning on *Automatically delete head branches* — a setting `GET /repos/{owner}/{repo}`
+reports as **already `true`**, and which had just done its job on that very PR. Two wrong
+statements to the owner, one stale ref.
+
+**`git fetch` does not fix this, and that is the part worth knowing.** A refspec-limited fetch —
+`git fetch origin main`, which is what the rest of this file tells you to run — updates exactly
+one branch and prunes nothing. Even a bare `git fetch` leaves deleted branches cached unless
+`fetch.prune` is set. So the ref survives every fetch you were already doing:
+
+```
+git -C <repo> remote prune origin        # or: git -C <repo> config fetch.prune true
+```
+
+That prune removed three refs, not one — two belonged to other sessions whose branches had merged
+and been deleted while this checkout went on listing them.
+
+**Read the empty result carefully, because "no output" is this file's favourite lie** (see
+*Verify before you diagnose*). `ls-remote` exits `0` whether it matched or not, so empty means
+"no such branch" only if the command ran. Prove it did by asking the same remote something that
+must answer — `git ls-remote --heads origin | wc -l` returned **830** in the session above — or
+confirm against a source that fails loudly: `GET /repos/{owner}/{repo}/branches/<branch>` answers
+`404 "Branch not found"`, which cannot be mistaken for a command that produced nothing.
+
+**And check a setting's CURRENT VALUE before recommending it be changed.** One `GET` would have
+replaced both wrong statements with "already on, and it worked". A recommendation is a claim about
+present state; it needs a read like any other.
+
 ## Claim the files before you start
 
 Before your first edit, look for someone already doing the work:
@@ -499,7 +539,7 @@ checkout that goes stale the moment `main` moves, and a stale worktree is where 
 runs tests against code that was replaced a day ago.
 
 Later that day one session retired its four, and the count is now in single figures — so this is
-a habit that works, not a lost cause. Two things make it safe to do:
+a habit that works, not a lost cause. Four things make it safe to do:
 
 - **A squash merge gives your commit a NEW sha, so your branch will never be an ancestor of
   `main`.** `git log origin/main..<branch>` therefore lists your commit forever and looks like
@@ -522,6 +562,12 @@ a habit that works, not a lost cause. Two things make it safe to do:
   `git worktree list` for the branch, then `git checkout --detach origin/main` there before
   deleting. This bites hardest when the two steps are done by different sessions, which is the
   order this section describes.
+- **The REMOTE branch is usually already gone, and your tracking ref will say otherwise.** This
+  repo has `delete_branch_on_merge` enabled, so a squash deletes the head branch for you — but
+  `refs/remotes/origin/*` is a cache no fetch you run here prunes, so `git branch -r` goes on
+  listing it. Ask the remote (`git ls-remote --heads origin "<branch>"`) before telling anybody a
+  manual **Delete branch** click is outstanding; a session did exactly that on 2026-09-06. Full
+  story, and why the empty answer needs reading carefully, under *Don't read the shared checkout*.
 
 ## Keep retired features in the tree — but write down that they are retired
 
