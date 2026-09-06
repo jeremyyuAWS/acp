@@ -1,0 +1,38 @@
+{
+  "_meta": {
+    "standard": "EN 301 549",
+    "version": "V3.2.1 (2021-03)",
+    "citation": "EN 301 549 V3.2.1 — Accessibility requirements for ICT products and services",
+    "publisher": "CEN, CENELEC and ETSI",
+    "status": "not-sourced",
+    "generated_by": null,
+    "source_url": "https://www.etsi.org/deliver/etsi_en/301500_301599/301549/03.02.01_60/en_301549v030201p.pdf",
+    "source_reachable": "measured 2026-09-06 from this repo's network: HTTP 200, 2285361 bytes, application/pdf",
+    "blocked_on": [
+      "May the requirement text be reproduced in this repository? The standard is published free of charge by CEN/CENELEC/ETSI and is reachable (above), so this is a question about REDISTRIBUTION, not access — the same shape as ADR 0053's question about the ITI VPAT template, and a question for counsel rather than engineering.",
+      "If the text may not be reproduced, may the clause NUMBERS and TITLES alone be? A VPAT's EU report needs a row per reportable clause; it does not need the normative prose."
+    ],
+    "why_this_file_exists": "So the shape is agreed and the wiring is proven before the answer arrives. requirement_sets_available() reads this file and finds nothing to offer, which is the correct behaviour for a catalog with no requirements in it — see acr_catalog for why an empty catalog and an absent one are deliberately the same answer.",
+    "row_shape": {
+      "num": "the clause number as the standard writes it, e.g. \"9.1.1.1\" or \"11.7\"",
+      "name": "the clause title",
+      "clause": "the top-level clause this row belongs to, e.g. \"9\" — the EU report's tables are organised by clause the way the 508 report's are by chapter",
+      "kind": "\"requirement\" or \"scope\", matching config/section-508.json so one renderer can serve both"
+    },
+    "reportable_clauses": {
+      "note": "Recorded from the standard's own table of contents so the eventual parse has something to be checked against, NOT transcribed from its requirement text.",
+      "4": "Principles",
+      "5": "Generic requirements",
+      "6": "ICT with two-way voice communication",
+      "7": "ICT with video capabilities",
+      "8": "Hardware",
+      "9": "Web",
+      "10": "Non-web documents",
+      "11": "Software",
+      "12": "Documentation and support services",
+      "13": "ICT providing relay or emergency service access"
+    },
+    "total": 0
+  },
+  "requirements": []
+}
