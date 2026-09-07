@@ -20,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "api"))
 import core
 import sweeper as sweeper_module
 import content_workspace_retention as retention_module
+import stage_outbox as stage_outbox_module
 
 
 class _ImmediateExit(BaseException):
@@ -62,6 +63,32 @@ def test_sweep_thread_calls_run_sweep_not_a_reimplemented_subset(monkeypatch):
     # 30-min lease preserved from the pre-wiring inline call — large-estate scans legitimately
     # run 10-15 min, so this must not silently drop to sweeper.py's own 600s module default.
     assert calls[0]["lease_seconds"] == 1800
+
+
+def test_sweep_thread_dispatches_the_canonical_outbox_in_production(monkeypatch):
+    monkeypatch.setattr(core, "_worker_handles", [], raising=False)
+    captured = {}
+
+    class _FakeThread:
+        def __init__(self, target=None, daemon=None, name=None): captured["target"] = target
+        def start(self): pass
+
+    store = object()
+    monkeypatch.setattr(core.threading, "Thread", _FakeThread)
+    monkeypatch.setattr(core, "get_store", lambda: store)
+    monkeypatch.setattr(sweeper_module, "run_sweep", lambda *args, **kwargs: None)
+    monkeypatch.setattr(retention_module, "run_content_workspace_retention_sweep",
+                        lambda *args, **kwargs: None)
+
+    def dispatch(actual, **kwargs):
+        assert actual is store
+        assert kwargs["limit"] == 200
+        raise _ImmediateExit
+
+    monkeypatch.setattr(stage_outbox_module, "dispatch_database_jobs_once", dispatch)
+    core.start_workers()
+    with pytest.raises(_ImmediateExit):
+        captured["target"]()
 
 
 def test_sweep_thread_survives_a_run_sweep_exception_and_keeps_looping(monkeypatch):

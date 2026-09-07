@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from stage_outbox import dispatch_once
+from stage_outbox import dispatch_database_jobs_once, dispatch_once
 
 
 OWNER = "outbox@example.org"
@@ -95,3 +95,28 @@ def test_dispatch_once_records_failure_without_losing_message(isolated_store):
                            max_attempts=2, backoff_seconds=0)
     assert first.retrying == 1
     assert second.dead_lettered == 1
+
+
+def test_production_database_transport_acknowledges_only_matching_durable_job(isolated_store):
+    batch_id, message_id = _outbox(isolated_store, "database-transport")
+    result = dispatch_database_jobs_once(
+        isolated_store, dispatcher_id="runtime-dispatcher")
+    assert result.claimed == result.delivered == 1
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "SELECT delivery_ack FROM stage_outbox WHERE message_id=%s", (message_id,))
+        ack = isolated_store._db.fetchone(cur)["delivery_ack"]
+    assert ack.startswith("database-job:")
+    snapshot = isolated_store.stage_execution_snapshot(batch_id, owner=OWNER)
+    assert snapshot["delivery"]["delivered"] == 1
+
+
+def test_production_database_transport_retries_corrupt_identity(isolated_store):
+    _, message_id = _outbox(isolated_store, "database-transport-corrupt")
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "UPDATE stage_outbox SET topic='wrong-stage' WHERE message_id=%s", (message_id,))
+    result = dispatch_database_jobs_once(
+        isolated_store, dispatcher_id="runtime-dispatcher", backoff_seconds=0)
+    assert result.retrying == 1
+    assert isolated_store.stage_outbox_health(owner=OWNER)["retrying"] == 1

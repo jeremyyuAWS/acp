@@ -52,3 +52,36 @@ def dispatch_once(store, publish: Callable[[str, dict, str], str | None], *,
             else:
                 stale += 1
     return DispatchResult(len(messages), delivered, retrying, dead, stale)
+
+
+def publish_database_job(store, topic: str, payload: dict, message_id: str) -> str:
+    """Acknowledge that an outbox message's durable database job is claimable.
+
+    ACP's production transport is the shared jobs table: workers claim it directly rather than
+    consuming a separate broker topic.  The outbox still provides delivery acknowledgement and
+    retry/dead-letter visibility, but it may only be acknowledged after the referenced job,
+    execution, work item, and topic agree.  A corrupt or partially migrated row retries visibly.
+    """
+    job_id = str(payload.get("job_id") or "")
+    execution_id = str(payload.get("execution_id") or "")
+    work_item_id = str(payload.get("work_item_id") or "")
+    if not job_id or not execution_id or not work_item_id:
+        raise ValueError(f"outbox message {message_id} is missing durable job identity")
+    job = store.get_job(job_id)
+    if not job:
+        raise LookupError(f"outbox job does not exist: {job_id}")
+    if job.get("type") != topic or job.get("batch_id") != execution_id:
+        raise ValueError(f"outbox job identity does not match message: {message_id}")
+    with store._db.cursor() as cur:
+        store._db.execute(cur,
+            "SELECT work_item_id FROM stage_work_items WHERE work_item_id=%s "
+            "AND execution_id=%s AND job_id=%s", (work_item_id, execution_id, job_id))
+        if not store._db.fetchone(cur):
+            raise LookupError(f"outbox work item does not exist: {work_item_id}")
+    return f"database-job:{job_id}"
+
+
+def dispatch_database_jobs_once(store, **kwargs) -> DispatchResult:
+    """Dispatch one production page using ACP's durable database queue transport."""
+    return dispatch_once(store, lambda topic, payload, message_id:
+                         publish_database_job(store, topic, payload, message_id), **kwargs)
