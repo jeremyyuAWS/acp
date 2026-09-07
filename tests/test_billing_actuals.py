@@ -354,3 +354,70 @@ def test_a_throttle_still_honours_retry_after_over_the_failure_window(monkeypatc
     clock[0] += costs_module._BILLING_FAILURE_TTL_S + 5
     costs_module.billing_block(now=lambda: clock[0])
     assert len(calls) == 1, "Retry-After must outrank the failure window"
+
+
+# --- The setup row distinguishes "wait" from "fix it" ----------------------------------------------
+# On 2026-09-07 the panel read "Billing actuals — Not configured" beside a tile saying "Cost
+# Management is throttling". Same boolean, opposite operator actions.
+
+def _served(monkeypatch, billing):
+    import routes.costs as served
+    served._billing_cache.update({"at": 0.0, "value": None, "blocked_until": 0.0})
+    monkeypatch.setattr(served, "_AZ_SUB", "sub-1")
+    monkeypatch.setattr(served, "_app_names", lambda: ["acp-assess"])
+    monkeypatch.setattr(served, "_az_client",
+                        lambda: (_ for _ in ()).throw(RuntimeError("no azure here")))
+    monkeypatch.setattr(served, "_query_billing", lambda: billing)
+    return served
+
+
+def test_a_throttle_is_temporarily_unavailable_with_a_retry_time(monkeypatch):
+    from datetime import datetime, timezone
+    from fastapi.testclient import TestClient
+    import routes.costs as served
+    from api.app import app
+
+    _served(monkeypatch, {
+        **served._billing_unavailable(
+            "throttled", "Azure billing actuals unavailable: Cost Management is throttling"),
+        "retry_after_s": 900,
+    })
+    before = datetime.now(timezone.utc)
+    row = TestClient(app).get("/control/costs").json()["setup"]["billing_actuals"]
+    assert row["state"] == "throttled"
+    assert row["configured"] is False, "the old boolean keeps its meaning: no figure came back"
+    assert "throttling" in row["reason"]
+    # Retry-After was 900s; the row names the wall-clock moment the hold lifts.
+    retry_at = datetime.fromisoformat(row["retry_at"])
+    assert 850 <= (retry_at - before).total_seconds() <= 950, row["retry_at"]
+
+
+def test_a_denial_is_unavailable_and_a_missing_subscription_is_not_configured(monkeypatch):
+    from fastapi.testclient import TestClient
+    import routes.costs as served
+    from api.app import app
+
+    _served(monkeypatch, served._billing_unavailable(
+        "permission", "Azure billing actuals unavailable: Cost Management Reader role needed"))
+    row = TestClient(app).get("/control/costs").json()["setup"]["billing_actuals"]
+    assert row["state"] == "unavailable"
+    assert row["retry_at"] is None
+
+    monkeypatch.setattr(served, "_AZ_SUB", None)
+    row = TestClient(app).get("/control/costs").json()["setup"]["billing_actuals"]
+    assert row["state"] == "not_configured"
+
+
+def test_a_figure_is_connected_and_configured_stays_true(monkeypatch):
+    from fastapi.testclient import TestClient
+    import routes.costs as served
+    from api.app import app
+
+    _served(monkeypatch, {
+        "configured": True, "unavailable_reason": None, "actual_month_to_date_usd": 42.0,
+        "forecast_month_usd": None, "currency": "USD", "updated_at": "2026-09-07T12:00:00+00:00",
+        "freshness_label": "Azure billing data last updated",
+        "refresh_note": served._BILLING_REFRESH_NOTE, "delay_note": served._BILLING_DELAY_NOTE,
+    })
+    row = TestClient(app).get("/control/costs").json()["setup"]["billing_actuals"]
+    assert (row["state"], row["configured"], row["reason"]) == ("connected", True, None)

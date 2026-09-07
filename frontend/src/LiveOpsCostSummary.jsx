@@ -12,10 +12,37 @@ function age(iso) {
   return seconds < 60 ? `${seconds}s ago` : `${Math.floor(seconds / 60)}m ago`
 }
 
+const SETUP_STATUS = {
+  connected: 'Connected',
+  // TEMPORARY, and the word matters. This read "Not configured" while the feed was fully
+  // configured and Azure was merely asking the app to back off — which sends an operator to fix
+  // configuration that is not broken. The only correct action for a throttle is to wait.
+  throttled: 'Temporarily unavailable',
+  unavailable: 'Unavailable',
+  not_configured: 'Not configured',
+}
+
+// The backend's four-state `state` when it sends one; the two booleans older backends sent
+// otherwise, read the way this component always read them.
+export function setupState(state) {
+  if (state?.state && SETUP_STATUS[state.state]) return state.state
+  if (!state?.configured) return 'not_configured'
+  return state?.available === false ? 'unavailable' : 'connected'
+}
+
+export function retryClause(state) {
+  const at = state?.retry_at ? new Date(state.retry_at) : null
+  if (!at || Number.isNaN(at.getTime())) return 'retrying within the hour'
+  return `retrying at ${at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+}
+
 function SetupSignal({ label, state }) {
-  const configured = !!state?.configured
-  const connected = configured && state?.available !== false
-  const status = !configured ? 'Not configured' : connected ? 'Connected' : 'Unavailable'
+  const kind = setupState(state)
+  const connected = kind === 'connected'
+  const status = SETUP_STATUS[kind]
+  const reason = kind === 'throttled'
+    ? `${state?.reason || 'Cost Management is throttling'} · ${retryClause(state)}`
+    : state?.reason
   return <div role="group" aria-label={`${label}: ${status.toLowerCase()}`}
     style={{ border: '1px solid var(--line)', borderRadius: 8, padding: '8px 10px', minWidth: 0 }}>
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
@@ -25,7 +52,7 @@ function SetupSignal({ label, state }) {
       <b>{label}</b>
       <span className="muted" style={{ marginLeft: 'auto' }}>{status}</span>
     </div>
-    {state?.reason && <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{state.reason}</div>}
+    {reason && <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{reason}</div>}
   </div>
 }
 
@@ -64,7 +91,7 @@ export default function LiveOpsCostSummary() {
     rate_card: { configured: !!costs.rate_source },
     billing_actuals: { configured: !!costs.billing?.configured },
   }
-  const missing = Object.values(setup).filter((item) => !item?.configured).length
+  const missing = Object.values(setup).filter((item) => !['connected', 'throttled'].includes(setupState(item))).length
   // Actuals and the estimate are DIFFERENT KINDS OF NUMBER and are never summed or blended: one
   // is what Azure billed, the other is what this capacity would cost at a rate card ACP was told.
   const billed = costs.billing?.actual_month_to_date_usd ?? null
