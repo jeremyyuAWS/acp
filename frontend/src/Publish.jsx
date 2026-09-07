@@ -1,13 +1,16 @@
 import { useState, useEffect, useRef } from 'react'
 import ScopeBanner from './ScopeBanner.jsx'
 import { documentSelection, documentScopeSentence } from './remediableScope.js'
-import SearchFilterBar, { useSearchFilter, matchesFilters } from './SearchFilterBar.jsx'
 import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseManifest, previewReleaseDestination, listHitlQueue, getSettings, getSourceStatus, rescoreFile, downloadReleasePackage } from './api.js'
-import { releaseDestination, releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
+import { releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
 import { SET_STATUS, certificationUniverse, releaseSetStatus } from './graduation.js'
 import { mirrorState, MIRROR } from './deliveryPolicy.js'
 import ReleaseHistory from './ReleaseHistory.jsx'
 import ReleaseModelProvenance from './ReleaseModelProvenance.jsx'
+import ReleaseFileSelection, { releaseFileSize } from './ReleaseFileSelection.jsx'
+import ReleasePlanSummary from './ReleasePlanSummary.jsx'
+import ReleaseStepPanel from './ReleaseStepPanel.jsx'
+import './release-plan-summary.css'
 
 // Step 9 · Publish. Marks re-validated documents as published: the conformance status
 // is recorded in the audit trail and the fixed copy (already in Blob + the Drive
@@ -18,13 +21,6 @@ import ReleaseModelProvenance from './ReleaseModelProvenance.jsx'
 export default function Publish({ run, files = [], certified = [], readOnly = false, onPublish, me,
   triage = {} }) {
   const ready = files.filter((f) => f.compliant)
-  const sfP = useSearchFilter('publish')
-  const PUB_FACETS = [
-    { key: 'type', label: 'Type', get: (f) => (f.file.split('.').pop() || '').toUpperCase() },
-    { key: 'department', label: 'Dept', get: (f) => f.department },
-    { key: 'source', label: 'Source', get: (f) => f.sourceName },
-  ]
-  const shownReady = sfP.active ? ready.filter(matchesFilters(sfP, PUB_FACETS, (f) => f.file)) : ready
   const [done, setDone] = useState({})
   const [pubUrls, setPubUrls] = useState({})   // file -> published Drive URL, from POST /publish
   const [releaseFolder, setReleaseFolder] = useState(null)
@@ -129,6 +125,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const selectableReady = ready.filter((f) => srcOf(f) !== 'stale')
   const selectedReady = selectableReady.filter((f) => selectedFiles.has(f.file))
   const selectedPublishable = selectedReady.filter((f) => !done[f.file])
+  const selectedSizes = selectedReady.map(releaseFileSize)
+  const selectedEstimatedBytes = selectedSizes.length > 0 && selectedSizes.every((size) => size != null)
+    ? selectedSizes.reduce((total, size) => total + size, 0) : undefined
   useEffect(() => {
     setSelectedFiles((old) => {
       const eligible = new Set(selectableReady.map((f) => f.file))
@@ -364,15 +363,6 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     : e.external ? 'via Upload' : 'just now'
   const publishedList = publishedEntries.map((e) => e.file)
   const sourcePath = (f) => f.source_relative_path || f.parent_folder || f.file
-  const sourceFolder = (f) => {
-    const parts = sourcePath(f).replace(/\\/g, '/').split('/')
-    return parts.length > 1 ? parts.slice(0, -1).join('/') : 'Source root'
-  }
-  const groupedReady = shownReady.reduce((groups, file) => {
-    const folder = sourceFolder(file)
-    return { ...groups, [folder]: [...(groups[folder] || []), file] }
-  }, {})
-  const selectedResult = sel ? releaseResults[sel.file] : null
   const failedCount = Object.values(releaseResults).filter((row) => row.status === 'failed').length
   const failedReady = ready.filter((f) => !done[f.file] && releaseResults[f.file]?.status === 'failed' && srcOf(f) !== 'stale')
   const downloadReleaseManifest = async () => {
@@ -656,10 +646,6 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
             </button>
           </div>
         )}
-        {ready.length > 8 && (
-          <SearchFilterBar ctl={sfP} items={ready} facets={PUB_FACETS} noun="files"
-                           placeholder="Search the publish queue…" />
-        )}
         {ready.length === 0 ? (
           pendingReview.items > 0 ? (
             <div className="muted" style={{ marginTop: 10, padding: '12px 14px', borderRadius: 9, background: '#FBF1DF', border: '1px solid #EAD9BF', color: '#7A5A12' }}>
@@ -669,48 +655,14 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           ) : (
             <p className="muted" style={{ marginTop: 10 }}>Nothing verified yet — remediate documents and approve their review items in Remediate first.</p>
           )
-        ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', border: '1px solid var(--line)', borderRadius: 10, overflow: 'hidden' }}>
-            <div className="publist" aria-label="Documents grouped by source folder" style={{ borderRight: '1px solid var(--line)', padding: 10 }}>
-            {shownReady.length === 0 ? <p className="muted">No files match — <button className="ghost small" onClick={sfP.clear}>clear the filters</button></p> : Object.entries(groupedReady).map(([folder, folderFiles]) => (
-              <div key={folder}>
-                <div style={{ fontSize: 11.5, fontWeight: 700, color: 'var(--muted)', padding: '8px 6px 4px' }}>{folder}</div>
-                {folderFiles.map((f) => <div className={`pubrow release-file-row${done[f.file] ? ' pubdone' : ''}`} key={f.file}>
-                <input className="release-file-check" type="checkbox" aria-label={`Select ${f.file}`} checked={selectedFiles.has(f.file)}
-                       disabled={srcOf(f) === 'stale'}
-                       onChange={(e) => setSelectedFiles((old) => { const next = new Set(old); if (e.target.checked) next.add(f.file); else next.delete(f.file); return next })} />
-                <div className="release-file-main">
-                  <button className="remname" onClick={() => setSel(f)}>{f.file}</button>
-                  <div className="release-file-meta">
-                    <span>{f.sourceName || 'Connected source'}{f.department ? ` · ${f.department}` : ''}</span>
-                    <span className="badge" style={{ background: 'var(--success-bg)', color: 'var(--success-fg)' }}>{f.score} / 100</span>
-                    <span className="release-file-destination" title="Where this document’s corrected copy will be written">→ {releaseDestination({ provider: releaseProvider, driveFileId: f.drive_file_id, driveMirrorEnabled, driveMirrorFolder }).label}</span>
-                    {srcOf(f) === 'stale' && <span className="release-file-warning" title="The source file changed after this scan — re-scan before releasing">⚠ source changed</span>}
-                    {srcOf(f) === 'unavailable' && <span className="release-file-warning" title="ACP could not read the source now (moved, deleted, or access lost)">source unreachable</span>}
-                  </div>
-                  {done[f.file] && <div className="release-file-outcome">✓ Released · audit recorded{pubUrls[f.file] && <> · <a href={pubUrls[f.file]} target="_blank" rel="noopener noreferrer">Open in {sourceProduct} ↗</a></>}</div>}
-                </div>
-                <button className="ghost small release-file-action" onClick={() => setSel(f)}>View details</button>
-              </div>)}
-              </div>
-            ))}
-            </div>
-            <div aria-label="Selected document release details" style={{ padding: 18 }}>
-              {sel ? <>
-                <h3 style={{ marginTop: 0 }}>{sel.file}</h3>
-                <dl style={{ display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '8px 14px', fontSize: 13 }}>
-                  <dt>Release status</dt><dd>{selectedResult?.status || (done[sel.file] ? 'published' : 'ready')}</dd>
-                  <dt>Original path</dt><dd>{selectedResult?.original_relative_path || sourcePath(sel)}</dd>
-                  <dt>Destination path</dt><dd>{selectedResult?.released_relative_path || `Remediated / ${releaseFolder?.name || '<release timestamp>'} / ${sourcePath(sel)}`}</dd>
-                  <dt>Verification</dt><dd>{selectedResult?.verification || 'Pending release'}</dd>
-                </dl>
-                {selectedResult?.status === 'failed' && <div role="alert" style={{ marginTop: 14, color: 'var(--error-fg-strong)' }}><b>Needs attention:</b> {selectedResult.explanation}</div>}
-                {selectedResult?.published_url && <a href={selectedResult.published_url} target="_blank" rel="noopener noreferrer" aria-label={`Open released document ${sel.file}`}>Open released document ↗</a>}
-                <details style={{ marginTop: 16 }}><summary>Audit history</summary><p className="muted">{selectedResult?.published_at ? `Released ${new Date(selectedResult.published_at).toLocaleString()} · ${selectedResult.created ? 'created' : 'reused'}` : 'No release event yet.'}</p></details>
-              </> : <p className="muted">Select a document to see its original path, destination, verification, and audit history.</p>}
-            </div>
-          </div>
-        )}
+        ) : <ReleaseFileSelection
+          files={ready} selectedFiles={selectedFiles} setSelectedFiles={setSelectedFiles}
+          done={done} sourceState={srcOf} sourceProduct={sourceProduct}
+          releaseProvider={releaseProvider} driveMirrorEnabled={driveMirrorEnabled}
+          driveMirrorFolder={driveMirrorFolder} releaseFolder={releaseFolder}
+          releaseResults={releaseResults} selectedFile={sel} setSelectedFile={setSel}
+          sourcePath={sourcePath}
+        />}
         {ready.length > 0 && (
           <div className="release-builder" aria-label="Release builder">
             <div className="release-builder__steps" aria-label="Release steps">
@@ -718,12 +670,17 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
               <span className={builderStep === 2 ? 'active' : builderStep > 2 ? 'complete' : ''} aria-current={builderStep === 2 ? 'step' : undefined}>2 <b>Choose delivery</b></span>
               <span className={builderStep === 3 ? 'active' : ''} aria-current={builderStep === 3 ? 'step' : undefined}>3 <b>Review</b></span>
             </div>
+            <ReleasePlanSummary compact count={selectedReady.length}
+              excluded={ready.length - selectedPublishable.length}
+              method={deliveryMethod} provider={sourceProduct}
+              destination={releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}
+              preserveStructure estimatedBytes={selectedEstimatedBytes} />
             {builderStep === 1 ? (
-              <div className="release-builder__continue">
+              <ReleaseStepPanel id="release-files-step" heading="Choose files" focusOnMount={false} className="release-builder__continue">
                 <span className="muted">{selectedReady.length ? `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file is' : 'files are'} ready.` : 'Select at least one ready file.'}</span>
                 <button className="qbtn approve" disabled={!selectedReady.length} onClick={chooseDelivery}>Choose delivery</button>
-              </div>
-            ) : builderStep === 2 ? <>
+              </ReleaseStepPanel>
+            ) : builderStep === 2 ? <ReleaseStepPanel id="release-delivery-step" heading="Choose delivery" focusOnMount>
               <fieldset className="release-methods">
                 <legend>Where should the corrected files go?</legend>
                 <label className={`${deliveryMethod === 'publish' ? 'selected' : ''}${!selectedPublishable.length ? ' disabled' : ''}`}>
@@ -778,7 +735,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                 <button className="ghost" onClick={() => setBuilderStep(1)}>Back to files</button>
                 <button className="qbtn approve" disabled={Boolean(deliveryNameError) || previewingRelease} onClick={reviewDelivery}>{previewingRelease ? 'Checking destination…' : 'Review release'}</button>
               </div>
-            </> : <>
+            </ReleaseStepPanel> : <ReleaseStepPanel id="release-review-step" heading="Review release" focusOnMount>
               <div className="release-plan">
                 <div>
                   <b>Review your release plan</b>
@@ -805,7 +762,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                       : <button className="qbtn approve" disabled={!selectedReady.length || keptInAcp} onClick={keepSelectedInAcp}>{keptInAcp ? 'Kept in ACP' : `Keep ${selectedReady.length} in ACP`}</button>}
                 </div>
               </div>
-            </>}
+            </ReleaseStepPanel>}
           </div>
         )}
         {failedCount > 0 && (
