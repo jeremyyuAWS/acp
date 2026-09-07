@@ -801,12 +801,20 @@ def _publish_file(payload: dict, job: dict) -> None:
         release = core.store.release_status(release_id, owner)
         if not release:
             raise FatalJobError("release execution not found")
+        chosen_parent = release.get("parent_folder_id")
+        if chosen_parent:
+            chosen_drive, _, chosen_item = chosen_parent.partition("/")
+            drive_id, parent_folder_id = chosen_drive, chosen_item
+            location = f"graph:{drive_id}"
+        else:
+            parent_folder_id = None
         root = core.store.get_release_root(release_id, location, owner)
         if not root:
             claimed_name = core.store.claim_release_root_name(
                 release_id, owner, "sharepoint", location, release["folder_name"])
+            folder_options = {"parent_id": parent_folder_id} if parent_folder_id else {}
             detail = _publish.ensure_sharepoint_release_folder(
-                token, drive_id, release_id, claimed_name)
+                token, drive_id, release_id, claimed_name, **folder_options)
             root = core.store.record_release_root(
                 release_id, owner, "sharepoint", location, detail["id"],
                 detail["name"], detail.get("url"))

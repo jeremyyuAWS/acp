@@ -222,6 +222,17 @@ def test_a_cleared_write_is_linked_to_its_call_with_no_regressions(store, monkey
     assert row["regressions"] == []                    # baseline ran: known to be none
 
 
+def test_post_write_outcome_keeps_every_call_on_a_multi_instance_card(store):
+    """One card can approve two independently generated values; validation belongs to both."""
+    item_id, first = _seed_linked(store, names=("Picture 1", "Picture 2"))
+    second = _accepted_call(store, item_id=item_id)
+    inserted = store.record_ai_validation_outcomes(
+        SID, FILE, "1.1.1", [item_id], "verified_cleared", regressions=[])
+    rows = store.list_ai_validation_outcomes(SID, FILE)
+    assert inserted == 2
+    assert {row["model_call_id"] for row in rows} == {first, second}
+
+
 def test_a_write_that_breaks_another_criterion_is_recorded_as_a_regression(store, monkeypatch):
     """Before the write 1.1.1 failed; after it 1.1.1 is clear and 2.4.4 fails. The credit gate
     is unchanged — the file is still credited and uploaded — but the draft's row says what the

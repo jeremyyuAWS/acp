@@ -276,6 +276,15 @@ def _fits(**over):
     return control.ScheduleWrite(**body)
 
 
+def _enable_overrides(store, monkeypatch):
+    """Make the currently saved version a real applied policy with an injectable writer."""
+    schedule = store_mod.load_schedule(store)
+    store.settings[store_mod.APPLICATION_KEY] = json.dumps({
+        "state": "applied", "desired_version": schedule.version,
+        "applied_version": schedule.version, "apps": []})
+    monkeypatch.setattr(control, "_capacity_apply_gateway", object())
+
+
 def test_every_write_is_admin_only(store, admin, monkeypatch):
     from fastapi import HTTPException
     outsider = _Req("someone@example.com")
@@ -350,8 +359,9 @@ def test_a_write_patches_only_the_fields_supplied(store, admin):
 
 # ── overrides through the API ────────────────────────────────────────────────────────────────
 
-def test_an_override_takes_effect_and_says_which_authority_set_the_floors(store, admin):
+def test_an_override_takes_effect_and_says_which_authority_set_the_floors(store, admin, monkeypatch):
     control.put_capacity_schedule(_fits(enabled=True), admin)
+    _enable_overrides(store, monkeypatch)
     control.create_capacity_override(
         control.OverrideRequest(mode="custom", duration="1h", reason="large batch landing",
                                 floors={"assess": 4}), admin)
@@ -362,17 +372,19 @@ def test_an_override_takes_effect_and_says_which_authority_set_the_floors(store,
     assert payload["override"]["actor"] == "owner@example.com"
 
 
-def test_an_override_without_a_reason_is_refused(store, admin):
+def test_an_override_without_a_reason_is_refused(store, admin, monkeypatch):
     from fastapi import HTTPException
+    _enable_overrides(store, monkeypatch)
     with pytest.raises(HTTPException) as excinfo:
         control.create_capacity_override(
             control.OverrideRequest(mode="off_hours", duration="1h", reason=""), admin)
     assert excinfo.value.status_code == 422
 
 
-def test_an_expired_override_disappears_from_the_payload_on_its_own(store, admin):
+def test_an_expired_override_disappears_from_the_payload_on_its_own(store, admin, monkeypatch):
     """No sweeper runs in this test, and that is the assertion: expiry is enforced by the read
     path, so there is no component whose failure could extend the override."""
+    _enable_overrides(store, monkeypatch)
     control.create_capacity_override(
         control.OverrideRequest(mode="off_hours", duration="30m", reason="cost test"), admin)
     assert control.get_capacity_schedule()["override"] is not None
@@ -386,7 +398,8 @@ def test_an_expired_override_disappears_from_the_payload_on_its_own(store, admin
     assert payload["effective_mode"] != "manual_override"
 
 
-def test_cancelling_an_override_is_idempotent(store, admin):
+def test_cancelling_an_override_is_idempotent(store, admin, monkeypatch):
+    _enable_overrides(store, monkeypatch)
     control.create_capacity_override(
         control.OverrideRequest(mode="off_hours", duration="1h", reason="r"), admin)
     assert control.delete_capacity_override(admin)["cleared"] is True
@@ -396,18 +409,48 @@ def test_cancelling_an_override_is_idempotent(store, admin):
 def test_an_override_is_not_reported_as_drift(store, admin, monkeypatch):
     """An override is a deliberate, audited divergence. Reporting it as configuration drift would
     bury the real thing among the expected ones."""
-    monkeypatch.setattr(control, "_AZ_CONFIGURED", True)
-    monkeypatch.setattr(control, "get_capacity", lambda: {
-        "configured": True,
-        "apps": {"acp-assess": {"min_replicas": 1, "max_replicas": 10}},
-    })
     control.put_capacity_schedule(_fits(enabled=True, maximums={
         "web": 3, "discovery": 4, "assess": 10, "remediate": 10, "gpu": 1}), admin)
-    before = control.get_capacity_schedule()["drift"]
+    _enable_overrides(store, monkeypatch)
     control.create_capacity_override(
         control.OverrideRequest(mode="custom", duration="1h", reason="r",
                                 floors={"assess": 9}), admin)
-    assert control.get_capacity_schedule()["drift"] == before
+    import capacity_reconcile
+    import queue_scaler
+    schedule = store_mod.load_schedule(store)
+    override = store_mod.get_override(store)
+    desired, _, _ = capacity_reconcile.effective_policy(
+        schedule, override, datetime.now(timezone.utc))
+    observed = {p.app: p.as_dict() for p in desired}
+    monkeypatch.setattr(control, "_observed_apps", lambda: (observed, True))
+    payload = control.get_capacity_schedule()
+    assert payload["drift_evaluated"] is True
+    assert payload["drift"] == []
+
+
+def test_an_override_requires_a_configured_gateway_and_applied_schedule(store, admin, monkeypatch):
+    from fastapi import HTTPException
+    request = control.OverrideRequest(mode="off_hours", duration="1h", reason="maintenance")
+    monkeypatch.setattr(control, "_capacity_apply_gateway", None)
+    with pytest.raises(HTTPException) as unavailable:
+        control.create_capacity_override(request, admin)
+    assert unavailable.value.status_code == 503
+    assert store_mod.get_override(store) is None
+
+    monkeypatch.setattr(control, "_capacity_apply_gateway", object())
+    with pytest.raises(HTTPException) as unapplied:
+        control.create_capacity_override(request, admin)
+    assert unapplied.value.status_code == 409
+    assert store_mod.get_override(store) is None
+
+
+def test_the_payload_exposes_durable_reconciliation_state(store):
+    store_mod.save_reconciliation(store, {
+        "state": "partial", "desired_key": "override:3:id:expiry", "failures": 2,
+        "completed_at": "2026-09-07T16:00:00+00:00", "apps": []},
+        action="settings.capacity_reconcile.failed", reason="temporary override",
+        correlation_id="id")
+    assert control.get_capacity_schedule()["reconciliation"]["failures"] == 2
 
 
 # ── the rendered policy ──────────────────────────────────────────────────────────────────────
@@ -474,6 +517,7 @@ def test_an_override_is_named_as_the_reason_capacity_is_where_it_is(store, admin
     monkeypatch.setattr(control, "_observed_apps", lambda: (
         {"acp-assess": {"current_replicas": 9}}, True))
     control.put_capacity_schedule(_fits(enabled=True), admin)
+    _enable_overrides(store, monkeypatch)
     control.create_capacity_override(
         control.OverrideRequest(mode="custom", duration="1h", reason="batch",
                                 floors={"assess": 9}), admin)

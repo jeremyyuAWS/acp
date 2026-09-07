@@ -139,12 +139,13 @@ def _ensure_folder(svc, parent_id: str | None, name: str, *,
 def ensure_published_folder(svc, release_id: str | None = None, *,
                             released_at: datetime | None = None,
                             folder_name: str | None = None,
+                            parent_id: str | None = None,
                             return_details: bool = False):
     """Create/reuse ``Remediated/<UTC timestamp>`` for one stable release execution."""
     if not release_id:  # backwards compatibility for older callers/tests
-        root, _ = _ensure_folder(svc, None, RELEASE_ROOT)
+        root, _ = _ensure_folder(svc, parent_id, RELEASE_ROOT)
         return root["id"]
-    root, _ = _ensure_folder(svc, None, RELEASE_ROOT)
+    root, _ = _ensure_folder(svc, parent_id, RELEASE_ROOT)
     folder = _find_folder(svc, root["id"], release_id=release_id)
     at = (released_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
     name = folder_name or release_folder_name(at)
@@ -195,10 +196,10 @@ def _sp_find_child(token: str, url: str, name: str, *, folder_only: bool = False
 
 
 def ensure_sharepoint_release_folder(token: str, drive_id: str | None, release_id: str,
-                                     folder_name: str) -> dict:
+                                     folder_name: str, parent_id: str | None = None) -> dict:
     """Find/create the release's durably claimed root in one Graph drive/library."""
     import scanner
-    root_id = _sp_ensure_folder(token, drive_id, None, RELEASE_ROOT)
+    root_id = _sp_ensure_folder(token, drive_id, parent_id, RELEASE_ROOT)
     base = scanner._sp_base(drive_id)
     folder_id = _sp_ensure_folder(token, drive_id, root_id, folder_name)
     item = scanner._sp_get(token, f"{base}/items/{folder_id}?$select=id,name,webUrl")

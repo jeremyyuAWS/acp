@@ -1336,6 +1336,12 @@ export const putMyReleaseTimezone = (releaseTimezone) => (SIM
       method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ release_timezone: releaseTimezone }),
     }).then(j))
+export const putMyReleaseDestination = (releaseDestination) => (SIM
+  ? sim({ release_destination: releaseDestination, simulated: true })
+  : fetch(`${BASE}/settings/mine`, {
+      method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ release_destination: releaseDestination }),
+    }).then(j))
 // Download a remediated file's fixed bytes (ADR 0010) — Blob primary, Drive-mirror
 // fallback server-side. Authenticated fetch → blob → download, same pattern as
 // openReport (a bare <a href> would drop the Authorization header).
@@ -1433,6 +1439,7 @@ export const updateHitlItem = (itemId, status, reviewerNote = null, approvedValu
         approved_values: opts.approvedValues ?? null,
         edited: !!opts.edited, review_ms: opts.reviewMs ?? null, ai_value: opts.aiValue ?? null,
         model_call_id: opts.modelCallId ?? null,
+        model_call_ids: opts.modelCallIds ?? null,
         // Feedback intelligence: WHY a rejection happened (enum; bulk/keyboard paths send 'unspecified')
         reject_reason: opts.rejectReason ?? null,
         // WCAG exception the reviewer applied instead of writing a fix: 'decorative' (1.1.1 — image
@@ -1491,19 +1498,20 @@ export const rescoreFile = (scanId, file) => (SIM
   ? sim({ job_id: 'sim-rescore', workers: 1 }, 200)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/rescore?file=${encodeURIComponent(file)}`, { method: 'POST', headers: headers() }).then(j))
 // Record a file (or files) as published back to its source. Body drives both forms.
-export const publishFile = (scanId, file) => (SIM
+export const publishFile = (scanId, file, destination = null) => (SIM
   ? sim({ published: [{ file, published_at: new Date().toISOString() }] }, 150)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/publish`, {
       method: 'POST',
       headers: headers({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ file }),
+      body: JSON.stringify({ file, ...(destination ? { destination } : {}) }),
     }).then(j))
-export const publishAllFiles = (scanId, files, releaseFolderName = '') => (SIM
+export const publishAllFiles = (scanId, files, releaseFolderName = '', options = {}) => (SIM
   ? sim({ published: files.map((f) => ({ file: f, published_at: new Date().toISOString() })) }, 150)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/publish`, {
       method: 'POST',
       headers: headers({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ files, ...(releaseFolderName.trim() ? { release_folder_name: releaseFolderName.trim() } : {}) }),
+      body: JSON.stringify({ files, ...(releaseFolderName.trim() ? { release_folder_name: releaseFolderName.trim() } : {}),
+        ...(options.destination ? { destination: options.destination } : {}) }),
     }).then(j))
 export const getReleaseStatus = (scanId) => (SIM
   ? sim({ release_id: null, roots: [], documents: [], documents_total: 0, published: 0, failed: 0, remaining: 0 }, 50)
@@ -1511,13 +1519,14 @@ export const getReleaseStatus = (scanId) => (SIM
 export const listReleaseHistory = (limit = 50) => (SIM
   ? sim({ releases: [] }, 50)
   : fetch(`${BASE}/releases?limit=${encodeURIComponent(limit)}`, { headers: headers() }).then(j))
-export const previewReleaseDestination = (scanId, files, releaseFolderName = '', preserveHierarchy = true) => (SIM
+export const previewReleaseDestination = (scanId, files, releaseFolderName = '', preserveHierarchy = true, destination = null) => (SIM
   ? sim({ folder_name: releaseFolderName || '2026-09-06 12-00 UTC', folder_state: 'proposed', provider: 'drive',
       documents: files.map((file) => ({ file, provider_location: 'google:me', destination_path: `Remediated/${releaseFolderName || '2026-09-06 12-00 UTC'}/${file}`, action: 'create' })),
       blockers: [], can_release: true, collision_policy: 'Existing files are not overwritten.', original_files_unchanged: true }, 80)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/preview`, {
       method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ files, preserve_hierarchy: preserveHierarchy, ...(releaseFolderName.trim() ? { release_folder_name: releaseFolderName.trim() } : {}) }),
+      body: JSON.stringify({ files, preserve_hierarchy: preserveHierarchy, ...(releaseFolderName.trim() ? { release_folder_name: releaseFolderName.trim() } : {}),
+        ...(destination ? { destination } : {}) }),
     }).then(j))
 export const getReleaseManifest = (scanId) => (SIM
   ? sim({ manifest: { schema_version: 1, scan_id: scanId, documents: [] },

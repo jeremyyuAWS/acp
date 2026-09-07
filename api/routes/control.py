@@ -2212,6 +2212,7 @@ def get_capacity_schedule():
     # exposing that capability state lets the page distinguish "saved, ready to apply" from
     # "saved, application unavailable in this environment" without probing with a write.
     payload["application_configured"] = _capacity_apply_gateway is not None
+    payload["reconciliation"] = store_mod.load_reconciliation(core.store)
     # An override outranks the schedule while it lasts, and says so in the mode rather than
     # borrowing the name of the mode it copied — nothing downstream may report an overridden
     # fleet as though the schedule produced it.
@@ -2241,10 +2242,10 @@ def get_capacity_schedule():
     # the real thing among the expected ones.
     if applied:
         import capacity_apply as apply_mod
-        import capacity_policy as policy_mod
-        import queue_scaler
+        import capacity_reconcile as reconcile_mod
+        desired, _, _ = reconcile_mod.effective_policy(schedule, override, now)
         comparisons = [apply_mod.compare(p, observed.get(p.app))
-                       for p in policy_mod.policy_for(schedule, queue_scaler.lane_job_types())]
+                       for p in desired]
         payload["drift"] = [difference for result in comparisons
                             for difference in result["differences"]]
         payload["drift_evaluated"] = all(r["state"] != "unreadable" for r in comparisons)
@@ -2474,8 +2475,15 @@ def create_capacity_override(body: OverrideRequest, request: Request):
     from .system import _require_admin
     _require_admin(request)
 
+    if _capacity_apply_gateway is None:
+        raise HTTPException(503, "capacity application is not configured")
+
     actor, correlation_id = _actor(request), uuid.uuid4().hex[:12]
     schedule = store_mod.load_schedule(core.store)
+    application = store_mod.load_application(core.store)
+    if (application.get("state") != "applied"
+            or application.get("applied_version") != schedule.version):
+        raise HTTPException(409, "the current schedule must be applied before an override")
     try:
         override = store_mod.set_override(
             core.store, mode=body.mode, floors=body.floors, duration=body.duration,

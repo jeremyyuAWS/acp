@@ -3303,6 +3303,72 @@ def _release_timezone(owner: str) -> str:
     return (getter(owner, "release_timezone") if callable(getter) else None) or "America/Chicago"
 
 
+def _release_destination(source: str, raw: object) -> dict | None:
+    """Normalize one optional provider parent without accepting credentials or URLs."""
+    if not isinstance(raw, dict):
+        return None
+    provider = str(raw.get("provider") or "").strip().lower()
+    folder_id = str(raw.get("folder_id") or "").strip()
+    folder_name = str(raw.get("folder_name") or "").strip()
+    if provider != source or provider not in {"drive", "sharepoint"}:
+        raise HTTPException(422, "the Release destination must match this scan's provider")
+    if not folder_id or len(folder_id) > 500 or not folder_name or len(folder_name) > 255:
+        raise HTTPException(422, "the Release destination needs a valid folder id and name")
+    if provider == "sharepoint" and "/" not in folder_id:
+        raise HTTPException(422, "a SharePoint destination must identify its document library")
+    return {"provider": provider, "folder_id": folder_id, "folder_name": folder_name}
+
+
+def _preflight_release_destination(request: Request, destination: dict | None) -> dict:
+    if destination is None:
+        return {"ready": True, "mode": "provider_default",
+                "message": "ACP will create the protected Remediated folder at the provider root."}
+    provider, folder_id = destination["provider"], destination["folder_id"]
+    if provider == "drive":
+        try:
+            svc = core.drive_service(request)
+            info = svc.files().get(
+                fileId=folder_id,
+                fields="id,name,trashed,mimeType,capabilities(canAddChildren)").execute()
+            writable = bool((info.get("capabilities") or {}).get("canAddChildren"))
+            exists = not bool(info.get("trashed"))
+            return {"ready": exists and writable, "credential_valid": True,
+                    "folder_reachable": exists, "write_permission": writable,
+                    "folder_name": info.get("name") or destination["folder_name"],
+                    "message": None if exists and writable else
+                    "Google Drive does not allow this account to add files to that folder."}
+        except Exception as exc:  # provider errors are returned as actionable preflight, not 500
+            return {"ready": False, "credential_valid": False, "folder_reachable": False,
+                    "write_permission": False, "message": str(exc)}
+    token = request.headers.get("x-sp-token")
+    if not token:
+        return {"ready": False, "credential_valid": False, "folder_reachable": False,
+                "write_permission": False, "message": "Reconnect Microsoft to check this folder."}
+    drive_id, _, item_id = folder_id.partition("/")
+    try:
+        import scanner as _scanner
+        import sp_readiness
+        info = _scanner._sp_item_exists(token, drive_id, item_id)
+        scopes, why_unknown = sp_readiness.token_scopes(token)
+        known_write = (sp_readiness._has(scopes, "Files.ReadWrite") or
+                       sp_readiness._has(scopes, "Files.ReadWrite.All") or
+                       sp_readiness._has(scopes, "Sites.ReadWrite.All"))
+        scope_known = scopes is not None
+        reachable = bool(info.get("exists"))
+        return {"ready": reachable and (known_write or not scope_known),
+                "credential_valid": True, "folder_reachable": reachable,
+                "write_permission": True if known_write else None if not scope_known else False,
+                "permission_assurance": "grant_and_connectivity" if known_write else "connectivity_only",
+                "message": (None if reachable and known_write else
+                    f"Folder is reachable; the token's write grant could not be inspected ({why_unknown})."
+                    if reachable and not scope_known else
+                    "Microsoft sign-in is missing a files or sites write grant."
+                    if reachable else info.get("error") or "The selected Microsoft folder is unreachable.")}
+    except Exception as exc:
+        return {"ready": False, "credential_valid": True, "folder_reachable": False,
+                "write_permission": None, "message": str(exc)}
+
+
 @router.post("/scans/{sid}/publish")
 def publish_files(sid: str, request: Request, body: dict):
     """Publish one or more re-validated files — ADR 0010 archive-copy, NON-destructive.
@@ -3320,6 +3386,12 @@ def publish_files(sid: str, request: Request, body: dict):
     owner_email = scan.get("run", {}).get("owner_email") or owner
     import publish as _publish
     source = scan.get("run", {}).get("source") or "local"
+    destination = _release_destination(source, body.get("destination"))
+    if destination:
+        destination_check = _preflight_release_destination(request, destination)
+        if not destination_check["ready"]:
+            raise HTTPException(409, detail={"code": "release_destination_not_ready",
+                                            "preflight": destination_check})
     eligible = [row for row in scan.get("files", [])
                 if row.get("compliant") and row.get("remediated_at")]
     try:
@@ -3330,9 +3402,12 @@ def publish_files(sid: str, request: Request, body: dict):
     if not preferred_folder_name:
         release_tz = _release_timezone(owner)
         preferred_folder_name = _publish.release_folder_name(timezone_name=release_tz)
+    execution_options = {"preferred_folder_name": preferred_folder_name}
+    if destination:
+        execution_options.update(parent_folder_id=destination["folder_id"],
+                                 parent_folder_name=destination["folder_name"])
     release = core.store.ensure_release_execution(
-        sid, owner, source, len(eligible),
-        preferred_folder_name=preferred_folder_name)
+        sid, owner, source, len(eligible), **execution_options)
     release_id = release["id"]
     created_at = release["created_at"]
     folder_name = release["folder_name"]
@@ -3429,6 +3504,8 @@ def publish_files(sid: str, request: Request, body: dict):
         status = core.store.release_status(release_id, owner)
         return {"release_id": release_id, "release_folder_id": None,
                 "release_folder_name": folder_name, "release_folder_url": None,
+                "parent_folder_id": release.get("parent_folder_id"),
+                "parent_folder_name": release.get("parent_folder_name"),
                 "release_folders": status.get("roots", []),
                 "documents_total": status.get("documents_total", 0),
                 "published_count": status.get("published", 0),
@@ -3508,6 +3585,7 @@ def publish_files(sid: str, request: Request, body: dict):
                         drive_svc, release_id,
                         released_at=datetime.fromisoformat(created_at.replace("Z", "+00:00")),
                         folder_name=folder_name,
+                        parent_id=release.get("parent_folder_id"),
                         return_details=True)
                     root = core.store.record_release_root(
                         release_id, owner, "drive", location, detail["id"],
@@ -3624,6 +3702,8 @@ def publish_files(sid: str, request: Request, body: dict):
             "release_folder_id": first_root.get("folder_id") if first_root else None,
             "release_folder_name": status.get("folder_name") if status else folder_name,
             "release_folder_url": first_root.get("folder_url") if first_root else None,
+            "parent_folder_id": status.get("parent_folder_id") if status else None,
+            "parent_folder_name": status.get("parent_folder_name") if status else None,
             "release_folders": roots, "documents_total": status.get("documents_total", 0),
             "published_count": status.get("published", 0), "failed": status.get("failed", 0),
             "remaining": status.get("remaining", 0), "published": results,
@@ -3642,6 +3722,8 @@ def get_release_history(request: Request, limit: int = Query(50, ge=1, le=100)):
         "actor": release["owner_email"],
         "source": release.get("source"),
         "folder_name": release.get("folder_name"),
+        "parent_folder_id": release.get("parent_folder_id"),
+        "parent_folder_name": release.get("parent_folder_name"),
         "status": release.get("status"),
         "created_at": release.get("created_at"),
         "updated_at": release.get("updated_at"),
@@ -3683,6 +3765,8 @@ def get_release_status(sid: str, request: Request):
                 "failed": 0, "remaining": 0, "roots": [], "documents": []}
     return {"release_id": status["id"], "release_folder_name": status["folder_name"],
             "created_at": status["created_at"], "status": status["status"],
+            "parent_folder_id": status.get("parent_folder_id"),
+            "parent_folder_name": status.get("parent_folder_name"),
             "documents_total": status["documents_total"], "published": status["published"],
             "failed": status["failed"], "remaining": status["remaining"],
             "roots": status["roots"], "documents": status["documents"]}
@@ -3692,6 +3776,7 @@ class ReleasePreviewRequest(BaseModel):
     files: list[str]
     release_folder_name: str | None = None
     preserve_hierarchy: bool = True
+    destination: dict | None = None
 
 
 @router.post("/scans/{sid}/release/preview")
@@ -3722,6 +3807,8 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
             folder_name = _publish.release_folder_name(timezone_name=release_tz)
         folder_state = "proposed"
     source = (scan.get("run") or {}).get("source") or "local"
+    destination_config = _release_destination(source, body.destination)
+    destination_preflight = _preflight_release_destination(request, destination_config)
     rows = {row.get("file"): row for row in scan.get("files", [])}
     existing = {row.get("file"): row for row in (status or {}).get("documents", [])}
     planned_paths: set[tuple[str, str]] = set()
@@ -3735,7 +3822,8 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
         try:
             if source == "sharepoint":
                 folders, safe_name = _publish.sharepoint_relative_path(source_path, name)
-                location = f"graph:{record.get('drive_id') or 'me'}"
+                target_drive = (destination_config or {}).get("folder_id", "").partition("/")[0]
+                location = f"graph:{target_drive or record.get('drive_id') or 'me'}"
             else:
                 folders, safe_name = _publish.normalize_relative_path(source_path, name)
                 location = "google:me" if source == "drive" else "azure:blob"
@@ -3743,7 +3831,9 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
             blockers.append({"file": name, "reason": str(exc)})
             continue
         relative = "/".join([*folders, safe_name]) if body.preserve_hierarchy else safe_name
-        destination = "/".join(["Remediated", folder_name, relative])
+        parent_name = (destination_config or {}).get("folder_name")
+        destination = "/".join([*([parent_name] if parent_name else []),
+                                "Remediated", folder_name, relative])
         key = (location, destination.casefold())
         if key in planned_paths:
             blockers.append({"file": name, "reason": f"Another selected file resolves to {destination}."})
@@ -3760,7 +3850,9 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
         "provider": source,
         "documents": documents,
         "blockers": blockers,
-        "can_release": not blockers,
+        "can_release": not blockers and destination_preflight["ready"],
+        "destination": destination_config,
+        "preflight": destination_preflight,
         "collision_policy": ("Existing ACP copies are reused. Unrelated provider files are not "
                              "overwritten; ACP creates a stable suffixed copy and verifies it."),
         "original_files_unchanged": True,

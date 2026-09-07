@@ -109,9 +109,20 @@ def _cli(*args: str) -> subprocess.CompletedProcess:
 
 
 def test_estimate_only_prices_the_run_without_calling_anything():
+    """The figure is DERIVED, not pasted. It was hardcoded as "$5.1480" and went stale the moment
+    evals/cost.py's nominal call was corrected for adaptive thinking — a test that pins a
+    computed number by transcription fails for the one reason that is never interesting."""
+    import sys
+    sys.path.insert(0, str(ROOT))
+    from evals.cost import PRICE_BOOK, estimate_run_usd
+    from evals.schema import load_cases
+
+    calls = len(load_cases()) * 3
+    expected = estimate_run_usd(PRICE_BOOK["anthropic-opus-5"], calls)
     r = _cli("--estimate-only", "--repeats", "3", "-c", "anthropic:claude-opus-5")
     assert r.returncode == 0
-    assert "429 calls" in r.stderr and "$5.1480" in r.stderr  # 143 cases x 3 repeats, Opus list price
+    assert f"{calls} calls" in r.stderr
+    assert f"${expected:,.4f}" in r.stderr, f"expected ${expected:,.4f} in:\n{r.stderr}"
 
 
 def test_the_spend_cap_refuses_before_the_first_call():

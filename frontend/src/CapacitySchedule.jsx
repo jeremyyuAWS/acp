@@ -112,6 +112,8 @@ export default function CapacitySchedule({ me = null } = {}) {
   const blocked = !!validation?.blocked
   const capacity = validation?.capacity
   const hasDrift = !!snap.drift_evaluated && !!snap.drift?.length
+  const overrideAvailable = !!snap.applied && !!snap.application_configured
+  const reconciliation = snap.reconciliation || {}
   const applicationState = hasDrift
     ? 'Drift detected'
     : snap.applied ? 'Applied' : 'Saved changes not applied'
@@ -157,12 +159,26 @@ export default function CapacitySchedule({ me = null } = {}) {
           {isAdmin && (
             <div aria-label="Schedule actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <button type="button" onClick={() => setWorkspace('schedule')}>Edit schedule</button>
-              <button type="button" className="secondary" onClick={() => setWorkspace('override')}>
+              <button type="button" className="secondary" disabled={!overrideAvailable}
+                title={!overrideAvailable ? 'Apply the schedule and enable Azure capacity application first' : undefined}
+                onClick={() => setWorkspace('override')}>
                 Temporary override
               </button>
             </div>
           )}
         </div>
+        {isAdmin && !overrideAvailable && (
+          <div role="note" className="muted" style={{ fontSize: 12, marginTop: 5 }}>
+            Temporary overrides are unavailable until this schedule is applied and Azure capacity application is enabled.
+          </div>
+        )}
+        {reconciliation.state && reconciliation.state !== 'idle' && (
+          <div role="status" style={{ fontSize: 12, marginTop: 5 }}>
+            Capacity reconciliation: <b>{reconciliation.state.replace(/_/g, ' ')}</b>
+            {reconciliation.completed_at ? <> · last completed {new Date(reconciliation.completed_at).toLocaleString()}</> : null}
+            {reconciliation.failures ? <> · {reconciliation.failures} failed attempt{reconciliation.failures === 1 ? '' : 's'}</> : null}
+          </div>
+        )}
         <div className="muted" style={{ fontSize: 12, marginTop: 5 }}>
           {!isAdmin ? 'You can review this policy. A platform administrator must make changes. '
             : null}

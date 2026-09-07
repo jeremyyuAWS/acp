@@ -14,6 +14,8 @@ class FakeStore:
         self.published = None
         self.root = None
         self.preferred_folder_name = None
+        self.parent_folder_id = None
+        self.parent_folder_name = None
         self.receipts = []
         self.finding_lineage = None
 
@@ -28,10 +30,15 @@ class FakeStore:
                 "source_relative_path": "/drives/library-1/root:/HR/Policies"}
 
     def ensure_release_execution(self, scan_id, owner, source, documents_total,
-                                 preferred_folder_name=None):
+                                 preferred_folder_name=None, parent_folder_id=None,
+                                 parent_folder_name=None):
         self.preferred_folder_name = preferred_folder_name
+        self.parent_folder_id = parent_folder_id
+        self.parent_folder_name = parent_folder_name
         return {"id": "release-1", "created_at": "2026-09-05T10:00:00+00:00",
-                "folder_name": preferred_folder_name or "2026-09-05 10-00 UTC"}
+                "folder_name": preferred_folder_name or "2026-09-05 10-00 UTC",
+                "parent_folder_id": parent_folder_id,
+                "parent_folder_name": parent_folder_name}
 
     def get_release_document(self, release_id, filename, owner):
         return self.documents.get(filename)
@@ -112,6 +119,25 @@ def test_sharepoint_submission_saves_a_valid_custom_release_folder(monkeypatch):
         {"files": [FILE], "release_folder_name": "Q3 Accessibility Release"})
     assert store.preferred_folder_name == "Q3 Accessibility Release"
     assert response["release_folder_name"] == "Q3 Accessibility Release"
+
+
+def test_sharepoint_submission_freezes_the_preflighted_parent_for_worker_retries(monkeypatch):
+    import core
+    from routes import scans
+
+    store = FakeStore()
+    monkeypatch.setattr(core, "store", store)
+    monkeypatch.setattr(core, "register_scan_tokens", lambda *args, **kwargs: None)
+    monkeypatch.setattr(scans, "_preflight_release_destination", lambda request, destination: {
+        "ready": True, "folder_reachable": True, "write_permission": True})
+    request = SimpleNamespace(state=SimpleNamespace(user_email=OWNER),
+                              headers={"x-sp-token": "delegated-secret"})
+    response = scans.publish_files(SID, request, {"files": [FILE], "destination": {
+        "provider": "sharepoint", "folder_id": "finance-drive/approved-folder",
+        "folder_name": "Approved releases"}})
+    assert store.parent_folder_id == "finance-drive/approved-folder"
+    assert store.parent_folder_name == "Approved releases"
+    assert response["parent_folder_id"] == "finance-drive/approved-folder"
 
 
 def test_sharepoint_worker_publishes_and_records_verified_copy(monkeypatch):

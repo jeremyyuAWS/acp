@@ -58,6 +58,20 @@ def _holiday_policy(schedule):
     return _override_policy(schedule, {"floors": dict(schedule.off_hours)})
 
 
+def effective_policy(schedule, override: dict | None, now: datetime):
+    """Return the policy Azure should run now, including deliberate temporary changes."""
+    holiday = None if override else _holiday_date(schedule, now)
+    if override:
+        return _override_policy(schedule, override), "manual_override", (
+            f"override:{schedule.version}:{override.get('correlation_id')}:"
+            f"{override.get('expires_at')}")
+    if holiday:
+        return _holiday_policy(schedule), "holiday_exception", (
+            f"holiday:{schedule.version}:{holiday}")
+    return (capacity_policy.policy_for(schedule, queue_scaler.lane_job_types()),
+            "saved_schedule", f"schedule:{schedule.version}")
+
+
 class CapacityReconciler:
     """One-at-a-time, persisted reconciliation with exponential retry backoff."""
 
@@ -93,28 +107,18 @@ class CapacityReconciler:
         if application.get("applied_version") != schedule.version:
             return {"state": "ineligible", "reason": "saved schedule is not applied"}
 
-        holiday = None if override else _holiday_date(schedule, now)
+        policies, authority, desired_key = effective_policy(schedule, override, now)
         if override:
-            desired_key = (f"override:{schedule.version}:"
-                           f"{override.get('correlation_id')}:{override.get('expires_at')}")
-            authority = "manual_override"
-            policies = _override_policy(schedule, override)
             correlation_id = str(override.get("correlation_id") or uuid.uuid4().hex[:12])
-        elif holiday:
-            desired_key = f"holiday:{schedule.version}:{holiday}"
-            authority = "holiday_exception"
-            policies = _holiday_policy(schedule)
+        elif authority == "holiday_exception":
             correlation_id = uuid.uuid4().hex[:12]
         else:
-            desired_key = f"schedule:{schedule.version}"
-            authority = "saved_schedule"
-            policies = capacity_policy.policy_for(schedule, queue_scaler.lane_job_types())
             correlation_id = uuid.uuid4().hex[:12]
 
         # The explicit apply route already certified this version. On the first startup, adopt
         # that as the reconciliation baseline instead of needlessly publishing the same policy
         # again. Once an override has been recorded, a return to this key is a real restoration.
-        if not override and not holiday and not state.get("desired_key"):
+        if authority == "saved_schedule" and not state.get("desired_key"):
             baseline = {"state": "applied", "desired_key": desired_key,
                         "applied_key": desired_key, "schedule_version": schedule.version,
                         "authority": authority, "attempted_at": now.isoformat(),
@@ -149,23 +153,25 @@ class CapacityReconciler:
                      "apps": []}
         capacity_store.save_reconciliation(
             self.store, attempted, action="settings.capacity_reconcile.started",
-            reason="temporary override" if override else "holiday exception" if holiday else "restore saved schedule",
+            reason="temporary override" if override else "holiday exception" if authority == "holiday_exception" else "restore saved schedule",
             correlation_id=correlation_id)
         result = capacity_apply.apply_policies(policies, self.gateway)
 
         # An override can expire or be cancelled while Azure is applying. Never certify that
         # stale intent; the next tick restores the then-current desired policy.
         current_now = self.clock()
+        current_schedule = capacity_store.load_schedule(self.store)
+        current_application = capacity_store.load_application(self.store)
         current_override = capacity_store.get_override(self.store, current_now)
-        current_holiday = None if current_override else _holiday_date(schedule, current_now)
-        current_key = (f"override:{schedule.version}:{current_override.get('correlation_id')}:"
-                       f"{current_override.get('expires_at')}") if current_override else (
-                           f"holiday:{schedule.version}:{current_holiday}" if current_holiday
-                           else f"schedule:{schedule.version}")
-        successful = result.get("state") == "applied" and current_key == desired_key
+        _, _, current_key = effective_policy(current_schedule, current_override, current_now)
+        current_is_applied = current_application.get("applied_version") == current_schedule.version
+        successful = (result.get("state") == "applied" and current_is_applied
+                      and current_key == desired_key)
         failures = 0 if successful else int(state.get("failures") or 0) + 1
         delay = min(MAX_BACKOFF_SECONDS, self.interval_seconds * (2 ** min(failures, 5)))
-        finished = {**attempted, "state": "applied" if successful else result.get("state", "failed"),
+        outcome_state = ("applied" if successful else "stale"
+                         if result.get("state") == "applied" else result.get("state", "failed"))
+        finished = {**attempted, "state": outcome_state,
                     "applied_key": desired_key if successful else state.get("applied_key"),
                     "completed_at": self.clock().isoformat(), "failures": failures,
                     "next_attempt_at": None if successful else (self.clock() + timedelta(seconds=delay)).isoformat(),
@@ -173,10 +179,10 @@ class CapacityReconciler:
         return capacity_store.save_reconciliation(
             self.store, finished,
             action=("settings.capacity_override.reconciled" if successful and override
-                    else "settings.capacity_holiday.reconciled" if successful and holiday
+                    else "settings.capacity_holiday.reconciled" if successful and authority == "holiday_exception"
                     else "settings.capacity_schedule.restored" if successful
                     else "settings.capacity_reconcile.failed"),
-            reason="temporary override" if override else "holiday exception" if holiday else "restore saved schedule",
+            reason="temporary override" if override else "holiday exception" if authority == "holiday_exception" else "restore saved schedule",
             correlation_id=correlation_id)
 
     def start(self) -> None:

@@ -172,3 +172,29 @@ def test_failure_is_persisted_audited_and_backed_off():
     assert failed["failures"] == 1 and failed["next_attempt_at"]
     assert worker.reconcile_once()["state"] == "backoff"
     assert any(d["action"] == "settings.capacity_reconcile.failed" for d in store.decisions)
+
+
+def test_schedule_change_during_apply_never_certifies_stale_policy():
+    store, schedule = applied_store()
+    now = utc(15)
+    store_mod.set_override(store, mode="off_hours", floors=None, duration="1h", reason="test",
+                           actor="a", schedule=schedule, now=now)
+    gateway = seeded_gateway(schedule)
+    original_apply = gateway.apply_scale
+    moved = False
+
+    def apply_and_move(policy):
+        nonlocal moved
+        original_apply(policy)
+        if not moved:
+            moved = True
+            newer = replace(schedule, version=4)
+            store.settings[store_mod.SCHEDULE_KEY] = store_mod._serialise(newer)
+            store.settings[store_mod.APPLICATION_KEY] = json.dumps(
+                {"state": "applied", "desired_version": 4, "applied_version": 4, "apps": []})
+
+    gateway.apply_scale = apply_and_move
+    result = reconcile.CapacityReconciler(store, gateway, clock=lambda: now).reconcile_once()
+    assert result["state"] != "applied"
+    assert result["applied_key"] is None
+    assert result["failures"] == 1
