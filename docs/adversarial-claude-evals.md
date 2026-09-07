@@ -189,8 +189,11 @@ rejecting the PHI alt, or the re-scan stops noticing the decorative shortcut, th
 
 The candidate is the kit's `anthropic:<model>` (the official SDK, no server-side fallback, a
 refusal stop reason recorded as *refused* with its category). Key resolution and pre-flight
-pricing are the kit's: `ANTHROPIC_API_KEY` or `EVALS_API_KEY` first, then the product's provider
-config via `api/providers.credential_for()`, with the SOURCE printed and never the value.
+pricing are the kit's: **`ANTHROPIC_API_KEY`** first — that variable and no other; `EVALS_API_KEY`
+is the `hosted:` candidate's and is never read for an `anthropic:` one — then the product's
+provider config via `api/providers.credential_for()`, with the SOURCE printed and never the value.
+The pre-flight prints that source per candidate (`key: env:ANTHROPIC_API_KEY`,
+`key: missing (...)`), so a run that is about to authenticate as nobody says so before it spends.
 
 ```
 python scripts/run_adversarial_claude_evals.py --estimate-only --repeats 3 \
@@ -204,6 +207,18 @@ In CI, `.github/workflows/remediation-evals.yml` runs it on **manual dispatch on
 `kit: adversarial`; the same spend cap, key check and Ollama refusal apply, and `fail_on_gate` is
 ignored for this set because it reports rather than gates. `--min-as-expected` exists for a
 local gate if one is wanted.
+
+**The secret has to be a REPOSITORY secret, and that is not the same as "the secret is set".**
+`secrets.ANTHROPIC_API_KEY` resolves for this job only from Settings → Secrets and variables →
+Actions → *Repository secrets*, or an organization secret whose repository-access list includes
+this repo. A secret added under Settings → **Environments** does not resolve, because the job
+declares no `environment:` key; nor does an entry on the **Variables** tab, which is `vars.`, not
+`secrets.`. All three read as "the secret is set" in the UI and fail identically here.
+
+Read it off the run rather than the settings page: in the key-check step's `env:` group, a secret
+that resolved prints as `***` and one that did not prints **blank**. On 2026-09-07 two dispatches
+died at that step in under 15 seconds with `ANTHROPIC_API_KEY:` blank — which is the good failure,
+since the check runs before the first billed call.
 
 **Not measured yet.** No Claude run has been made against this set. The offline baseline above is
 the graders proving they bite, not a model result. Commit the JSON of the first paid run to
