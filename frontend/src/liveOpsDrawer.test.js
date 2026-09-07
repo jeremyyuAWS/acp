@@ -8,12 +8,14 @@ import {
   CAPACITY_RULES, NOT_REPORTED, TREND_WINDOW_MS, appendSample, arcPath, capacityMatchesService,
   chartModel, componentState, defaultMetricFor, deriveEvents, durableRunEvents, etaSeconds, eventClock,
   eventsForNode, filterEvents, formatDuration, gaugeModel, mergeEvents, metricsForKind,
+  collapseContainerUpdates, deploymentActivityEvents, liveOpsActivityModel, EVENT_FILTERS,
   PROVENANCE, capacityForService, fairnessModel, metricGroups, niceCeiling, num, outputModel,
   provenance, queueModel, rateSeries,
   LATENCY_PERCENTILES_NOTE, replicaLifecycle, reported, requestHealth, revisionLabel, runModel,
   sampleForNode, saturationModel, scaleEvents, tracingModel,
   scaleExplanation, secondsSince, seriesForMetric, sourceModel, tenantConcentration, throughputModel,
   PHASE_LABELS, replicaJobLoad, trendMarkers, updatedAgo, workerJobHealth } from './liveOpsDrawer.js'
+import { LIVE_OPS_ACTIVITY_FIXTURE } from './fixtures/liveOpsActivity.js'
 
 const NOW = Date.parse('2026-09-04T14:32:00Z')
 const iso = (offsetS) => new Date(NOW + offsetS * 1000).toISOString()
@@ -535,6 +537,65 @@ describe('Events are derived from observed change, and say nothing they did not 
   it('formats a wall clock timestamp for each event', () => {
     expect(eventClock('nonsense')).toBe('--:--:--')
     expect(eventClock(iso(0))).toMatch(/^\d{2}:\d{2}:\d{2}$/)
+  })
+})
+
+describe('Unified Live Operations activity', () => {
+  it('combines workflow, live capacity, and Azure deployment events in chronological order', () => {
+    const model = liveOpsActivityModel(LIVE_OPS_ACTIVITY_FIXTURE)
+    expect(model.events.map((event) => event.kind))
+      .toEqual(['deployment', 'activity', 'capacity', 'deployment', 'warning'])
+    expect(model.events[0].group).toMatchObject({
+      type: 'container-update', count: 3,
+      startAt: '2026-09-07T17:02:00.000Z', endAt: '2026-09-07T17:03:00.000Z',
+    })
+    expect(model.rawEvents).toHaveLength(7)
+  })
+
+  it('preserves source provenance, including every member of a collapsed group', () => {
+    const model = liveOpsActivityModel(LIVE_OPS_ACTIVITY_FIXTURE)
+    const group = model.events[0]
+    expect(group.items).toHaveLength(3)
+    expect(group.items.every((event) => event.provenance.source === 'azure-deployment')).toBe(true)
+    expect(model.events.find((event) => event.id === 'stage:stage-1').provenance.source)
+      .toBe('workflow-history')
+    expect(model.events.find((event) => event.id === 'live-capacity-1').provenance.source)
+      .toBe('live-observation')
+  })
+
+  it('exposes the approved five filters and combines warnings with errors', () => {
+    expect(EVENT_FILTERS.map(({ key, label }) => [key, label])).toEqual([
+      ['all', 'All'], ['work', 'Work'], ['capacity', 'Capacity'],
+      ['deployment', 'Deployment'], ['warning_error', 'Warning/Error'],
+    ])
+    const events = [
+      { id: 'work', kind: 'activity' }, { id: 'capacity', kind: 'capacity' },
+      { id: 'deployment', kind: 'deployment' }, { id: 'warning', kind: 'warning' },
+      { id: 'error', kind: 'error' },
+    ]
+    expect(filterEvents(events, 'work').map((event) => event.id)).toEqual(['work'])
+    expect(filterEvents(events, 'warning_error').map((event) => event.id))
+      .toEqual(['warning', 'error'])
+  })
+
+  it('does not collapse container updates separated by a meaningful event', () => {
+    const update = (id, at) => ({ id, at, kind: 'deployment', text: 'Container app updated',
+      provenance: { source: 'azure-deployment' } })
+    const events = collapseContainerUpdates([
+      update('u2', '2026-09-07T17:02:00Z'),
+      { id: 'work', at: '2026-09-07T17:01:30Z', kind: 'activity', text: 'Document completed' },
+      update('u1', '2026-09-07T17:01:00Z'),
+    ])
+    expect(events.map((event) => event.id)).toEqual(['u2', 'work', 'u1'])
+  })
+
+  it('maps failed Azure deployment rows to Error without losing the original row', () => {
+    const [event] = deploymentActivityEvents({ deployments: { queried: true, events: [{
+      id: 'failed-op', at: '2026-09-07T17:00:00Z', kind: 'operation',
+      label: 'Container app update failed', status: 'Failed', failed: true,
+    }] } })
+    expect(event).toMatchObject({ id: 'deployment:failed-op', kind: 'error', outcome: 'Failed' })
+    expect(event.deployment.id).toBe('failed-op')
   })
 })
 

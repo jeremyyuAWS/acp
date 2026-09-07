@@ -1400,12 +1400,11 @@ export function niceCeiling(value) {
 /* ─────────────────────── D. Live event timeline ─────────────────────── */
 
 export const EVENT_FILTERS = [
-  { key: 'all', label: 'All events' },
-  { key: 'activity', label: 'Activity' },
+  { key: 'all', label: 'All' },
+  { key: 'work', label: 'Work' },
   { key: 'capacity', label: 'Capacity' },
   { key: 'deployment', label: 'Deployment' },
-  { key: 'warning', label: 'Warning' },
-  { key: 'error', label: 'Error' },
+  { key: 'warning_error', label: 'Warning/Error' },
 ]
 
 export const EVENT_ICONS = { activity: '▸', capacity: '⇅', deployment: '⬆', warning: '▲', error: '■' }
@@ -1618,7 +1617,118 @@ export function eventsForNode(log = [], nodeId) {
 }
 
 export function filterEvents(log = [], filter = 'all') {
-  return filter === 'all' ? log : log.filter((event) => event.kind === filter)
+  if (filter === 'all') return log
+  if (filter === 'work' || filter === 'activity') {
+    return log.filter((event) => event.kind === 'activity')
+  }
+  if (filter === 'warning_error') {
+    return log.filter((event) => event.kind === 'warning' || event.kind === 'error')
+  }
+  return log.filter((event) => event.kind === filter)
+}
+
+/** Azure deployment rows projected into the live timeline shape without discarding their source. */
+export function deploymentActivityEvents(capacity = null) {
+  const rows = deploymentModel(capacity).events
+  return rows.flatMap((row, index) => {
+    if (!row?.at) return []
+    const failed = row.failed === true
+    const label = row.label || row.text || 'Deployment activity'
+    const identity = row.id || [row.at, row.kind, label, row.status].filter(Boolean).join(':')
+    return [{
+      id: `deployment:${identity || index}`,
+      at: row.at,
+      key: `deployment:${row.kind || 'event'}:${identity || index}`,
+      kind: failed ? 'error' : 'deployment',
+      nodes: Array.isArray(row.nodes) ? row.nodes : null,
+      text: label,
+      outcome: row.status || (failed ? 'Failed' : 'Recorded'),
+      correlation: row.correlation_id || row.operation_id || capacity?.worker_app_name || null,
+      provenance: { source: 'azure-deployment', label: 'Azure deployment activity' },
+      deployment: row,
+    }]
+  })
+}
+
+function withActivityProvenance(event) {
+  if (event.provenance) return event
+  return {
+    ...event,
+    provenance: event.durable
+      ? { source: 'workflow-history', label: 'Durable workflow history' }
+      : { source: 'live-observation', label: 'Observed live change' },
+  }
+}
+
+function eventTime(event) {
+  const value = new Date(event?.at).getTime()
+  return Number.isFinite(value) ? value : -Infinity
+}
+
+function isContainerUpdate(event) {
+  if (event?.kind !== 'deployment') return false
+  const raw = `${event.deployment?.kind || ''} ${event.text || ''}`.toLowerCase()
+  return /container(?:\s+app)?(?:\s+was)?\s+updated|containerapp.*(?:write|update)/.test(raw)
+}
+
+/**
+ * Collapses adjacent Azure container-update noise. `items` is intentionally retained: a group is
+ * a display summary, not a lossy replacement for the operation records that produced it.
+ */
+export function collapseContainerUpdates(events = []) {
+  const collapsed = []
+  for (const event of events) {
+    const previous = collapsed.at(-1)
+    if (!isContainerUpdate(event)) {
+      collapsed.push(event)
+      continue
+    }
+    const members = previous?.group?.type === 'container-update'
+      ? previous.items
+      : isContainerUpdate(previous) ? [previous] : null
+    if (!members) {
+      collapsed.push(event)
+      continue
+    }
+    const items = [...members, event]
+    const times = items.map(eventTime).filter((time) => time !== -Infinity)
+    const newestAt = times.length ? new Date(Math.max(...times)).toISOString() : items[0].at
+    const oldestAt = times.length ? new Date(Math.min(...times)).toISOString() : items.at(-1).at
+    collapsed[collapsed.length - 1] = {
+      id: `container-updates:${newestAt}:${oldestAt}`,
+      at: newestAt,
+      key: 'deployment:container-updates',
+      kind: 'deployment',
+      nodes: [...new Set(items.flatMap((item) => item.nodes || []))],
+      text: `${items.length} container updates`,
+      outcome: items.some((item) => item.outcome === 'Failed') ? 'Includes failures' : 'Recorded',
+      correlation: items.every((item) => item.correlation === items[0].correlation)
+        ? items[0].correlation : null,
+      provenance: { source: 'azure-deployment', label: 'Azure deployment activity' },
+      group: { type: 'container-update', count: items.length, startAt: oldestAt, endAt: newestAt },
+      items,
+    }
+  }
+  return collapsed
+}
+
+/**
+ * Unified, newest-first activity model for the drawer. It accepts the accumulated browser log,
+ * adds durable workflow history and Azure deployment activity, de-duplicates by source identity,
+ * then summarizes only consecutive repetitive container updates.
+ */
+export function liveOpsActivityModel({ snapshot = {}, capacity = null, liveEvents = [] } = {}) {
+  const combined = [
+    ...liveEvents.map(withActivityProvenance),
+    ...durableRunEvents(snapshot).map(withActivityProvenance),
+    ...deploymentActivityEvents(capacity),
+  ]
+  const byId = new Map()
+  for (const event of combined) {
+    if (event?.id && !byId.has(event.id)) byId.set(event.id, event)
+  }
+  const events = [...byId.values()].sort((a, b) => eventTime(b) - eventTime(a))
+  return { events: collapseContainerUpdates(events), rawEvents: events }
 }
 
 /** Timeline timestamps are wall-clock, second-resolution — the format the PRD's examples use. */
