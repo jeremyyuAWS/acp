@@ -47,6 +47,15 @@ _RUN = {"id": "selfcheck", "completed_at": "2026-08-04T00:00:00", "avg_score": 7
 _META = {"target": "WCAG 2.1 Level AA", "version": "3", "hash": "abc"}
 
 
+def test_report_context_carries_canonical_stage_lineage():
+    from report_tagged import _prepare_context
+    meta = {**_META, "stage_lineage_digest": "a" * 64,
+            "stage_lineage_status": "consistent"}
+    context = _prepare_context(_RUN, _FILES, meta)
+    assert context["stage_lineage_digest"] == "a" * 64
+    assert context["stage_lineage_status"] == "consistent"
+
+
 def _build(tmp: Path, **over) -> Path:
     import report_weasy
     run = {**_RUN, **over.pop("run", {})}

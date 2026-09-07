@@ -788,6 +788,21 @@ def _publish_file(payload: dict, job: dict) -> None:
             raise IOError("corrected content was unavailable")
         folders, _ = _publish.sharepoint_relative_path(source_path, source_name)
         released_name = publication.get("filename") or source_name
+        # The provider write is a canonical side effect, not merely a URL on file_records. The
+        # deterministic receipt survives retries and is what a sealed Release manifest cites.
+        receipt_writer = getattr(core.store, "record_side_effect_receipt", None)
+        execution_id = (job or {}).get("batch_id")
+        if callable(receipt_writer) and execution_id:
+            work_item = core.store.stage_work_item_for_job((job or {}).get("id"))
+            receipt_writer(
+                execution_id=execution_id,
+                work_item_id=(work_item or {}).get("work_item_id"),
+                effect_type="sharepoint.publish",
+                destination=f"graph:{drive_id or 'me'}:{root['folder_id']}:{'/'.join([*folders, released_name])}",
+                content_digest=(publication.get("checksum") or record.get("corrected_sha256")
+                                or f"provider-id:{publication.get('id') or released_name}"),
+                receipt={"provider_id": publication.get("id"), "url": publication.get("url"),
+                         "created": bool(publication.get("created"))})
         published_at = core.store.record_publish(
             scan_id, filename, published_url=publication.get("url"))
         core.store.record_release_document(release_id, owner, {

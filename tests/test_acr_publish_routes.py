@@ -133,6 +133,13 @@ def test_an_approver_can_publish_a_clean_report(client, report, isolated_store):
     body = r.json()
     assert body["revision"] == 1
     assert len(body["content_digest"]) == 64
+    execution = isolated_store.get_stage_execution(body["stage_execution_id"], owner=OWNER)
+    assert execution["stage"] == "conformance"
+    assert execution["state"] == "succeeded"
+    assert execution["output_manifest_id"] == body["snapshot_id"]
+    assert execution["input_snapshot_id"] == body["content_digest"]
+    assert [event["event_type"] for event in isolated_store.stage_execution_events(
+        body["stage_execution_id"], owner=OWNER)] == ["work_item.completed"]
     # The response says what the digest is and is not, so an API log cannot imply a signature.
     assert "not a digital signature" in body["digest_note"]
 

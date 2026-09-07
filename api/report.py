@@ -888,6 +888,14 @@ def _provenance_section(run, facts, meta, diff, cert, total, h2, body, cell, mut
               f"<b>{cert}</b>/<b>{total}</b> certifiable"]
     el.append(Paragraph("<b>Pipeline.</b> " + "  →  ".join(stages), cell))
     el.append(Spacer(1, 6))
+    lineage_digest = (meta or {}).get("stage_lineage_digest")
+    if lineage_digest:
+        lineage_status = _esc(str((meta or {}).get("stage_lineage_status") or "unknown"))
+        el.append(Paragraph(
+            f"<b>Canonical stage lineage.</b> {lineage_status} · SHA-256 "
+            f"<font name='Courier' size='7'>{_esc(str(lineage_digest))}</font>. "
+            "Stage totals use sealed execution snapshots.", muted))
+        el.append(Spacer(1, 6))
     # R-D — actionable reproduce instructions: three steps, not a prose assertion.
     # The full hash is included (not truncated) because the auditor must verify it exactly.
     rubric = meta.get("hash") if meta else None

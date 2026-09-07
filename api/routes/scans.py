@@ -3067,6 +3067,27 @@ def scan_manifest(sid: str, request: Request):
     return core.store.get_scan_manifest(sid)
 
 
+def _canonical_lineage_export(scan_id: str, owner: str) -> dict:
+    """Stable export form: omit request-time timestamps while preserving durable evidence time."""
+    lineage = core.store.canonical_stage_lineage(scan_id, owner=owner)
+    lineage.pop("generated_at", None)
+    for stage in lineage.get("stages", []):
+        stage.pop("generated_at", None)
+    encoded = _json.dumps(lineage, sort_keys=True, separators=(",", ":"),
+                          ensure_ascii=False, default=str).encode("utf-8")
+    return {"lineage": lineage, "content_digest": {
+        "algorithm": "SHA-256", "value": hashlib.sha256(encoded).hexdigest()}}
+
+
+@router.get("/scans/{sid}/stage-lineage")
+def stage_lineage(sid: str, request: Request):
+    """Owner-scoped canonical stage totals, sealed handoffs, and integrity as one authority."""
+    owner = _owner(request)
+    if core.store.get_scan_head(sid, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    return _canonical_lineage_export(sid, owner)
+
+
 #: Which renderer serves /scans/{sid}/report.pdf. "weasy" (the default) is the PDF/UA-1
 #: conformant one; "tagged" restores the previous Chromium renderer WITHOUT a redeploy, which is
 #: the point of the switch existing at all — the cutover shipped before two of the gates ADR 0034
@@ -3115,9 +3136,15 @@ def report_pdf(sid: str, request: Request):
     res = core.store.get_scan(sid, owner=_owner(request))
     if res is None:
         raise HTTPException(404, "scan not found")
+    owner = _owner(request)
     rb = core.active_rubric()
+    lineage_export = _canonical_lineage_export(sid, owner)
     meta = {"target": rb.cfg.get("conformance_target"), "version": rb.version,
-            "hash": res["run"].get("rubric_hash") or rb.hash}
+            "hash": res["run"].get("rubric_hash") or rb.hash,
+            "stage_lineage_digest": lineage_export["content_digest"]["value"],
+            "stage_lineage_status": ("unavailable" if not
+                lineage_export["lineage"]["available"] else "consistent" if
+                lineage_export["lineage"]["integrity"]["ok"] else "inconsistent")}
     decisions = core.store.get_decisions(sid)
     evidence = core.store.get_remediation_evidence(sid)
     facts = core.store.get_certification_facts(sid, apply_document_selection=True)
@@ -3574,7 +3601,8 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
 
 
 def _release_manifest_payload(status: dict, *, scan_id: str, owner: str,
-                              snapshot_id: str | None) -> dict:
+                              snapshot_id: str | None,
+                              stage_lineage: dict | None = None) -> dict:
     """Build the authoritative, stable release record from persisted server evidence.
 
     This intentionally contains no request-time timestamp: downloading the same unchanged
@@ -3609,6 +3637,7 @@ def _release_manifest_payload(status: dict, *, scan_id: str, owner: str,
         "release_id": status.get("id"),
         "scan_id": scan_id,
         "snapshot_id": snapshot_id,
+        "canonical_stage_lineage": stage_lineage,
         "actor": owner,
         "source": status.get("source"),
         "status": status.get("status"),
@@ -3641,7 +3670,8 @@ def get_release_manifest(sid: str, request: Request):
     if status is None:
         raise HTTPException(404, "release not found")
     manifest = _release_manifest_payload(
-        status, scan_id=sid, owner=owner, snapshot_id=core.store.stage_snapshot_id(sid))
+        status, scan_id=sid, owner=owner, snapshot_id=core.store.stage_snapshot_id(sid),
+        stage_lineage=_canonical_lineage_export(sid, owner)["lineage"])
     canonical = _json.dumps(manifest, sort_keys=True, separators=(",", ":"),
                             ensure_ascii=False, default=str).encode("utf-8")
     return {
@@ -3725,7 +3755,8 @@ def download_release_package(sid: str, request: Request, body: ReleasePackageReq
                 })
             status = core.store.release_for_scan(sid, owner)
             release_manifest = (_release_manifest_payload(
-                status, scan_id=sid, owner=owner, snapshot_id=core.store.stage_snapshot_id(sid))
+                status, scan_id=sid, owner=owner, snapshot_id=core.store.stage_snapshot_id(sid),
+                stage_lineage=_canonical_lineage_export(sid, owner)["lineage"])
                 if status is not None else None)
             manifest = {
                 "schema_version": 1,
