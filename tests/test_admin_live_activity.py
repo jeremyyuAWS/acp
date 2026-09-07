@@ -652,6 +652,52 @@ def test_workflow_rows_use_canonical_counts_and_manual_stop_state():
     assert workflow["status"] == "stopped"
 
 
+def test_workflow_rows_include_jobless_canonical_stage_without_run_or_event_projection():
+    canonical = {"s1": {"available": True, "workflow_id": "workflow-1",
+        "workflow_revision": 3, "owner_email": "owner@example.org", "source": "drive",
+        "stages": [{
+            "stage": "release", "execution_id": "release-1", "workflow_revision": 3,
+            "revision": 2, "state": "running",
+            "last_durable_update_at": "2026-09-06T00:02:00+00:00",
+            "counts": {"work_items": {"unit": "work items", "total": 2,
+                "completed": 1, "processing": 1, "queued": 0, "failed": 0,
+                "cancelled": 0, "skipped": 0}},
+            "control": {"cancel_requested": False},
+        }]}}
+
+    workflow = system._workflow_rows([], canonical_lineages=canonical)[0]
+    assert workflow["workflow_id"] == "workflow-1"
+    assert workflow["owner_display_name"] == "owner@example.org"
+    assert workflow["source"] == "drive"
+    assert workflow["status"] == "running"
+    assert workflow["updated_at"] == "2026-09-06T00:02:00+00:00"
+    assert workflow["stages"][0]["stage"] == "release"
+    assert workflow["stages"][0]["stage_run_id"] == "release-1"
+    assert workflow["stages"][0]["active"] == 1
+
+
+def test_workflow_rows_include_canonical_terminal_stage_missing_from_queue_tail():
+    run = {"scan_id": "s1", "stage": "assess", "owner": "a@example.org", "source": "drive",
+           "running": 1, "queued": 0, "failed": 0, "completed": 0, "total": 1,
+           "updated_at": "2026-09-06T00:01:00+00:00"}
+    canonical = {"s1": {"available": True, "workflow_revision": 1, "stages": [
+        {"stage": "discover", "execution_id": "discover-1", "state": "succeeded",
+         "last_durable_update_at": "2026-09-06T00:00:00+00:00",
+         "counts": {"work_items": {"total": 4, "completed": 4, "processing": 0,
+             "queued": 0, "failed": 0, "cancelled": 0, "skipped": 0}}, "control": {}},
+        {"stage": "assess", "execution_id": "assess-1", "state": "running",
+         "last_durable_update_at": "2026-09-06T00:01:00+00:00",
+         "counts": {"work_items": {"total": 1, "completed": 0, "processing": 1,
+             "queued": 0, "failed": 0, "cancelled": 0, "skipped": 0}}, "control": {}},
+    ]}}
+
+    workflow = system._workflow_rows([run], canonical_lineages=canonical)[0]
+    assert [stage["stage"] for stage in workflow["stages"]] == ["discover", "assess"]
+    assert workflow["stages"][0]["status"] == "completed"
+    assert workflow["stages"][0]["completed"] == 4
+    assert workflow["current_stage"] == "assess"
+
+
 def test_liveops_canonical_lineage_read_is_safe_during_rolling_deploy(monkeypatch):
     class Store:
         def canonical_stage_lineage(self, scan_id):
