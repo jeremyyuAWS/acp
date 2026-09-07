@@ -24,8 +24,18 @@ const here = dirname(fileURLToPath(import.meta.url))
 
 describe('canonical stage card', () => {
   it('renders the server-authored equation with an explicit unit and revisions', () => {
+    expect(canonicalStageCardModel(SNAPSHOT).workItems).toEqual([
+      ['Completed', 5], ['Failed', 1], ['Skipped', 1], ['Processing', 1],
+      ['Waiting', 2], ['Stopped manually', 0],
+    ])
     const html = render(SNAPSHOT)
-    expect(html).toContain('10 of 10 work items accounted for')
+    expect(html).toContain('Integrity check: 10 of 10 work items accounted for')
+    expect(html).toContain('Completed</dt><dd')
+    expect(html).toContain('>5</dd>')
+    expect(html).toContain('Failed</dt><dd')
+    expect(html).toContain('Skipped</dt><dd')
+    expect(html).toContain('Processing</dt><dd')
+    expect(html).toContain('Waiting</dt><dd')
     expect(html).toContain('Workflow revision 3 · snapshot revision 12')
     expect(html).toContain('execution-1')
     expect(html).toContain('Not yet sealed')
@@ -34,8 +44,10 @@ describe('canonical stage card', () => {
   it('never turns unknown totals into zero', () => {
     const html = render({ ...SNAPSHOT, counts: { work_items: { unit: 'work items', total: null } },
       reconciliation: { unit: 'work items', total: null, accounted: null, unaccounted: null } })
-    expect(html).toContain('Not reported of Not reported work items')
+    expect(html).toContain('Integrity check: Not reported of Not reported work items')
     expect(html).not.toContain('0 of 0')
+    expect(html).toContain('Completed</dt><dd')
+    expect(html).toContain('>Not reported</dd>')
   })
 
   it('withholds the reconciled claim when integrity fails', () => {
@@ -43,14 +55,24 @@ describe('canonical stage card', () => {
       reconciliation: { ...SNAPSHOT.reconciliation, exact: false, unaccounted: -1 } })
     expect(html).toContain('Accounting temporarily inconsistent.')
     expect(html).not.toContain('10 of 10 work items accounted for')
+    expect(html).not.toContain('aria-label="Release work-item counts"')
   })
 
   it('distinguishes a requested stop, a completed stop, and failure', () => {
     expect(canonicalStageCardModel({ ...SNAPSHOT,
-      control: { cancel_requested: true } }).stateLabel).toBe('Stopping')
+      control: { cancel_requested: true } }).stateLabel).toBe('Stopping safely')
     expect(canonicalStageCardModel({ ...SNAPSHOT, state: 'cancelled',
-      control: { cancel_requested: true } }).stateLabel).toBe('Stopped')
+      control: { cancel_requested: true } }).stateLabel).toBe('Stopped manually')
     expect(canonicalStageCardModel({ ...SNAPSHOT, state: 'failed' }).stateLabel).toBe('Failed')
+  })
+
+  it('keeps the canonical partition visible while leased work drains after a stop request', () => {
+    const html = render({ ...SNAPSHOT, control: { cancel_requested: true } })
+    expect(html).toContain('Release · Stopping safely')
+    expect(html).toContain('Processing</dt><dd')
+    expect(html).toContain('>1</dd>')
+    expect(html).toContain('Waiting</dt><dd')
+    expect(html).toContain('>2</dd>')
   })
 
   it('does not equate completed work items with resolved findings', () => {

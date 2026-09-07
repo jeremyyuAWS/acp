@@ -23,11 +23,23 @@ export default function CanonicalStageCard({ snapshot, onOpen = null }) {
         <p role="status" style={{ margin: '10px 0 0' }}>
           <b>Accounting temporarily inconsistent.</b> Progress claims are withheld until reconciliation completes.
         </p>
-      ) : (
+      ) : (<>
         <p style={{ margin: '10px 0 0' }}>
-          <b>{shown(model.accounted)} of {shown(model.total)} {model.unit} accounted for</b>
+          <b>Integrity check: {shown(model.accounted)} of {shown(model.total)} {model.unit} accounted for</b>
           {model.exact && ' · Reconciled'}
         </p>
+        <dl aria-label={`${model.stageLabel} work-item counts`}
+            style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 20px', margin: '10px 0 0' }}>
+          {model.workItems.map(([label, value]) => (
+            <div key={label}>
+              <dt className="muted">{label}</dt>
+              <dd style={{ margin: 0, fontVariantNumeric: 'tabular-nums', fontWeight: 650 }}>
+                {shown(value)}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </>
       )}
 
       <dl style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 20px', margin: '10px 0 0' }}>
