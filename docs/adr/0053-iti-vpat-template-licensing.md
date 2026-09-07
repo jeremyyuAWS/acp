@@ -15,11 +15,12 @@ Shipped in: #1484, #1499, #1501, #1509, #1510.
 ## Context
 
 The ACR workspace produces a conformance report about ACP itself. Phase 5's acceptance table has
-two rows, and only one of them is still open:
+two rows. Both are answered now; this section is kept as written because the reasoning below is
+about how they got there, and the table records where they landed:
 
 | # | Criterion | Status |
 |---|---|---|
-| 13 | Exported Word document follows the official VPAT structure | ⬜ open — this ADR |
+| 13 | Exported Word document follows the official VPAT structure | ✅ closed 2026-09-07 via **Option C** — structure matched, file not vendored. **Q1 below is still open**, and it is about the NAME, not the structure |
 | 14 | Generated Word document passes ACP's accessibility checks | ✅ enforced at the route |
 
 **Row 14 is done and did not depend on row 13**, which is worth stating because the belief that it
