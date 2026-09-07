@@ -238,7 +238,15 @@ HEALTH_OPENAPI_SPEC: dict = {
                 "type": "object",
                 "properties": {
                     "enabled": {"type": "boolean"},
-                    "interval_minutes": {"type": "integer"},
+                    "schedule_type": {"type": "string", "enum": ["wall_clock", "interval"]},
+                    "timezone": {"type": "string", "example": "America/Los_Angeles",
+                                 "description": "IANA timezone; local wall time remains stable across DST."},
+                    "local_time": {"type": "string", "pattern": "^[0-2][0-9]:[0-5][0-9]$",
+                                   "example": "09:00"},
+                    "days": {"type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 6},
+                             "description": "Local weekdays, Monday=0 through Sunday=6."},
+                    "interval_minutes": {"type": "integer", "nullable": True,
+                                         "description": "Deprecated legacy cadence; null for wall-clock schedules."},
                     "next_at": {"type": "string", "nullable": True, "format": "date-time"},
                     "last_at": {"type": "string", "nullable": True, "format": "date-time",
                                 "description": "Fixed 2026-08-28 (#908) to include Discover-only sweeps, not just fully-assessed scans."},
@@ -408,7 +416,9 @@ HEALTH_OPENAPI_SPEC: dict = {
         "/schedule": {
             "get": _get(
                 "Scheduled-sweep configuration + last outcome", "Monitoring",
-                "Enabled/interval, next scheduled run, last completed scan (fixed 2026-08-28 (#908) "
+                "The signed-in user's IANA-timezone/local-time schedule (legacy interval schedules "
+                "remain readable by their original owner), next scheduled run, last completed scan "
+                "(fixed 2026-08-28 (#908) "
                 "to see Discover-only sweeps), and the last sweep's own success/failure outcome "
                 "(added 2026-08-28, #909).",
                 {"$ref": "#/components/schemas/ScheduleResponse"}, security=_SESSION_AUTH,

@@ -65,6 +65,9 @@ _CONFIG_SURVIVORS = {
     # protected Owner role, which exists precisely so administrative lockout is impossible.
     "workspace_roles",
     "workspace_role_permissions",
+    # A user's chosen scan days, local time and timezone are durable preferences, not scan
+    # output. Resetting assessment data must not unexpectedly turn their recurring scan off.
+    "user_scan_schedules",
 }
 
 
