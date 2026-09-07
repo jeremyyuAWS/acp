@@ -4729,14 +4729,18 @@ _FIELD_NAME_EXTS = ("pdf", "docx")
 # getter is narrowed to ("1.4.5",) rather than reading both bands into one map.
 _IMAGE_OF_TEXT_EXTS = ("pptx",)
 # ADR 0055. The 1.4.5 card's locator shape, recognised here only to decide whether the alt lane
-# needs the translation below — the translation itself lives in apply_pptx_image_of_text, beside
-# the enumeration it mirrors. Matching the shape rather than the rule_id is deliberate: apply_alt
-# cannot resolve this locator whatever row it came from, so the question the lane actually has is
-# "is any of this untranslated", not "which row wrote it".
+# needs the translation below — the translation itself lives beside the enumeration it mirrors,
+# in apply_office_image_of_text (docx/xlsx) and apply_pptx_image_of_text (pptx, delegated to by
+# the former so this file has ONE call site). Matching the shape rather than the rule_id is
+# deliberate: apply_alt cannot resolve this locator whatever row it came from, so the question
+# the lane actually has is "is any of this untranslated", not "which row wrote it".
 #
 # Imported from the module that owns the pattern rather than recompiled here, so the recogniser
 # and the translator can never disagree about what a media-index locator looks like.
-from apply_pptx_image_of_text import is_media_index_locator as _is_media_index_locator
+from apply_office_image_of_text import (
+    SUPPORTED_EXTS as _DESCRIBED_MEDIA_EXTS,
+    is_media_index_locator as _is_media_index_locator,
+)
 _IMAGE_OF_TEXT_SCS = ("1.4.5",)
 
 # Every format an approved value can actually be WRITTEN into — the format scope
@@ -4991,19 +4995,26 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
     # it here, against `working`: these are the bytes about to be written, and a media index
     # resolved against any other copy can name a different picture.
     #
-    # ONE LOCATOR BECOMES SEVERAL when the media part is placed on more than one slide, because
+    # ONE LOCATOR BECOMES SEVERAL when the media part is placed more than once, because
     # 'image N' names the part and not a placement. Describing only one of them would leave the
     # others carrying their source filename, 1.1.1 would still fail on re-scan, and the lane
     # would withhold the credit for a write that was actually correct — see
     # apply_pptx_image_of_text.resolve_media_locators, where that was measured.
     #
+    # THE TRANSLATION IS PER FORMAT, and that is not a tidy generalisation of the pptx one: a
+    # docx places every body picture in one part behind ONE relationship id, so the pptx-shaped
+    # 'part#rId' reaches only the first (apply_alt.resolve_target is first-match-wins), and an
+    # xlsx writes its relationship targets absolute and its attributes in the other order, so the
+    # pptx canonicaliser resolves nothing at all. Both measured on real packages; see
+    # apply_office_image_of_text, which owns the docx/xlsx translation and delegates pptx.
+    #
     # Non-media locators pass through untouched, and an unresolvable one is LEFT AS IT IS so it
     # reaches apply_alt, is reported unresolved, and appears in the apply.unresolved log under
     # the name the reviewer's card used rather than one they never saw.
-    if ext == "pptx" and any(_is_media_index_locator(k) for k in alt_values):
+    if ext in _DESCRIBED_MEDIA_EXTS and any(_is_media_index_locator(k) for k in alt_values):
         try:
-            from apply_pptx_image_of_text import expand_media_locator_values
-            alt_values = expand_media_locator_values(working, alt_values)
+            from apply_office_image_of_text import expand_media_locator_values
+            alt_values = expand_media_locator_values(working, alt_values, ext)
         except Exception:
             swallowed("_apply_approved_values: translating the media-index alt locators failed",
                       scan_id)
