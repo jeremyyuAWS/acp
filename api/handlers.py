@@ -4598,10 +4598,13 @@ _PDF_APPLY_EXTS = ("pdf",)
 _FIELD_NAME_EXTS = ("pdf", "docx")
 
 # 1.4.5/1.4.9 image-of-text alt text: the approved OCR text is written as the picture's
-# <p:cNvPr descr="..."> by apply_pptx_image_of_text. Currently pptx-only; docx and xlsx carry
-# a broken chain at a different layer (no approved-value applier exists for those formats yet).
-# PDF: writing /Alt to the /Figure struct element satisfies 1.1.1 but NOT 1.4.5 — the raster
-# image persists and the OCR detector re-fires on re-scan, so the credit cannot be granted.
+# <p:cNvPr descr="..."> by apply_pptx_image_of_text. The write is correct and is kept, but the
+# lane is HUMAN for every format (remediation_capability), because the write cannot clear the
+# criterion it is credited against: the 1.4.5 detector (ocr.images_of_text) OCRs the raster
+# bytes, a descr attribute leaves those bytes untouched, so the finding re-fires on re-scan and
+# _apply_one_value_kind withholds credit. That is the gate working as designed — descr is a
+# 1.1.1 improvement, not removal of the image of text. PDF /Alt has the same shape and the
+# same outcome. Genuine 1.4.5 remediation means replacing the picture with real text.
 _IMAGE_OF_TEXT_EXTS = ("pptx",)
 
 # Every format an approved value can actually be WRITTEN into — the format scope
