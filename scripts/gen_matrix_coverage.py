@@ -242,6 +242,12 @@ def load_appliers(*, keyword: str = "scs_to_clear") -> dict[str, set[str]]:
     consts: dict[str, set[str]] = {}
     # …and the per-format SC maps ({fmt: (sc, ...)}), which are also format constants.
     sc_maps: dict[str, dict[str, set[str]]] = {}
+    # …and plain SC tuples (`_IMAGE_OF_TEXT_SCS = ("1.4.5",)`). A lane whose SC set is used in
+    # more than one place — the getter that narrows the read AND the credit argument — names it
+    # once rather than repeating the literal, which is the same reason the format gates are
+    # constants. Resolving the name here keeps the matrix derived from one source instead of
+    # forcing the lane to spell the criterion twice and hope the two stay equal.
+    sc_consts: dict[str, set[str]] = {}
 
     def _exts(val) -> set[str] | None:
         """The format set a constant's VALUE denotes, or None when it isn't one.
@@ -285,6 +291,11 @@ def load_appliers(*, keyword: str = "scs_to_clear") -> dict[str, set[str]]:
             if per_fmt and all(all(_SC_RE.fullmatch(str(s)) for s in scs)
                                for scs in per_fmt.values()):
                 sc_maps[name] = per_fmt
+        if isinstance(val, (ast.Tuple, ast.List, ast.Set)):
+            lits = {e.value for e in val.elts
+                    if isinstance(e, ast.Constant) and isinstance(e.value, str)}
+            if lits and all(_SC_RE.fullmatch(s) for s in lits):
+                sc_consts[name] = lits
 
     fn = next((n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
                and n.name == "_apply_approved_values"), None)
@@ -323,11 +334,14 @@ def load_appliers(*, keyword: str = "scs_to_clear") -> dict[str, set[str]]:
                 if f in outer and f in out:
                     out[f] |= fmt_scs
             continue
-        if not isinstance(scs_node, (ast.Set, ast.List, ast.Tuple)):
+        if isinstance(scs_node, ast.Name) and scs_node.id in sc_consts:
+            scs = set(sc_consts[scs_node.id])          # a named SC tuple, resolved above
+        elif isinstance(scs_node, (ast.Set, ast.List, ast.Tuple)):
+            scs = {e.value for e in scs_node.elts if isinstance(e, ast.Constant)}
+        else:
             raise SystemExit(f"gen_matrix_coverage: _apply_one_value_kind called without a "
-                             f"literal {keyword} or a per-format SC map — update this "
-                             f"generator.")
-        scs = {e.value for e in scs_node.elts if isinstance(e, ast.Constant)}
+                             f"literal {keyword}, a named SC tuple, or a per-format SC map — "
+                             f"update this generator.")
         calls += 1
         # Narrow to this call's own gate when it has one, else the function-wide gate.
         exts = outer

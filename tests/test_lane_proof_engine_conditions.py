@@ -1,4 +1,4 @@
-"""The 18-lane milestone states the engine condition it was measured under.
+"""The 19-lane milestone states the engine condition it was measured under.
 
 THE PROBLEM. "REMEDIATION-VERIFIED 17 of 17" was the same string in two situations that prove
 materially different things:
@@ -48,16 +48,25 @@ def _lanes() -> list:
 
 
 def test_the_split_between_engine_dependent_and_in_process_lanes():
-    """16 Office lanes need the .NET analyser to grade a re-scan trustworthy; 2 pdf lanes run
+    """17 Office lanes need the .NET analyser to grade a re-scan trustworthy; 2 pdf lanes run
     in-process (pikepdf) and are engine-independent on any host. If a lane is added, this fails
     until the split is restated — which is the point, since a new Office lane inherits the
-    engine condition and a new pdf one does not."""
+    engine condition and a new pdf one does not.
+
+    `1.4.5 pptx` (added with the image-of-text replacement lane) is counted with the Office
+    lanes because it is a .pptx write, but its CRITERION is graded by the OCR pass in
+    `api/ocr.py`, not by the .NET analyser: it needs tesseract instead, and its proof
+    skips without it. So the Office count is not a count of .NET-graded criteria, and this
+    is the one member that differs.
+    """
     lanes = _lanes()
     office = [l for l in lanes if not l.endswith(" pdf")]
     inproc = [l for l in lanes if l.endswith(" pdf")]
-    assert len(lanes) == 18, f"the lane set changed ({len(lanes)}); restate the engine split"
-    assert len(office) == 16, f"expected 16 Office lanes, got {len(office)}: {office}"
+    assert len(lanes) == 19, f"the lane set changed ({len(lanes)}); restate the engine split"
+    assert len(office) == 17, f"expected 17 Office lanes, got {len(office)}: {office}"
     assert sorted(inproc) == ["1.1.1 pdf", "4.1.2 pdf"], inproc
+    assert "1.4.5 pptx" in office, (
+        "the OCR-graded Office lane vanished; the docstring's exception no longer applies")
 
 
 def test_the_report_always_states_which_condition_produced_the_number():

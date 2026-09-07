@@ -10195,20 +10195,30 @@ class Store:
                 out.update(self._row_approved_values(row))
         return out
 
-    def approved_images_of_text_values(self, scan_id: str, file: str) -> dict[str, str]:
-        """{locator: OCR'd text} awaiting a write into `file`, from approved 1.4.5/1.4.9 rows.
+    def approved_images_of_text_values(self, scan_id: str, file: str,
+                                       rule_ids: tuple[str, ...] = ("1.4.5", "1.4.9"),
+                                       ) -> dict[str, str]:
+        """{locator: OCR'd text} awaiting a write into `file`, from approved image-of-text rows.
 
         Locator format depends on the source format:
           pptx  — 'image N' (1-based, matching ocr._ooxml_images enumeration order).
-                  Written by apply_pptx_image_of_text as <p:cNvPr descr="...">.
+                  Written by apply_pptx_image_replacement, which swaps the picture for a real
+                  text box and deletes the image.
           pdf   — 'pdf:fig:P:S' (page + per-page sequence, matching _figure_locators in
                   remediate_pdf). Written by apply_pdf_figure_alt via apply_pdf_approved.
-        Both criteria share one map because the proposer emits them for the same embedded
-        images and the applier writes alt text regardless of which band raised the finding.
+
+        `rule_ids` NARROWS the read, and the pptx 1.4.5 lane narrows it to ("1.4.5",) — the two
+        criteria are not interchangeable for a writer that DELETES the image. 1.4.5 exempts
+        charts and diagrams (ocr._looks_like_chart: a picture of data is not a picture of
+        prose), 1.4.9 is AAA and exempts nothing. So a 1.4.9 row can be a chart, and replacing a
+        chart with its axis labels destroys information the reviewer never agreed to lose. The
+        default keeps both for has_approved_values_to_write, which only asks whether a job is
+        worth enqueuing.
         """
+        wanted = {str(r).strip() for r in (rule_ids or ()) if r}
         out: dict[str, str] = {}
         for row in self._approved_unapplied_rows(scan_id, file):
-            if str(row.get("rule_id") or "").strip() in ("1.4.5", "1.4.9"):
+            if str(row.get("rule_id") or "").strip() in wanted:
                 out.update(self._row_approved_values(row))
         return out
 

@@ -248,13 +248,19 @@ REMEDIATION: dict[str, dict[str, str]] = {
         "1.4.1": HUMAN,      # colour-only hyperlink — no pptx write-back restores the suppressed underline
         "1.4.3": AUTO,       # low-contrast run recolour
         "1.4.4": HUMAN,      # resize text — fixed text box that may clip at 200%; reviewer verifies rendered output
-        "1.4.5": HUMAN,      # images-of-text — apply_pptx_image_of_text writes the OCR text as the
-                             # picture's descr, which is a 1.1.1 improvement, not a 1.4.5 fix: the
-                             # raster stays in ppt/media, ocr.images_of_text re-reads the same bytes
-                             # on re-scan, and _apply_one_value_kind's verify gate refuses the credit
-                             # every time. The lane was ASSISTED in name only; Apply was a no-op.
+        "1.4.5": ASSISTED,   # images-of-text — OCR proposes the transcript, a human approves, and
+                             # apply_pptx_image_replacement swaps the picture for a real text box and
+                             # DELETES the image. Removing the raster is what clears the criterion:
+                             # ocr.images_of_text reads ppt/media/* from the zip, so the descr write
+                             # this lane used to do (HUMAN since #1665) never could. Assisted, not
+                             # auto — replacing a picture with its transcript changes how the slide
+                             # looks, so a human accepts each one.
         "1.4.6": AUTO,       # same recolour reaches the AAA threshold
-        "1.4.9": HUMAN,      # images-of-text (AAA) — same constraint as 1.4.5
+        "1.4.9": HUMAN,      # images-of-text (AAA) — NOT the 1.4.5 lane, on purpose. AAA exempts
+                             # nothing, so a 1.4.9 row can be a chart, and 1.4.5 exempts charts
+                             # because a picture of data is not a picture of prose. Replacing a
+                             # chart with its axis labels destroys information, so this one stays
+                             # with a human until there is a fix that does not.
         "1.4.10": HUMAN,     # reflow — wide table; whether it two-dim scrolls at 320px is a rendered call
         "1.4.11": HUMAN,     # non-text contrast — shape outline vs fill; no write-back applier for pptx shapes
         "1.4.12": HUMAN,     # text spacing — exact (fixed) line spacing; clip outcome is rendered, not in the file
