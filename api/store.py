@@ -9926,10 +9926,20 @@ class Store:
         answers "which pieces of content is this row ABOUT" — the question a WCAG exception
         asks, since it is applied to the images themselves and carries no text at all.
 
-        Proposals only. A row's `evidence` entries are addressed by relationship id
-        (`part#rId2`, remediate_office), while apply_alt resolves a locator by the element's
-        NAME (`part#Picture 3`) — an evidence locator reaches no element, so handing one to a
-        writer buys an `apply.unresolved` log line and nothing else.
+        Proposals only — and the REASON recorded here was stale, which matters because the
+        behaviour it justifies is a narrowing rather than a forced choice. It said an evidence
+        locator (`part#rId2`, minted by remediate_office) "reaches no element", apply_alt
+        resolving only by the shape's NAME (`part#Picture 3`). That stopped being true when
+        apply_alt.resolve_target gained its r:embed branch: an rId fragment resolves to the same
+        element as the name (measured in tests/test_describe_instead_of_replace.py, and proved
+        end to end for the vision alt lane in tests/test_alt_locator_rid_writeback.py — the lane
+        that existed BECAUSE those locators were being dropped).
+
+        So excluding evidence is now a conservative scope, not an impossibility: the decorative
+        marking is withheld from a deferred row's images because nothing has verified that lane,
+        not because the locator could not reach them. Whether it SHOULD extend to evidence is a
+        real question with a real answer either way, and it is deliberately not decided here —
+        see approved_decorative_locators, whose docstring already records the consequence.
         """
         seen, out = set(), []
         for p in (row.get("proposals") or []):
