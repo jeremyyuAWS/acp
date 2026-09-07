@@ -93,7 +93,7 @@ TIER_ROLE = {"discover": "discovery", "assess": "assess", "remediate": "remediat
 # grows — a failure whose only symptom is that autoscaling silently does not happen. That is the
 # query this table exists to make impossible to write from memory.
 LANE_JOB_TYPES = {
-    "discovery": ("scan_discover", "scan_folder"),
+    "discovery": ("scheduled_sweep", "scan_discover", "scan_folder"),
     "assess": ("scan", "scan_assess", "scan_batch", "scan_file", "workspace_scan_file",
                "workspace_scan_discover", "scan_finalize", "assess_trace"),
     "remediate": ("remediate_file", "deliver_corrected_copy", "rescore_file",
