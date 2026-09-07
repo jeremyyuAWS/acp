@@ -46,10 +46,12 @@ def test_shutdown_requeues_at_a_safe_checkpoint_without_spending_a_retry(isolate
     row = store.get_job(jid)
     assert row["status"] == "queued"
     assert row["locked_by"] is None and row["lease_expires_at"] is None
-    assert row["attempts"] == 0, "a planned rollout consumed the customer's retry budget"
+    assert row["attempts"] == 1 and row["max_attempts"] == 3
+    assert row["max_attempts"] - row["attempts"] == 2, \
+        "a planned rollout consumed the customer's retry budget"
     assert row["phase"] == store.DEPLOYMENT_REQUEUE_PHASE
-    assert notices == [(jid, {"phase": "deployment_requeue", "attempt": 0,
-                              "max_attempts": 2})]
+    assert notices == [(jid, {"phase": "deployment_requeue", "attempt": 1,
+                              "max_attempts": 3})]
     events = store.list_scan_events(sid)
     handoff = [event for event in events if event["kind"] == "scan.interrupted"]
     assert len(handoff) == 1
@@ -58,7 +60,78 @@ def test_shutdown_requeues_at_a_safe_checkpoint_without_spending_a_retry(isolate
     assert handoff[0]["detail"]["reason"] == "planned deployment handoff"
 
     replacement = store.claim_job("new-revision")
-    assert replacement["id"] == jid and replacement["attempts"] == 1
+    assert replacement["id"] == jid and replacement["attempts"] == 2
+
+
+def test_canonical_stage_follows_a_planned_handoff_through_replacement(isolated_store):
+    """A rollout is waiting work, not a failure and not still-active processing."""
+    import worker as worker_mod
+    store = isolated_store
+
+    started = threading.Event()
+
+    @worker_mod.handler("deployment_stage_checkpoint")
+    def _checkpoint(_payload, job):
+        if job["locked_by"] == "old-revision":
+            started.set()
+            while True:
+                worker_mod.check_cancel()
+                time.sleep(0.005)
+
+    sid = "deployment-stage-scan"
+    owner = "pilot@example.com"
+    store.init_scan_run(sid, "sharepoint", 1, "2026-09-05T00:00:00Z", "r", "h",
+                        owner=owner, status="running")
+    execution = store.enqueue_stage_batch(
+        sid, "assess", "deployment_stage_checkpoint", [{"scan_id": sid, "file": "one.pdf"}],
+        snapshot_id="discover-manifest-1", request_fingerprint="assess-request-1")
+    execution_id = execution["batch_id"]
+    work_item_id = store.stage_execution_snapshot(execution_id, owner=owner)[
+        "counts"]["work_items"]
+
+    old_worker = worker_mod.JobWorker(store, worker_id="old-revision")
+    thread = _threaded_turn(old_worker)
+    assert started.wait(2), "the old revision never entered the canonical stage handler"
+
+    old_worker.stop()
+    thread.join(2)
+
+    assert not thread.is_alive(), "canonical stage work did not hand off promptly"
+    queued = store.stage_execution_snapshot(execution_id, owner=owner)
+    assert queued["state"] == "queued"
+    assert queued["counts"]["work_items"] == {
+        **work_item_id, "terminal": 0, "queued": 1, "processing": 0,
+    }
+    assert queued["attempts"]["terminal"] == 1
+    with store._db.cursor() as cur:
+        store._db.execute(cur,
+            "SELECT worker_id,state,outcome FROM stage_attempts WHERE execution_id=%s ORDER BY started_at",
+            (execution_id,))
+        assert store._db.fetchall(cur) == [{
+            "worker_id": "old-revision", "state": "terminal",
+            "outcome": "deployment_handoff",
+        }]
+
+    replacement = worker_mod.JobWorker(store, worker_id="new-revision")
+    assert replacement.run_once() is True
+
+    completed = store.stage_execution_snapshot(execution_id, owner=owner)
+    assert completed["state"] == "succeeded"
+    assert completed["reconciliation"]["exact"] is True
+    assert completed["counts"]["work_items"]["completed"] == 1
+    assert completed["counts"]["work_items"]["terminal"] == 1
+    assert completed["output_manifest_id"]
+    manifest = store.get_stage_output_manifest(completed["output_manifest_id"], owner=owner)
+    assert manifest["item_count"] == 1
+    with store._db.cursor() as cur:
+        store._db.execute(cur,
+            "SELECT worker_id,state,outcome FROM stage_attempts WHERE execution_id=%s ORDER BY started_at",
+            (execution_id,))
+        assert store._db.fetchall(cur) == [
+            {"worker_id": "old-revision", "state": "terminal",
+             "outcome": "deployment_handoff"},
+            {"worker_id": "new-revision", "state": "terminal", "outcome": "completed"},
+        ]
 
 
 def test_handoff_is_fenced_against_a_replacement_claim(isolated_store):

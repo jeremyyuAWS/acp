@@ -12989,6 +12989,7 @@ class Store:
             "attempt.started": "processing", "attempt.heartbeat": "processing",
             "attempt.retrying": "queued", "attempt.completed": "completed",
             "attempt.failed": "failed", "attempt.cancelled": "cancelled",
+            "attempt.deployment_handoff": "queued",
         }
         if event_type not in state_for:
             raise ValueError(f"unsupported worker stage event: {event_type}")
@@ -13021,7 +13022,8 @@ class Store:
                     or row.get("work_owner") != worker_id)):
                 return {"applied": False, "duplicate": False, "stale": True}
             target = state_for[event_type]
-            terminal = event_type in ("attempt.completed", "attempt.failed", "attempt.cancelled")
+            terminal = event_type in ("attempt.completed", "attempt.failed", "attempt.cancelled",
+                                      "attempt.deployment_handoff")
             if terminal and row.get("state") == "terminal":
                 return {"applied": False, "duplicate": False, "stale": True}
             next_revision = int(row["work_revision"]) + (event_type != "attempt.heartbeat")
@@ -14420,8 +14422,9 @@ class Store:
 
         The caller has already left its handler at a declared safe checkpoint.  The ownership
         fence is still essential: if a lease expired just before shutdown, the old process must
-        not clear a replacement worker's live claim.  Decrementing ``attempts`` refunds the claim
-        consumed by the rollout, so routine releases cannot exhaust a customer's retry budget.
+        not clear a replacement worker's live claim. ``attempts`` remains a monotonic claim
+        generation (canonical event identity depends on it); incrementing ``max_attempts`` refunds
+        the rollout claim without allowing the replacement to reuse an old attempt identity.
 
         Returns ``queued`` when this claim performed the handoff, ``missing`` if the row no
         longer exists, or ``stale`` when another claim/outcome already owns the row.
@@ -14432,8 +14435,8 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "UPDATE jobs SET status='queued', run_after=%s, locked_at=NULL, "
-                "locked_by=NULL, lease_expires_at=NULL, attempts=CASE WHEN attempts>0 "
-                "THEN attempts-1 ELSE 0 END, phase=%s, last_error=NULL, error_class=NULL, "
+                "locked_by=NULL, lease_expires_at=NULL, max_attempts=max_attempts+1, "
+                "phase=%s, last_error=NULL, error_class=NULL, "
                 "updated_at=%s WHERE id=%s" + self._CLAIM_OWNED,
                 (now, self.DEPLOYMENT_REQUEUE_PHASE, now, job_id, worker_id, attempt))
             won = (getattr(cur, "rowcount", 0) or 0) > 0
@@ -14441,6 +14444,12 @@ class Store:
             print(f"[acp] deployment handoff refused for job {job_id}: stale claim "
                   f"worker={worker_id} attempt={attempt}", flush=True)
             return "stale"
+        # The queue handoff and canonical stage narration are separate durable ledgers. Move the
+        # stage item back to waiting and close the old attempt immediately; otherwise a graceful
+        # rollout looks like live Processing work until the replacement happens to claim it.
+        self.publish_worker_stage_event(
+            job_id, worker_id, attempt, "attempt.deployment_handoff",
+            reason="planned deployment handoff")
         return "queued"
 
     # The phase a reclaimed job carries while it waits to be picked up again.
