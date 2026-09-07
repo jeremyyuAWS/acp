@@ -1024,7 +1024,7 @@ def _drive_prior_inventory_for_account(owner: str | None, account_id: str | None
     return match[1] if match else None
 
 
-def _drive_sync_plan(owner: str | None) -> tuple[bool, dict | None]:
+def _drive_sync_plan(owner: str | None, cursor_key: str = "drive") -> tuple[bool, dict | None]:
     """PRD Phase 3: decide what the scheduled Drive sweep should do, from the stored sync
     cursor. Returns (skip, drive_delta):
 
@@ -1048,7 +1048,7 @@ def _drive_sync_plan(owner: str | None) -> tuple[bool, dict | None]:
     for why a Drive token is not guaranteed to be the same identity from one sweep to the
     next (an operator-rotated ADC credential, in this caller's case)."""
     from scanner import _drive_service, drive_account_id
-    result = _drive_delta_check("drive", owner, lambda: _drive_service(None))
+    result = _drive_delta_check(cursor_key, owner, lambda: _drive_service(None))
     if result is None:
         return False, None
     changed, removed_ids = result
@@ -1411,11 +1411,26 @@ def _interactive_sp_sync_plan(owner: str, token: str, drive_id: str | None) -> d
     return {"prior_files": prior_files, "changed": changed, "removed_ids": removed_ids}
 
 
-def _do_scheduled_scan():
+def _do_scheduled_scan(occurrence: dict | None = None):
     """A scheduled sweep. Re-scans the configured source (Drive via the service-account
     ADC identity — no user token is available in the background), stamps it with the
     owner who set the schedule so it shows up in their scan list, and finalizes it."""
-    cfg = get_store().get_schedule()
+    import datetime as _dt
+    if occurrence and occurrence.get("owner_email"):
+        import scan_schedule as _scan_schedule
+        cfg = get_store().get_user_scan_schedule(occurrence["owner_email"])
+        # A durable job may start after its owner disabled or changed the schedule. Re-read the
+        # owner-scoped row and require the queued local occurrence to still describe it.
+        try:
+            local_day = _dt.date.fromisoformat(str(occurrence.get("local_date")))
+            current_key = _scan_schedule.occurrence_key(cfg, local_day)
+        except (TypeError, ValueError, _scan_schedule.ScheduleError):
+            current_key = None
+        if not cfg.get("enabled") or current_key != occurrence.get("occurrence_key"):
+            print("scheduled user sweep skipped — its schedule changed after enqueue", flush=True)
+            return
+    else:
+        cfg = get_store().get_schedule()
 
     # THE SETTING IS AUTHORITATIVE ON EVERY FIRE, not only when reload_scheduler() runs.
     #
@@ -1431,14 +1446,14 @@ def _do_scheduled_scan():
     # a stale job left by a failed reload, which a broadcast would not.
     if not cfg.get("enabled"):
         print("scheduled sweep skipped — the schedule is off (stale job in this process)", flush=True)
-        reload_scheduler()      # self-heal: drops the job here so it stops firing at all
+        if not occurrence:
+            reload_scheduler()  # legacy singleton self-heal
         return
 
     owner = cfg.get("owner_email")
     source = cfg.get("source") or "drive"
     ai = get_store().get_ai_enabled()
 
-    import datetime as _dt
     now = _dt.datetime.now(_dt.timezone.utc).isoformat()
 
     drive_delta = None
@@ -1446,10 +1461,12 @@ def _do_scheduled_scan():
     sp_token = None
     sp_folder = None
     if source == "drive":
-        skip, drive_delta = _drive_sync_plan(owner)
+        cursor_key = f"drive:scheduled:{str(owner).strip().lower()}" if occurrence else "drive"
+        skip, drive_delta = _drive_sync_plan(owner, cursor_key)
         if skip:
             print("scheduled drive sweep skipped — no changes since the last sync", flush=True)
-            get_store().record_sweep_outcome(ok=True, when=now, source=source, skipped=True)
+            get_store().record_sweep_outcome(ok=True, when=now, source=source, skipped=True,
+                                             owner=owner if occurrence else None)
             return
     elif source == "sharepoint":
         import sp_sync
@@ -1470,7 +1487,8 @@ def _do_scheduled_scan():
             if skip:
                 print("scheduled sharepoint sweep skipped — no changes since the last sync",
                       flush=True)
-                get_store().record_sweep_outcome(ok=True, when=now, source=source, skipped=True)
+                get_store().record_sweep_outcome(ok=True, when=now, source=source, skipped=True,
+                                                 owner=owner if occurrence else None)
                 return
 
     try:
@@ -1480,7 +1498,8 @@ def _do_scheduled_scan():
         sid = get_store().save_scan(report)
         finalize_scan(sid, ai, source)
         get_store().record_sweep_outcome(ok=True, when=now, source=source, scan_id=sid,
-                                         files=report["summary"]["files"])
+                                         files=report["summary"]["files"],
+                                         owner=owner if occurrence else None)
         print(f"scheduled {source} sweep complete: {report['summary']['files']} files "
               f"(owner={owner})", flush=True)
     except Exception as e:
@@ -1500,7 +1519,8 @@ def _do_scheduled_scan():
         # was recorded, the sole trace of a failing sweep was this log line inside the container,
         # while the UI kept presenting an hours-old scan as the live estate — which is how a
         # 403 insufficient-scopes loop ran unnoticed on 2026-07-29. /schedule reports it now.
-        get_store().record_sweep_outcome(ok=False, when=now, source=source, error=str(e))
+        get_store().record_sweep_outcome(ok=False, when=now, source=source, error=str(e),
+                                         owner=owner if occurrence else None)
         print(f"scheduled {source} sweep FAILED — no scan was saved, the previous scan stands: {e}",
               flush=True)
 
@@ -1512,15 +1532,33 @@ def _enqueue_scheduled_scan(now=None) -> bool:
     while Store.enqueue_scheduled_sweep atomically admits only one queue row for that bucket.
     """
     import datetime as _dt
-    cfg = get_store().get_schedule()
-    interval_minutes = int(cfg.get("interval_minutes") or 0)
-    if not cfg.get("enabled") or interval_minutes <= 0:
-        return False
+    import scan_schedule as _scan_schedule
+    st = get_store()
     instant = now or _dt.datetime.now(_dt.timezone.utc)
     if instant.tzinfo is None:
         instant = instant.replace(tzinfo=_dt.timezone.utc)
+    schedules = (st.list_enabled_user_scan_schedules()
+                 if hasattr(st, "list_enabled_user_scan_schedules") else [])
+    admitted = False
+    for cfg in schedules:
+        due = _scan_schedule.due_occurrence(cfg, instant)
+        if not due:
+            continue
+        payload = {**due, "owner_email": cfg["owner_email"],
+                   "source": cfg.get("source") or "drive",
+                   "timezone": cfg["timezone"], "local_time": cfg["local_time"]}
+        admitted = st.enqueue_scheduled_sweep(due["occurrence_key"], payload) or admitted
+    if schedules:
+        return admitted
+
+    # Rolling-deploy compatibility: until the old global row is replaced by a user schedule,
+    # keep its interval behavior intact.
+    cfg = st.get_schedule()
+    interval_minutes = int(cfg.get("interval_minutes") or 0)
+    if not cfg.get("enabled") or interval_minutes <= 0:
+        return False
     bucket = int(instant.timestamp()) // (interval_minutes * 60)
-    return get_store().enqueue_scheduled_sweep(f"{interval_minutes}:{bucket}")
+    return st.enqueue_scheduled_sweep(f"{interval_minutes}:{bucket}")
 
 
 def _next_scheduled_scan_fire(interval_minutes: int, now=None):
@@ -1547,14 +1585,20 @@ def _derive_review_memory_tick() -> None:
 
 
 def reload_scheduler():
-    cfg = get_store().get_schedule()
+    st = get_store()
+    cfg = st.get_schedule()
+    user_schedules = (st.list_enabled_user_scan_schedules()
+                      if hasattr(st, "list_enabled_user_scan_schedules") else [])
     scheduler.remove_all_jobs()
-    if cfg["enabled"] and cfg["interval_minutes"] > 0:
-        scheduler.add_job(_enqueue_scheduled_scan, "interval",
-                          minutes=cfg["interval_minutes"],
-                          next_run_time=_next_scheduled_scan_fire(cfg["interval_minutes"]),
+    if user_schedules:
+        scheduler.add_job(_enqueue_scheduled_scan, "interval", minutes=1,
+                          next_run_time=_next_scheduled_scan_fire(1),
                           id="scheduled_local_scan",
                           coalesce=True, max_instances=1)
+    elif cfg["enabled"] and cfg["interval_minutes"] > 0:
+        scheduler.add_job(_enqueue_scheduled_scan, "interval", minutes=cfg["interval_minutes"],
+                          next_run_time=_next_scheduled_scan_fire(cfg["interval_minutes"]),
+                          id="scheduled_local_scan", coalesce=True, max_instances=1)
     # ADR 0021 stage 3 — nightly review-memory derivation, only when the feature is on. Dark
     # by default (flag unset), so it adds no scheduled work to today's deploys.
     if os.environ.get("ACP_REVIEW_MEMORY", "").strip().lower() in ("1", "true", "yes", "on"):

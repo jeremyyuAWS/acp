@@ -946,26 +946,64 @@ def _active_scope_info() -> dict:
 
 class ScheduleUpdate(BaseModel):
     enabled: bool
-    interval_minutes: int
+    # Deprecated, retained so the API may roll out before an older SPA refreshes.
+    interval_minutes: int | None = None
+    timezone: str | None = None
+    local_time: str | None = None
+    days: list[int] | None = None
+
+
+def _schedule_owner(request: Request) -> str:
+    return (getattr(request.state, "user_email", None) or "demo").strip().lower()
+
+
+def _schedule_response(request: Request) -> dict:
+    """Return only the caller's schedule; configuration is owner-scoped at the query."""
+    owner = _schedule_owner(request)
+    cfg = core.store.get_user_scan_schedule(owner)
+    legacy = core.store.get_schedule()
+    legacy_owner = (legacy.get("owner_email") or "demo").strip().lower()
+    # An existing process-wide interval remains visible only to its original owner until that
+    # owner saves a wall-clock schedule. It is never exposed to another signed-in user.
+    if cfg.get("updated_at") is None and legacy_owner == owner and legacy.get("enabled"):
+        cfg = {**cfg, **legacy, "schedule_type": "interval"}
+        job = core.scheduler.get_job("scheduled_local_scan")
+        cfg["next_at"] = job.next_run_time.isoformat() if job and job.next_run_time else None
+    else:
+        cfg["schedule_type"] = "wall_clock"
+        cfg["interval_minutes"] = None
+        try:
+            import scan_schedule
+            next_at = scan_schedule.next_occurrence(cfg, datetime.now(timezone.utc))
+            cfg["next_at"] = next_at.isoformat() if next_at else None
+        except ValueError:
+            cfg["next_at"] = None
+    return cfg
 
 
 @router.get("/schedule")
-def schedule():
-    cfg = core.store.get_schedule()
-    job = core.scheduler.get_job("scheduled_local_scan")
-    cfg["next_at"] = job.next_run_time.isoformat() if job and job.next_run_time else None
+def schedule(request: Request):
+    cfg = _schedule_response(request)
     # list_scans() filters to completed_at IS NOT NULL, which an ADR 0020 Discover-only run
     # never sets (see list_finished_scans' own docstring) — a discover-only sweep landed here
     # and last_at kept showing the last scan that was ever ASSESSED, which can be arbitrarily
     # older than the estate's true last refresh. list_finished_scans() plus the same
     # COALESCE(completed_at, discovered_at) its own ordering uses is the fix: whichever
     # timestamp the newest row actually has.
-    scans = core.store.list_finished_scans()
+    owner = _schedule_owner(request)
+    # Local/demo mode deliberately remains one shared estate. An authenticated deployment must
+    # not let Alice's schedule status advance because Bob completed a scan.
+    scans = core.store.list_finished_scans(None if owner == "demo" else owner)
     cfg["last_at"] = (scans[0].get("completed_at") or scans[0].get("discovered_at")) if scans else None
     # The last sweep's OUTCOME, not just when a scan last completed. A failing sweep saves
     # nothing by design, so `last_at` keeps pointing at the last SUCCESSFUL scan and reads as
     # healthy while the estate quietly goes stale. None until a sweep has run.
-    cfg["last_sweep"] = core.store.get_last_sweep()
+    owner = _schedule_owner(request)
+    cfg["last_sweep"] = core.store.get_last_sweep(owner)
+    # Demo/no-auth deployments predate owner-scoped outcomes. Preserve that single-user history;
+    # authenticated users never fall back to another user's process-wide result.
+    if cfg["last_sweep"] is None and owner == "demo":
+        cfg["last_sweep"] = core.store.get_last_sweep()
     return cfg
 
 
@@ -973,10 +1011,30 @@ def schedule():
 def update_schedule(body: ScheduleUpdate, request: Request):
     # Attribute scheduled sweeps to whoever set the schedule, so the resulting scans
     # show up in their (owner-scoped) scan list.
-    owner = getattr(request.state, "user_email", None)
-    core.store.save_schedule(body.enabled, body.interval_minutes, owner=owner, source="drive")
+    owner = _schedule_owner(request)
+    if body.timezone is None and body.local_time is None and body.days is None:
+        if body.interval_minutes is None:
+            raise HTTPException(422, "interval_minutes or a wall-clock schedule is required")
+        if body.interval_minutes < 1:
+            raise HTTPException(422, "interval_minutes must be at least 1")
+        core.store.save_schedule(body.enabled, body.interval_minutes, owner=owner, source="drive")
+    else:
+        current = core.store.get_user_scan_schedule(owner)
+        try:
+            core.store.save_user_scan_schedule(
+                owner, body.enabled,
+                body.timezone if body.timezone is not None else current["timezone"],
+                body.local_time if body.local_time is not None else current["local_time"],
+                body.days if body.days is not None else current["days"], source="drive")
+            legacy = core.store.get_schedule()
+            legacy_owner = (legacy.get("owner_email") or "demo").strip().lower()
+            if legacy_owner == owner and legacy.get("enabled"):
+                core.store.save_schedule(False, legacy["interval_minutes"], owner=owner,
+                                         source=legacy.get("source") or "drive")
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     core.reload_scheduler()
-    return schedule()
+    return schedule(request)
 
 
 @router.get("/hub", response_class=Response)

@@ -368,6 +368,13 @@ _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS schedule_config (
       key TEXT PRIMARY KEY, value TEXT
     )""",
+    # One local wall-clock schedule per verified owner. IANA timezone names keep the chosen time
+    # stable through daylight-saving changes; days is JSON with Monday=0 through Sunday=6.
+    """CREATE TABLE IF NOT EXISTS user_scan_schedules (
+      owner_email TEXT PRIMARY KEY, enabled INT NOT NULL, timezone TEXT NOT NULL,
+      local_time TEXT NOT NULL, days TEXT NOT NULL, source TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )""",
     # PRD Phase 3 (incremental connector sync). One row per source: the connector-native
     # cursor (Drive's changes.list page token today; a Graph delta link would be a future
     # row) that lets the scheduled sweep ask "what changed since last time" instead of
@@ -2278,8 +2285,11 @@ class _PgAdapter:
     # original column set and therefore safely produce pending messages for the new dispatcher.
     # v32 adds the finding disposition ledger and its append-only transition evidence on top of
     # the complete v31 canonical stage schema.
-    _SCHEMA_VERSION = 33
-    _SCHEMA_CHECKSUM_AT_VERSION = "c49133bec1c04a43b419ab2c4b0b8693"
+    # v34 is the additive union of v33's AI-call decision linkage and owner-scoped
+    # user_scan_schedules. Older replicas ignore both; newer replicas no longer share one
+    # process-wide cadence between signed-in users.
+    _SCHEMA_VERSION = 34
+    _SCHEMA_CHECKSUM_AT_VERSION = "45ccbaa2dcb309ae7fdc75e76281a9e5"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -6428,6 +6438,62 @@ class Store:
                     "INSERT INTO schedule_config(key,value) VALUES(%s,%s) "
                     "ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value", (k, v))
 
+    def get_user_scan_schedule(self, owner: str) -> dict:
+        normalized = str(owner or "demo").strip().lower() or "demo"
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT owner_email,enabled,timezone,local_time,days,source,updated_at "
+                "FROM user_scan_schedules WHERE owner_email=%s", (normalized,))
+            rows = self._db.fetchall(cur)
+        if not rows:
+            return {"owner_email": normalized, "enabled": False, "timezone": "UTC",
+                    "local_time": "09:00", "days": [0, 1, 2, 3, 4],
+                    "source": "drive", "updated_at": None}
+        row = dict(rows[0])
+        row["enabled"] = bool(row["enabled"])
+        row["days"] = [int(day) for day in json.loads(row["days"])]
+        return row
+
+    def list_enabled_user_scan_schedules(self) -> list[dict]:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT owner_email,enabled,timezone,local_time,days,source,updated_at "
+                "FROM user_scan_schedules WHERE enabled=1 ORDER BY owner_email")
+            rows = self._db.fetchall(cur)
+        schedules = []
+        for raw in rows:
+            try:
+                row = dict(raw)
+                row["enabled"] = True
+                row["days"] = [int(day) for day in json.loads(row["days"])]
+                schedules.append(row)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                # One corrupt historic row must not prevent every other user's due scan.
+                continue
+        return schedules
+
+    def save_user_scan_schedule(self, owner: str, enabled: bool, timezone: str,
+                                local_time: str, days, source: str = "drive") -> dict:
+        import datetime as _dt
+        import scan_schedule as _scan_schedule
+        normalized = str(owner or "demo").strip().lower() or "demo"
+        # Validate before touching storage; canonical values keep occurrence keys stable.
+        _scan_schedule.zone(timezone)
+        parsed_time = _scan_schedule.local_time(local_time).strftime("%H:%M")
+        parsed_days = list(_scan_schedule.normalize_days(days))
+        now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO user_scan_schedules(owner_email,enabled,timezone,local_time,days,"
+                "source,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT(owner_email) DO UPDATE SET enabled=EXCLUDED.enabled,"
+                "timezone=EXCLUDED.timezone,local_time=EXCLUDED.local_time,days=EXCLUDED.days,"
+                "source=EXCLUDED.source,updated_at=EXCLUDED.updated_at",
+                (normalized, int(bool(enabled)), str(timezone), parsed_time,
+                 json.dumps(parsed_days, separators=(",", ":")),
+                 str(source or "drive").lower(), now))
+        return self.get_user_scan_schedule(normalized)
+
     def get_sync_cursor(self, source: str) -> dict | None:
         """The connector-native cursor (e.g. Drive's changes.list page token) the scheduled
         sweep last advanced to for `source`, or None if this source has never been synced
@@ -9818,7 +9884,8 @@ class Store:
 
     def record_sweep_outcome(self, *, ok: bool, when: str, source: str,
                              scan_id: str | None = None, files: int | None = None,
-                             error: str | None = None, skipped: bool = False) -> None:
+                             error: str | None = None, skipped: bool = False,
+                             owner: str | None = None) -> None:
         """Persist the most recent scheduled sweep's outcome. Best-effort: a sweep must not fail
         because its bookkeeping did.
 
@@ -9830,20 +9897,25 @@ class Store:
         /monitor/estate's own comment on telling a sweep apart from a real collapse."""
         import json as _json
         try:
-            self.set_setting(self._SWEEP_KEY, _json.dumps({
+            value = _json.dumps({
                 "ok": bool(ok), "at": when, "source": source,
                 "scan_id": scan_id, "files": files, "skipped": bool(skipped),
                 # Truncated: this reaches the browser, and a Google HttpError repr carries the
                 # full request URL. Enough to recognise the failure, not a wall of query string.
                 "error": (error or None) and str(error)[:400],
-            }))
+            })
+            if owner:
+                self.set_user_setting(str(owner).strip().lower(), self._SWEEP_KEY, value)
+            else:
+                self.set_setting(self._SWEEP_KEY, value)
         except Exception:
             swallowed("store.record_sweep_outcome: recording the sweep outcome failed", scan_id)
 
-    def get_last_sweep(self) -> dict | None:
+    def get_last_sweep(self, owner: str | None = None) -> dict | None:
         """The last recorded sweep outcome, or None if none has run since this was added."""
         import json as _json
-        raw = self.get_setting(self._SWEEP_KEY)
+        raw = (self.get_user_setting(str(owner).strip().lower(), self._SWEEP_KEY)
+               if owner else self.get_setting(self._SWEEP_KEY))
         if not raw:
             return None
         try:
@@ -11299,7 +11371,7 @@ class Store:
                         (now, batch_id))
         return job_id
 
-    def enqueue_scheduled_sweep(self, occurrence_key: str) -> bool:
+    def enqueue_scheduled_sweep(self, occurrence_key: str, payload: dict | None = None) -> bool:
         """Durably enqueue one fleet-wide scheduled-sweep occurrence.
 
         Every API and worker replica owns an APScheduler process, so they can all offer the
@@ -11317,7 +11389,7 @@ class Store:
                 "run_after,created_at,updated_at) "
                 "VALUES(%s,'scheduled_sweep',%s,'queued',%s,0,3,%s,%s,%s) "
                 "ON CONFLICT(id) DO NOTHING",
-                (job_id, _json.dumps({"occurrence_key": occurrence_key}),
+                (job_id, _json.dumps({**(payload or {}), "occurrence_key": occurrence_key}),
                  job_priority("scheduled_sweep"), now, now, now))
             return (getattr(cur, "rowcount", 0) or 0) > 0
 
