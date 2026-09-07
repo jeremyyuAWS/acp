@@ -680,13 +680,13 @@ thing the PRD does not mention.
   **First evidence slice implemented:** Settings reports the last 30 days at the exact
   provider/model/processing-zone grain, with measured call count, call success/failure, mean
   latency and spend. It explicitly does not infer reviewer acceptance, edit rate or post-write
-  validation from transport success. Remaining: link model-call IDs to those reviewer and
-  validation outcomes, then add criterion-level comparison and rollout gates.
+  validation from transport success. Exact reviewer and post-write outcome linkage is now live;
+  the remaining work is the production pilot and its enforced stop gates.
 
   **Reviewer-outcome linkage started:** on-demand text remediation drafts now retain the exact
   `ai_calls.id` through the review card and persist it on the immutable HITL event. The API rejects
-  an identifier from another scan or file rather than guessing attribution. Remaining linkage:
-  criterion-level comparison and rollout gates. Post-write validation now records an immutable
+  an identifier from another scan or file rather than guessing attribution. Post-write validation
+  now records an immutable
   outcome against the exact accepted model call — verified-cleared, verified-regressed (the
   target cleared but a criterion that did not fail before the write does now, measured against a
   baseline re-scan the apply job takes once), still-failing, could-not-verify, or not written
@@ -696,6 +696,14 @@ thing the PRD does not mention.
   and server-precomputed single-proposal cards carry the exact producing call as well;
   multi-instance cards deliberately remain unattributed until the review contract can express
   one decision per generated value without false precision.
+
+  **Criterion rollout report implemented:** Settings → AI Governance exposes the declared two-run
+  shadow comparison at criterion-and-format grain. It shows all 59 decisions and identifies only
+  `docx:2.4.4` and `html:2.4.4` with Sonnet 5 as eligible for an assisted pilot; human approval
+  remains mandatory. Every other category stays with rule code, human-only, or insufficient
+  evidence exactly as the committed evaluator decided. Remaining: run those two pilots against
+  real review traffic, enforce measured production stop gates, and add exact attribution for
+  multi-instance vision decisions.
 
   **Conformance and Release provenance slices implemented:** the immutable certification PDF now carries the
   same exact provider/model/zone rows with measured success/failure and latency, and states that
