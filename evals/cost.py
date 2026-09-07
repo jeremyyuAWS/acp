@@ -140,9 +140,28 @@ def fmt_usd_per_call(usd: float) -> str:
 # runs actually measured (~760 in / ~200 out). A budget guard that under-estimates is worse than
 # none: it green-lights the run that overspends. These are the numbers a preflight quotes; the
 # ledger still bills what the API reports.
-ESTIMATE_TOKENS_IN = 900
-ESTIMATE_TOKENS_OUT = 300
-ESTIMATE_LATENCY_S = 3.0
+# ── the pre-flight estimate's nominal call ───────────────────────────────────────────────────
+#
+# GROUNDED IN THE COMMITTED RUNS, NOT CHOSEN. A spend guard that under-quotes green-lights the
+# run that overspends, which is the one thing it exists to prevent — so every figure here sits
+# above the highest any run in evals/reports/ has measured, and
+# tests/test_remediation_evals_kit.py reads those reports and fails if one stops being true.
+#
+# Both of these were under-quoting until 2026-09-07, in the direction that costs money:
+#
+#   out/call   assumed 300, measured up to 683 (Opus 5 on the adversarial set); the paid tiers
+#              all run adaptive thinking, and the assumption predated any run that used it. The
+#              measured Sonnet 5 run cost $0.65 against a $0.46 estimate, 41% over.
+#   latency    assumed 3.0s, measured up to 11.9s (llama3.2:1b). Latency is what prices the
+#              local_amortised tier, so a local run was quoted at roughly a quarter of its cost.
+#
+# Raising these makes the estimate conservative for cheap tiers — a Haiku run quotes ~3x its
+# real cost, because the input assumption also sits well above its measured 364/call. That is
+# the correct direction: an over-quote refuses a run you would have allowed and costs a second
+# look, an under-quote spends money you capped.
+ESTIMATE_TOKENS_IN = 900       # measured max 497/call
+ESTIMATE_TOKENS_OUT = 900      # measured max 683/call
+ESTIMATE_LATENCY_S = 15.0      # measured max 11.9s/call
 
 
 def estimate_run_usd(pricing: Pricing, calls: int, *, tokens_in: int = ESTIMATE_TOKENS_IN,
