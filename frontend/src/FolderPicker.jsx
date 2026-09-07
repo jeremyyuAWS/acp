@@ -57,6 +57,9 @@ export default function FolderPicker({
   // Named in the error sentence, so a reader with several connections wired up knows
   // WHICH one failed. Defaults to the neutral phrase rather than guessing a provider.
   sourceName = 'the source',
+  maxSelections = null,
+  allowAll = true,
+  confirmLabel = null,
 }) {
   const [stack, setStack] = useState([{ id: 'root', name: rootName }])
   const [folders, setFolders] = useState([])
@@ -124,9 +127,14 @@ export default function FolderPicker({
   const goTo  = (idx)    => setStack((s) => s.slice(0, idx + 1))
   const isPicked = (id) => picked.some((p) => p.id === id)
   const isExcluded = (id) => excluded.some((p) => p.id === id)
-  const toggle = (f) => setPicked((s) => (s.some((p) => p.id === f.id)
-    ? s.filter((p) => p.id !== f.id)
-    : [...s, { id: f.id, name: f.name }]))
+  const toggle = (f) => setPicked((s) => {
+    if (s.some((p) => p.id === f.id)) return s.filter((p) => p.id !== f.id)
+    if (maxSelections === 1) {
+      setExcluded([])
+      return [{ id: f.id, name: f.name }]
+    }
+    return [...s, { id: f.id, name: f.name }]
+  })
   // `under` is the included ancestor this carve-out narrows, read from the LIVE breadcrumb at the
   // moment of exclusion. You can only exclude while drilling inside an included folder, so it is
   // exact here and unknowable later — which is what makes tri-state possible without the tree.
@@ -454,9 +462,9 @@ export default function FolderPicker({
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
           {multi ? (
             <>
-              <button className="ghost small" onClick={() => onConfirm([], [])}>Scan all of {rootName}</button>
-              <button onClick={() => onConfirm(picked, excluded)}>
-                {picked.length ? `Save ${picked.length} location${picked.length === 1 ? '' : 's'}` : 'Save'}
+              {allowAll && <button className="ghost small" onClick={() => onConfirm([], [])}>Scan all of {rootName}</button>}
+              <button disabled={requireSelection && picked.length === 0} onClick={() => onConfirm(picked, excluded)}>
+                {confirmLabel || (picked.length ? `Save ${picked.length} location${picked.length === 1 ? '' : 's'}` : 'Save')}
               </button>
             </>
           ) : (
