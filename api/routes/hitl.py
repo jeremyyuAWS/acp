@@ -6,6 +6,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 import core
+from store import Store
 from swallowed import swallowed
 
 router = APIRouter()
@@ -32,7 +33,8 @@ class HitlUpdate(BaseModel):
     # alternative is required) or 'essential_exception' (1.4.5/1.4.9: a logo/brand mark is exempt
     # from the images-of-text rule). Recorded in the immutable audit trail as WHY the finding was
     # resolved, so the certification report never implies a written fix that never happened.
-    resolution: str | None = None       # decorative | essential_exception | out_of_scope
+    # 'described_not_replaced' (ADR 0055) is the exception that DOES carry text: see RESOLUTIONS.
+    resolution: str | None = None       # decorative | essential_exception | described_not_replaced | out_of_scope
 
 
 REJECT_REASONS = {"incorrect_object", "too_vague", "hallucinated", "missed_text", "org_preference", "other", "unspecified"}
@@ -41,6 +43,18 @@ REJECT_REASONS = {"incorrect_object", "too_vague", "hallucinated", "missed_text"
 RESOLUTIONS = {
     "decorative": "reviewer marked image decorative — no text alternative required (WCAG 1.1.1)",
     "essential_exception": "reviewer marked essential logo/brand mark — exempt from images-of-text (WCAG 1.4.5/1.4.9)",
+    # ADR 0055. The odd one out among the exceptions, and the difference is worth stating: this
+    # one is only honest once a write lands. The reviewer keeps an image of text — because the
+    # replacement writer refuses it, because the styling carries meaning, or because it is a
+    # 1.4.9 chart replacement would gut — and describes it instead. That resolves 1.4.5/1.4.9 by
+    # judgement AND creates a 1.1.1 obligation the document did not have, so store.
+    # queue_described_image_alt records the description as alt text owed and the file cannot
+    # certify until it is written and a re-scan confirms 1.1.1 cleared. Without that second
+    # half the description would be stored, reach nothing, and the file would certify as
+    # conformant with the image untouched and undescribed.
+    Store.DESCRIBED_RESOLUTION:
+        "reviewer kept the image of text and described it instead of replacing it — "
+        "resolves images-of-text by judgement (WCAG 1.4.5/1.4.9), owes alt text (WCAG 1.1.1)",
     # Unlike the two above (which RESOLVE a finding that IS in scope, so it stays a human_verified
     # pass), out_of_scope means the criterion does not APPLY to this document — the reviewer's
     # judgement that it is not applicable. It leaves the coverage denominator (accessibility_status
@@ -145,6 +159,25 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
         raise HTTPException(422, f"reject_reason must be one of {sorted(REJECT_REASONS)}")
     if body.resolution is not None and body.resolution not in RESOLUTIONS:
         raise HTTPException(422, f"resolution must be one of {sorted(RESOLUTIONS)}")
+    # ADR 0055: describe-instead-of-replace is the one resolution that is incomplete without
+    # text, so it is refused without text — here, BEFORE anything is written, rather than
+    # discovered after the row has been updated. Both halves are checked because both halves
+    # can be wrong on their own: the criterion, because "I kept it and described it" means
+    # nothing on a link-text or contrast row; and the descriptions, because a resolution with
+    # none of them resolves the image-of-text finding while leaving the images undescribed and
+    # letting the file certify that way. That is the silent failure the whole feature closes,
+    # so the request fails loudly instead.
+    if body.resolution == Store.DESCRIBED_RESOLUTION:
+        rule_id = str(item.get("rule_id") or "").strip()
+        if rule_id not in Store.DESCRIBED_SOURCE_SCS:
+            raise HTTPException(
+                422, f"{Store.DESCRIBED_RESOLUTION} applies to an images-of-text finding "
+                     f"({', '.join(Store.DESCRIBED_SOURCE_SCS)}), not to {rule_id or 'this row'}")
+        if not any(str(v or "").strip() for v in (body.approved_values or [])):
+            raise HTTPException(
+                422, f"{Store.DESCRIBED_RESOLUTION} needs a description for at least one image: "
+                     "keeping an image of text without describing it leaves it unreadable to a "
+                     "screen reader and resolves nothing")
     if body.model_call_id and not core.store.ai_call_belongs_to_file(
             body.model_call_id, item.get("scan_id"), item.get("file")):
         raise HTTPException(422, "model_call_id does not belong to this review item")
@@ -163,6 +196,28 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
             core.store.approve_proposal_values(item_id, body.approved_values)
         except Exception:
             swallowed("routes.hitl.hitl_update: approving the proposal values failed")
+    # ADR 0055: describe-instead-of-replace. The reviewer kept the images of text and wrote
+    # descriptions, so this decision resolves 1.4.5/1.4.9 by judgement AND leaves the document
+    # owing 1.1.1 alt text it did not owe before. Record that obligation now, as an approved but
+    # unapplied row, so the gate below enqueues the write and mark_file_compliant_if_reviewed
+    # refuses to certify until the description is in the document and a re-scan agrees.
+    #
+    # AFTER approve_proposal_values, necessarily: the descriptions are read off the source row's
+    # proposals, and until that call lands the row holds only the OCR drafts. And NOT
+    # best-effort in the way the telemetry below is — a swallowed failure here leaves the
+    # reviewer's descriptions reaching nothing while the 1.4.5 finding reads resolved, which is
+    # precisely the silent false certification this feature exists to prevent. It is guarded so
+    # one broken row cannot take down the decision, and it says so in the log.
+    if body.status == "approved" and body.resolution == Store.DESCRIBED_RESOLUTION:
+        # NOT swallowed. Every other best-effort block here degrades telemetry; this one decides
+        # whether the document ends up carrying the reviewer's descriptions. A failure that got
+        # past the 422 above leaves the 1.4.5 row resolved and owing nothing, so the file
+        # certifies as conformant with the images untouched AND undescribed — the exact silent
+        # failure ADR 0055 measured. Better to fail the request: the reviewer sees it, and the
+        # row keeps whatever status it had.
+        if core.store.queue_described_image_alt(item_id) is None:
+            raise HTTPException(500, "the descriptions could not be recorded as alt text; "
+                                     "the decision was not completed")
     # Immutable audit trail: WHO decided what, when, on which finding — include the
     # approved value itself so the log is self-sufficient compliance evidence.
     #

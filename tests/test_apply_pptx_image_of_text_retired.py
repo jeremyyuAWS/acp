@@ -1,40 +1,31 @@
-"""api/apply_pptx_image_of_text.py is RETIRED: nothing in production calls it.
+"""api/apply_pptx_image_of_text is PARTLY retired: its WRITER has no caller, its resolver does.
 
 #1715 replaced the pptx 1.4.5 lane's writer. The lane used to set the OCR transcript as the
 picture's `<p:cNvPr descr="...">`; it now calls apply_pptx_image_replacement, which swaps the
 picture for a real text box and deletes the image — the only thing that actually clears 1.4.5,
-since ocr._ooxml_images reads ppt/media/* straight out of the zip. The descr writer was left in
-the tree, correct and fully unit-tested, with no caller.
+since ocr._ooxml_images reads ppt/media/* straight out of the zip.
 
-WHY THAT NEEDED WRITING DOWN. A complete, tested module with a passing test file reads as live
-code to anyone who greps it — which is precisely how ten unmounted frontend components sat on
-main being reported as shipped (CLAUDE.md, "Keep retired features in the tree"). The rule there
-is both halves: keep the file so the decision is reversible, and assert the orphan so it cannot
-be mistaken for live code. This is that assertion for the backend.
+WHAT CHANGED, and why this file was narrowed rather than deleted. ADR 0055 (#1733) designed
+describe-instead-of-replace: a reviewer who KEEPS an image of text and describes it. Its
+description travels the proven 1.1.1 alt lane, and the one thing standing between the two is a
+locator shape — so the module's RESOLVER (`resolve_media_locators` / `is_media_index_locator`:
+media index -> canonical media path -> the rId a slide references it by) is now live, and its
+WRITER is still dead. That is exactly the split the previous version of this file predicted
+under "what would revive it", and it is why #1724 kept the file rather than deleting it.
 
-WHAT WOULD REVIVE IT, so the next reader does not have to re-derive it:
+So this now asserts something narrower and more useful than "nothing imports this module":
+`_patch_pics` and `apply_pptx_image_of_text` — the descr-writing half — have no caller. They
+stay dead because apply_alt_text already writes alt text, resolves both locator shapes, and has
+a round-trip fixture behind it. Two writers for one job is how they drift.
 
-  Its unique capability is the 'image N' locator — a media-index into ppt/media/*, mirroring
-  ocr._ooxml_images. apply_alt.parse_locator cannot read that shape at all (it requires a '#',
-  as in 'ppt/slides/slide1.xml#Picture 2'), so this module is the only writer that can aim at an
-  image the OCR proposer named.
+WHY THAT STILL NEEDS ASSERTING. A complete, tested function inside a module something DOES
+import reads as live code even more readily than one in an orphaned file — a grep for the module
+name now finds a real caller, so the reader has no reason to look further (CLAUDE.md, "Keep
+retired features in the tree"). The rule is both halves: keep it so the decision is reversible,
+and assert the orphan so it cannot be mistaken for live code.
 
-  It does NOT have a job in 1.1.1 today, and that was checked rather than assumed:
-    * 'image N' is emitted in exactly one place (proposals.propose_images_of_text) and enqueued
-      under exactly one rule id (handlers, "1.4.5"), so no 1.1.1 row can carry that locator.
-    * Every 1.1.1 row uses 'part#name', which apply_alt_text already writes and
-      tests/test_remediation_verified_pptx_alt.py already proves end to end.
-    * "The OCR transcript as alt text" is already shipped on a better path: ai._transcribed_alt
-      feeds the vision alt draft when _looks_like_an_image_of_text says the picture is prose, so
-      the transcript reaches the 1.1.1 card with a locator the proven lane can resolve.
-
-  So the revival case is a NEW one: a reviewer who chooses to keep an image of text and describe
-  it rather than replace it. That needs a disposition carrying a value, which store._row_is_resolved
-  deliberately forbids today (an exception-resolved row promises the document no prose). Design
-  that first; this module is then the writer it would use.
-
-When it is called again, this file fails — which is the reminder to delete this file, not a
-regression.
+When the writer is called again, this file fails — which is the reminder to delete this file and
+give that lane a round-trip fixture, not a regression.
 """
 from __future__ import annotations
 
@@ -46,27 +37,39 @@ API = ACP / "api"
 MODULE = "apply_pptx_image_of_text"
 SELF = API / f"{MODULE}.py"
 
+# The descr-writing half: no caller, and this file is what holds it that way.
+RETIRED_NAMES = {"apply_pptx_image_of_text", "_patch_pics"}
+# The locator resolver ADR 0055 revived. Live, and asserted to BE live below — a narrowing
+# that stops being true the moment nothing uses it.
+LIVE_NAMES = {"resolve_media_locators", "expand_media_locator_values", "is_media_index_locator"}
+
 
 def _production_files() -> list[Path]:
     """Every .py under api/ except the module itself — the code that ships."""
     return [p for p in sorted(API.rglob("*.py")) if p != SELF]
 
 
-def test_the_module_is_still_here():
+def test_the_retired_writer_is_still_here():
     """Retired, not deleted. The owner's standing instruction is that an unused feature stays in
-    the tree so bringing it back is one commit."""
+    the tree so bringing it back is one commit — and this half is one commit from returning."""
     assert SELF.is_file()
     src = ast.parse(SELF.read_text())
     fns = {n.name for n in src.body if isinstance(n, ast.FunctionDef)}
-    assert MODULE in fns, f"{MODULE}.py no longer defines {MODULE}()"
+    missing = RETIRED_NAMES - fns
+    assert not missing, f"{MODULE}.py no longer defines {sorted(missing)}"
 
 
-def test_no_production_module_imports_or_calls_it():
-    """The assertion that keeps a tested orphan from reading as live code.
+def test_no_production_module_imports_or_calls_the_writer():
+    """The assertion that keeps the retired WRITER from reading as live code.
 
-    Structural, not a substring search: the handler comment explaining the retirement names the
-    module, and a whole-file text ban would match its own explanation — the failure mode
-    discoverUploadRemoved.test.jsx documents hitting four times in this repo.
+    Names, not the module: the module IS imported now, for its resolver, so a
+    module-level ban would fail on the very revival ADR 0055 designed. What must stay
+    dead is the descr-writing half — the entry point and the function under it.
+
+    Structural, not a substring search, for the reason this file has always given: the
+    module docstring and the handler comment both NAME the writer while explaining that
+    it is retired, so a whole-file text ban would match its own explanation. That is the
+    failure mode discoverUploadRemoved.test.jsx documents hitting four times in this repo.
     """
     offenders: list[str] = []
     for path in _production_files():
@@ -75,22 +78,44 @@ def test_no_production_module_imports_or_calls_it():
         except SyntaxError:
             continue                      # not this test's business; other guards cover parsing
         for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                if any(a.name == MODULE for a in node.names):
-                    offenders.append(f"{path.relative_to(ACP)}: import {MODULE}")
-            elif isinstance(node, ast.ImportFrom):
-                if node.module == MODULE:
-                    offenders.append(f"{path.relative_to(ACP)}: from {MODULE} import …")
+            if isinstance(node, ast.ImportFrom) and node.module == MODULE:
+                for alias in node.names:
+                    if alias.name in RETIRED_NAMES:
+                        offenders.append(
+                            f"{path.relative_to(ACP)}:{node.lineno}: imports {alias.name}")
             elif isinstance(node, ast.Call):
                 name = getattr(node.func, "id", None) or getattr(node.func, "attr", None)
-                if name == MODULE:
-                    offenders.append(f"{path.relative_to(ACP)}:{node.lineno}: calls {MODULE}()")
+                if name in RETIRED_NAMES:
+                    offenders.append(f"{path.relative_to(ACP)}:{node.lineno}: calls {name}()")
     assert not offenders, (
-        f"{MODULE} is documented as retired but production code uses it:\n  "
-        + "\n  ".join(offenders)
+        f"the retired descr writer in {MODULE} is documented as having no caller, but "
+        f"production code uses it:\n  " + "\n  ".join(offenders)
         + f"\n\nIf reviving it is deliberate, delete tests/{Path(__file__).name} and give the "
           "lane a round-trip fixture (tests/test_capability_assisted_contract.py requires one)."
     )
+
+
+def test_the_resolver_is_the_half_that_is_live():
+    """The other half of the split, asserted so the file stays honest in BOTH directions.
+
+    Without this, deleting the ADR 0055 wiring would leave the whole module orphaned again and
+    nothing here would notice — the test above would go on passing, because a module nobody
+    imports certainly does not import its writer. The narrowing is only safe while something
+    really does use the resolver.
+    """
+    users: list[str] = []
+    for path in _production_files():
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == MODULE:
+                users.extend(a.name for a in node.names if a.name in LIVE_NAMES)
+    assert users, (
+        f"nothing in api/ imports {MODULE}'s resolver ({', '.join(sorted(LIVE_NAMES))}) any "
+        "more. The module is fully orphaned again, so this file should go back to asserting "
+        "that — see #1724 for the version that did.")
 
 
 def test_the_live_1_4_5_writer_is_the_replacement_one():

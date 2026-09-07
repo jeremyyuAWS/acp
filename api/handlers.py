@@ -4689,6 +4689,15 @@ _FIELD_NAME_EXTS = ("pdf", "docx")
 # Replacing a chart with its axis labels destroys information, so 1.4.9 stays HUMAN and the
 # getter is narrowed to ("1.4.5",) rather than reading both bands into one map.
 _IMAGE_OF_TEXT_EXTS = ("pptx",)
+# ADR 0055. The 1.4.5 card's locator shape, recognised here only to decide whether the alt lane
+# needs the translation below — the translation itself lives in apply_pptx_image_of_text, beside
+# the enumeration it mirrors. Matching the shape rather than the rule_id is deliberate: apply_alt
+# cannot resolve this locator whatever row it came from, so the question the lane actually has is
+# "is any of this untranslated", not "which row wrote it".
+#
+# Imported from the module that owns the pattern rather than recompiled here, so the recogniser
+# and the translator can never disagree about what a media-index locator looks like.
+from apply_pptx_image_of_text import is_media_index_locator as _is_media_index_locator
 _IMAGE_OF_TEXT_SCS = ("1.4.5",)
 
 # Every format an approved value can actually be WRITTEN into — the format scope
@@ -4938,6 +4947,28 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
     _phase(job, "re-scanning the copy before writing (regression baseline)")
     residual_state = {"verification": _verify_residual(working, filename)}
 
+    # ADR 0055: a described-not-replaced row carries the 1.4.5 card's own 'image N' locator — a
+    # media index, which apply_alt cannot read at all (parse_locator requires a '#'). Translate
+    # it here, against `working`: these are the bytes about to be written, and a media index
+    # resolved against any other copy can name a different picture.
+    #
+    # ONE LOCATOR BECOMES SEVERAL when the media part is placed on more than one slide, because
+    # 'image N' names the part and not a placement. Describing only one of them would leave the
+    # others carrying their source filename, 1.1.1 would still fail on re-scan, and the lane
+    # would withhold the credit for a write that was actually correct — see
+    # apply_pptx_image_of_text.resolve_media_locators, where that was measured.
+    #
+    # Non-media locators pass through untouched, and an unresolvable one is LEFT AS IT IS so it
+    # reaches apply_alt, is reported unresolved, and appears in the apply.unresolved log under
+    # the name the reviewer's card used rather than one they never saw.
+    if ext == "pptx" and any(_is_media_index_locator(k) for k in alt_values):
+        try:
+            from apply_pptx_image_of_text import expand_media_locator_values
+            alt_values = expand_media_locator_values(working, alt_values)
+        except Exception:
+            swallowed("_apply_approved_values: translating the media-index alt locators failed",
+                      scan_id)
+
     # Office images carry part#rId locators written by apply_alt; PDF figures carry the
     # `pdf:fig:{page}:{seq}` locator minted by remediate_pdf and are written by
     # apply_pdf_approved. Same (bytes, {locator: value}) -> (fixed, applied, unresolved)
@@ -4956,7 +4987,13 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
         scan_id=scan_id, filename=filename, working=working,
         values=alt_values, extra_work=bool(deco_locators),
         scs_to_clear={"1.1.1"}, write_fn=alt_write_fn,
-        diff_rule_id="1.1.1", credit_rule_ids=("1.1.1",), noun="description", job=job,
+        # '1.1.1/described' is credited by this lane because its content IS written by this
+        # lane (ADR 0055). Left out, the described row would be written into the document and
+        # never marked applied, so count_unapplied_approved_values would count it forever and
+        # the file could never certify — the permanently-unpublishable dead end, reached by
+        # doing everything else right.
+        diff_rule_id="1.1.1", noun="description", job=job,
+        credit_rule_ids=("1.1.1", f"1.1.1{core.store.DESCRIBED_RULE_SUFFIX}"),
         residual_state=residual_state)
 
     # 4.1.2 form-field accessible names. PDF keys on `pdf:field:…` and writes /TU; Word keys
