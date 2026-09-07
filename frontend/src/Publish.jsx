@@ -11,6 +11,7 @@ import ReleaseFileSelection, { releaseFileSize } from './ReleaseFileSelection.js
 import ReleasePlanSummary, { formatReleaseBytes } from './ReleasePlanSummary.jsx'
 import ReleaseStepPanel from './ReleaseStepPanel.jsx'
 import LiveCounter from './LiveCounter.jsx'
+import ReleaseDestinationPicker from './ReleaseDestinationPicker.jsx'
 import './release-plan-summary.css'
 
 // Step 9 · Publish. Marks re-validated documents as published: the conformance status
@@ -37,6 +38,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [deliveryMethod, setDeliveryMethod] = useState('publish')
   const [packageName, setPackageName] = useState('')
   const [releaseFolderName, setReleaseFolderName] = useState('')
+  const [releaseDestination, setReleaseDestination] = useState(null)
   const [preserveHierarchy, setPreserveHierarchy] = useState(true)
   const [includeManifest, setIncludeManifest] = useState(true)
   const [includeVerificationReport, setIncludeVerificationReport] = useState(false)
@@ -73,9 +75,14 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [settings, setSettings] = useState(null)
   useEffect(() => {
     let live = true
-    getSettings().then((s) => { if (live && s) setSettings(s) }).catch(() => {})
+    getSettings().then((s) => {
+      if (!live || !s) return
+      setSettings(s)
+      const preference = s.release_destination?.provider === run?.source ? s.release_destination : null
+      setReleaseDestination((current) => current?.provider === run?.source ? current : preference)
+    }).catch(() => {})
     return () => { live = false }
-  }, [])
+  }, [run?.source])
   const ms = mirrorState(settings)
   const driveMirrorEnabled = ms === MIRROR.ON
   const driveMirrorFolder = settings?.drive_mirror_folder?.trim() || 'Remediated'
@@ -174,6 +181,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   }
   const rememberRelease = (res, expectedFiles = []) => {
     if (res?.release_id) setReleaseId(res.release_id)
+    if (res?.parent_folder_id) setReleaseDestination({
+      provider: releaseProvider, folder_id: res.parent_folder_id,
+      folder_name: res.parent_folder_name || 'Selected provider folder',
+    })
     const roots = res?.release_folders || res?.roots || []
     const mappedRoots = roots.map((root) => ({
       id: root.folder_id || root.id, name: root.folder_name || root.name,
@@ -273,10 +284,15 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     // Release state is durable; reload and resume polling when the selected scan changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run?.id])
+  const publishSelectedFiles = (fileNames, folderName = '') => releaseDestination
+    ? publishAllFiles(run?.id, fileNames, folderName, { destination: releaseDestination })
+    : folderName ? publishAllFiles(run?.id, fileNames, folderName) : publishAllFiles(run?.id, fileNames)
   const publish = async (file) => {
     if (done[file]) return
     try {
-      const res = await publishFile(run?.id, file)
+      const res = releaseDestination
+        ? await publishFile(run?.id, file, releaseDestination)
+        : await publishFile(run?.id, file)
       const successful = rememberRelease(res, [file])
       if (releaseProvider === 'sharepoint' && res?.queued) {
         const status = await followSharePointRelease([file])
@@ -296,9 +312,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     const requested = fileNames ? new Set(fileNames) : null
     const pending = ready.filter((f) => !done[f.file] && (!requested || requested.has(f.file))).map((f) => f.file)
     try {
-      const res = preferredFolderName
-        ? await publishAllFiles(run?.id, pending, preferredFolderName)
-        : await publishAllFiles(run?.id, pending)
+      const res = await publishSelectedFiles(pending, preferredFolderName)
       const successful = rememberRelease(res, pending)
       if (releaseProvider === 'sharepoint' && res?.queued) {
         const status = await followSharePointRelease(pending)
@@ -342,7 +356,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     setPublishing(true)
     const targets = setStatus.graduatable
     try {
-      const res = await publishAllFiles(run?.id, targets)
+      const res = await publishSelectedFiles(targets)
       const successful = rememberRelease(res, targets)
       if (releaseProvider === 'sharepoint' && res?.queued) {
         const status = await followSharePointRelease(targets)
@@ -430,7 +444,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     try {
       const preview = await previewReleaseDestination(
         run?.id, selectedPublishable.map((file) => file.file),
-        releaseFolder?.name || releaseFolderName, preserveHierarchy)
+        releaseFolder?.name || releaseFolderName, preserveHierarchy, releaseDestination)
       setReleasePreview(preview)
       if (!releaseFolder && !releaseFolderName.trim()) setReleaseFolderName(preview.folder_name || '')
       setBuilderStep(3)
@@ -701,7 +715,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
             <ReleasePlanSummary compact count={selectedReady.length}
               excluded={staleReady.length + selectedReady.filter((file) => done[file.file]).length}
               method={deliveryMethod} provider={sourceProduct}
-              destination={releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}
+              destination={releaseDestination
+                ? `${releaseDestination.folder_name} / Remediated / <release name>`
+                : releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}
               preserveStructure={preserveHierarchy} estimatedBytes={packagePreview?.estimated_bytes ?? selectedEstimatedBytes} />
             {builderStep === 1 ? (
               <ReleaseStepPanel id="release-files-step" heading="Choose files" focusOnMount={false} className="release-builder__continue">
@@ -752,7 +768,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                   <div className="release-includes"><span>✓ Corrected copies retained</span><span>✓ Review decisions retained</span><span>✓ Originals unchanged</span></div>
                 </> : releaseFolder ? <>
                   <div className="release-destination-config__heading"><b>{sourceProduct} destination</b><span>Connected source</span></div>
-                  <div className="release-destination-path">{releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}</div>
+                  <div className="release-destination-path">{releaseDestination
+                    ? `${releaseDestination.folder_name} / Remediated / ${releaseFolder.name}`
+                    : releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}</div>
                   <div className="release-name-field">
                   <label><b>Release folder name</b></label>
                   <div className="release-name-existing">{releaseFolder.name}</div>
@@ -760,7 +778,13 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                   </div>
                 </> : <>
                   <div className="release-destination-config__heading"><b>{sourceProduct} destination</b><span>Connected source</span></div>
-                  <div className="release-destination-path">{releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}</div>
+                  {(releaseProvider === 'drive' || releaseProvider === 'sharepoint') && <ReleaseDestinationPicker
+                    provider={releaseProvider} value={releaseDestination}
+                    onChange={(value) => { setReleaseDestination(value); setReleasePreview(null) }}
+                    onError={(error) => setReleaseError({ summary: 'The destination could not be saved.', details: error?.message || 'Try choosing the folder again.' })} />}
+                  <div className="release-destination-path">{releaseDestination
+                    ? `${releaseDestination.folder_name} / Remediated / <release name>`
+                    : releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}</div>
                   <div className="release-name-field">
                   <label htmlFor="release-folder-name"><b>Release folder name</b> <span>Optional</span></label>
                   <input id="release-folder-name" value={releaseFolderName} onChange={(e) => setReleaseFolderName(e.target.value)} placeholder="Automatic: release date and time" aria-describedby="release-name-help release-name-error" />
@@ -786,6 +810,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                       : `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file' : 'files'} will remain securely in ACP. No external copy will be created and original files will not be changed.`}</p>
                   {deliveryMethod === 'publish' && releasePreview && <div className="release-preview">
                     <div className="release-preview__heading"><b>Exact destination preview</b><span>{releasePreview.documents?.length || 0} files · {releasePreview.folder_state === 'existing' ? 'existing release folder' : 'new release folder'}</span></div>
+                    {releasePreview.preflight && <div className={`release-preflight ${releasePreview.preflight.ready ? 'release-preflight--ready' : 'release-preflight--blocked'}`} role={releasePreview.preflight.ready ? 'status' : 'alert'}>
+                      <b>{releasePreview.preflight.ready ? '✓ Destination ready' : 'Destination needs attention'}</b>
+                      {releasePreview.preflight.message && <span>{releasePreview.preflight.message}</span>}
+                    </div>}
                     {(releasePreview.documents || []).slice(0, 5).map((item) => <div className="release-preview__path" key={item.file}><span>{item.action === 'reuse' ? '↻ Reuse' : '+ Create'}</span><code>{item.destination_path}</code></div>)}
                     {(releasePreview.documents || []).length > 5 && <small>+{releasePreview.documents.length - 5} more paths</small>}
                     <p>{releasePreview.collision_policy}</p>

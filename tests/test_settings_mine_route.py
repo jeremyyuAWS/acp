@@ -110,3 +110,34 @@ def test_user_cannot_store_an_unsupported_release_timezone(monkeypatch, isolated
     response = c.put("/settings/mine", headers=_AUTH,
                      json={"release_timezone": "Europe/London"})
     assert response.status_code == 422
+
+
+def test_release_destination_round_trips_without_tokens_or_urls(monkeypatch, isolated_store):
+    c = _client(monkeypatch, isolated_store)
+    response = c.put("/settings/mine", headers=_AUTH, json={"release_destination": {
+        "provider": "drive", "folder_id": "folder-123", "folder_name": "Approved releases",
+        "token": "must-not-persist", "url": "https://example.invalid/private",
+    }})
+    assert response.status_code == 200, response.text
+    expected = {"provider": "drive", "folder_id": "folder-123",
+                "folder_name": "Approved releases"}
+    assert response.json()["release_destination"] == expected
+    assert c.get("/settings/mine", headers=_AUTH).json()["release_destination"] == expected
+    assert c.get("/settings", headers=_AUTH).json()["release_destination"] == expected
+    raw = isolated_store.get_user_setting("alice@hosp.org", "release_destination")
+    assert "must-not-persist" not in raw and "example.invalid" not in raw
+
+
+def test_release_destination_is_user_scoped_validated_and_clearable(monkeypatch, isolated_store):
+    c = _client(monkeypatch, isolated_store)
+    bad = c.put("/settings/mine", headers=_AUTH,
+                json={"release_destination": {"provider": "blob", "folder_id": "x", "folder_name": "X"}})
+    assert bad.status_code == 422
+    good = {"provider": "sharepoint", "folder_id": "drive/item", "folder_name": "Compliance"}
+    assert c.put("/settings/mine", headers=_AUTH, json={"release_destination": good}).status_code == 200
+    monkeypatch.setattr(__import__("core"), "verify_gis_token", lambda tok: "bob@hosp.org", raising=False)
+    assert c.get("/settings/mine", headers=_AUTH).json()["release_destination"] is None
+    monkeypatch.setattr(__import__("core"), "verify_gis_token", lambda tok: "alice@hosp.org", raising=False)
+    cleared = c.put("/settings/mine", headers=_AUTH, json={"release_destination": None})
+    assert cleared.status_code == 200
+    assert cleared.json()["release_destination"] is None

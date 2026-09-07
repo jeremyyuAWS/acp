@@ -107,6 +107,15 @@ def test_ensure_release_folder_uses_the_reviewed_custom_name():
     assert ("create", "Q3 Accessibility Release") in svc.calls
 
 
+def test_drive_release_root_is_created_under_the_selected_parent():
+    svc = _FakeSvc(list_result=[])
+    publish.ensure_published_folder(
+        svc, "release-1", folder_name="Release", parent_id="finance",
+        return_details=True)
+    assert any("'finance' in parents" in (call[1] or "")
+               for call in svc.calls if call[0] == "list")
+
+
 def test_upload_published_upserts_existing():
     svc = _FakeSvc(list_result=[{"id": "file-9"}])
     url = publish.upload_published(svc, "folder-1", "report.pdf", b"%PDF-1.4 ...")
@@ -269,6 +278,21 @@ def test_sharepoint_release_root_reuses_its_durably_claimed_name(monkeypatch):
 
     assert folder_calls[-1] == ("2026-09-05 10-00 UTC", "root")
     assert result["id"] == "release-folder"
+
+
+def test_sharepoint_release_root_is_created_under_the_selected_parent(monkeypatch):
+    import scanner
+    folder_calls = []
+    monkeypatch.setattr(publish, "_sp_ensure_folder",
+                        lambda token, drive, parent_id, name:
+                        folder_calls.append((name, parent_id)) or
+                        ("root" if name == "Remediated" else "release-folder"))
+    monkeypatch.setattr(scanner, "_sp_base", lambda drive: "https://graph")
+    monkeypatch.setattr(scanner, "_sp_get", lambda token, url: {
+        "id": "release-folder", "name": "Release", "webUrl": "https://sp/release"})
+    publish.ensure_sharepoint_release_folder(
+        "token", "drive", "release-1", "Release", parent_id="finance")
+    assert folder_calls[0] == ("Remediated", "finance")
 
 
 def test_sharepoint_publish_reuses_identical_copy_without_writing(monkeypatch):
