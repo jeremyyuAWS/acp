@@ -10,6 +10,7 @@ import ReleaseModelProvenance from './ReleaseModelProvenance.jsx'
 import ReleaseFileSelection, { releaseFileSize } from './ReleaseFileSelection.jsx'
 import ReleasePlanSummary, { formatReleaseBytes } from './ReleasePlanSummary.jsx'
 import ReleaseStepPanel from './ReleaseStepPanel.jsx'
+import LiveCounter from './LiveCounter.jsx'
 import './release-plan-summary.css'
 
 // Step 9 · Publish. Marks re-validated documents as published: the conformance status
@@ -483,6 +484,12 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           <b>{pubStarted ? publishedCount : 0}</b> released
           {failedCount > 0 && <><span className="muted"> · </span><b style={{ color: 'var(--error-fg-strong)' }}>{failedCount}</b> failed</>}
         </p>
+        <dl className="stage-live-accounting" aria-label="Live release accounting">
+          <div><dt>Released</dt><dd><LiveCounter value={pubStarted ? publishedCount : 0} /></dd></div>
+          <div><dt>Ready</dt><dd>{publishableReady.length.toLocaleString()}</dd></div>
+          <div><dt>Pending</dt><dd>{Math.max(0, ready.length - Object.keys(done).length - failedCount).toLocaleString()}</dd></div>
+          {failedCount > 0 && <div className="stage-live-accounting__exception"><dt>Failed</dt><dd>{failedCount.toLocaleString()}</dd></div>}
+        </dl>
         <details className="release-safeguards" style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
           <summary style={{ cursor: 'pointer', fontSize: 12.5, fontWeight: 600 }}>Release safeguards, destination, and evidence</summary>
           <div style={{ marginTop: 8, fontSize: 12.5, lineHeight: 1.6 }}>

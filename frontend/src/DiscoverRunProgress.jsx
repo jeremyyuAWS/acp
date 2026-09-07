@@ -797,6 +797,15 @@ export default function DiscoverRunProgress({ progress, busy, onStop, sources, s
         <SourceVisibility source={source} scope={scope} />
 
         <SharePointLiveSummary source={source} scope={scope} progress={progress} freshness={freshness} />
+        {' '}
+        <dl className="stage-live-accounting" aria-label="Live discovery accounting">
+          <div><dt>Documents found</dt><dd><LiveCounter value={filesFound} /></dd></div>
+          {foldersFound !== null && <div><dt>Folders visited</dt><dd><LiveCounter value={foldersFound} /></dd></div>}
+          {(saveNew !== null || saveUpdated !== null) && (
+            <div><dt>Inventory saved</dt><dd><LiveCounter value={(saveNew ?? 0) + (saveUpdated ?? 0)} /></dd></div>
+          )}
+          {totalExceptions > 0 && <div className="stage-live-accounting__exception"><dt>Needs attention</dt><dd>{totalExceptions.toLocaleString()}</dd></div>}
+        </dl>
 
         <div aria-live="polite" aria-atomic="false" role="list" aria-label="Discovery steps"
              style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>

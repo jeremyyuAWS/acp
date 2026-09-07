@@ -177,6 +177,8 @@ describe('Release builder', () => {
     const s = pub()
     expect(s).toMatch(/className="release-safeguards"/)
     expect(s).toMatch(/Release safeguards, destination, and evidence/)
+    expect(s).toMatch(/aria-label="Live release accounting"/)
+    expect(s).toMatch(/<LiveCounter value=\{pubStarted \? publishedCount : 0\}/)
     expect(s).toMatch(/<details hidden className="panel release-record"/)
     expect(s).toMatch(/<details hidden className="panel"/)
   })
