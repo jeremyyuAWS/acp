@@ -97,6 +97,54 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   gap (`_sp_list` carries `driveId` per file for exactly this). The fix threads `driveId` through `norm` so
   the download routes to Graph. Paired with #483, which stopped the drawer mislabelling the symptom.
 
+
+- **Delta sync reached interactive scans, not just the scheduled sweep** (#951, #961, #963, #978,
+  #979, #981, #984, #994, #1007). SharePoint delta sync was added to the scheduled sweep (#961) and
+  then to interactive scans (#981), with Drive following the same path (#978, #951); reconstructed
+  listings feed the real scan pipeline rather than a parallel one (#979). Two things had to be true
+  first — SharePoint checksum support, which is what unlocks ADR 0011 reuse (#963), and Content Type
+  carried through a delta-sync reconstruction (#1007, TODO P1e). Interactive delta sync was decoupled
+  from the incremental flag (#984) so a caller could not silently get a full re-list, and Drive
+  reconstruction was verified against the same Google account (#994). The failure this prevents: a
+  30k-file estate re-listed from scratch on every scan is the difference between a scan that finishes
+  and one the customer cancels.
+- **Source freshness became a vocabulary rather than a timestamp** (#945, #955, #973). Discover
+  surfaces source-freshness (#945) with the fuller PRD Phase 3 sync-state vocabulary (#973), and
+  worker-heartbeat age as a third freshness signal (#955) — so "is this list current?" has an answer
+  that tells a stale source apart from a dead worker.
+
+
+### 2026-09-04 → 2026-09-07
+
+- **Multi-site SharePoint discovery finished, Phases 1 → 4b** (#1303, #1313, #1323, #1326, #1332,
+  #1337, #1346, #1357). Site enumeration, SharePoint-native metadata and freshness, per-site
+  checkpoints with resumable scans, concurrent library walks with site coverage on the map, and
+  Graph throttling with an exception report. Freshness is read from SharePoint itself rather than
+  re-derived, so a scan no longer re-downloads a library that has not changed.
+- **A thirty-site scale proof, and the per-document Graph call it exposed** (#1355). The proof was
+  run rather than asserted; it found a per-document Graph round-trip that only shows up at estate
+  width. #1424 then wrote down what actually counts as one of the thirty locations, so the number
+  means the same thing to the customer and to the code.
+- **Release into SharePoint made durable against the five ways it was failing** (#1447, #1468,
+  #1475, #1496, #1498, #1500, #1504). Name races now fail atomically instead of half-writing;
+  release folders are recovered after a crash; duplicate filenames are preserved rather than
+  silently overwritten; collisions beyond page one of the listing are caught (page one was the only
+  place the old check looked); incremental totals are reconciled; and the Microsoft access token is
+  refreshed through long releases, which is the failure a large publish hits and a small one never does.
+- **Assessments scoped by content type** (#1398), **SharePoint scope shown across workflow cards**
+  (#1351) and **guarded across workflow stages** (#1385), so a SharePoint-sourced run cannot present
+  itself as a Drive one.
+- **Remediation reads the source cache under the key Assess wrote** (#1359) and remediates from that
+  cache one batch at a time (#1341) — the mismatch meant SharePoint remediation was refetching.
+- **A refusal now says whose problem it is** (#1352): a Graph 403 reports whether the tenant, the
+  scope, or the item is at fault, and what the tenant admin will see when asked.
+- **The production canary became a verifiable evidence gate** (#1491) and release canaries **fail
+  closed when incomplete** (#1506) — an unfinished canary used to read as a pass.
+- Corrected stale SharePoint parity claims in the docs (#1395) and made the folder-rule gap document
+  state what is true rather than what was planned (#1358). Four `importlib.reload` calls in the
+  SharePoint tests were breaking two tests in an unrelated file (#1431).
+
+
 ## Feature: Operator scan scope · #4601
 
 - Closed the gap where operator scope gated assessment and scoring but **nothing gated
@@ -201,6 +249,20 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   parent becomes an explicit exclusion, pruned at the **walk** not post-filtered) and fixed two bugs that
   made the whole feature cosmetic — the saved folder scope was not being applied at scan time.
 
+
+### 2026-09-04 → 2026-09-07
+
+- **Scheduled scans became operable** (#1660, #1664, #1684). User-timezone schedules (with the
+  timezone shown beside the account name, #1650), operational controls for pausing and forcing a run,
+  and reliability polish. A schedule expressed in server time is a schedule the customer reads wrong.
+- **Narrow scans no longer masquerade as full sweeps** (#1520) and **no longer lock the workspace**
+  (#1524); the selected Discovery scope stays visible while the scan runs (#1577).
+- **Replacing a Discovery now requires confirmation and offers continuity** (#1493, #1495), and the
+  exact recent workflow is offered before a rescan (#1505) — three separate paths that used to
+  discard a completed estate scan on a single click.
+- Scan history replays chronologically (#1598) and names the workflow revision behind each run (#1507).
+
+
 ## Feature: v2 frontend redesign · #4602
 
 - Forked the SPA so the redesign can move without risking the live one (#139).
@@ -297,6 +359,49 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   cards incl. a functional Google whitelist; `simAdminWriteHonesty`/`inviteTester` updated to the new
   structure. Full v2 suite green at 1687; `vite build` clean.
 
+
+- **Discover's queued state stopped contradicting itself** (#993, #1027, #1030, #1031, #1043). Three
+  contradicting queued-state signals were fixed and clarified (#1027) and the UI consolidated into a
+  single card (#1031); an unclaimed scan job could hijack the UI forever (#1030); the missing
+  "previous inventory unaffected" line was restored and a scan ID added to the failure banner (#1043);
+  and Discover's indefinite "Loading your inventory…" plus a worker-capacity false alarm were fixed
+  (#993).
+- **Smaller UI corrections** (#943, #944, #946, #948, #949, #956, #1130, #1188, #1204). The completion
+  card's inventory-delta question redirected to SourceDrawer (#943) and its key stats bulletized
+  (#946); the top-nav scannable-document count labelled and Time-travel's epoch date fixed (#944);
+  cancelled/interrupted scans labelled in the Recent scans table rather than shown as 0 (#948); the
+  status word itself shown in Docs/Certifiable instead of a separate badge (#949); a browser
+  notification on scan **failure**, not just completion (#956); a WCAG-compliant palette toggle in the
+  header (#1204); lifecycle results and folder metadata polished for Deva (#1130); and FastPass
+  failures fixed in the production shell (#1188).
+
+
+### 2026-09-04 → 2026-09-07
+
+- **The People and Roles screens were unusable in four distinct ways, all now fixed** (#1407, #1444,
+  #1457, #1464, #1535, #1571, #1579). The screen listed people it then refused to give a role to; the
+  role dropdown did nothing because its confirmation rendered off-screen; the row holding role
+  assignment wrapped so the control was unreachable; the dropdown closed under the cursor because
+  App's polling re-committed the select; a hidden Settings tab was not hidden; and the confirmation
+  toast covered — and swallowed the clicks of — the rows beneath it. Each was a control that appeared
+  to work and did nothing, which is worse than a control that is visibly broken.
+- **Application header and account controls simplified** (#1296); provider links styled as source
+  actions (#1402); duplicate source-drawer actions removed (#1426); connected content sources open in
+  their provider (#1314). The connector drawer had eighteen labels for classes nothing writes (#1418).
+- **The WCAG token migration was finished and the allowlist emptied** (#1483, #1476, #1286, #1320).
+  Seven undeclared custom properties, then an eighth, were fixed and the allowlist that was hiding
+  them removed; three `--text` uses were pointed at the declared `--ink`; icon-button, upload-step,
+  assess-pipeline, segment-bar and verify-track contrast failures were closed. The product asserts
+  contrast conformance for customers, so its own shell failing it is a credibility defect.
+- **Machine values render identically wherever they appear** (#1716). Sixteen components each reached
+  for their own monospace/tabular-figure styling for counts, ids and timings, so the same number
+  looked different between the Remediate inbox, Monitor and the run drawers; one `styles.css` class
+  now owns it and `typographyConsistency.test.js` fails a component that re-invents it. Inconsistent
+  number rendering is what makes two surfaces showing the same figure read as two figures.
+
+
+
+
 ## Feature: Dependency security · #4603
 
 - **Upgraded pdfjs-dist to 6.2.108, closing arbitrary JavaScript execution on opening a
@@ -306,6 +411,16 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   `npm audit --omit=dev` on both SPAs — **`--omit=dev` is the part that matters**, because these
   are not build tooling: they ship to the browser. A platform whose entire purpose is ingesting
   untrusted documents cannot carry a parse-a-PDF-and-run-JS bug.
+
+- **vite upgraded to clear moderate and high CVEs** (#672, P3.5).
+
+
+### 2026-09-04 → 2026-09-07
+
+- Fail fast when shared scan credentials cannot be stored (#1564), and Key Vault write-through that
+  accepts a key value and stores none locally (ADR 0050, #1353). Telemetry endpoints are treated as
+  credentials rather than as collectors (#1438) — they carry account-identifying data.
+
 
 ## Feature: Alt-text generation and grounding · #4604
 
@@ -353,6 +468,32 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   `ok=False`, with `providers.REASON_*`), so the miss and its reason show in the audit trail / cost
   panel. Makes the remaining root cause (rotated key R3, or the worker env value) diagnosable from the UI
   after deploy. 1.1.1 stays "assisted"; no capability change.
+
+
+- **Vision providers gained a governed activation path, and OCR stopped lying about what it read**
+  (#1033, #1140, #1157, #1195). The OpenAI and Anthropic vision providers completed their governed
+  activation path (#1157). An image OCR could not read is no longer reported as an image with no text
+  in it (#1195) — the silent degradation that makes a clean report untrustworthy — and image OCR work
+  is now bounded and reused rather than repeated per finding (#1140). House style reaches 1.1.1 alt
+  drafts, the one criterion it could not (#1033).
+
+
+### 2026-09-04 → 2026-09-07
+
+- **Four vision providers behind one governed activation path** (#1335 Gemini, #1342 Bedrock, #1414 +
+  #1427 Hugging Face endpoint health with nearest-rank p95 and window exclusion, #1545 Claude
+  `claude-haiku-4-5` promoted to primary text+vision provider). Optional vision now **fails fast when
+  unavailable** (#1637) instead of degrading silently into a run that produces nothing usable.
+- **Assessment-time cloud escalation for LOW-confidence findings** (#1283), governed (#1460),
+  track-managed (#1455), restored under AI governance after a regression (#1458) and surfaced across
+  live assessment and operations (#1463). A second opinion that is invisible cannot be audited.
+- **HITL image review got a working assistant** (#1301 "Help me" copilot, ADR 0019 Phase 2; #1297 a
+  context-aware guidance sentence replacing a terse reason; #1299 a zoom label that says which image
+  "THIS" refers to; #1292/#1294 assess-time pre-draft wired through `describe_image_structured`).
+- **Reviewer edit-rate feeds back as an automation maturity signal** (ADR 0019 §8.5, #1305), and a
+  nightly Review Memory derivation job was added (ADR 0021, #1372). Constrained decoding was measured
+  and reported honestly: it fixes the output format and moves no quality gate (#1333).
+
 
 ## Feature: Test corpus and CI · #4605
 
@@ -422,6 +563,64 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   suite splits across the four runners by wall-clock, not an even count — a few slow modules no longer
   pin one shard. Another session's follow-up to #321, recorded here as it landed in this window.
 
+- **A real browser suite over the discover → assess pipeline** (#857, #859, #876, #832). Playwright driving
+  the actual pipeline end to end (#857), with vite bound to `127.0.0.1` so the CI readiness probe could
+  connect (#859) and an Assess-tab visibility wait replacing a bare click (#876). Comprehensive scale tests
+  for the deferred discover pipeline (#832). The suite immediately earned itself: a UI wording change broke
+  the `VersionToastBanner` assertion (`69a29c3a`) — caught in CI rather than in staging.
+- **Unit coverage where the queue logic now lives** (#718, #714, #710, #703, #861, #838). `scan_batch` item
+  analysis, finalize trigger and premature-finalize guard (#718); `rescore_file`, `assess_trace` and
+  `_verify_residual_scs` (#714); six lifecycle gaps — contains, null dates, disabled, actor scope, tag dedup,
+  delete-excluded (#710) — plus boundary conditions and multi-policy conflict resolution (#703).
+  `test_scan_never_started_fix` was **leaking a mocked scanner into the rest of the suite** (#861), and
+  `drive_token` cross-replica resolution is now pinned for `scan_discover` (#838).
+
+
+- **The labelled ground-truth corpus went from 15 to 40 verified pairs, and CI ratchets it** (#1009,
+  #1012, #1014, #1016, #1018, #1021). .xlsx started at 4 pairs (#1012) and reached 23 by zip-part
+  injection for four more criteria (#1014); .pptx added 9 (#1016, 23 → 32, 52%); .pdf added 8 (#1018,
+  32 → 40, 65%). Fixture coverage is reported and **ratcheted so it cannot shrink** (#1009), and the
+  corpus invariants are enforced in one place for every corpus (#1021) rather than per-corpus and
+  drifting apart.
+- **Criterion × format coverage 44 → 54 of 62** (#1020, #1029, #1038, #1042, #1047, #1050). 1.3.3 on
+  xlsx/pptx/pdf (#1038, 44 → 47, 76%), 1.4.5 on the same three (#1047, 48 → 51), 3.1.2 (#1050, 51 →
+  54) with the corpora given their text lane. Two of these are corrections rather than additions: pdf
+  2.4.2 and 3.1.1 were covered after **the earlier claim that they were unreachable turned out to be
+  wrong** (#1020), and the .pdf corpus was carrying an *unearned* 2.4.2 control, removed while 1.3.1
+  was covered (#1042). #1029 fixed a 3.1.1 the xlsx corpus was already carrying incorrectly. #1047's
+  own note is the part worth keeping — it closed the hole that had let the previous pass skip them.
+- **Test-suite hygiene — mostly defects the suite was hiding** (#1083, #1093, #1095, #1098, #1105,
+  #1114, #1131, #1141, #1176, #1193). The suite was leaking every fixture directory it built (#1083)
+  and pruning a **live** session's temp directory on age (#1093). A store test double could never have
+  been called by production (#1105); Drive test doubles are now isolated (#1141); two AssessSummary
+  test files differed only in case (#1114). Three tests were passing without testing anything: the OCR
+  corpus assertions never took the skip their own docstring promised (#1098), one skipped forever on a
+  dependency nobody declared (#1176), and a parallelism test proved parallelism **by winning a race**
+  (#1193). The pool-exhaustion load test now waits for saturation instead of sleeping (#1131), and the
+  job queue is tested on the database it actually runs on (#1095).
+
+
+- **Two e2e regressions caught by the suite that was just built** (#898, #899, #942). The pipeline spec was
+  matched to the "files inventoried" wording (#898) and to #941's completion-card timestamp (#942), and
+  shard-4's cross-test module poisoning was stopped **at the source** rather than worked around (#899).
+
+
+### 2026-09-04 → 2026-09-07
+
+- **Measured whether the detector tests would notice the detector being wrong** (#1503) and tested
+  the one PRD 9 guard that nineteen mutations found undefended (#1456). Mutation testing is the only
+  check that distinguishes a test suite from a suite of assertions that happen to pass.
+- **Checked the docx detectors against an OOXML implementation that is not ours** (#1487) — a
+  detector validated only against the writer it was built alongside proves nothing about real files.
+- **Three flaky or false-green CI failures fixed** (#1429 two worker-boot tests racing a fixed sleep
+  against `import core`; #1594 a backoff test that asserted the dice and so failed at random on other
+  people's PRs; #1604 a CI job running a Python nothing ships, plus a gauge calling a busy service idle).
+- **A pending CI run is cancelled too, so main's middle commits never shipped** (#1627). Cancel-in-progress
+  was cancelling queued runs for commits that then merged unverified — the class of bug where the
+  dashboard is green because nothing ran.
+- Made the legacy readiness probe work in CI (#1589).
+
+
 ## Feature: Remediation reaching the file · #4606
 
 - Built `api/apply_text_values.py`, the write-back that never existed for the two text-span
@@ -455,6 +654,85 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   used when the in-memory store is wiped and that total absence fails cleanly with the honest
   "re-trigger" message, never a partial write. `docs/TODO.md` item #1 struck with the evidence and the
   "engineering left ≈ 2–3.5 person-days" summary corrected to ≈ near zero.
+
+
+- **All 17 remediation lanes proven end to end — 0 → 17 of 17** (#1058, #1067, #1069, #1073, #1074,
+  #1076, #1077, #1078). The REMEDIATION-VERIFIED denominator closed on one bar held constant for every
+  lane: the original document trips the finding, an approval changes the saved document, **a real
+  re-scan verifies it**, unrelated content survives, and a failed write earns no credit. docx 2.4.4
+  first (#1058), then 1.1.1 pptx and 3.1.2 docx (#1069), 2.4.4 pptx and 1.1.1 docx (#1073), five more
+  (#1074, 6 → 11), the 1.3.3 sensory rewrite across all three Office formats (#1077, 11 → 14), and the
+  last three (#1078). The one worth reading is 2.4.6 xlsx: it was written and **deliberately withheld**
+  because renaming only the sheet tab left every formula, defined name and chart series referencing a
+  sheet that no longer existed (#1076, #1067). Registering it on that evidence would have certified the
+  damage; the guarantee is now asserted through the lane rather than through the writer alone.
+- **Remediate became an automation-first workspace** (#1144, #1145, #1147, #1203). A two-panel review
+  workspace (#1147) with automatic batches and contained review layout (#1144), and predicted Assess
+  stragglers scheduled first (#1145) so the long tail stops deciding the run's wall-clock. #1203 fixed
+  execution, preview and live progress together.
+
+
+- **The engine condition attached to the 17-lane milestone** (#1097) — so the "17 of 17" claim carries the
+  condition under which it holds rather than standing bare.
+
+
+### 2026-09-04 → 2026-09-07
+
+- **Archival will no longer move a file out from under someone.** Four independent guards: check
+  whether a document can be overwritten before archiving it (#1371), check who is still working on it
+  (#1361), treat access as distinct from use — whether anybody has actually opened it (#1369) — and
+  archive automatically only where something is *proven* to have replaced it (#1472). Approving an
+  archival candidate now actually moves the file (#1374); it previously recorded the decision and did
+  nothing.
+- **Autoscale remediation within the database connection budget** (#1370) and drain workers on deploy
+  while reducing in-flight remediation work (#1366) — remediation could previously exhaust Postgres
+  connections and take the API down with it.
+- **One server-owned account of a remediation run, instead of five subsystems' counters** (#1376).
+  Five components each maintained their own progress arithmetic and disagreed; the run is now counted
+  once, server-side, and every surface reads that.
+- Remediation exceptions made actionable, with a delivery-only retry that cannot silently re-fix
+  (#1474); recovery made bounded and explicit (#1525); finding counts reconciled (#1616); remediation
+  batches bound to the approved decisions behind them (#1488).
+- **pptx 1.4.5 genuinely clears: the image of text is replaced, not described** (#1715). The old lane
+  wrote the OCR transcript into the picture's `descr` — a 1.1.1 improvement that can never satisfy
+  1.4.5, which is why #1665 downgraded it to HUMAN. Measured first: `ocr._ooxml_images` reads
+  `ppt/media/*` straight out of the zip, so **deleting the `<p:pic>` does not clear the finding** —
+  only deleting the media part does, and a test pins that. The new
+  `apply_pptx_image_replacement` turns each approved picture into a real text box at the same
+  rectangle and drops the media part, and **refuses** (withholding credit) when the image is
+  referenced by a layout or master, sits in a group, or has no `<a:xfrm>` of its own. 1.4.9 is
+  deliberately left HUMAN — it is AAA, exempts nothing, so its rows can be charts, and replacing a
+  chart with its axis labels destroys information. pptx 1.4.5 moves HUMAN → ASSISTED, the write-lane
+  count 18 → 19, and a round-trip fixture additionally asserts the replacement introduces no new
+  failure.
+- **The applier registry is derived from the tests that prove it, not from a hand-written list**
+  (#1707). `test_capability_assisted_contract.py` held a frozenset "verified by tracing" — and tracing
+  is reading, which is how pptx 1.4.5 sat in that set for months while its verify gate refused every
+  approval. Each round-trip fixture now declares `PROVES_LANES`, read by AST, and admitted only if the
+  module visibly runs the production seam. Deriving it found the gap the list hid: pptx **2.4.6 had no
+  round-trip fixture at all**, and writing one exposed a live hole — `office_structure` counts a
+  `ctrTitle` placeholder as a slide title while the writer matched only `type="title"`, so an approved
+  title on a Title Slide was silently returned unresolved and never credited. Fixed; the generator now
+  reports 18 of 18.
+- **The retired pptx `descr` writer is asserted orphaned rather than left looking live** (#1724). A
+  complete, fully unit-tested module with no caller reads as shipped code to anyone who greps it — the
+  same shape that had ten unmounted components being reported as delivered. Three structural (AST, not
+  substring) assertions keep the file for reversibility while proving nothing calls it, and each was
+  bite-checked.
+- **A fix that breaks another criterion no longer certifies the document** (#1712). #1680 recorded the
+  regression and left the policy open; this closes it. Every write-back lane asks only whether *its*
+  criterion cleared, so a deck whose approved alt text cleared 1.1.1 and tripped 1.4.3 reached
+  `compliant=1`, `score=100`, `status='pass'` and Publish — certified against a criterion it was
+  failing. The corrected file is still kept; only the conformance claim is withheld, and a review row
+  is raised naming what broke. Three details are load-bearing: only the **credited** path counts (a
+  regression inside a discarded write is evidence about the model, not a fact about the file, which
+  corrects #1680); the row is keyed `{criterion}/regressed` so `_superseded_items` cannot retract it
+  the instant it is written; and the gate **fails closed** on a missing row, because a regression
+  nobody can see in the inbox is exactly the one that must not certify on silence. Seven bite checks,
+  one of which started green and exposed a faulty test.
+
+
+
 
 ## Feature: Assessment correctness · #4607
 
@@ -494,6 +772,40 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   edge corpus: 07-malformed-xml and 08-missing-document-xml flagged; good, tracked-changes, empty and
   unicode/RTL controls not.
 
+- **Dead-lettered work stopped disappearing from the arithmetic** (#668, #851, #666). A dead-lettered job now
+  leaves its document in the count (#668) and a dead-lettered `scan`/`scan_discover` job marks the scan
+  failed (#851) instead of leaving it eternally "running"; the unverified lease is bounded, and a count that
+  was always zero was removed (#666).
+- **Classification and scoring fixes** (#833, #653, #652, #660, #603, #692). Image and video MIMEs handled in
+  `classify_from_metadata` (#833); a minimal-prompt retry for moondream (#653); severity levels recalibrated
+  with a unified palette (#652); scope resolution guarded so **one corrupt scope could no longer fail every
+  file in the run** (#660); and `annotate()`'s filename guess was defeating the classification-honesty check
+  (#603). A Continue-to-Assess button now appears when only non-assessable files were found (#692) rather
+  than a dead end.
+
+- **Fail closed when an analysis engine is missing** (#952, #967, #991, #992, #995, #998, #1005, #1060,
+  #1066, #1070). A missing analysis engine now fails closed **everywhere it could silently pass**
+  (#1005). The assessment scope is re-adopted after a save, not only at boot (#991); the monolithic
+  scan path populates `scan_inventory` and guards against an inventory-less baseline (#995).
+  `DispositionRules` stopped writing state from a request that outlived its mount (#1070); Assess
+  stopped saying "nothing is processing them" about a job a worker was running (#1060); the Assess
+  topology/health split was finished and worker provisioning taken off the user's screen (#1066).
+  Orphan-component drift surfaced by an ADR audit was fixed and the list enforced (#992), the Phase 3
+  sync review's remaining low-severity findings cleaned up (#998), a weekend review pass found four
+  more (#952), and a flake #964's pause checkpoint had introduced was fixed (#967).
+
+
+### 2026-09-04 → 2026-09-07
+
+- Live assessment updates made adaptive and resilient (#1479); the assess tier pinned warm at 5-5 as
+  production actually runs it (#1405); the assessment card kept visible across tabs and on its own tab
+  (#1437, #1446); the rolling heartbeat bars restored (#1625) and the sparkline moved into live status
+  (#1621).
+- **"12 of 70 documents processed" said nothing had been processed** (#1561) — a completeness figure
+  that read as zero progress while two thirds of the estate was done. Live processed-document
+  completeness is now shown during remediation (#1511).
+
+
 ## Feature: Multi-tenancy and the control plane · #4608
 
 - Gave `documents` its own tenant column, separate from the business owner (#159). The table
@@ -529,6 +841,40 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   `is_owner` so the SPA shows the promote/demote controls to the owner only. Settings → Users gained admin
   badges + an owner-only Make/Remove-admin toggle. 7 backend + 3 frontend tests. Not RULE_PATHS.
 
+- **The route allowlist was fail-open; it is now a fail-closed gate** (#630, #632). #630 found **five route
+  groups shipped unauthenticated, one of them a write endpoint** — the allowlist model meant any route added
+  without an explicit entry defaulted to public. #632 inverts it: unlisted routes are denied. This is the
+  highest-severity finding in the window.
+- **Owner scoping and isolation** (#872, #796, #690, #613). `POST /scans/{sid}/remediate` scoped to the
+  requesting owner (#872); owner-email isolation tests plus a fan-out load harness (#796, R11 — load test
+  PASS 2026-08-25, #817); SharePoint silent token refresh with mid-scan logout cleanup (#690); and a second,
+  separate production SharePoint tenant connected as a scan source (#613).
+- **Recorded as reverted — the `/internal/admin/sql` endpoint** (#873 → #874, #875 → #878). A protected
+  endpoint for programmatic DB access was merged (#873) and reverted the same day (#874), re-landed using
+  `cursor()` instead of `connect()` (#875), and reverted again (#878). **Net effect on `main`: no admin SQL
+  endpoint exists.** Logged deliberately: the round trip consumed real review cycles, and the conclusion —
+  a general SQL door is not worth its blast radius even behind admin auth — should not have to be
+  rediscovered by the next person who wants one.
+
+
+### 2026-09-04 → 2026-09-07
+
+- **Workspace RBAC completed across slices 3, 5 and 6** (#1285 the Roles screen, drawer and role
+  assignment; #1295 denial telemetry, the unassignment event and a lockout proof; #1302 the staged
+  rollout ladder, observe mode and a preflight report), plus full RBAC enforcement with a default
+  Platform User role (#1293) and all tabs opened to signed-in users (#1287). Rollout readiness is now
+  shown in Roles (#1634).
+- **A domain grants sign-in; a role grants privileges** (#1417) — the two had been conflated, so
+  adding a domain effectively granted privileges nobody had assigned.
+- **Suspending somebody now actually stops them signing in** (#1453). The suspension was recorded and
+  not enforced: a suspended user retained a working session and could re-authenticate.
+- **A cached permission denial outlived the permission grant** (#1617) — a user who was just granted
+  access kept being refused until the cache expired.
+- **HITL item owner isolation enforced** (#1633) and **a document's name scoped to the viewer's own
+  runs** (#1596). Same class as the three unscoped routes found on 2026-09-02: cross-account leakage
+  through an object that was never owner-checked because nobody thought of it as data.
+
+
 ## Feature: Local model benchmarking · #4609
 
 - Added an ollama service to the local compose stack on a named volume rather than a baked
@@ -538,6 +884,51 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   exists because llava:7b + llama came to ~9.2GB and OOM-killed the container against an 8Gi
   Azure Consumption ceiling. Deployment and local development have opposite constraints.
 - Fixed an ollama healthcheck that called a binary the image does not contain (#162).
+
+
+### 2026-09-04 → 2026-09-07
+
+- **The Remediation Evals Kit answers one question: which tier is cheap enough AND safe enough**
+  (#1316). Run against two local models, **neither earned a category** (#1328) — reported as a
+  negative result rather than quietly dropped.
+- **The hosted ladder: three Claude tiers, zero criticals, 178× over budget** (#1373). The quality
+  answer and the cost answer point in opposite directions, and both are on the record.
+- **A dispatch-only evals job with a spend guard that refuses before it bills** (#1345), and one place
+  to configure the model key — the evals now read the product's (#1347), so an eval cannot pass
+  against a model the product does not use.
+- **The adversarial review-loop eval set: 32 cases, a reviewer oracle and re-scan** (#1678), plus
+  measured remediation model evidence (#1641), model provenance on conformance reports (#1644), and
+  **criterion-level model rollout gates** (#1704) with a shadow-mode comparison of Claude against the
+  current remediation lane, per criterion: enable / human-only / insufficient (#1673). This is the
+  machinery that lets a model be turned on for the criteria where it is proven and left off elsewhere,
+  rather than as one all-or-nothing switch.
+- **A coverage band: a second case for every single-case category in the evals corpus** (#1705). A
+  category represented by one case cannot distinguish a model that handles it from one that got lucky.
+- **The first measured Claude run on the adversarial review-loop set** (#1721). Run 34135515960: 32
+  cases x 3 repeats across Haiku 4.5 and Sonnet 5, 192 billed calls, $0.81, with the report JSON
+  committed so the table can be checked rather than trusted. Accepted unchanged 51% / 62%, applied
+  59% / 69%, cleared after re-scan 59% / 69%, **regressions introduced zero for both**, latency mean
+  3.10s / 6.40s, $1.61e-03 / $6.79e-03 per call. Three findings matter more than the headline: the
+  reviewer is load-bearing (both models produced proposals that would have regressed unedited — Haiku
+  5, Sonnet 3, rules-only 9 more; all caught), the must-refuse cases separate the two candidates
+  (Sonnet escalated the invoice-header and PHI cases 3/3 where Haiku proposed a mutation), and cost
+  runs 161x / 679x over the kit's per-dollar target uncached. Recorded in place: 32 cases is a look,
+  not a distribution, and Sonnet is nondeterministic here (0.66 / 0.75 / 0.66 accept rate), which is
+  why the default is three repeats.
+- **The Claude eval candidate's credential is now named correctly, and the workflow accepts either
+  name** (#1709, #1717). Five dispatches of the adversarial set died at the key check with
+  `ANTHROPIC_API_KEY` blank while a real key sat in the Dependabot store, then under
+  `ACP_ANTHROPIC_KEY`. The docs claimed resolution took "`ANTHROPIC_API_KEY` or `EVALS_API_KEY`" —
+  `AnthropicCandidate` reads the first and nothing else — and never said that a job declaring no
+  `environment:` cannot see an environment-scoped secret. The workflow now maps either secret name
+  onto the one the kit reads, and its error text names the *store*, not just the settings page that
+  carries three indistinguishable tabs.
+- **A guarded Sonnet remediation pilot** (#1714) — the provider path, settings surface and store
+  wiring to run Sonnet on remediation proposals behind an explicit switch, with a pilot module and
+  tests rather than a global provider swap.
+
+
+
 
 ## Documentation
 
@@ -704,6 +1095,75 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
   the GPU/vision lane (the in-tenant Azure T4, the ollama-on-GPU path, what the pre-flight probe actually
   verifies), each cited to the code as it stands on origin/main rather than to plan. Docs-only, not RULE_PATHS.
 
+- **ADR 0040, the independent verification gate, and adversarial fixtures** (#734, P4.1/P4.4/P4.5) — plus a
+  sweep-corpus density and confidence-calibration script (#746, P4.2/P4.6).
+- **Backlog reconciled against the source, twice** (#670, #678, #683, #686, #687, #715, #717, #678). #670
+  marked eleven items done, each source-verified on 2026-08-24; #678 closed R10, R13 and P3.5. The pattern
+  this repeats: `docs/TODO.md` drifts stale because shipping and closing are separate acts, so the log
+  records the reconciliation rather than the individual strikethroughs.
+- **Decisions closed with evidence** — P1.4 production quality met via RunPod `qwen2.5-vl` (#799); R11 load
+  test PASS 2026-08-25 (#817); R12 GPU vision `zone=cloud` confirmed in prod, deploy #559 (#801); P3.1 closed
+  after confirming the PDF engine was vendored by ADR 0029 and correcting a stale comment (#771); P0.10
+  warning when `deploy.sh` uses shared Langfuse defaults (#798); a stale 2.4.4 PDF coverage reason corrected
+  after P-21 shipped (#794). Blue/green deployment guide and the P-13–P-20 backlog written (#731); RunPod
+  key-rotation runbook added (#754).
+
+
+- **Five ADRs and a reliability PRD, written where the code disagreed with the plan** (#1022, #1046,
+  #1053, #1056, #1071, #1085, #1096, #1126). ADR 0045 proposes controlled schema migration and says why
+  a separate step is not enough (#1085); its §6 records that **the app and the worker deploy on
+  different images and nobody sequences that** (#1096). ADR 0046 designs blob intake at Assess — design
+  only, no code (#1126). The reliability-hardening PRD was verified against `main` and overlap-cleared
+  before being written up (#1046). Role-specific connection budgets are proposed with **the arithmetic
+  made executable** rather than asserted (#1056), the native entry points and what is actually isolated
+  are mapped (#1071), and #1022 records two lessons that cost a session real work. #1053 records the
+  .xlsx 2.4.4 credit gap *and the trap under its obvious fix* — the note that made #1076 possible.
+
+
+- **A public Swagger document for the health/readiness/heartbeat API** (#917) — the endpoints an operator
+  is told to check were previously documented only in the code that serves them.
+
+
+### 2026-09-04 → 2026-09-07
+
+- **The ADR index was missing 16 of 55 ADRs, and three cross-references pointed at nothing** (#1517).
+  An index that silently omits a third of its entries is worse than no index — it is read as complete.
+- **ADR 0053 framed the VPAT template decision and stopped citing ADR 0029 as its precedent** (#1514);
+  the follow-up recorded that the terms were readable after all and answered its open Q2 (#1643).
+- **Four stale status claims corrected, each of which read as current** (#1536 Phase 5's row said
+  "planned" while two thirds of it served traffic; #1566 Phase 6's row said "planned" while the
+  Section 508 edition was already offerable; #1626 the same row said "part delivered" after the last
+  edition opened; #1518 two dated backlog notes reading as current). Plus a PRD whose heading and
+  status line both named a stale phase (#1631), and a PRD claiming sub-headings "do not yet match"
+  forty minutes after they did (#1671).
+- `docs/TODO.md`'s coverage counts were 36/45/6 and are 37/44/6 (#1396); **31 of 70 catalog rules
+  pointed at files that do not exist** (#1397); the chart rendered less than the plan promised (#1394)
+  and the volume it asked for would have broken the model runtime (#1428); two output figures named
+  the wrong thing (#1422); the 98.36% CPU figure is now cited rather than traceless (#1304).
+- CLAUDE.md corrections: which writes the proxy refuses and who has to make them (#1384); a
+  remote-tracking ref outlives the branch it describes (#1516); **"is it in production?" is an
+  ancestry question**, not a tag comparison (#1547).
+- The real-time remediation operations panel was specified before it was built (#1379, #1382, #1433),
+  the coverage-and-adapters sprint backlog added (#1315), the database tier put in front of a proposal
+  that ignored it (#1308), and the vision-adapter dependency marked shipped (#1276).
+- **Five sites still described ACR export "Phase 5" as pending, and one of them reached customers**
+  (#1708). `acr_export_preview.py`'s projection carried "The official ITI VPAT® template is integrated
+  in Phase 5", printed in the notice above **every draft preview**, wrapped by the PDF and carried in
+  the JSON — telling every reader a template file was coming when ADR 0053 (Option C, decided
+  2026-09-07) had decided the opposite: match the structure, do not vendor the file. Corrected along
+  with a module docstring wrong three ways, a seam docstring, a frontend comment claiming shipped tabs
+  were unbuilt, and a test fixture carrying the false sentence verbatim. "not a VPAT" is retained,
+  because the naming question is still open.
+- **ADR 0047 still cited ADR 0029 as the licensing precedent ADR 0053 exists to retract** (#1710). The
+  0053 retraction reached the two code sites that quoted the claim and missed the ADR where it
+  originated — 0029 vendored a first-party analyser and contains no licensing or trademark reasoning
+  at all. A repo-wide sweep confirms this was the last one. The bullet records what it used to say and
+  why the correction missed it, rather than deleting the sentence: "fix the citations that quote it"
+  is a checklist that completes while leaving the source intact.
+
+
+
+
 ## Feature: docx Core-17 criterion coverage · #4610
 
 Closing the last .docx accessibility criteria that had no lane, so a Word document can be judged on
@@ -782,6 +1242,77 @@ shared `_docx_story_xmls` helper, so the checks cannot drift on which parts coun
   the Python assess-coverage contract guard reimplements the JS rollup and passed, and CI vitest
   surfaced and then confirmed the pinned-count fallout.
 
+- **Six criteria gained or upgraded detectors** (#766, #772, #774, #775, #785, #797, #667). 1.3.5 Identify
+  Input Purpose for PDF and DOCX (#774); 2.5.3 Label in Name for PDF push-buttons (#775); 2.4.3 Focus Order
+  for PDF promoted HEURISTIC → PARTIAL (#772); 2.4.4 link purpose extended to PDF vague phrases and xlsx
+  cell-value labels (#766); 1.4.11 resolving `schemeClr` theme colours in docx/pptx shape contrast (#797);
+  2.4.6 xlsx write-back applying approved sheet-tab and table-column labels (#785); and colour-only
+  hyperlink detection in PPTX for 1.4.1 (#667).
+- **Every assessed criterion × format pair now declares a remediation lane** (#676, #679, #683, #684, #696,
+  #709, #789). Seven pairs in batch 2 (#679), seven pptx REVIEW-only pairs (#676), docx/pdf/pptx 1.4.1 and
+  1.4.11 plus pptx 4.1.2 migrated out of `REVIEW_FORMATS` into the registry (#696), xlsx 1.4.1/1.4.11/4.1.2
+  and pdf 2.4.3 declared ready (#684), 2.4.4×pdf and 3.1.2×xlsx declared with 2.1.2 removed from
+  `REVIEW_FORMATS` (#709), and the 1.3.5 docx/pdf plus 2.5.3 pdf lanes declared (#789). All xlsx/pptx/pdf
+  rule IDs are mapped to WCAG SCs — 61 SC pairs (#683). The gap this closes: a criterion could be *assessed*
+  and silently have no declared path to a fix, which read to a customer as "we checked it" when nothing
+  could act on the result.
+
+
+- **Capability is reported as four levels on four denominators, never as one number** (#1026, #1034,
+  #1057, #1092, #1094). #1057 is the finding that justifies the shape: three registered detectors —
+  docx 1.3.5, pdf 1.3.5, pdf 2.5.3 — were written, imported cleanly, returned a real finding when
+  called, and **nothing in the scan path ever called them**, because no caller invokes
+  `rule_registry.evaluate`. A single headline number would have hidden that. The denominator decision
+  was recorded rather than deferred again (#1034), reviewer-experience completeness is measured per
+  (criterion, format) (#1092), two overstated precision claims were corrected (#1094), and the stale
+  capability report regenerated (#1026).
+- **pdf.reading-order, bounded honestly rather than claimed** (#1044, #1089, #1100). Recorded as unable
+  to fire, with a watch on the engine that houses it (#1044); a third false positive — tagged reading
+  order — covered (#1089); then implemented as a **bounded** capability with 1.3.2 explicitly left
+  uncovered (#1100).
+- **Reviewer guidance that says why *this* criterion matters** (#1062, #1088, #1091, #1099, #1102). The
+  reviewer is told why THIS criterion matters, not why its principle does (#1088); the four criteria a
+  menu path cannot resolve get real guidance (#1099); a finding says where it is and whether ACP can
+  actually fix it (#1062). 1.3.5's heuristic false-positive rate was **measured instead of predicted**
+  (#1091), and 1.3.5 applicability plus 2.5.3 were evaluated through real dispatch (#1102).
+
+
+- **The three orphaned detectors were wired into the scan path** (#1209). This closes the finding #1057
+  recorded: `docx_input_purpose_checks` (1.3.5, HEURISTIC/LOW), `pdf_input_purpose_checks` (1.3.5) and
+  `pdf_label_in_name_checks` (2.5.3, PARTIAL/HIGH) now have thin wrappers in `office_structure.checks_for`,
+  following the same pattern as `pdf_form_field_checks`. Detectors that returned real findings when called
+  directly, and were never called, now run.
+- **13 pptx/pdf lanes downgraded ASSISTED → HUMAN after tracing the write-back chain** (#1228, #1264). Every
+  lane marked ASSISTED was audited end to end — proposer → approval store → `has_approved_values_to_write`
+  → `apply_approved_values` / `apply_pdf_approved` → re-scan clears the finding. **Thirteen fail at step 4**:
+  the write-back job is never enqueued, either because `has_approved_values_to_write` has no getter reading
+  the rule id, or because the proposer carries `explain_only=True` and `apply_pdf_approved` has no routing
+  for its locator type. This is a capability claim walked back on evidence — the honest direction, and the
+  kind of correction the four-denominator model exists to make visible.
+- **Capability matrix cells labelled for screen readers** (#1273).
+
+
+### 2026-09-04 → 2026-09-07
+
+- **pptx criterion coverage extended and then honestly walked back.** 1.3.1/1.3.2 (#1390, with a
+  control that had no margin), 2.4.2/3.1.1 and the mislabel that declared them exposed (#1388),
+  2.4.6/3.1.2 routing gaps closed (#1531), and the 1.4.5/1.4.9 image-of-text write-back chain wired
+  (#1581) — then **downgraded to the HUMAN lane** (#1665) because the `descr` write cannot clear the
+  OCR detector. The downgrade is the more valuable of the two commits: an automated lane that cannot
+  prove its own fix is a false conformance claim.
+- **xlsx 1.3.1 and 1.3.2 — every certifying pair now has ground truth** (#1392).
+- **PDF**: veraPDF Phase 0 local PDF/UA-1 corroboration engine (ADR 0028, #1343); scanned-PDF Tier A
+  detection gate with vision layout extraction (ADR 0027, #1360) and Tier B WCAG REVIEW findings from
+  those layout descriptions (#1367); the 2.5.3 label-in-name detector extended to all AcroForm field
+  types (#1354); struct-tree locator infrastructure for 1.4.5/1.4.9 in the HUMAN lane (#1624); and
+  page-level OCR and vision reused during PDF remediation rather than recomputed (#1568).
+- **Skip the LibreOffice round-trip when `soffice` cannot open a document, not merely when it is
+  absent** (#1513) — the guard tested for the binary, not for whether it could do the job.
+- **W4 criterion disposition**: a 20-test suite and P0 backlog ticks (#1330, #1334), with dispositions
+  persisted to the `criterion_disposition` table (#1321). ADR 0041 added the auto-apply gate for
+  validated 2.4.4 and 4.1.2 proposals (#1327).
+
+
 ## Feature: PHI privacy and document access control · #4613
 
 Work specific to a hospital deployment where the documents are patient health information — what
@@ -797,6 +1328,18 @@ leaks into a trace, and who can reach a remediated file.
   `None` fell through to a Drive mirror URL taken from a row the caller had no right to — a correct
   control creating the path to an incorrect one. Found by re-checking the two routes the
   2026-08-08 owner-derivation audit had listed as not covered.
+
+- **P3.3 healthcare hardening** (#781, #655). Per-scan deletion to satisfy BAA erasure obligations, and PHI
+  redaction in logs — the pairing matters, because an erasure guarantee that leaves PHI in application logs
+  is not an erasure guarantee. Drive folder IDs are also no longer exposed in assess counts (#655).
+
+
+### 2026-09-04 → 2026-09-07
+
+- Owner isolation extended to HITL items (#1633) and to document names in run listings (#1596); shared
+  scan credentials fail fast rather than falling back to an unscoped store (#1564). See the
+  multi-tenancy section for the RBAC enforcement these depend on.
+
 
 ## Feature: Continuous deployment to Azure · #4614
 
@@ -933,6 +1476,107 @@ reach production, safely.
   deploy is otherwise silent). Pairs with the earlier CI cancel-in-progress fix (#525). CI config; not
   RULE_PATHS.
 
+- **Blue/green cutover and a staging worker** (#749, #824, `c69ab809`, `4bf2dd57`). A standalone
+  `blue-green.sh` zero-downtime cutover script (#749); a `start-staging-worker` workflow; and
+  `environment:staging` added so the OIDC subject matches the Azure federated credential — without it the
+  staging deploy could not authenticate at all. `ACP_DEPLOY_ENV=staging` is now overridden *after*
+  `deploy.sh` runs on staging provisioning (#824), which had been silently reverting to prod values.
+- **The deploy pipeline stopped losing ships to races** (#866, #867, #747, `bc9e8040`). The CI gate query
+  retries to survive GitHub API indexing lag (#866) and handles in-progress CI when a deploy races a newer
+  merge (#867) — together these were the cause of merges that looked green and never shipped. Auto-merge
+  squashes when CI is green (#747), and an automated SSE smoke test now runs against staging after every
+  deploy (`bc9e8040`, #820, with the script updated for the nested snapshot schema — `b346eb18`).
+- **Worker capacity** (#645). Worker CPU and memory doubled with ephemeral storage added, after large-estate
+  scans were being killed rather than slowed.
+
+
+- **Ingress gating moved from "answers TCP" to "can actually serve"** (#1152, #1153, #1189, #1200). The
+  readiness gate is wired into the production redeploy (#1153) and ingress gates on a replica that can
+  serve (#1152). One clean poll is not an answer: the worker check is sustained and ACA is asked how
+  many revisions are actually running (#1189), and a busy ACA is waited out rather than failing the
+  deploy between two apps (#1200).
+- **The worker tier split into roles, then the generic worker was retired** (#1106, #1124, #1125, #1133,
+  #1142, #1172, #1174, #1183, #1184). The worker tier says which image it is running (#1106); Discovery
+  and processing job claims are isolated by worker role (#1124), with Discovery given queue precedence
+  and its own scaling (#1125); Assess and Remediate got dedicated lanes (#1133); Discovery capacity is
+  released before Assess (#1142). The generic production worker was then retired from deploys (#1172)
+  and the retirement finished (#1184), after #1183 checked which worker roles the deploy actually ships
+  and stopped it expanding a retired one. #1174 verifies each worker service **by its own heartbeat,
+  not by a key they all overwrite** — without which the roles are indistinguishable to the health check.
+- **ACP Lite deployed as its own Container App** (#1122, #1129). A cut-down Discover/Assess/Remediate
+  page served as a single static page from its own Container App beside `acp-app`, sharing the resource
+  group, registry and Container Apps environment — and nothing else. The reasoning is the part worth
+  keeping: adding a prototype page to the control-plane image means every Lite change rebuilds it and
+  **restarts running scans**. Lite scales to zero, which is safe precisely because it holds no state;
+  the control plane cannot. #1129 restored the production folder picker in it.
+- **Auto-merge, corrected twice by evidence** (#1041, #1160, `7817e5ab`). A hold label that exempts a PR
+  from auto-merge, actively enforced (#1041); unconditional auto-merge disabled as a stated TEMPORARY
+  measure with the hold-for-review disable path kept (`7817e5ab`); and #1160 recording that **the
+  documented recipe cannot work — the label is the real mechanism.**
+- **Staging gained read-only validation and deadlock evidence** (#1039, #1048, #1167). A read-only
+  staging Azure validation workflow with a separately gated scale test (#1039), plus staging diagnostic
+  logging config and read-only deadlock evidence retrieval (#1048). #1167 then refuses to destroy a
+  PostgreSQL database no test has proven is disposable — a guard added because the diagnostics work had
+  made the destructive path reachable.
+
+
+- **Deploy and sweep visibility, mid-window** (#890, #891, #906, #909). A `skip_ci_gate` manual-dispatch
+  input added to staging (#890) and mirrored to production (#891); auto-merge fixed so it stopped silently
+  blocking CI-on-main and the deploy (#906); and the scheduled sweep's outcome printed in the production
+  monitor (#909), which had been running blind.
+
+
+### 2026-09-04 → 2026-09-07
+
+- **A portable deployment packaging contract and its tooling** (#1290), the ACP application Helm chart
+  (#1309), and `acpctl` matured into something that can be trusted: `init` writes a deployment
+  document that is valid when it is written (#1331), `doctor` makes two silent preconditions loud
+  (#1319), and `status` reports health plus the drift check the document's own claim needs (#1324).
+- **The Azure contract was checked against the running system rather than assumed.** Parity baseline
+  derived and made to survive #1370 landing under it (#1375); the deployment timeline and **the half
+  of a deploy Azure cannot see** (#1381); the two things the rebuild contract could not say about
+  production (#1380); who makes the document true (#1386); cost at the customer's own rate plus the
+  logs that say why a rollout failed (#1389). `/healthz` now names the commit it was built from (#1529).
+- **A transition is not a current status** (#1378) and **"nobody is watching" is not "nothing is
+  wrong"** (#1377) — two alerting defects where the absence of a signal was rendered as a healthy one.
+- **Legacy bootstrap for OIDC deploys, in five attempts, ending in a verified one** (#1585, #1591,
+  #1595, #1599, #1600): kept alive without caller stdin, validated as complete before Azure reports
+  teardown status, and compressed/compacted to fit the exec channel. Only one verified legacy
+  readiness bootstrap is permitted (#1585).
+- **Staging is now isolated from production** (#1612 role workers, #1629 auxiliaries, #1623 an
+  unsupported worker storage flag removed). A staging run reaching a production auxiliary is a data
+  incident, not a test failure.
+- **Capacity scheduling shipped through phases 1–4 and finished** (#1538, #1544, #1583, #1654): the
+  scalers fixed, the schedule shown, published, and attributed to who asked for it, behind a
+  staging-gated policy adapter. Work-hours autoscaling foundations added (#1642).
+- **Active worker jobs are protected during deployments** (#1576), worker telemetry stays alive while
+  draining (#1609), and **the worker registry stopped keeping every replica it had ever seen** (#1590)
+  — the registry was accumulating dead replicas, which is what put 1000 dead names at the top of the
+  Live Ops drawer (#1574).
+- Connection budget corrected for the three-tier worker topology (#1298); the worker size figure now
+  names the service it came from rather than "the worker tier" (#1312, #1322); the `WORKER_APP_NAME`
+  default was removed because it named a retired app (#1317); the last three replica ranges were
+  decided together and priced (#1459). A tab left open across a deploy showed an error for a page that
+  was fine (#1565).
+- **Capacity schedule loading fixed** (#1711) — the control-plane route and its frontend client
+  disagreed, so the work-hours autoscaling schedule (#1642) could not be read back.
+- **A pending CI run is cancelled too, so main's middle commits never shipped** (#1713).
+  `cancel-in-progress: false` was introduced to stop rapid merges cancelling each other and the code
+  comment recorded it as solved; it was not. A concurrency group holds one running plus one *pending*
+  run, and a third arrival cancels the pending one regardless of that flag. Measured twice inside ten
+  minutes on 2026-09-06 (CI 3545 and 3549, each cancelled within two seconds of the next run's
+  creation, neither ever given a runner). `deploy.yml` requires `conclusion == 'success'`, and a
+  cancelled run is neither success nor failure — deploy run 1330 refused main's tip outright with five
+  merged PRs behind it. Main now gets **one concurrency group per commit**; PR refs keep a single
+  group so a ten-push branch still supersedes itself. This deliberately reverses the earlier trade —
+  runs on main are parallel and cost more runner minutes — because a commit that never deploys is the
+  more expensive failure. The test **evaluates** the group expression against concrete contexts rather
+  than grepping it for `github.sha`, which would pass for an expression that fixed main by breaking PR
+  supersession.
+
+
+
+
 ## Feature: Release Center · #4599
 
 The Publish tab presented itself as a conformance report — an estate score, a "certifiable" queue,
@@ -980,6 +1624,35 @@ the write path actually does, and tells a reviewer when the source moved on unde
   Center. Honest by construction: gated to a real run (SIM/demo keeps its illustrative surfaces), an
   error leaves the panel empty rather than inventing changes, and untrackable files are reported as
   untrackable, never "unchanged". Suite green at 1642.
+
+
+### 2026-09-04 → 2026-09-07
+
+- **Release became a real three-step workflow** (#1553) with the builder first (#1607), users led
+  directly into it (#1543), a guided delivery workflow (#1537), destinations previewed before
+  publishing (#1597), and named release packages and destinations (#1592). The Release destination
+  workspace was polished (#1620), folder depth made explicit and release timestamps localized (#1638).
+- **Structured release folders preserve the source hierarchy** (#1425) and corrected files download as
+  one release package (#1588); released files remain selectable for download afterwards (#1567).
+- **Release manifests made authoritative and tamper-evident** (#1481), a published revision exports
+  from its snapshot and **refuses when the digest fails** (#1442), and **Release effects are reserved
+  before provider writes** (#1692) so a partial publish cannot leave the record claiming a file that
+  was never written. Partial Release failures are recoverable (#1559) and durable Release progress and
+  recovery were restored (#1602).
+- **Every assessed finding is now reconciled through Release** (#1647), with receipts bound to exact
+  finding lineage (#1687), exact AI provenance shown before Release (#1656), finding evidence
+  drill-down and report attestation exposed (#1658), and Conformance and Release snapshot identity
+  aligned (#1670). A release that cannot name which finding each corrected file answers is not an
+  audit artifact.
+- Durable cross-run Release history added (#1608, #1615). Release exports aligned with canonical stage
+  accounting (#1699) and synchronous Release execution canonicalized (#1695).
+- **The guided Release delivery workspace completed** (#1718) — a persistent plan summary, a file
+  selection step, configurable and hardened corrected-file download names, accessibility polish on the
+  step panel, and the Release package preview mapped into the workspace capability map, across seven
+  slices with backend package/preview tests behind them.
+
+
+
 
 ## Feature: Remediate review queue (AI Work Inbox) · #4598
 
@@ -1356,6 +2029,51 @@ existing data and the existing decision path; nothing adds a second write path.
   `priority` sort already orders by `SEV_RANK` (critical → serious → moderate → minor), then lane, then id, and
   the inbox defaults to it — so the backlog item was satisfied. Recorded here rather than duplicated.
 
+- **Human-review workflow persisted and observable** (#732, #713, #723, #729, #764, #685, #695). An
+  `in_review` status with `hitl.assigned` / `hitl.resolved` webhook events (#732); reviewer assignment
+  persisted to the database rather than held in session (#713, #723); a completed human-review KPI block
+  covering edited drafts and average review time (#729, R9). Two defects: `ReviewCenter` was **swallowing
+  approval errors** so a failed approval looked like a successful one (#764), and a race in `listHitlQueue`
+  re-surfaced in-flight items to a second reviewer (#685). `window.confirm`/`alert` replaced with a
+  `ConfirmDialog` overlay (#695).
+
+
+- **Review Memory and the house-style chip** (#996, #999, #1011). The Review Memory panel was wired up
+  (#996, ADR 0021) and the "house style applied" chip built (#999) and shown on scan-time pre-drafted
+  cards (#1011, ADR 0021 §E) — so a reviewer can tell a freshly drafted suggestion from a remembered
+  decision.
+
+
+### 2026-09-04 → 2026-09-07
+
+- **The remediation run card now survives the things that used to destroy it** (#1413 leaving the tab,
+  with one stream that survives with it; #1403 resuming the stream from the last event the browser
+  rendered; #1462 reconnecting interrupted streams; #1461 hardened live-state recovery; #1601 the card
+  shown on every tab; #1454 one card per navigation context; #1554 the activity pulse following it).
+  A reviewer who navigates away and loses a running remediation is a reviewer who stops trusting the
+  screen.
+- **Live remediation state made truthful rather than merely animated** (#1512, #1521, #1473 durable
+  structured progress that stops counting heartbeats as progress, #1534 live deltas, #1511 processed-document
+  completeness, #1606 live throughput on the durable card, #1466 measured throughput and ETA, #1616
+  reconciled finding counts). Three cards were lying in specific ways: one whose status line said
+  "Complete" was headed ACTIVE JOB (#1542), the completed chip showed a job 93% through remediating
+  (#1540), and the operator hold — a wait on a human — held a stream open that should have closed (#1523).
+- **Reviewer throughput work**: visible-view bulk actions (#1451), restored scoped bulk approval
+  (#1445), simplified guided decisions (#1465), simplified workspace (#1339), polished decisions and
+  completion (#1344, #1356), collapsed audit trail (#1325), a narrow-screen layout (#1469), a compact
+  status everywhere except Live Processing (#1556), one compact activity card (#1630), and the bulk
+  popup replaced with an upper-right toast (#1541).
+- **AI drafts are now separable from human work end to end** (#1605 classified from provenance, #1603
+  reviewers can isolate AI-assisted drafts, #1659 remediation drafts linked to reviewer outcomes,
+  #1662 the same for vision drafts, #1667 post-write validation outcomes recorded, #1680 each draft
+  linked to its post-write validation including regressions, #1674 a refused write surfaced on the
+  review card as `apply_outcome` from `apply.unverified`). #1674 is the one that matters most: a write
+  the system could not verify used to look like a completed fix.
+- Automation preview shows file impact (#1636) and confidence (#1618); the automation slider counts
+  were reconciled with what remediation actually does (#1651). The remediation accessibility check was
+  scoped to the workflow panel (#1522).
+
+
 ## Feature: Estate coverage — three denominators and discovery at scale · #4597
 
 A customer with a 30k-file estate could not see it: discovery listed the whole drive but the count the
@@ -1417,6 +2135,36 @@ three-denominator model (#297, under Documentation).
   inventoried / assessment-eligible) are real from the inventory; stages 4–6/7 (assessed, issues,
   remediation-eligible, remediated) derive from the file rows; human-review and published stay
   'pending' rather than showing a guessed number until that workflow state is threaded through.
+
+- **The "0 documents" failure class, closed across every surface that could report it** (#835, #836, #848,
+  #860, #863, #868, #869, #870, #882, #636, #716). This was one symptom with at least seven causes, and each
+  was fixed at its own layer: the headline read the wrong table (#636); `scan_runs` was created only *after*
+  listing, so large-estate scans were falsely marked never-started (#716); the suspicious-zero guard
+  disarmed on retry (#860) and needed hardening plus a sync-path conflict response (#869); a
+  `phase=discovered` overwrite raced a conflict that had already written `phase=error` (#868); pre-ADR-0020
+  scans had no `file_records` baseline to count (#870); the completion card gate did not accept
+  `status='discovered'` as a durable Postgres fallback (#882); and two channels were reporting a false zero
+  independently (#863). "0 files discovered" now shows the real estate total (#848), and a partial listing is
+  surfaced as partial rather than as nothing.
+- **Discovery at wide-estate scale** (#776, #830, #831, #826, #827, #880). Parallel BFS for Drive folder
+  traversal — **up to 6× faster on wide estates** (#776) — with progress callbacks throttled to 2s intervals
+  so the speedup was not spent on chatter (#830), resumable checkpoints (#831), `add_inventory`'s per-row
+  inserts batched instead of looped through `execute()` (#880), and the lifecycle rule evaluator bulk-loading
+  dispositions with batched writes (#826) after pre-parsing policy match conditions once outside the
+  inventory loop (#827).
+- **Discovery results became a dashboard rather than a number** (#819, #605, #615, #646, #849, #847, #855,
+  #864, #865, #762). Age / size / folder distribution panels (#819), an estate-composition treemap and
+  compliance funnel with real drill-down (#605, #616), and a flat `DiscoverCompleteSummary` card replacing
+  the estate bar (#864, #865, #762). Two honesty fixes underneath: the *By file type* panel had been counting
+  only scanned rows rather than the estate (#615), and OS metadata files (`.DS_Store`, `Thumbs.db`) were
+  inflating the inventory (#646). Listing / Metadata / Classifying collapsed into one honest step (#847) with
+  a live folder count during listing, not just files (#849).
+- **Estate analytics, renamed twice and rebuilt once** (#728, #754, #757, #769, #701, #702, #777). The
+  backend-enforced estate analytics tab shipped as *Admin Insights* (#728), was renamed *Estate Insights*
+  (#754), rebuilt with KPIs / funnel / charts / data-quality panels (#757), and the adjacent tab renamed
+  *Scan Analytics* (#769). Overview gained a stakeholder summary with an eligible-funnel step and real empty
+  states (#702) and an estate progress panel (#701). P3.4 shipped Power BI export via Postgres read-only
+  views and DirectQuery (#777).
 
 ---
 - Drill a capability-status count down to the files behind it: `summarize()` emits a
@@ -1528,6 +2276,60 @@ three-denominator model (#297, under Documentation).
   Frontend; not RULE_PATHS.
 
 ---
+
+
+- **The 2026-08-28 wave: every Discover surface that could report a wrong number** (#903, #905, #907,
+  #908, #910, #914, #918, #934, #940, #941). This continues the "0 documents" class from the previous
+  window, but at the reporting layer rather than the data layer. `GET /scans` was blind to
+  Discover-only scans (#910) — the root cause of "0 documents" on Discover *and* Assess — as were
+  `/monitor/estate` (#907) and `/schedule`'s `last_at` (#908). A queued scan no longer shows 0 (#914),
+  an untrustworthy run is explained rather than shown as 0 (#905), a queued scan this tab is not
+  tracking live is explained (#918), and a stale "0 files inventoried" self-heals (#903). The
+  completion card's failed/complete contradiction, worker-status wording and eligibility tooltips were
+  fixed (#934), its totals reconciled with the rest of the screen (#941), and its eligibility
+  breakdown collapsed behind a disclosure (#940).
+- **Discover started showing the worker, not just the scan** (#916, #920, #921, #923, #924, #925, #926,
+  #929, #930, #935, #936, #937, #938, #939). Worker availability — how many can pick up jobs (#925) —
+  "Worker assigned" once a job is claimed (#926), a live SSE badge (#924), a green live badge when the
+  scan's Redis job state is actively updating (#916), folder-level activity tracked during Drive
+  discovery (#929) and shown on the card (#930), and **"worker online but queue not draining"**
+  surfaced (#938) — the state that had previously looked identical to healthy. Two live bugs were
+  fixed underneath it: a zero-workers boot race and an unbounded Drive socket (#935), with the
+  remaining two socket call sites in #936.
+- **Whole-Drive enumeration completed, and Discovery scope narrowed** (#1121, #1123, #1128, #1132,
+  #1136, #1138). Whole-Drive enumeration finished (#1138) with readable folder breadcrumbs (#1136);
+  durable Discovery capacity reserved and scan scope narrowed (#1121); whole-source scans reset with
+  lifecycle buckets expanded (#1132); one Discovery queue status shown, warning on delayed pickup
+  (#1123); setup made responsive with an unnecessary Drive listing removed (#1128).
+- **A boot that fails is no longer an empty estate** (#1149, #1150, #1151, #1207). Boot reads are
+  bounded and a failed load stops reporting as an empty estate (#1150); the scan enqueue is bounded and
+  an unconfirmed submit is no longer called a failure (#1151); a stalled `/config` no longer strands
+  sign-in forever (#1149). #1207 is the same distinction at the other end of the run — the user is told
+  when a scan **found nothing**, instead of being shown a wall of zeros.
+
+
+- **Discover's queued, retrying and failure states, 2026-08-27/28** (#892, #901, #902, #904, #911, #912,
+  #913, #915, #919, #932). A distinct queued-state card (#901, PRD §16.1) and a retrying-state card with the
+  backend signal it needs (#902, PRD §16.8); a "Cancel requested" acknowledgment on the Stop/Cancel button
+  (#904); the **actual** discovery-failure reason surfaced instead of a static message (#919); stale
+  failed/cancelled/interrupted banners suppressed while a new scan is busy (#915); the results table replaced
+  with a queued placeholder for a new scan (#932); and a stale capacity notice cleared when an attempt fails
+  (#892). The two "choose a folder to scan" flows were unified into one (#911), and raw scan data
+  (`scope.enumeration` plus the decision log, with `run.status`) is now viewable on click for support
+  debugging (#912, #913).
+
+
+### 2026-09-04 → 2026-09-07
+
+- Incremental discovery at estate scale (Phase 3, #1323); folder baselines rejected for Drive delta
+  (#1284); readable folder paths shown in discovery (#1467); live Discovery state kept off historical
+  scans (#1362); the live Discovery card owns its own status (#1573).
+- **Discovery drifted in both directions and one script was fixing one while undoing the other**
+  (#1530); the decision that Discovery is 4-8 is now stated in the script itself (#1533). A
+  self-healing script that oscillates is harder to notice than one that plainly fails.
+- Narrow scans distinguished from collapsed sweeps (#1520) — the two produce similar-looking counts
+  and mean completely different things about coverage.
+
 
 ## Feature: Discover & Assess lifecycle rules · #4618
 
@@ -1749,6 +2551,66 @@ foundation first so the shared `store.py` schema never became a merge chokepoint
   screen sets a *discovery* boundary (it had said "assess"); the run's total counts what Assess enqueued, not
   what Discover listed.
 
+- **Lifecycle rule authoring, finished end to end** (#604, #606, #608, #610, #611, #614, #617, #622, #626,
+  #628, #631, #707, #726, #727, #738, #743, #751). The condition builder expanded to 10 fields, two of them
+  new (#610); rules gained explicit priority, reordering and a conflicts report (#614); enabling a rule now
+  previews its matches and asks first (#611), with a live match-count preview before save (#622) and inline
+  expansion showing the matched files under the rule card (#707). A saved rule can be edited in place rather
+  than only duplicated or deleted (#628, #608). Two correctness fixes matter more than the features: rules
+  were **global shared records rather than per-tenant** (#606), and the decision log **attributed every rule
+  action to "admin"** regardless of actor (#604). `disposition.evaluate()` now carries per-condition
+  provenance (#727), per-file overrides write a reason and a dual audit entry (#617), the preview breaks out
+  effective / superseded / exempted / unable-to-evaluate (#738, #743, #751), the audit trail filters by
+  document (#631), and disabling or editing an enabled rule warns about tags already persisted (#726). The
+  inventory CSV export had been dropping the rule, reason and any override (#626).
+
+
+- **The lifecycle disposition review queue, built and then made honest** (#1148, #1154, #1155, #1163,
+  #1164, #1165, #1169, #1170, #1171, #1173, #1175, #1179, #1180, #1182, #1192, #1205, #1206). An
+  explainable Discovery lifecycle control plane (#1155), with Discovery formats and lifecycle
+  disposition clarified (#1154). The queue's row became a cluster rather than a finding (#1148),
+  grouped as its approval route already required (#1171), filtered to lifecycle candidates only
+  (#1175), paginated for large lists (#1180), with its filters finished **including the two that cannot
+  exist** (#1179). Approval was then made safe: a reviewer can approve an archival batch **without it
+  meaning more than they meant** (#1170), and can see what approving a batch would do without doing any
+  of it (#1192). Evidence is rendered in monospace (#1164), kept consistent with Discovery results
+  (#1169), and a document's prior history is shown before this scan recommends archiving it (#1173).
+  #1182 stopped recording an existing document as one that no longer exists. #1205 took the queue out
+  of Discover, and #1206 says what the archive-vs-delete rule actually does — **all three outcomes of
+  it**. #1165 tests the control plane the way somebody without a mouse uses it.
+- **An archive that can be undone, and a recovery location that can be trusted** (#1187, #1190). Where a
+  file came from is written down so an archive can be undone (#1190), and the UI says where a
+  dispositioned file **can** be recovered and where it cannot (#1187). That distinction is what decides
+  whether a customer will let the feature run at all.
+- **The inventory CSV export stopped querying twice per row** (#1163).
+
+
+- **A rule can no longer arm itself unattended, and shows what it rejected** (#1216, #1218, PRD Phase 3 §7.5).
+  The preview returned every document a rule *selected* and not one it rejected — **and the rejected half is
+  what a rule gets debugged from**. A rule selecting far fewer files than expected is diagnosed by seeing
+  what fell out and on which condition, not by re-reading the count. The data was already in hand:
+  `disposition.evaluate()` runs for every document in that loop and its failing condition was being discarded.
+  #1218 then stops a rule that *changes files* being turned on unseen. Worth noting the discipline in #1216:
+  most of the test bench already existed and was checked before building — the preview, the shared draft/saved
+  path, `would_match` / `effective` / `superseded` / `exempted` / `unable_to_evaluate`, and the conflicts
+  endpoint were all already real.
+- **A cap on how many rows one disposition approval may cover** (#1213) — the blast-radius limit under the
+  "approve a batch without it meaning more than you meant" guarantee (#1170).
+
+
+### 2026-09-04 → 2026-09-07
+
+- **An `in` operator, so a departed-employee roster is one rule** (#1363) rather than one rule per
+  person, with roster matching added to the rule builder (#1368). **`not_in` is not the boolean
+  negation of `in`** (#1365) — for a document with multiple owners the two are genuinely different
+  questions, and treating one as the negation of the other silently mis-scopes the rule.
+- Folder rules match on SharePoint (#1358); per-scan decision snapshot validation tests added (#1289);
+  the remediation lifecycle log written (#1391); stages bound to frozen lifecycle policy inputs
+  (#1492) so a rule edited mid-run cannot retroactively change what a completed stage decided.
+- **The live-drift caveat has been hit, and `acp-remediate` is the instance** (#1526) — recorded
+  against the ADR that predicted it rather than treated as a surprise.
+
+
 ## Feature: Observability — AI tracing and cost (Langfuse) · #4697
 
 The scan / assess / remediate lifecycle was already traced, but the AI calls themselves were recorded as
@@ -1884,6 +2746,35 @@ invariant the redaction tests pin).
   `discover_run_trace` no-email guard. −133 lines; full backend job green (`api/lf.py` is not a RULE_PATHS
   file, so no Matrix-Note). The live per-file model is untouched.
 
+- **Reproducibility metadata on every AI call** (#761, #763, #693, #758, #791). `temperature` and
+  `prompt_version` columns added to `ai_calls` (#761) and `prompt_version` wired at all `ai.py` call sites
+  (#763, P4.7); reproducibility metadata attached to proposals and judge output (#693). The provider now
+  **warns loudly when `runpod_serverless` silently falls back to local Ollama** (#758) — the failure mode
+  where quality drops with no signal — and the WARNING R2 log paths are pinned in `active_vision_provider`
+  (#791).
+
+
+- **Langfuse trace routes scoped by owner; raw email replaced with an HMAC key** (#1202). All eight
+  `/scans/{sid}/trace/...` endpoints now resolve the authenticated owner from the request and look the
+  scan up owner-scoped, so a request for another owner's scan returns 404 rather than leaking trace
+  data — and the two `/exists` endpoints that had **no ownership check at all** guard through the same
+  lookup. Operator email had been written to Langfuse both as a `user:{email}` tag and as `user_id`;
+  it is replaced by a stable, irreversible HMAC using the same salt and algorithm as `_doc_label`, so
+  the observability store holds no PII. `fetch_document_history` now takes an owner key and filters on
+  `owner:{key}`, which is what stops cross-tenant document history being returned.
+
+
+### 2026-09-04 → 2026-09-07
+
+- **Honest cost transparency in Live Operations** (#1349), with **every missing cost signal explained**
+  rather than rendered as zero (#1580), and **Azure billing actuals read from Cost Management** (#1586)
+  — previously never called live, so the displayed cost was a model, not a bill.
+- Azure Monitor's full metric set delivered over SSE with provenance on every value (#1350); metric
+  windows sent as query-safe UTC (#1409). Grafana renders, and the image learns to split its own DSN
+  (#1434).
+- Telemetry endpoints reclassified as credentials rather than collectors (#1438).
+
+
 ## Feature: Scan-run experience — live progress and transparency (Track A) · #4696
 
 The scan progress panel rebuilt from an implementation-centric spinner into an outcome-oriented,
@@ -2003,6 +2894,145 @@ are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the pr
   polling blind. Turns "it's running" into how much is done, how fast, how long left, and what's emerging —
   the same numbers the final report will show. Backend + frontend; not RULE_PATHS.
 
+- **The durable job queue, built out to ADR 0004 in one push** (#805–#814). The scan path stopped being a
+  session-scoped thread and became a real queue: scan and job committed in one transaction (#806, with the
+  scan row pre-created so `startScanQueued` returns a usable ID first — #805), an immutable input snapshot
+  captured atomically at enqueue (#807), idempotent `disposition_audit` writes (#808), `SKIP LOCKED` claims
+  with an inspectable `lease_expires_at` (#809), typed retry policies that classify the error and apply
+  per-class backoff (#810), cooperative durable cancellation via `cancel_requested_at` (#811), a
+  reconciliation sweeper for expired leases / exhausted jobs / orphaned scans (#812), and per-folder
+  checkpoints (#814). The failure this prevents is the one the log kept recording all month: a scan whose
+  worker replica died left no trace anyone could act on, so the run hung at 0/N until a human noticed.
+- **Single-flight scans — supersede, don't race** (#841, #845, #607, #612, #871, #881). Two runs for one
+  owner could interleave and the loser would overwrite the winner's results; worse, #845 found a *superseded*
+  scan was being cancelled, and its real results then rendered as "0 documents". Cancellation now reaches a
+  queued scan before any worker claims it (#612) and an outstanding job as well as `status='running'` (#881);
+  a scan whose replica died is detected rather than hung on (#607); and a stale `active_discovery_guard` row
+  is reclaimed instead of blocking every subsequent scan forever (#871).
+- **Live progress that survives a dropped connection** (#840, #842, #843, #844, #886, `cbb6687f`). An
+  EventSource progress stream now covers all scan paths (#842) on an authenticated client — the unauthenticated
+  one was generating a stale-`job_id` 404 storm (#843). Job state moved to atomic Redis `HSET` with update
+  coalescing and a scan-ID-based stream (#840); sparse Postgres checkpoints back it with adaptive
+  SSE-fallback backoff (#844) so a client that loses push degrades to polling instead of going silent. A dead
+  push now shows an explicit reconnecting freshness state (`cbb6687f`) rather than a frozen number, and a new
+  scan surfaces without a page reload (#886).
+- **A read-only preflight before a scan starts** (#846, #839). `POST /discovery/preflight` returns
+  Ready / Degraded / Blocked, and `/readyz` warns ahead of the durable scan path (#839) — so a scan that was
+  always going to fail on a missing Drive token fails at the button, not forty minutes in (#854).
+- **Worker and queue transparency in the UI** (#818, #664, #658, #825, #822, #837). A `WorkerCard` with
+  progress, speed and ETA during active phases (#818); a structured worker status strip with an honest
+  activity timestamp (#664); stall detection and smart defaults (#658); and the alarming red health banner
+  replaced with an amber *reconnecting* notice (#825) — red now means confirmed failure, not a slow poll.
+  Workers back off on claim-time DB errors instead of hammering at poll cadence (#837).
+
+
+- **ADR 0042: a durable scan-lifecycle event log, with SSE kept as the live transport** (#959, #965,
+  #970, #974, #980, #982, #986). Landed as four no-caller-first PRs — the `scan_events` table and its
+  two accessors, unused (#965); the lifecycle transitions emitted into it (#970); `GET
+  /scans/{sid}/history` and the run-history panel that reads it (#974); the discover stream's not-live
+  fallback frame filled from the event log (#980). ADR 0043 records the SSE-resume decision:
+  **Last-Event-ID rejected, history-on-reconnect adopted** (#982). `GET /scans/{sid}/events` is
+  recorded as deliberately unconsumed with a guard test (#986) rather than left looking like dead code.
+- **Queue-pickup estimates on all three tabs** (#1000, #1002, #1004, #1006, #1087, #1090). A
+  queue-pickup-estimate service (#1000) wired into Discover (#1002), Assess (#1004) and Remediate
+  (#1006). Two corrections followed: the estimate now asks about the scan **just submitted, not the one
+  on screen** (#1087), and a queued run's age comes from the server's timestamp or says it is
+  unavailable (#1090) rather than being inferred from the client's clock.
+- **Stale-while-revalidate across Overview, Assess and Monitor** (#947, #960, #962, #971, #977, #985,
+  #987, #988, #989, #990, #997). A server-generated Overview snapshot cached per scan (#960) behind one
+  `GET /workspace/bootstrap` request (#962), wired into App.jsx's initial load (#971); SWR then shipped
+  for Overview (#977), Assess (#987) and Monitor (#990). Discover stopped showing misleading 0s before
+  the scan payload had loaded (#988); the initial-load chain is instrumented with **real timing, not
+  inferred timing** (#989); the load screen is parallelized and narrated (#947); ETag/If-None-Match
+  conditional fetch was added to `GET /scans/{sid}` (#997); and two Overview cache-invalidation gaps
+  found in audit were fixed (#985).
+- **Assess progress that survives you looking away** (#1063, #1064, #1103, #1135, #1137, #1143, #1146).
+  Durable per-file Assess progress (#1137) with live Assess and Remediate refresh (#1143); a run's
+  elapsed time taken from the server so looking away does not reset it (#1103); active assessment
+  status consolidated (#1135); stale Assess results hidden during new runs (#1146). Two honesty fixes
+  underneath: Assess had been **naming one document as "the file being processed"** while processing
+  many (#1064), and its progress bar counted against a different total from its own caption (#1063).
+- **Monitor and Azure capacity became evidence rather than a status light** (#953, #954, #957, #958,
+  #968, #969, #975, #983, #1028, #1032, #1035, #1036, #1037, #1054, #1059, #1065, #1086). Azure
+  capacity evidence — current replica count, CPU/memory per worker (#953) — brought into Monitor →
+  Workers & Queue (#954), with revision health and draining replicas (#957), revision traffic split
+  (#968), a deploy/revision history view for the worker Container App (#983), deduped polling with a
+  visual gauge (#969), and a stated reason when Azure Monitor metrics are unavailable (#975). A
+  diagnosis layer turns worker and Azure signals into a ranked "here's likely why" (#958). Dead-letter
+  incidents are aggregated by affected runs, attempts and time span (#1036), and the misleading "0
+  workers" headline clarified (#1032). #1054 replaced five private polling loops with one shared `GET
+  /jobs` subscription; #1065 shows the age of the queue data rather than the age of the subscription;
+  and #1086 stops the queue claiming "empty" and "zero workers" **before it has read anything**.
+
+
+- **Assess and Discover instrumentation, 2026-08-27/28/29** (#883, #887, #893, #895, #922, #927, #928, #933,
+  #950). A `freshness` field on `GET /scans/{id}` with a green top banner for version updates (#883) and a
+  reconnecting freshness state for a dead SSE push (#887); attempt number plus out-of-order protection on live
+  SSE state (#895); the Assess "Processing details" panel (#922, PRD Phase 1 slice); a files column on the
+  scan history table (#893). The ADR 0020 source cache was re-keyed by content checksum for cross-scan reuse
+  (#928) and its dead read side wired up (#927); the scheduled Drive sweep now skips when nothing changed
+  (#933); and Azure worker-replica visibility reached Discover with the write path admin-gated (#950).
+
+
+### 2026-09-04 → 2026-09-07
+
+- **Live Operations became an admin surface an operator can actually work from.** Run details open in
+  a drawer (#1279) with one drawer shape and seven sections on every node (#1387); a visual real-time
+  component view (#1340); topology stays visible while idle (#1311); crisp traffic edges (#1336);
+  graph routing cleaned up (#1329); infrastructure and jobs separated (#1406); worker cards kept apart
+  (#1399); connected workflows shown (#1448); completed stages stay connected (#1478).
+- **Capacity and worker telemetry made truthful, in eight steps** (#1306 Azure worker capacity detail,
+  #1404 the queue tile counts only slots that can claim the work, #1410 bounded gauges plus a
+  stale-stream state and who can actually claim the queue, #1411 truthful per-replica capacity, #1420
+  utilisation shown as *unavailable* without replica telemetry rather than as zero, #1423 replicas
+  counted by replica identity, #1432 the worker instance telemetry lifecycle finished, #1652 a
+  draining replica's running jobs counted as busy slots). Every one of these replaced a confidently
+  wrong number with either a right one or an explicit "unknown".
+- **Which replica is running which job** (#1560), the draining replica named on the drawer with
+  rollouts no longer all called "mixed" (#1668), failed runs told apart from idle (#1572), workflow
+  linkage truth (#1519), an immutable claim time and a worker id that names one worker (#1408), and
+  the running-job drawer given the lease evidence it never had (#1412).
+- **The drawer led with 1000 dead replica names and buried the work** (#1574) — the registry bug in
+  #1590 surfacing as an unusable UI.
+- Recovery controls and telemetry (#1482, #1486, #1494); AI provider health in the Monitor panel
+  (#1449); Monitor recent-job row collisions fixed (#1649); five previously-untested Monitor paths
+  covered (#1280); a crash without `ResizeObserver` prevented (#1318); the job poll loop stopped on
+  App unmount (#1401); work kept visible without capacity telemetry (#1632).
+- Presentation: opaque toasts (#1419), compact and distinct stage notifications (#1635), standardized
+  heartbeat bar palettes (#1628), live sparklines on workflow cards (#1613), workflow state views
+  polished (#1490), and layouts tightened (#1300).
+- **A run tile read "200%" with its progress bar drawn out of the card and across the map** (#1713).
+  Assess had completed two documents against a discover-expected total of one; the ratio was a true
+  fact about stale counts, but a gauge past 100% is a fact about nothing and its unbounded value was
+  handed straight to CSS as a width. `runProgress()` now returns a clamped `pct` used for **both** the
+  label and the bar — one number, so the two cannot disagree again — and names the excess in words
+  ("1 more completed than the 1 expected · expected total is stale") instead of drawing it. The tile
+  itself is rendered in the test, not just the helper: a correct helper the tile stopped calling would
+  leave the arithmetic green and the card overflowing.
+- **A draining replica's running jobs are busy slots, not nothing** (#1713). The capacity gauge read
+  "Idle — 0 of 20 slots (0%)" directly above "8 documents in flight", from the same heartbeats:
+  `_replica_capacity` counted only `ready` and `busy`, and a worker draining after a deploy is
+  neither — for up to **nine minutes** per rollout (`ACP_SHUTDOWN_DRAIN_SECONDS` is 540), real work on
+  real slots contributed neither capacity nor utilisation and surfaced as `unattributed_running`. The
+  intent was already in the code and defeated one layer up: `WorkerInstanceReporter.draining()` exists
+  to hold the heartbeat open through the drain, and the reader discarded the rows anyway. A draining
+  replica now contributes exactly the work it still holds and **none of its free slots** — it will
+  never claim them. Production reading went from 20 slots / 0 busy / 8 unattributed to 28 / 8 / 0. A
+  regression caught by re-reading the diff: `no_capacity_with_queue` was keyed on `worker_slots`,
+  which meant "some replica can accept work" only while draining replicas counted zero — it is keyed
+  on `healthy_replicas` now, or the alert would have gone silent during exactly the rollout window it
+  exists for. Follow-on polish names it on the drawer ("1 draining, holding 8 jobs") and stops
+  `mixed_revisions` firing on every deploy for the whole drain.
+- **A cached permission denial outlived the permission grant** (#1713). `billing_block` held every
+  answer for an hour, failures included, so the cost panel named a missing Cost Management Reader role
+  for the rest of the hour after the role was granted — the observed remedy was restarting the
+  revision. The long hold is right for a success (Cost Management rate-limits and the panel polls
+  every 60s), and wrong for a failure, which is almost always something an operator is actively
+  fixing; failures now hold 60s while successes keep the hour, and Azure's `Retry-After` still wins.
+
+
+
+
 ## Feature: Certification report as an audit artifact · #4698
 
 Turned the per-scan certification PDF (`api/report.py`) from a scan summary into an audit artifact an
@@ -2045,6 +3075,98 @@ basis; where a denominator is not tracked the number is omitted, not invented (A
   reproduce the findings, verify a document by hand). Distinct from `conformance-report.md`, which is
   ACP's own platform-UI VPAT.
 
+- **P-13 – P-20: the report honesty set** (#737, #739, #740, #742, #744, #748, #750, #752, #755, #756). A
+  material-limitations notice (#737, #739), stable finding identifiers in the evidence appendix (#750),
+  report provenance and freshness in the header band (#740, #742), per-finding status across seven named
+  states (#748), report-level reconciliation checks with an integrity warning box (#744), richer evidence
+  presentation carrying location / expected / confidence / timestamp / redaction (#752), ambiguous assurance
+  language removed (#755), and print / PDF / AT behaviour — page headers, `repeatRows`, `KeepTogether` (#756).
+- **The PDF itself became accessible and verifiable** (#767, #768, #689, #711, #665, #733, #722, #698). A
+  Chromium HTML→PDF pipeline produces an accessible tagged report (#768) that passes `pdf.tagged` / WCAG
+  1.3.1 (#767); a QR code and `/public/verify/{scan_id}` endpoint let a reader check a printed report against
+  the live record (#689, with `ACP_PUBLIC_URL` documented for it — #711). Per-fix assurance tiers and a
+  per-criterion compliance table (#665), assurance / confidence mode bars (#733), the AI reasoning basis
+  (source + why_review) rendered for proposed fixes (#722), and reproduce instructions rewritten as an
+  actionable 3-step table (#698).
+
+
+- **The ACR workspace, Phases 1–4** (#1161, #1178, #1186, #1191, #1197). A WCAG 2.2 conformance report
+  with an evidence-gated decision model. The standards catalog is **generated from the W3C
+  Recommendation** rather than hand-transcribed — 55 criteria, 31 Level A and 24 Level AA — because a
+  missing criterion or a wrong level stays invisible at every stage until a customer's procurement
+  reviewer finds it; running the generator, rather than reading it, established that 4.1.1 Parsing is
+  present in WCAG 2.2 but titled "(Obsolete and removed)" and stripped of its conformance-level marker.
+  Phase 1 landed domain and persistence only, reachable from nothing, and said so (#1161). Phase 2
+  added axe ingestion, the metadata editor and evidence gaps (#1178); Phase 3 guided manual test plans
+  and the publish gate that consumes them (#1186); Phase 4 publication with immutable snapshots and
+  revisions (#1191). Publication is the one irreversible act in the feature — an ACR goes into a
+  customer's procurement file and cannot be recalled — so `POST /acr/{id}/publish` **assembles the
+  existing gate rather than rewriting it**, calling the same `acr_validation.validate`,
+  `acr_authz.may_publish` and `acr_freshness` the screens call. A second implementation of the gate is
+  how a screen goes green while the real check is red. The check order is deliberate — already
+  published, then whether the *caller* may publish, then readiness — and it goes through `acr_authz`,
+  never `core.is_admin`. #1197 makes the export a PDF a screen-reader user can actually read.
+- **A PDF/UA-1 conformance report, built before it was wired** (#1159, #1198, #1199, #1201, #1208). Built
+  and validated via WeasyPrint and explicitly recorded as **NOT yet wired in** (#1159) rather than
+  announced; then made portable and deployable (#1198), made to actually run in CI (#1199), served with
+  a way back that needs no build (#1201), and the gate extended to the other pipeline and the test
+  image (#1208).
+- **Report arithmetic** (#1156, #1168). The report's "Files affected" column counts files, not findings
+  (#1168), and an Assessment Run Integrity Gate was added with the manifest able to feed it (#1156).
+
+
+- **"Can this deployment produce a tagged PDF?" — answerable without a credential** (#1211). The ACR's
+  accessible export needs WeasyPrint, which binds to Pango, a **system** library a pip pin cannot supply. So
+  *"`requirements.txt` pins weasyprint"* and *"this container can produce a tagged PDF"* are different claims,
+  and only the first was checkable from outside; the endpoint answering the second requires an OAuth bearer,
+  so an unauthenticated caller gets 401 whether the renderer works or not. On 2026-09-02 that gap cost a real
+  investigation — confirming the renderer had reached production meant reproducing `redeploy.sh`'s base-image
+  dependency hash by hand and matching it against a deploy log.
+- **The review packet stopped telling reviewers nothing had shipped** (#1212, #1215). A packet built from
+  `main` opened by describing the WeasyPrint renderer as a *proposal* with `scans.py` untouched — **every
+  clause false since #1201**. The filenames said it too: `candidate.pdf` was the live renderer and
+  `shipped.pdf` the one just retired. #1215 ships the reading order inside the packet, since NVDA cannot run
+  in this environment and a reviewer needs the evidence rather than an instruction to go and verify it.
+- **ADR 0034 Addendum 3 — the PAC attempt, including that its reason was untested** (#1219). Addendum 1 gave
+  "not run — Windows only" for PAC 2024. The *fact* was true; the *reason* had never been checked, and an
+  untested reason attached to a true fact reads as settled. So it was tested: PAC 24.4.4.0 downloaded and run
+  under Wine 9.0, where it dies with a `TypeInitializationException` in mscorlib. The reason turns out to be
+  nearly right for the wrong cause — which is the point of recording it.
+
+
+### 2026-09-04 → 2026-09-07
+
+- **All four VPAT editions now render, on catalogs derived from the standards themselves** — the
+  largest single workstream in this window, delivered as Phase 6.1 → 6.4:
+  - **6.1** the Revised Section 508 requirement catalog, derived from 36 CFR 1194 (#1539) — and the
+    catalog guard that shipped with it and **guarded nothing** was then made to run (#1557).
+  - **6.2** a matrix row says which standard it came from, and a 508 edition gets 508 rows (#1550).
+  - **6.3** the Revised Section 508 Report renders, so the edition opens (#1555).
+  - **6.4** the EN 301 549 catalog, committed empty behind a gate that reads it properly (#1570), the
+    EU report rendering against a catalog that did not yet exist (#1582), and finally the catalog
+    itself with all four editions (#1619).
+- **A report could declare the Section 508 edition and contain no Section 508** (#1532). The edition
+  label and the content were independent; a customer could have received a conformance report that
+  named a standard it did not assess.
+- **The EN generator said clause 9 has fifty-six; the catalog it writes has fifty-eight** (#1676) —
+  a generator disagreeing with its own output, found by checking rather than by a customer.
+- **The VPAT template's headings, as a catalog with provenance** (#1645), with the 508 chapters and EN
+  clauses headed in the template's own wording (#1666) and the WCAG report laid out the way the ITI
+  template lays it out (#1648). The criteria list groups Section 508 by chapter so a chapter can be
+  marked in one decision (#1562).
+- **The ACR as an accessible Word document, without the ITI template** (#1484), wired to a route
+  behind its own accessibility gate (#1499), offered on the export tab with the gate visible before
+  download (#1501), and the export finished — leaks stopped, then published (#1509). **A Word export
+  nobody can open must fail the gate, not pass it silently** (#1558), and the export gate's findings
+  rendered as the literal word "check" (#1510).
+- Honesty about limits: the ACR PDF states inside itself what has not been validated about it (#1416),
+  the limitations notice reaches the PDF people actually download (#1439), ACR export validation
+  limits are shown in Conformance (#1430), and the acceptance table — which described a product two
+  phases old — was corrected (#1470), given a command where it had a count (#1527), and row 13 closed
+  because the structure is what it asks for (#1653).
+- Exact model provenance added to conformance reports (#1644).
+
+
 ## Feature: Structural evidence renderers (Remediate preview) · #4699
 
 Document-structure findings showed a generic "structure not extracted" note; these surface the real
@@ -2069,7 +3191,230 @@ real extracted content, degrading to the generic note, never a fabricated tree.
   trace's tags). Categories/counts only, never a value — the PHI guard holds. `api/lf.py` + `api/handlers.py`,
   not RULE_PATHS; 176 langfuse/assess tests green, redaction guards green.
 
+
+## Feature: ACP Managed Content Workspace (ADR 0044) · needs a Feature
+
+Upload-first document intake: the customer brings documents to ACP instead of connecting a source.
+Built data-model-first, with each PR landing behind no caller until the layer beneath it was real.
+
+- **The store, built as a data model before a route** (#1001, #1003, #1008, #1010, #1017, #1019, #1023,
+  #1024, #1119). The Managed Content Workspace data model (#1001) with `content_workspace_documents`
+  and `versions` tables plus CRUD (#1003); `api/workspace_blob.py` as the Blob store (#1008); the
+  upload-session and completion endpoints (#1010); a document-scoped upload session for new versions
+  (#1024); a download-original endpoint (#1017); a baseline retention sweep for versions (#1019, PRD
+  §28); and a per-workspace storage quota (#1023, PRD §9). #1119 reserves the version row at session
+  time rather than at completion — so a crashed upload leaves a row that can be reconciled instead of
+  leaving nothing at all.
+- **Uploads are treated as hostile input** (#1013, #1015). An extension allow-list plus **magic-byte
+  quarantine** (#1013, PRD §13) — a platform whose entire purpose is ingesting untrusted documents
+  cannot trust a file extension — and duplicate detection and resolution (#1015, PRD §12).
+- **Connected to the real scan engine, then made enumerable** (#1116, #1118). #1116 connected one stored
+  version to the existing scan/assess engine — a per-version assess endpoint and a `workspace_scan_file`
+  job. #1118 is the enumeration half: `POST /content-workspaces/{id}/assess` creates the run and **one**
+  `workspace_scan_discover` job that lists the workspace and fans out one job per document, so a
+  customer uploads a folder and gets one run with one total and one completion rather than N per-version
+  scans to correlate. Enumeration lives in the worker, not the route, and that is the design claim: the
+  population is re-derived from the authoritative table on every attempt, so a document uploaded between
+  pressing Assess and a worker claiming the job is included, and a reclaimed job resumes correctly.
+
+## Feature: Durable orchestration and worker reliability · needs a Feature
+
+The durable job queue existed; this window made it correct under the failures it was built for — a
+worker dying mid-job, two attempts racing, a cancellation nobody honoured.
+
+- **A result can only be written by the attempt that produced it** (#1068, #1075, #1080, #1110, #1112,
+  #1115, #1117). Result writes are fenced to the job attempt that produced them (#1117); only the
+  current holder may renew a lease, and an unsupported claim is withdrawn from the map (#1075); only
+  the current claim may publish an outcome, not merely renew (#1080). A terminal row plus a
+  cancellation request **does not prove the work stopped** (#1115), so the interruption the reclaim
+  records is now rendered (#1112), a worker that died holding a job says so instead of nothing at all
+  (#1110), and which job and which document it had open is recorded (#1068).
+- **Cancellation that actually reaches the work** (#1051, #1061, #1079, #1081, #1101). `check_cancel()`
+  plumbed through to the threads doing the work (#1079); discovery given real cancellation checkpoints,
+  with **five paths that had been swallowing them** fixed (#1081); superseding a scan now stops the
+  worker already running it (#1061). A rejected scan submission no longer destroys the run it would
+  have replaced (#1051, H-03), and a job someone STOPPED is no longer reported as a job that FAILED
+  (#1101).
+- **Failures stopped being silent** (#1055, #1086, #1104, #1108, #1111, #1113). Every silently-swallowed
+  failure in `api/` was given a voice (#1108). A folder ACP could not read is not a folder with nothing
+  in it (#1104) — the same class of lie as #1195 for images. A folder is counted once however many
+  times its job runs (#1111); active discovery is separated from previous inventory and counts (#1113);
+  and an overload 503 no longer claims "No changes were made" on requests that **may have written**
+  (#1055).
+- **Database and connection behaviour under real load** (#1040, #1045, #1084, #1109). The API replica's
+  DB pool no longer collapses to 10 connections when `ACP_WORKERS=0` (#1045); the schema is verified at
+  boot instead of replayed, **so replicas stop deadlocking** (#1084); concurrent Discovery HTTP request
+  transports are isolated (#1109). #1040 added the `orchestration_events` and `worker_instances` tables
+  as PR 1 of 5 with no caller — the same no-caller-first discipline ADR 0042 used.
+- **Verification fails closed** (#1072, #1082). A re-scan that could not run never grants credit (#1082),
+  and a stopped run outranks a healthy service light — a heartbeat is no longer read as progress
+  (#1072).
+
+
+- **The durable scan path, hardened 2026-08-27** (#889, #894, #896, #897, #900). The built reconciliation
+  sweeper was wired into production (#889) — it existed and was not running; `scan_to_job` mapping is written
+  on the durable `scan_discover` path (#894); `complete_job` / `mark_job_cancelled` / `fail_job` are guarded
+  against a zombie-worker race (#896); scan status flips to `discovered` **only after every durable write
+  lands** (#900); and `disposition_audit` ids were made deterministic, closing the PRD §20 idempotency gap
+  (#897).
+
+## Feature: Media captions — 1.2.1 / 1.2.2 · needs a Feature
+
+- **Audio and video became assessable, in four slices** (#1158, #1166, #1177, #1185). A local
+  media-to-captions pipeline behind a probed optional engine (#1158); standalone audio and video
+  assessed against 1.2.1/1.2.2 (#1166); a 1.2.2 finding arriving with a caption file a reviewer can
+  approve (#1177); and a caption file a reviewer can correct **and can actually obtain** (#1185). The
+  engine is probed rather than assumed, so a deployment without it degrades to "not assessed" instead
+  of to a false pass — which is the whole reason the lane can be shipped optional.
+
+
+- **Slice 5: a caption a reviewer can correct while watching the media** (#1221) — the correction loop closed
+  against playback, so a reviewer is not editing a transcript blind.
+
+## Feature: ACP — Iteration 11 delivery · #5478
+
+Bound to ADO Feature **#5478** (Epic #3664), created 2026-09-04 with sixteen Tasks covering Iteration 11
+(2026-08-24 → 2026-09-04). Hours on the ADO Tasks are **delivery estimates, not measured elapsed time**.
+  The roll-up as supplied listed per-item hours summing to 85 against a stated total of 80; on
+  2026-09-04 the largest item (#5487) was reduced 8h → 3h to reconcile them, bringing the Feature to 80h.
+Each bullet below names its ADO Task id and the PRs behind it, so the board and this log can be reconciled
+in either direction.
+
+- **Simplify Overview and Discovery information flow** (Task #5479, 5h) — #1217, #1223, #1226, #1227, #1234,
+  #1236, #1237, #1261. Redundant estate/context panels removed, scan summaries consolidated, scope
+  information repositioned, and "Scope of This Assertion" standardised.
+- **Inventory snapshot exports made reachable** (#1220, #1225, #1265). The Export CSV/JSON controls were
+  moved to the top of the inventory snapshot section (#1220, refined in #1265) and the Discover scan
+  summary and its exports improved (#1225) — folded under Task #5479, whose scope this shares.
+- **Restore rich Discovery live-progress experience** (Task #5480, 6h) — #1229, #1230, #1231, #1233, #1249,
+  #1267, #1268. The detailed SSE checklist and lifecycle summaries restored, completion state persisted
+  across refresh, and recovery messaging added for incomplete or suspicious scans — #1267 blocks a
+  suspicious Discovery scope collapse outright rather than reporting it afterwards.
+- **Build authoritative live Assessment card** (Task #5481, 7h) — #1235, #1241, #1242, #1244, #1245, #1251.
+  Live preparation and processing stages, document counts reconciled, file-level activity retained, and
+  progress restored after navigation.
+- **Improve Assessment worker and throughput visibility** (Task #5482, 4h) — #1232, #1239, #1252.
+  Active/standby worker detail, queue status, capacity and throughput, with expandable processing details;
+  #1232 sets a *reviewed* production capacity baseline rather than an assumed one.
+- **Build detailed Automated Remediation live card** (Task #5483, 7h) — #1238, #1244, #1245. SSE-driven
+  remediation stages, document and WCAG-rule activity, fix progress, verification status and corrected-copy
+  tracking, replacing the completed Assessment card while remediation runs.
+- **Simplify the Remediation review experience** (Task #5484, 5h) — #1243 plus the review-surface work in
+  #1249. Redundant previews and whitespace removed while approval/rejection actions and efficient approval
+  across related findings were preserved.
+- **Implement Release publishing workflow** (Task #5485, 6h) — timestamped Remediated output folders, source
+  folder structure preserved, corrected-file publishing prepared, and remediation provenance recorded in
+  document metadata. *Recorded from the sprint roll-up; the individual PRs for this task were not separable
+  from the Remediate wave above by commit subject alone, so no PR list is claimed here.*
+- **Add tenant-fair worker scheduling and capacity controls** (Task #5486, 6h) — #1232, #1239, #1259.
+  Durable tenant-fair scheduling with Postgres fair-claim row locking, so **one user can no longer monopolise
+  the worker pool** — the multi-tenant failure the durable queue made possible and did not yet prevent.
+- **Create the Admin Live Operations ReactFlow view** (Task #5487, 3h) — #1254, #1255, #1256, #1257, #1263.
+  An admin-only Live Operations tab with live Azure traffic flow, worker nodes, shared-queue status,
+  utilisation, recent runs kept visible, and clickable run detail.
+- **Add accessible Live Operations notifications and trends** (Task #5488, 3h) — #1269, #1272. Toast contrast
+  improved and trend/sparkline interactions made keyboard accessible — the new admin surface held to the same
+  bar the product asserts for customers.
+- **Add source-level run history and activity clarity** (Task #5489, 4h) — #1257, #1270, #1271. Run-history
+  placement and labels improved, loading states announced, and source-specific discovery history clarified.
+- **Extend the WCAG palette toggle across the application** (Task #5490, 6h) — #1222, #1224, #1247, #1250,
+  #1262, #1266, #1273, #1274, #1275, #1277. Hard-coded colours replaced with semantic tokens over four phases,
+  WCAG
+  mode extended beyond the nav tabs to every workflow tab, and FastPass regression coverage expanded with it.
+  #1277 adds the non-text contrast overrides for the active dot and the rule-breakdown bars — the two
+  components the token migration had left below the 3:1 threshold.
+- **Create unified Google and Microsoft user onboarding** (Task #5491, 5h) — #1240. Google tester
+  whitelisting guidance, Microsoft Entra guest invitations, provider-specific onboarding states, and Settings
+  narrowed to Owners and Users.
+- **Integrate governed Hugging Face vision support** (Task #5492, 5h) — #1246, #1258, #1260. The Inference
+  Endpoint adapter added under the governed activation path, provider behaviour hardened with a
+  **deterministic readiness probe**, fallback preserved, model provenance recorded — and #1258 renamed a
+  fallback test whose name misdescribed what it asserted.
+- **Add secure file-level Langfuse observability** (Task #5493, 4h) — #1202, #1253. File-level scan,
+  assessment and remediation traces carrying outcome, model usage, cost and reproducibility data, with trace
+  access isolated by account through privacy-safe owner identifiers.
+- **Production reliability, CI, merge and deployment hardening** (Task #5494, 4h) — #1253 is the substantive
+  one: a 2026-09-02 audit found **three routes missing ownership checks**. `GET /inventory` served
+  cross-account file listings because the global path-dedup table has no owner column (now admin-only, with
+  regular callers directed to `GET /scans/{sid}/inventory`); `GET /scans/jobs/{job_id}` let any authenticated
+  caller who knew or guessed a job id read another user's scan state — source paths, phase, file counts; and
+  the remediate POST was likewise unscoped. Same class as #1202 and #872, found by looking rather than waiting.
+
+## Feature: Canonical stage model and durable workflow execution · needs a Feature
+
+The window's deepest architectural change: a single canonical account of what stage a piece of work is
+in, owned by the server, durable across deploys, and the same everywhere it is displayed. Before this,
+each surface derived stage from whatever events it had seen. Distinct from *Durable orchestration and
+worker reliability* above, which is the job-queue layer (leases, cancellation, connection budgets); this
+is the layer above it — what stage the *work* is in, independent of which attempt is executing it.
+
+- **Scan stages bound to a durable workflow execution** (#1485), with each stage **single-flight**
+  (#1489), completion recorded **exactly once** (#1477), cross-stage execution **idempotent and
+  transparent** (#1639), and stage transitions guarded (#1622). A failed stage execution re-runs; a
+  finished one still does not (#1400).
+- **Canonical stages made primary across the product** (#1697, #1661, #1663), with domain equations
+  (#1698), domain accounting (#1700), intuitive counts (#1688) and terminal labels (#1696), lineage
+  integrity made explicit (#1701), and — the load-bearing one — **canonical stages kept truthful
+  through deployments** (#1693).
+- **Sealed manifests wired through runtime stages** (#1677), the canonical stage outbox run in the
+  worker tier (#1681), and historical stage backfill run **once per fleet** (#1683) rather than once
+  per replica.
+- Durable stage cards own workflow status (#1614, #1515, #1563); stage history shown in Live Operations
+  (#1528); reused stage executions explained in the UI (#1593); failed and stalled stages persisted
+  (#1480).
+- **Workflow identity across replacement and interruption**: downstream stages locked to immutable
+  snapshots (#1383), workflow revisions named in scan history (#1507) and shown across the live UI
+  (#1502), active work linked to its previous revision (#1508), replacement scans kept in one lineage
+  (#1497), active workflows resumed after sign-in (#1415), an in-flight run rejoined after signing
+  back in within a blob transport budget (#1364), and active workflow cards refreshed on tab focus
+  (#1640).
+- **Cumulative workflow stage cards** (#1719) — a stage stack that shows the run's stages
+  accumulating rather than only the current one, so an operator can see the shape of a run in progress
+  instead of a single label.
+
+
+
+## Feature: Realtime operations event backbone · needs a Feature
+
+A second event transport built entirely **default-off and shadowed**, proven against staging under
+load, and gated before any traffic depends on it. Worth its own Feature because none of it is visible
+to a customer yet and all of it is prerequisite to retiring the current polling path.
+
+- **Shared realtime operations event contract defined** (#1546), then implemented as default-off
+  canonical publishers (#1551, #1584), a default-off gateway (#1578), a browser shadow bridge (#1587),
+  shadow diagnostics (#1548) and an isolated shadow harness (#1549) — with activation gated to staging
+  (#1611).
+- **Proven under load before promotion**: a repeatable multi-tenant load and chaos gate (#1569), a
+  canonical realtime load and isolation gate (#1610), per-event staging latency measurement (#1685)
+  with cold and warm gate latency split apart (#1694), batched Redis writes (#1686) observed in the
+  staging gate (#1690), single-write transports preserved (#1691), the shadow publisher's Redis
+  connection warmed (#1702), and a guaranteed warm soak wave (#1703).
+- **A GO/NO-GO gate runs after every staging deploy** (#1679), through the ACA PTY (#1682). The
+  discipline here is the point: the replacement transport cannot be switched on by opinion.
+- **The load gate is decided on structure in CI and on the clock only in staging** (#1706). A
+  wall-clock latency assertion on shared CI runners fails for reasons that have nothing to do with the
+  code; the gate now checks in CI what CI can actually answer.
+
+
+
 ## Open items (backlog candidates)
+
+- **The `acp` working copy is parked on a stale branch, and that made the delivery log look current
+  when it was 307 commits behind.** `acp/` has HEAD on `worktree-feat-reconnecting-freshness`
+  (`cbb6687f`, 2026-08-27) while the work landed on `origin/main` (`503f1916`, 2026-09-02).
+  `ado-sync.sh delta` compares against HEAD, so it reported `mode=clean` with an empty delta — the
+  standup would have skipped ACP entirely. The helper's existing guard covers "git failed and said
+  nothing"; it does not cover "HEAD is not where the work is". Either the checkout should be returned
+  to `main`, or `delta` should compare against the tracking branch. Until one of those happens, every
+  future standup on this repo is one stale checkout away from silently reporting nothing.
+- **Three Features in this window have no ADO id** — ACP Managed Content Workspace (ADR 0044), Durable
+  orchestration and worker reliability, and Media captions (1.2.1 / 1.2.2). They are substantial enough
+  to be Features rather than Tasks under an existing one, and are marked "needs a Feature" until ids
+  are created under Epic #3664.
+- **The PDF/UA-1 report is built, gated in CI and served, but its wiring status should be confirmed
+  before it is described to a customer.** #1159 landed it explicitly NOT wired in; #1198–#1208 made it
+  portable, deployable, CI-gated and served. Whether it is reachable in the product for an end user is
+  the one claim in this window not verifiable from commit subjects alone.
 
 - **The docx header/footer parity audit is complete.** All six body-only content checks now read
   the header/footer/note parts: 2.4.4 (#214), 2.1.2/3.3.2/4.1.2 (#229), 1.4.11 (#230), 3.1.2 (#226)
@@ -2197,7 +3542,63 @@ real extracted content, degrading to the generic note, never a fabricated tree.
   `file_tags` entry in `_ANALYTICS_TABLES` (from #312 + #313 fixing the same bug) is being de-duplicated in
   a separate session.
 
+- **Uncommitted in the working tree as of 2026-08-29** — `frontend/src/assessSummary.test.jsx` is modified
+  and unstaged, and the repo root carries a large set of untracked binary deliverables (the
+  `ACP-Azure-Deployment-Architecture`, `ACP-Discover-Redesign`, `ACP-Discovery-Redesign-Why`,
+  `ACP-Location-Golden-Record` and `ACP-MovaIO-Prod-vs-Staging` PNG/PPTX sets, `ACP_DOCX_WCAG_Fixtures`,
+  `docs/Archive.zip`, `AGENTS.md`, `deploy/compose/docker-compose.override.yml`). None of this is on a
+  branch. `AGENTS.md` and the compose override are the two that look like they belong in the repo and are
+  not in it; the decks and fixture archives probably belong somewhere other than the repo root. Needs a
+  decision, not a commit-everything sweep.
+- **Two open PRs look superseded and should be closed or reduced** — #787 and #790 appear to duplicate work
+  already merged (#774 for the 1.3.5 detectors, #777 for Power BI DirectQuery). Not verified line by line;
+  flagged for a comparison pass rather than asserted as dead.
+
 ---
+
+- **`acp-redesign-review-queue` is a git *worktree* of `acp`, and the standup nearly counted its
+  history twice.** Its `.git` is a file, not a directory, so `find -maxdepth 3 -name .git -type d`
+  — the discovery command in the `ado-standup` skill — **does not find it at all**; it was only
+  reached because it has a delivery log. It then reported `mode=no-prior-sync` with **573 commits**,
+  of which exactly **one** (`143bbf3f`, "Redesign lifecycle disposition review queue") is not on
+  `origin/main`; the other 572 are `acp`'s own trunk. Its sync was deliberately **not** marked, because
+  a marker there would promise coverage in a log file that checkout does not contain. Two decisions
+  needed: whether the skill's discovery should drop `-type d`, and whether worktrees should be
+  excluded from the standup entirely and folded into their source repo. The same shape applies to
+  `acp-utsw` (a worktree of `acp-utsw-source`), which is currently harmless only because both are clean.
+- **`frontend/src/AssessSummary.test.jsx` and `frontend/src/assessSummary.test.jsx` are both tracked on
+  `worktree-feat-reconnecting-freshness` — a case-only duplicate that macOS cannot represent.** Only one
+  file can exist on a case-insensitive filesystem, so git diffs whichever content is on disk against the
+  *other* index entry and reports a large phantom modification. Restoring either variant dirties the
+  other; there is no clean state, and a `merge --ff-only` aborts on it indefinitely. `origin/main` tracks
+  only the lowercase path, so **the collision does not exist on `main`** — `767653c0` ("Merge the two
+  AssessSummary test files that differed only in case", #1114) resolved it there, and the parked branch
+  is ~810 commits behind that fix. Anything branched from that parked branch inherits the collision.
+  This has happened before: `stash@{1}` on this clone is named "preserve handoff AssessSummary
+  case-variant". Worth a guard, because the failure is invisible on macOS and silent on Linux CI, where
+  both files simply exist.
+
+  **This entry replaces a wrong one, recorded rather than deleted.** The 2026-09-07 standup filed this as
+  *"an uncommitted change in the working tree strips `assessSummary.test.jsx` down to a stub — 23
+  insertions against 356 deletions"*, and went on to say the stripped file removed the purpose header and
+  most assertions, that nothing about it looked deliberate, and that whoever left it should finish or
+  discard it. **There was no uncommitted change at all.** The on-disk content was byte-identical to
+  `HEAD:frontend/src/AssessSummary.test.jsx` — a committed blob, verifiable with
+  `git diff <disk> HEAD:frontend/src/AssessSummary.test.jsx` returning empty. The 23/356 figure was the
+  diff between the two committed case variants, which is exactly what `git status` reports in this
+  situation and exactly what a stripped-down working file would also look like. The two are
+  indistinguishable from the porcelain alone, which is why the wrong reading was plausible; telling them
+  apart needs `git ls-files` on the directory, and that was not run. The lesson is the general one: an
+  unexplained diff against a file that "is not on any branch" deserves a check that it is not on a branch
+  under another name.
+
+- **PR #1713 squashed five unrelated fixes into one commit spanning four Features.** A cached billing
+  denial, CI concurrency on `main`, draining-replica capacity accounting, the Live Ops drawer, and the
+  run-tile progress clamp arrived as a single squash. Each is well-described and each was bite-checked,
+  but the PR number now appears under Continuous deployment, Scan-run experience and Certification
+  report at once, so neither the board nor this log can tell from the id which change is meant. Worth a
+  convention call: one PR per Feature-sized change, or a commit trailer naming the Features it touches.
+
 
 ## Sync log
 
@@ -2620,3 +4021,99 @@ real extracted content, degrading to the generic note, never a fabricated tree.
   not rebuilt. Remaining R-series item: **R15 undo-a-batch** (touches the apply flow; feasibility being scoped).
   Per the new working agreement (#583) CI was not polled — merges gated on a single delayed check per PR.
   **Sync marker deliberately NOT advanced** (same convention).
+
+- **2026-08-29 (standup sweep — the whole 273-commit delta, and the marker finally advanced)** — mode
+  `clean`, prev head `6fa4f369` (2026-08-21), now `cbb6687f` (2026-08-27). **273 commits across seven days**
+  (23 on 08-21, 26 on 08-22, 12 on 08-23, 86 on 08-24, 70 on 08-25, 39 on 08-26, 17 on 08-27), roughly
+  PR #603 → #886. Tasks appended to fourteen Features: **Scan-run experience (#4696)** took the ADR 0004
+  durable-queue build-out, single-flight scans, SSE progress and the preflight; **Estate coverage (#4597)**
+  took the "0 documents" failure family, the 6× parallel BFS, the results dashboards and the estate-analytics
+  rebuild; **Discover & Assess lifecycle rules (#4618)** took the rule-authoring completion plus the
+  per-tenant and audit-attribution defects; **Certification report (#4698)** took P-13–P-20 and the tagged
+  accessible PDF with QR verification; **Capability registry (#4612)** took six detector additions/upgrades
+  and the full remediation-lane declaration sweep; **Continuous deployment (#4614)**, **Multi-tenancy
+  (#4608)**, **PHI privacy (#4613)**, **Remediate review queue (#4598)**, **Test corpus and CI (#4605)**,
+  **Assessment correctness (#4607)**, **Observability — Langfuse (#4697)**, **Dependency security (#4603)**
+  and **Documentation** took the remainder.
+  **The sync marker IS advanced this time**, breaking the convention the eight preceding entries used. Those
+  entries deliberately held the marker back because each documented only a slice and left other sessions'
+  work in the delta. This entry documents the delta in full, so holding the marker would only mean the next
+  standup re-reads 273 already-written commits. Much of this work is the claude[bot] pipeline's and other
+  sessions'; it is logged here for ADO intake, not claimed as one person's.
+  Two things this entry does **not** do: it does not re-verify the individual PR claims against the source
+  (the volume made that impractical, and the bullets follow the commit subjects and PR titles), and it does
+  not resolve the untracked working-tree material recorded as a new Open item.
+- **2026-09-02 (standup)** — Rollup sweep across all projects. ACP had **307 commits on
+  `origin/main` undocumented** since the `cbb6687f` marker (2026-08-27 → 2026-09-02, 189 of them inside
+  the 3-day window). Mode reported `clean` with an *empty* delta because the `acp/` checkout sits on
+  `worktree-feat-reconnecting-freshness`, not `main`; the delta was recomputed against `origin/main`
+  and cross-referenced against every PR number already named in this file, so the 222 lines of
+  uncommitted log content already in the working tree from a previous session are not duplicated.
+  Appended ~30 grouped Tasks across SharePoint source, Operator scan scope, v2 redesign, Alt-text,
+  Test corpus and CI, Remediation, Assessment correctness, Documentation, Capability registry,
+  Continuous deployment, Remediate review queue, Estate coverage, Lifecycle rules, Observability,
+  Scan-run experience and Certification report. Three new Features written with no ADO id: ACP Managed
+  Content Workspace (ADR 0044), Durable orchestration and worker reliability, and Media captions
+  (1.2.1 / 1.2.2). Three Open items recorded, led by the stale-checkout blindness that hid this delta.
+  Sync marker advanced from `cbb6687f` to `origin/main` head at the time of writing.
+- **2026-09-04 (standup follow-up)** — Closed the gap the 2026-09-02 entry left open. `origin/main` had
+  reached `369f0c6e` (#1275); 371 commits stood past the `cbb6687f` marker, of which 273 were already
+  documented and **97 were not**. Two distinct groups, both now written up: a residue of ~33 small PRs from
+  2026-08-27/29 (#883–#950, #1097) that fell between the grouped bullets of the previous pass, and 64 new
+  commits from 2026-09-02/04. The new work is bound to ADO Feature **#5478** — *ACP — Iteration 11 delivery*,
+  created this day under Epic #3664 with sixteen Closed Tasks (#5479–#5494) totalling 85 hours of delivery
+  estimate. Its section names each Task id against the PRs behind it so the board and this log reconcile in
+  both directions. One task (#5485, Release publishing workflow) is recorded **without** a PR list, because
+  its commits were not separable from the Remediate wave by subject alone; that is stated in place rather
+  than papered over. The `acp` checkout remains parked on `worktree-feat-reconnecting-freshness` — see the
+  first Open item; the delta was again computed against `origin/main` and cross-referenced by PR number.
+
+- **2026-09-07 (standup)** — Rollup across all projects. ACP was the only repo with new work:
+  **416 commits on `origin/main`** past the `50bf1731` marker (2026-09-04 → 2026-09-07, PRs
+  #1276–#1706), all of them undocumented. Mode reported `clean` and, unlike the two previous entries,
+  the delta was **not** empty — the tip-resolution fix landed in `ado-sync.sh` on 2026-09-04 now
+  compares against `origin/main` rather than the parked `worktree-feat-reconnecting-freshness` HEAD,
+  so the stale-checkout blindness recorded as the first Open item no longer hides this repo's work.
+  That Open item stands only for the checkout itself, which is still parked.
+  Bullets were appended under twenty existing Features plus the Documentation section, and **two new
+  Features written with no ADO id**: *Canonical stage model and durable workflow execution* and *Realtime operations event
+  backbone*. Both are large enough to be Features rather than Tasks — together they account for
+  roughly 90 of the 416 commits — and both are marked "needs a Feature" pending ids under Epic #3664.
+  Three things this entry does **not** do. It does not re-verify individual PR claims against the
+  source; at 416 commits over three days that was not practical, and the bullets follow commit
+  subjects and PR titles. It does not open an "Iteration 12 delivery" Feature to mirror #5478, because
+  no such ADO Feature exists yet and inventing an id is worse than leaving the work under its
+  functional Features. And it does not mark `acp-redesign-review-queue`'s sync — see the new Open item.
+  Much of this work is the claude[bot] pipeline's and other sessions'; it is logged here for ADO
+  intake, not claimed as one person's.
+  `origin/main` **moved while this entry was being written** — from `26ace4af` (#1704) to `03b85970`
+  (#1706), two commits from a concurrent session. Both were picked up rather than left for the next
+  run: #1705 under Local model benchmarking, #1706 under the new Realtime operations event backbone.
+  The count above is therefore 416, not the 414 the first delta reported. Sync marker advanced from
+  `50bf1731` to `origin/main` head (`03b85970`).
+
+- **2026-09-07 (standup, second run of the day)** — The earlier run today (marker `03b85970`, PR #1706)
+  covered 416 commits; **15 more landed in the hours since**, PRs #1707–#1724, all documented here.
+  Mode `clean`, delta exact. This entry appends to nine existing Features rather than opening any new
+  one — the work is continuation, not new territory: Assessment correctness (four bullets, led by pptx
+  1.4.5 finally clearing and a regression no longer certifying a document), Local model benchmarking
+  (the first measured Claude run on the adversarial set — 192 billed calls, $0.81, zero regressions
+  introduced), Documentation (two stale-prose corrections, one of which was reaching customers in every
+  draft ACR preview), Continuous deployment (the pending-CI-run cancellation that stopped main's middle
+  commits shipping), Scan-run experience (three Live Operations gauge fixes), Release Center, Canonical
+  stage model, and v2 frontend redesign.
+  Two things this entry does **not** do. It does not re-verify PR claims against the source — the
+  bullets follow commit subjects and bodies, which for this batch are unusually detailed and carry
+  their own measurements. And it still does not open an "Iteration 12 delivery" Feature to mirror
+  #5478: no such ADO Feature exists, and inventing an id is worse than leaving the work under its
+  functional Features. Every Feature id cited here was already bound; **no new Feature was created**.
+  `origin/main` was re-checked immediately before marking and had not moved. Sync marker advanced from
+  `03b85970` to `8c854d71` (#1724). Much of this work is the claude[bot] pipeline's and other
+  sessions'; it is logged for ADO intake, not claimed as one person's.
+
+- **2026-09-07 (correction, no new commits documented)** — The second standup pass filed an Open item
+  claiming an uncommitted working-tree change had stripped `frontend/src/assessSummary.test.jsx` to a
+  stub. That was wrong, and the Open item has been rewritten in place to say what it actually was: a
+  case-only duplicate tracked on the parked branch, already fixed on `main` by #1114. The original
+  wording and the reason it was believable are recorded inside the replacement rather than deleted.
+  No Feature bullets and no sync marker changed — this pass documents no commits.
