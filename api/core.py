@@ -1641,6 +1641,21 @@ WORKERS = int(os.environ.get("ACP_WORKERS", _WORKER_DEFAULT) or _WORKER_DEFAULT)
 _worker_handles: list = []
 _worker_seq = 0          # monotonic id source so scaled-in workers get fresh ids
 _MAX_WORKERS = 16        # safety cap on live scaling
+_STAGE_BACKFILL_MARKER = "maintenance:stage-execution-backfill-v1:complete"
+
+
+def _run_stage_execution_backfill_once() -> dict | None:
+    """Backfill historical stage batches once per fleet, retrying after interrupted owners."""
+    st = get_store()
+    if st.get_setting(_STAGE_BACKFILL_MARKER):
+        return None
+    if not st.claim_maintenance_lease("stage-execution-backfill-v1", lease_seconds=3600):
+        return None
+    import json as _json
+    report = st.backfill_stage_executions()
+    st.set_setting(_STAGE_BACKFILL_MARKER, _json.dumps(report, sort_keys=True))
+    print(f"[sweeper] canonical stage backfill complete: {report}", flush=True)
+    return report
 
 
 def _discovery_reservation(pool_size):
@@ -2345,6 +2360,7 @@ def start_workers() -> int:
                 # failures remain retryable and visible in Live Operations.
                 _stage_outbox.dispatch_database_jobs_once(
                     get_store(), dispatcher_id=worker_process_instance_id("outbox"), limit=200)
+                _run_stage_execution_backfill_once()
                 ticks += 1
                 if ticks % 60 == 0:      # ~hourly: trim old completed jobs so the jobs
                     d = get_store().purge_done_jobs(older_than_hours=24)   # table + claim index don't bloat (audit P2)
