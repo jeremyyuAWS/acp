@@ -1,4 +1,4 @@
-import { createElement, act } from 'react'
+import { createElement, act, useEffect, useState } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url'
 import { createTestRoot } from './testRoots.js'
 import CanonicalStageCard from './CanonicalStageCard.jsx'
 import WorkflowStageStack from './WorkflowStageStack.jsx'
-import { canonicalStageCardModel, currentCanonicalStage, priorCanonicalStages,
+import { canonicalStageCardModel, canonicalWorkflowStages, currentCanonicalStage, priorCanonicalStages,
   stageNeedsAttention } from './canonicalStageCard.js'
 
 const SNAPSHOT = {
@@ -100,27 +100,22 @@ describe('canonical stage card', () => {
     expect(html).toContain('Integrity check: 10 of 10 work items accounted for')
   })
 
-  it('keeps retained history and completed content mounted while a prior stage toggles', async () => {
+  it('keeps retained history mounted while an earlier-stage card collapses and expands', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-07T01:02:03Z'))
     const { container, root } = createTestRoot()
     const lineage = { workflow_id: 'workflow-collapse', workflow_revision: 3,
-      stages: [{ ...SNAPSHOT, stage: 'discover', state: 'succeeded' }] }
+      stages: [{ ...SNAPSHOT, stage: 'discover', state: 'succeeded' },
+        { ...SNAPSHOT, stage: 'assess', execution_id: 'assess-1', state: 'processing' }] }
     await act(async () => { root.render(createElement(WorkflowStageStack, {
       lineage, view: 'assess', receivedAt: Date.now(),
     })) })
-    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(1)
-    expect(container.querySelectorAll('.live-heartbeat-bars i')).toHaveLength(12)
-    const body = container.querySelector('.workflow-stage-stack__body')
-    const completedCard = container.querySelector('.discover-run-progress')
-    expect(body.hidden).toBe(true)
-    const summary = container.querySelector('.workflow-stage-stack__summary')
+    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(3)
+    const summary = container.querySelector('[data-stage="discover"] .workflow-stage-stack__summary')
     await act(async () => { summary.click() })
-    expect(body.hidden).toBe(false)
-    expect(container.querySelector('.discover-run-progress')).toBe(completedCard)
+    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(3)
     await act(async () => { summary.click() })
-    expect(body.hidden).toBe(true)
-    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(1)
+    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(3)
     expect(container.textContent).toContain('Final · refreshed now')
     await act(async () => { vi.advanceTimersByTime(10_000) })
     expect(container.textContent).toContain('Final · refreshed now')
@@ -267,11 +262,11 @@ describe('cumulative workflow stage selection', () => {
 })
 
 describe('app-level canonical ownership', () => {
-  it('keeps one lineage hook and card alive outside the tab panel', () => {
+  it('keeps one lineage hook and workflow stack alive outside the tab panel', () => {
     const app = readFileSync(join(here, 'App.jsx'), 'utf8')
     const hook = app.indexOf('useCanonicalStageLineage(')
     const signIn = app.search(/^ {2}if \(!me\) return <SignIn/m)
-    const card = app.indexOf('<CanonicalStageCard')
+    const card = app.indexOf('<WorkflowStageStack')
     const panel = app.indexOf('id="workflow-panel"')
     expect(hook).toBeGreaterThan(-1)
     expect(hook).toBeLessThan(signIn)
@@ -280,10 +275,74 @@ describe('app-level canonical ownership', () => {
     expect(app.indexOf('<WorkflowStageStack')).toBeLessThan(panel)
   })
 
-  it('deduplicates the richer remediation card and the canonical Release fallback', () => {
+  it('mounts every live detail only through the canonical stack', () => {
     const app = readFileSync(join(here, 'App.jsx'), 'utf8')
-    expect(app).toContain("!['discover', 'assess', 'remediate'].includes(canonicalStage.stage)")
     expect(app).toContain("canonicalAvailable={canonicalStage?.stage === 'release'}")
-    expect(app).toContain("{ release: 'publish', assess: 'assess', discover: 'discover' }")
+    expect(app.match(/<WorkflowStageStack/g)).toHaveLength(1)
+    expect(app.match(/<LiveAssessmentLive/g)).toHaveLength(1)
+    expect(app.match(/<RemediationRunCard/g)).toHaveLength(1)
+    expect(app).toContain('showRunProgress={false}')
+  })
+})
+
+describe('unified idempotent workflow integration', () => {
+  const stage = (name, state, revision, extra = {}) => ({
+    ...SNAPSHOT, stage: name, state, revision, workflow_revision: 7,
+    execution_id: `${name}-${revision}`, ...extra,
+  })
+
+  it('restores exactly one current Assess card with completed Discover above and future stages locked', async () => {
+    const { container, root } = createTestRoot()
+    const lineage = { workflow_id: 'restore', workflow_revision: 7, stages: [
+      stage('discover', 'succeeded', 3), stage('assess', 'processing', 4),
+    ] }
+    await act(async () => { root.render(createElement(WorkflowStageStack, { lineage })) })
+    expect(container.querySelectorAll('[data-current="true"]')).toHaveLength(1)
+    expect(container.querySelector('[data-current="true"]').dataset.stage).toBe('assess')
+    expect(container.querySelector('[data-stage="discover"] .workflow-stage-stack__body').hidden).toBe(true)
+    expect(container.querySelector('[data-stage="assess"] .workflow-stage-stack__body').hidden).toBe(false)
+    expect([...container.querySelectorAll('.is-locked')].map((node) => node.dataset.stage))
+      .toEqual(['remediate', 'release'])
+    expect(container.textContent).not.toContain('Discovering documents')
+    expect([...container.querySelectorAll('button')].some((button) => /^Stop\b/.test(button.textContent))).toBe(false)
+    await act(async () => { root.unmount() })
+  })
+
+  it('rejects stale revisions and never lets an upstream live flag reclaim downstream ownership', () => {
+    const lineage = { workflow_revision: 7, stages: [
+      stage('discover', 'processing', 99), stage('assess', 'processing', 4),
+      stage('assess', 'succeeded', 3),
+      stage('remediate', 'succeeded', 8, { workflow_revision: 6 }),
+    ] }
+    expect(canonicalWorkflowStages(lineage).map(({ stage: name, revision }) => [name, revision]))
+      .toEqual([['discover', 99], ['assess', 4]])
+    expect(currentCanonicalStage(lineage).stage).toBe('assess')
+  })
+
+  it('keeps the live detail instance and its state across collapse', async () => {
+    let mounts = 0
+    function Detail() {
+      const [samples, setSamples] = useState(12)
+      useEffect(() => { mounts += 1; return () => { mounts -= 1 } }, [])
+      return <button type="button" onClick={() => setSamples((value) => value + 1)}>{samples} samples</button>
+    }
+    const { container, root } = createTestRoot()
+    const lineage = { workflow_id: 'retained', workflow_revision: 7,
+      stages: [stage('discover', 'processing', 2)] }
+    await act(async () => { root.render(createElement(WorkflowStageStack, {
+      lineage, stageDetails: { discover: <Detail /> },
+    })) })
+    const summary = container.querySelector('[data-stage="discover"] .workflow-stage-stack__summary')
+    const detailButton = container.querySelector('.workflow-stage-stack__live-detail button')
+    await act(async () => { detailButton.click() })
+    expect(detailButton.textContent).toBe('13 samples')
+    await act(async () => { summary.click() })
+    expect(container.querySelector('[data-stage="discover"] .workflow-stage-stack__body').hidden).toBe(true)
+    expect(container.querySelector('.workflow-stage-stack__live-detail button').textContent).toBe('13 samples')
+    expect(mounts).toBe(1)
+    await act(async () => { summary.click() })
+    expect(container.querySelector('.workflow-stage-stack__live-detail button').textContent).toBe('13 samples')
+    expect(mounts).toBe(1)
+    await act(async () => { root.unmount() })
   })
 })

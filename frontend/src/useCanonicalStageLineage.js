@@ -8,13 +8,22 @@ function lineageVersion(value) {
   return [Number(lineage?.workflow_revision || 0), stageRevision]
 }
 
+const STAGE_ORDER = { discover: 0, assess: 1, remediate: 2, release: 3 }
+
+function furthestStage(value) {
+  const lineage = value?.lineage || value
+  return Math.max(-1, ...(lineage?.stages || []).map((stage) => STAGE_ORDER[stage.stage] ?? -1))
+}
+
 export function isNewerLineage(previous, next) {
   if (!next) return false
   if (!previous) return true
   const [previousWorkflow, previousStage] = lineageVersion(previous)
   const [nextWorkflow, nextStage] = lineageVersion(next)
-  return nextWorkflow > previousWorkflow
-    || (nextWorkflow === previousWorkflow && nextStage >= previousStage)
+  if (nextWorkflow !== previousWorkflow) return nextWorkflow > previousWorkflow
+  // A full lineage response may update counters without incrementing its revision, so equality is
+  // valid. It may not forget a downstream stage or lower the greatest durable stage revision.
+  return furthestStage(next) >= furthestStage(previous) && nextStage >= previousStage
 }
 
 export function useCanonicalStageLineage(scanId, loadLineage) {

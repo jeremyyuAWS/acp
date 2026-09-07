@@ -145,7 +145,7 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
   // annotated array is the 2026-08-21 defect: annotate() gives every real file a department, so
   // the check read "classified" on every real scan.
   rawFiles = null, onStop = null, onViewMonitor = null, onViewLiveOps = null,
-  onOpenSource = null, pendingScanLoad = false }) {
+  onOpenSource = null, pendingScanLoad = false, showRunProgress = true }) {
   // discoverRunTime resolves the snapshot instant from run.discovered_at / completed_at, and this
   // component is given neither — Discover takes scanId and scope, not the run. The pieces it needs
   // are assembled here rather than threading the whole run object through a new prop; the resolver
@@ -840,9 +840,9 @@ export default function Discover({ sources, files, busy, onScan, hasDriveToken =
           from the last GET /scans/{id} the outer `scan` state holds, which during an active run
           can be the PREVIOUS scan's terminal value until this one settles. */}
       {/* The queue/assignment card below owns status until listing starts. */}
-      {!(displayBusy && ['queued', 'preparing', 'submitting'].includes(displayProgress?.phase)) && <DiscoverRunProgress progress={discoveryProgressForCard} busy={displayBusy} onStop={onStop} onContinue={onAdvance} assessmentComplete={Boolean(run?.assessed_at)} sources={sources} source={run?.source} scope={scope} inv={inv} preflightDegraded={preflightDegraded} freshness={displayProgress?.freshness ?? run?.freshness ?? null} runStartedAt={run?.started_at ?? null} />}
+      {showRunProgress && !(displayBusy && ['queued', 'preparing', 'submitting'].includes(displayProgress?.phase)) && <DiscoverRunProgress progress={discoveryProgressForCard} busy={displayBusy} onStop={onStop} onContinue={onAdvance} assessmentComplete={Boolean(run?.assessed_at)} sources={sources} source={run?.source} scope={scope} inv={inv} preflightDegraded={preflightDegraded} freshness={displayProgress?.freshness ?? run?.freshness ?? null} runStartedAt={run?.started_at ?? null} />}
 
-      {(() => {
+      {showRunProgress && (() => {
         const jobClaimed = !!(discoverJobInfo && discoverJobInfo.status && discoverJobInfo.status !== 'queued')
         const queuedNotClaimed = displayBusy && displayProgress?.phase === 'queued' && !jobClaimed
         // The consolidated "DISCOVERY · Queued" card (stakeholder UX review, 2026-08-30) replaces

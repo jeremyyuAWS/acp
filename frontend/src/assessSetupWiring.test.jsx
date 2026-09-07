@@ -258,10 +258,10 @@ describe('App composes the Assess tab the way the board specifies', () => {
     // and view !== 'discover'. The liveScanId gate prevents a no-op: no id → no Stop rendered.
     // Stop is never missing from a cross-tab scan view as long as onStop is wired here.
     const s = app()
-    expect(s).toMatch(/onStop=\{liveScanId \? \(\) => stopScan\(liveScanId\) : undefined\}/)
+    expect(s).toMatch(/onStop=\{canonicalScanId \? \(\) => stopScan\(canonicalScanId\) : undefined\}/)
     // LiveAssessmentLive goes through stopScan too, not a bare cancelScan call. Both Stops
     // use the same helper — the regression that let them drift apart was two call sites.
-    expect(s).toMatch(/<LiveAssessmentLive[\s\S]{0,500}?onStop=\{\(\) => stopScan\(primaryWorkflow\?\.stage === 'assess'[\s\S]{0,120}?primaryWorkflow\.scan_id/)
+    expect(s).toMatch(/assess: canonicalStage\?\.stage === 'assess'[\s\S]{0,500}?<LiveAssessmentLive[\s\S]{0,250}?onStop=\{canonicalScanId \? \(\) => stopScan\(canonicalScanId\)/)
     // and neither may go back to swallowing the outcome
     expect(s).not.toMatch(/cancelScan\([^)]*\)\.catch\(\(\) => \{\}\)/)
   })
@@ -286,9 +286,9 @@ describe('App composes the Assess tab the way the board specifies', () => {
     // evaluates the real expression); pinning the literal here just meant this test failed for a
     // change it does not describe. What it cares about is that the card is mounted with the
     // server-owned active-workflow id and activates from either local or restored state, never busy.
-    expect(s).toMatch(/<LiveAssessmentLive scanId=\{primaryWorkflow\?\.stage === 'assess'/)
-    expect(s).toMatch(/active=\{assessPhase === 'running' \|\| primaryWorkflow\?\.stage === 'assess'\}/)
-    expect(s).not.toMatch(/active=\{assessPhase === 'running'[\s\S]{0,120}?view !== 'assess'/)
+    expect(s).toMatch(/assess: canonicalStage\?\.stage === 'assess'/)
+    expect(s).toMatch(/<LiveAssessmentLive scanId=\{canonicalScanId\}/)
+    expect(s).toMatch(/<LiveAssessmentLive[\s\S]{0,160}?\sactive onStop=/)
   })
 })
 
