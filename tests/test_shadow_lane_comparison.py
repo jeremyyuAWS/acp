@@ -226,3 +226,37 @@ def test_build_report_emits_one_row_per_case_run(cases):
             and r["eligible"]]
     assert sum(r["verified_fix"] for r in mine) / len(mine) == pytest.approx(lad["varr"])
     json.dumps(rep, default=str)  # serialisable, as the CLI writes it
+
+
+# ── the enable pick is the CHEAPEST safe tier, not the first alphabetically ───────────────────
+
+def test_enable_names_the_cheapest_safe_tier_not_the_alphabetical_first():
+    """Measured on the 142-case run: Opus and Sonnet were both safe on html:2.4.4, and naming
+    `sorted(safe)[0]` picked Opus at 4x Sonnet's cost. Cheapest-that-is-safe is the claim."""
+    both = {O: [True], S: [True]}
+    base = dict(cases=5, eligible=3, lane="assisted", rules_safe=[False])
+    v, why, who = decide(**base, claude=both, costs={O: 0.0124, S: 0.0028})
+    assert v == ENABLE and who == S, "the cheaper safe tier must be the one named"
+    assert "cheapest of 2 safe here" in why and O in why
+    # Flip the prices and the pick flips with them — the rule follows the measurement.
+    assert decide(**base, claude=both, costs={O: 0.0028, S: 0.0124})[2] == O
+    # Alphabetical order alone must not decide it: O sorts first and is the dearer one above.
+    assert sorted([O, S])[0] == O
+
+
+def test_enable_pick_is_deterministic_when_costs_tie_or_are_missing():
+    base = dict(cases=5, eligible=3, lane="assisted", rules_safe=[False], claude={O: [True], S: [True]})
+    assert decide(**base, costs={O: 0.01, S: 0.01})[2] == sorted([O, S])[0]
+    assert decide(**base, costs={})[2] == sorted([O, S])[0]
+    assert decide(**base, costs={O: None, S: 0.05})[2] == S  # a priced tier beats an unpriced one
+
+
+def test_the_committed_142_run_picks_sonnet_for_html_2_4_4(cases):
+    path = ROOT / "evals" / "reports" / "2026-09-07-hosted-ladder-142.json"
+    if not path.exists():                     # the report lands with its own commit
+        pytest.skip("142-case report not committed yet")
+    cmp = compare([load_report(path)], None, REMEDIATION)
+    rows = {x["category"]: x for x in cmp["rows"]}
+    row = rows["html:2.4.4"]
+    assert row["verdict"] == ENABLE and row["enable_candidate"] == S
+    assert row["claude"][S]["mean_usd_per_case"] < row["claude"][O]["mean_usd_per_case"]
