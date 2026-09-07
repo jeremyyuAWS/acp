@@ -13,6 +13,7 @@ Env vars:
 """
 from __future__ import annotations
 import os
+import threading as _threading
 
 _HOST = os.environ.get("LANGFUSE_HOST", "")
 _PK   = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
@@ -31,6 +32,15 @@ _ENV = (os.environ.get("LANGFUSE_TRACING_ENVIRONMENT") or os.environ.get("ACP_EN
 _ENV = _re.sub(r"[^a-z0-9_-]", "-", _ENV)[:40] or "production"
 
 _client = None
+
+# A trace export is optional work and must never occupy a scan worker.  Langfuse's SDK flush is
+# synchronous and may retry for minutes when its ingestion endpoint returns 500 (observed in
+# production on 7 September 2026).  One daemon owns flushes for the process; callers merely mark
+# that a pass is needed.  Requests arriving while a pass is running are coalesced into one more
+# pass, which bounds both threads and pressure on an unhealthy telemetry service.
+_flush_lock = _threading.Lock()
+_flush_requested = False
+_flush_thread = None
 
 # Friendly source labels for trace names/summaries.
 _SOURCE_LABEL = {"drive": "Google Drive", "sharepoint": "SharePoint / OneDrive", "local": "local corpus"}
@@ -309,15 +319,38 @@ def pii_span(file_span_, pinfo: dict, filename: str | None = None):
 
 
 def flush():
-    """Flush pending events — call at the end of each scan. Guarded: flush() runs before
-    the fan-out progress counter advances (handlers.py), so a raising Langfuse flush must
-    never fail or stall a scan/remediation job."""
-    try:
-        lf = _lf()
-        if lf:
-            lf.flush()
-    except Exception:
-        swallowed("lf.flush: flushing Langfuse failed")
+    """Request a best-effort background export and return immediately.
+
+    Guarding exceptions is insufficient: the SDK can spend minutes retrying a failing endpoint
+    before it raises.  Assessment completion is therefore separated from telemetry availability.
+    At most one exporter thread and one follow-up pass exist per process during an outage.
+    """
+    global _flush_requested, _flush_thread
+    if not _ENABLED:
+        return
+    with _flush_lock:
+        _flush_requested = True
+        if _flush_thread is not None and _flush_thread.is_alive():
+            return
+        _flush_thread = _threading.Thread(
+            target=_flush_loop, daemon=True, name="langfuse-flush")
+        _flush_thread.start()
+
+
+def _flush_loop():
+    global _flush_requested, _flush_thread
+    while True:
+        with _flush_lock:
+            if not _flush_requested:
+                _flush_thread = None
+                return
+            _flush_requested = False
+        try:
+            lf = _lf()
+            if lf:
+                lf.flush()
+        except Exception:
+            swallowed("lf.flush: flushing Langfuse failed")
 
 
 _PROJECT_ID_CACHE: str | None = None
