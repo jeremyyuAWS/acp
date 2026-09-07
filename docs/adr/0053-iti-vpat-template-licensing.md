@@ -1,9 +1,9 @@
 # ADR 0053 — The ITI VPAT® template: what row 13 actually asks for, and the three separable questions behind it
 
-**Status:** Proposed — **the decision is deliberately not made here.** This ADR exists to make the
-question answerable by the owner (and, for the first of the three questions below, by counsel).
-Everything an engineer can settle is settled; what is left is not an engineering call.
-**Date:** 2026-09-06
+**Status:** Accepted for Q2 (2026-09-07) — the owner decided the reproduction scope. **Q1 remains
+open and is still not decided here.** Option C is the one that ships; see *The decision, and what
+it does not cover* below.
+**Date:** 2026-09-06, amended 2026-09-07
 **Related:** `docs/prd-acr-workspace.md` acceptance rows 13 and 14, and the "Phase 5 note".
 Code: `api/acr_export_preview.py` (the projection every format is built from),
 `api/acr_export_docx.py`, `api/acr_export_pdf.py`, `api/routes/acr.py` (`/preview`,
@@ -91,21 +91,46 @@ needs no vendoring — see Option C — and a version that needs Q2 answered yes
 
 ## What could not be established from this session, and must not be guessed
 
-**I could not read ITI's published terms.** `www.itic.org` is blocked by this environment's egress
-proxy, and I did not route around it. Nothing in this ADR asserts what the VPAT licence, trademark
-policy or template terms actually say, because I have not read them, and a confident summary of a
-licence I could not open is exactly the kind of plausible-and-wrong claim that ends an
-investigation instead of starting one.
+**I could not read ITI's published terms — and on 2026-09-07 that stopped being true.** This
+section said `www.itic.org` was blocked by the egress proxy. It answered `200` on the next
+attempt, a day later, from the same environment. The original caution was right and the conclusion
+drawn from it has expired: **the terms below are now quoted from the page, not summarised from
+memory.** What the block did NOT mean was that the terms were unknowable; it meant one session
+could not reach them, and that is a fact with a shelf life. Re-test a blocked host before building
+a decision on its being blocked.
 
-**What a human needs to read, before this ADR can move past Proposed:**
+### What the page says, verbatim
 
-1. ITI's VPAT page and the terms accompanying the current template download (VPAT 2.5Rev at the
-   time of writing) — the WCAG, 508, EU and INT editions are published separately, and row 13's
-   scope is the WCAG edition only.
-2. Whatever trademark/usage notice accompanies the mark itself, for Q1.
-3. Whether redistribution inside a commercial product's source tree and container images is
-   addressed at all, for Q2 — silence is not permission, and this is the specific question a
-   general "free to use" statement usually does *not* answer.
+Quoted from `https://www.itic.org/policy/accessibility/vpat`, read 2026-09-07. These are ITI's
+words, not a paraphrase, because the paraphrase is the failure mode this section was written about:
+
+> The VPAT is offered free of charge. Membership in ITI is not required to use the VPAT. Please
+> note, however, that the VPAT name and report form are ITI registered service marks, and should
+> not be altered without the express written permission of ITI. Also, the notation ® should be
+> used in conjunction with the name and report in accordance with established guidelines.
+
+and, in the list headed *All four editions of the VPAT contain*:
+
+> Provided as a Microsoft Word file that can be used as is or reproduced in other formats.
+
+and, on the naming question:
+
+> A version of the VPAT which has been completed for a specific product is an ACR.
+
+> ITI provides the VPAT templates as a free resource for anyone to use.
+
+**These sentences do not all point the same way, which is why Q1 stays open.** "Reproduced in other
+formats" contemplates exactly what ACP does — one projection rendered as HTML, PDF and DOCX. "The
+report form … should not be altered" cuts the other way against a structure that resembles the form
+without being it. Reading those two together is a legal judgement, and this ADR still does not make
+it. What it can now do is put the actual text in front of whoever does.
+
+**What a human still needs to read, for Q1:** whatever trademark/usage notice accompanies the mark
+itself. The page quoted above is the terms accompanying the template download; it names the mark
+and the alteration constraint, and it does not, on its face, address redistribution inside a
+commercial product's source tree and container images. **Silence is not permission**, which is why
+the owner's decision below is a decision not to vendor rather than a finding that vendoring is
+allowed.
 
 **This is a question for counsel, not for engineering judgement, and not for mine.** What
 engineering can say is what each possible answer would cost, which is the rest of this document.
@@ -200,7 +225,43 @@ not against the invariant.
 
 ---
 
-## Decision
+## The decision, and what it does not cover
+
+**2026-09-07, the owner: titles and numbers only — the same scope given for EN 301 549 a day
+earlier, extended to this template.** In the three-question frame above that is an answer to **Q2**,
+and it is a *no* to vendoring with a *yes* to reproducing the template's section headings, table
+titles and column headers. It selects **Option C**.
+
+**It is not an answer to Q1**, and Q1 is the irreversible one. A reproduction-scope decision is
+about copyright; whether a document may be *called* a VPAT® is about a service mark, and the page
+quoted above says that mark should not be altered without ITI's written permission. So:
+
+- every format keeps the statement on its face that it is not a VPAT, exactly as today;
+- nothing ACP generates uses the mark, with or without the ® notation;
+- the section headings, table titles and column headers may be matched, because those are what
+  "titles and numbers" means for a document whose content is a table structure.
+
+**What this permits ACP to reproduce**, and the boundary is the same one the EN 301 549 catalog
+runs on: *headings and table structure, not prose*. The template's Essential Requirements, Best
+Practices, Terms and Legal Disclaimer sections are instructional and boilerplate text — they are
+the prose, and they stay out. A heading with ACP's own words under it is not a reproduction of
+ITI's; a heading with ITI's paragraph under it would be.
+
+### A finding from reading the template itself
+
+The WCAG edition lists **56** criteria where `config/wcag-2.2-aa.json` holds **55**. The whole
+difference is **4.1.1 Parsing**, which the template carries annotated *"WCAG 2.0 and 2.1 – Always
+answer 'Supports'; WCAG 2.2 (obsolete and removed) - Does not apply"* so that one template serves
+all three WCAG versions. ACP's catalog is WCAG 2.2 and correctly omits it. **This is not a gap to
+close** — adding 4.1.1 to a 2.2 report would print a criterion the standard removed. Recorded
+because "the official template has one more row than we do" is exactly the observation that gets
+acted on before it is understood.
+
+Every one of the other 55 titles matches ACP's, case-folded, once the template's `(Level A)` /
+`(Level AA 2.1 and 2.2)` suffix is stripped — the level is a rendering convention there, and a
+column in ACP's catalog.
+
+## Prior decision (superseded for Q2 on 2026-09-07)
 
 **Deferred, pending Q1 and Q2.** Recorded here rather than left implicit so that:
 
@@ -212,6 +273,12 @@ not against the invariant.
 **Recommended sequence** (engineering's input to a decision that is not engineering's to make):
 send Q1 and Q2 to counsel or to ITI (Option D) while shipping Option A, which is already live. Do
 not begin Option B before Q2 is answered in writing.
+
+*Followed, in part.* Q2 was answered by the owner on 2026-09-07 as a scope rather than a
+permission — reproduce titles and numbers, do not vendor the file — which selects Option C and
+leaves Option B unbegun, as this sequence asks. Q1 has not been sent, and until it is, Option A's
+disclaimer stays on every rendered format. Option C changes the shape of the document; it does not
+change what the document is allowed to call itself.
 
 ## Consequences
 
