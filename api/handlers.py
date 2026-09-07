@@ -4834,6 +4834,27 @@ def _apply_one_value_kind(
     unresolved_note = (f"; {len(unresolved)} locator(s) unresolved and not written"
                        if unresolved else "")
     if not applied:
+        # NOTHING REACHED THE DOCUMENT. Until this branch logged, that was the quietest failure
+        # in the lane: it returned here BEFORE any apply.unverified line, so annotate_apply_
+        # outcomes set no apply_outcome, reviewCard mounted no card, and the row — being
+        # `approved` — was not in the pending inbox either. The reviewer approved, clicked, and
+        # got a file that never publishes, with nothing anywhere to say why. Only an
+        # apply.unresolved line in the decision log recorded it, and nothing reads that for a card.
+        #
+        # A wedged file must never be invisible, so the same apply.unverified shape the two
+        # branches below use is written here too, naming the criteria so apply_outcome can match
+        # it to this row (normalise_sc('1.1.1/described') is '1.1.1', so a described row matches).
+        # Logged only when locators actually went unresolved: a lane with nothing to write is an
+        # ordinary no-op and must not manufacture an outcome for a reviewer to read.
+        if unresolved:
+            core.store.log_decision(
+                "system", "apply.unverified", scan_id=scan_id, file=filename,
+                detail=f"wrote no {noun} value(s) for {sorted(scs_to_clear)}: all "
+                       f"{len(unresolved)} approved locator(s) reach no image in this document. "
+                       f"Credit withheld; the approved value is kept for retry")
+            _model_outcome("write_unresolved",
+                           f"nothing written; every {noun} locator was unresolved"
+                           + unresolved_note, regressions=None)
         return working, False
 
     _phase(job, f"re-verifying the corrected copy ({noun})")

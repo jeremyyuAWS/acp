@@ -573,18 +573,21 @@ def test_an_unreachable_image_wedges_the_file_rather_than_certifying_it_falsely(
 
     What follows is a dead end: the described row is approved and can never be applied, so
     count_unapplied_approved_values counts it forever and the file can never certify. The
-    direction is SAFE — no false certification, which is the failure ADR 0055 exists to prevent —
-    but there is no way out for the reviewer, and it is not fixed here.
+    direction is SAFE — no false certification, which is the failure ADR 0055 exists to prevent.
 
-    THIS IS NOT A DEFECT THIS CHANGE INTRODUCES. It is the same shape in all three formats: the
-    merged pptx lane wedges identically on an image referenced only by a slideLayout or
-    slideMaster. What this change alters is how OFTEN docx and xlsx reach it — before it, the
-    locator was never translated at all, so EVERY described decision on those formats wedged;
-    after it, only an image the 1.1.1 detector itself cannot see does.
+    IT IS NO LONGER SILENT, which was the half that actually hurt. The lane now logs
+    apply.unverified when it writes nothing because every locator was unresolved, and
+    apply_outcome reads that back as NOTHING_WRITTEN, so the reviewer gets a card saying the
+    description reached no image instead of a file that never publishes and no explanation. That
+    is asserted below, because a wedge nobody can see is a different defect from a wedge.
 
-    When the cross-format fix lands (refuse the decision up front, as #1761 refuses a row with
-    nowhere to put a description), this test goes red and should be replaced by that refusal's
-    own test — it is a pin on a known gap, not a specification of correct behaviour.
+    The pptx half of this shape — a picture on a slideLayout or slideMaster — is now REACHED
+    rather than merely visible (formats.office.images.ALT_TARGETS covers the inherited parts, and
+    tests/test_described_image_inherited_and_unreachable.py proves the round trip). What is left
+    here is the residual: a media part no alt-bearing part references at all, which no locator
+    scheme can address. Extending reach further would mean widening ALT_TARGETS to parts that
+    genuinely carry no alt-bearing element, which would break the detector/applier agreement that
+    module exists to keep.
     """
     import apply_office_image_of_text as aoit
     data = _docx_unreachable_only()
@@ -605,6 +608,13 @@ def test_an_unreachable_image_wedges_the_file_rather_than_certifying_it_falsely(
     assert store.count_unapplied_approved_values(SID, "orphan.docx") == 1
     # The half that matters: it does NOT certify. A wedge is recoverable; a false pass is not.
     assert store.mark_file_compliant_if_reviewed(SID, "orphan.docx") is False
+
+    # And the reviewer is TOLD, rather than left with a file that silently never publishes.
+    import apply_outcome
+    row = rows[f"1.1.1{store.DESCRIBED_RULE_SUFFIX}"]
+    outcome = apply_outcome.apply_outcome_for(row, store.list_decisions(scan_id=SID))
+    assert outcome and outcome["outcome"] == apply_outcome.NOTHING_WRITTEN
+    assert outcome["criteria"] == ["1.1.1"]
 
 
 @needs_ocr

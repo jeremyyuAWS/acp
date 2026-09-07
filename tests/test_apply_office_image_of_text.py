@@ -107,16 +107,25 @@ def _media(data: bytes) -> list[str]:
 
 # ------------------------------------------------- the pptx translation does not transfer
 
-def test_the_pptx_resolver_finds_nothing_in_a_docx_or_an_xlsx():
-    """It enumerates ppt/media/ alone, so on these packages it is not wrong — it is silent.
+def test_the_pptx_entry_point_now_answers_for_every_format():
+    """The pptx name is a DELEGATION now, not a second implementation.
 
-    Silence is the failure mode that matters: the caller keeps the untranslated 'image N', apply
-    _alt reports it unresolved, the described row is never marked applied, and the file can never
-    certify. Nothing raises and nothing logs a mismatch.
+    It used to enumerate `ppt/media/` alone and return {} on these packages — silently, which is
+    the failure mode that mattered: the caller kept the untranslated 'image N', apply_alt reported
+    it unresolved, the row was never applied, and the file could never certify. That is the whole
+    reason this module exists.
+
+    The slides-only walk is gone (it had two holes of its own — inherited parts, and a slide
+    showing one picture twice), so the two names now answer identically for every format. Asserted
+    by identity rather than by value: a future divergence fails here rather than in production.
     """
     import apply_pptx_image_of_text as pptx_aoit
-    assert pptx_aoit.resolve_media_locators(_docx_twice(), ["image 1"]) == {}
-    assert pptx_aoit.resolve_media_locators(_xlsx_two_sheets(), ["image 1", "image 2"]) == {}
+    import apply_office_image_of_text as aoit
+    for data, ext, locs in ((_docx_twice(), "docx", ["image 1"]),
+                            (_xlsx_two_sheets(), "xlsx", ["image 1", "image 2"])):
+        assert (pptx_aoit.resolve_media_locators(data, locs)
+                == aoit.resolve_media_locators(data, locs, ext))
+        assert pptx_aoit.resolve_media_locators(data, locs), "the shared walk found nothing"
 
 
 def test_an_xlsx_relationship_target_is_absolute():
