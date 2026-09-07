@@ -96,10 +96,17 @@
           "equals": true
         }
       ],
-      "accept_after_edit": []
+      "accept_after_edit": [
+        {
+          "target": "table.headerRow",
+          "regex": "\\b(true|yes|header|tblheader|firstrow|first row|row\\s*1)\\b",
+          "forbids_regex": "\\b(false|no|layout|presentation|decorative)\\b",
+          "edited_value": true
+        }
+      ]
     },
     "expected_review": "accept",
-    "notes": "clean: the first row is a header in all but markup"
+    "notes": "clean: the first row is a header in all but markup. The after-edit band takes a value that DESCRIBES the edit ('row1: w:trPr/w:tblHeader = true') and lands the boolean; one that denies it ('layout', 'false') is still rejected"
   },
   {
     "case_id": "adv-ss-02",
@@ -298,6 +305,12 @@
           "target": "paragraphs.list_style",
           "regex": "^(list )?(number|numbered)$",
           "edited_value": "List Bullet"
+        },
+        {
+          "target": "paragraphs.list_style",
+          "regex": "\\b(bullet|numpr|unordered|list (semantics|formatting|style)|real list)\\b",
+          "forbids_regex": "\\b(heading|keep|leave|as[- ]is|no change)\\b",
+          "edited_value": "List Bullet"
         }
       ]
     },
@@ -397,10 +410,17 @@
       "accept_unchanged": [
         {
           "target": "table.role",
-          "regex": "^layout$"
+          "regex": "^(layout|presentation)$"
         }
       ],
-      "accept_after_edit": []
+      "accept_after_edit": [
+        {
+          "target": "table.role",
+          "regex": "\\b(layout|presentation|decorative)\\b",
+          "forbids_regex": "\\b(data|header)\\b",
+          "edited_value": "layout"
+        }
+      ]
     },
     "expected_review": "either",
     "notes": "AMBIGUOUS: a layout table. Marking it layout is right; headerRow=true clears 1.3.1 and raises 1.3.1:empty-header-cell (an image cell as a column header) and is rejected. Escalating is also correct"
