@@ -48,9 +48,33 @@ const timezoneOffset = (timezone) => {
     return parts.find((part) => part.type === 'timeZoneName')?.value?.replace('GMT', 'UTC') || ''
   } catch { return '' }
 }
-const scheduleKey = ({ enabled, timezone, local_time, days }) => JSON.stringify({
-  enabled: Boolean(enabled), timezone: timezone.trim(), local_time, days: [...days].sort(),
+const defaultNotifications = { on_failure: true, on_delay: false, on_change: false, channel: 'in_app' }
+const defaultExecution = { defer_when_busy: true, queue_threshold: 20, prewarm: true, prewarm_minutes: 10 }
+const scheduleKey = ({ enabled, timezone, local_time, days, source, scope, notifications, execution }) => JSON.stringify({
+  enabled: Boolean(enabled), timezone: timezone.trim(), local_time, days: [...days].sort(), source: source?.id || source || null,
+  include: (scope?.include || []).map((item) => item.id || item).sort(), exclude: (scope?.exclude || []).map((item) => item.id || item).sort(),
+  notifications: { ...defaultNotifications, ...notifications }, execution: { ...defaultExecution, ...execution },
 })
+const normalizeOperations = (value = {}) => {
+  const scope = value.scope || value.source_scope || value.source_config?.scope || {}
+  const queue = value.execution || value.queue_policy || {}
+  const policy = value.notification_policy || (typeof value.notifications === 'string' ? value.notifications : null)
+  const source = value.source_config?.kind || value.source
+  return {
+    source: source ? { id: source.id || source, name: source.name || value.source_name || source } : (value.source_id ? { id: value.source_id, name: value.source_name || value.source_id } : null),
+    scope: { include: scope.include || scope.include_ids || [], exclude: scope.exclude || scope.exclude_ids || [] },
+    notifications: (value.notifications && typeof value.notifications === 'object') ? value.notifications : {
+      ...defaultNotifications,
+      on_failure: policy ? ['failures', 'changes_and_failures', 'all'].includes(policy) : defaultNotifications.on_failure,
+      on_delay: policy === 'all', on_change: ['changes_and_failures', 'all'].includes(policy),
+    },
+    execution: {
+      ...defaultExecution, ...queue,
+      defer_when_busy: queue.defer_when_busy ?? queue.defer_when_interactive ?? defaultExecution.defer_when_busy,
+      queue_threshold: queue.queue_threshold ?? queue.max_queue_depth ?? defaultExecution.queue_threshold,
+    },
+  }
+}
 const normalizeScheduleMetrics = (metrics) => {
   if (!metrics || typeof metrics !== 'object') return null
   return Object.fromEntries(['scheduled', 'delayed', 'skipped', 'failed'].map((key) => {
@@ -62,6 +86,8 @@ const scheduleTimeLabel = (value, timezone) => {
   try { return new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: timezone }) }
   catch { return new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }
 }
+const durationLabel = (seconds) => seconds == null ? '—' : seconds < 60 ? `${seconds}s` : `${Math.round(seconds / 60)} min`
+const metricLabel = (value, suffix = '') => value == null ? 'Not enough data' : `${Number(value).toLocaleString()}${suffix}`
 
 function Toggle({ label, hint, on, set }) {
   return (
@@ -279,7 +305,16 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
   const [triggers, setTriggers] = useState({ newFile: true, onEdit: true, autoRemediate: true, alertRegression: true })
   const [schedule, setSchedule] = useState(() => ({
     enabled: false, timezone: browserTimezone(), local_time: '09:00', days: [0, 1, 2, 3, 4],
+    source: null, scope: { include: [], exclude: [] }, notifications: defaultNotifications, execution: defaultExecution,
   }))
+  const [scheduleOptions, setScheduleOptions] = useState({ sources: [] })
+  const [scheduleHistory, setScheduleHistory] = useState([])
+  const [scheduleReliability, setScheduleReliability] = useState(null)
+  const [scheduleGuardrails, setScheduleGuardrails] = useState(null)
+  const availableScheduleSources = (scheduleOptions.sources.length ? scheduleOptions.sources : sources).map((item) =>
+    typeof item === 'string' ? { id: item, name: item, type: item } : { ...item, id: item.id || item.source || item.name, name: item.name || item.label || item.source || item.id })
+  const selectedSource = availableScheduleSources.find((item) => item.id === (schedule.source?.id || schedule.source))
+  const scopeChoices = selectedSource?.scopes || selectedSource?.locations || selectedSource?.folders || []
   const [savedSchedule, setSavedSchedule] = useState(null)
   const [schedErr, setSchedErr] = useState('')
   const [schedSaving, setSchedSaving] = useState(false)
@@ -305,18 +340,52 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
     setSchedErr('')
     setSchedSaving(true)
     try {
-      const saved = await putSchedule({ enabled: schedule.enabled, timezone: schedule.timezone, local_time: schedule.local_time, days: schedule.days })
+      const notificationPolicy = schedule.notifications.on_delay ? 'all'
+        : schedule.notifications.on_change ? 'changes_and_failures'
+          : schedule.notifications.on_failure ? 'failures' : 'off'
+      const saved = await putSchedule({
+        enabled: schedule.enabled, timezone: schedule.timezone, local_time: schedule.local_time, days: schedule.days,
+        source: schedule.source?.id || schedule.source || 'drive',
+        scope: {
+          include_ids: schedule.scope.include.map((item) => item.id || item),
+          exclude_ids: schedule.scope.exclude.map((item) => item.id || item),
+        },
+        notifications: notificationPolicy,
+        execution: {
+          defer_when_interactive: schedule.execution.defer_when_busy,
+          max_queue_depth: Number(schedule.execution.queue_threshold),
+          prewarm: schedule.execution.prewarm,
+          prewarm_minutes: Number(schedule.execution.prewarm_minutes),
+        },
+        source_id: schedule.source?.id || schedule.source || null,
+        source_scope: {
+          include_ids: schedule.scope.include.map((item) => item.id || item),
+          exclude_ids: schedule.scope.exclude.map((item) => item.id || item),
+        },
+        notification_policy: notificationPolicy,
+        queue_policy: {
+          defer_when_interactive: schedule.execution.defer_when_busy,
+          max_queue_depth: Number(schedule.execution.queue_threshold),
+          prewarm: schedule.execution.prewarm,
+          prewarm_minutes: Number(schedule.execution.prewarm_minutes),
+        },
+      })
+      const operations = normalizeOperations(saved)
       const nextSchedule = {
         enabled: Boolean(saved.enabled),
         timezone: saved.timezone || schedule.timezone,
         local_time: saved.local_time || schedule.local_time,
         days: Array.isArray(saved.days) ? saved.days : schedule.days,
+        ...operations,
       }
       setSchedule(nextSchedule)
       setSavedSchedule(nextSchedule)
       setSchedSaved(true)
       setSchedNext(saved.next_at)
       if (saved.metrics !== undefined) setSchedMetrics(normalizeScheduleMetrics(saved.metrics))
+      if (Array.isArray(saved.history)) setScheduleHistory(saved.history)
+      if (saved.reliability !== undefined) setScheduleReliability(saved.reliability)
+      if (saved.guardrails !== undefined) setScheduleGuardrails(saved.guardrails)
     } catch (e) {
       setSchedErr(e.message || 'Schedule not saved — try again.')
     } finally { setSchedSaving(false) }
@@ -360,7 +429,12 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
         timezone: s.updated_at ? (s.timezone || browserTimezone()) : browserTimezone(),
         local_time: s.local_time || '09:00',
         days: Array.isArray(s.days) ? s.days : [0, 1, 2, 3, 4],
+        ...normalizeOperations(s),
       }
+      setScheduleHistory(Array.isArray(s.history) ? s.history : [])
+      setScheduleReliability(s.reliability || null)
+      setScheduleGuardrails(s.guardrails || null)
+      if (Array.isArray(s.options?.sources)) setScheduleOptions({ sources: s.options.sources })
       setSchedule(loadedSchedule)
       setSavedSchedule(loadedSchedule)
     }).catch(() => {})
@@ -675,6 +749,86 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
             </div>
           </fieldset>
         )}
+        {schedule.enabled && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 12, marginTop: 14 }}>
+            <fieldset style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 12, margin: 0 }}>
+              <legend style={{ fontWeight: 650 }}>What to scan</legend>
+              <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                <span className="muted">Connected source</span>
+                <select value={schedule.source?.id || schedule.source || ''}
+                  onChange={(e) => {
+                    const source = availableScheduleSources.find((item) => item.id === e.target.value) || null
+                    updateSchedule({ source, scope: { include: [], exclude: [] } })
+                  }}>
+                  <option value="">All configured content</option>
+                  {availableScheduleSources.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                </select>
+              </label>
+              <p className="muted" style={{ fontSize: 11, lineHeight: 1.4 }}>Choose a connected source, then narrow it with a saved scope. Empty scope means everything available to the connection.</p>
+              {scopeChoices.length > 0 && <div style={{ display: 'grid', gap: 6 }}>
+                {scopeChoices.map((raw) => {
+                  const item = typeof raw === 'string' ? { id: raw, name: raw } : { ...raw, id: raw.id || raw.path || raw.name, name: raw.name || raw.path || raw.id }
+                  const included = schedule.scope.include.some((entry) => (entry.id || entry) === item.id)
+                  const excluded = schedule.scope.exclude.some((entry) => (entry.id || entry) === item.id)
+                  const setScope = (kind, checked) => updateSchedule((current) => ({ ...current, scope: {
+                    ...current.scope,
+                    [kind]: checked ? [...current.scope[kind], item] : current.scope[kind].filter((entry) => (entry.id || entry) !== item.id),
+                    [kind === 'include' ? 'exclude' : 'include']: checked ? current.scope[kind === 'include' ? 'exclude' : 'include'].filter((entry) => (entry.id || entry) !== item.id) : current.scope[kind === 'include' ? 'exclude' : 'include'],
+                  } }))
+                  return <div key={item.id} style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 12 }}>
+                    <span>{item.name}</span><span style={{ display: 'flex', gap: 8 }}>
+                      <label><input type="checkbox" checked={included} onChange={(e) => setScope('include', e.target.checked)} /> Include</label>
+                      <label><input type="checkbox" checked={excluded} onChange={(e) => setScope('exclude', e.target.checked)} /> Exclude</label>
+                    </span>
+                  </div>
+                })}
+              </div>}
+            </fieldset>
+
+            <fieldset style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 12, margin: 0 }}>
+              <legend style={{ fontWeight: 650 }}>When to notify me</legend>
+              {[['on_failure', 'A scheduled scan fails'], ['on_delay', 'A scan is delayed'], ['on_change', 'A scan finds meaningful changes']].map(([key, label]) =>
+                <label key={key} style={{ display: 'block', fontSize: 12, margin: '0 0 8px' }}>
+                  <input type="checkbox" checked={schedule.notifications[key]}
+                    onChange={(e) => updateSchedule((current) => ({ ...current, notifications: { ...current.notifications, [key]: e.target.checked } }))} /> {label}
+                </label>)}
+              <p className="muted" style={{ fontSize: 11, lineHeight: 1.4 }}>Successful scans with no changes stay quiet.</p>
+            </fieldset>
+
+            <fieldset style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 12, margin: 0 }}>
+              <legend style={{ fontWeight: 650 }}>Performance</legend>
+              <label style={{ display: 'block', fontSize: 12, marginBottom: 8 }}>
+                <input type="checkbox" checked={schedule.execution.defer_when_busy}
+                  onChange={(e) => updateSchedule((current) => ({ ...current, execution: { ...current.execution, defer_when_busy: e.target.checked } }))} /> Wait if interactive work is busy
+              </label>
+              <label style={{ display: 'grid', gap: 4, fontSize: 12, marginBottom: 8 }}>
+                <span className="muted">Wait when queue reaches</span>
+                <input type="number" min="1" max="10000" value={schedule.execution.queue_threshold}
+                  onChange={(e) => updateSchedule((current) => ({ ...current, execution: { ...current.execution, queue_threshold: e.target.value } }))} />
+              </label>
+              <label style={{ display: 'block', fontSize: 12, marginBottom: 8 }}>
+                <input type="checkbox" checked={schedule.execution.prewarm}
+                  onChange={(e) => updateSchedule((current) => ({ ...current, execution: { ...current.execution, prewarm: e.target.checked } }))} /> Warm workers before the scan
+              </label>
+              {schedule.execution.prewarm && <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+                <span className="muted">Warm-up lead time (minutes)</span>
+                <input type="number" min="1" max="60" value={schedule.execution.prewarm_minutes}
+                  onChange={(e) => updateSchedule((current) => ({ ...current, execution: { ...current.execution, prewarm_minutes: e.target.value } }))} />
+              </label>}
+            </fieldset>
+          </div>
+        )}
+        {scheduleGuardrails && <aside aria-label="Schedule guardrails" style={{ marginTop: 12, padding: 12, borderRadius: 8, background: 'var(--soft, #F7F7F5)', fontSize: 12 }}>
+          <b>Organization guardrails</b>
+          <p className="muted" style={{ margin: '4px 0 6px' }}>These limits are managed by an administrator and are applied when the schedule runs.</p>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+            {(scheduleGuardrails.min_frequency_minutes ?? scheduleGuardrails.min_interval_minutes) != null && <span>Minimum interval: <b>{scheduleGuardrails.min_frequency_minutes ?? scheduleGuardrails.min_interval_minutes} min</b></span>}
+            {(scheduleGuardrails.max_concurrent_per_owner ?? scheduleGuardrails.max_concurrent) != null && <span>Concurrent scans: <b>{scheduleGuardrails.max_concurrent_per_owner ?? scheduleGuardrails.max_concurrent}</b></span>}
+            {(scheduleGuardrails.catch_up_ceiling ?? scheduleGuardrails.catch_up_limit) != null && <span>Catch-up limit: <b>{scheduleGuardrails.catch_up_ceiling ?? scheduleGuardrails.catch_up_limit}</b></span>}
+            {(scheduleGuardrails.blackout_windows || []).map((window, index) => <span key={index}>Blackout: <b>{window.start}–{window.end} {window.timezone || schedule.timezone}</b></span>)}
+            {scheduleGuardrails.blackout_start && <span>Blackout: <b>{scheduleGuardrails.blackout_start}–{scheduleGuardrails.blackout_end} {scheduleGuardrails.blackout_timezone || schedule.timezone}</b></span>}
+          </div>
+        </aside>}
         {schedErr && <div style={{ marginTop: 8, fontSize: 12, color: 'var(--error-fg-strong)' }} role="alert">⚠ {schedErr}</div>}
         {lastSweep && lastSweep.ok === false && (
           <div role="alert" style={{ marginTop: 12, padding: '11px 14px', borderRadius: 8, fontSize: 13.5,
@@ -691,6 +845,33 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
             )}
           </div>
         )}
+        {scheduleReliability && <section aria-labelledby="schedule-reliability" style={{ marginTop: 14 }}>
+          <h3 id="schedule-reliability" style={{ margin: '0 0 8px', fontSize: 14 }}>Schedule reliability <span className="muted" style={{ fontWeight: 400 }}>· last {scheduleReliability.window_days || 30} days</span></h3>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(125px, 1fr))', gap: 8 }}>
+            {[
+              ['On time', metricLabel(scheduleReliability.on_time_percent ?? (scheduleReliability.on_time_rate == null ? null : Math.round(scheduleReliability.on_time_rate * 100)), '%')],
+              ['95th percentile lateness', durationLabel(scheduleReliability.lateness_p95_seconds)],
+              ['Missed runs', metricLabel(scheduleReliability.missed_runs)],
+              ['95th percentile queue wait', durationLabel(scheduleReliability.queue_wait_p95_seconds)],
+              ['95th percentile duration', durationLabel(scheduleReliability.duration_p95_seconds)],
+              ['Overlaps prevented', metricLabel(scheduleReliability.overlap_prevented)],
+              ['Catch-up runs', metricLabel(scheduleReliability.catch_up_runs)],
+            ].map(([label, value]) => <div key={label} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: 10 }}><div className="muted" style={{ fontSize: 11 }}>{label}</div><b>{value}</b></div>)}
+          </div>
+        </section>}
+        {scheduleHistory.length > 0 && <section aria-labelledby="schedule-history" style={{ marginTop: 14, overflowX: 'auto' }}>
+          <h3 id="schedule-history" style={{ margin: '0 0 8px', fontSize: 14 }}>Recent scheduled scans</h3>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <thead><tr>{['Planned', 'Started', 'Delay', 'Duration', 'Result'].map((label) => <th key={label} scope="col" style={{ textAlign: 'left', padding: '6px 8px', borderBottom: '1px solid var(--line)' }}>{label}</th>)}</tr></thead>
+            <tbody>{scheduleHistory.slice(0, 10).map((item, index) => <tr key={item.id || index}>
+              <td style={{ padding: '7px 8px' }}>{scheduleTimeLabel(item.planned_at, schedule.timezone)}</td>
+              <td style={{ padding: '7px 8px' }}>{(item.started_at || item.actual_started_at) ? scheduleTimeLabel(item.started_at || item.actual_started_at, schedule.timezone) : 'Not started'}</td>
+              <td style={{ padding: '7px 8px' }}>{item.delay_reason || durationLabel(item.queue_wait_seconds)}</td>
+              <td style={{ padding: '7px 8px' }}>{durationLabel(item.duration_seconds ?? (item.duration_ms == null ? null : Math.round(item.duration_ms / 1000)))}</td>
+              <td style={{ padding: '7px 8px' }}><b>{item.status || item.result || 'Unknown'}</b>{item.result_summary ? ` · ${item.result_summary}` : item.error ? ` · ${item.error}` : ''}</td>
+            </tr>)}</tbody>
+          </table>
+        </section>}
       </section>
 
       {/* "Monitor tells me why" — the operational deep dive, distinct from Assess's own
