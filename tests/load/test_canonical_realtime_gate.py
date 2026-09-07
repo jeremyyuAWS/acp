@@ -18,6 +18,7 @@ def test_canonical_realtime_gate_is_bounded_isolated_and_green():
     assert result["metrics"]["missing_retry_events"] == 0
     assert result["metrics"]["missing_dead_letter_events"] == 0
     assert result["metrics"]["missing_latest_progress_events"] == 0
+    assert result["metrics"]["missing_warm_soak_events"] == 0
     assert result["metrics"]["missing_failed_events"] == 0
     assert result["metrics"]["cold_first_batch_size"] >= 1
     assert result["metrics"]["warm_batch_count"] >= 1
@@ -66,6 +67,15 @@ def test_gateway_latency_observer_supports_batched_redis_writes():
         "size": 3,
         "event_ids": ["event-0", "event-1", "event-2"],
     }]
+
+
+def test_explicit_second_wave_guarantees_persistent_client_warm_sample():
+    result = run(GateConfig(tenants=2, jobs_per_tenant=1, progress_per_job=10,
+                            redis_delay_ms=0, timeout_seconds=5))
+
+    assert result["metrics"]["missing_warm_soak_events"] == 0
+    assert result["metrics"]["warm_batch_count"] >= 1
+    assert result["checks"]["persistent_client_warm_soak"] is True
 
 
 def test_staging_gate_is_shipped_and_uses_environment_secret():
