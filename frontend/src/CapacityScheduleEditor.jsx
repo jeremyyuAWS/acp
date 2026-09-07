@@ -1,292 +1,45 @@
-import { useState } from 'react'
-import { putCapacitySchedule, validateCapacitySchedule, createCapacityOverride,
-         deleteCapacityOverride } from './api.js'
+import { useEffect, useMemo, useState } from 'react'
+import { putCapacitySchedule, validateCapacitySchedule, applyCapacitySchedule, createCapacityOverride, deleteCapacityOverride } from './api.js'
 
-/**
- * The administrator half of Settings → Scheduling (Phase 3).
- *
- * RENDERED ONLY FOR AN ADMIN, and that is convenience rather than the gate: every endpoint here
- * runs `_require_admin`, and WorkerReplicaControl.jsx records what happens when the SPA is the
- * only check — a non-admin got an optimistic change that reverted with no message once the write
- * 403'd. The buttons are hidden for the same reason the count is not.
- *
- * THE THREE THINGS THE UI HAS TO GET RIGHT, because the API cannot do them for it:
- *
- *   * `version` travels with the edit. It comes from the snapshot this form was opened on, so a
- *     save built on a stale read is refused by the server rather than silently overwriting
- *     somebody else's floor. A 409 is rendered as what it is — someone else saved — with both
- *     numbers and a reload, not as a generic failure.
- *   * A reason is required before Save is reachable. §11 wants it in the audit row, and an audit
- *     row whose reason is empty is the one an operator finds a week later and cannot act on.
- *   * Validation is offered BEFORE saving and its verdict is shown, but Save does not depend on
- *     the client having run it — the server validates again and refuses. A client-side gate that
- *     could be bypassed would be the more dangerous half of a two-part check.
- *
- * NO OPTIMISTIC RENDERING. Warm capacity is real money and a real restart; the form waits for the
- * server and re-reads. An optimistic floor that reverts is indistinguishable from one that saved.
- */
+const DAYS = [['mon', 'Monday'], ['tue', 'Tuesday'], ['wed', 'Wednesday'], ['thu', 'Thursday'], ['fri', 'Friday'], ['sat', 'Saturday'], ['sun', 'Sunday']]
+const SERVICES = [['web', 'Web app'], ['discovery', 'Discovery'], ['assess', 'Assess'], ['remediate', 'Remediate'], ['gpu', 'GPU vision']]
+const ZONES = [['America/Los_Angeles', 'Pacific Time — Los Angeles'], ['America/Denver', 'Mountain Time — Denver'], ['America/Chicago', 'Central Time — Chicago'], ['America/New_York', 'Eastern Time — New York'], ['Europe/London', 'United Kingdom — London'], ['Europe/Paris', 'Central Europe — Paris'], ['Asia/Kolkata', 'India Standard Time — Kolkata'], ['Asia/Tokyo', 'Japan Standard Time — Tokyo'], ['UTC', 'Coordinated Universal Time']]
+const DURATIONS = [['30m', '30 minutes'], ['1h', '1 hour'], ['2h', '2 hours'], ['4h', '4 hours'], ['until_next_transition', 'Until next transition']]
+const defaults = { business_hours: { web: 2, discovery: 2, assess: 5, remediate: 5, gpu: 1 }, off_hours: { web: 1, discovery: 1, assess: 1, remediate: 1, gpu: 0 }, maximums: { web: 3, discovery: 4, assess: 10, remediate: 10, gpu: 1 } }
+const ctl = { minHeight: 38, padding: '7px 9px', fontSize: 13, border: '1px solid var(--line)', borderRadius: 6 }
+const lbl = { display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 5 }
 
-const DAYS = [['mon', 'Mon'], ['tue', 'Tue'], ['wed', 'Wed'], ['thu', 'Thu'],
-              ['fri', 'Fri'], ['sat', 'Sat'], ['sun', 'Sun']]
-const SERVICES = [['web', 'Web app'], ['discovery', 'Discovery'], ['assess', 'Assess'],
-                  ['remediate', 'Remediate'], ['gpu', 'GPU vision']]
-const DURATIONS = [['30m', '30 minutes'], ['1h', '1 hour'], ['2h', '2 hours'],
-                   ['4h', '4 hours'], ['until_next_transition', 'Until the next transition']]
+function makeDraft(s) { return { enabled: !!s.enabled, timezone: s.timezone || 'America/Los_Angeles', days: [...(s.days || [])], start: s.start || '06:00', end: s.end || '20:00', business_hours: { ...(s.business_hours || {}) }, off_hours: { ...(s.off_hours || {}) }, maximums: { ...(s.maximums || {}) }, holidays: [...(s.holidays || [])] } }
+function time(v) { const [h, m] = v.split(':').map(Number); return new Date(2000, 0, 1, h, m).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) }
+function summary(d) { if (!d.enabled) return 'The weekly schedule is disabled.'; const chosen = DAYS.filter(([k]) => d.days.includes(k)).map(([, n]) => n); const weekdays = chosen.length === 5 && DAYS.slice(0, 5).every(([k]) => d.days.includes(k)); return `${weekdays ? 'Monday–Friday' : chosen.join(', ') || 'No active days'}, ${time(d.start)}–${time(d.end)}${d.start > d.end ? ' (overnight)' : ''} in ${d.timezone}. Off-hours capacity applies at all other times.` }
 
-const label = { display: 'block', fontSize: 11, color: 'var(--muted)', marginBottom: 2 }
-const num = { width: 58, padding: '3px 5px', fontSize: 12 }
+export default function CapacityScheduleEditor({ snap, onSaved, onClose, initialView = 'schedule' }) {
+  const original = useMemo(() => makeDraft(snap), [snap])
+  const [draft, setDraft] = useState(original), [step, setStep] = useState(0)
+  const [reason, setReason] = useState(''), [checked, setChecked] = useState(null)
+  const [busy, setBusy] = useState(false), [error, setError] = useState(null), [holiday, setHoliday] = useState('')
+  const [overrideReason, setOverrideReason] = useState(''), [overrideMode, setOverrideMode] = useState('business_hours'), [overrideDuration, setOverrideDuration] = useState('1h')
+  const dirty = JSON.stringify(draft) !== JSON.stringify(original) || !!reason
+  const errors = useMemo(() => { const e = {}; if (draft.enabled && !draft.days.length) e.days = 'Choose at least one active day.'; if (draft.enabled && draft.start === draft.end) e.hours = 'Start and end times must be different.'; SERVICES.forEach(([s]) => { const a = [draft.business_hours[s], draft.off_hours[s], draft.maximums[s]]; if (a.some((n) => !Number.isInteger(n) || n < 0)) e[s] = 'Enter whole numbers of zero or more.'; else if (a[0] > a[2] || a[1] > a[2]) e[s] = 'Warm capacity cannot exceed the maximum.' }); return e }, [draft])
+  const set = (field, value) => { setDraft((d) => ({ ...d, [field]: value })); setChecked(null) }
+  const count = (group, service, raw) => { const value = raw === '' ? '' : Number(raw); setDraft((d) => ({ ...d, [group]: { ...d[group], [service]: value } })); setChecked(null) }
+  const validate = (showError = true) => { if (Object.keys(errors).length) { if (showError) setError('Fix the highlighted fields before checking the schedule.'); return Promise.resolve() } setBusy(true); setError(null); return validateCapacitySchedule(draft).then(setChecked).catch(() => { if (showError) setError('The schedule could not be checked. Your draft is still here.') }).finally(() => setBusy(false)) }
+  useEffect(() => { if (!dirty || Object.keys(errors).length) return; const timer = setTimeout(() => validate(false), 600); return () => clearTimeout(timer) }, [JSON.stringify(draft)]) // eslint-disable-line react-hooks/exhaustive-deps
+  const save = () => { if (Object.keys(errors).length) return setError('Fix the highlighted fields before saving.'); setBusy(true); setError(null); putCapacitySchedule({ ...draft, version: snap.version, reason }).then((r) => { if (r?.detail?.current_version !== undefined) return setError(`Someone else saved while you were editing (you had version ${r.detail.your_version}, current is ${r.detail.current_version}). Review the latest version before saving yours.`); if (r?.detail?.findings) { setChecked(r.detail); return setError('This schedule cannot be saved — review the findings below.') } setReason(''); onSaved?.() }).catch(() => setError('The schedule could not be saved. Nothing was changed; your draft is still here.')).finally(() => setBusy(false)) }
+  const apply = () => { setBusy(true); setError(null); applyCapacitySchedule({ version: snap.version, reason }).then((r) => { if (r?.detail?.current_version !== undefined) return setError(`The saved schedule changed (you had version ${r.detail.your_version}, current is ${r.detail.current_version}). Review the latest version before applying.`); if (r?.detail) return setError(typeof r.detail === 'string' ? r.detail : 'The schedule could not be applied. The previous Azure policy remains in place.'); onSaved?.() }).catch(() => setError('The schedule could not be applied. The previous Azure policy remains in place.')).finally(() => setBusy(false)) }
+  const close = () => { if (!dirty || window.confirm('Discard your unsaved schedule changes?')) onClose?.() }
+  const override = () => { setBusy(true); createCapacityOverride({ mode: overrideMode, duration: overrideDuration, reason: overrideReason, floors: overrideMode === 'custom' ? draft.business_hours : null }).then((r) => { if (r?.detail) setError(String(r.detail)); else onSaved?.() }).catch(() => setError('The override could not be created. Nothing was changed.')).finally(() => setBusy(false)) }
+  const endOverride = () => { setBusy(true); deleteCapacityOverride().then(() => onSaved?.()).catch(() => setError('The override could not be ended.')).finally(() => setBusy(false)) }
 
-function draftFrom(snap) {
-  return {
-    enabled: !!snap.enabled,
-    timezone: snap.timezone || 'America/Los_Angeles',
-    days: [...(snap.days || [])],
-    start: snap.start || '06:00',
-    end: snap.end || '20:00',
-    business_hours: { ...(snap.business_hours || {}) },
-    off_hours: { ...(snap.off_hours || {}) },
-    maximums: { ...(snap.maximums || {}) },
-    holidays: [...(snap.holidays || [])],
-  }
-}
+  if (initialView === 'override') return <section className="panel" aria-labelledby="override-title" style={{ padding: 16, display: 'grid', gap: 14 }}><header style={{ display: 'flex', justifyContent: 'space-between' }}><div><h3 id="override-title" style={{ margin: 0 }}>Temporary override</h3><div className="muted" style={{ fontSize: 12 }}>Make a time-limited capacity change without rewriting the weekly schedule.</div></div>{onClose && <button className="ghost" onClick={onClose}>Close</button>}</header>{error && <div role="alert">{error}</div>}{snap.override ? <div><p><b>{snap.override.mode.replace(/_/g, ' ')} capacity</b>, set by {snap.override.actor}, expires {new Date(snap.override.expires_at).toLocaleString()}.</p><p className="muted">Reason: {snap.override.reason}. Schedule version {snap.override.resumes_schedule_version} resumes automatically.</p><button className="ghost" disabled={busy} onClick={endOverride}>End override</button></div> : <><label><span style={lbl}>Capacity</span><select id="ov-mode" value={overrideMode} style={ctl} onChange={(e) => setOverrideMode(e.target.value)}><option value="business_hours">Business-hours capacity</option><option value="off_hours">Off-hours capacity</option><option value="custom">Custom capacity</option></select></label><label><span style={lbl}>Duration</span><select id="ov-duration" value={overrideDuration} style={ctl} onChange={(e) => setOverrideDuration(e.target.value)}>{DURATIONS.map(([v, n]) => <option key={v} value={v}>{n}</option>)}</select></label><label><span style={lbl}>Reason (required)</span><input id="ov-reason" value={overrideReason} style={{ ...ctl, width: '100%' }} onChange={(e) => setOverrideReason(e.target.value)} /></label><button disabled={busy || !overrideReason.trim()} onClick={override}>Apply override</button></>}</section>
 
-export default function CapacityScheduleEditor({ snap, onSaved }) {
-  const [draft, setDraft] = useState(() => draftFrom(snap))
-  const [reason, setReason] = useState('')
-  const [checked, setChecked] = useState(null)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState(null)
-  const [overrideReason, setOverrideReason] = useState('')
-  const [overrideMode, setOverrideMode] = useState('business_hours')
-  const [overrideDuration, setOverrideDuration] = useState('1h')
-
-  const setField = (field, value) => { setDraft((d) => ({ ...d, [field]: value })); setChecked(null) }
-  const setCount = (group, service, value) => {
-    const n = Math.max(0, Number.parseInt(value, 10) || 0)
-    setDraft((d) => ({ ...d, [group]: { ...d[group], [service]: n } }))
-    setChecked(null)
-  }
-  const toggleDay = (day) => setField('days',
-    draft.days.includes(day) ? draft.days.filter((d) => d !== day) : [...draft.days, day])
-
-  const check = () => {
-    setBusy(true); setError(null)
-    validateCapacitySchedule(draft)
-      .then(setChecked)
-      .catch(() => setError('The schedule could not be checked. Nothing was changed.'))
-      .finally(() => setBusy(false))
-  }
-
-  const save = () => {
-    setBusy(true); setError(null)
-    // `version` is the one this form was opened on, never a re-read: re-reading it here would
-    // defeat the whole mechanism by making every save look current.
-    putCapacitySchedule({ ...draft, version: snap.version, reason })
-      .then((saved) => {
-        if (saved?.detail?.current_version !== undefined) {
-          setError(`Someone else saved while you were editing (you had version `
-            + `${saved.detail.your_version}, current is ${saved.detail.current_version}). `
-            + 'Reload to see their change before saving yours.')
-          return
-        }
-        if (saved?.detail?.findings) {
-          setChecked(saved.detail)
-          setError('This schedule cannot be applied — see the findings below.')
-          return
-        }
-        setReason(''); setChecked(null); onSaved?.()
-      })
-      .catch(() => setError('The schedule could not be saved. Nothing was changed.'))
-      .finally(() => setBusy(false))
-  }
-
-  const applyOverride = () => {
-    setBusy(true); setError(null)
-    createCapacityOverride({ mode: overrideMode, duration: overrideDuration,
-                             reason: overrideReason,
-                             floors: overrideMode === 'custom' ? draft.business_hours : null })
-      .then((r) => {
-        if (r?.detail) { setError(String(r.detail)); return }
-        setOverrideReason(''); onSaved?.()
-      })
-      .catch(() => setError('The override could not be created. Nothing was changed.'))
-      .finally(() => setBusy(false))
-  }
-
-  const cancelOverride = () => {
-    setBusy(true); setError(null)
-    deleteCapacityOverride()
-      .then(() => onSaved?.())
-      .catch(() => setError('The override could not be cancelled.'))
-      .finally(() => setBusy(false))
-  }
-
-  const canSave = !busy && reason.trim().length > 0
-
-  return (
-    <div className="panel" style={{ padding: 12, display: 'grid', gap: 12 }}>
-      <b style={{ fontSize: 13 }}>Edit the schedule</b>
-
-      {error && <div role="alert" style={{ fontSize: 12, padding: '7px 9px',
-        borderLeft: '4px solid var(--danger-fg, #a3222b)', background: 'var(--bg)' }}>{error}</div>}
-
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-        <label style={{ fontSize: 12, display: 'flex', gap: 6, alignItems: 'center' }}>
-          <input type="checkbox" checked={draft.enabled}
-                 onChange={(e) => setField('enabled', e.target.checked)} />
-          Schedule enabled
-        </label>
-        <span>
-          <label style={label} htmlFor="cap-tz">Timezone (IANA)</label>
-          <input id="cap-tz" value={draft.timezone} style={{ width: 190, padding: '3px 5px', fontSize: 12 }}
-                 onChange={(e) => setField('timezone', e.target.value)} />
-        </span>
-        <span>
-          <label style={label} htmlFor="cap-start">Business hours start</label>
-          <input id="cap-start" type="time" value={draft.start} style={{ padding: '3px 5px', fontSize: 12 }}
-                 onChange={(e) => setField('start', e.target.value)} />
-        </span>
-        <span>
-          <label style={label} htmlFor="cap-end">Business hours end</label>
-          <input id="cap-end" type="time" value={draft.end} style={{ padding: '3px 5px', fontSize: 12 }}
-                 onChange={(e) => setField('end', e.target.value)} />
-        </span>
-      </div>
-
-      <fieldset style={{ border: '1px solid var(--line)', borderRadius: 6, padding: '6px 10px' }}>
-        <legend style={{ fontSize: 11, color: 'var(--muted)' }}>Active days</legend>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          {DAYS.map(([key, name]) => (
-            <label key={key} style={{ fontSize: 12, display: 'flex', gap: 4, alignItems: 'center' }}>
-              <input type="checkbox" checked={draft.days.includes(key)}
-                     onChange={() => toggleDay(key)} /> {name}
-            </label>
-          ))}
-        </div>
-      </fieldset>
-
-      <table style={{ borderCollapse: 'collapse', fontSize: 12 }}>
-        <thead>
-          <tr style={{ textAlign: 'left' }}>
-            <th style={{ padding: '3px 8px', fontWeight: 600 }}>Service</th>
-            <th style={{ padding: '3px 8px', fontWeight: 600 }}>Business hours</th>
-            <th style={{ padding: '3px 8px', fontWeight: 600 }}>Off hours</th>
-            <th style={{ padding: '3px 8px', fontWeight: 600 }}>Maximum</th>
-          </tr>
-        </thead>
-        <tbody>
-          {SERVICES.filter(([k]) => draft.maximums[k] !== undefined).map(([key, name]) => (
-            <tr key={key}>
-              <td style={{ padding: '3px 8px' }}>{name}</td>
-              {['business_hours', 'off_hours', 'maximums'].map((group) => (
-                <td key={group} style={{ padding: '3px 8px' }}>
-                  <input type="number" min="0" style={num} value={draft[group][key] ?? 0}
-                         aria-label={`${name} ${group.replace(/_/g, ' ')}`}
-                         onChange={(e) => setCount(group, key, e.target.value)} />
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      <span>
-        <label style={label} htmlFor="cap-holidays">
-          Holiday exceptions — YYYY-MM-DD, comma separated (optional)
-        </label>
-        <input id="cap-holidays" value={draft.holidays.join(', ')}
-               style={{ width: '100%', padding: '4px 6px', fontSize: 12 }}
-               onChange={(e) => setField('holidays',
-                 e.target.value.split(',').map((d) => d.trim()).filter(Boolean))} />
-        {/* The caveat belongs beside the field, not in a doc. ACP observes a holiday everywhere
-            ACP decides; the published Azure policy cannot, because a KEDA cron rule has no way
-            to express an exception to its own window. An administrator who types a date here and
-            is not told that would reasonably expect the spend to drop on the day. */}
-        <span className="muted" style={{ fontSize: 11 }}>
-          ACP treats these as off-hours days. Azure does not: a cron scale rule cannot express an
-          exception to its own window, so a published policy still holds the business-hours floor
-          on them. Use a temporary override on the day, or republish without the schedule enabled.
-        </span>
-      </span>
-
-      <span>
-        <label style={label} htmlFor="cap-reason">Reason for this change (recorded in the audit log)</label>
-        <input id="cap-reason" value={reason} onChange={(e) => setReason(e.target.value)}
-               style={{ width: '100%', padding: '4px 6px', fontSize: 12 }} />
-      </span>
-
-      {checked && (
-        <div role="status" style={{ fontSize: 12, padding: '7px 9px', background: 'var(--bg)',
-          borderLeft: `4px solid ${checked.blocked ? 'var(--danger-fg, #a3222b)' : 'var(--success-fg)'}` }}>
-          <b>{checked.blocked ? 'This schedule cannot be applied' : 'This schedule fits the fleet'}</b>
-          {checked.capacity && (
-            <div className="muted" style={{ marginTop: 3 }}>
-              {checked.capacity.deploy_connections} connections during a revision overlap, plus{' '}
-              {checked.capacity.reserve} reserved, against {checked.capacity.server_max_connections}.
-            </div>
-          )}
-          <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>
-            {(checked.findings || []).map((f, i) => <li key={i}>{f.detail}</li>)}
-          </ul>
-        </div>
-      )}
-
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <button className="ghost" onClick={check} disabled={busy}>Check this schedule</button>
-        <button onClick={save} disabled={!canSave}>Save schedule</button>
-        {/* Saving records the intention. Pushing it to Azure is a separate, deliberate step —
-            see the module docstring on api/routes/control.py's PUT. */}
-        <span className="muted" style={{ fontSize: 11 }}>
-          {reason.trim() ? 'Saving records the schedule; applying it to Azure is a separate step.'
-            : 'A reason is required before saving.'}
-        </span>
-      </div>
-
-      <hr style={{ border: 0, borderTop: '1px solid var(--line)', margin: 0 }} />
-
-      <b style={{ fontSize: 13 }}>Temporary override</b>
-      {snap.override ? (
-        <div style={{ fontSize: 12 }}>
-          <div>
-            <b>{snap.override.mode.replace(/_/g, ' ')}</b> capacity, set by {snap.override.actor},
-            expiring {new Date(snap.override.expires_at).toLocaleString()}.
-          </div>
-          <div className="muted">Reason: {snap.override.reason}</div>
-          <div className="muted">
-            The schedule (version {snap.override.resumes_schedule_version}) resumes automatically
-            when it expires — an override cannot become permanent.
-          </div>
-          <button className="ghost" onClick={cancelOverride} disabled={busy}
-                  style={{ marginTop: 6 }}>Cancel the override now</button>
-        </div>
-      ) : (
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <span>
-            <label style={label} htmlFor="ov-mode">Capacity</label>
-            <select id="ov-mode" value={overrideMode} style={{ fontSize: 12, padding: '3px 5px' }}
-                    onChange={(e) => setOverrideMode(e.target.value)}>
-              <option value="business_hours">Business-hours capacity now</option>
-              <option value="off_hours">Off-hours capacity now</option>
-              <option value="custom">The business-hours column above</option>
-            </select>
-          </span>
-          <span>
-            <label style={label} htmlFor="ov-duration">Duration</label>
-            <select id="ov-duration" value={overrideDuration} style={{ fontSize: 12, padding: '3px 5px' }}
-                    onChange={(e) => setOverrideDuration(e.target.value)}>
-              {DURATIONS.map(([key, name]) => <option key={key} value={key}>{name}</option>)}
-            </select>
-          </span>
-          <span style={{ flex: '1 1 200px' }}>
-            <label style={label} htmlFor="ov-reason">Reason (required)</label>
-            <input id="ov-reason" value={overrideReason} style={{ width: '100%', padding: '4px 6px', fontSize: 12 }}
-                   onChange={(e) => setOverrideReason(e.target.value)} />
-          </span>
-          <button onClick={applyOverride} disabled={busy || !overrideReason.trim()}>
-            Apply override
-          </button>
-        </div>
-      )}
-    </div>
-  )
+  return <section className="panel" aria-labelledby="editor-title" style={{ padding: 16, display: 'grid', gap: 16 }}>
+    <header style={{ display: 'flex', justifyContent: 'space-between', gap: 10 }}><div><h3 id="editor-title" style={{ margin: 0 }}>Edit the schedule</h3><div className="muted" style={{ fontSize: 12 }}>Choose when services stay warm, set capacity, then review.</div></div>{onClose && <button className="ghost" onClick={close}>Close</button>}</header>
+    <nav aria-label="Schedule editing steps" style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 6 }}>{['When', 'Capacity', 'Review & apply'].map((n, i) => <button key={n} className={step === i ? '' : 'ghost'} aria-current={step === i ? 'step' : undefined} onClick={() => setStep(i)}>{i + 1}. {n}</button>)}</nav>
+    {error && <div role="alert" style={{ borderLeft: '4px solid var(--danger-fg, #a3222b)', padding: 9 }}>{error}</div>}
+    {step === 0 && <div style={{ display: 'grid', gap: 14 }}><div><h4 style={{ margin: 0 }}>When should warm capacity run?</h4><p className="muted" style={{ fontSize: 12 }}>{summary(draft)}</p></div><label><input type="checkbox" checked={draft.enabled} onChange={(e) => set('enabled', e.target.checked)} /> Enable this weekly schedule</label><label><span style={lbl}>Timezone</span><input id="cap-tz" list="timezones" value={draft.timezone} style={{ ...ctl, width: 'min(100%,360px)' }} onChange={(e) => set('timezone', e.target.value)} /><datalist id="timezones">{ZONES.map(([v, n]) => <option key={v} value={v}>{n}</option>)}</datalist><small className="muted"> Search by city; daylight saving changes are automatic.</small></label><fieldset style={{ border: 0, padding: 0 }}><legend style={lbl}>Active days</legend><div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>{DAYS.map(([k, n]) => <button key={k} className={draft.days.includes(k) ? '' : 'ghost'} aria-label={n} aria-pressed={draft.days.includes(k)} onClick={() => set('days', draft.days.includes(k) ? draft.days.filter((d) => d !== k) : [...draft.days, k])}>{n.slice(0, 3)}</button>)}</div>{errors.days && <small role="alert">{errors.days}</small>}</fieldset><div style={{ display: 'flex', gap: 12 }}><label><span style={lbl}>Starts</span><input id="cap-start" type="time" value={draft.start} style={ctl} onChange={(e) => set('start', e.target.value)} /></label><label><span style={lbl}>Ends</span><input id="cap-end" type="time" value={draft.end} style={ctl} onChange={(e) => set('end', e.target.value)} /></label></div>{errors.hours && <small role="alert">{errors.hours}</small>}<div><label style={lbl} htmlFor="cap-holidays">Holiday exception</label><div style={{ display: 'flex', gap: 7 }}><input id="cap-holidays" type="date" value={holiday} style={ctl} onChange={(e) => setHoliday(e.target.value)} /><button className="ghost" disabled={!holiday} onClick={() => { if (draft.holidays.includes(holiday)) return setError('That holiday is already included.'); set('holidays', [...draft.holidays, holiday].sort()); setHoliday('') }}>Add date</button></div><div aria-label="Selected holiday exceptions">{draft.holidays.map((d) => <span className="chip" key={d}>{d} <button aria-label={`Remove ${d}`} onClick={() => set('holidays', draft.holidays.filter((x) => x !== d))}>×</button></span>)}</div><small className="muted">Azure cron cannot express holiday exceptions; use a temporary override on the day.</small></div></div>}
+    {step === 1 && <div><h4 style={{ margin: 0 }}>Choose capacity for each service</h4><p className="muted" style={{ fontSize: 12 }}>Warm is the normal count. Maximum is the queue-driven ceiling.</p><div style={{ display: 'grid', gap: 9 }}>{SERVICES.filter(([s]) => draft.maximums[s] !== undefined).map(([s, n]) => <fieldset key={s} style={{ border: '1px solid var(--line)', borderRadius: 8 }}><legend><b>{n}</b></legend><div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(145px,1fr))', gap: 8 }}>{[['business_hours', 'Warm during business hours'], ['off_hours', 'Warm off hours'], ['maximums', 'Maximum when busy']].map(([g, l]) => <label key={g}><span style={lbl}>{l}</span><input id={`cap-${g}-${s}`} type="number" min="0" step="1" aria-invalid={!!errors[s]} value={draft[g][s] ?? ''} style={{ ...ctl, width: '100%' }} onChange={(e) => count(g, s, e.target.value)} /></label>)}</div>{errors[s] && <small role="alert">{errors[s]}</small>}<button className="ghost" onClick={() => setDraft((d) => ({ ...d, business_hours: { ...d.business_hours, [s]: defaults.business_hours[s] }, off_hours: { ...d.off_hours, [s]: defaults.off_hours[s] }, maximums: { ...d.maximums, [s]: defaults.maximums[s] } }))}>Use recommended defaults</button></fieldset>)}</div></div>}
+    {step === 2 && <div style={{ display: 'grid', gap: 12 }}><h4 style={{ margin: 0 }}>Review &amp; apply</h4><p>{summary(draft)}</p><div className="panel" style={{ padding: 10 }}>{SERVICES.filter(([s]) => draft.maximums[s] !== undefined).map(([s, n]) => <div key={s}>{n}: {draft.business_hours[s]} warm · {draft.off_hours[s]} off hours · {draft.maximums[s]} maximum</div>)}</div>{draft.holidays.length > 0 && <div role="note"><b>Operational follow-up:</b> plan an override for {draft.holidays.length} holiday {draft.holidays.length === 1 ? 'date' : 'dates'}.</div>}{checked && <div role="status"><b>{checked.blocked ? 'This schedule cannot be applied' : 'This schedule fits the fleet'}</b><ul>{(checked.findings || []).map((f, i) => <li key={i}>{f.detail}</li>)}</ul></div>}<label><span style={lbl}>Reason for this change (recorded in the audit log)</span><input id="cap-reason" value={reason} style={{ ...ctl, width: '100%' }} onChange={(e) => setReason(e.target.value)} /></label><div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}><button className="ghost" disabled={busy} onClick={() => validate()}>Check schedule</button><button disabled={busy || !reason.trim() || Object.keys(errors).length > 0} onClick={save}>Save draft</button>{!snap.applied && snap.application_configured && <button disabled={busy || !reason.trim() || checked?.blocked} onClick={apply}>Apply saved schedule</button>}</div>{!snap.applied && !snap.application_configured && <div role="note" className="muted" style={{ fontSize: 12 }}><b>Azure application is not configured in this environment.</b> You can save and validate the schedule, but the current Azure policy will remain in place.</div>}<small className="muted">{reason.trim() ? 'Save draft records intent; applying the saved version is a separate action.' : 'A reason is required before saving or applying.'}</small></div>}
+    <footer style={{ display: 'flex', justifyContent: 'space-between', borderTop: '1px solid var(--line)', paddingTop: 12 }}><button className="ghost" disabled={!step} onClick={() => setStep(step - 1)}>Back</button>{step < 2 && <button onClick={() => setStep(step + 1)}>Continue</button>}</footer>
+  </section>
 }

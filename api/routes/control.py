@@ -2199,6 +2199,11 @@ def get_capacity_schedule():
                and application.get("applied_version") == schedule.version)
     payload["applied"] = applied
     payload["application"] = application
+    # The management UI must not offer an Apply action that is guaranteed to 503. Production
+    # deliberately keeps the Azure writer disabled until its gateway is explicitly configured;
+    # exposing that capability state lets the page distinguish "saved, ready to apply" from
+    # "saved, application unavailable in this environment" without probing with a write.
+    payload["application_configured"] = _capacity_apply_gateway is not None
     # An override outranks the schedule while it lasts, and says so in the mode rather than
     # borrowing the name of the mode it copied — nothing downstream may report an overridden
     # fleet as though the schedule produced it.

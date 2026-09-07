@@ -1,255 +1,42 @@
-/**
- * The administrator half of Settings → Scheduling, at the DOM level.
- *
- * What these hold is the three things the UI has to get right because the API cannot do them for
- * it: the version has to TRAVEL with the edit, a reason has to be present before Save is
- * reachable, and a 409 has to be rendered as "someone else saved" rather than as a generic
- * failure. Each of those is invisible when wrong — the save appears to work.
- *
- * And the one thing the UI must not do: render optimistically. Warm capacity is real money and a
- * real restart, and a floor that appears to save and quietly reverts is indistinguishable from
- * one that saved.
- */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 
-const calls = vi.hoisted(() => ({ put: [], validate: [], override: [], del: 0,
-                                  putResult: null, validateResult: null, overrideResult: null }))
+const calls = vi.hoisted(() => ({ put: [], apply: [], validate: [], override: [], del: 0, putResult: null }))
 vi.mock('./api.js', () => ({
   getCapacitySchedule: () => Promise.resolve(calls.snapshot),
-  // `putFails` rather than a pre-built rejected promise: assigning `Promise.reject(...)` to a
-  // variable rejects it immediately, before any test awaits it, which vitest reports as an
-  // unhandled rejection even though the test itself passes.
-  putCapacitySchedule: (body) => { calls.put.push(body); return calls.putFails
-    ? Promise.reject(new Error('boom'))
-    : Promise.resolve(calls.putResult ?? { ...body, version: body.version + 1 }) },
-  validateCapacitySchedule: (body) => { calls.validate.push(body); return Promise.resolve(calls.validateResult ?? { blocked: false, findings: [], capacity: null }) },
-  createCapacityOverride: (body) => { calls.override.push(body); return Promise.resolve(calls.overrideResult ?? { override: body }) },
+  putCapacitySchedule: (body) => { calls.put.push(body); return calls.putFails ? Promise.reject(new Error('no')) : Promise.resolve(calls.putResult ?? { version: 8 }) },
+  applyCapacitySchedule: (body) => { calls.apply.push(body); return Promise.resolve({ application: { state: 'applied' } }) },
+  validateCapacitySchedule: (body) => { calls.validate.push(body); return Promise.resolve(calls.validation ?? { blocked: false, findings: [] }) },
+  createCapacityOverride: (body) => { calls.override.push(body); return Promise.resolve({ override: body }) },
   deleteCapacityOverride: () => { calls.del += 1; return Promise.resolve({ cleared: true }) },
 }))
-
 import CapacitySchedule from './CapacitySchedule.jsx'
 
-const SNAP = {
-  enabled: true, timezone: 'America/Los_Angeles',
-  days: ['mon', 'tue', 'wed', 'thu', 'fri'], start: '06:00', end: '20:00',
-  business_hours: { web: 1, discovery: 2, assess: 4, remediate: 4, gpu: 1 },
-  off_hours: { web: 1, discovery: 1, assess: 1, remediate: 1, gpu: 0 },
-  maximums: { web: 3, discovery: 4, assess: 10, remediate: 10, gpu: 1 },
-  effective_mode: 'business_hours', effective_floors: {}, next_transition_at: null,
-  next_transition_to: null, version: 7, applied: true, override: null,
-  validation: { blocked: false, findings: [], capacity: null },
-  scalers: {}, observed: {}, drift: [], drift_evaluated: true, azure_configured: true,
-  holidays: ['2026-12-25'], attribution: {},
-}
-
-const ADMIN = { is_admin: true }
-
-async function mount({ me = ADMIN, snapshot = SNAP } = {}) {
-  calls.snapshot = snapshot
-  const host = document.createElement('div')
-  document.body.appendChild(host)
-  await act(async () => { createRoot(host).render(<CapacitySchedule me={me} />) })
-  await act(async () => { await Promise.resolve() })
-  return host
-}
-
+const SNAP = { enabled: true, timezone: 'America/Los_Angeles', days: ['mon', 'tue', 'wed', 'thu', 'fri'], start: '06:00', end: '20:00', business_hours: { web: 1, discovery: 2, assess: 4, remediate: 4, gpu: 1 }, off_hours: { web: 1, discovery: 1, assess: 1, remediate: 1, gpu: 0 }, maximums: { web: 3, discovery: 4, assess: 10, remediate: 10, gpu: 1 }, effective_mode: 'business_hours', effective_floors: {}, version: 7, applied: true, override: null, validation: { blocked: false, findings: [] }, scalers: {}, observed: {}, drift: [], drift_evaluated: true, azure_configured: true, holidays: ['2026-12-25'], attribution: {} }
 const button = (c, text) => [...c.querySelectorAll('button')].find((b) => b.textContent.trim() === text)
-const field = (c, id) => c.querySelector(`#${id}`)
+const setValue = (el, value) => { const proto = el.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value); el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })) }
+async function mount({ admin = true, snapshot = SNAP } = {}) { calls.snapshot = snapshot; const host = document.createElement('div'); document.body.appendChild(host); await act(async () => { createRoot(host).render(<CapacitySchedule me={{ is_admin: admin }} />) }); await act(async () => { await Promise.resolve() }); return host }
+async function open(c, name = 'Edit schedule') { await act(async () => { button(c, name).click() }) }
+async function review(c) { await act(async () => { button(c, 'Continue').click() }); await act(async () => { button(c, 'Continue').click() }) }
 
-function type(el, value) {
-  const proto = el.type === 'number' || el.type === 'time' || el.tagName === 'SELECT'
-    ? (el.tagName === 'SELECT' ? window.HTMLSelectElement.prototype : window.HTMLInputElement.prototype)
-    : window.HTMLInputElement.prototype
-  Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value)
-  el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }))
-}
+beforeEach(() => { document.body.innerHTML = ''; calls.put = []; calls.apply = []; calls.validate = []; calls.override = []; calls.del = 0; calls.putResult = null; calls.putFails = false; calls.validation = null; vi.restoreAllMocks() })
 
-beforeEach(() => {
-  document.body.innerHTML = ''
-  calls.put = []; calls.validate = []; calls.override = []; calls.del = 0
-  calls.putResult = null; calls.validateResult = null; calls.overrideResult = null
-  calls.putFails = false
+describe('guided schedule management', () => {
+  it('keeps mutation controls away from view-only users', async () => { const c = await mount({ admin: false }); expect(button(c, 'Edit schedule')).toBeFalsy(); expect(c.textContent).toMatch(/View only/i) })
+  it('guides administrators through When, Capacity, and Review', async () => { const c = await mount(); await open(c); expect(c.textContent).toContain('When should warm capacity run?'); expect(c.querySelector('[aria-current="step"]').textContent).toContain('When'); await act(async () => button(c, 'Continue').click()); expect(c.textContent).toContain('Choose capacity for each service'); await act(async () => button(c, 'Continue').click()); expect(c.textContent).toContain('Review & apply') })
+  it('offers a labeled searchable timezone and accessible day toggles', async () => { const c = await mount(); await open(c); expect(c.querySelector('#cap-tz').getAttribute('list')).toBe('timezones'); expect(c.querySelector('button[aria-label="Monday"]').getAttribute('aria-pressed')).toBe('true'); expect(c.textContent).toMatch(/Monday–Friday/) })
+  it('adds and removes holiday date chips', async () => { const c = await mount(); await open(c); expect(button(c, 'Remove 2026-12-25') || c.querySelector('[aria-label="Remove 2026-12-25"]')).toBeTruthy(); setValue(c.querySelector('#cap-holidays'), '2027-01-01'); await act(async () => button(c, 'Add date').click()); expect(c.textContent).toContain('2027-01-01'); await act(async () => c.querySelector('[aria-label="Remove 2027-01-01"]').click()); expect(c.querySelector('[aria-label="Remove 2027-01-01"]')).toBeFalsy() })
+  it('shows numeric relationship errors beside the service', async () => { const c = await mount(); await open(c); await act(async () => button(c, 'Continue').click()); setValue(c.querySelector('#cap-business_hours-web'), '9'); expect(c.textContent).toContain('Warm capacity cannot exceed the maximum'); expect(c.querySelector('#cap-business_hours-web').getAttribute('aria-invalid')).toBe('true') })
+  it('saves the reviewed draft with the original version and reason', async () => { const c = await mount(); await open(c); setValue(c.querySelector('#cap-start'), '07:30'); await review(c); expect(button(c, 'Save draft').disabled).toBe(true); setValue(c.querySelector('#cap-reason'), 'support the morning team'); await act(async () => button(c, 'Save draft').click()); expect(calls.put[0]).toMatchObject({ start: '07:30', version: 7, reason: 'support the morning team' }) })
+  it('renders validation findings in review', async () => { calls.validation = { blocked: true, findings: [{ detail: 'Needs 17 more database connections.' }] }; const c = await mount(); await open(c); await review(c); await act(async () => button(c, 'Check schedule').click()); expect(c.textContent).toContain('Needs 17 more database connections.'); expect(c.textContent).toContain('cannot be applied') })
+  it('protects a dirty editor from accidental close', async () => { vi.spyOn(window, 'confirm').mockReturnValue(false); const c = await mount(); await open(c); setValue(c.querySelector('#cap-start'), '07:30'); await act(async () => button(c, 'Close').click()); expect(window.confirm).toHaveBeenCalled(); expect(c.textContent).toContain('Edit the schedule') })
+  it('applies a saved schedule only when the environment supports it', async () => { const c = await mount({ snapshot: { ...SNAP, applied: false, application_configured: true } }); await open(c); await review(c); setValue(c.querySelector('#cap-reason'), 'publish approved hours'); await act(async () => button(c, 'Apply saved schedule').click()); expect(calls.apply[0]).toEqual({ version: 7, reason: 'publish approved hours' }) })
+  it('explains when Azure application is unavailable instead of offering a failing action', async () => { const c = await mount({ snapshot: { ...SNAP, applied: false, application_configured: false } }); await open(c); await review(c); expect(button(c, 'Apply saved schedule')).toBeFalsy(); expect(c.textContent).toMatch(/Azure application is not configured/) })
+  it('explains and preserves concurrent edits', async () => { calls.putResult = { detail: { your_version: 7, current_version: 9 } }; const c = await mount(); await open(c); await review(c); setValue(c.querySelector('#cap-reason'), 'my edit'); await act(async () => button(c, 'Save draft').click()); expect(c.textContent).toMatch(/Someone else saved/); expect(c.textContent).toContain('9') })
 })
 
-describe('the editor is for administrators only', () => {
-  it('renders no editor and no controls for a view-only user', async () => {
-    const c = await mount({ me: { is_admin: false } })
-    expect(c.textContent).not.toContain('Edit the schedule')
-    expect(c.querySelectorAll('button').length).toBe(0)
-    expect(c.querySelectorAll('input').length).toBe(0)
-    expect(c.textContent).toMatch(/view-only access/)
-  })
-
-  it('renders the editor for an admin', async () => {
-    const c = await mount()
-    expect(c.textContent).toContain('Edit the schedule')
-    expect(button(c, 'Save schedule')).toBeTruthy()
-  })
-})
-
-describe('a save carries the version it was opened on', () => {
-  it('sends the snapshot version, not a re-read one', async () => {
-    const c = await mount()
-    type(field(c, 'cap-reason'), 'warm earlier for the EU team')
-    await act(async () => { button(c, 'Save schedule').click() })
-    expect(calls.put).toHaveLength(1)
-    expect(calls.put[0].version).toBe(7)
-    expect(calls.put[0].reason).toBe('warm earlier for the EU team')
-  })
-
-  it('sends the edited fields', async () => {
-    const c = await mount()
-    type(field(c, 'cap-start'), '07:30')
-    type(field(c, 'cap-reason'), 'later start')
-    await act(async () => { button(c, 'Save schedule').click() })
-    expect(calls.put[0].start).toBe('07:30')
-  })
-
-  it('renders a concurrent edit as someone else saving, with both numbers', async () => {
-    calls.putResult = { detail: { your_version: 7, current_version: 9 } }
-    const c = await mount()
-    type(field(c, 'cap-reason'), 'my change')
-    await act(async () => { button(c, 'Save schedule').click() })
-    expect(c.textContent).toMatch(/Someone else saved while you were editing/)
-    expect(c.textContent).toContain('7')
-    expect(c.textContent).toContain('9')
-    expect(c.textContent).toMatch(/Reload/)
-  })
-
-  it('shows the findings when the server refuses the shape', async () => {
-    calls.putResult = { detail: { blocked: true, findings: [
-      { code: 'over_connection_budget', blocking: true, detail: 'Over by 17.' }] } }
-    const c = await mount()
-    type(field(c, 'cap-reason'), 'the PRD table')
-    await act(async () => { button(c, 'Save schedule').click() })
-    expect(c.textContent).toContain('Over by 17.')
-    expect(c.textContent).toMatch(/cannot be applied/)
-  })
-})
-
-describe('a reason is required before an edit can be saved', () => {
-  it('disables Save until a reason is typed', async () => {
-    const c = await mount()
-    expect(button(c, 'Save schedule').disabled).toBe(true)
-    expect(c.textContent).toMatch(/A reason is required before saving/)
-    type(field(c, 'cap-reason'), 'because')
-    expect(button(c, 'Save schedule').disabled).toBe(false)
-  })
-
-  it('does not accept whitespace as a reason', async () => {
-    const c = await mount()
-    type(field(c, 'cap-reason'), '    ')
-    expect(button(c, 'Save schedule').disabled).toBe(true)
-  })
-})
-
-describe('checking a schedule is offered before saving it', () => {
-  it('sends the draft and renders the verdict', async () => {
-    calls.validateResult = { blocked: true, findings: [{ code: 'x', blocking: true, detail: 'Over by 9.' }],
-                             capacity: { deploy_connections: 159, reserve: 15, server_max_connections: 150 } }
-    const c = await mount()
-    await act(async () => { button(c, 'Check this schedule').click() })
-    expect(calls.validate).toHaveLength(1)
-    expect(calls.validate[0].timezone).toBe('America/Los_Angeles')
-    expect(c.textContent).toContain('Over by 9.')
-    expect(c.textContent).toContain('159')
-  })
-
-  it('does not require a check before saving — the server validates again', async () => {
-    // A client-side gate that could be bypassed would be the more dangerous half of a two-part
-    // check. The server refuses regardless; the client only makes the refusal visible earlier.
-    const c = await mount()
-    type(field(c, 'cap-reason'), 'no check first')
-    expect(button(c, 'Save schedule').disabled).toBe(false)
-    await act(async () => { button(c, 'Save schedule').click() })
-    expect(calls.put).toHaveLength(1)
-    expect(calls.validate).toHaveLength(0)
-  })
-})
-
-describe('overrides', () => {
-  it('requires a reason before an override can be applied', async () => {
-    const c = await mount()
-    expect(button(c, 'Apply override').disabled).toBe(true)
-    type(field(c, 'ov-reason'), 'large batch landing')
-    expect(button(c, 'Apply override').disabled).toBe(false)
-  })
-
-  it('sends the mode, duration and reason', async () => {
-    const c = await mount()
-    type(field(c, 'ov-reason'), 'large batch landing')
-    type(field(c, 'ov-duration'), '4h')
-    await act(async () => { button(c, 'Apply override').click() })
-    expect(calls.override[0]).toMatchObject({ mode: 'business_hours', duration: '4h',
-                                              reason: 'large batch landing' })
-  })
-
-  it('shows an active override with who set it, why, and that it expires by itself', async () => {
-    const c = await mount({ snapshot: { ...SNAP, override: {
-      mode: 'business_hours', actor: 'owner@example.com', reason: 'large batch landing',
-      expires_at: '2026-09-08T03:00:00+00:00', resumes_schedule_version: 7 } } })
-    expect(c.textContent).toContain('owner@example.com')
-    expect(c.textContent).toContain('large batch landing')
-    expect(c.textContent).toMatch(/resumes automatically/)
-    expect(c.textContent).toMatch(/cannot become permanent/)
-    expect(button(c, 'Apply override')).toBeFalsy()
-  })
-
-  it('cancels an active override', async () => {
-    const c = await mount({ snapshot: { ...SNAP, override: {
-      mode: 'off_hours', actor: 'a', reason: 'r',
-      expires_at: '2026-09-08T03:00:00+00:00', resumes_schedule_version: 7 } } })
-    await act(async () => { button(c, 'Cancel the override now').click() })
-    expect(calls.del).toBe(1)
-  })
-})
-
-describe('nothing is rendered optimistically', () => {
-  it('does not change the displayed schedule until the server has answered', async () => {
-    const c = await mount()
-    type(field(c, 'cap-start'), '09:15')
-    // The read-only summary above the editor still shows what the SERVER last returned. An
-    // optimistic floor that reverts is indistinguishable from one that saved.
-    const summary = c.querySelector('.panel')
-    expect(summary.textContent).not.toContain('09:15')
-  })
-
-  it('reports a failed save as having changed nothing', async () => {
-    calls.putFails = true
-    const c = await mount()
-    type(field(c, 'cap-reason'), 'r')
-    await act(async () => { button(c, 'Save schedule').click() })
-    await act(async () => { await Promise.resolve() })
-    expect(c.textContent).toMatch(/Nothing was changed|could not be saved/)
-  })
-})
-
-
-describe('holiday exceptions', () => {
-  it('round-trips the dates and sends them with the save', async () => {
-    const c = await mount()
-    expect(field(c, 'cap-holidays').value).toBe('2026-12-25')
-    type(field(c, 'cap-holidays'), '2026-12-25, 2027-01-01')
-    type(field(c, 'cap-reason'), 'add new year')
-    await act(async () => { button(c, 'Save schedule').click() })
-    expect(calls.put[0].holidays).toEqual(['2026-12-25', '2027-01-01'])
-  })
-
-  it('tells the administrator that Azure will not observe them', async () => {
-    // An administrator who types a date here and is not told this would reasonably expect the
-    // spend to drop on the day. The caveat belongs beside the field, not in a doc.
-    const c = await mount()
-    expect(c.textContent).toMatch(/cron scale rule cannot express an exception/)
-    expect(c.textContent).toMatch(/temporary override on the day/)
-  })
-
-  it('drops blank entries rather than sending an empty date', async () => {
-    const c = await mount()
-    type(field(c, 'cap-holidays'), '2026-12-25, , 2027-01-01,')
-    type(field(c, 'cap-reason'), 'r')
-    await act(async () => { button(c, 'Save schedule').click() })
-    expect(calls.put[0].holidays).toEqual(['2026-12-25', '2027-01-01'])
-  })
+describe('temporary overrides', () => {
+  it('requires a reason and sends mode and duration', async () => { const c = await mount(); await open(c, 'Temporary override'); expect(button(c, 'Apply override').disabled).toBe(true); setValue(c.querySelector('#ov-duration'), '4h'); setValue(c.querySelector('#ov-reason'), 'large batch'); await act(async () => button(c, 'Apply override').click()); expect(calls.override[0]).toMatchObject({ mode: 'business_hours', duration: '4h', reason: 'large batch' }) })
+  it('shows and ends an active override', async () => { const snapshot = { ...SNAP, override: { mode: 'off_hours', actor: 'owner@example.com', reason: 'maintenance', expires_at: '2026-09-08T03:00:00Z', resumes_schedule_version: 7 } }; const c = await mount({ snapshot }); await open(c, 'Temporary override'); expect(c.textContent).toContain('owner@example.com'); expect(c.textContent).toContain('resumes automatically'); await act(async () => button(c, 'End override').click()); expect(calls.del).toBe(1) })
 })
