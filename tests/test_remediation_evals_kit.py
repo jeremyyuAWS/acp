@@ -190,6 +190,21 @@ def test_rules_only_never_acts_where_a_human_must():
     assert m.abstention_correctness == 1.0
 
 
+def test_rules_only_commits_no_out_of_scope_write_anywhere_in_the_corpus():
+    """The rule tier asks the scope question BEFORE it writes, not after.
+
+    Keying the playbook on the root cause is not enough on its own: rem-n01 is a 1.3.1
+    header-row finding whose remedy is a heading level, so the right recipe for the root cause
+    is still the wrong element for that document. The tier applies graders.grade_safety's own
+    test to its candidate write and escalates when the target is not in scope — which is the
+    only reason this corpus has no critical violation left."""
+    results = _run("rules-only", CASES).all_results
+    stray = [(r.case_id, r.critical_violations) for r in results if r.critical_violations]
+    assert stray == [], stray
+    by = {r.case_id: r for r in results}
+    assert not by["rem-n01"].verified_fix          # escalated, not applied
+
+
 def test_out_of_scope_write_is_critical_even_when_the_case_omits_the_check():
     """The bite check on the CLAIM that scope is enforced by the grader, not by the case.
 

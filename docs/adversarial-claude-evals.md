@@ -153,21 +153,28 @@ Default run, 32 cases × 3 repeats, no network:
 
 | candidate | accepted unchanged | accepted after edit | rejected / refused | applied | cleared after re-scan | regressions (proposed) | as expected |
 |---|---|---|---|---|---|---|---|
-| `rules-only` | 16% | 0% | 84% (21 rej · 60 ref) | 16% | 16% | 0 (6) | 41% |
+| `rules-only` | 25% | 0% | 75% (12 rej · 60 ref) | 25% | 25% | 0 (9) | 50% |
 | `stub:good` | 88% | 6% | 6% (0 rej · 6 ref) | 94% | 94% | 0 (0) | 100% |
-| `stub:sloppy` | 22% | 66% | 12% (6 rej · 6 ref) | 88% | 88% | 0 (39) | 94% |
-| `stub:literal` | 25% | 31% | 44% (42 rej · 0 ref) | 56% | 56% | 0 (15) | 56% |
+| `stub:sloppy` | 22% | 69% | 9% (3 rej · 6 ref) | 91% | 91% | 0 (39) | 97% |
+| `stub:literal` | 25% | 31% | 44% (42 rej · 0 ref) | 56% | 56% | 0 (18) | 56% |
 | `stub:timid` | 0% | 0% | 100% (0 rej · 96 ref) | 0% | 0% | 0 (0) | 31% |
 | `stub:overeager` | 0% | 0% | 100% (96 rej) | 0% | 0% | 0 (18) | 0% |
 | `stub:unsafe` | 0% | 0% | 100% (96 rej) | 0% | 0% | 0 (0) | 0% |
 
 What the floor and the fixtures establish:
 
-- **`rules-only` reproduces the kit's known failure on two cases here** (`adv-hl-01`, `adv-ss-05`):
-  keyed on criterion alone, it fires the 1.3.1 table playbook on a pseudo-heading and writes
-  `table.headerRow` outside scope. It also declares the invoice row a header on `adv-ss-02` and
-  takes the template's `en-US` over the French body on `adv-dl-02` — both rejected by the oracle,
-  both named as proposed regressions. Its 16% acceptance is the deterministic ceiling on this set.
+- **`rules-only` found a defect in itself on three cases here** (`adv-hl-01`, `adv-ss-03`,
+  `adv-ss-05`): keyed on criterion alone, it fired the 1.3.1 *table* playbook on two
+  pseudo-headings and a run of typed bullets, writing `table.headerRow` outside scope. The
+  playbook is now keyed on `(criterion, root cause)` and the tier applies the grader's own scope
+  test before it writes; all three land and clear, taking acceptance from 16% to **25%** and
+  as-expected from 41% to **50%**. The full account, including the second half of the fix that
+  keying alone did not cover, is in
+  [the kit's § 5](remediation-evals-kit.md#the-defect-the-kit-found-in-the-rule-tier-and-the-fix).
+  What remains is not a mis-key: it still declares the invoice row a header on `adv-ss-02`, takes
+  the template's `en-US` over the French body on `adv-dl-02`, and copies the sample SSN fragment
+  into a control name on `adv-hl-05` — all three rejected by the oracle, and the first two named
+  as proposed regressions. 25% acceptance is the deterministic ceiling on this set.
 - **`stub:good` accepts nowhere it should not** and refuses exactly the two must-refuse cases; its
   two after-edit outcomes are the two cases whose canonical value sits in the after-edit band by
   design (`adv-lp-03`'s in-context link, `adv-lp-05`).
@@ -235,6 +242,13 @@ Measured: see § 7. The full JSON of that run is committed at
 | `claude-haiku-4-5` | 50% | 12% | 38% (17 rej · 19 ref) | 62% | 62% | **0** | 70% | 3.14s / 3.97s | $1.60e-03 |
 | `claude-sonnet-5` | 61% | 16% | 23% (5 rej · 17 ref) | 77% | 76% | **0** | 92% | 6.39s / 10.74s | $6.78e-03 |
 | `claude-opus-5` | 58% | 22% | 20% (4 rej · 15 ref) | 80% | 77% | **0** | 93% | 9.81s / 15.77s | $1.96e-02 |
+
+The `rules-only` row is left as that run measured it. It **predates the root-cause keying fix**
+described in § 5 and in [the kit's § 5](remediation-evals-kit.md#the-defect-the-kit-found-in-the-rule-tier-and-the-fix);
+the tier now scores 25% unchanged / 25% applied / 25% cleared / 50% as-expected on the same 96
+case-runs, with 6 critical violations rather than 15 and the same 9 proposed regressions. Re-running the paid candidates to refresh one deterministic row would cost another $2.68 and
+change none of the model figures, so the table stays as billed and this note carries the
+correction. The per-category `rules-only` column below is from the same pre-fix run.
 
 As-expected rate per category:
 
