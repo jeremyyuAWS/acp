@@ -4784,11 +4784,6 @@ def _apply_one_value_kind(
     baseline = (residual_state or {}).get("verification")
     regressions = (sorted(verification.residual - baseline.residual)
                    if verification.ok and baseline is not None and baseline.ok else None)
-    if regressions:
-        core.store.log_decision(
-            "system", "apply.regression", scan_id=scan_id, file=filename,
-            detail=f"writing {len(applied)} {noun} value(s) made {regressions} fail on re-scan; "
-                   f"neither failed before the write")
     if not verification.ok:
         # COULD NOT VERIFY — the document was unreadable, the scan errored or timed out, an
         # engine was missing, or a rule threw and its criterion is simply absent from the
@@ -4831,6 +4826,21 @@ def _apply_one_value_kind(
         for item_id in core.store.approved_unapplied_item_ids(scan_id, filename, rule_id):
             core.store.mark_row_applied(item_id)
     if regressions:
+        # ONLY here, on the credited path. The two branches above return `working` — the bytes as
+        # they were BEFORE this lane — so a regression observed in a write they discarded is
+        # evidence about the draft (recorded on its outcome row above) and NOT a fact about the
+        # document. Logging or queueing it there would block a file over damage it never took.
+        core.store.log_decision(
+            "system", "apply.regression", scan_id=scan_id, file=filename,
+            detail=f"writing {len(applied)} {noun} value(s) made {regressions} fail on re-scan; "
+                   f"none of them failed before the write")
+        # The reviewer's way out. Certification is blocked by store.unresolved_regression until
+        # one of these is approved; queueing is best-effort because a failed write here must not
+        # lose the corrected copy, and the gate fails CLOSED on a missing row rather than open.
+        try:
+            core.store.queue_regression_review(scan_id, filename, regressions)
+        except Exception:
+            swallowed("_apply_one_value_kind: queueing the regression review failed", scan_id)
         _model_outcome("verified_regressed",
                        f"cleared on re-scan: {sorted(scs_to_clear)}; newly failing: {regressions}"
                        + unresolved_note,
