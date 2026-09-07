@@ -84,7 +84,7 @@ export default function WorkerCard({ current, filesDone = 0, filesTotal = 0, ela
       {hasCurrent && (
         <div className="muted"
              style={{ marginTop: 4, overflow: 'hidden', textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap', fontFamily: 'monospace', fontSize: 11.5 }}
+                      whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)', fontSize: 11.5 }}
              title={current}>
           {truncatePath(current)}
         </div>

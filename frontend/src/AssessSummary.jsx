@@ -374,7 +374,7 @@ export default function AssessSummary({ files, cap, assessment, criteria, level 
           <ul className="muted" style={{ fontSize: 12.5, margin: '6px 0 0', paddingLeft: 18, lineHeight: 1.6 }}>
             {m.documentsUnopened.map((d) => (
               <li key={d.file}>
-                <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{d.name}</span>
+                <span style={{ fontFamily: 'var(--font-mono)' }}>{d.name}</span>
                 {d.reason ? ` — ${d.reason}` : ''}
               </li>
             ))}

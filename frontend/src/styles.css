@@ -10,6 +10,10 @@
      --card so it is always opaque (an undefined --surface resolves to transparent, which let
      scrolling rows bleed through the sticky scope-matrix header). */
   --surface: var(--card);
+  /* One machine-value face across every workflow tab. Keep prose in the product's readable
+     system sans; identifiers, filenames, timestamps, versions and evidence values use this
+     compact stack with tabular figures. */
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 
   /* ── Semantic tokens for elements whose standard colors fail WCAG AA ──────────────
      Centralised here so [data-wcag="on"] can override at the variable level rather
@@ -160,9 +164,12 @@ button.ghost { background: #fff; color: var(--plum); border: 1px solid var(--lin
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th { text-align: left; color: var(--muted); font-weight: 500; font-size: 12px; padding: 0 0 8px; }
 td { padding: 10px 0; border-top: 1px solid var(--line); }
-.fname { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
-.lifecycle-evidence-panel { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco,
-  Consolas, "Liberation Mono", "Courier New", monospace; }
+.fname { font-family: var(--font-mono); font-size: 13px; }
+.machine-value { font-family: var(--font-mono); font-variant-numeric: tabular-nums;
+  font-size: 0.92em; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+/* Lifecycle prose remains sans like every other tab; only its evidence values are machine text. */
+.lifecycle-evidence-panel code, .lifecycle-evidence-panel .machine-value {
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .lifecycle-integrity-warning { margin: 10px 0; padding: 10px 12px; border: 1px solid #B7791F;
   border-radius: 8px; background: #FFF8E6; color: #744210; line-height: 1.45; }
 .discover-integrity-recovery { margin: 0 0 18px; padding: 18px; border: 1px solid var(--warn-line, #B7791F);
@@ -306,7 +313,7 @@ button.small { padding: 6px 12px; font-size: 13px; }
 .runinfo-ago { font-size: 13px; font-weight: 500; color: var(--ink); }
 .runinfo-abs { color: var(--muted); }
 .runinfo-source { padding: 1px 7px; border-radius: 20px; background: #e6f1fb; color: #185fa5; font-size: 11px; font-weight: 500; }
-.runinfo-build { margin-left: auto; font-size: 11px; color: var(--muted); font-family: var(--mono, monospace); }
+.runinfo-build { margin-left: auto; font-size: 11px; color: var(--muted); font-family: var(--font-mono); }
 .workflow-continuity { margin: 12px 16px; padding: 12px 14px; border: 1px solid #c4b5fd; border-left: 4px solid #7c3aed; border-radius: 8px; background: #f5f3ff; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .workflow-continuity > div:first-child { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .workflow-continuity strong { color: #3b2352; font-size: 14px; }
@@ -678,7 +685,7 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 
 /* remediate — before/after diff + confidence */
 .diffbox { border-radius: 8px; padding: 9px 12px; margin: 6px 0; }
-.diffbox code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; word-break: break-word; display: block; }
+.diffbox code { font-family: var(--font-mono); font-size: 12px; word-break: break-word; display: block; }
 .diffbox.before { background: var(--info-bg); }
 .diffbox.before code { color: var(--info-fg); }
 .diffbox.after { background: #EAF3DE; }
@@ -1689,7 +1696,7 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .assessrunmeta .muted { font-size: 12px; }
 .assesspct { font-size: 12px; font-weight: 700; color: var(--info-fg); }
 .assessfile { display: flex; align-items: baseline; gap: 8px; margin-top: 8px; background: #F0F5FB; border: 1px solid #D4E2F0; border-radius: 7px; padding: 7px 12px; flex-wrap: wrap; }
-.assessfname { font-size: 12.5px; font-weight: 600; color: var(--ink); font-family: monospace; }
+.assessfname { font-size: 12.5px; font-weight: 600; color: var(--ink); font-family: var(--font-mono); }
 .assessengine { font-size: 11px; font-weight: 700; color: #3C3489; background: #EEEDFE; border-radius: 999px; padding: 1px 8px; white-space: nowrap; }
 
 /* Per-document progress under the bar: which files are done, and which criteria each one failed.
@@ -1708,7 +1715,7 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .assess-live-stage { color: var(--success-fg); font-weight: 600; }
 @keyframes assessPulse { 0%, 100% { opacity: .4; transform: scale(.8); } 50% { opacity: 1; transform: scale(1.1); } }
 @media (prefers-reduced-motion: reduce) { .assesslist li.active .alstate { animation: none; } }
-.alname { font-family: monospace; font-size: 11.5px; color: var(--ink); flex: 1 1 auto;
+.alname { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink); flex: 1 1 auto;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .assesslist li.pending .alname { color: var(--muted); }
 .alscore { font-weight: 700; font-size: 11.5px; color: var(--ink); flex: 0 0 auto; }
@@ -2644,7 +2651,7 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
    indentation carries the level. */
 .evcard-explain-map { margin: 6px 0 0; padding: 8px 11px; border: 1px solid var(--line);
   border-radius: 8px; background: var(--surface-1, #f6f5f2); font-size: 12px;
-  white-space: pre-wrap; overflow-x: auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  white-space: pre-wrap; overflow-x: auto; font-family: var(--font-mono); }
 
 /* WCAG-exception resolution (HITL-six) — decorative (1.1.1) / essential logo (1.4.5/1.4.9). A
    quiet, secondary affordance beside the primary actions: the reviewer applies the standard's own
@@ -2844,7 +2851,7 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .caption-cue:last-child { border-bottom: 0; }
 .caption-cue-active { border-left-color: var(--plum); background: var(--wash, #F7F4FA); }
 .caption-cue-active .caption-cue-text textarea { font-weight: 600; }
-.caption-cue-time { flex: 0 0 auto; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+.caption-cue-time { flex: 0 0 auto; font-family: var(--font-mono);
   font-size: 11.5px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 4px;
   background: transparent; cursor: pointer; }
 .caption-cue-time:focus-visible { outline: 2px solid var(--plum); outline-offset: 1px; }

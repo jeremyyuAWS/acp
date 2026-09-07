@@ -18,7 +18,7 @@ export default function DiscoveryContinuityChoice({ choice, onContinue, onReplac
               ? 'The source, folders, settings, and lifecycle policy match. Continue that workflow to avoid repeating Discovery, or intentionally create a new revision.'
               : `Continue the current ${stageLabel} to keep its progress. Starting a new Discovery will stop it and create a new workflow revision.`}
           </div>
-          <div className="muted" style={{ marginTop: 5, fontSize: 11.5, fontFamily: 'monospace' }}>
+          <div className="muted" style={{ marginTop: 5, fontSize: 11.5, fontFamily: 'var(--font-mono)' }}>
             Workflow revision {choice.workflowRevision || 1} · Scan {choice.scanId}
           </div>
         </div>

@@ -132,7 +132,7 @@ function ScanTraces({ scanId, rows }) {
             <ul style={{ listStyle: 'none', padding: 0, margin: '12px 0 0', display: 'grid', gap: 6 }}>
               {rows.map((r) => (
                 <li key={r.file} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  <span style={{ fontFamily: 'var(--font-mono)',
                                  fontSize: 12, flex: '1 1 260px' }}>{r.name || r.file}</span>
                   {/* An unopened file still has a trace — it is where the reason it could not be
                       read is recorded — so it is listed, and labelled rather than dropped. */}

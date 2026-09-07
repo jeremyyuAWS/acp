@@ -114,7 +114,7 @@ function FailRow({ jb, kind, onRetry, retried }) {
         {hint && <div style={{ fontSize: 12.5, color: '#7A4A0B', marginTop: 2 }}>{hint}</div>}
         {jb.last_error && (
           <div title={jb.last_error} style={{
-            fontSize: 11.5, fontFamily: 'ui-monospace, monospace', color: '#8A2A20',
+            fontSize: 11.5, fontFamily: 'var(--font-mono)', color: '#8A2A20',
             opacity: 0.85, marginTop: 2, wordBreak: 'break-word',
           }}>{jb.last_error.slice(0, 160)}</div>
         )}

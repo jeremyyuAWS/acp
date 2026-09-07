@@ -174,7 +174,7 @@ function PropRow({ label, value, mono = false }) {
       <span className="muted" style={{ fontSize: 11.5, letterSpacing: '.04em', textTransform: 'uppercase' }}>{label}</span>
       {missing
         ? <span className="muted" style={{ fontSize: 13 }}>—</span>
-        : <span style={{ fontSize: 13.5, minWidth: 0, overflowWrap: 'anywhere', fontFamily: mono ? 'var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace)' : undefined }}>{String(value)}</span>}
+        : <span style={{ fontSize: 13.5, minWidth: 0, overflowWrap: 'anywhere', fontFamily: mono ? 'var(--font-mono)' : undefined }}>{String(value)}</span>}
     </div>
   )
 }

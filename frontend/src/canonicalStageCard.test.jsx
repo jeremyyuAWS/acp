@@ -125,6 +125,7 @@ describe('canonical stage card', () => {
       unaccounted: null, exact: false, buckets: { published: null, failed: null },
     } })
     expect(html).toContain('Accounting temporarily inconsistent.')
+    expect(html.match(/class="machine-value"/g)).toHaveLength(3)
     expect(html).not.toContain('10 of 10 requested documents')
     expect(html).not.toContain('Operational work-item progress')
   })

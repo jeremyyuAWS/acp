@@ -115,7 +115,7 @@ export default function RemediationRunProgress({ progress, updateMode = 'idle', 
           <div style={{ borderTop: '1px solid var(--line,#e4e8ec)', paddingTop: 10, marginTop: 12,
                         fontSize: 12.5, lineHeight: 1.5 }}>
             <div className="muted" style={{ marginBottom: 4 }}>Processing now</div>
-            {activity.file && <strong style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{activity.file}</strong>}
+            {activity.file && <strong style={{ fontFamily: 'var(--font-mono)' }}>{activity.file}</strong>}
             <div aria-live="polite" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
               {activity.sc && <span className="fmtchip">WCAG {activity.sc}{activity.sc_name ? ` · ${activity.sc_name}` : ''}</span>}
               {activity.action && <span>{activity.action}</span>}

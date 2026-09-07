@@ -22,7 +22,7 @@ import { approvalQueue, reconcileQueue } from './approvalQueue.js'
 
 const kicker = { fontSize: 11.5, letterSpacing: '.07em', textTransform: 'uppercase',
                  color: 'var(--muted)', fontWeight: 600 }
-const mono = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12 }
+const mono = { fontFamily: 'var(--font-mono)', fontSize: 12 }
 const rowStyle = { borderTop: '1px solid var(--line)', padding: '12px 0' }
 
 function Location({ item }) {

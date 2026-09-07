@@ -29,7 +29,7 @@ function Swatch({ label, color, bg, ratio }) {
                       padding: '6px 10px', borderTop: '1px solid var(--line,#e2dce4)', background: 'var(--surface-2,#f6f5f8)' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
             <span aria-hidden="true" style={{ width: 12, height: 12, borderRadius: 3, border: '1px solid var(--line,#e2dce4)', background: color || 'transparent', flex: '0 0 auto' }} />
-            <span style={{ fontFamily: 'var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace)' }}>{color || '—'}</span>
+            <span style={{ fontFamily: 'var(--font-mono)' }}>{color || '—'}</span>
           </span>
           {ratio != null && (
             <span style={{ fontSize: 12, fontWeight: 700, color: passes ? 'var(--ok-ink,#217a3b)' : 'var(--bad-ink,#a33b28)' }}>
