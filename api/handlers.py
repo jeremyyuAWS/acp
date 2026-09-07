@@ -810,38 +810,83 @@ def _publish_file(payload: dict, job: dict) -> None:
             root = core.store.record_release_root(
                 release_id, owner, "sharepoint", location, detail["id"],
                 detail["name"], detail.get("url"))
-        publication = _publish.archive_copy_publish_sharepoint(
-            token, drive_id, root["folder_id"], owner, release_id, scan_id,
-            filename, source_path, source_id, source_filename=source_name)
-        if publication is None:
-            raise IOError("corrected content was unavailable")
-        folders, _ = _publish.sharepoint_relative_path(source_path, source_name)
-        released_name = publication.get("filename") or source_name
+        folders, planned_name = _publish.sharepoint_relative_path(source_path, source_name)
+        planned_destination = f"graph:{drive_id or 'me'}:{root['folder_id']}:{'/'.join([*folders, planned_name])}"
         # The provider write is a canonical side effect, not merely a URL on file_records. The
         # deterministic receipt survives retries and is what a sealed Release manifest cites.
         receipt_writer = getattr(core.store, "record_side_effect_receipt", None)
+        reserve = getattr(core.store, "reserve_side_effect", None)
         execution_id = (job or {}).get("batch_id")
-        if callable(receipt_writer) and execution_id:
-            work_item = core.store.stage_work_item_for_job((job or {}).get("id"))
+        work_item = core.store.stage_work_item_for_job((job or {}).get("id")) \
+            if execution_id else None
+        content_digest = record.get("corrected_sha256") or _publish.remediated_content_digest(
+            owner, scan_id, filename)
+        if not content_digest:
+            raise IOError("corrected content was unavailable")
+        reservation = None
+        if callable(reserve) and execution_id:
+            reservation = reserve(
+                execution_id=execution_id, work_item_id=(work_item or {}).get("work_item_id"),
+                effect_type="sharepoint.publish", destination=planned_destination,
+                content_digest=content_digest,
+                worker_id=(job or {}).get("locked_by") or (job or {}).get("id") or "release-worker")
+            if reservation.get("reused") and reservation.get("status") == "completed":
+                saved_receipt = dict(reservation.get("receipt") or {})
+                publication = {"id": saved_receipt.get("provider_id"),
+                               "url": saved_receipt.get("url"),
+                               "created": bool(saved_receipt.get("created")),
+                               "checksum": saved_receipt.get("checksum") or content_digest,
+                               "filename": saved_receipt.get("filename") or planned_name,
+                               "verified": bool(saved_receipt.get("verified", True))}
+            elif not reservation.get("acquired"):
+                raise RuntimeError("SharePoint publication is owned by another worker attempt")
+            else:
+                # A reclaimed reservation may represent a predecessor that wrote and died before
+                # finalizing. The publisher verifies matching destination bytes before deciding
+                # whether a write is needed, so takeover never blindly repeats the side effect.
+                publication = _publish.archive_copy_publish_sharepoint(
+                    token, drive_id, root["folder_id"], owner, release_id, scan_id,
+                    filename, source_path, source_id, source_filename=source_name)
+        else:
+            publication = _publish.archive_copy_publish_sharepoint(
+                token, drive_id, root["folder_id"], owner, release_id, scan_id,
+                filename, source_path, source_id, source_filename=source_name)
+        if publication is None:
+            raise IOError("corrected content was unavailable")
+        released_name = publication.get("filename") or planned_name
+        if reservation and reservation.get("acquired"):
             lineage_reader = getattr(core.store, "release_finding_lineage", None)
             finding_lineage = (lineage_reader(execution_id, filename)
                                if callable(lineage_reader) else None)
             provider_receipt = {
                 "provider_id": publication.get("id"), "url": publication.get("url"),
                 "created": bool(publication.get("created")),
+                "checksum": publication.get("checksum") or content_digest,
+                "filename": released_name, "verified": bool(publication.get("verified", True)),
             }
             if finding_lineage is not None:
                 # Freeze the exact Remediation findings this provider revision releases.  This
                 # belongs in the immutable side-effect receipt, not in a later request-time
                 # projection whose current disposition may have changed by the time it is read.
                 provider_receipt["finding_lineage"] = finding_lineage
+            core.store.finalize_side_effect(
+                reservation["effect_id"], reservation["reservation_token"], provider_receipt)
+        elif callable(receipt_writer) and execution_id:
+            lineage_reader = getattr(core.store, "release_finding_lineage", None)
+            finding_lineage = (lineage_reader(execution_id, filename)
+                               if callable(lineage_reader) else None)
+            provider_receipt = {
+                "provider_id": publication.get("id"), "url": publication.get("url"),
+                "created": bool(publication.get("created")),
+                "checksum": publication.get("checksum") or content_digest,
+                "filename": released_name, "verified": bool(publication.get("verified", True)),
+            }
+            if finding_lineage is not None:
+                provider_receipt["finding_lineage"] = finding_lineage
             receipt_writer(
-                execution_id=execution_id,
-                work_item_id=(work_item or {}).get("work_item_id"),
-                effect_type="sharepoint.publish",
-                destination=f"graph:{drive_id or 'me'}:{root['folder_id']}:{'/'.join([*folders, released_name])}",
-                content_digest=(publication.get("checksum") or record.get("corrected_sha256")
-                                or f"provider-id:{publication.get('id') or released_name}"),
+                execution_id=execution_id, work_item_id=(work_item or {}).get("work_item_id"),
+                effect_type="sharepoint.publish", destination=planned_destination,
+                content_digest=content_digest,
                 receipt=provider_receipt)
         published_at = core.store.record_publish(
             scan_id, filename, published_url=publication.get("url"))
