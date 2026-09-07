@@ -946,26 +946,64 @@ def _active_scope_info() -> dict:
 
 class ScheduleUpdate(BaseModel):
     enabled: bool
-    interval_minutes: int
+    # Deprecated, retained so the API may roll out before an older SPA refreshes.
+    interval_minutes: int | None = None
+    timezone: str | None = None
+    local_time: str | None = None
+    days: list[int] | None = None
+
+
+def _schedule_owner(request: Request) -> str:
+    return (getattr(request.state, "user_email", None) or "demo").strip().lower()
+
+
+def _schedule_response(request: Request) -> dict:
+    """Return only the caller's schedule; configuration is owner-scoped at the query."""
+    owner = _schedule_owner(request)
+    cfg = core.store.get_user_scan_schedule(owner)
+    legacy = core.store.get_schedule()
+    legacy_owner = (legacy.get("owner_email") or "demo").strip().lower()
+    # An existing process-wide interval remains visible only to its original owner until that
+    # owner saves a wall-clock schedule. It is never exposed to another signed-in user.
+    if cfg.get("updated_at") is None and legacy_owner == owner and legacy.get("enabled"):
+        cfg = {**cfg, **legacy, "schedule_type": "interval"}
+        job = core.scheduler.get_job("scheduled_local_scan")
+        cfg["next_at"] = job.next_run_time.isoformat() if job and job.next_run_time else None
+    else:
+        cfg["schedule_type"] = "wall_clock"
+        cfg["interval_minutes"] = None
+        try:
+            import scan_schedule
+            next_at = scan_schedule.next_occurrence(cfg, datetime.now(timezone.utc))
+            cfg["next_at"] = next_at.isoformat() if next_at else None
+        except ValueError:
+            cfg["next_at"] = None
+    return cfg
 
 
 @router.get("/schedule")
-def schedule():
-    cfg = core.store.get_schedule()
-    job = core.scheduler.get_job("scheduled_local_scan")
-    cfg["next_at"] = job.next_run_time.isoformat() if job and job.next_run_time else None
+def schedule(request: Request):
+    cfg = _schedule_response(request)
     # list_scans() filters to completed_at IS NOT NULL, which an ADR 0020 Discover-only run
     # never sets (see list_finished_scans' own docstring) — a discover-only sweep landed here
     # and last_at kept showing the last scan that was ever ASSESSED, which can be arbitrarily
     # older than the estate's true last refresh. list_finished_scans() plus the same
     # COALESCE(completed_at, discovered_at) its own ordering uses is the fix: whichever
     # timestamp the newest row actually has.
-    scans = core.store.list_finished_scans()
+    owner = _schedule_owner(request)
+    # Local/demo mode deliberately remains one shared estate. An authenticated deployment must
+    # not let Alice's schedule status advance because Bob completed a scan.
+    scans = core.store.list_finished_scans(None if owner == "demo" else owner)
     cfg["last_at"] = (scans[0].get("completed_at") or scans[0].get("discovered_at")) if scans else None
     # The last sweep's OUTCOME, not just when a scan last completed. A failing sweep saves
     # nothing by design, so `last_at` keeps pointing at the last SUCCESSFUL scan and reads as
     # healthy while the estate quietly goes stale. None until a sweep has run.
-    cfg["last_sweep"] = core.store.get_last_sweep()
+    owner = _schedule_owner(request)
+    cfg["last_sweep"] = core.store.get_last_sweep(owner)
+    # Demo/no-auth deployments predate owner-scoped outcomes. Preserve that single-user history;
+    # authenticated users never fall back to another user's process-wide result.
+    if cfg["last_sweep"] is None and owner == "demo":
+        cfg["last_sweep"] = core.store.get_last_sweep()
     return cfg
 
 
@@ -973,10 +1011,30 @@ def schedule():
 def update_schedule(body: ScheduleUpdate, request: Request):
     # Attribute scheduled sweeps to whoever set the schedule, so the resulting scans
     # show up in their (owner-scoped) scan list.
-    owner = getattr(request.state, "user_email", None)
-    core.store.save_schedule(body.enabled, body.interval_minutes, owner=owner, source="drive")
+    owner = _schedule_owner(request)
+    if body.timezone is None and body.local_time is None and body.days is None:
+        if body.interval_minutes is None:
+            raise HTTPException(422, "interval_minutes or a wall-clock schedule is required")
+        if body.interval_minutes < 1:
+            raise HTTPException(422, "interval_minutes must be at least 1")
+        core.store.save_schedule(body.enabled, body.interval_minutes, owner=owner, source="drive")
+    else:
+        current = core.store.get_user_scan_schedule(owner)
+        try:
+            core.store.save_user_scan_schedule(
+                owner, body.enabled,
+                body.timezone if body.timezone is not None else current["timezone"],
+                body.local_time if body.local_time is not None else current["local_time"],
+                body.days if body.days is not None else current["days"], source="drive")
+            legacy = core.store.get_schedule()
+            legacy_owner = (legacy.get("owner_email") or "demo").strip().lower()
+            if legacy_owner == owner and legacy.get("enabled"):
+                core.store.save_schedule(False, legacy["interval_minutes"], owner=owner,
+                                         source=legacy.get("source") or "drive")
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     core.reload_scheduler()
-    return schedule()
+    return schedule(request)
 
 
 @router.get("/hub", response_class=Response)
@@ -1714,7 +1772,7 @@ def _admin_activity_snapshot() -> dict:
         pressure = "busy"
     else:
         pressure = "healthy"
-    workflows = _workflow_rows(runs, stage_events)
+    workflows = _workflow_rows(runs, stage_events, _liveops_canonical_lineages(runs, stage_events))
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "runs": runs,
@@ -1813,7 +1871,43 @@ def _recovery_summary(events: list[dict] | None) -> dict:
     }
 
 
-def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None) -> list[dict]:
+def _liveops_canonical_lineages(runs: list[dict], lifecycle_events: list[dict] | None = None) -> dict[str, dict]:
+    """Read canonical stage state without making Live Ops unavailable during a rolling deploy."""
+    reader = getattr(core.store, "canonical_stage_lineage", None)
+    if not callable(reader):
+        return {}
+    scan_ids = {str(row.get("scan_id") or "").strip() for row in runs}
+    scan_ids.update(str(row.get("scan_id") or "").strip() for row in lifecycle_events or [])
+    lineages = {}
+    for scan_id in sorted(scan_ids - {""}):
+        try:
+            lineage = reader(scan_id)
+        except Exception:
+            swallowed("routes.system._liveops_canonical_lineages: reading lineage failed")
+            continue
+        if lineage and lineage.get("available"):
+            remediate = next((row for row in lineage.get("stages", [])
+                              if row.get("stage") == "remediate"), None)
+            facts_reader = getattr(core.store, "remediation_run_facts", None)
+            if remediate and callable(facts_reader):
+                try:
+                    import remediation_run
+                    snapshot = remediation_run.build_snapshot(facts_reader(scan_id))
+                    remediate["finding_accounting"] = {
+                        "finding_reconciliation": snapshot.get("finding_reconciliation"),
+                        "fixes": snapshot.get("fixes"),
+                        "review": snapshot.get("review"),
+                        "last_durable_update_at": snapshot.get("latest_progress_at"),
+                        "revision": snapshot.get("revision"),
+                    }
+                except Exception:
+                    swallowed("routes.system._liveops_canonical_lineages: reading finding accounting failed")
+            lineages[scan_id] = lineage
+    return lineages
+
+
+def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None,
+                   canonical_lineages: dict[str, dict] | None = None) -> list[dict]:
     """Turn stage aggregates into the durable workflow contract used by Live Ops.
 
     New scans carry a persisted workflow execution and revision. Its external id deliberately
@@ -1965,11 +2059,43 @@ def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None)
             "next_retry_at": None,
         })
     for workflow in grouped.values():
+        lineage = (canonical_lineages or {}).get(workflow["scan_id"])
+        canonical_by_stage = {row.get("stage"): row for row in (lineage or {}).get("stages", [])}
+        for stage in workflow["stages"]:
+            canonical = canonical_by_stage.get(stage["stage"])
+            stage["canonical"] = canonical
+            if not canonical:
+                continue
+            counts = (canonical.get("counts") or {}).get("work_items") or {}
+            stage.update({
+                "stage_run_id": canonical.get("execution_id") or stage["stage_run_id"],
+                "status": ({"succeeded": "completed", "cancelled": "cancelled",
+                            "failed": "failed", "integrity_failed": "failed",
+                            "queued": "waiting", "paused": "waiting"}
+                           .get(canonical.get("state"), "running")),
+                "total": counts.get("total"), "completed": counts.get("completed"),
+                "active": counts.get("processing"), "waiting": counts.get("queued"),
+                "failed": counts.get("failed"), "cancelled": counts.get("cancelled"),
+                "skipped": counts.get("skipped"),
+                "latest_progress_at": canonical.get("last_durable_update_at"),
+                "cancel_requested": bool((canonical.get("control") or {}).get("cancel_requested")),
+                "cancel_requested_at": (canonical.get("control") or {}).get("cancel_requested_at"),
+            })
+            state = canonical.get("state")
+            if state == "cancelled":
+                stage["terminal_outcome"] = "cancelled"
+            elif state in ("failed", "integrity_failed"):
+                stage["terminal_outcome"] = "failed"
+            elif state == "succeeded":
+                stage["terminal_outcome"] = "completed"
+            workflow["workflow_revision"] = int(
+                canonical.get("workflow_revision") or (lineage or {}).get("workflow_revision") or 1)
         workflow["stages"].sort(key=lambda row: (stage_order.get(row["stage"], 99), row["stage"]))
         active = [row for row in workflow["stages"] if row["status"] != "completed"]
         if active:
             workflow["current_stage"] = active[-1]["stage"]
-            workflow["status"] = ("stopping" if any(row.get("cancel_requested") for row in active) else
+            workflow["status"] = ("stopping" if any(row.get("cancel_requested") and row["status"] != "cancelled"
+                                                      for row in active) else
                                   "running" if any(row["status"] == "running" for row in active) else
                                   "waiting" if any(row["status"] == "waiting" for row in active) else
                                   "stopped" if all(row["status"] == "cancelled" for row in active) else

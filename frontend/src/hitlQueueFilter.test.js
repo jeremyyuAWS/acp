@@ -48,6 +48,18 @@ function stubFetch({ putError = false } = {}) {
 }
 
 describe('I.2 — listHitlQueue suppresses items whose PUT is still in flight', () => {
+  it('sends the exact model-call identifier with the reviewer decision', async () => {
+    const { resolvePut } = stubFetch()
+    const { updateHitlItem } = await import('./api.js')
+    const pending = updateHitlItem(ITEM.id, 'approved', null, 'Accessible chart', {
+      modelCallId: 'call-exact-42',
+    })
+    const [, opts] = fetch.mock.calls.find(([, options]) => options?.method === 'PUT')
+    expect(JSON.parse(opts.body).model_call_id).toBe('call-exact-42')
+    resolvePut()
+    await pending
+  })
+
   it('filters out the acted-on item while the PUT is unresolved', async () => {
     stubFetch()
     const { listHitlQueue, updateHitlItem } = await import('./api.js')

@@ -37,3 +37,16 @@ def test_analytics_scoped_by_scan(st):
 def test_empty_analytics_no_divide_by_zero(st):
     a = st.hitl_analytics("nope")
     assert a["total"] == 0 and a["approval_rate"] is None and a["avg_review_ms"] is None
+
+
+def test_review_event_links_to_exact_model_call_without_inference(st):
+    call_id = st.record_ai_call(surface="suggest", provider="anthropic", model="claude",
+                                zone="cloud", latency_ms=120, ok=True,
+                                scan_id="s1", file="a.docx")
+    assert st.ai_call_belongs_to_file(call_id, "s1", "a.docx") is True
+    assert st.ai_call_belongs_to_file(call_id, "s1", "other.docx") is False
+    st.record_hitl_event("s1", "a.docx", "2.4.4", "i1", "approve",
+                         model_call_id=call_id)
+    with st._db.cursor() as cur:
+        st._db.execute(cur, "SELECT model_call_id FROM hitl_events WHERE item_id=%s", ("i1",))
+        assert st._db.fetchone(cur)["model_call_id"] == call_id

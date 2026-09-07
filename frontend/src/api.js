@@ -811,6 +811,13 @@ export const getScanManifest = (id) => (SIM ? sim(null) : fetch(
   `${BASE}/scans/${encodeURIComponent(id)}/manifest`,
   { headers: headers(), cache: 'no-store', signal: AbortSignal.timeout(MANIFEST_READ_TIMEOUT_MS) },
 ).then(j))
+// One revisioned authority for execution state across Discover → Release. Domain metrics such as
+// findings and assessment outcomes stay on their own canonical snapshots; this contract answers
+// which stage ran, its work-item partition, integrity, and sealed handoff identity.
+export const getStageLineage = (id) => (SIM ? sim({ lineage: null, content_digest: null }) : fetch(
+  `${BASE}/scans/${encodeURIComponent(id)}/stage-lineage`,
+  { headers: headers(), cache: 'no-store' },
+).then(j))
 export const getScan = (id, knownRevision = null) => (SIM ? sim(simGetScan(id)) : fetch(`${BASE}/scans/${id}`, {
   headers: headers(knownRevision != null ? { 'If-None-Match': `W/"${knownRevision}"` } : {}),
   cache: 'no-store',
@@ -1405,6 +1412,7 @@ export const updateHitlItem = (itemId, status, reviewerNote = null, approvedValu
       body: JSON.stringify({ status, reviewer_note: reviewerNote, approved_value: approvedValue,
         approved_values: opts.approvedValues ?? null,
         edited: !!opts.edited, review_ms: opts.reviewMs ?? null, ai_value: opts.aiValue ?? null,
+        model_call_id: opts.modelCallId ?? null,
         // Feedback intelligence: WHY a rejection happened (enum; bulk/keyboard paths send 'unspecified')
         reject_reason: opts.rejectReason ?? null,
         // WCAG exception the reviewer applied instead of writing a fix: 'decorative' (1.1.1 — image
@@ -1724,7 +1732,7 @@ export const setScanLocations = (source, folders, exclude = []) => (SIM ? sim({ 
 
 export const listFolders = (parent = 'root') => (SIM ? sim({ parent, name: 'My Drive', folders: [] }) : fetch(`${BASE}/folders?parent=${encodeURIComponent(parent)}`, { headers: headers() }).then(j))
 export const getSchedule = () => (SIM
-  ? sim({ enabled: false, interval_minutes: 60, next_at: null, last_at: null })
+  ? sim({ enabled: false, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', local_time: '09:00', days: [0, 1, 2, 3, 4], next_at: null, last_at: null })
   : fetch(`${BASE}/schedule`, { headers: headers() }).then(j))
 export const putSchedule = (body) => (SIM
   ? sim({ ...body, next_at: null, last_at: null })

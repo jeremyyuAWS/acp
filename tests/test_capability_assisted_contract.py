@@ -50,11 +50,12 @@ PPTX_PDF_APPLIER_REGISTRY = frozenset({
     # pptx in _LANGUAGE_EXTS → apply_text_values writes language marks.
     # pdf is NOT in _LANGUAGE_EXTS → downgraded to HUMAN.
     ("pptx", "3.1.2"),
-    # ── images of text (1.4.5 / 1.4.9) ───────────────────────────────────────
-    # approved_images_of_text_values reads rule_ids "1.4.5" and "1.4.9".
-    # pptx in _IMAGE_OF_TEXT_EXTS → apply_pptx_image_of_text writes descr.
-    ("pptx", "1.4.5"),
-    ("pptx", "1.4.9"),
+    # ── images of text (1.4.5 / 1.4.9) — NO entry, deliberately ──────────────
+    # Steps 1–6 are wired for pptx (approved_images_of_text_values reads both rule_ids,
+    # apply_pptx_image_of_text writes descr), but step 7 can never happen: the detector
+    # (ocr.images_of_text) OCRs the raster bytes in ppt/media, and a descr attribute does
+    # not change those bytes, so the finding re-fires and the verify gate withholds credit.
+    # Writing descr is a 1.1.1 improvement, not a 1.4.5 fix. Both lanes are HUMAN.
 })
 
 SCOPED_FORMATS = frozenset({"pptx", "pdf"})

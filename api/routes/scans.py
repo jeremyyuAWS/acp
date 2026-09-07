@@ -3181,8 +3181,9 @@ def report_pdf(sid: str, request: Request):
     owner = _owner(request)
     rb = core.active_rubric()
     lineage_export = _canonical_lineage_export(sid, owner)
+    snapshot_id = core.store.stage_snapshot_id(sid)
     finding_reconciliation = _release_finding_reconciliation(
-        sid, res["run"].get("id") or sid, lineage_export["lineage"])
+        sid, snapshot_id, lineage_export["lineage"])
     meta = {"target": rb.cfg.get("conformance_target"), "version": rb.version,
             "hash": res["run"].get("rubric_hash") or rb.hash,
             "stage_lineage_digest": lineage_export["content_digest"]["value"],

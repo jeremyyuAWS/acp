@@ -75,6 +75,20 @@ def test_work_item_identity_is_stable_and_partition_is_exact(isolated_store):
     assert snapshot["integrity"] == {"ok": True, "affected": [], "violations": []}
 
 
+def test_snapshot_publishes_every_bucket_used_by_its_reconciliation_equation(isolated_store):
+    sid = _scan(isolated_store, "stage-skipped-visible")
+    execution = _submit(isolated_store, sid)
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "UPDATE stage_work_items SET state='skipped' WHERE execution_id=%s AND input_id=%s",
+            (execution["batch_id"], "a.docx"))
+    snapshot = isolated_store.stage_execution_snapshot(execution["batch_id"], owner=OWNER)
+    work = snapshot["counts"]["work_items"]
+    assert work["skipped"] == 1
+    assert snapshot["reconciliation"]["accounted"] == sum(
+        work[key] for key in ("queued", "processing", "completed", "failed", "cancelled", "skipped"))
+
+
 def test_duplicate_event_is_noop_and_payload_collision_fails_closed(isolated_store):
     sid = _scan(isolated_store)
     execution = _submit(isolated_store, sid)

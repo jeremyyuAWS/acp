@@ -122,3 +122,28 @@ def test_no_resolution_is_the_unchanged_default(st, route):
     hitl_update(row["id"], HitlUpdate(status="approved"), _req())
     hitl_line = next(d for d in decisions if d["action"] == "hitl.approved")
     assert "resolution:" not in (hitl_line.get("detail") or "")
+
+
+def test_review_decision_persists_its_exact_model_call(st, route):
+    hitl_update, HitlUpdate, _jobs, _dec = route
+    row = _row(st, rule="2.4.4")
+    call_id = st.record_ai_call(surface="suggest", provider="anthropic", model="claude",
+                                zone="cloud", latency_ms=80, ok=True,
+                                scan_id="s1", file="deck.pptx")
+    hitl_update(row["id"], HitlUpdate(status="approved", model_call_id=call_id), _req())
+    with st._db.cursor() as cur:
+        st._db.execute(cur, "SELECT model_call_id FROM hitl_events WHERE item_id=%s", (row["id"],))
+        assert st._db.fetchone(cur)["model_call_id"] == call_id
+
+
+def test_review_rejects_a_model_call_from_another_file(st, route):
+    from fastapi import HTTPException
+    hitl_update, HitlUpdate, _jobs, _dec = route
+    row = _row(st, rule="2.4.4")
+    call_id = st.record_ai_call(surface="suggest", provider="anthropic", model="claude",
+                                zone="cloud", latency_ms=80, ok=True,
+                                scan_id="s1", file="other.docx")
+    with pytest.raises(HTTPException) as error:
+        hitl_update(row["id"], HitlUpdate(status="approved", model_call_id=call_id), _req())
+    assert error.value.status_code == 422
+    assert st.get_hitl_item(row["id"])["status"] == "pending"

@@ -148,6 +148,64 @@ describe('Admin live traffic graph', () => {
       ]))
   })
 
+  it('labels canonical accounting, integrity, and manual stopping without conflating failures', () => {
+    const facts = runFacts({ status: 'cancelled', canonical: {
+      execution_id: 'execution-1', revision: 4, state: 'cancelled',
+      counts: { work_items: { total: 5, completed: 2, processing: 0, queued: 0,
+        failed: 0, cancelled: 2, skipped: 1 } },
+      reconciliation: { exact: true, unaccounted: 0 }, integrity: { ok: true },
+      control: { cancel_requested: true, awaiting_acknowledgement: 0,
+        acknowledgement_deadline_at: '2026-09-06T00:02:00Z' },
+      delivery: { pending: 0, retrying: 0, dead_lettered: 0 },
+      input_manifest_id: 'input-1',
+      sealed_output: { item_count: 5, manifest_id: 'output-1' },
+    } })
+    expect(facts).toEqual(expect.arrayContaining([
+      ['Status', 'Stopped manually'],
+      ['Canonical state', 'cancelled'],
+      ['Work-item accounting', '2 completed · 0 processing · 0 queued · 0 failed · 2 stopped · 1 skipped = 5 work items'],
+      ['Reconciliation', 'Exact'],
+      ['Integrity', 'Reconciled'],
+      ['Sealed output', '5 work items · output-1'],
+    ]))
+  })
+
+  it('does not manufacture zero progress when canonical totals are unknown', () => {
+    expect(runFacts({ canonical: { state: 'running', counts: { work_items: { total: null } } } }))
+      .toEqual(expect.arrayContaining([
+        ['Progress', 'Not reported'],
+        ['Queue', 'Not reported'],
+        ['Work-item accounting', 'Not reported'],
+      ]))
+  })
+
+  it('keeps finding, review-item, and change units separate in Live Operations', () => {
+    const facts = runFacts({ canonical: { state: 'succeeded', finding_accounting: {
+      finding_reconciliation: { assessed: 7, accounted: 7, unaccounted: 0, exact: true,
+        resolved_verified: 4, awaiting_review: 3 },
+      review: { items: 1, findings: 3 },
+      fixes: { applied: 9, verified: 8, verification_failures: 1 },
+    } } })
+    expect(facts).toEqual(expect.arrayContaining([
+      ['Assessed findings', '7 findings'],
+      ['Finding dispositions', '7 of 7 findings accounted'],
+      ['Finding reconciliation', 'Exact'],
+      ['Awaiting review', '3 findings across 1 review items'],
+      ['Change evidence', '9 applied changes · 8 verified changes · 1 failed checks'],
+    ]))
+  })
+
+  it('calls unknown finding dispositions unavailable instead of zero', () => {
+    const facts = runFacts({ canonical: { finding_accounting: {
+      finding_reconciliation: { assessed: 7, accounted: null, exact: false },
+    } } })
+    expect(facts).toEqual(expect.arrayContaining([
+      ['Finding dispositions', 'Not yet available'],
+      ['Finding reconciliation', 'Not yet available'],
+      ['Verified resolutions', 'Not yet available'],
+    ]))
+  })
+
   it('keeps a durable completed stage connected after its queue rows age out', () => {
     const graph = buildTrafficGraph({ summary: {}, runs: [
       { scan_id: 'one', stage: 'assess', owner: 'a', source: 'sharepoint', status: 'active',

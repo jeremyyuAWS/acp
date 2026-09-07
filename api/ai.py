@@ -233,7 +233,7 @@ def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, o
               provider: str = "ollama", zone: str | None = None, cost_usd: float = 0.0,
               reason: str | None = None, prompt_tokens: int | None = None,
               completion_tokens: int | None = None, temperature: float | None = None,
-              prompt_version: str | None = None) -> None:
+              prompt_version: str | None = None) -> str | None:
     """Emit a Langfuse span + persist an ai_calls provenance row for one model call — model,
     latency, prompt size, completion, ok, and (ADR 0019 §1) which provider/zone/cost it ran on.
     model defaults to the text model; vision calls pass the vision model. `provider`/`zone`/`cost_usd`
@@ -262,12 +262,13 @@ def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, o
     # by …" line and the governance rollup. Best-effort + lazy import so it never fails the AI call.
     try:
         import core
-        core.store.record_ai_call(surface=surface, provider=provider, model=mdl,
-                                  zone=zn, latency_ms=latency_ms, ok=ok, cost_usd=cost_usd,
-                                  scan_id=scan_id, file=file, reason=reason,
-                                  temperature=temperature, prompt_version=prompt_version)
+        return core.store.record_ai_call(surface=surface, provider=provider, model=mdl,
+                                         zone=zn, latency_ms=latency_ms, ok=ok, cost_usd=cost_usd,
+                                         scan_id=scan_id, file=file, reason=reason,
+                                         temperature=temperature, prompt_version=prompt_version)
     except Exception:
         swallowed("ai._trace_ai: recording the AI call failed", scan_id)
+        return None
 
 
 def explain_finding(
@@ -625,6 +626,15 @@ def _minimal_vision_prompt(style: str = "") -> str:
     return f"Describe this image {steer}."
 
 
+class _TracedVisionText(str):
+    """A normal string that retains the exact durable call which produced it."""
+
+    def __new__(cls, value: str, ai_call_id: str | None = None):
+        obj = super().__new__(cls, value)
+        obj.ai_call_id = ai_call_id
+        return obj
+
+
 def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = None,
                      file: str | None = None, model: str | None = None, clean: bool = True,
                      prompt_version: str | None = None) -> str | None:
@@ -738,8 +748,9 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
                   reason=reason, **_tr)
         return None
     if not clean:
-        _trace_ai("vision", prompt, raw, _t0, ok=True, reason=_providers.REASON_OK, **_tr)
-        return raw or None
+        call_id = _trace_ai("vision", prompt, raw, _t0, ok=True,
+                            reason=_providers.REASON_OK, **_tr)
+        return _TracedVisionText(raw, call_id) if raw else None
     alt = _clean_alt(raw)
     ok = bool(alt) and len(alt) >= 8 and " " in alt
     # A fourth way to end at None, and the transport had nothing to do with it: the model DID
@@ -749,9 +760,9 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     if not ok:
         print(f"[vision] {_tr['provider']} · model={mdl} — reply rejected by the alt-text guard: "
               f"reply_chars={len(alt or '')} (needs ≥8 chars and more than one word)", flush=True)
-    _trace_ai("vision", prompt, alt, _t0, ok=ok,
-              reason=_providers.REASON_OK if ok else _providers.REASON_UNUSABLE, **_tr)
-    return alt if ok else None
+    call_id = _trace_ai("vision", prompt, alt, _t0, ok=ok,
+                        reason=_providers.REASON_OK if ok else _providers.REASON_UNUSABLE, **_tr)
+    return _TracedVisionText(alt, call_id) if ok else None
 
 
 def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "", style: str = "",
@@ -805,6 +816,9 @@ def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "",
         "processing_zone": escalation["zone"] if escalation
         else ("local" if prov.get("zone") == "local" else "customer_cloud"),
     }
+    call_id = escalation.get("ai_call_id") if escalation else getattr(alt, "ai_call_id", None)
+    if call_id:
+        out["ai_call_id"] = call_id
     if escalation:
         out["escalation"] = escalation["steps"]      # the transparent numbered path
         out["cost_usd"] = escalation["cost_usd"]
@@ -1042,6 +1056,9 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
     else:
         evidence = "vision description only — no text in the image to anchor it; confirm it matches the intent"
     out = {"alt": alt, "grounded": grounded, "evidence": evidence, "model": model_used}
+    call_id = escalation.get("ai_call_id") if escalation else getattr(alt, "ai_call_id", None)
+    if call_id:
+        out["ai_call_id"] = call_id
     if escalation:
         out.update(provider=escalation["provider"], processing_zone=escalation["zone"],
                    cost_usd=escalation["cost_usd"], escalation=escalation["steps"])
@@ -1064,7 +1081,7 @@ def _escalate_vision(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     mdl = res.get("model")
     # Stay vendor-agnostic (rule 6): the provider names itself in its result; ai.py never hardcodes
     # a cloud vendor. 'cloud' is only a defensive fallback if an adapter omitted its own name.
-    _trace_ai("vision", prompt, res.get("text"), _t0, ok=bool(res.get("ok")), model=mdl,
+    call_id = _trace_ai("vision", prompt, res.get("text"), _t0, ok=bool(res.get("ok")), model=mdl,
               provider=res.get("provider") or "cloud", zone=res.get("zone"),
               cost_usd=res.get("cost_usd", 0.0), scan_id=scan_id, file=file,
               reason=res.get("reason"),
@@ -1080,6 +1097,7 @@ def _escalate_vision(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     return {
         "alt": alt, "model": mdl, "provider": res.get("provider"), "zone": res.get("zone"),
         "cost_usd": res.get("cost_usd", 0.0),
+        "ai_call_id": call_id,
         "steps": [
             {"provider": "ollama", "zone": provenance()["zone"],
              "outcome": "no grounded description"},
@@ -1242,7 +1260,8 @@ def _suggest_prompt(rule_id: str, rule_name: str, filename: str, detail: str, gu
 
 def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
                 detail: str = "", image_bytes: bytes | None = None, style: str = "",
-                guidance: str = "") -> dict | None:
+                guidance: str = "", scan_id: str | None = None,
+                file: str | None = None) -> dict | None:
     """Draft a concrete, human-approvable fix value (alt text / link text / title) for a
     semantic finding via the local model. Returns None when Ollama is unavailable.
 
@@ -1254,7 +1273,7 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
     memory is active — "" (the default) leaves the prompt byte-identical to pre-memory."""
     if rule_id == "1.1.1" and image_bytes:
         res = describe_image(image_bytes, filename=filename, context=detail, style=style,
-                             guidance=guidance)
+                             guidance=guidance, scan_id=scan_id, file=file)
         if res:
             out = {"suggestion": res["alt"], "kind": "alt text",
                    "is_template": False, "model": res["model"]}
@@ -1264,7 +1283,7 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
             # numbered `escalation` steps and cost_usd only when a cloud escalation actually
             # occurred. No secret is carried — a provider name, a 'local'/'customer_cloud' zone,
             # and the numbered path only.
-            for k in ("provider", "processing_zone", "escalation", "cost_usd"):
+            for k in ("provider", "processing_zone", "escalation", "cost_usd", "ai_call_id"):
                 if res.get(k) is not None:
                     out[k] = res[k]
             return out
@@ -1278,17 +1297,19 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
     if _cr is not None:
         text = _cr["text"].strip().strip('"').strip()
         if text:
-            _trace_ai("suggest", prompt, text, _t0, ok=True,
+            call_id = _trace_ai("suggest", prompt, text, _t0, ok=True,
                       provider=_cr["provider"], zone=_cr["zone"], model=_cr["model"],
                       prompt_tokens=_cr["prompt_tokens"],
                       completion_tokens=_cr["completion_tokens"],
                       cost_usd=_cr["cost_usd"], temperature=0.4,
-                      prompt_version="suggest-v1")
+                      prompt_version="suggest-v1", scan_id=scan_id, file=file)
             kind = _SUGGEST_KIND.get(rule_id, ("fix", ""))[0]
             out = {"suggestion": text, "kind": kind,
                    "is_template": rule_id == "1.1.1", "model": _cr["model"],
                    "provider": _cr["provider"], "processing_zone": _cr["zone"],
                    "cost_usd": _cr["cost_usd"]}
+            if call_id:
+                out["ai_call_id"] = call_id
             if out["is_template"]:
                 out["reason"] = (
                     "Template only — no vision model is available to look at this image. "
@@ -1324,15 +1345,17 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
         r.raise_for_status()
         _data = r.json()
         text = (_data.get("response", "") or "").strip().strip('"').strip()
-        _trace_ai("suggest", prompt, text, _t0, ok=bool(text),
+        call_id = _trace_ai("suggest", prompt, text, _t0, ok=bool(text),
                   prompt_tokens=_data.get("prompt_eval_count"),
                   completion_tokens=_data.get("eval_count"), temperature=0.4,
-                  prompt_version="suggest-v1")
+                  prompt_version="suggest-v1", scan_id=scan_id, file=file)
         if not text:
             return None
         kind = _SUGGEST_KIND.get(rule_id, ("fix", ""))[0]
         out = {"suggestion": text, "kind": kind,
                "is_template": rule_id == "1.1.1", "model": OLLAMA_MODEL}
+        if call_id:
+            out["ai_call_id"] = call_id
         if out["is_template"]:
             # Be exact about WHY this is a blank to fill rather than a description. The card
             # used to say "no vision model described this image" in both cases, which reads as

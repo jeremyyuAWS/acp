@@ -368,6 +368,22 @@ _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS schedule_config (
       key TEXT PRIMARY KEY, value TEXT
     )""",
+    # One local wall-clock schedule per verified owner. IANA timezone names keep the chosen time
+    # stable through daylight-saving changes; days is JSON with Monday=0 through Sunday=6.
+    """CREATE TABLE IF NOT EXISTS user_scan_schedules (
+      owner_email TEXT PRIMARY KEY, enabled INT NOT NULL, timezone TEXT NOT NULL,
+      local_time TEXT NOT NULL, days TEXT NOT NULL, source TEXT NOT NULL,
+      updated_at TEXT NOT NULL, last_enqueued_occurrence TEXT,
+      metric_admitted INT NOT NULL DEFAULT 0,
+      metric_delayed_catch_up INT NOT NULL DEFAULT 0,
+      metric_skipped INT NOT NULL DEFAULT 0,
+      metric_failed INT NOT NULL DEFAULT 0
+    )""",
+    "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS last_enqueued_occurrence TEXT",
+    "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS metric_admitted INT NOT NULL DEFAULT 0",
+    "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS metric_delayed_catch_up INT NOT NULL DEFAULT 0",
+    "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS metric_skipped INT NOT NULL DEFAULT 0",
+    "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS metric_failed INT NOT NULL DEFAULT 0",
     # PRD Phase 3 (incremental connector sync). One row per source: the connector-native
     # cursor (Drive's changes.list page token today; a Graph delta link would be a future
     # row) that lets the scheduled sweep ask "what changed since last time" instead of
@@ -577,6 +593,13 @@ _SCHEMA = [
     # Error class persisted on failure so operators can diagnose dead-lettered jobs by
     # category (rate_limit / auth / corrupt / transient) without parsing last_error text.
     "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS error_class TEXT",
+    # Owner is denormalized only for scheduled sweeps so admission can atomically prevent one
+    # user's prior scheduled scan from overlapping their next occurrence. Interactive jobs stay
+    # NULL and retain their existing tenant linkage through scan_runs.
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS scheduled_owner TEXT",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_one_active_scheduled_owner "
+    "ON jobs(scheduled_owner) WHERE type='scheduled_sweep' "
+    "AND status IN ('queued','running') AND scheduled_owner IS NOT NULL",
     # Canonical workflow-stage authority. Queue rows remain the delivery mechanism; these rows
     # own identity, lifecycle and user-visible accounting across retries and reconnects.
     """CREATE TABLE IF NOT EXISTS stage_executions (
@@ -746,6 +769,17 @@ _SCHEMA = [
     # hallucinated, missed_text, org_preference, other, unspecified). Additive; placed AFTER the
     # CREATE above — init_schema runs this list in order.
     "ALTER TABLE hitl_events ADD COLUMN IF NOT EXISTS reject_reason TEXT",
+    # Explicit provenance join: which recorded model call a reviewer acted on. Nullable for
+    # human-authored and historical decisions; never inferred from timestamps or filenames.
+    "ALTER TABLE hitl_events ADD COLUMN IF NOT EXISTS model_call_id TEXT",
+    # Append-only post-write evidence for model-generated proposals. A reviewer acceptance says
+    # the draft looked right; this row says whether the corrected bytes subsequently cleared the
+    # detector. Keeping those as separate immutable events prevents transport success or approval
+    # from being misreported as validated remediation quality.
+    """CREATE TABLE IF NOT EXISTS ai_validation_outcomes (
+      id TEXT PRIMARY KEY, model_call_id TEXT, scan_id TEXT, file TEXT, rule_id TEXT,
+      item_id TEXT, outcome TEXT, detail TEXT, created_at TEXT
+    )""",
     # Configurable file disposition (ADR 0003, Phase 3). PREVIEW ONLY as of this
     # migration -- api/disposition.py's matches() tells you which documents a policy
     # would select; nothing executes a real move/rename/archive/delete yet. That
@@ -2275,8 +2309,18 @@ class _PgAdapter:
     # original column set and therefore safely produce pending messages for the new dispatcher.
     # v32 adds the finding disposition ledger and its append-only transition evidence on top of
     # the complete v31 canonical stage schema.
-    _SCHEMA_VERSION = 32
-    _SCHEMA_CHECKSUM_AT_VERSION = "28f2e211cd425c4ec84bc39849c06b27"
+    # v34 is the additive union of v33's AI-call decision linkage and owner-scoped
+    # user_scan_schedules. Older replicas ignore both; newer replicas no longer share one
+    # process-wide cadence between signed-in users.
+    # v35 adds user_scan_schedules.last_enqueued_occurrence. This durable watermark survives
+    # jobs-table retention, so catch-up cannot recreate an occurrence after its done row is
+    # purged. It is nullable and ignored by older replicas, preserving rolling compatibility.
+    # v36 adds durable owner-scoped operational counters for admitted, delayed catch-up,
+    # skipped and failed scheduled runs. Defaults preserve existing schedule rows and older
+    # replicas ignore the additive columns during a rolling deploy.
+    # v37 adds immutable post-write validation outcomes linked to exact accepted AI calls.
+    _SCHEMA_VERSION = 37
+    _SCHEMA_CHECKSUM_AT_VERSION = "e05e63425b0a87897a4dd4c044d7191b"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -4476,7 +4520,8 @@ class Store:
                          "lifecycle_evaluation", "effective_disposition",
                          "org_memory", "remediation_state", "finding_disposition",
                          "finding_disposition_event", "remediation_diff", "applied_fixes",
-                         "ai_calls", "second_opinion_reservations", "finding_comments",
+                         "ai_calls", "ai_validation_outcomes", "second_opinion_reservations",
+                         "finding_comments",
                          "scan_inputs",  # Stage 1 item 3: per-scan enqueue snapshots are customer data
                          "scan_folder_completions",  # which folders of a scan were counted done
                          "active_discovery_guard",  # transient lock state — cleared on reset
@@ -6425,6 +6470,81 @@ class Store:
                     "INSERT INTO schedule_config(key,value) VALUES(%s,%s) "
                     "ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value", (k, v))
 
+    def get_user_scan_schedule(self, owner: str) -> dict:
+        normalized = str(owner or "demo").strip().lower() or "demo"
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT owner_email,enabled,timezone,local_time,days,source,updated_at,"
+                "last_enqueued_occurrence,metric_admitted,metric_delayed_catch_up,"
+                "metric_skipped,metric_failed "
+                "FROM user_scan_schedules WHERE owner_email=%s", (normalized,))
+            rows = self._db.fetchall(cur)
+        if not rows:
+            return {"owner_email": normalized, "enabled": False, "timezone": "UTC",
+                    "local_time": "09:00", "days": [0, 1, 2, 3, 4],
+                    "source": "drive", "updated_at": None,
+                    "last_enqueued_occurrence": None,
+                    "metrics": {"scheduled": 0, "delayed": 0,
+                                "skipped": 0, "failed": 0}}
+        row = dict(rows[0])
+        row["enabled"] = bool(row["enabled"])
+        row["days"] = [int(day) for day in json.loads(row["days"])]
+        row["metrics"] = {
+            "scheduled": int(row.pop("metric_admitted") or 0),
+            "delayed": int(row.pop("metric_delayed_catch_up") or 0),
+            "skipped": int(row.pop("metric_skipped") or 0),
+            "failed": int(row.pop("metric_failed") or 0),
+        }
+        return row
+
+    def list_enabled_user_scan_schedules(self) -> list[dict]:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT owner_email,enabled,timezone,local_time,days,source,updated_at,"
+                "last_enqueued_occurrence,metric_admitted,metric_delayed_catch_up,"
+                "metric_skipped,metric_failed "
+                "FROM user_scan_schedules WHERE enabled=1 ORDER BY owner_email")
+            rows = self._db.fetchall(cur)
+        schedules = []
+        for raw in rows:
+            try:
+                row = dict(raw)
+                row["enabled"] = True
+                row["days"] = [int(day) for day in json.loads(row["days"])]
+                row["metrics"] = {
+                    "scheduled": int(row.pop("metric_admitted") or 0),
+                    "delayed": int(row.pop("metric_delayed_catch_up") or 0),
+                    "skipped": int(row.pop("metric_skipped") or 0),
+                    "failed": int(row.pop("metric_failed") or 0),
+                }
+                schedules.append(row)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                # One corrupt historic row must not prevent every other user's due scan.
+                continue
+        return schedules
+
+    def save_user_scan_schedule(self, owner: str, enabled: bool, timezone: str,
+                                local_time: str, days, source: str = "drive") -> dict:
+        import datetime as _dt
+        import scan_schedule as _scan_schedule
+        normalized = str(owner or "demo").strip().lower() or "demo"
+        # Validate before touching storage; canonical values keep occurrence keys stable.
+        _scan_schedule.zone(timezone)
+        parsed_time = _scan_schedule.local_time(local_time).strftime("%H:%M")
+        parsed_days = list(_scan_schedule.normalize_days(days))
+        now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO user_scan_schedules(owner_email,enabled,timezone,local_time,days,"
+                "source,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT(owner_email) DO UPDATE SET enabled=EXCLUDED.enabled,"
+                "timezone=EXCLUDED.timezone,local_time=EXCLUDED.local_time,days=EXCLUDED.days,"
+                "source=EXCLUDED.source,updated_at=EXCLUDED.updated_at",
+                (normalized, int(bool(enabled)), str(timezone), parsed_time,
+                 json.dumps(parsed_days, separators=(",", ":")),
+                 str(source or "drive").lower(), now))
+        return self.get_user_scan_schedule(normalized)
+
     def get_sync_cursor(self, source: str) -> dict | None:
         """The connector-native cursor (e.g. Drive's changes.list page token) the scheduled
         sweep last advanced to for `source`, or None if this source has never been synced
@@ -6495,7 +6615,7 @@ class Store:
                        latency_ms: int, ok: bool, scan_id: str | None = None,
                        file: str | None = None, cost_usd: float = 0.0,
                        reason: str | None = None, temperature: float | None = None,
-                       prompt_version: str | None = None) -> None:
+                       prompt_version: str | None = None) -> str:
         """Append one AI-call provenance row (ADR 0019): which provider/model ran, WHERE
         (local/cloud zone), how long, at what cost, and — for a call that did not succeed —
         `reason`, WHICH way it failed (providers.REASON_*). Best-effort — a telemetry write
@@ -6503,14 +6623,16 @@ class Store:
         import uuid
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
+        call_id = uuid.uuid4().hex
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO ai_calls(id,ts,scan_id,file,surface,provider,model,zone,"
                 "latency_ms,ok,cost_usd,reason,temperature,prompt_version) "
                 "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                (uuid.uuid4().hex, now, scan_id, file, surface, provider, model, zone,
+                (call_id, now, scan_id, file, surface, provider, model, zone,
                  int(latency_ms), 1 if ok else 0, float(cost_usd), reason,
                  temperature, prompt_version))
+        return call_id
 
     def reserve_second_opinion(self, *, scan_id: str, file: str, policy: dict) -> tuple[bool, str]:
         """Atomically reserve one call against scan/day request and estimated-cost ceilings."""
@@ -6567,6 +6689,14 @@ class Store:
             else:
                 self._db.execute(cur, "SELECT * FROM ai_calls ORDER BY ts DESC LIMIT %s", (limit,))
             return self._db.fetchall(cur)
+
+    def ai_call_belongs_to_file(self, call_id: str, scan_id: str, file: str) -> bool:
+        """True only for an exact model-call provenance row on this scan and file."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT 1 AS found FROM ai_calls WHERE id=%s AND scan_id=%s AND file=%s LIMIT 1",
+                (call_id, scan_id, file))
+            return self._db.fetchone(cur) is not None
 
     # -- R18 · Comments on a finding -----------------------------------------------------------
     def add_finding_comment(self, scan_id: str, finding_key: str, author: str, body: str,
@@ -7058,7 +7188,8 @@ class Store:
     def record_hitl_event(self, scan_id: str, file: str, rule_id: str, item_id: str,
                           action: str, *, edited: bool = False, review_ms: int | None = None,
                           ai_value: str | None = None, final_value: str | None = None,
-                          reviewer: str | None = None, reject_reason: str | None = None) -> None:
+                          reviewer: str | None = None, reject_reason: str | None = None,
+                          model_call_id: str | None = None) -> None:
         """One immutable row per human review decision — the telemetry the review workspace
         reports on (reviewer time saved) and calibrates from (edit rate on High-confidence
         proposals). `reject_reason` (Reviewer Feedback Intelligence) records WHY a rejection
@@ -7068,11 +7199,55 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO hitl_events(id,scan_id,file,rule_id,item_id,action,edited,"
-                "review_ms,ai_value,final_value,reviewer,created_at,reject_reason) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                "review_ms,ai_value,final_value,reviewer,created_at,reject_reason,model_call_id) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (uuid.uuid4().hex, scan_id, file, rule_id, item_id, action,
                  1 if edited else 0, review_ms, ai_value or None, final_value or None,
-                 reviewer, datetime.now(timezone.utc).isoformat(), reject_reason or None))
+                 reviewer, datetime.now(timezone.utc).isoformat(), reject_reason or None,
+                 model_call_id or None))
+
+    def record_ai_validation_outcomes(self, scan_id: str, file: str, rule_id: str,
+                                      item_ids: list[str], outcome: str, *,
+                                      detail: str | None = None) -> int:
+        """Append one post-write result for every exact model call accepted by these items.
+
+        Replays of the same item/result are idempotent; a later retry may append a different
+        outcome (for example could_not_verify followed by verified_cleared). Human-authored and
+        historical items have no model_call_id and correctly produce no rows.
+        """
+        allowed = {"verified_cleared", "verified_still_failing", "could_not_verify"}
+        if outcome not in allowed:
+            raise ValueError(f"unsupported AI validation outcome: {outcome}")
+        ids = [str(i) for i in dict.fromkeys(item_ids or []) if i]
+        if not ids:
+            return 0
+        marks = ",".join(["%s"] * len(ids))
+        import hashlib
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        inserted = 0
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"SELECT item_id,model_call_id,rule_id FROM hitl_events WHERE item_id IN ({marks}) "
+                "AND model_call_id IS NOT NULL AND action IN ('approve','edit') "
+                "ORDER BY created_at DESC", tuple(ids))
+            rows = self._db.fetchall(cur)
+            latest: dict[str, tuple[str, str]] = {}
+            for row in rows:
+                latest.setdefault(str(row["item_id"]),
+                                  (str(row["model_call_id"]), str(row.get("rule_id") or rule_id)))
+            for item_id, (call_id, event_rule_id) in latest.items():
+                event_id = hashlib.sha256(
+                    f"post-write:{call_id}:{scan_id}:{file}:{event_rule_id}:{item_id}:{outcome}".encode()
+                ).hexdigest()[:32]
+                self._db.execute(cur,
+                    "INSERT INTO ai_validation_outcomes(id,model_call_id,scan_id,file,rule_id,"
+                    "item_id,outcome,detail,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                    "ON CONFLICT(id) DO NOTHING",
+                    (event_id, call_id, scan_id, file, event_rule_id, item_id, outcome,
+                     (detail or None), now))
+                inserted += max(0, int(cur.rowcount or 0))
+        return inserted
 
     # ADR 0019 §8.5 — thresholds for surfacing a rule as ready to migrate
     # Human-Assisted → AI-Assisted. All three conditions must hold simultaneously.
@@ -9803,7 +9978,8 @@ class Store:
 
     def record_sweep_outcome(self, *, ok: bool, when: str, source: str,
                              scan_id: str | None = None, files: int | None = None,
-                             error: str | None = None, skipped: bool = False) -> None:
+                             error: str | None = None, skipped: bool = False,
+                             owner: str | None = None) -> None:
         """Persist the most recent scheduled sweep's outcome. Best-effort: a sweep must not fail
         because its bookkeeping did.
 
@@ -9815,20 +9991,35 @@ class Store:
         /monitor/estate's own comment on telling a sweep apart from a real collapse."""
         import json as _json
         try:
-            self.set_setting(self._SWEEP_KEY, _json.dumps({
+            value = _json.dumps({
                 "ok": bool(ok), "at": when, "source": source,
                 "scan_id": scan_id, "files": files, "skipped": bool(skipped),
                 # Truncated: this reaches the browser, and a Google HttpError repr carries the
                 # full request URL. Enough to recognise the failure, not a wall of query string.
                 "error": (error or None) and str(error)[:400],
-            }))
+            })
+            if owner:
+                self.set_user_setting(str(owner).strip().lower(), self._SWEEP_KEY, value)
+                normalized = str(owner).strip().lower()
+                with self._db.cursor() as cur:
+                    if skipped:
+                        self._db.execute(cur,
+                            "UPDATE user_scan_schedules SET metric_skipped=metric_skipped+1 "
+                            "WHERE owner_email=%s", (normalized,))
+                    elif not ok:
+                        self._db.execute(cur,
+                            "UPDATE user_scan_schedules SET metric_failed=metric_failed+1 "
+                            "WHERE owner_email=%s", (normalized,))
+            else:
+                self.set_setting(self._SWEEP_KEY, value)
         except Exception:
             swallowed("store.record_sweep_outcome: recording the sweep outcome failed", scan_id)
 
-    def get_last_sweep(self) -> dict | None:
+    def get_last_sweep(self, owner: str | None = None) -> dict | None:
         """The last recorded sweep outcome, or None if none has run since this was added."""
         import json as _json
-        raw = self.get_setting(self._SWEEP_KEY)
+        raw = (self.get_user_setting(str(owner).strip().lower(), self._SWEEP_KEY)
+               if owner else self.get_setting(self._SWEEP_KEY))
         if not raw:
             return None
         try:
@@ -11284,7 +11475,8 @@ class Store:
                         (now, batch_id))
         return job_id
 
-    def enqueue_scheduled_sweep(self, occurrence_key: str) -> bool:
+    def enqueue_scheduled_sweep(self, occurrence_key: str, payload: dict | None = None,
+                                run_after: str | None = None) -> bool:
         """Durably enqueue one fleet-wide scheduled-sweep occurrence.
 
         Every API and worker replica owns an APScheduler process, so they can all offer the
@@ -11296,15 +11488,54 @@ class Store:
         import json as _json
         now = self._now()
         job_id = "sweep-" + _hashlib.sha256(occurrence_key.encode("utf-8")).hexdigest()[:32]
+        owner = str((payload or {}).get("owner_email") or "").strip().lower() or None
+        with self._db.cursor() as cur:
+            encoded = _json.dumps({**(payload or {}), "occurrence_key": occurrence_key})
+            if owner:
+                # INSERT and watermark advance share one transaction. The schedule predicate
+                # survives done-job retention; the partial unique index independently prevents
+                # two different occurrences for one owner from overlapping.
+                self._db.execute(cur,
+                    "INSERT INTO jobs(id,type,payload,status,priority,attempts,max_attempts,"
+                    "run_after,created_at,updated_at,scheduled_owner) "
+                    "SELECT %s,'scheduled_sweep',%s,'queued',%s,0,3,%s,%s,%s,%s "
+                    "FROM user_scan_schedules WHERE owner_email=%s "
+                    "AND (last_enqueued_occurrence IS NULL OR last_enqueued_occurrence<>%s) "
+                    "ON CONFLICT DO NOTHING",
+                    (job_id, encoded, job_priority("scheduled_sweep"), run_after or now,
+                     now, now, owner, owner, occurrence_key))
+            else:
+                # Legacy singleton schedules have no owner row or watermark. Preserve their
+                # original deterministic job-id behavior unchanged.
+                self._db.execute(cur,
+                    "INSERT INTO jobs(id,type,payload,status,priority,attempts,max_attempts,"
+                    "run_after,created_at,updated_at,scheduled_owner) "
+                    "VALUES(%s,'scheduled_sweep',%s,'queued',%s,0,3,%s,%s,%s,NULL) "
+                    "ON CONFLICT DO NOTHING",
+                    (job_id, encoded, job_priority("scheduled_sweep"), run_after or now, now, now))
+            admitted = (getattr(cur, "rowcount", 0) or 0) > 0
+            if admitted and owner:
+                self._db.execute(cur,
+                    "UPDATE user_scan_schedules SET last_enqueued_occurrence=%s,"
+                    "metric_admitted=metric_admitted+1,"
+                    "metric_delayed_catch_up=metric_delayed_catch_up+%s "
+                    "WHERE owner_email=%s",
+                    (occurrence_key, int(bool((payload or {}).get("catch_up"))), owner))
+            return admitted
+
+    def active_scheduled_sweep(self, owner: str) -> dict | None:
+        """Inspectable overlap state used by scheduler diagnostics and focused tests."""
+        normalized = str(owner or "").strip().lower()
+        if not normalized:
+            return None
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "INSERT INTO jobs(id,type,payload,status,priority,attempts,max_attempts,"
-                "run_after,created_at,updated_at) "
-                "VALUES(%s,'scheduled_sweep',%s,'queued',%s,0,3,%s,%s,%s) "
-                "ON CONFLICT(id) DO NOTHING",
-                (job_id, _json.dumps({"occurrence_key": occurrence_key}),
-                 job_priority("scheduled_sweep"), now, now, now))
-            return (getattr(cur, "rowcount", 0) or 0) > 0
+                "SELECT id,status,run_after,created_at FROM jobs "
+                "WHERE type='scheduled_sweep' AND scheduled_owner=%s "
+                "AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1",
+                (normalized,))
+            row = self._db.fetchone(cur)
+        return dict(row) if row else None
 
     def stage_snapshot_id(self, scan_id: str) -> str:
         """Stable identity of the immutable Discover/Assess input consumed downstream.
@@ -11843,7 +12074,8 @@ class Store:
                        "processing": partitions.get("processing", 0),
                        "completed": partitions.get("completed", 0),
                        "failed": partitions.get("failed", 0),
-                       "cancelled": partitions.get("cancelled", 0)}},
+                       "cancelled": partitions.get("cancelled", 0),
+                       "skipped": partitions.get("skipped", 0)}},
             "attempts": {"unit": "worker attempts", "total": sum(attempt_partitions.values()),
                          **attempt_partitions},
             "delivery": {"unit": "messages", "pending": outbox_partitions.get("pending", 0),

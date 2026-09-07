@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { monitoringState, sourceWatch, IDENTITY, SIM } from './sim.js'
+import { monitoringState, IDENTITY, SIM } from './sim.js'
 import { getSchedule, putSchedule, listCampaigns, createCampaign, setCampaignStatus, getScanDiff, getSourceStatus, getAiProvidersHealth } from './api.js'
 import { prefersReducedMotion } from './a11y.js'
 import RegressionRadar from './RegressionRadar.jsx'
@@ -28,6 +28,40 @@ const DEC_ACT = { auto: 'auto-fix', assisted: 'review', review: 'review', archiv
 const DEC_WHAT = { auto: 'issues auto-remediated', assisted: 'AI fix queued for approval', review: 'flagged for manual review', archive: 'marked for archive — superseded', keep: 'kept as-is', manual: 'flagged for manual rebuild' }
 const ACTOR = { 'auto-fix': 'mova engine', review: 'you', publish: 'mova engine', 're-scan': 'mova engine', archive: 'mova engine' }
 const ACOLOR = { 'auto-fix': '#157A56', review: 'var(--warn-fg)', publish: '#185FA5', 're-scan': 'var(--success-fg)', archive: '#5F5E5A' }
+const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+const browserTimezone = () => {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' } catch { return 'UTC' }
+}
+const timezoneChoices = () => {
+  try { return Intl.supportedValuesOf?.('timeZone') || [] } catch { return [] }
+}
+const isValidTimezone = (timezone) => {
+  if (!timezone?.trim()) return false
+  try { new Intl.DateTimeFormat([], { timeZone: timezone }).format(); return true } catch { return false }
+}
+const timezoneOffset = (timezone) => {
+  if (!isValidTimezone(timezone)) return ''
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: timezone, timeZoneName: 'longOffset', hour: '2-digit',
+    }).formatToParts(new Date())
+    return parts.find((part) => part.type === 'timeZoneName')?.value?.replace('GMT', 'UTC') || ''
+  } catch { return '' }
+}
+const scheduleKey = ({ enabled, timezone, local_time, days }) => JSON.stringify({
+  enabled: Boolean(enabled), timezone: timezone.trim(), local_time, days: [...days].sort(),
+})
+const normalizeScheduleMetrics = (metrics) => {
+  if (!metrics || typeof metrics !== 'object') return null
+  return Object.fromEntries(['scheduled', 'delayed', 'skipped', 'failed'].map((key) => {
+    const value = Number(metrics[key])
+    return [key, Number.isFinite(value) && value > 0 ? Math.floor(value) : 0]
+  }))
+}
+const scheduleTimeLabel = (value, timezone) => {
+  try { return new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: timezone }) }
+  catch { return new Date(value).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }
+}
 
 function Toggle({ label, hint, on, set }) {
   return (
@@ -118,7 +152,6 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
   const m = monitoringState(files)
   // Real signed-in org for the evidence report — demo org only in SIM.
   const orgName = SIM ? IDENTITY.org : (me?.email?.split('@')[1]?.replace(/\.[^.]+$/, '') || me?.name || 'your organisation')
-  const watch = sourceWatch(sources, files)
   const derivedProg = useProgramBatches(files, decisions)
 
   // ADR 0003 Phase 4: the program below was purely client-derived (recomputed from
@@ -214,6 +247,7 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
   const evidenceRef = useRef(null)
   const [exporting, setExporting] = useState(false)
   const [schedNext, setSchedNext] = useState(null)
+  const [schedMetrics, setSchedMetrics] = useState(null)
   // The last sweep's outcome from /schedule ({ok, at, source, error, files, scan_id}), or null
   // before any has run. A FAILED sweep saves nothing and leaves the previous scan standing, so
   // without this the estate on screen silently ages while every date on the page still looks
@@ -243,20 +277,49 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
     finally { setTimeout(() => setExporting(false), 600) }
   }
   const [triggers, setTriggers] = useState({ newFile: true, onEdit: true, autoRemediate: true, alertRegression: true })
-  const [cad, setCad] = useState(() => Object.fromEntries(watch.map((w) => [w.id, w.cadence])))
+  const [schedule, setSchedule] = useState(() => ({
+    enabled: false, timezone: browserTimezone(), local_time: '09:00', days: [0, 1, 2, 3, 4],
+  }))
+  const [savedSchedule, setSavedSchedule] = useState(null)
   const [schedErr, setSchedErr] = useState('')
-  const setAllCad = (v) => {
-    // Optimistic UI with a real rollback: if the schedule write fails, revert the
-    // chips to what the server still has instead of showing a cadence that isn't real.
-    const prev = cad
-    setCad(Object.fromEntries(watch.map((w) => [w.id, v])))
-    setSchedErr('')
-    if (!SIM) {
-      const minMap = { live: 5, hourly: 60, daily: 1440, weekly: 10080 }
-      putSchedule({ enabled: v !== 'off', interval_minutes: minMap[v] ?? 60 })
-        .then((s) => setSchedNext(s.next_at))
-        .catch((e) => { setCad(prev); setSchedErr(e.message || 'schedule not saved — try again') })
+  const [schedSaving, setSchedSaving] = useState(false)
+  const [schedSaved, setSchedSaved] = useState(false)
+  const schedDirty = savedSchedule !== null && scheduleKey(schedule) !== scheduleKey(savedSchedule)
+  const schedTimezoneValid = isValidTimezone(schedule.timezone)
+  const schedOffset = timezoneOffset(schedule.timezone)
+  const updateSchedule = (change) => {
+    setSchedSaved(false)
+    setSchedule((current) => typeof change === 'function' ? change(current) : { ...current, ...change })
+  }
+  const applySchedulePreset = (days) => updateSchedule({ enabled: true, local_time: '09:00', days })
+  const saveSchedule = async () => {
+    if (schedSaving) return
+    if (schedule.enabled && !schedule.days.length) {
+      setSchedErr('Choose at least one day for scheduled scans.')
+      return
     }
+    if (schedule.enabled && !schedTimezoneValid) {
+      setSchedErr('Enter a valid IANA time zone, such as America/Los_Angeles.')
+      return
+    }
+    setSchedErr('')
+    setSchedSaving(true)
+    try {
+      const saved = await putSchedule({ enabled: schedule.enabled, timezone: schedule.timezone, local_time: schedule.local_time, days: schedule.days })
+      const nextSchedule = {
+        enabled: Boolean(saved.enabled),
+        timezone: saved.timezone || schedule.timezone,
+        local_time: saved.local_time || schedule.local_time,
+        days: Array.isArray(saved.days) ? saved.days : schedule.days,
+      }
+      setSchedule(nextSchedule)
+      setSavedSchedule(nextSchedule)
+      setSchedSaved(true)
+      setSchedNext(saved.next_at)
+      if (saved.metrics !== undefined) setSchedMetrics(normalizeScheduleMetrics(saved.metrics))
+    } catch (e) {
+      setSchedErr(e.message || 'Schedule not saved — try again.')
+    } finally { setSchedSaving(false) }
   }
 
   // Build the live audit trail: published files first, then remediation decisions, padded with baseline.
@@ -289,10 +352,17 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
     if (SIM) return
     getSchedule().then((s) => {
       setSchedNext(s.next_at)
+      setSchedMetrics(normalizeScheduleMetrics(s.metrics))
       setLastSweep(s.last_sweep || null)
       setSchedLastAt(s.last_at || null)
-      const v = !s.enabled ? 'off' : s.interval_minutes <= 5 ? 'live' : s.interval_minutes <= 60 ? 'hourly' : s.interval_minutes <= 1440 ? 'daily' : 'weekly'
-      setCad((prev) => Object.fromEntries((Object.keys(prev).length ? Object.keys(prev) : watch.map((w) => w.id)).map((k) => [k, v])))
+      const loadedSchedule = {
+        enabled: Boolean(s.enabled),
+        timezone: s.updated_at ? (s.timezone || browserTimezone()) : browserTimezone(),
+        local_time: s.local_time || '09:00',
+        days: Array.isArray(s.days) ? s.days : [0, 1, 2, 3, 4],
+      }
+      setSchedule(loadedSchedule)
+      setSavedSchedule(loadedSchedule)
     }).catch(() => {})
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -527,28 +597,85 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
 
       <section className="panel" style={{ marginBottom: 14 }}>
         <div className="proghd">
-          <h2 style={{ margin: 0 }}>Scheduled re-scans <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4, color: 'var(--success-fg)', background: 'var(--success-bg)', border: '1px solid #C9E0B0', borderRadius: 4, padding: '1px 5px', marginLeft: 8, verticalAlign: 'middle' }}>LIVE</span> <span className="muted">· automatic re-scan of your estate, server-side via the service account</span></h2>
-          {schedNext && (Object.values(cad)[0] || 'off') !== 'off' && (
-            <span className="trstatchip pending" style={{ fontSize: 12 }}>next {new Date(schedNext).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</span>
+          <h2 style={{ margin: 0 }}>Scheduled re-scans <span style={{ fontSize: 9.5, fontWeight: 700, letterSpacing: 0.4, color: 'var(--success-fg)', background: 'var(--success-bg)', border: '1px solid #C9E0B0', borderRadius: 4, padding: '1px 5px', marginLeft: 8, verticalAlign: 'middle' }}>LIVE</span> <span className="muted">· automatic re-scan using your organization’s configured background connection</span></h2>
+          {schedNext && schedule.enabled && (
+            <span className="trstatchip pending" style={{ fontSize: 12 }}>next {scheduleTimeLabel(schedNext, schedule.timezone)}</span>
           )}
         </div>
         <div className="muted" style={{ fontSize: 13, margin: '6px 0 10px' }}>
-          {(Object.values(cad)[0] || 'off') === 'off'
+          {!schedule.enabled
             ? 'No schedule set — the estate is re-scanned only when you trigger one manually.'
-            : `Re-scanning ${Object.values(cad)[0]}. The scheduled sweep runs server-side and writes results back to your scans + Langfuse.`}
+            : `Your estate will be re-scanned at ${schedule.local_time} in ${schedule.timezone}. The schedule follows local clock changes automatically.`}
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          <span className="muted" style={{ fontSize: 13 }}>Cadence:</span>
-          {['live', 'hourly', 'daily', 'weekly', 'off'].map((v) => {
-            const on = (Object.values(cad)[0] || 'off') === v
-            return (
-              <button key={v} onClick={() => setAllCad(v)}
-                style={{ fontSize: 12, padding: '4px 11px', borderRadius: 6, cursor: 'pointer', fontWeight: on ? 600 : 400,
-                  border: '1px solid ' + (on ? '#7C3AED' : 'var(--line)'), background: on ? '#7C3AED' : '#fff', color: on ? '#fff' : 'var(--ink)' }}>{v}</button>
-            )
-          })}
-          {schedErr && <span style={{ fontSize: 12, color: 'var(--error-fg-strong)' }} role="alert">⚠ {schedErr}</span>}
+        <div className="muted" style={{ fontSize: 12, margin: '-4px 0 10px' }}>
+          Scheduled scans run in the background and do not depend on this browser session remaining signed in.
         </div>
+        {schedMetrics && (
+          <dl aria-label="Scheduled scan run totals" style={{ display: 'flex', gap: 14, flexWrap: 'wrap', margin: '0 0 12px', fontSize: 12 }}>
+            {[
+              ['scheduled', 'Scheduled'], ['delayed', 'Delayed'], ['skipped', 'Skipped'], ['failed', 'Failed'],
+            ].map(([key, label]) => (
+              <div key={key} style={{ display: 'flex', gap: 4 }}>
+                <dt className="muted">{label}</dt>
+                <dd style={{ margin: 0, fontWeight: 650 }}>{schedMetrics[key].toLocaleString()}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
+          <Toggle label="Run scheduled scans" on={schedule.enabled}
+            set={(enabled) => updateSchedule({ enabled })} />
+          <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+            <span className="muted">Local time</span>
+            <input type="time" value={schedule.local_time}
+              onChange={(e) => updateSchedule({ local_time: e.target.value })}
+              disabled={!schedule.enabled} />
+          </label>
+          <label style={{ display: 'grid', gap: 4, fontSize: 12 }}>
+            <span className="muted">Time zone{schedOffset ? ` · ${schedOffset}` : ''}</span>
+            <input list="scan-timezones" value={schedule.timezone}
+              onChange={(e) => updateSchedule({ timezone: e.target.value })}
+              disabled={!schedule.enabled} aria-invalid={schedule.enabled && !schedTimezoneValid}
+              aria-describedby="scan-timezone-help" style={{ minWidth: 210 }} />
+            <datalist id="scan-timezones">
+              {timezoneChoices().map((zone) => <option value={zone} key={zone} />)}
+            </datalist>
+            <span id="scan-timezone-help" className="muted" style={{ fontSize: 11 }}>
+              {schedTimezoneValid ? `Current offset ${schedOffset || 'available when saved'}` : 'Use an IANA zone, for example America/Los_Angeles.'}
+            </span>
+          </label>
+          <button className="primary" onClick={saveSchedule}
+            disabled={schedSaving || (schedule.enabled && (!schedule.days.length || !schedTimezoneValid))}>
+            {schedSaving ? 'Saving…' : 'Save schedule'}
+          </button>
+          <span role="status" aria-live="polite" style={{ minWidth: 72, fontSize: 12,
+            color: schedSaved ? 'var(--success-fg)' : 'var(--muted)' }}>
+            {schedSaved ? '✓ Saved' : schedDirty ? 'Unsaved changes' : ''}
+          </span>
+        </div>
+        {schedule.enabled && (
+          <fieldset style={{ border: 0, padding: 0, margin: '12px 0 0' }}>
+            <legend className="muted" style={{ fontSize: 12, marginBottom: 6 }}>Days to scan</legend>
+            <div aria-label="Schedule presets" style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 8 }}>
+              <button type="button" onClick={() => applySchedulePreset([0, 1, 2, 3, 4])}
+                style={{ fontSize: 12, padding: '4px 10px' }}>Weekdays at 9:00</button>
+              <button type="button" onClick={() => applySchedulePreset([0, 1, 2, 3, 4, 5, 6])}
+                style={{ fontSize: 12, padding: '4px 10px' }}>Daily at 9:00</button>
+            </div>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {WEEKDAYS.map((day, index) => {
+                const selected = schedule.days.includes(index)
+                return <button type="button" key={day} aria-pressed={selected}
+                  onClick={() => updateSchedule((s) => ({ ...s, days: selected ? s.days.filter((d) => d !== index) : [...s.days, index].sort() }))}
+                  style={{ fontSize: 12, padding: '4px 10px', borderRadius: 6, cursor: 'pointer', fontWeight: selected ? 600 : 400,
+                    border: '1px solid ' + (selected ? '#7C3AED' : 'var(--line)'), background: selected ? '#7C3AED' : '#fff', color: selected ? '#fff' : 'var(--ink)' }}>
+                  {day}
+                </button>
+              })}
+            </div>
+          </fieldset>
+        )}
+        {schedErr && <div style={{ marginTop: 8, fontSize: 12, color: 'var(--error-fg-strong)' }} role="alert">⚠ {schedErr}</div>}
         {lastSweep && lastSweep.ok === false && (
           <div role="alert" style={{ marginTop: 12, padding: '11px 14px', borderRadius: 8, fontSize: 13.5,
                background: '#FBE9E7', border: '1px solid #E7B4AC', color: '#8A2A20' }}>

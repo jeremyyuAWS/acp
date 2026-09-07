@@ -2408,10 +2408,10 @@ export function workflowStageRuns(snapshot = {}) {
         status: stage.status === 'completed' ? 'recent'
           : stage.status === 'failed' ? 'failed'
             : stage.status === 'cancelled' ? 'cancelled' : 'active',
-        total: num(stage.total) ?? 0,
-        completed: num(stage.completed) ?? 0,
-        running: num(stage.active) ?? 0,
-        queued: num(stage.waiting) ?? 0,
+        total: num(stage.total),
+        completed: num(stage.completed),
+        running: num(stage.active),
+        queued: num(stage.waiting),
         failed: num(stage.failed),
         started_at: stage.started_at || workflow.created_at || null,
         updated_at: stage.latest_progress_at || stage.completed_at || workflow.updated_at || null,
@@ -2425,13 +2425,20 @@ export function workflowStageRuns(snapshot = {}) {
         cancel_requested: stage.cancel_requested === true,
         cancel_requested_at: stage.cancel_requested_at || null,
         waiting_reason: stage.waiting_reason || null,
+        canonical: stage.canonical || null,
       }
       // Never replace live-only operational facts such as current_file, worker heartbeat, queue
       // position or classified error. The durable fields enrich that row; they replace absence.
       rows.set(key, held ? { ...durable, ...held,
         stage_run_id: stage.stage_run_id || held.stage_run_id,
+        status: stage.status === 'completed' ? 'recent'
+          : stage.status === 'failed' ? 'failed'
+            : stage.status === 'cancelled' ? 'cancelled' : 'active',
+        total: num(stage.total), completed: num(stage.completed),
+        running: num(stage.active), queued: num(stage.waiting), failed: num(stage.failed),
         completed_at: stage.completed_at || held.completed_at,
         completion_recorded: stage.completion_recorded === true || held.completion_recorded === true,
+        canonical: stage.canonical || held.canonical || null,
       } : durable)
     }
   }

@@ -627,3 +627,66 @@ def test_activity_signature_includes_durable_workflow_changes():
         {"scan_id": "s1", "stages": [{"stage": "assess", "status": "completed"}]},
     ]}
     assert system._activity_signature(base) != system._activity_signature(changed)
+
+
+def test_workflow_rows_use_canonical_counts_and_manual_stop_state():
+    run = {"scan_id": "s1", "stage": "assess", "owner": "a@example.org", "source": "drive",
+           "status": "active", "running": 9, "queued": 8, "failed": 7, "completed": 6,
+           "total": 30, "started_at": "2026-09-06T00:00:00+00:00",
+           "updated_at": "2026-09-06T00:01:00+00:00"}
+    canonical = {"s1": {"available": True, "workflow_revision": 2, "stages": [{
+        "stage": "assess", "execution_id": "execution-1", "workflow_revision": 2,
+        "revision": 4, "state": "cancelled", "last_durable_update_at": "2026-09-06T00:02:00+00:00",
+        "counts": {"work_items": {"unit": "work items", "total": 5, "completed": 2,
+                   "processing": 0, "queued": 0, "failed": 0, "cancelled": 2, "skipped": 1}},
+        "control": {"cancel_requested": True, "cancel_requested_at": "2026-09-06T00:01:30+00:00"},
+        "reconciliation": {"exact": True}, "integrity": {"ok": True},
+    }]}}
+    workflow = system._workflow_rows([run], canonical_lineages=canonical)[0]
+    stage = workflow["stages"][0]
+    assert (stage["total"], stage["completed"], stage["cancelled"], stage["skipped"]) == (5, 2, 2, 1)
+    assert stage["status"] == "cancelled"
+    assert stage["terminal_outcome"] == "cancelled"
+    assert stage["stage_run_id"] == "execution-1"
+    assert stage["canonical"]["revision"] == 4
+    assert workflow["status"] == "stopped"
+
+
+def test_liveops_canonical_lineage_read_is_safe_during_rolling_deploy(monkeypatch):
+    class Store:
+        def canonical_stage_lineage(self, scan_id):
+            if scan_id == "bad":
+                raise RuntimeError("old replica")
+            return {"available": True, "scan_id": scan_id, "stages": []}
+
+    monkeypatch.setattr(system.core, "store", Store())
+    assert system._liveops_canonical_lineages(
+        [{"scan_id": "good"}, {"scan_id": "bad"}], [{"scan_id": "event-only"}]) == {
+            "event-only": {"available": True, "scan_id": "event-only", "stages": []},
+            "good": {"available": True, "scan_id": "good", "stages": []},
+        }
+
+
+def test_liveops_projects_remediation_finding_units_from_one_durable_snapshot(monkeypatch):
+    class Store:
+        def canonical_stage_lineage(self, scan_id):
+            return {"available": True, "scan_id": scan_id,
+                    "stages": [{"stage": "remediate", "execution_id": "e1"}]}
+
+        def remediation_run_facts(self, scan_id):
+            return {"scan_id": scan_id, "batch_id": "b1", "total_findings": 7,
+                    "finding_reconciliation": {"assessed": 7, "resolved_verified": 4,
+                        "awaiting_review": 3, "approved_pending_verification": 0,
+                        "unchanged_no_fix": 0, "failed": 0, "excluded": 0,
+                        "superseded": 0, "accounted": 7, "unaccounted": 0,
+                        "exact": True},
+                    "review_findings": 3, "review_items": 1, "jobs": [],
+                    "fixes_applied": 9, "fixes_verified": 8}
+
+    monkeypatch.setattr(system.core, "store", Store())
+    remediate = system._liveops_canonical_lineages([{"scan_id": "s1"}])["s1"]["stages"][0]
+    accounting = remediate["finding_accounting"]
+    assert accounting["finding_reconciliation"]["assessed"] == 7
+    assert accounting["finding_reconciliation"]["accounted"] == 7
+    assert accounting["review"] == {"documents": 0, "items": 1, "findings": 3}
+    assert accounting["fixes"]["verified"] == 8

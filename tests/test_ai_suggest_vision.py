@@ -23,7 +23,8 @@ def test_image_bytes_reach_the_vision_model(monkeypatch):
 
     def fake_describe(img, *, filename="", context="", style="", **_):
         seen["img"] = img
-        return {"alt": "A nurse reviews a chart with a patient.", "model": "llava:7b"}
+        return {"alt": "A nurse reviews a chart with a patient.", "model": "llava:7b",
+                "ai_call_id": "vision-call-1"}
 
     monkeypatch.setattr(_ai, "describe_image", fake_describe)
     out = _ai.suggest_fix("1.1.1", "Non-text Content", "A", "deck.pptx", image_bytes=b"PNGBYTES")
@@ -31,6 +32,7 @@ def test_image_bytes_reach_the_vision_model(monkeypatch):
     assert out["is_template"] is False
     assert out["suggestion"] == "A nurse reviews a chart with a patient."
     assert out["model"] == "llava:7b"
+    assert out["ai_call_id"] == "vision-call-1"
     assert "reason" not in out          # a real description explains itself
 
 
@@ -115,15 +117,35 @@ def test_describe_image_local_draft_reports_zone_but_never_escalates(monkeypatch
     assert "escalation" not in out and "cost_usd" not in out
 
 
+def test_local_vision_draft_retains_the_exact_persisted_call(monkeypatch):
+    class _Local:
+        name = "ollama"
+        model = "llava:13b"
+        base_url = "http://ollama"
+        zone = "local"
+
+        @staticmethod
+        def generate(*_args, **_kwargs):
+            return {"ok": True, "text": "A nurse reviews a patient chart",
+                    "model": "llava:13b", "provider": "ollama", "zone": "local"}
+
+    monkeypatch.setattr("providers.active_vision_provider", lambda: _Local())
+    monkeypatch.setattr(_ai, "_trace_ai", lambda *_a, **_k: "vision-call-local-9")
+    out = _ai.describe_image(b"IMGBYTES", filename="patient.png", scan_id="s1", file="d.docx")
+    assert out["ai_call_id"] == "vision-call-local-9"
+
+
 def test_suggest_fix_forwards_escalation_fields_only_for_vision(monkeypatch):
     monkeypatch.setattr(_ai, "describe_image", lambda *a, **k: {
         "alt": "Bar chart of quarterly revenue by region", "model": "gpt-4o",
         "provider": "azure_openai", "processing_zone": "customer_cloud",
-        "escalation": [{"provider": "ollama"}, {"provider": "azure_openai"}], "cost_usd": 0.0032})
+        "escalation": [{"provider": "ollama"}, {"provider": "azure_openai"}], "cost_usd": 0.0032,
+        "ai_call_id": "cloud-vision-call"})
     out = _ai.suggest_fix("1.1.1", "Non-text Content", "A", "chart.pptx", image_bytes=b"X")
     assert out["is_template"] is False
     assert out["provider"] == "azure_openai" and out["processing_zone"] == "customer_cloud"
     assert out["escalation"][1]["provider"] == "azure_openai" and out["cost_usd"] == 0.0032
+    assert out["ai_call_id"] == "cloud-vision-call"
 
     # A non-vision criterion (text template) carries none of these keys.
     import httpx

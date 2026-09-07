@@ -18,6 +18,7 @@ class HitlUpdate(BaseModel):
     edited: bool = False                # reviewer changed the AI draft before approving (calibration signal)
     review_ms: int | None = None        # client-measured time from card-open to decision (reviewer-time metric)
     ai_value: str | None = None         # the AI-proposed value shown, so we store proposed-vs-final
+    model_call_id: str | None = None    # exact ai_calls row reviewed; absent for human-authored work
     # One final text per proposal, positionally: the row holds N proposals (one per image) and
     # a single approved_value could never describe ten different pictures. An entry that is
     # null/"" accepts that proposal's own draft, so approving an unedited card means exactly
@@ -144,6 +145,9 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
         raise HTTPException(422, f"reject_reason must be one of {sorted(REJECT_REASONS)}")
     if body.resolution is not None and body.resolution not in RESOLUTIONS:
         raise HTTPException(422, f"resolution must be one of {sorted(RESOLUTIONS)}")
+    if body.model_call_id and not core.store.ai_call_belongs_to_file(
+            body.model_call_id, item.get("scan_id"), item.get("file")):
+        raise HTTPException(422, "model_call_id does not belong to this review item")
     # The resolution is persisted ON THE ROW, not only in the decision log below. The certify
     # gate and the appliers read rows: with the exception recorded nowhere they could reach,
     # store._row_approved_values fell back to the card's own UI label, so "Mark as decorative"
@@ -190,7 +194,8 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
             edited=body.edited, review_ms=body.review_ms, ai_value=body.ai_value,
             final_value=body.approved_value,
             reviewer=(getattr(request.state, "user_email", None) if request is not None else None),
-            reject_reason=(body.reject_reason if body.status == "rejected" else None))
+            reject_reason=(body.reject_reason if body.status == "rejected" else None),
+            model_call_id=body.model_call_id)
     except Exception:
         swallowed("routes.hitl.hitl_update: recording the HITL event failed")
     # Observability: the human decision joins the file's Langfuse trace (audit P1 — HITL

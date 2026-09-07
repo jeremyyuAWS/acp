@@ -31,7 +31,10 @@ logger = logging.getLogger(__name__)
 @handler("scheduled_sweep")
 def _scheduled_sweep(payload: dict, job: dict) -> None:
     """Execute the one durable occurrence elected from all scheduler replicas."""
-    core._do_scheduled_scan()
+    if payload.get("owner_email"):
+        core._do_scheduled_scan(payload)
+    else:
+        core._do_scheduled_scan()
 
 
 # Longest-predicted work first reduces the tail of a parallel Assess run: without it, a large PDF
@@ -4595,10 +4598,13 @@ _PDF_APPLY_EXTS = ("pdf",)
 _FIELD_NAME_EXTS = ("pdf", "docx")
 
 # 1.4.5/1.4.9 image-of-text alt text: the approved OCR text is written as the picture's
-# <p:cNvPr descr="..."> by apply_pptx_image_of_text. Currently pptx-only; docx and xlsx carry
-# a broken chain at a different layer (no approved-value applier exists for those formats yet).
-# PDF: writing /Alt to the /Figure struct element satisfies 1.1.1 but NOT 1.4.5 — the raster
-# image persists and the OCR detector re-fires on re-scan, so the credit cannot be granted.
+# <p:cNvPr descr="..."> by apply_pptx_image_of_text. The write is correct and is kept, but the
+# lane is HUMAN for every format (remediation_capability), because the write cannot clear the
+# criterion it is credited against: the 1.4.5 detector (ocr.images_of_text) OCRs the raster
+# bytes, a descr attribute leaves those bytes untouched, so the finding re-fires on re-scan and
+# _apply_one_value_kind withholds credit. That is the gate working as designed — descr is a
+# 1.1.1 improvement, not removal of the image of text. PDF /Alt has the same shape and the
+# same outcome. Genuine 1.4.5 remediation means replacing the picture with real text.
 _IMAGE_OF_TEXT_EXTS = ("pptx",)
 
 # Every format an approved value can actually be WRITTEN into — the format scope
@@ -4629,6 +4635,20 @@ def _apply_one_value_kind(
     if not values and not extra_work:
         return working, False
 
+    # Freeze the exact review items before the lane changes their applied state. Their immutable
+    # HITL events carry model_call_id when a reviewer acted on an AI draft; human-authored work
+    # simply yields no model outcome row.
+    review_item_ids = []
+    for rule_id in credit_rule_ids:
+        review_item_ids.extend(core.store.approved_unapplied_item_ids(scan_id, filename, rule_id))
+
+    def _model_outcome(outcome: str, detail: str) -> None:
+        try:
+            core.store.record_ai_validation_outcomes(
+                scan_id, filename, diff_rule_id, review_item_ids, outcome, detail=detail)
+        except Exception:
+            swallowed("_apply_one_value_kind: recording the AI post-write outcome failed", scan_id)
+
     _phase(job, f"writing the approved {noun}")
     fixed, applied, unresolved = write_fn(working, values)
     if unresolved:
@@ -4655,6 +4675,7 @@ def _apply_one_value_kind(
             detail=f"wrote {len(applied)} {noun} value(s) but could not verify "
                    f"{sorted(scs_to_clear)}: {verification.reason}. Credit withheld; "
                    f"the approved value is kept for retry")
+        _model_outcome("could_not_verify", verification.reason or "verification unavailable")
         return working, False
     if not verification.cleared(scs_to_clear):
         # The value went in but the criterion still fails (content we never saw, or the engine
@@ -4664,6 +4685,8 @@ def _apply_one_value_kind(
             "system", "apply.unverified", scan_id=scan_id, file=filename,
             detail=f"wrote {len(applied)} {noun} value(s) but "
                    f"{sorted(verification.still_failing(scs_to_clear))} still fails on re-scan")
+        _model_outcome("verified_still_failing",
+                       f"still failing: {sorted(verification.still_failing(scs_to_clear))}")
         return working, False
 
     try:
@@ -4677,6 +4700,7 @@ def _apply_one_value_kind(
     for rule_id in credit_rule_ids:
         for item_id in core.store.approved_unapplied_item_ids(scan_id, filename, rule_id):
             core.store.mark_row_applied(item_id)
+    _model_outcome("verified_cleared", f"cleared on re-scan: {sorted(scs_to_clear)}")
     core.store.log_decision(
         "system", "apply.applied", scan_id=scan_id, file=filename,
         detail=f"wrote {len(applied)} reviewer-approved {noun} value(s); "
