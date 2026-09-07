@@ -53,7 +53,7 @@ would be gated on noise. Those findings are unchanged from the first run.
 | verdict | categories | cases | which |
 |---|---|---|---|
 | **enable** | 2 | 9 | `docx:2.4.4`, `html:2.4.4` — Sonnet 5, safe 6 of 6 repeats across both runs |
-| **keep-human-only** | 3 | 10 | `pdf:1.1.1` (no tier verified all 3 cases in either run); `docx:1.3.1` (auto lane with the known pseudo-heading rule defect; no Claude tier covered for it, 0% VARR both runs); `docx:3.1.2` (entirely must-abstain; every Claude tier declined it in both runs) |
+| **keep-human-only** | 3 | 10 | `pdf:1.1.1` (no tier verified all 3 cases in either run); `docx:1.3.1` (auto lane with the known pseudo-heading rule defect; no Claude tier covered for it, 0% VARR both runs); `docx:3.1.2` (entirely must-abstain; Sonnet and Opus declined it in both runs, Haiku did not in either) |
 | **insufficient-evidence** | 47 | 59 | 42 single-case categories, plus 5 adequately sampled ones where a tier was safe in one run and not the other: `docx:1.4.3`, `pdf:1.4.3`, `docx:1.1.1`, `pptx:1.1.1`, `docx:1.4.5` |
 | **no-change-rule-code** | 7 | 22 | `2.4.2` docx/pdf/pptx, `3.1.1` docx/pptx/xlsx, `xlsx:1.3.1` |
 
@@ -102,8 +102,9 @@ make it a lead worth routing on, because VARR is pooled over categories where So
   executor cannot provide, and it is the only way to learn a real estate's cache hit rate, which
   is the lever the cost gate depends on.
 - **Do not:** promote any `human` lane on this evidence. No human-lane category reached `enable`.
-  The 15 must-abstain cases were declined by every tier in both runs, which says the human lane
-  is respected, not that it is unnecessary.
+  Sonnet and Opus declined the must-abstain cases at 99% and 96% in both runs, and Haiku at
+  97–98%, which says the human lane is respected, not that it is unnecessary — and on
+  `docx:3.1.2` specifically, Haiku acted where it should have declined, in both runs.
 - **Do not:** read `no-change-rule-code` as "Claude failed" — on `3.1.1` docx/pptx Opus was safe
   in both runs too. It is dominated by a free tier that verified 100%.
 - **Before any further lane decision:** sample the 42 single-case categories. 71% of categories
