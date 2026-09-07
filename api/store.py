@@ -10427,7 +10427,8 @@ class Store:
                     or self.approved_structure_label_values(scan_id, file)
                     or self.approved_images_of_text_values(scan_id, file))
 
-    def approve_proposal_values(self, item_id: str, values: list[str | None]) -> int:
+    def approve_proposal_values(self, item_id: str, values: list[str | None], *,
+                                draft_fallback: bool = True) -> int:
         """Record the reviewer's final text per instance, positionally.
 
         `values[i]` is the text for instance i: an edited string, or None/"" meaning "accept
@@ -10439,6 +10440,23 @@ class Store:
         model produced no draft — the values are written onto the evidence entries instead, in
         the SAME positional order the card rendered them. Evidence has no draft, so an empty value
         stays empty (the image is still undescribed) rather than falling back to anything.
+
+        `draft_fallback=False` turns that same "no fallback" behaviour on for a PROPOSALS row, and
+        the describe-instead-of-replace decision (ADR 0055) is why it exists.
+
+        THE BUG IT CLOSES, which is worth stating because the guard was in the wrong place and
+        looked right. queue_described_image_alt refuses to fall back to a draft, and its docstring
+        explains why at length: on a 1.4.5 card the draft is the OCR TRANSCRIPT — the words baked
+        into the picture — and a transcript is not a description of the image. But that function
+        runs SECOND. This one runs first, from the same request, and had already substituted the
+        transcript for every blank the reviewer left; by the time the guard looked, the transcript
+        was sitting in `approved_value` and was indistinguishable from authored prose.
+
+        So a reviewer describing a two-image deck — describing one, leaving the other alone —
+        filed the second picture's own text as its description, and the audit row recorded it as
+        `"source": "reviewer"`. Measured end to end before this fix. An empty description now
+        clears the value, exactly as it does for evidence: an undescribed image contributes
+        nothing, which is what ADR 0055 said it wanted all along.
         """
         import json as _json
         with self._db.cursor() as cur:
@@ -10447,7 +10465,7 @@ class Store:
             if not row:
                 return 0
             if row.get("proposals"):
-                col, has_draft = "proposals", True
+                col, has_draft = "proposals", draft_fallback
             elif row.get("evidence"):
                 col, has_draft = "evidence", False
             else:
