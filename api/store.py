@@ -2372,8 +2372,8 @@ class _PgAdapter:
     # plus one deployment-wide set of administrator guardrails. All schedule columns are
     # additive and carry safe defaults for rolling replicas.
     # v40 adds fenced pre-write reservations and terminal evidence to provider-effect receipts.
-    _SCHEMA_VERSION = 40
-    _SCHEMA_CHECKSUM_AT_VERSION = "e16e8f397bd3079f3af52fea4f4bfe09"
+    _SCHEMA_VERSION = 41
+    _SCHEMA_CHECKSUM_AT_VERSION = "84b065bd5e6864a22d95c4adb580c50a"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
