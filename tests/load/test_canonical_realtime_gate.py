@@ -19,6 +19,10 @@ def test_canonical_realtime_gate_is_bounded_isolated_and_green():
     assert result["metrics"]["missing_dead_letter_events"] == 0
     assert result["metrics"]["missing_latest_progress_events"] == 0
     assert result["metrics"]["missing_failed_events"] == 0
+    assert result["metrics"]["cold_first_batch_size"] >= 1
+    assert result["metrics"]["warm_batch_count"] >= 1
+    assert result["checks"]["persistent_client_warm_soak"] is True
+    assert result["checks"]["warm_gateway_latency_p95_ms"] is True
     assert (result["metrics"]["coalesced_write_ratio"]
             <= THRESHOLDS["coalesced_write_ratio_max"])
     assert result["config"]["redis_url"] is None
@@ -57,6 +61,11 @@ def test_gateway_latency_observer_supports_batched_redis_writes():
     latencies = [observed.latency_ms(event.event_id) for event in events]
     assert all(latency >= 5 for latency in latencies)
     assert max(latencies) - min(latencies) < .001
+    assert observed.batch_observations() == [{
+        "latency_ms": latencies[0],
+        "size": 3,
+        "event_ids": ["event-0", "event-1", "event-2"],
+    }]
 
 
 def test_staging_gate_is_shipped_and_uses_environment_secret():

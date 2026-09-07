@@ -23,6 +23,7 @@ from realtime_events import owner_scope, stream_key
 
 THRESHOLDS = {
     "gateway_latency_p95_ms_max": 250.0,
+    "warm_gateway_latency_p95_ms_max": 250.0,
     "submit_latency_p95_ms_max": 1.0,
     "coalesced_write_ratio_max": 0.10,
     "redis_bytes_per_event_max": 2048.0,
@@ -100,6 +101,7 @@ class ObservedTransport:
         self.transport = transport
         self.redis = transport.redis
         self._latencies_ms: dict[str, float] = {}
+        self._batches: list[dict] = []
         self._active_writes = 0
         self._lock = threading.Lock()
 
@@ -112,6 +114,8 @@ class ObservedTransport:
             latency_ms = (time.perf_counter_ns() - started_ns) / 1_000_000
             with self._lock:
                 self._latencies_ms[event.event_id] = latency_ms
+                self._batches.append({"latency_ms": latency_ms, "size": 1,
+                                      "event_ids": [event.event_id]})
             return row_id
         finally:
             with self._lock:
@@ -131,6 +135,8 @@ class ObservedTransport:
             latency_ms = (time.perf_counter_ns() - started_ns) / 1_000_000
             with self._lock:
                 self._latencies_ms.update({event.event_id: latency_ms for event in events})
+                self._batches.append({"latency_ms": latency_ms, "size": len(events),
+                                      "event_ids": [event.event_id for event in events]})
             return results
         finally:
             with self._lock:
@@ -143,6 +149,10 @@ class ObservedTransport:
     def latency_ms(self, event_id: str) -> float:
         with self._lock:
             return self._latencies_ms[event_id]
+
+    def batch_observations(self) -> list[dict]:
+        with self._lock:
+            return [dict(batch) for batch in self._batches]
 
 
 @dataclass(frozen=True)
@@ -255,6 +265,14 @@ def run(config: GateConfig) -> dict:
         gateway_latencies = [
             observed_transport.latency_ms(event.event_id) for event in all_events
         ]
+        batches = observed_transport.batch_observations()
+        cold_batch = batches[:1]
+        warm_batches = batches[1:]
+        warm_gateway_latencies = [
+            batch["latency_ms"]
+            for batch in warm_batches
+            for _event_id in batch["event_ids"]
+        ]
         leakage = sum(
             event.owner_scope != owner_scope(owner)
             for owner, rows in per_owner.items() for _row_id, event in rows
@@ -275,6 +293,13 @@ def run(config: GateConfig) -> dict:
         }
         metrics = {
             "gateway_latency_p95_ms": percentile(gateway_latencies, .95),
+            "cold_first_batch_latency_ms": cold_batch[0]["latency_ms"] if cold_batch else 0.0,
+            "cold_first_batch_size": cold_batch[0]["size"] if cold_batch else 0,
+            "warm_gateway_latency_p95_ms": percentile(warm_gateway_latencies, .95),
+            "warm_batch_count": len(warm_batches),
+            "warm_batch_size_p95": percentile(
+                [float(batch["size"]) for batch in warm_batches], .95
+            ),
             "submit_latency_p95_ms": percentile(submit_latencies, .95),
             "coalesced_write_ratio": progress_written / max(progress_submitted, 1),
             "progress_submitted": progress_submitted,
@@ -295,6 +320,7 @@ def run(config: GateConfig) -> dict:
             for name, threshold in THRESHOLDS.items()
         }
         checks["missing_failed_events"] = metrics["missing_failed_events"] == 0
+        checks["persistent_client_warm_soak"] = metrics["warm_batch_count"] >= 1
         return {"schema_version": 1, "mode": "redis" if config.redis_url else "in-memory-ci",
                 "config": public_config(config), "thresholds": THRESHOLDS, "metrics": metrics,
                 "checks": checks, "decision": "GO" if all(checks.values()) else "NO-GO"}
