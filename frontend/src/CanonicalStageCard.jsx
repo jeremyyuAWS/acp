@@ -3,12 +3,13 @@ import { canonicalStageCardModel } from './canonicalStageCard.js'
 
 const shown = (value) => value == null ? 'Not reported' : value.toLocaleString()
 
-export default function CanonicalStageCard({ snapshot, onOpen = null }) {
+export default function CanonicalStageCard({ snapshot, onOpen = null, embedded = false }) {
   const model = canonicalStageCardModel(snapshot)
   if (!model) return null
+  const Wrapper = embedded ? 'div' : 'section'
   return (
-    <section className="panel" aria-label={`${model.stageLabel} canonical stage status`}
-             data-testid="canonical-stage-card" style={{ margin: '10px 0 0', padding: '12px 16px' }}>
+    <Wrapper className={embedded ? '' : 'panel'} aria-label={`${model.stageLabel} canonical stage status`}
+             data-testid="canonical-stage-card" style={embedded ? undefined : { margin: '10px 0 0', padding: '12px 16px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
         <div>
           <strong>{model.stageLabel} · {model.stateLabel}</strong>
@@ -74,6 +75,6 @@ export default function CanonicalStageCard({ snapshot, onOpen = null }) {
       <p className="muted" style={{ margin: '8px 0 0', fontSize: 12 }}>
         Work-item completion reports execution progress. It does not mean every accessibility finding was resolved.
       </p>
-    </section>
+    </Wrapper>
   )
 }
