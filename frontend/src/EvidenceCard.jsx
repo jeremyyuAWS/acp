@@ -195,6 +195,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
   // The value the AI actually proposed — reviewTelemetry diffs the human's final value against
   // this to derive the `edited` calibration signal, so it must be the proposal, not the draft.
   const aiDraft = useRef(firstProposed(item) ?? item?.approved_value ?? null)
+  const modelCallId = useRef(null)
   // Auto-draft plumbing: the card element (for the viewport observer), a once-guard so the auto
   // draft fires at most once, and whether the card has been scrolled into view yet.
   const rootRef = useRef(null)
@@ -227,6 +228,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
       const s = (r?.suggestion || '').trim()
       if (!s) { setDraftMsg({ kind: 'error', text: 'The model returned nothing — write the value yourself.' }); return }
       setValue(s)
+      modelCallId.current = r?.ai_call_id || null
       setOcrAid(r.ocr_text || null)
       // Read the escalation path off the response itself (#378) — null when this draft stayed local.
       setDraftEscalation(escalationFromDraft(r))
@@ -314,6 +316,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
       const s = (r?.suggestion || '').trim()
       if (!s) { setDraftMsg({ kind: 'error', text: `Image ${i + 1}: the model returned nothing — write it yourself.` }); return }
       setValueAt(i, s)
+      if (instances.length === 1) modelCallId.current = r?.ai_call_id || null
       setOcrAid(r.ocr_text || null)
       // A per-image escalation reads off this image's own response (#378); keep any earlier one shown
       // if this image stayed local, so the card doesn't blank a path a sibling image established.
@@ -670,7 +673,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
     try {
       await onAct(card.id, status, noteOut, finalValue,
                   { edited: t.edited, reviewMs: t.reviewMs, aiValue: t.aiValue, approvedValues,
-                    rejectReason, resolution })
+                    rejectReason, resolution, modelCallId: modelCallId.current })
       onResolved && onResolved(card.id, status)
     } catch (e) {
       // HitlBell rolls the optimistic list back and rethrows. Without this catch the rejection

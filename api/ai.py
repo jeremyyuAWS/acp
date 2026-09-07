@@ -233,7 +233,7 @@ def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, o
               provider: str = "ollama", zone: str | None = None, cost_usd: float = 0.0,
               reason: str | None = None, prompt_tokens: int | None = None,
               completion_tokens: int | None = None, temperature: float | None = None,
-              prompt_version: str | None = None) -> None:
+              prompt_version: str | None = None) -> str | None:
     """Emit a Langfuse span + persist an ai_calls provenance row for one model call — model,
     latency, prompt size, completion, ok, and (ADR 0019 §1) which provider/zone/cost it ran on.
     model defaults to the text model; vision calls pass the vision model. `provider`/`zone`/`cost_usd`
@@ -262,12 +262,13 @@ def _trace_ai(surface: str, prompt: str, completion: str | None, t0: float, *, o
     # by …" line and the governance rollup. Best-effort + lazy import so it never fails the AI call.
     try:
         import core
-        core.store.record_ai_call(surface=surface, provider=provider, model=mdl,
-                                  zone=zn, latency_ms=latency_ms, ok=ok, cost_usd=cost_usd,
-                                  scan_id=scan_id, file=file, reason=reason,
-                                  temperature=temperature, prompt_version=prompt_version)
+        return core.store.record_ai_call(surface=surface, provider=provider, model=mdl,
+                                         zone=zn, latency_ms=latency_ms, ok=ok, cost_usd=cost_usd,
+                                         scan_id=scan_id, file=file, reason=reason,
+                                         temperature=temperature, prompt_version=prompt_version)
     except Exception:
         swallowed("ai._trace_ai: recording the AI call failed", scan_id)
+        return None
 
 
 def explain_finding(
@@ -1242,7 +1243,8 @@ def _suggest_prompt(rule_id: str, rule_name: str, filename: str, detail: str, gu
 
 def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
                 detail: str = "", image_bytes: bytes | None = None, style: str = "",
-                guidance: str = "") -> dict | None:
+                guidance: str = "", scan_id: str | None = None,
+                file: str | None = None) -> dict | None:
     """Draft a concrete, human-approvable fix value (alt text / link text / title) for a
     semantic finding via the local model. Returns None when Ollama is unavailable.
 
@@ -1254,7 +1256,7 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
     memory is active — "" (the default) leaves the prompt byte-identical to pre-memory."""
     if rule_id == "1.1.1" and image_bytes:
         res = describe_image(image_bytes, filename=filename, context=detail, style=style,
-                             guidance=guidance)
+                             guidance=guidance, scan_id=scan_id, file=file)
         if res:
             out = {"suggestion": res["alt"], "kind": "alt text",
                    "is_template": False, "model": res["model"]}
@@ -1278,17 +1280,19 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
     if _cr is not None:
         text = _cr["text"].strip().strip('"').strip()
         if text:
-            _trace_ai("suggest", prompt, text, _t0, ok=True,
+            call_id = _trace_ai("suggest", prompt, text, _t0, ok=True,
                       provider=_cr["provider"], zone=_cr["zone"], model=_cr["model"],
                       prompt_tokens=_cr["prompt_tokens"],
                       completion_tokens=_cr["completion_tokens"],
                       cost_usd=_cr["cost_usd"], temperature=0.4,
-                      prompt_version="suggest-v1")
+                      prompt_version="suggest-v1", scan_id=scan_id, file=file)
             kind = _SUGGEST_KIND.get(rule_id, ("fix", ""))[0]
             out = {"suggestion": text, "kind": kind,
                    "is_template": rule_id == "1.1.1", "model": _cr["model"],
                    "provider": _cr["provider"], "processing_zone": _cr["zone"],
                    "cost_usd": _cr["cost_usd"]}
+            if call_id:
+                out["ai_call_id"] = call_id
             if out["is_template"]:
                 out["reason"] = (
                     "Template only — no vision model is available to look at this image. "
@@ -1324,15 +1328,17 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
         r.raise_for_status()
         _data = r.json()
         text = (_data.get("response", "") or "").strip().strip('"').strip()
-        _trace_ai("suggest", prompt, text, _t0, ok=bool(text),
+        call_id = _trace_ai("suggest", prompt, text, _t0, ok=bool(text),
                   prompt_tokens=_data.get("prompt_eval_count"),
                   completion_tokens=_data.get("eval_count"), temperature=0.4,
-                  prompt_version="suggest-v1")
+                  prompt_version="suggest-v1", scan_id=scan_id, file=file)
         if not text:
             return None
         kind = _SUGGEST_KIND.get(rule_id, ("fix", ""))[0]
         out = {"suggestion": text, "kind": kind,
                "is_template": rule_id == "1.1.1", "model": OLLAMA_MODEL}
+        if call_id:
+            out["ai_call_id"] = call_id
         if out["is_template"]:
             # Be exact about WHY this is a blank to fill rather than a description. The card
             # used to say "no vision model described this image" in both cases, which reads as

@@ -746,6 +746,9 @@ _SCHEMA = [
     # hallucinated, missed_text, org_preference, other, unspecified). Additive; placed AFTER the
     # CREATE above — init_schema runs this list in order.
     "ALTER TABLE hitl_events ADD COLUMN IF NOT EXISTS reject_reason TEXT",
+    # Explicit provenance join: which recorded model call a reviewer acted on. Nullable for
+    # human-authored and historical decisions; never inferred from timestamps or filenames.
+    "ALTER TABLE hitl_events ADD COLUMN IF NOT EXISTS model_call_id TEXT",
     # Configurable file disposition (ADR 0003, Phase 3). PREVIEW ONLY as of this
     # migration -- api/disposition.py's matches() tells you which documents a policy
     # would select; nothing executes a real move/rename/archive/delete yet. That
@@ -2275,8 +2278,8 @@ class _PgAdapter:
     # original column set and therefore safely produce pending messages for the new dispatcher.
     # v32 adds the finding disposition ledger and its append-only transition evidence on top of
     # the complete v31 canonical stage schema.
-    _SCHEMA_VERSION = 32
-    _SCHEMA_CHECKSUM_AT_VERSION = "28f2e211cd425c4ec84bc39849c06b27"
+    _SCHEMA_VERSION = 33
+    _SCHEMA_CHECKSUM_AT_VERSION = "c49133bec1c04a43b419ab2c4b0b8693"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -6495,7 +6498,7 @@ class Store:
                        latency_ms: int, ok: bool, scan_id: str | None = None,
                        file: str | None = None, cost_usd: float = 0.0,
                        reason: str | None = None, temperature: float | None = None,
-                       prompt_version: str | None = None) -> None:
+                       prompt_version: str | None = None) -> str:
         """Append one AI-call provenance row (ADR 0019): which provider/model ran, WHERE
         (local/cloud zone), how long, at what cost, and — for a call that did not succeed —
         `reason`, WHICH way it failed (providers.REASON_*). Best-effort — a telemetry write
@@ -6503,14 +6506,16 @@ class Store:
         import uuid
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
+        call_id = uuid.uuid4().hex
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO ai_calls(id,ts,scan_id,file,surface,provider,model,zone,"
                 "latency_ms,ok,cost_usd,reason,temperature,prompt_version) "
                 "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                (uuid.uuid4().hex, now, scan_id, file, surface, provider, model, zone,
+                (call_id, now, scan_id, file, surface, provider, model, zone,
                  int(latency_ms), 1 if ok else 0, float(cost_usd), reason,
                  temperature, prompt_version))
+        return call_id
 
     def reserve_second_opinion(self, *, scan_id: str, file: str, policy: dict) -> tuple[bool, str]:
         """Atomically reserve one call against scan/day request and estimated-cost ceilings."""
@@ -6567,6 +6572,14 @@ class Store:
             else:
                 self._db.execute(cur, "SELECT * FROM ai_calls ORDER BY ts DESC LIMIT %s", (limit,))
             return self._db.fetchall(cur)
+
+    def ai_call_belongs_to_file(self, call_id: str, scan_id: str, file: str) -> bool:
+        """True only for an exact model-call provenance row on this scan and file."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT 1 AS found FROM ai_calls WHERE id=%s AND scan_id=%s AND file=%s LIMIT 1",
+                (call_id, scan_id, file))
+            return self._db.fetchone(cur) is not None
 
     # -- R18 · Comments on a finding -----------------------------------------------------------
     def add_finding_comment(self, scan_id: str, finding_key: str, author: str, body: str,
@@ -7058,7 +7071,8 @@ class Store:
     def record_hitl_event(self, scan_id: str, file: str, rule_id: str, item_id: str,
                           action: str, *, edited: bool = False, review_ms: int | None = None,
                           ai_value: str | None = None, final_value: str | None = None,
-                          reviewer: str | None = None, reject_reason: str | None = None) -> None:
+                          reviewer: str | None = None, reject_reason: str | None = None,
+                          model_call_id: str | None = None) -> None:
         """One immutable row per human review decision — the telemetry the review workspace
         reports on (reviewer time saved) and calibrates from (edit rate on High-confidence
         proposals). `reject_reason` (Reviewer Feedback Intelligence) records WHY a rejection
@@ -7068,11 +7082,12 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO hitl_events(id,scan_id,file,rule_id,item_id,action,edited,"
-                "review_ms,ai_value,final_value,reviewer,created_at,reject_reason) "
-                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                "review_ms,ai_value,final_value,reviewer,created_at,reject_reason,model_call_id) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
                 (uuid.uuid4().hex, scan_id, file, rule_id, item_id, action,
                  1 if edited else 0, review_ms, ai_value or None, final_value or None,
-                 reviewer, datetime.now(timezone.utc).isoformat(), reject_reason or None))
+                 reviewer, datetime.now(timezone.utc).isoformat(), reject_reason or None,
+                 model_call_id or None))
 
     # ADR 0019 §8.5 — thresholds for surfacing a rule as ready to migrate
     # Human-Assisted → AI-Assisted. All three conditions must hold simultaneously.
