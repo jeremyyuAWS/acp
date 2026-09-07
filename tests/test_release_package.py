@@ -137,3 +137,62 @@ def test_package_rejects_an_unsafe_custom_name(monkeypatch):
             scans.ReleasePackageRequest(files=["report.pdf"], package_name="Q3/exports"))
     assert exc.value.status_code == 422
     assert "ZIP filename" in exc.value.detail
+
+
+def test_package_can_flatten_folders_and_omit_manifest(monkeypatch):
+    monkeypatch.setattr(scans.core, "store", _Store())
+    monkeypatch.setattr(scans, "_remediated_bytes", lambda owner, sid, name: b"corrected")
+    response = scans.download_release_package(
+        "scan-1", _request(), scans.ReleasePackageRequest(
+            files=["report.pdf", "form.docx"], preserve_hierarchy=False,
+            include_manifest=False))
+
+    with zipfile.ZipFile(io.BytesIO(asyncio.run(_response_body(response)))) as archive:
+        assert set(archive.namelist()) == {"report.pdf", "form.docx"}
+
+
+def test_direct_download_returns_the_single_corrected_file(monkeypatch):
+    monkeypatch.setattr(scans.core, "store", _Store())
+    monkeypatch.setattr(scans, "_remediated_bytes", lambda owner, sid, name: b"corrected-pdf")
+    response = scans.download_release_package(
+        "scan-1", _request(), scans.ReleasePackageRequest(
+            files=["report.pdf"], download_format="original"))
+
+    assert response.body == b"corrected-pdf"
+    assert response.media_type == "application/pdf"
+    assert response.headers["content-disposition"] == 'attachment; filename="report.pdf"'
+
+
+def test_direct_download_requires_exactly_one_file(monkeypatch):
+    monkeypatch.setattr(scans.core, "store", _Store())
+    with pytest.raises(HTTPException) as exc:
+        scans.download_release_package(
+            "scan-1", _request(), scans.ReleasePackageRequest(
+                files=["report.pdf", "form.docx"], download_format="original"))
+    assert exc.value.status_code == 422
+    assert "exactly one" in exc.value.detail
+
+
+def test_package_preview_reports_paths_size_coverage_and_recommendation(monkeypatch):
+    store = _Store()
+    original = store.get_scan
+
+    def scan_with_sizes(sid, owner=None):
+        result = original(sid, owner)
+        if result:
+            result["files"][0]["size"] = 120
+            result["files"][1]["size"] = 80
+        return result
+
+    store.get_scan = scan_with_sizes
+    monkeypatch.setattr(scans.core, "store", store)
+    preview = scans.preview_release_package(
+        "scan-1", _request(), scans.ReleasePackagePreviewRequest(
+            files=["report.pdf"], preserve_hierarchy=False, include_manifest=False))
+
+    assert preview["paths"] == ["report.pdf"]
+    assert preview["estimated_bytes"] == 120
+    assert preview["estimate_complete"] is True
+    assert preview["recommended_format"] == "original"
+    assert preview["include_manifest"] is False
+    assert preview["can_download"] is True

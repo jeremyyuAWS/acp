@@ -40,11 +40,15 @@ BY_ID = {c.case_id: c for c in CASES}
 # ── the corpus ───────────────────────────────────────────────────────────────────────────────
 
 def test_corpus_is_the_specified_mix():
-    assert len(CASES) == 142
+    """Band 06 is derived, so its size tracks the lane table: it holds exactly the categories
+    bands 01-05 leave with a single case. It moved 42 -> 43 when pptx 1.4.5 became ASSISTED —
+    that pair had NO case at all while it was HUMAN, so the corpus gained a category rather
+    than shuffling one. See EXPECTED_COUNTS in the generator for the check that was run."""
+    assert len(CASES) == 143
     counts = {p.name: len(json.loads(p.read_text()))
               for p in sorted((ROOT / "evals" / "cases").glob("*.json"))}
     assert counts == {"01-common.json": 40, "02-malformed.json": 20, "03-must-abstain.json": 15,
-                      "04-adversarial.json": 15, "05-novel.json": 10, "06-coverage.json": 42}
+                      "04-adversarial.json": 15, "05-novel.json": 10, "06-coverage.json": 43}
 
 
 def test_corpus_matches_its_generator():

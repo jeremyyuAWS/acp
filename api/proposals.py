@@ -1156,8 +1156,9 @@ def propose_link_texts(path, ext: str, *, ai_enabled: bool = True, guidance: str
                 import ai as _ai
                 # model_is_available(), not is_available() — suggest_fix drafts the replacement
                 # link text with the TEXT model (_TEXT_GATE).
-                res = (_ai.suggest_fix(sc, "Link Purpose", "A", "",
-                                       detail=f'link text "{text}" → {href}', guidance=guidance)
+                res = (_ai.suggest_fix(sc, "Link Purpose", "A", str(path),
+                                       detail=f'link text "{text}" → {href}', guidance=guidance,
+                                       file_format=(ext or "").lower().lstrip("."))
                        if _ai.model_is_available() else None)
             except Exception:
                 res = None

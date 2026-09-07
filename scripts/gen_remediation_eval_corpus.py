@@ -721,8 +721,14 @@ BANDS = {
 # 06 is DERIVED from 01-05: it holds exactly the categories they leave single. Its count moving
 # means a category elsewhere gained or lost a case, which is worth a deliberate look, not a
 # silent re-pin.
+#
+# 42 -> 43 when pptx 1.4.5 became ASSISTED (the image-of-text replacement lane). The look, run
+# before re-pinning: pptx:1.4.5 went from 0 cases to 1 — a category that did not exist in the
+# corpus at all, because a HUMAN pair only ever appears as an abstain case and this one had
+# none — and it displaced one of docx:3.1.1's four, which keeps three and stays well clear of
+# the two-case routing floor. So this is a category GAINED, which is the point of the lane.
 EXPECTED_COUNTS = {"01-common.json": 40, "02-malformed.json": 20, "03-must-abstain.json": 15,
-                   "04-adversarial.json": 15, "05-novel.json": 10, "06-coverage.json": 42}
+                   "04-adversarial.json": 15, "05-novel.json": 10, "06-coverage.json": 43}
 
 
 def build_all() -> dict[str, list[dict[str, Any]]]:

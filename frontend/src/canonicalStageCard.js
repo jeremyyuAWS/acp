@@ -15,6 +15,40 @@ const PIPELINE_STAGE_ORDER = {
   discover: 0, assess: 1, remediate: 2, release: 3,
 }
 
+const VIEW_STAGE = {
+  discover: 'discover', assess: 'assess', remediate: 'remediate',
+  publish: 'release', monitor: 'conformance',
+}
+
+export function priorCanonicalStages(lineage, view) {
+  const currentStage = VIEW_STAGE[view]
+  const currentOrder = currentStage === 'conformance' ? 4 : PIPELINE_STAGE_ORDER[currentStage]
+  if (currentOrder == null) return []
+  const workflowRevision = number(lineage?.workflow_revision)
+  const stages = Array.isArray(lineage?.stages) ? lineage.stages : []
+  const matching = stages.filter((stage) => {
+    const order = PIPELINE_STAGE_ORDER[stage.stage]
+    return order != null && order < currentOrder
+      && workflowRevision != null
+      && number(stage.workflow_revision) === workflowRevision
+  })
+  const newestByStage = new Map()
+  matching.forEach((stage) => {
+    const previous = newestByStage.get(stage.stage)
+    if (!previous || Number(stage.revision || 0) > Number(previous.revision || 0)) {
+      newestByStage.set(stage.stage, stage)
+    }
+  })
+  return [...newestByStage.values()].sort((left, right) =>
+    PIPELINE_STAGE_ORDER[left.stage] - PIPELINE_STAGE_ORDER[right.stage])
+}
+
+export function stageNeedsAttention(snapshot) {
+  return snapshot?.integrity?.ok === false
+    || snapshot?.reconciliation?.exact === false
+    || ['failed', 'cancelled', 'integrity_failed', 'reconciling'].includes(snapshot?.state)
+}
+
 const DOMAIN_BUCKET_LABELS = {
   waiting: 'Waiting', processing: 'Processing', assessed: 'Assessed',
   published: 'Published · verified', completed_unverified: 'Completed · not verified',

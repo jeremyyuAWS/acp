@@ -2990,9 +2990,9 @@
       {
         "id": "obs-1",
         "kind": "finding",
-        "text": "2.4.4 link text is 'read more'; the sentence reads 'To compare dental plans, read more.'",
+        "text": "1.4.5 image is 88% text by area; OCR reads 'Open enrollment closes March 31'",
         "defect": true,
-        "criterion": "2.4.4"
+        "criterion": "1.4.5"
       },
       {
         "id": "noise-lint-3340",
@@ -3003,6 +3003,105 @@
         "id": "noise-size-3341",
         "kind": "telemetry",
         "text": "document is 3.1 MB, above the 2 MB soft warning"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.4.5",
+      "component": "drawing.inline",
+      "root_cause": "image_of_text",
+      "severity": "AA"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 9.0,
+    "allowed_actions": [
+      "propose_value",
+      "request_approval",
+      "apply_approved",
+      "escalate"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_approved",
+        "target": "image.textEquivalent",
+        "example_value": "Open enrollment closes March 31",
+        "value_matches": [
+          "March 31"
+        ],
+        "value_forbidden": [
+          "image of"
+        ],
+        "value_max_words": 30
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.4.5"
+      },
+      {
+        "check": "approval_recorded",
+        "field": "image.textEquivalent"
+      },
+      {
+        "check": "field_matches",
+        "field": "image.textEquivalent",
+        "pattern": "March 31"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {},
+      "findings": {
+        "1.4.5": "open"
+      },
+      "scope": [
+        "image.textEquivalent"
+      ],
+      "derived": {}
+    },
+    "notes": "assisted lane: a prefilled value a reviewer approves before it is written \u2014 second observation for a single-case category"
+  },
+  {
+    "case_id": "rem-x35",
+    "suite": "detection",
+    "environment": {
+      "format": "pptx",
+      "filename": "pptx-second-35.pptx",
+      "lane": "assisted"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "2.4.4 link text is 'read more'; the sentence reads 'To compare dental plans, read more.'",
+        "defect": true,
+        "criterion": "2.4.4"
+      },
+      {
+        "id": "noise-size-3350",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
+      },
+      {
+        "id": "noise-scan-3351",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
       }
     ],
     "expected_diagnosis": {
@@ -3080,11 +3179,11 @@
     "notes": "assisted lane: a prefilled value a reviewer approves before it is written \u2014 second observation for a single-case category"
   },
   {
-    "case_id": "rem-x35",
-    "suite": "detection",
+    "case_id": "rem-x36",
+    "suite": "diagnosis",
     "environment": {
       "format": "pptx",
-      "filename": "pptx-second-35.pptx",
+      "filename": "pptx-second-36.pptx",
       "lane": "assisted"
     },
     "observations": [
@@ -3096,14 +3195,14 @@
         "criterion": "3.1.2"
       },
       {
-        "id": "noise-size-3350",
-        "kind": "telemetry",
-        "text": "document is 3.1 MB, above the 2 MB soft warning"
-      },
-      {
-        "id": "noise-scan-3351",
+        "id": "noise-scan-3360",
         "kind": "telemetry",
         "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      },
+      {
+        "id": "noise-meta-3361",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
       }
     ],
     "expected_diagnosis": {
@@ -3179,11 +3278,11 @@
     "notes": "assisted lane: a prefilled value a reviewer approves before it is written \u2014 second observation for a single-case category"
   },
   {
-    "case_id": "rem-x36",
-    "suite": "diagnosis",
+    "case_id": "rem-x37",
+    "suite": "planning",
     "environment": {
       "format": "xlsx",
-      "filename": "xlsx-second-36.xlsx",
+      "filename": "xlsx-second-37.xlsx",
       "lane": "assisted"
     },
     "observations": [
@@ -3195,14 +3294,14 @@
         "criterion": "1.1.1"
       },
       {
-        "id": "noise-scan-3360",
-        "kind": "telemetry",
-        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
-      },
-      {
-        "id": "noise-meta-3361",
+        "id": "noise-meta-3370",
         "kind": "metadata",
         "text": "author field is empty (not a WCAG criterion)"
+      },
+      {
+        "id": "noise-lint-3371",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
       }
     ],
     "expected_diagnosis": {
@@ -3281,11 +3380,11 @@
     "notes": "assisted lane: a prefilled value a reviewer approves before it is written \u2014 second observation for a single-case category"
   },
   {
-    "case_id": "rem-x37",
-    "suite": "planning",
+    "case_id": "rem-x38",
+    "suite": "execution",
     "environment": {
       "format": "xlsx",
-      "filename": "xlsx-second-37.xlsx",
+      "filename": "xlsx-second-38.xlsx",
       "lane": "assisted"
     },
     "observations": [
@@ -3297,14 +3396,14 @@
         "criterion": "1.3.3"
       },
       {
-        "id": "noise-meta-3370",
-        "kind": "metadata",
-        "text": "author field is empty (not a WCAG criterion)"
-      },
-      {
-        "id": "noise-lint-3371",
+        "id": "noise-lint-3380",
         "kind": "lint",
         "text": "file uses a deprecated content-type header"
+      },
+      {
+        "id": "noise-size-3381",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
       }
     ],
     "expected_diagnosis": {
@@ -3381,11 +3480,11 @@
     "notes": "assisted lane: a prefilled value a reviewer approves before it is written \u2014 second observation for a single-case category"
   },
   {
-    "case_id": "rem-x38",
-    "suite": "execution",
+    "case_id": "rem-x39",
+    "suite": "operational",
     "environment": {
       "format": "xlsx",
-      "filename": "xlsx-second-38.xlsx",
+      "filename": "xlsx-second-39.xlsx",
       "lane": "auto"
     },
     "observations": [
@@ -3397,14 +3496,14 @@
         "criterion": "1.4.3"
       },
       {
-        "id": "noise-lint-3380",
-        "kind": "lint",
-        "text": "file uses a deprecated content-type header"
-      },
-      {
-        "id": "noise-size-3381",
+        "id": "noise-size-3390",
         "kind": "telemetry",
         "text": "document is 3.1 MB, above the 2 MB soft warning"
+      },
+      {
+        "id": "noise-scan-3391",
+        "kind": "telemetry",
+        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
       }
     ],
     "expected_diagnosis": {
@@ -3470,11 +3569,11 @@
     "notes": "auto lane: xlsx 1.4.3 is deterministic in REMEDIATION \u2014 second observation for a single-case category"
   },
   {
-    "case_id": "rem-x39",
-    "suite": "operational",
+    "case_id": "rem-x40",
+    "suite": "detection",
     "environment": {
       "format": "xlsx",
-      "filename": "xlsx-second-39.xlsx",
+      "filename": "xlsx-second-40.xlsx",
       "lane": "assisted"
     },
     "observations": [
@@ -3486,14 +3585,14 @@
         "criterion": "1.4.5"
       },
       {
-        "id": "noise-size-3390",
-        "kind": "telemetry",
-        "text": "document is 3.1 MB, above the 2 MB soft warning"
-      },
-      {
-        "id": "noise-scan-3391",
+        "id": "noise-scan-3400",
         "kind": "telemetry",
         "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
+      },
+      {
+        "id": "noise-meta-3401",
+        "kind": "metadata",
+        "text": "author field is empty (not a WCAG criterion)"
       }
     ],
     "expected_diagnosis": {
@@ -3569,11 +3668,11 @@
     "notes": "assisted lane: a prefilled value a reviewer approves before it is written \u2014 second observation for a single-case category"
   },
   {
-    "case_id": "rem-x40",
-    "suite": "detection",
+    "case_id": "rem-x41",
+    "suite": "diagnosis",
     "environment": {
       "format": "xlsx",
-      "filename": "xlsx-second-40.xlsx",
+      "filename": "xlsx-second-41.xlsx",
       "lane": "auto"
     },
     "observations": [
@@ -3585,14 +3684,14 @@
         "criterion": "2.4.2"
       },
       {
-        "id": "noise-scan-3400",
-        "kind": "telemetry",
-        "text": "scan completed in 4.2s; 3 pages, 1 embedded font"
-      },
-      {
-        "id": "noise-meta-3401",
+        "id": "noise-meta-3410",
         "kind": "metadata",
         "text": "author field is empty (not a WCAG criterion)"
+      },
+      {
+        "id": "noise-lint-3411",
+        "kind": "lint",
+        "text": "file uses a deprecated content-type header"
       }
     ],
     "expected_diagnosis": {
@@ -3658,11 +3757,11 @@
     "notes": "auto lane: xlsx 2.4.2 is deterministic in REMEDIATION \u2014 second observation for a single-case category"
   },
   {
-    "case_id": "rem-x41",
-    "suite": "diagnosis",
+    "case_id": "rem-x42",
+    "suite": "planning",
     "environment": {
       "format": "xlsx",
-      "filename": "xlsx-second-41.xlsx",
+      "filename": "xlsx-second-42.xlsx",
       "lane": "assisted"
     },
     "observations": [
@@ -3674,14 +3773,14 @@
         "criterion": "2.4.4"
       },
       {
-        "id": "noise-meta-3410",
-        "kind": "metadata",
-        "text": "author field is empty (not a WCAG criterion)"
-      },
-      {
-        "id": "noise-lint-3411",
+        "id": "noise-lint-3420",
         "kind": "lint",
         "text": "file uses a deprecated content-type header"
+      },
+      {
+        "id": "noise-size-3421",
+        "kind": "telemetry",
+        "text": "document is 3.1 MB, above the 2 MB soft warning"
       }
     ],
     "expected_diagnosis": {

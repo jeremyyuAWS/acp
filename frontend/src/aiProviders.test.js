@@ -23,6 +23,7 @@ describe('AI Providers settings — the key is never entered in the UI (ADR 0019
     expect(api).toMatch(/getSecondOpinionPolicy\s*=/)
     expect(api).toMatch(/putSecondOpinionPolicy\s*=/)
     expect(api).toMatch(/\/ai\/second-opinion-policy/)
+    expect(api).toMatch(/\/ai\/remediation-pilot/)
     expect(api).toMatch(/enabled: false/)
     expect(s).toMatch(/copied into each new scan/i)
     expect(s).toMatch(/already running/i)
@@ -32,6 +33,8 @@ describe('AI Providers settings — the key is never entered in the UI (ADR 0019
   it('the panel sends key_secret_ref, never a key value, and states the key is not entered here', () => {
     const s = read('Settings.jsx')
     expect(s).toMatch(/AIProvidersPanel/)
+    expect(s).toMatch(/Sonnet-assisted remediation pilot/)
+    expect(s).toMatch(/30-day gates: failures ≤10%/)
     // the payload built in save() carries key_secret_ref and no api_key/key field
     const save = s.slice(s.indexOf('putAiProvider({'), s.indexOf('putAiProvider({') + 400)
     expect(save).toMatch(/key_secret_ref:/)

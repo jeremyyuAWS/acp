@@ -7,7 +7,8 @@ import { dirname, join } from 'node:path'
 // classification is proven server-side; this pins that the UI fetches it, warns honestly, and
 // only ever offers a re-scan for files it actually found changed.
 const HERE = dirname(fileURLToPath(import.meta.url))
-const pub = () => readFileSync(join(HERE, 'Publish.jsx'), 'utf8')
+const pub = () => ['Publish.jsx', 'ReleaseFileSelection.jsx']
+  .map((file) => readFileSync(join(HERE, file), 'utf8')).join('\n')
 const api = () => readFileSync(join(HERE, 'api.js'), 'utf8')
 const mon = () => readFileSync(join(HERE, 'Monitor.jsx'), 'utf8')
 
@@ -45,10 +46,10 @@ describe('Release Center: source-staleness UI', () => {
   it('per-row badges are honest: stale is flagged, unreachable is muted, nothing else claims “unchanged”', () => {
     const s = pub()
     // Both branches are gated on the server-derived state; the visible text is honest.
-    expect(s).toMatch(/srcOf\(f\) === 'stale' &&/)
-    expect(s).toMatch(/⚠ source changed/)
-    expect(s).toMatch(/srcOf\(f\) === 'unavailable' &&/)
-    expect(s).toMatch(/source unreachable/)
+    expect(s).toMatch(/sourceState\(file\) === 'stale'/)
+    expect(s).toMatch(/Source changed/)
+    expect(s).toMatch(/sourceState\(file\) === 'unavailable'/)
+    expect(s).toMatch(/Source unreachable/)
     // No blanket "source unchanged" / "up to date" claim rendered per row.
     expect(s).not.toMatch(/source unchanged/)
     expect(s).not.toMatch(/source up to date/)

@@ -1359,6 +1359,19 @@ class SecondOpinionPolicyUpdate(BaseModel):
     estimated_cost_per_request_usd: float = 0.01
 
 
+class RemediationPilotUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool
+    categories: list[str]
+    max_calls: int = 100
+    max_spend_usd: float = 5.0
+    min_sample: int = 10
+    max_failure_rate: float = 0.10
+    min_acceptance_rate: float = 0.90
+    max_edit_rate: float = 0.20
+    min_validation_clear_rate: float = 0.95
+
+
 @router.get("/ai/second-opinion-policy")
 def get_second_opinion_policy(request: Request):
     """Owner-visible consent policy; credentials and provider output are never part of it."""
@@ -1384,6 +1397,35 @@ def put_second_opinion_policy(body: SecondOpinionPolicyUpdate, request: Request)
                                     f"{','.join(policy['criteria']) or '(none)'} · threshold="
                                     f"{policy['confidence_threshold']} · future scans only"))
     return policy
+
+
+@router.get("/ai/remediation-pilot")
+def get_remediation_pilot(request: Request):
+    """Live, owner-visible pilot state including the server's automatic stop decision."""
+    _require_admin(request)
+    from remediation_pilot import pilot_status
+    return pilot_status(core.store)
+
+
+@router.put("/ai/remediation-pilot")
+def put_remediation_pilot(body: RemediationPilotUpdate, request: Request):
+    """Arm or stop only the evidence-approved assisted lanes; arbitrary lanes are rejected."""
+    _require_admin(request)
+    from remediation_pilot import (ALLOWED_CATEGORIES, SETTING_KEY, normalize_policy,
+                                   pilot_status)
+    unknown = sorted(set(body.categories) - set(ALLOWED_CATEGORIES))
+    if unknown:
+        raise HTTPException(422, f"categories are not approved for this pilot: {', '.join(unknown)}")
+    if body.enabled and not body.categories:
+        raise HTTPException(422, "at least one approved category is required when enabled")
+    policy = normalize_policy(body.model_dump())
+    core.store.set_setting(SETTING_KEY, json.dumps(policy, sort_keys=True))
+    actor = getattr(request.state, "user_email", None) or "admin"
+    core.store.log_decision(actor, "settings.remediation_model_pilot",
+                            detail=(f"enabled={policy['enabled']} · categories="
+                                    f"{','.join(policy['categories']) or '(none)'} · "
+                                    "server stop gates active"))
+    return pilot_status(core.store)
 
 
 @router.get("/ai/providers")

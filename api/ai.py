@@ -1261,7 +1261,7 @@ def _suggest_prompt(rule_id: str, rule_name: str, filename: str, detail: str, gu
 def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
                 detail: str = "", image_bytes: bytes | None = None, style: str = "",
                 guidance: str = "", scan_id: str | None = None,
-                file: str | None = None) -> dict | None:
+                file: str | None = None, file_format: str | None = None) -> dict | None:
     """Draft a concrete, human-approvable fix value (alt text / link text / title) for a
     semantic finding via the local model. Returns None when Ollama is unavailable.
 
@@ -1291,13 +1291,24 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
     prompt = _suggest_prompt(rule_id, rule_name, filename, detail, guidance)
     import time as _t
     _t0 = _t.monotonic()
-    # Try the cloud text provider when configured — zero-configuration fallback to Ollama.
+    # Only the two evidence-approved 2.4.4 lanes may override the default cloud model. The
+    # server-side gate is checked on every call, so disabling the UI or crossing a stop threshold
+    # takes effect immediately and cannot be bypassed by a stale browser.
     import providers as _prov
-    _cr = _prov.claude_text_generate(prompt, temperature=0.4, max_tokens=800)
+    _pilot_model = None
+    if rule_id == "2.4.4" and file_format:
+        try:
+            import core as _core
+            from remediation_pilot import decision as _pilot_decision
+            _pilot_model = _pilot_decision(_core.store, file_format, rule_id).get("model")
+        except Exception:
+            _pilot_model = None
+    _cr = _prov.claude_text_generate(prompt, temperature=0.4, max_tokens=800,
+                                     model=_pilot_model)
     if _cr is not None:
         text = _cr["text"].strip().strip('"').strip()
         if text:
-            call_id = _trace_ai("suggest", prompt, text, _t0, ok=True,
+            call_id = _trace_ai("remediation-pilot" if _pilot_model else "suggest", prompt, text, _t0, ok=True,
                       provider=_cr["provider"], zone=_cr["zone"], model=_cr["model"],
                       prompt_tokens=_cr["prompt_tokens"],
                       completion_tokens=_cr["completion_tokens"],
