@@ -93,6 +93,28 @@ class AsyncMemoryRedis:
         return None
 
 
+class ObservedTransport:
+    """Record each event's publish-to-observable latency at its own write boundary."""
+
+    def __init__(self, transport):
+        self.transport = transport
+        self.redis = transport.redis
+        self._latencies_ms: dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    def write(self, event):
+        started_ns = time.perf_counter_ns()
+        row_id = self.transport.write(event)
+        latency_ms = (time.perf_counter_ns() - started_ns) / 1_000_000
+        with self._lock:
+            self._latencies_ms[event.event_id] = latency_ms
+        return row_id
+
+    def latency_ms(self, event_id: str) -> float:
+        with self._lock:
+            return self._latencies_ms[event_id]
+
+
 @dataclass(frozen=True)
 class GateConfig:
     tenants: int = 4
@@ -145,7 +167,8 @@ def run(config: GateConfig) -> dict:
         transport.retention = 10_000
         reader = AsyncMemoryRedis(memory)
 
-    publisher = realtime_shadow.ShadowPublisher(transport)
+    observed_transport = ObservedTransport(transport)
+    publisher = realtime_shadow.ShadowPublisher(observed_transport)
     drops_before = realtime_shadow.METRICS.snapshot()["publish_drop_total"]
     submit_latencies = []
     progress_submitted = config.tenants * config.jobs_per_tenant * config.progress_per_job
@@ -198,9 +221,8 @@ def run(config: GateConfig) -> dict:
         reader_for_replay, reader = reader, None
         per_owner = asyncio.run(_replay_all(reader_for_replay, owners))
         all_events = [event for rows in per_owner.values() for _row_id, event in rows]
-        observed_ns = time.perf_counter_ns()
         gateway_latencies = [
-            (observed_ns - int(event.payload["emitted_ns"])) / 1_000_000 for event in all_events
+            observed_transport.latency_ms(event.event_id) for event in all_events
         ]
         leakage = sum(
             event.owner_scope != owner_scope(owner)
