@@ -5,6 +5,7 @@ import { PRI_COLOR } from './ontology.js'
 import { baFor, scOf, remediateHtml } from './BeforeAfter.jsx'
 import { allRules, PLAIN_NAMES } from './rules/index.js'
 import { explainFinding, getFileContent, uploadToDrive, markRemediated, remediateScan, getQueueJob, queueHitlReview, queueHitlVerify, getFileRemediationState, getFileRemediationDiffs, downloadRemediated, getRules, getRubric, getConfig, getCapability, listHitlQueue, updateHitlItem, openTraceUrl, getDocumentTimeline } from './api.js'
+import { reviewableInPlace } from './reviewCard.js'
 import EvidenceCard from './EvidenceCard.jsx'
 import { CAPABILITY_FALLBACK, fmtOf, autoSCs, modeFor, reviewRecommended } from './capability.js'
 import PagePreview from './PagePreview.jsx'
@@ -557,8 +558,11 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
     setHitlItems([]); setReviewSc(null)
     if (!scanId || !file?.file) return
     let live = true
-    const load = () => listHitlQueue(scanId, 'pending')
-      .then((rows) => { if (live) setHitlItems((rows || []).filter((r) => r.file === file.file)) })
+    // Pending rows, plus an approved row whose write was refused credit (apply_outcome) — the
+    // reviewer approved, nothing changed, and this card is where they learn why. reviewableInPlace
+    // is the one definition of that set.
+    const load = () => listHitlQueue(scanId)
+      .then((rows) => { if (live) setHitlItems((rows || []).filter((r) => r.file === file.file && reviewableInPlace(r))) })
       .catch(() => {})
     load()
     window.addEventListener('acp:hitl-changed', load)

@@ -87,6 +87,21 @@ def pg():
     return st
 
 
+def test_maintenance_lease_elects_one_backfill_owner_under_real_concurrency(pg):
+    workers = 8
+    barrier = threading.Barrier(workers)
+
+    def claim(_index):
+        barrier.wait()
+        return pg.claim_maintenance_lease(
+            "concurrent-stage-backfill", lease_seconds=60,
+            now="2026-09-07T00:00:00+00:00")
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        outcomes = list(pool.map(claim, range(workers)))
+    assert Counter(outcomes) == Counter({False: workers - 1, True: 1})
+
+
 def _enqueue_many(st, n, job_type="t_pg"):
     return [st.enqueue_job(job_type, {"i": i}) for i in range(n)]
 

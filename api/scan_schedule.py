@@ -11,6 +11,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 DAYS = tuple(range(7))  # Monday=0, matching datetime.weekday() and the HTTP contract.
+DEFAULT_CATCH_UP = timedelta(days=7)
 
 
 class ScheduleError(ValueError):
@@ -95,6 +96,53 @@ def due_occurrence(schedule: dict, now: datetime, *, grace: timedelta = timedelt
     return None
 
 
+def due_or_most_recent_occurrence(
+        schedule: dict, now: datetime, *, grace: timedelta = timedelta(minutes=5),
+        catch_up: timedelta = DEFAULT_CATCH_UP) -> dict | None:
+    """Return the on-time occurrence or at most one newest missed occurrence.
+
+    Catch-up is bounded both by ``catch_up`` and by the schedule's ``updated_at``. The latter
+    prevents enabling a schedule after today's chosen time from manufacturing a historic run.
+    A durable occurrence key makes repeated scheduler ticks harmless.
+    """
+    current = due_occurrence(schedule, now, grace=grace)
+    if current:
+        return {**current, "catch_up": False}
+    if not schedule.get("enabled"):
+        return None
+    days = normalize_days(schedule.get("days"))
+    if not days or catch_up <= timedelta(0):
+        return None
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    now = now.astimezone(timezone.utc)
+    floor = now - catch_up
+    updated_at = schedule.get("updated_at")
+    if updated_at:
+        try:
+            saved = datetime.fromisoformat(str(updated_at).replace("Z", "+00:00"))
+            if saved.tzinfo is None:
+                saved = saved.replace(tzinfo=timezone.utc)
+            floor = max(floor, saved.astimezone(timezone.utc))
+        except (TypeError, ValueError):
+            return None  # corrupt state must not manufacture background work
+    tz_name = str(schedule.get("timezone") or "UTC")
+    local_today = now.astimezone(zone(tz_name)).date()
+    for offset in range(8):
+        day = local_today - timedelta(days=offset)
+        if day.weekday() not in days:
+            continue
+        instant = occurrence_instant(day, str(schedule.get("local_time")), tz_name)
+        if floor <= instant <= now:
+            return {
+                "occurrence_key": occurrence_key(schedule, day),
+                "scheduled_for": instant.isoformat(),
+                "local_date": day.isoformat(),
+                "catch_up": True,
+            }
+    return None
+
+
 def next_occurrence(schedule: dict, now: datetime) -> datetime | None:
     if not schedule.get("enabled"):
         return None
@@ -114,3 +162,67 @@ def next_occurrence(schedule: dict, now: datetime) -> datetime | None:
         if instant > now:
             return instant
     return None
+
+
+def in_blackout(schedule: dict, instant: datetime) -> bool:
+    """Whether ``instant`` falls in one of the schedule's local blackout windows.
+
+    A window that crosses midnight belongs to the weekday on which it starts.  Thus a
+    Friday 22:00-02:00 window includes early Saturday, which is how operators describe it.
+    Invalid persisted windows fail closed: a malformed guardrail must not silently permit work.
+    """
+    windows = schedule.get("blackout_windows") or ()
+    if not windows:
+        return False
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=timezone.utc)
+    local = instant.astimezone(zone(str(schedule.get("timezone") or "UTC")))
+    current = local.timetz().replace(tzinfo=None)
+    for window in windows:
+        days = normalize_days(window.get("days"))
+        start = local_time(window.get("start"))
+        end = local_time(window.get("end"))
+        if start == end:
+            raise ScheduleError("a blackout start and end cannot be equal")
+        if start < end:
+            if local.weekday() in days and start <= current < end:
+                return True
+        else:
+            if local.weekday() in days and current >= start:
+                return True
+            if (local.weekday() - 1) % 7 in days and current < end:
+                return True
+    return False
+
+
+def prewarm_candidates(schedules, now: datetime, *, default_lead_minutes: int = 15) -> list[dict]:
+    """Return upcoming occurrences whose configured pre-warm window has opened.
+
+    This is only a forecast.  The caller persists an idempotent capacity intent; it does not
+    mutate Azure from the scheduler process.  Existing queue-driven scale-down therefore keeps
+    its claimed-work protection and drain semantics.
+    """
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    now = now.astimezone(timezone.utc)
+    due = []
+    for cfg in schedules:
+        try:
+            lead = int((cfg.get("queue_policy") or {}).get(
+                "prewarm_minutes", cfg.get("prewarm_minutes", default_lead_minutes)))
+            upcoming = next_occurrence(cfg, now)
+            if lead <= 0 or upcoming is None or not (now <= upcoming <= now + timedelta(minutes=lead)):
+                continue
+            if in_blackout(cfg, upcoming):
+                continue
+            local_day = upcoming.astimezone(zone(str(cfg.get("timezone") or "UTC"))).date()
+            due.append({
+                "occurrence_key": occurrence_key(cfg, local_day),
+                "owner_email": cfg.get("owner_email"),
+                "source": cfg.get("source") or "drive",
+                "scheduled_for": upcoming.isoformat(),
+                "lead_minutes": lead,
+            })
+        except (ScheduleError, TypeError, ValueError):
+            continue
+    return due

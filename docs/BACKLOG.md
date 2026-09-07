@@ -686,9 +686,16 @@ thing the PRD does not mention.
   **Reviewer-outcome linkage started:** on-demand text remediation drafts now retain the exact
   `ai_calls.id` through the review card and persist it on the immutable HITL event. The API rejects
   an identifier from another scan or file rather than guessing attribution. Remaining linkage:
-  post-write validation events. Vision and server-precomputed single-proposal cards now carry the
-  exact producing call as well; multi-instance cards deliberately remain unattributed until the
-  review contract can express one decision per generated value without false precision.
+  criterion-level comparison and rollout gates. Post-write validation now records an immutable
+  outcome against the exact accepted model call — verified-cleared, verified-regressed (the
+  target cleared but a criterion that did not fail before the write does now, measured against a
+  baseline re-scan the apply job takes once), still-failing, could-not-verify, or not written
+  because the approved content no longer resolves — with the newly-failing criteria on the row.
+  Settings → AI usage reports reviewer decisions and these outcomes per provider/model/zone,
+  joined only through recorded call ids, and the document timeline shows each outcome. Vision
+  and server-precomputed single-proposal cards carry the exact producing call as well;
+  multi-instance cards deliberately remain unattributed until the review contract can express
+  one decision per generated value without false precision.
 
   **Conformance and Release provenance slices implemented:** the immutable certification PDF now carries the
   same exact provider/model/zone rows with measured success/failure and latency, and states that

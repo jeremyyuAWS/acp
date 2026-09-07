@@ -162,6 +162,34 @@ def test_output_manifest_is_sealed_from_deterministic_effect_receipts(isolated_s
     assert final["output_manifest_id"] == manifest["manifest_id"]
 
 
+def test_successful_runtime_batch_seals_output_automatically(isolated_store):
+    sid = _scan(isolated_store, "runtime-seal")
+    execution = _submit(isolated_store, sid)
+    for worker in ("worker-1", "worker-2"):
+        job = isolated_store.claim_job(worker, job_types=("remediate_file",))
+        assert job is not None
+        assert isolated_store.complete_job(
+            job["id"], worker_id=worker, attempt=int(job["attempts"])) is True
+
+    current = isolated_store.get_stage_execution(execution["batch_id"], owner=OWNER)
+    assert current["state"] == "succeeded"
+    manifest = isolated_store.get_stage_output_manifest(current["output_manifest_id"], owner=OWNER)
+    assert manifest["item_count"] == 2
+    assert {entry["input_id"] for entry in manifest["entries"]} == {"a.docx", "b.docx"}
+    assert {entry["outcome"] for entry in manifest["entries"]} == {"completed"}
+
+
+def test_current_stage_output_manifest_exposes_only_successfully_sealed_output(isolated_store):
+    sid = _scan(isolated_store, "sealed-reader")
+    assert isolated_store.current_stage_output_manifest(sid, "discover") is None
+    job = isolated_store.claim_job("discover-worker", job_types=("scan_discover",))
+    assert isolated_store.complete_job(
+        job["id"], worker_id="discover-worker", attempt=int(job["attempts"])) is True
+    manifest = isolated_store.current_stage_output_manifest(sid, "discover")
+    assert manifest is not None
+    assert manifest["stage"] == "discover"
+
+
 def test_sealed_manifest_is_required_and_carried_across_stage_handoff(isolated_store):
     sid = _scan(isolated_store)
     upstream = _submit(isolated_store, sid)

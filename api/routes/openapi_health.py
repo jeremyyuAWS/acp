@@ -245,6 +245,14 @@ HEALTH_OPENAPI_SPEC: dict = {
                                    "example": "09:00"},
                     "days": {"type": "array", "items": {"type": "integer", "minimum": 0, "maximum": 6},
                              "description": "Local weekdays, Monday=0 through Sunday=6."},
+                    "source_config": {"type": "object", "description": "Connector and saved include/exclude identifiers."},
+                    "notifications": {"type": "string", "enum": ["off", "failures", "changes_and_failures", "all"]},
+                    "execution": {"type": "object", "description": "Queue-aware deferral preferences."},
+                    "guardrails": {"type": "object", "readOnly": True,
+                                     "description": "Effective administrator limits and blackout window."},
+                    "history": {"type": "array", "items": {"type": "object"},
+                                "description": "Recent owner-scoped planned/start/completion outcomes."},
+                    "reliability": {"type": "object", "description": "Owner-scoped scheduling counters and on-time rate."},
                     "interval_minutes": {"type": "integer", "nullable": True,
                                          "description": "Deprecated legacy cadence; null for wall-clock schedules."},
                     "next_at": {"type": "string", "nullable": True, "format": "date-time"},
@@ -423,6 +431,18 @@ HEALTH_OPENAPI_SPEC: dict = {
                 "(added 2026-08-28, #909).",
                 {"$ref": "#/components/schemas/ScheduleResponse"}, security=_SESSION_AUTH,
             ),
+        },
+        "/schedule/history": {
+            "get": _get("Scheduled occurrence history", "Monitoring",
+                         "Owner-scoped planned, actual start, completion, delay and result records.",
+                         {"type": "object", "properties": {"items": {"type": "array", "items": {"type": "object"}}}},
+                         security=_SESSION_AUTH),
+        },
+        "/schedule/notifications": {
+            "get": _get("Scheduled scan notifications", "Monitoring",
+                         "Durable owner-scoped in-app notifications.",
+                         {"type": "object", "properties": {"items": {"type": "array", "items": {"type": "object"}}}},
+                         security=_SESSION_AUTH),
         },
         "/ai/status": {
             "get": _get(

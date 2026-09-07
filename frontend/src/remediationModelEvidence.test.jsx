@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-// Keep the acceptance contract close to the UI: operational success is measured, while reviewer
-// acceptance/edit and post-write validation remain explicitly unavailable until call IDs are
-// linked to those outcome records.
+// Keep the acceptance contract close to the UI: operational success is measured; reviewer
+// decisions and post-write validation are shown only where the decision recorded the exact
+// model call, and a model with none reads "Not linked" rather than a rate over nothing.
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -15,7 +15,12 @@ describe('remediation model evidence', () => {
     expect(source).toContain('costs?.month?.by_model || []')
     expect(source).toContain('Remediation model evidence')
     expect(source).toContain('Success means the model call completed')
-    expect(source).toContain('Reviewer acceptance, edit rate and post-write validation are not reported here yet')
+    expect(source).toContain('<th>Reviewer decisions</th><th>Post-write validation</th>')
+    expect(source).toContain('reviewedCell(m.reviewed)')
+    expect(source).toContain('validationCell(m.validation)')
+    expect(source).toContain("return 'Not linked'")
+    expect(source).toContain('read as not linked rather than estimated')
     expect(source).not.toMatch(/estimated acceptance|estimated edit rate/i)
+    expect(source).not.toContain('are not reported here yet')
   })
 })

@@ -110,6 +110,15 @@ def _enqueue_stage_batch(*args, **kwargs) -> dict:
         }) from exc
 
 
+def _sealed_stage_input(sid: str, upstream_stage: str,
+                        fallback_snapshot_id: str) -> tuple[str, str | None]:
+    """Bind downstream work to the current sealed upstream output when available."""
+    reader = getattr(core.store, "current_stage_output_manifest", None)
+    manifest = reader(sid, upstream_stage) if callable(reader) else None
+    manifest_id = (manifest or {}).get("manifest_id")
+    return (manifest_id, manifest_id) if manifest_id else (fallback_snapshot_id, None)
+
+
 def _inv_capability(row: dict) -> dict:
     """Add the estate capability {format, status} to a scan_inventory row, derived from its mime/name
     the same way estate_inventory.summarize classifies the whole estate — so the per-file list/export
@@ -724,7 +733,8 @@ async def remediate_scan(sid: str, request: Request):
              "remediated_folder_id": remediated_folder_id, "drive_token": token,
              "source": source, "owner": owner,
              "checksum": checksums.get(f["file"]) or f.get("checksum")})
-    snapshot_id = core.store.stage_snapshot_id(sid)
+    snapshot_id, input_manifest_id = _sealed_stage_input(
+        sid, "assess", core.store.stage_snapshot_id(sid))
     # Fingerprint the EFFECTIVE file set, not raw request spelling: adding a nonexistent name or
     # reordering the same names is still the same work and must reuse the same execution. Human
     # intent is part of that identity too: editing an approved value for the same file set must
@@ -738,7 +748,7 @@ async def remediate_scan(sid: str, request: Request):
         payload["decision_digest"] = decision_digest
     execution = _enqueue_stage_batch(
         sid, "remediate", "remediate_file", payloads, snapshot_id=snapshot_id,
-        request_fingerprint=request_fingerprint)
+        request_fingerprint=request_fingerprint, input_manifest_id=input_manifest_id)
     core.store.seed_finding_dispositions(sid, execution["batch_id"], snapshot_id=snapshot_id)
     # AFTER the jobs exist, never before: the run is "accepted" precisely when durable work has
     # been enqueued for it, and an acceptance event that led the enqueue would let the panel show
@@ -1374,7 +1384,8 @@ def assess(sid: str, request: Request, level: str = Query("AA"),
             _live = _active_scope(core.store)
             if _live:
                 core.store.merge_scan_scope(sid, {"scan_scope": _scope_as_json(_live)})
-        snapshot_id = core.store.stage_snapshot_id(sid)
+        snapshot_id, input_manifest_id = _sealed_stage_input(
+            sid, "discover", core.store.stage_snapshot_id(sid))
         request_fingerprint = _json.dumps(
             {"level": level, "include_lifecycle_flagged": include_lifecycle_flagged},
             sort_keys=True)
@@ -1382,7 +1393,8 @@ def assess(sid: str, request: Request, level: str = Query("AA"),
             sid, "assess", "scan_assess",
             [{"scan_id": sid, "user": _owner(request),
               "include_lifecycle_flagged": include_lifecycle_flagged}],
-            snapshot_id=snapshot_id, request_fingerprint=request_fingerprint)
+            snapshot_id=snapshot_id, request_fingerprint=request_fingerprint,
+            input_manifest_id=input_manifest_id)
         jid = execution["job_ids"][0]
         return {"scan_id": sid, "level": level, "job_id": jid, "workers": core.WORKERS,
                 "worker_tier_alive": core.store.worker_tier_alive(),
@@ -1390,13 +1402,15 @@ def assess(sid: str, request: Request, level: str = Query("AA"),
                 "snapshot_id": snapshot_id, "reused": execution["reused"]}
     # Immediate model — the results views gate on assessed_at; stamp it + build the assess trace.
     core.store.mark_assessed(sid, _dt.datetime.now(_dt.timezone.utc).isoformat())
-    snapshot_id = core.store.stage_snapshot_id(sid)
+    snapshot_id, input_manifest_id = _sealed_stage_input(
+        sid, "discover", core.store.stage_snapshot_id(sid))
     request_fingerprint = _json.dumps(
         {"level": level, "include_lifecycle_flagged": include_lifecycle_flagged},
         sort_keys=True)
     execution = _enqueue_stage_batch(
         sid, "assess", "assess_trace", [{"scan_id": sid, "level": level}],
-        snapshot_id=snapshot_id, request_fingerprint=request_fingerprint)
+        snapshot_id=snapshot_id, request_fingerprint=request_fingerprint,
+        input_manifest_id=input_manifest_id)
     return {"scan_id": sid, "level": level, "job_id": execution["job_ids"][0],
             "workers": core.WORKERS, "snapshot_id": snapshot_id,
             "reused": execution["reused"]}
@@ -3181,8 +3195,9 @@ def report_pdf(sid: str, request: Request):
     owner = _owner(request)
     rb = core.active_rubric()
     lineage_export = _canonical_lineage_export(sid, owner)
+    snapshot_id = core.store.stage_snapshot_id(sid)
     finding_reconciliation = _release_finding_reconciliation(
-        sid, res["run"].get("id") or sid, lineage_export["lineage"])
+        sid, snapshot_id, lineage_export["lineage"])
     meta = {"target": rb.cfg.get("conformance_target"), "version": rb.version,
             "hash": res["run"].get("rubric_hash") or rb.hash,
             "stage_lineage_digest": lineage_export["content_digest"]["value"],
@@ -3377,9 +3392,11 @@ def publish_files(sid: str, request: Request, body: dict):
             import hashlib, json
             requested = sorted(p["file"] for p in payloads)
             fingerprint = hashlib.sha256(json.dumps(requested).encode()).hexdigest()
+            snapshot_id, input_manifest_id = _sealed_stage_input(sid, "remediate", release_id)
             execution = _enqueue_stage_batch(
                 sid, "release", "publish_file", payloads,
-                snapshot_id=release_id, request_fingerprint=fingerprint)
+                snapshot_id=snapshot_id, request_fingerprint=fingerprint,
+                input_manifest_id=input_manifest_id)
         status = core.store.release_status(release_id, owner)
         return {"release_id": release_id, "release_folder_id": None,
                 "release_folder_name": folder_name, "release_folder_url": None,

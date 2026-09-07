@@ -373,7 +373,45 @@ _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS user_scan_schedules (
       owner_email TEXT PRIMARY KEY, enabled INT NOT NULL, timezone TEXT NOT NULL,
       local_time TEXT NOT NULL, days TEXT NOT NULL, source TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL, last_enqueued_occurrence TEXT,
+      metric_admitted INT NOT NULL DEFAULT 0,
+      metric_delayed_catch_up INT NOT NULL DEFAULT 0,
+      metric_skipped INT NOT NULL DEFAULT 0,
+      metric_failed INT NOT NULL DEFAULT 0
+    )""",
+    "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS last_enqueued_occurrence TEXT",
+    "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS metric_admitted INT NOT NULL DEFAULT 0",
+    "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS metric_delayed_catch_up INT NOT NULL DEFAULT 0",
+    "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS metric_skipped INT NOT NULL DEFAULT 0",
+    "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS metric_failed INT NOT NULL DEFAULT 0",
+    "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS source_scope TEXT NOT NULL DEFAULT '{}'",
+    "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS notification_policy TEXT NOT NULL DEFAULT 'failures'",
+    "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS queue_policy TEXT NOT NULL DEFAULT '{}'",
+    """CREATE TABLE IF NOT EXISTS schedule_occurrences (
+      owner_email TEXT NOT NULL, occurrence_key TEXT NOT NULL, planned_at TEXT NOT NULL,
+      actual_started_at TEXT, completed_at TEXT, delay_reason TEXT, result TEXT,
+      duration_ms INT, changed INT, error TEXT,
+      run_after TEXT, deferral_count INT NOT NULL DEFAULT 0,
+      PRIMARY KEY(owner_email, occurrence_key)
+    )""",
+    "ALTER TABLE schedule_occurrences ADD COLUMN IF NOT EXISTS run_after TEXT",
+    "ALTER TABLE schedule_occurrences ADD COLUMN IF NOT EXISTS deferral_count INT NOT NULL DEFAULT 0",
+    """CREATE TABLE IF NOT EXISTS schedule_notifications (
+      id TEXT PRIMARY KEY, owner_email TEXT NOT NULL, occurrence_key TEXT,
+      kind TEXT NOT NULL, title TEXT NOT NULL, message TEXT NOT NULL,
+      created_at TEXT NOT NULL, read_at TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_schedule_notifications_owner ON schedule_notifications(owner_email,created_at)",
+    """CREATE TABLE IF NOT EXISTS schedule_guardrails (
+      singleton INT PRIMARY KEY CHECK(singleton=1), allowed_sources TEXT NOT NULL,
+      min_frequency_minutes INT NOT NULL, max_concurrent_per_owner INT NOT NULL,
+      catch_up_ceiling INT NOT NULL, blackout_timezone TEXT NOT NULL,
+      blackout_start TEXT, blackout_end TEXT, updated_at TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS schedule_prewarm_requests (
+      owner_email TEXT NOT NULL, occurrence_key TEXT NOT NULL, planned_at TEXT NOT NULL,
+      requested_at TEXT NOT NULL, source TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+      PRIMARY KEY(owner_email, occurrence_key)
     )""",
     # PRD Phase 3 (incremental connector sync). One row per source: the connector-native
     # cursor (Drive's changes.list page token today; a Graph delta link would be a future
@@ -584,6 +622,13 @@ _SCHEMA = [
     # Error class persisted on failure so operators can diagnose dead-lettered jobs by
     # category (rate_limit / auth / corrupt / transient) without parsing last_error text.
     "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS error_class TEXT",
+    # Owner is denormalized only for scheduled sweeps so admission can atomically prevent one
+    # user's prior scheduled scan from overlapping their next occurrence. Interactive jobs stay
+    # NULL and retain their existing tenant linkage through scan_runs.
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS scheduled_owner TEXT",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_one_active_scheduled_owner "
+    "ON jobs(scheduled_owner) WHERE type='scheduled_sweep' "
+    "AND status IN ('queued','running') AND scheduled_owner IS NOT NULL",
     # Canonical workflow-stage authority. Queue rows remain the delivery mechanism; these rows
     # own identity, lifecycle and user-visible accounting across retries and reconnects.
     """CREATE TABLE IF NOT EXISTS stage_executions (
@@ -756,6 +801,20 @@ _SCHEMA = [
     # Explicit provenance join: which recorded model call a reviewer acted on. Nullable for
     # human-authored and historical decisions; never inferred from timestamps or filenames.
     "ALTER TABLE hitl_events ADD COLUMN IF NOT EXISTS model_call_id TEXT",
+    # Append-only post-write evidence for model-generated proposals. A reviewer acceptance says
+    # the draft looked right; this row says whether the corrected bytes subsequently cleared the
+    # detector. Keeping those as separate immutable events prevents transport success or approval
+    # from being misreported as validated remediation quality.
+    """CREATE TABLE IF NOT EXISTS ai_validation_outcomes (
+      id TEXT PRIMARY KEY, model_call_id TEXT, scan_id TEXT, file TEXT, rule_id TEXT,
+      item_id TEXT, outcome TEXT, detail TEXT, created_at TEXT
+    )""",
+    # Which criteria the post-write re-scan found NEWLY failing: absent from the residual of the
+    # bytes BEFORE this write, present after it. A JSON list — empty when both re-scans ran and
+    # none appeared; NULL when there was no trustworthy baseline to compare against (a row written
+    # before this column, or a baseline re-scan that could not run), which is "unknown" and must
+    # never be read as "none". Additive; placed AFTER the CREATE above.
+    "ALTER TABLE ai_validation_outcomes ADD COLUMN IF NOT EXISTS regressions TEXT",
     # Configurable file disposition (ADR 0003, Phase 3). PREVIEW ONLY as of this
     # migration -- api/disposition.py's matches() tells you which documents a policy
     # would select; nothing executes a real move/rename/archive/delete yet. That
@@ -2288,8 +2347,20 @@ class _PgAdapter:
     # v34 is the additive union of v33's AI-call decision linkage and owner-scoped
     # user_scan_schedules. Older replicas ignore both; newer replicas no longer share one
     # process-wide cadence between signed-in users.
-    _SCHEMA_VERSION = 34
-    _SCHEMA_CHECKSUM_AT_VERSION = "45ccbaa2dcb309ae7fdc75e76281a9e5"
+    # v35 adds user_scan_schedules.last_enqueued_occurrence. This durable watermark survives
+    # jobs-table retention, so catch-up cannot recreate an occurrence after its done row is
+    # purged. It is nullable and ignored by older replicas, preserving rolling compatibility.
+    # v36 adds durable owner-scoped operational counters for admitted, delayed catch-up,
+    # skipped and failed scheduled runs. Defaults preserve existing schedule rows and older
+    # replicas ignore the additive columns during a rolling deploy.
+    # v37 adds immutable post-write validation outcomes linked to exact accepted AI calls.
+    # v38 adds `regressions` to ai_validation_outcomes: the criteria a post-write re-scan
+    # found newly failing, so a draft's validation row can say what its write cost.
+    # v39 adds owner-scoped schedule operation policy, occurrence history and notifications,
+    # plus one deployment-wide set of administrator guardrails. All schedule columns are
+    # additive and carry safe defaults for rolling replicas.
+    _SCHEMA_VERSION = 39
+    _SCHEMA_CHECKSUM_AT_VERSION = "1a02b63a4a2707559da654052ef9e0d3"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -4489,7 +4560,8 @@ class Store:
                          "lifecycle_evaluation", "effective_disposition",
                          "org_memory", "remediation_state", "finding_disposition",
                          "finding_disposition_event", "remediation_diff", "applied_fixes",
-                         "ai_calls", "second_opinion_reservations", "finding_comments",
+                         "ai_calls", "ai_validation_outcomes", "second_opinion_reservations",
+                         "finding_comments",
                          "scan_inputs",  # Stage 1 item 3: per-scan enqueue snapshots are customer data
                          "scan_folder_completions",  # which folders of a scan were counted done
                          "active_discovery_guard",  # transient lock state — cleared on reset
@@ -4551,7 +4623,11 @@ class Store:
                          # is a record about a run rather than the live configuration.
                          # archive_autofire_policy is deliberately NOT here: it is the rule, and
                          # rules survive a reset exactly as disposition_policy does.
-                         "archive_execution", "archive_policy_snapshot"]
+                         "archive_execution", "archive_policy_snapshot",
+                         # Scheduled occurrence/notification/prewarm rows are records of customer
+                         # work. The live schedule and administrator guardrails are configuration.
+                         "schedule_occurrences", "schedule_notifications",
+                         "schedule_prewarm_requests"]
 
     def reset_analytics(self) -> list[str]:
         """Clear all scan results / activity so the Grafana + in-app charts start
@@ -6442,22 +6518,41 @@ class Store:
         normalized = str(owner or "demo").strip().lower() or "demo"
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT owner_email,enabled,timezone,local_time,days,source,updated_at "
+                "SELECT owner_email,enabled,timezone,local_time,days,source,updated_at,"
+                "last_enqueued_occurrence,metric_admitted,metric_delayed_catch_up,"
+                "metric_skipped,metric_failed,source_scope,notification_policy,queue_policy "
                 "FROM user_scan_schedules WHERE owner_email=%s", (normalized,))
             rows = self._db.fetchall(cur)
         if not rows:
             return {"owner_email": normalized, "enabled": False, "timezone": "UTC",
                     "local_time": "09:00", "days": [0, 1, 2, 3, 4],
-                    "source": "drive", "updated_at": None}
+                    "source": "drive", "updated_at": None,
+                    "last_enqueued_occurrence": None,
+                    "metrics": {"scheduled": 0, "delayed": 0,
+                                "skipped": 0, "failed": 0},
+                    "source_scope": {"include_ids": [], "exclude_ids": []},
+                    "notification_policy": "failures",
+                    "queue_policy": {"defer_when_interactive": True, "max_queue_depth": 100,
+                                     "prewarm": True, "prewarm_minutes": 10}}
         row = dict(rows[0])
         row["enabled"] = bool(row["enabled"])
         row["days"] = [int(day) for day in json.loads(row["days"])]
+        row["source_scope"] = json.loads(row.get("source_scope") or "{}")
+        row["queue_policy"] = json.loads(row.get("queue_policy") or "{}")
+        row["metrics"] = {
+            "scheduled": int(row.pop("metric_admitted") or 0),
+            "delayed": int(row.pop("metric_delayed_catch_up") or 0),
+            "skipped": int(row.pop("metric_skipped") or 0),
+            "failed": int(row.pop("metric_failed") or 0),
+        }
         return row
 
     def list_enabled_user_scan_schedules(self) -> list[dict]:
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT owner_email,enabled,timezone,local_time,days,source,updated_at "
+                "SELECT owner_email,enabled,timezone,local_time,days,source,updated_at,"
+                "last_enqueued_occurrence,metric_admitted,metric_delayed_catch_up,"
+                "metric_skipped,metric_failed,source_scope,notification_policy,queue_policy "
                 "FROM user_scan_schedules WHERE enabled=1 ORDER BY owner_email")
             rows = self._db.fetchall(cur)
         schedules = []
@@ -6466,6 +6561,14 @@ class Store:
                 row = dict(raw)
                 row["enabled"] = True
                 row["days"] = [int(day) for day in json.loads(row["days"])]
+                row["source_scope"] = json.loads(row.get("source_scope") or "{}")
+                row["queue_policy"] = json.loads(row.get("queue_policy") or "{}")
+                row["metrics"] = {
+                    "scheduled": int(row.pop("metric_admitted") or 0),
+                    "delayed": int(row.pop("metric_delayed_catch_up") or 0),
+                    "skipped": int(row.pop("metric_skipped") or 0),
+                    "failed": int(row.pop("metric_failed") or 0),
+                }
                 schedules.append(row)
             except (TypeError, ValueError, json.JSONDecodeError):
                 # One corrupt historic row must not prevent every other user's due scan.
@@ -6473,7 +6576,10 @@ class Store:
         return schedules
 
     def save_user_scan_schedule(self, owner: str, enabled: bool, timezone: str,
-                                local_time: str, days, source: str = "drive") -> dict:
+                                local_time: str, days, source: str = "drive",
+                                source_scope: dict | None = None,
+                                notification_policy: str = "failures",
+                                queue_policy: dict | None = None) -> dict:
         import datetime as _dt
         import scan_schedule as _scan_schedule
         normalized = str(owner or "demo").strip().lower() or "demo"
@@ -6481,18 +6587,299 @@ class Store:
         _scan_schedule.zone(timezone)
         parsed_time = _scan_schedule.local_time(local_time).strftime("%H:%M")
         parsed_days = list(_scan_schedule.normalize_days(days))
+        normalized_source = str(source or "drive").strip().lower()
+        scope = self._normalize_schedule_scope(source_scope)
+        if notification_policy not in {"off", "failures", "changes_and_failures", "all"}:
+            raise ValueError("notification_policy must be off, failures, changes_and_failures, or all")
+        queue = self._normalize_queue_policy(queue_policy)
+        guardrails = self.get_schedule_guardrails()
+        if normalized_source not in guardrails["allowed_sources"]:
+            raise ValueError(f"source {normalized_source!r} is not allowed by schedule guardrails")
         now = _dt.datetime.now(_dt.timezone.utc).isoformat()
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO user_scan_schedules(owner_email,enabled,timezone,local_time,days,"
-                "source,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s) "
+                "source,updated_at,source_scope,notification_policy,queue_policy) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                 "ON CONFLICT(owner_email) DO UPDATE SET enabled=EXCLUDED.enabled,"
                 "timezone=EXCLUDED.timezone,local_time=EXCLUDED.local_time,days=EXCLUDED.days,"
-                "source=EXCLUDED.source,updated_at=EXCLUDED.updated_at",
+                "source=EXCLUDED.source,updated_at=EXCLUDED.updated_at,"
+                "source_scope=EXCLUDED.source_scope,notification_policy=EXCLUDED.notification_policy,"
+                "queue_policy=EXCLUDED.queue_policy",
                 (normalized, int(bool(enabled)), str(timezone), parsed_time,
                  json.dumps(parsed_days, separators=(",", ":")),
-                 str(source or "drive").lower(), now))
+                 normalized_source, now, json.dumps(scope, separators=(",", ":")),
+                 notification_policy, json.dumps(queue, separators=(",", ":"))))
         return self.get_user_scan_schedule(normalized)
+
+    @staticmethod
+    def _normalize_schedule_scope(scope: dict | None) -> dict:
+        raw = scope or {}
+        out = {}
+        for key in ("include_ids", "exclude_ids"):
+            values = raw.get(key, [])
+            if not isinstance(values, list) or any(not isinstance(v, str) for v in values):
+                raise ValueError(f"source_scope.{key} must be a list of identifiers")
+            out[key] = sorted({v.strip() for v in values if v.strip()})
+        if set(out["include_ids"]) & set(out["exclude_ids"]):
+            raise ValueError("a source identifier cannot be both included and excluded")
+        return out
+
+    @staticmethod
+    def _normalize_queue_policy(policy: dict | None) -> dict:
+        raw = policy or {}
+        depth = int(raw.get("max_queue_depth", 100))
+        prewarm = bool(raw.get("prewarm", True))
+        prewarm_minutes = int(raw.get("prewarm_minutes", 10)) if prewarm else 0
+        if depth < 0:
+            raise ValueError("queue_policy.max_queue_depth must be non-negative")
+        if not 0 <= prewarm_minutes <= 60:
+            raise ValueError("queue_policy.prewarm_minutes must be between 0 and 60")
+        return {"defer_when_interactive": bool(raw.get("defer_when_interactive", True)),
+                "max_queue_depth": depth, "prewarm": prewarm,
+                "prewarm_minutes": prewarm_minutes}
+
+    def get_schedule_guardrails(self) -> dict:
+        defaults = {"allowed_sources": ["drive", "sharepoint"], "min_frequency_minutes": 60,
+                    "max_concurrent_per_owner": 1, "catch_up_ceiling": 1,
+                    "blackout_timezone": "UTC", "blackout_start": None, "blackout_end": None,
+                    "updated_at": None}
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT * FROM schedule_guardrails WHERE singleton=1")
+            row = self._db.fetchone(cur)
+        if not row:
+            return defaults
+        answer = dict(row)
+        answer.pop("singleton", None)
+        answer["allowed_sources"] = json.loads(answer["allowed_sources"])
+        return answer
+
+    def save_schedule_guardrails(self, *, allowed_sources: list[str], min_frequency_minutes: int,
+                                 max_concurrent_per_owner: int, catch_up_ceiling: int,
+                                 blackout_timezone: str = "UTC", blackout_start: str | None = None,
+                                 blackout_end: str | None = None) -> dict:
+        import datetime as _dt
+        import scan_schedule as _scan_schedule
+        sources = sorted({str(v).strip().lower() for v in allowed_sources if str(v).strip()})
+        if not sources:
+            raise ValueError("allowed_sources must not be empty")
+        if min_frequency_minutes < 1 or max_concurrent_per_owner < 1 or catch_up_ceiling < 0:
+            raise ValueError("frequency/concurrency must be positive and catch_up_ceiling non-negative")
+        _scan_schedule.zone(blackout_timezone)
+        if (blackout_start is None) != (blackout_end is None):
+            raise ValueError("blackout_start and blackout_end must be set together")
+        if blackout_start is not None:
+            blackout_start = _scan_schedule.local_time(blackout_start).strftime("%H:%M")
+            blackout_end = _scan_schedule.local_time(blackout_end).strftime("%H:%M")
+        now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO schedule_guardrails(singleton,allowed_sources,min_frequency_minutes,"
+                "max_concurrent_per_owner,catch_up_ceiling,blackout_timezone,blackout_start,"
+                "blackout_end,updated_at) VALUES(1,%s,%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT(singleton) DO UPDATE SET allowed_sources=EXCLUDED.allowed_sources,"
+                "min_frequency_minutes=EXCLUDED.min_frequency_minutes,"
+                "max_concurrent_per_owner=EXCLUDED.max_concurrent_per_owner,"
+                "catch_up_ceiling=EXCLUDED.catch_up_ceiling,blackout_timezone=EXCLUDED.blackout_timezone,"
+                "blackout_start=EXCLUDED.blackout_start,blackout_end=EXCLUDED.blackout_end,"
+                "updated_at=EXCLUDED.updated_at",
+                (json.dumps(sources), min_frequency_minutes, max_concurrent_per_owner,
+                 catch_up_ceiling, blackout_timezone, blackout_start, blackout_end, now))
+        return self.get_schedule_guardrails()
+
+    def schedule_queue_snapshot(self, owner: str) -> dict:
+        normalized = str(owner).strip().lower()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE status IN ('queued','running')", ())
+            total = int(self._db.fetchone(cur)["n"])
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE status IN ('queued','running') "
+                "AND scheduled_owner=%s", (normalized,))
+            owner_active = int(self._db.fetchone(cur)["n"])
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE status IN ('queued','running') "
+                "AND type<>'scheduled_sweep'", ())
+            interactive = int(self._db.fetchone(cur)["n"])
+        return {"queue_depth": total, "owner_active": owner_active,
+                "interactive_active": interactive}
+
+    def schedule_admission(self, owner: str, occurrence_key: str, planned_at: str, now: str) -> dict:
+        """Atomically observed admission facts plus a deterministic defer decision.
+
+        This method never enqueues work. The scheduler owns that transition and may use
+        ``run_after`` to defer the same durable occurrence rather than minting a duplicate.
+        """
+        import datetime as _dt
+        from zoneinfo import ZoneInfo
+        cfg = self.get_user_scan_schedule(owner)
+        limits = self.get_schedule_guardrails()
+        snapshot = self.schedule_queue_snapshot(owner)
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT deferral_count FROM schedule_occurrences "
+                "WHERE owner_email=%s AND occurrence_key=%s",
+                (str(owner).strip().lower(), occurrence_key))
+            row = self._db.fetchone(cur)
+        deferrals = int((row or {}).get("deferral_count") or 0)
+        reason = None
+        # The snapshot includes the scheduled job currently asking for admission. Reject only
+        # when active work EXCEEDS the allowed count; >= would make the default limit of one
+        # reject itself forever at handler start.
+        if snapshot["owner_active"] > int(limits["max_concurrent_per_owner"]):
+            reason = "owner_concurrency_limit"
+        elif snapshot["queue_depth"] > int(cfg["queue_policy"].get("max_queue_depth", 100)):
+            reason = "queue_depth_limit"
+        elif cfg["queue_policy"].get("defer_when_interactive", True) and snapshot["interactive_active"]:
+            reason = "interactive_work_active"
+        start, end = limits.get("blackout_start"), limits.get("blackout_end")
+        if start and end:
+            instant = _dt.datetime.fromisoformat(str(now).replace("Z", "+00:00"))
+            local_hm = instant.astimezone(ZoneInfo(limits["blackout_timezone"])).strftime("%H:%M")
+            in_blackout = (start <= local_hm < end if start < end
+                           else local_hm >= start or local_hm < end)
+            if in_blackout:
+                reason = "blackout_window"
+        terminal = bool(reason and deferrals >= int(limits["catch_up_ceiling"]))
+        run_after = None
+        if reason and not terminal:
+            instant = _dt.datetime.fromisoformat(str(now).replace("Z", "+00:00"))
+            run_after = (instant + _dt.timedelta(minutes=5)).isoformat()
+        return {"admit": reason is None, "reason": reason, "run_after": run_after,
+                "deferral_count": deferrals, "terminal": terminal, **snapshot}
+
+    def begin_schedule_occurrence(self, owner: str, occurrence_key: str, planned_at: str,
+                                  actual_started_at: str, delay_reason: str | None = None) -> bool:
+        normalized = str(owner).strip().lower()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO schedule_occurrences(owner_email,occurrence_key,planned_at,"
+                "actual_started_at,delay_reason,result) VALUES(%s,%s,%s,%s,%s,'running') "
+                "ON CONFLICT(owner_email,occurrence_key) DO UPDATE SET "
+                "actual_started_at=EXCLUDED.actual_started_at,delay_reason=EXCLUDED.delay_reason,"
+                "result='running' WHERE schedule_occurrences.result='deferred'",
+                (normalized, occurrence_key, planned_at, actual_started_at, delay_reason))
+            return cur.rowcount == 1
+
+    def defer_schedule_occurrence(self, owner: str, occurrence_key: str, run_after: str,
+                                  reason: str, planned_at: str | None = None) -> bool:
+        normalized = str(owner).strip().lower()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO schedule_occurrences(owner_email,occurrence_key,planned_at,delay_reason,"
+                "result,run_after,deferral_count) VALUES(%s,%s,%s,%s,'deferred',%s,1) "
+                "ON CONFLICT(owner_email,occurrence_key) DO UPDATE SET delay_reason=EXCLUDED.delay_reason,"
+                "result='deferred',run_after=EXCLUDED.run_after,"
+                "deferral_count=schedule_occurrences.deferral_count+1",
+                (normalized, occurrence_key, planned_at or run_after, reason, run_after))
+            return cur.rowcount == 1
+
+    def defer_scheduled_sweep(self, owner: str, occurrence_key: str, run_after: str,
+                              reason: str, planned_at: str | None = None) -> bool:
+        """Scheduler-facing name; retains one durable occurrence across deferrals."""
+        return self.defer_schedule_occurrence(owner, occurrence_key, run_after, reason, planned_at)
+
+    def complete_schedule_occurrence(self, owner: str, occurrence_key: str, *, result: str,
+                                     completed_at: str, changed: bool | None = None,
+                                     error: str | None = None) -> dict | None:
+        normalized = str(owner).strip().lower()
+        if result not in {"succeeded", "failed", "skipped"}:
+            raise ValueError("invalid schedule occurrence result")
+        duration_ms = None
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT actual_started_at FROM schedule_occurrences "
+                "WHERE owner_email=%s AND occurrence_key=%s", (normalized, occurrence_key))
+            existing = self._db.fetchone(cur)
+            if existing and existing.get("actual_started_at"):
+                import datetime as _dt
+                try:
+                    start = _dt.datetime.fromisoformat(str(existing["actual_started_at"]).replace("Z", "+00:00"))
+                    end = _dt.datetime.fromisoformat(str(completed_at).replace("Z", "+00:00"))
+                    duration_ms = max(0, int((end - start).total_seconds() * 1000))
+                except (TypeError, ValueError):
+                    pass
+            self._db.execute(cur,
+                "UPDATE schedule_occurrences SET completed_at=%s,result=%s,changed=%s,error=%s,"
+                "duration_ms=%s "
+                "WHERE owner_email=%s AND occurrence_key=%s",
+                (completed_at, result, None if changed is None else int(changed),
+                 (error or None) and str(error)[:400], duration_ms, normalized, occurrence_key))
+        rows = self.list_schedule_occurrences(normalized, limit=200)
+        return next((row for row in rows if row["occurrence_key"] == occurrence_key), None)
+
+    def list_schedule_occurrences(self, owner: str, limit: int = 20) -> list[dict]:
+        normalized = str(owner).strip().lower()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM schedule_occurrences WHERE owner_email=%s "
+                "ORDER BY planned_at DESC LIMIT %s", (normalized, max(1, min(int(limit), 200))))
+            rows = [dict(r) for r in self._db.fetchall(cur)]
+        for row in rows:
+            row["changed"] = None if row.get("changed") is None else bool(row["changed"])
+        return rows
+
+    def request_schedule_prewarm(self, owner: str, occurrence_key: str, planned_at: str,
+                                 requested_at: str, source: str) -> bool:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO schedule_prewarm_requests(owner_email,occurrence_key,planned_at,"
+                "requested_at,source) VALUES(%s,%s,%s,%s,%s) "
+                "ON CONFLICT(owner_email,occurrence_key) DO NOTHING",
+                (str(owner).strip().lower(), occurrence_key, planned_at, requested_at, source))
+            return cur.rowcount == 1
+
+    def create_schedule_notification(self, owner: str, occurrence_key: str | None, kind: str,
+                                     title: str, message: str) -> dict:
+        import datetime as _dt
+        import uuid as _uuid
+        normalized = str(owner).strip().lower()
+        notification_id = (str(_uuid.uuid5(_uuid.NAMESPACE_URL,
+                                           f"acp:schedule:{normalized}:{occurrence_key}:{kind}"))
+                           if occurrence_key else str(_uuid.uuid4()))
+        row = {"id": notification_id, "owner_email": normalized,
+               "occurrence_key": occurrence_key, "kind": kind, "title": title,
+               "message": message, "created_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+               "read_at": None}
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO schedule_notifications(id,owner_email,occurrence_key,kind,title,message,"
+                "created_at,read_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT(id) DO NOTHING", tuple(row.values()))
+            self._db.execute(cur, "SELECT * FROM schedule_notifications WHERE id=%s",
+                             (notification_id,))
+            return dict(self._db.fetchone(cur))
+
+    def emit_schedule_notification_for_occurrence(self, owner: str, occurrence_key: str,
+                                                  result: str, *, changed: bool = False,
+                                                  message: str | None = None) -> dict | None:
+        policy = self.get_user_scan_schedule(owner)["notification_policy"]
+        should_emit = (policy == "all" or
+                       policy in {"failures", "changes_and_failures"} and result == "failed" or
+                       policy == "changes_and_failures" and bool(changed))
+        if not should_emit:
+            return None
+        title = ("Scheduled scan failed" if result == "failed" else
+                 "Scheduled scan found changes" if changed else "Scheduled scan completed")
+        return self.create_schedule_notification(
+            owner, occurrence_key, result, title, message or title)
+
+    def list_schedule_notifications(self, owner: str, limit: int = 50) -> list[dict]:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM schedule_notifications WHERE owner_email=%s "
+                "ORDER BY created_at DESC LIMIT %s",
+                (str(owner).strip().lower(), max(1, min(int(limit), 200))))
+            return [dict(r) for r in self._db.fetchall(cur)]
+
+    def mark_schedule_notification_read(self, owner: str, notification_id: str) -> bool:
+        import datetime as _dt
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE schedule_notifications SET read_at=%s WHERE id=%s AND owner_email=%s",
+                (_dt.datetime.now(_dt.timezone.utc).isoformat(), notification_id,
+                 str(owner).strip().lower()))
+            return cur.rowcount == 1
 
     def get_sync_cursor(self, source: str) -> dict | None:
         """The connector-native cursor (e.g. Drive's changes.list page token) the scheduled
@@ -6700,15 +7087,20 @@ class Store:
         bounds the window (1 = today-ish, 30 = month); None = all time. `scan_id` scopes the
         rollup to one scan — the per-scan provenance the certification report embeds (§4)."""
         from datetime import datetime, timedelta, timezone
-        clauses, params_l = [], []
+        clauses, jclauses, params_l = [], [], []
         if since_days is not None:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=since_days)).isoformat()
             clauses.append("ts >= %s")
+            jclauses.append("c.ts >= %s")
             params_l.append(cutoff)
         if scan_id is not None:
             clauses.append("scan_id = %s")
+            jclauses.append("c.scan_id = %s")
             params_l.append(scan_id)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        # The same window, qualified for the joins below (hitl_events and ai_validation_outcomes
+        # both carry a scan_id of their own, so an unqualified clause would be ambiguous).
+        jwhere = (" WHERE " + " AND ".join(jclauses)) if jclauses else ""
         params = tuple(params_l)
         with self._db.cursor() as cur:
             self._db.execute(cur,
@@ -6759,6 +7151,19 @@ class Store:
                 "GROUP BY COALESCE(reason,'unrecorded') ORDER BY calls DESC", params)
             failure_reasons = [{"key": r["k"], "calls": r["calls"]} for r in self._db.fetchall(cur)]
 
+            # Reviewer decisions and post-write validation, at the SAME exact provider/model/zone
+            # grain, joined through the call id each decision and each validation row carries.
+            # This is the evidence a stronger-model rollout is actually judged on: not whether the
+            # call completed, but whether a human accepted the draft and whether the written value
+            # cleared the detector without breaking anything else. Nothing is inferred — a decision
+            # that recorded no model_call_id (human-authored work, or a card reviewed before the
+            # linkage existed) is absent from these counts rather than attributed by proximity.
+            linked = self._linked_outcomes_by_model(cur, jwhere, params)
+            for m in by_model:
+                key = (m["provider"], m["model"], m["zone"])
+                m["reviewed"] = linked["reviewed"].get(key, dict(self._EMPTY_REVIEWED))
+                m["validation"] = linked["validation"].get(key, dict(self._EMPTY_VALIDATION))
+
             calls = tot.get("calls", 0) or 0
             return {
                 "window_days": since_days,
@@ -6773,7 +7178,78 @@ class Store:
                 "by_zone": _group("zone"),
                 "by_surface": _group("surface"),
                 "failure_reasons": failure_reasons,
+                "reviewed": self._sum_buckets(linked["reviewed"].values(), self._EMPTY_REVIEWED),
+                "validation": self._sum_buckets(linked["validation"].values(),
+                                                self._EMPTY_VALIDATION),
             }
+
+    # Reviewer decisions linked to an exact model call. `approved` is an unedited acceptance,
+    # `edited` an acceptance the reviewer changed first, `rejected` a rejection; skips are not
+    # decisions and are not counted. `decisions` is the sum of the three.
+    _EMPTY_REVIEWED = {"decisions": 0, "approved": 0, "edited": 0, "rejected": 0}
+    # Post-write outcomes linked to an exact model call, one per (call, item) — the LATEST, so a
+    # could_not_verify that was later retried to verified_cleared counts once, as cleared. The
+    # five outcome counts partition `validated`; `newly_failing` cuts across them: rows of any
+    # outcome whose re-scan found a criterion failing that did not fail before the write.
+    _EMPTY_VALIDATION = {"validated": 0, "cleared": 0, "regressed": 0, "still_failing": 0,
+                         "could_not_verify": 0, "unresolved": 0, "newly_failing": 0}
+    _VALIDATION_BUCKET = {"verified_cleared": "cleared", "verified_regressed": "regressed",
+                          "verified_still_failing": "still_failing",
+                          "could_not_verify": "could_not_verify",
+                          "write_unresolved": "unresolved"}
+
+    @staticmethod
+    def _sum_buckets(buckets, empty: dict) -> dict:
+        total = dict(empty)
+        for b in buckets:
+            for k in total:
+                total[k] += int(b.get(k) or 0)
+        return total
+
+    def _linked_outcomes_by_model(self, cur, jwhere: str, params: tuple) -> dict:
+        """{'reviewed': {(provider, model, zone): bucket}, 'validation': {…}} for the calls in the
+        window — see ai_cost_rollup for what the buckets mean and why nothing here is inferred."""
+        reviewed: dict[tuple, dict] = {}
+        validation: dict[tuple, dict] = {}
+        self._db.execute(cur,
+            "SELECT c.provider AS provider, c.model AS model, c.zone AS zone, "
+            "e.model_call_id AS call_id, e.item_id AS item_id, e.action AS action, "
+            "e.created_at AS created_at "
+            "FROM hitl_events e JOIN ai_calls c ON c.id = e.model_call_id"
+            f"{jwhere} ORDER BY e.created_at", params)
+        latest: dict[tuple, dict] = {}
+        for r in self._db.fetchall(cur):
+            latest[(r["call_id"], r["item_id"])] = r        # ordered ascending: last wins
+        for r in latest.values():
+            action = {"approve": "approved", "edit": "edited", "reject": "rejected"}.get(
+                str(r.get("action") or ""))
+            if action is None:
+                continue
+            b = reviewed.setdefault((r["provider"], r["model"], r["zone"]),
+                                    dict(self._EMPTY_REVIEWED))
+            b[action] += 1
+            b["decisions"] += 1
+
+        self._db.execute(cur,
+            "SELECT c.provider AS provider, c.model AS model, c.zone AS zone, "
+            "v.model_call_id AS call_id, v.item_id AS item_id, v.outcome AS outcome, "
+            "v.regressions AS regressions, v.created_at AS created_at "
+            "FROM ai_validation_outcomes v JOIN ai_calls c ON c.id = v.model_call_id"
+            f"{jwhere} ORDER BY v.created_at", params)
+        latest = {}
+        for r in self._db.fetchall(cur):
+            latest[(r["call_id"], r["item_id"])] = r
+        for r in latest.values():
+            bucket = self._VALIDATION_BUCKET.get(str(r.get("outcome") or ""))
+            if bucket is None:
+                continue
+            b = validation.setdefault((r["provider"], r["model"], r["zone"]),
+                                      dict(self._EMPTY_VALIDATION))
+            b[bucket] += 1
+            b["validated"] += 1
+            if self._decode_regressions(r.get("regressions")):
+                b["newly_failing"] += 1
+        return {"reviewed": reviewed, "validation": validation}
 
     def ai_provider_health_stats(self, provider: str, *, window_hours: int = 24) -> dict:
         """Endpoint health snapshot for one cloud provider (ADR 0019/0016). All numbers come
@@ -7154,6 +7630,118 @@ class Store:
                  1 if edited else 0, review_ms, ai_value or None, final_value or None,
                  reviewer, datetime.now(timezone.utc).isoformat(), reject_reason or None,
                  model_call_id or None))
+
+    # Every outcome a post-write validation row may carry. Each names what the applier OBSERVED
+    # about ONE approved draft, never what it hoped:
+    #   write_unresolved        the value could not be written — the content it addressed no longer
+    #                           resolves in the document (nothing was verified, nothing changed)
+    #   could_not_verify        written, but the re-scan could not run to a trustworthy result;
+    #                           the bytes were discarded and the row stays unapplied
+    #   verified_still_failing  written and re-scanned; the target criterion still fails
+    #   verified_cleared        written; the target cleared; no criterion newly fails
+    #   verified_regressed      written; the target cleared; the re-scan found at least one
+    #                           criterion failing that did not fail before the write
+    # `regressions` on the row lists the newly-failing criteria for ANY outcome that re-scanned, so
+    # a still-failing write that also broke something is not hidden behind its primary outcome.
+    AI_VALIDATION_OUTCOMES = frozenset({
+        "write_unresolved", "could_not_verify", "verified_still_failing",
+        "verified_cleared", "verified_regressed"})
+
+    def record_ai_validation_outcomes(self, scan_id: str, file: str, rule_id: str,
+                                      item_ids: list[str], outcome: str, *,
+                                      detail: str | None = None,
+                                      regressions: list[str] | set[str] | None = None) -> int:
+        """Append one post-write result for every exact model call accepted by these items.
+
+        Replays of the same item/result are idempotent; a later retry may append a different
+        outcome (for example could_not_verify followed by verified_cleared). Human-authored and
+        historical items have no model_call_id and correctly produce no rows.
+
+        `regressions` is the set of criteria the re-scan found newly failing (see the column
+        comment in _SCHEMA): pass an empty collection when the comparison ran and found none, and
+        None when no baseline existed — the two are different facts and are stored differently.
+        """
+        if outcome not in self.AI_VALIDATION_OUTCOMES:
+            raise ValueError(f"unsupported AI validation outcome: {outcome}")
+        ids = [str(i) for i in dict.fromkeys(item_ids or []) if i]
+        if not ids:
+            return 0
+        reg_json = (None if regressions is None
+                    else json.dumps(sorted({str(r) for r in regressions if r})))
+        marks = ",".join(["%s"] * len(ids))
+        import hashlib
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        inserted = 0
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"SELECT item_id,model_call_id,rule_id FROM hitl_events WHERE item_id IN ({marks}) "
+                "AND model_call_id IS NOT NULL AND action IN ('approve','edit') "
+                "ORDER BY created_at DESC", tuple(ids))
+            rows = self._db.fetchall(cur)
+            latest: dict[str, tuple[str, str]] = {}
+            for row in rows:
+                latest.setdefault(str(row["item_id"]),
+                                  (str(row["model_call_id"]), str(row.get("rule_id") or rule_id)))
+            for item_id, (call_id, event_rule_id) in latest.items():
+                event_id = hashlib.sha256(
+                    f"post-write:{call_id}:{scan_id}:{file}:{event_rule_id}:{item_id}:{outcome}"
+                    f":{reg_json or ''}".encode()
+                ).hexdigest()[:32]
+                self._db.execute(cur,
+                    "INSERT INTO ai_validation_outcomes(id,model_call_id,scan_id,file,rule_id,"
+                    "item_id,outcome,detail,created_at,regressions) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                    "ON CONFLICT(id) DO NOTHING",
+                    (event_id, call_id, scan_id, file, event_rule_id, item_id, outcome,
+                     (detail or None), now, reg_json))
+                inserted += max(0, int(cur.rowcount or 0))
+        return inserted
+
+    def list_ai_validation_outcomes(self, scan_id: str | None = None, file: str | None = None,
+                                    limit: int = 500) -> list[dict]:
+        """The recorded post-write outcomes, oldest first, `regressions` decoded to a list (or
+        None when the row carries no baseline comparison)."""
+        clauses, params = [], []
+        if scan_id is not None:
+            clauses.append("scan_id=%s")
+            params.append(scan_id)
+        if file is not None:
+            clauses.append("file=%s")
+            params.append(file)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT * FROM ai_validation_outcomes" + where
+                             + " ORDER BY created_at LIMIT %s", (*params, limit))
+            out = []
+            for r in self._db.fetchall(cur):
+                r = dict(r)
+                r["regressions"] = self._decode_regressions(r.get("regressions"))
+                out.append(r)
+            return out
+
+    @staticmethod
+    def _decode_regressions(raw) -> list[str] | None:
+        if raw is None:
+            return None
+        try:
+            v = json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            return None
+        return [str(x) for x in v] if isinstance(v, list) else None
+
+    def approved_unapplied_item_locators(self, scan_id: str, file: str,
+                                         rule_ids) -> dict[str, list[str]]:
+        """{item_id: [locator, …]} for the approved-but-unapplied rows of `rule_ids` — exactly
+        the locators the applier hands the writer for each row (_row_approved_values), so a
+        locator the writer could not resolve can be attributed back to the review item, and
+        through it to the model call, that approved it."""
+        wanted = {str(r).strip() for r in (rule_ids or ()) if r}
+        out: dict[str, list[str]] = {}
+        for row in self._approved_unapplied_rows(scan_id, file):
+            if str(row.get("rule_id") or "").strip() in wanted:
+                out[str(row["id"])] = list(self._row_approved_values(row).keys())
+        return out
 
     # ADR 0019 §8.5 — thresholds for surfacing a rule as ready to migrate
     # Human-Assisted → AI-Assisted. All three conditions must hold simultaneously.
@@ -9688,11 +10276,30 @@ class Store:
                 shadowed.update((sid, f) for f in self._shadowed_files(cur, sid))
             rows = [r for r in rows if (r["scan_id"], r["file"]) not in shadowed]
             superseded = self._superseded_items(cur, rows)
+            unverified = self._apply_unverified_decisions(cur, rows)
+        # An approved row whose write was attempted and refused credit gets `apply_outcome`, so
+        # the review card can say why nothing changed. Pending rows are untouched (no key).
+        from apply_outcome import annotate_apply_outcomes
+        annotate_apply_outcomes(rows, unverified)
         if include_superseded:
             for r in rows:
                 r["superseded"] = r["id"] in superseded
             return rows
         return [r for r in rows if r["id"] not in superseded]
+
+    def _apply_unverified_decisions(self, cur, rows: list[dict]) -> list[dict]:
+        """Every apply.unverified decision for the scans holding an approved-but-unapplied row —
+        the evidence that a write ran and was refused credit. Read here, interpreted in
+        apply_outcome.py; nothing is read when no row could carry an outcome."""
+        scans = sorted({r["scan_id"] for r in rows
+                        if str(r.get("status") or "") == "approved" and not r.get("applied")})
+        if not scans:
+            return []
+        marks = ",".join(["%s"] * len(scans))
+        self._db.execute(cur,
+            f"SELECT ts,action,scan_id,file,detail FROM decision_log "
+            f"WHERE action=%s AND scan_id IN ({marks})", ("apply.unverified", *scans))
+        return [dict(r) for r in self._db.fetchall(cur)]
 
     def _superseded_items(self, cur, rows: list[dict]) -> set[str]:
         """The ids of queue rows whose finding has stopped being work.
@@ -9831,6 +10438,24 @@ class Store:
                 "ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value",
                 (key, value))
 
+    def claim_maintenance_lease(self, name: str, *, lease_seconds: int = 3600,
+                                now: str | None = None) -> bool:
+        """Atomically elect one replica for recoverable, idempotent maintenance work."""
+        from datetime import datetime, timedelta, timezone
+        instant = datetime.fromisoformat(str(now).replace("Z", "+00:00")) if now else \
+            datetime.now(timezone.utc)
+        if instant.tzinfo is None:
+            instant = instant.replace(tzinfo=timezone.utc)
+        claimed_at = instant.isoformat()
+        expires_at = (instant + timedelta(seconds=max(1, int(lease_seconds)))).isoformat()
+        key = f"maintenance:{name}:lease"
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO app_settings(key,value) VALUES(%s,%s) "
+                "ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value "
+                "WHERE app_settings.value<=%s", (key, expires_at, claimed_at))
+            return (getattr(cur, "rowcount", 0) or 0) > 0
+
     # ── Per-user setting overrides (R7: owner default + per-user override) ─────────────────────
     # A per-user override is stored as an ordinary app_settings row under a namespaced key, so it
     # needs no schema change and inherits the settings table's persistence and RESET treatment. The
@@ -9906,6 +10531,16 @@ class Store:
             })
             if owner:
                 self.set_user_setting(str(owner).strip().lower(), self._SWEEP_KEY, value)
+                normalized = str(owner).strip().lower()
+                with self._db.cursor() as cur:
+                    if skipped:
+                        self._db.execute(cur,
+                            "UPDATE user_scan_schedules SET metric_skipped=metric_skipped+1 "
+                            "WHERE owner_email=%s", (normalized,))
+                    elif not ok:
+                        self._db.execute(cur,
+                            "UPDATE user_scan_schedules SET metric_failed=metric_failed+1 "
+                            "WHERE owner_email=%s", (normalized,))
             else:
                 self.set_setting(self._SWEEP_KEY, value)
         except Exception:
@@ -11243,11 +11878,19 @@ class Store:
             return []
 
     # ── Audit trail (maturity Phase 4) ────────────────────────────────────────
+    _VALIDATION_TITLES = {
+        "verified_cleared": "written and verified",
+        "verified_regressed": "written and verified, with a regression",
+        "verified_still_failing": "written but the criterion still fails",
+        "could_not_verify": "written but could not be verified",
+        "write_unresolved": "not written — content no longer found",
+    }
+
     def document_timeline(self, scan_id: str, file: str, limit: int = 300) -> list[dict]:
         """Chronological provenance for ONE document in ONE scan — the auditor's answer to
         "what happened to this file and who decided what". Assembled entirely from rows the
         pipeline already persists (scan_runs, file_records, ai_calls, hitl_queue,
-        hitl_events, applied_fixes, decision_log); nothing is inferred or fabricated
+        hitl_events, applied_fixes, ai_validation_outcomes, decision_log); nothing is inferred or fabricated
         (ADR 0016). Every event: {ts, kind, title, detail?, actor?, rule_id?}. Best-effort
         per source — a missing table (older DB) skips that source, never errors."""
         events: list[dict] = []
@@ -11298,6 +11941,21 @@ class Store:
                        (scan_id, file)):
             _add(r.get("created_at"), "fix", f"Fix written into document · {r.get('rule_id') or ''}".strip(" ·"),
                  detail=(r.get("value") or "")[:160] or None, rule_id=r.get("rule_id"))
+        # What happened to an approved AI draft AFTER the human said yes. A cleared (or regressed)
+        # write changed the document and is a `fix`; the other outcomes left the bytes untouched
+        # — the lane discards an unverified or still-failing write — and are recorded decisions.
+        for r in _rows("SELECT * FROM ai_validation_outcomes WHERE scan_id=%s AND file=%s "
+                       "ORDER BY created_at", (scan_id, file)):
+            outcome = str(r.get("outcome") or "")
+            label = self._VALIDATION_TITLES.get(outcome, outcome or "unrecorded outcome")
+            detail = (r.get("detail") or "").strip()
+            regs = self._decode_regressions(r.get("regressions"))
+            if regs:
+                detail = f"{detail + ' · ' if detail else ''}newly failing: {', '.join(regs)}"
+            _add(r.get("created_at"),
+                 "fix" if outcome in ("verified_cleared", "verified_regressed") else "decision",
+                 f"AI draft {label} · {r.get('rule_id') or ''}".strip(" ·"),
+                 detail=detail[:160] or None, rule_id=r.get("rule_id"))
         for r in _rows("SELECT * FROM decision_log WHERE scan_id=%s AND file=%s ORDER BY ts",
                        (scan_id, file)):
             action = r.get("action") or "decision"
@@ -11371,7 +12029,8 @@ class Store:
                         (now, batch_id))
         return job_id
 
-    def enqueue_scheduled_sweep(self, occurrence_key: str, payload: dict | None = None) -> bool:
+    def enqueue_scheduled_sweep(self, occurrence_key: str, payload: dict | None = None,
+                                run_after: str | None = None) -> bool:
         """Durably enqueue one fleet-wide scheduled-sweep occurrence.
 
         Every API and worker replica owns an APScheduler process, so they can all offer the
@@ -11383,15 +12042,54 @@ class Store:
         import json as _json
         now = self._now()
         job_id = "sweep-" + _hashlib.sha256(occurrence_key.encode("utf-8")).hexdigest()[:32]
+        owner = str((payload or {}).get("owner_email") or "").strip().lower() or None
+        with self._db.cursor() as cur:
+            encoded = _json.dumps({**(payload or {}), "occurrence_key": occurrence_key})
+            if owner:
+                # INSERT and watermark advance share one transaction. The schedule predicate
+                # survives done-job retention; the partial unique index independently prevents
+                # two different occurrences for one owner from overlapping.
+                self._db.execute(cur,
+                    "INSERT INTO jobs(id,type,payload,status,priority,attempts,max_attempts,"
+                    "run_after,created_at,updated_at,scheduled_owner) "
+                    "SELECT %s,'scheduled_sweep',%s,'queued',%s,0,3,%s,%s,%s,%s "
+                    "FROM user_scan_schedules WHERE owner_email=%s "
+                    "AND (last_enqueued_occurrence IS NULL OR last_enqueued_occurrence<>%s) "
+                    "ON CONFLICT DO NOTHING",
+                    (job_id, encoded, job_priority("scheduled_sweep"), run_after or now,
+                     now, now, owner, owner, occurrence_key))
+            else:
+                # Legacy singleton schedules have no owner row or watermark. Preserve their
+                # original deterministic job-id behavior unchanged.
+                self._db.execute(cur,
+                    "INSERT INTO jobs(id,type,payload,status,priority,attempts,max_attempts,"
+                    "run_after,created_at,updated_at,scheduled_owner) "
+                    "VALUES(%s,'scheduled_sweep',%s,'queued',%s,0,3,%s,%s,%s,NULL) "
+                    "ON CONFLICT DO NOTHING",
+                    (job_id, encoded, job_priority("scheduled_sweep"), run_after or now, now, now))
+            admitted = (getattr(cur, "rowcount", 0) or 0) > 0
+            if admitted and owner:
+                self._db.execute(cur,
+                    "UPDATE user_scan_schedules SET last_enqueued_occurrence=%s,"
+                    "metric_admitted=metric_admitted+1,"
+                    "metric_delayed_catch_up=metric_delayed_catch_up+%s "
+                    "WHERE owner_email=%s",
+                    (occurrence_key, int(bool((payload or {}).get("catch_up"))), owner))
+            return admitted
+
+    def active_scheduled_sweep(self, owner: str) -> dict | None:
+        """Inspectable overlap state used by scheduler diagnostics and focused tests."""
+        normalized = str(owner or "").strip().lower()
+        if not normalized:
+            return None
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "INSERT INTO jobs(id,type,payload,status,priority,attempts,max_attempts,"
-                "run_after,created_at,updated_at) "
-                "VALUES(%s,'scheduled_sweep',%s,'queued',%s,0,3,%s,%s,%s) "
-                "ON CONFLICT(id) DO NOTHING",
-                (job_id, _json.dumps({**(payload or {}), "occurrence_key": occurrence_key}),
-                 job_priority("scheduled_sweep"), now, now, now))
-            return (getattr(cur, "rowcount", 0) or 0) > 0
+                "SELECT id,status,run_after,created_at FROM jobs "
+                "WHERE type='scheduled_sweep' AND scheduled_owner=%s "
+                "AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1",
+                (normalized,))
+            row = self._db.fetchone(cur)
+        return dict(row) if row else None
 
     def stage_snapshot_id(self, scan_id: str) -> str:
         """Stable identity of the immutable Discover/Assess input consumed downstream.
@@ -11873,6 +12571,50 @@ class Store:
                 "item_count": len(ordered), "entries": ordered, "sealed_at": now,
                 "upstream_manifest_id": execution.get("input_manifest_id"), "contract_version": 1}
 
+    def seal_stage_if_ready(self, execution_id: str) -> dict | None:
+        """Seal a successful worker stage once its canonical partition is complete.
+
+        Every worker finishing the tail of a batch may race here.  The execution revision and
+        the manifest's unique execution key elect one winner; followers return the winner's
+        immutable manifest instead of treating the race as a failure.
+        """
+        execution = self.get_stage_execution(execution_id)
+        if not execution:
+            return None
+        if execution.get("output_manifest_id"):
+            return self.get_stage_output_manifest(execution["output_manifest_id"])
+        if execution.get("state") != "processing_complete":
+            return None
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT work_item_id,input_id,state,result_digest FROM stage_work_items "
+                "WHERE execution_id=%s ORDER BY input_id,work_item_id", (execution_id,))
+            items = self._db.fetchall(cur)
+        expected = execution.get("expected_items")
+        if expected is None or len(items) != int(expected) or any(
+                row.get("state") not in ("completed", "skipped") for row in items):
+            return None
+        entries = [{"work_item_id": row["work_item_id"], "input_id": row["input_id"],
+                    "outcome": row["state"], "result_digest": row.get("result_digest")}
+                   for row in items]
+        try:
+            return self.seal_stage_output_manifest(
+                execution_id, entries, expected_revision=int(execution["revision"]))
+        except RuntimeError:
+            winner = self.get_stage_execution(execution_id)
+            manifest_id = (winner or {}).get("output_manifest_id")
+            if manifest_id:
+                return self.get_stage_output_manifest(manifest_id)
+            raise
+
+    def current_stage_output_manifest(self, scan_id: str, stage: str) -> dict | None:
+        """Return only the sealed output of the current successful upstream stage."""
+        workflow = self.workflow_for_scan(scan_id) or {}
+        execution = self.current_stage_execution(workflow.get("id") or scan_id, stage)
+        if not execution or execution.get("state") != "succeeded" or not execution.get("output_manifest_id"):
+            return None
+        return self.get_stage_output_manifest(execution["output_manifest_id"])
+
     def stage_execution_snapshot(self, execution_id: str, *, owner: str | None = None) -> dict | None:
         execution = self.get_stage_execution(execution_id, owner=owner)
         if not execution:
@@ -12014,6 +12756,7 @@ class Store:
                 "UPDATE stage_executions SET state=%s,terminal_items=%s,revision=revision+1,updated_at=%s "
                 "WHERE execution_id=%s AND (state<>%s OR terminal_items<>%s)",
                 (state, terminal, now, job["batch_id"], state, terminal))
+        self.seal_stage_if_ready(job["batch_id"])
 
     def _start_stage_attempt(self, job: dict) -> None:
         """Append the immutable identity of a worker claim; retries get distinct rows."""

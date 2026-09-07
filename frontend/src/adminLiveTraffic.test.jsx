@@ -179,6 +179,33 @@ describe('Admin live traffic graph', () => {
       ]))
   })
 
+  it('keeps finding, review-item, and change units separate in Live Operations', () => {
+    const facts = runFacts({ canonical: { state: 'succeeded', finding_accounting: {
+      finding_reconciliation: { assessed: 7, accounted: 7, unaccounted: 0, exact: true,
+        resolved_verified: 4, awaiting_review: 3 },
+      review: { items: 1, findings: 3 },
+      fixes: { applied: 9, verified: 8, verification_failures: 1 },
+    } } })
+    expect(facts).toEqual(expect.arrayContaining([
+      ['Assessed findings', '7 findings'],
+      ['Finding dispositions', '7 of 7 findings accounted'],
+      ['Finding reconciliation', 'Exact'],
+      ['Awaiting review', '3 findings across 1 review items'],
+      ['Change evidence', '9 applied changes · 8 verified changes · 1 failed checks'],
+    ]))
+  })
+
+  it('calls unknown finding dispositions unavailable instead of zero', () => {
+    const facts = runFacts({ canonical: { finding_accounting: {
+      finding_reconciliation: { assessed: 7, accounted: null, exact: false },
+    } } })
+    expect(facts).toEqual(expect.arrayContaining([
+      ['Finding dispositions', 'Not yet available'],
+      ['Finding reconciliation', 'Not yet available'],
+      ['Verified resolutions', 'Not yet available'],
+    ]))
+  })
+
   it('keeps a durable completed stage connected after its queue rows age out', () => {
     const graph = buildTrafficGraph({ summary: {}, runs: [
       { scan_id: 'one', stage: 'assess', owner: 'a', source: 'sharepoint', status: 'active',

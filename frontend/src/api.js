@@ -1732,7 +1732,9 @@ export const setScanLocations = (source, folders, exclude = []) => (SIM ? sim({ 
 
 export const listFolders = (parent = 'root') => (SIM ? sim({ parent, name: 'My Drive', folders: [] }) : fetch(`${BASE}/folders?parent=${encodeURIComponent(parent)}`, { headers: headers() }).then(j))
 export const getSchedule = () => (SIM
-  ? sim({ enabled: false, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', local_time: '09:00', days: [0, 1, 2, 3, 4], next_at: null, last_at: null })
+  ? sim({ enabled: false, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', local_time: '09:00', days: [0, 1, 2, 3, 4], next_at: null, last_at: null,
+      source: null, scope: { include: [], exclude: [] }, notifications: { on_failure: true, on_delay: false, on_change: false, channel: 'in_app' },
+      execution: { defer_when_busy: true, queue_threshold: 20, prewarm: true, prewarm_minutes: 10 }, history: [], reliability: null })
   : fetch(`${BASE}/schedule`, { headers: headers() }).then(j))
 export const putSchedule = (body) => (SIM
   ? sim({ ...body, next_at: null, last_at: null })

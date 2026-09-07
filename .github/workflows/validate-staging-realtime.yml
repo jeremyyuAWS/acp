@@ -1,0 +1,66 @@
+# Post-deploy GO/NO-GO for the default-off canonical realtime path. This runs the bounded gate
+# inside the staging Assess lane's Container Apps environment so its internal Redis URL is never moved
+# into GitHub or printed. It does not alter feature flags, replica counts, or production.
+name: validate-staging-realtime
+
+on:
+  workflow_dispatch: {}
+  workflow_run:
+    workflows: [deploy-staging]
+    types: [completed]
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: validate-staging-realtime
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    if: >-
+      vars.STAGING_FQDN != '' &&
+      (github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    environment:
+      name: staging
+      url: https://${{ vars.STAGING_FQDN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Run bounded event gate inside staging
+        env:
+          STAGING_RG: ${{ vars.STAGING_RG || 'mdk-accessibility' }}
+          STAGING_WORKER: ${{ vars.STAGING_ASSESS_WORKER || 'acp-assess-staging' }}
+        run: |
+          set -euo pipefail
+          source deploy/public/readiness_probe.sh
+          REVISION=$(az containerapp show -g "$STAGING_RG" -n "$STAGING_WORKER" \
+            --query properties.latestRevisionName -o tsv)
+          REPLICA=$(az containerapp replica list -g "$STAGING_RG" -n "$STAGING_WORKER" \
+            --revision "$REVISION" --query '[0].name' -o tsv)
+          test -n "$REPLICA" || { echo "::error::staging worker has no running replica"; exit 1; }
+          TRANSCRIPT=$(mktemp)
+          trap 'rm -f "$TRANSCRIPT"' EXIT
+          EXEC_EXIT=0
+          set +e
+          _aca_exec_tty az containerapp exec -g "$STAGING_RG" -n "$STAGING_WORKER" \
+            --revision "$REVISION" --replica "$REPLICA" \
+            --command "python /app/scripts/staging_realtime_gate.py" | tee "$TRANSCRIPT"
+          EXEC_EXIT=${PIPESTATUS[0]}
+          set -e
+          # The Linux Azure client can return nonzero while tearing down a successful websocket.
+          # Accept that only after the strict parser proves there is exactly one complete GO marker.
+          python3 scripts/parse_realtime_gate.py < "$TRANSCRIPT"
+          if [ "$EXEC_EXIT" -ne 0 ]; then
+            echo "::warning::Azure exec exited $EXEC_EXIT after a strictly validated GO marker"
+          fi
