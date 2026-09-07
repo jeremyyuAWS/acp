@@ -17,15 +17,46 @@ from evals.schema import load_cases  # noqa: E402
 from evals.shadow_lane import compare, load_report  # noqa: E402
 from remediation_capability import REMEDIATION  # noqa: E402
 
+# The 142-case corpus: every (format, criterion) has at least two cases, so no category is
+# withheld for under-sampling. This is ONE run, where the previous pair was two runs on the
+# 100-case corpus — coverage bought at the cost of replication, and `evidence` below says so.
+# The comparison refuses to pool reports from different corpora, so this is a switch, not an
+# addition; the two 100-case reports stay committed and are still read by
+# scripts/shadow_lane_comparison.py.
 REPORTS = [
-    ROOT / "evals/reports/2026-09-04-hosted-ladder.json",
-    ROOT / "evals/reports/2026-09-07-hosted-ladder.json",
+    ROOT / "evals/reports/2026-09-07-hosted-ladder-142.json",
 ]
 OUTPUT = ROOT / "config/shadow-model-rollout.json"
 
 
+def candidate_safety(reports: list[dict]) -> list[dict]:
+    """Per candidate, corpus-wide: the gates it passed and the violations it recorded.
+
+    A per-category "enable" row cannot show this, and without it the panel would recommend a
+    tier while hiding that the same tier wrote outside scope somewhere else in the same run.
+    On the 142-case run Sonnet is the enable candidate for five categories AND recorded one
+    critical violation on docx:1.1.1; both facts belong on the same screen.
+    """
+    out = []
+    for rep in reports:
+        for c in rep["candidates"]:
+            if not c["candidate"].startswith("anthropic:"):
+                continue
+            m = c["metrics"]
+            out.append({
+                "candidate": c["candidate"],
+                "critical_violations": m["critical_violations"],
+                "autonomous_precision": m["autonomous_precision"],
+                "abstention_correctness": m["abstention_correctness"],
+                "varr": m["varr"],
+                "gates_failed": [g["name"] for g in c["gates"] if not g["passed"]],
+            })
+    return out
+
+
 def build() -> dict:
-    result = compare([load_report(p) for p in REPORTS], load_cases(), REMEDIATION)
+    reports = [load_report(p) for p in REPORTS]
+    result = compare(reports, load_cases(), REMEDIATION)
     rows = []
     for row in result["rows"]:
         candidates = []
@@ -43,11 +74,21 @@ def build() -> dict:
         )} | {"candidates": candidates})
     return {
         "schema_version": 1,
-        "evidence": {"independent_runs": len(REPORTS), "source_reports": [p.name for p in REPORTS]},
+        "evidence": {
+            "independent_runs": len(REPORTS),
+            "source_reports": [p.name for p in REPORTS],
+            "corpus_cases": result["corpus_cases"],
+            "replication": ("Single run: a verdict here rests on one observation of each "
+                            "category, not on agreement between runs."
+                            if len(REPORTS) == 1 else
+                            f"{len(REPORTS)} runs: a verdict requires the tier to be safe in "
+                            f"every one of them."),
+        },
+        "candidate_safety": candidate_safety(reports),
         "decision_rule": {
-            "enable": "Safe in every shadow run, adequately sampled, and not dominated by rule code. Assisted pilot only; human approval remains required.",
+            "enable": "Safe in every shadow run, adequately sampled, and not dominated by rule code; where more than one tier is safe the cheapest by measured cost is named. Assisted pilot only; human approval remains required.",
             "keep-human-only": "Adequately sampled with no consistently safe candidate, or every case requires abstention.",
-            "insufficient-evidence": "Under-sampled or inconsistent between shadow runs.",
+            "insufficient-evidence": "Fewer cases than the ladder will route on, or safe in some runs and not others. With a single source run only the case count can trigger this.",
             "no-change-rule-code": "Deterministic rule code is safe in every run and remains the lower-cost choice.",
         },
         "summary_categories": result["summary_categories"],
