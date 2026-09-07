@@ -1,22 +1,28 @@
 """AI layer for ACP.
 
-Text backend: delegates to providers.claude_text_generate() (cloud path, when a key is
-configured) then falls back to the locally-running Ollama instance on any failure or
-when no key is set — callers never break and never need a key for the keyless local path.
+Text backend: delegates to providers.text_generate() (the cloud path — whichever governed
+provider providers.active_text_provider() selects) then falls back to the locally-running
+Ollama instance on any failure or when no cloud secret resolves — callers never break and
+never need a key for the keyless local path.
 
 Vision backend: uses providers.active_vision_provider(), which selects a cloud vision
 adapter when one is configured, otherwise falls back to Ollama.
 
 Config (env vars — cloud key and model name are consumed by providers.py):
+  ACP_TEXT_PROVIDER    — deploy default cloud text provider; the `ai_text_provider` admin
+                         setting overrides it. providers.TEXT_PROVIDERS names the vendors and
+                         providers.active_text_provider says what each needs before it will
+                         serve a call — this module names none of them (rule 6, ADR 0019 §1),
+                         and learns a provider's name only from a result at runtime.
   CLAUDE_TEXT_MODEL    — default claude-haiku-4-5 (text: suggest / simplify)
   OLLAMA_BASE_URL      — default http://localhost:11434 (Ollama fallback)
   OLLAMA_MODEL         — default llama3.2 (text fallback)
   OLLAMA_VISION_MODEL  — default moondream (vision fallback)
   OLLAMA_VISION_TIMEOUT— default 120s (CPU vision inference is heavier than text)
 
-The cloud provider key rides only in the x-api-key request header (managed by
-providers.py); it is never stored, logged, returned in a response, or written to any
-database row.
+The cloud provider key rides only in the request's auth header (managed by providers.py,
+which resolves a secret REFERENCE and never a pasted value); it is never stored, logged,
+returned in a response, or written to any database row.
 """
 from __future__ import annotations
 import os
@@ -1295,16 +1301,21 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
     # server-side gate is checked on every call, so disabling the UI or crossing a stop threshold
     # takes effect immediately and cannot be bypassed by a stale browser.
     import providers as _prov
-    _pilot_model = None
+    _pilot_model = _pilot_provider = None
     if rule_id == "2.4.4" and file_format:
         try:
             import core as _core
-            from remediation_pilot import decision as _pilot_decision
-            _pilot_model = _pilot_decision(_core.store, file_format, rule_id).get("model")
+            import remediation_pilot as _pilot
+            _pilot_model = _pilot.decision(_core.store, file_format, rule_id).get("model")
+            # The pilot's model id belongs to the pilot's own provider, so the call is PINNED
+            # to it. Without that pin, a deployment whose default text provider is a different
+            # one would be sent a model id that provider does not serve — a call that fails,
+            # and whose ai_calls row would name a model that never ran.
+            _pilot_provider = _pilot.PROVIDER if _pilot_model else None
         except Exception:
-            _pilot_model = None
-    _cr = _prov.claude_text_generate(prompt, temperature=0.4, max_tokens=800,
-                                     model=_pilot_model)
+            _pilot_model = _pilot_provider = None
+    _cr = _prov.text_generate(prompt, temperature=0.4, max_tokens=800,
+                              model=_pilot_model, provider=_pilot_provider)
     if _cr is not None:
         text = _cr["text"].strip().strip('"').strip()
         if text:
