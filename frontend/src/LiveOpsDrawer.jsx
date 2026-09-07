@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import { prefersReducedMotion, useDialog } from './a11y.js'
 import {
   EVENT_FILTERS, EVENT_ICONS, NOT_REPORTED, TONE, alertRuleState, alertRuleTone, alertsModel,
@@ -37,6 +37,52 @@ import {
 
 const PANEL = { minWidth: 0, padding: 12, border: '1px solid var(--line)', borderRadius: 10, background: 'var(--card, #fff)' }
 const LABEL = { display: 'block', fontSize: 11, letterSpacing: '.02em', color: 'var(--muted)', marginBottom: 3 }
+
+const DRAWER_TABS = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'replicas', label: 'Replicas' },
+  { id: 'activity', label: 'Activity' },
+  { id: 'diagnostics', label: 'Diagnostics' },
+]
+
+// The drawer is normally unmounted when it closes. Keep each node's last tab for this browser
+// session without writing operational identifiers to durable storage.
+const sessionTabs = new Map()
+
+function DrawerTabs({ active, onSelect, uid }) {
+  const refs = useRef([])
+  const selectAt = (index) => {
+    const tab = DRAWER_TABS[(index + DRAWER_TABS.length) % DRAWER_TABS.length]
+    onSelect(tab.id)
+    refs.current[DRAWER_TABS.findIndex((item) => item.id === tab.id)]?.focus()
+  }
+  const onKeyDown = (event, index) => {
+    let next = null
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = index + 1
+    if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = index - 1
+    if (event.key === 'Home') next = 0
+    if (event.key === 'End') next = DRAWER_TABS.length - 1
+    if (next == null) return
+    event.preventDefault()
+    selectAt(next)
+  }
+  return <div className="liveops-tabs" role="tablist" aria-label="Component details">
+    {DRAWER_TABS.map((tab, index) => <button key={tab.id} type="button" role="tab"
+      id={`${uid}-tab-${tab.id}`} aria-controls={`${uid}-panel-${tab.id}`}
+      aria-selected={active === tab.id} tabIndex={active === tab.id ? 0 : -1}
+      ref={(element) => { refs.current[index] = element }}
+      onClick={() => onSelect(tab.id)} onKeyDown={(event) => onKeyDown(event, index)}>
+      {tab.label}
+    </button>)}
+  </div>
+}
+
+function TabPanel({ tab, active, uid, children }) {
+  return <div className="liveops-tabpanel" role="tabpanel" id={`${uid}-panel-${tab}`}
+    aria-labelledby={`${uid}-tab-${tab}`} tabIndex={0} hidden={active !== tab}>
+    {children}
+  </div>
+}
 
 function Value({ children }) {
   return <b style={{ fontSize: 15, overflowWrap: 'anywhere' }}>{children}</b>
@@ -110,7 +156,7 @@ function LiveHeader({ name, kind, state, connection, generatedAt, revision, nowM
 
 /* ─────────────── B. Primary operational visualization ─────────────── */
 
-function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queueDepth, placement }) {
+function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queueDepth }) {
   if (!gauge.available) {
     const lifecycle = replicaLifecycle(capacity, service)
     return <section aria-label="Worker slot utilization" style={{ ...PANEL, padding: 14 }}>
@@ -128,10 +174,6 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queu
       <WorkerTelemetrySignals service={service} />
       <ScalingActivity capacity={capacity} saturation={saturation} queueDepth={queueDepth}
         lifecycle={lifecycle} nowMs={nowMs} />
-      <ReplicaJobLoad load={placement} />
-      <WorkerReplicaTable replicas={service?.instances} nowMs={nowMs} />
-      <ProvisioningTimeline timeline={provisioningTimeline(lifecycle)} />
-      <ReplicaLifecycle lifecycle={lifecycle} nowMs={nowMs} measuredAt={capacity?.measured_at} />
       <AzureMetrics capacity={capacity} service={service} nowMs={nowMs} />
     </section>
   }
@@ -197,11 +239,6 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queu
     <Saturation saturation={saturation} nowMs={nowMs} measuredAt={capacity?.measured_at} />
     <ScalingActivity capacity={capacity} saturation={saturation} queueDepth={queueDepth}
       lifecycle={replicaLifecycle(capacity, service)} nowMs={nowMs} />
-    <ReplicaJobLoad load={placement} />
-    <WorkerReplicaTable replicas={service?.instances} nowMs={nowMs} />
-    <ProvisioningTimeline timeline={provisioningTimeline(replicaLifecycle(capacity, service))} />
-    <ReplicaLifecycle lifecycle={replicaLifecycle(capacity, service)} nowMs={nowMs}
-      measuredAt={capacity?.measured_at} />
     <AzureMetrics capacity={capacity} service={service} nowMs={nowMs} />
   </section>
 }
@@ -628,13 +665,9 @@ function Deployments({ deploy, comparison }) {
 }
 
 /**
- * One of the drawer's seven sections (PRD "Best drawer experience").
+ * One of the drawer's content sections, now routed into the four-tab shell.
  *
- * The heading is the point: every node opens the SAME seven, in the same order, so a reader who
- * has learned one node's drawer has learned all of them and can go straight to the section that
- * answers their question. A section that has little to say for this node still appears and says
- * why — an omitted section reads as "nothing to report here", which is a claim, and usually the
- * wrong one.
+ * The headings preserve landmarks within each tab, while the tabs provide the primary navigation.
  */
 function Section({ n, title, children }) {
   return <section aria-label={`${n}. ${title}`} style={{ display: 'grid', gap: 10 }}>
@@ -1992,6 +2025,8 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
   samples = [], events = [], facts = [], accent = 'var(--plum)', onClose, onCancelStage,
   onResumeStage, onRecover, nowMs = Date.now() }) {
   const panelRef = useRef(null)
+  const tabUid = useId().replaceAll(':', '')
+  const [activeTab, setActiveTab] = useState(() => sessionTabs.get(nodeId) || 'overview')
   const [metricKey, setMetricKey] = useState(() => defaultMetricFor(node?.kind))
   const [filter, setFilter] = useState('all')
   const [showAll, setShowAll] = useState(false)
@@ -2004,7 +2039,16 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
   const shown = frozen || { samples, events }
 
   useDialog(panelRef, onClose)
-  useEffect(() => { setMetricKey(defaultMetricFor(node?.kind)); setShowAll(false) }, [nodeId, node?.kind])
+  useEffect(() => {
+    setMetricKey(defaultMetricFor(node?.kind))
+    setShowAll(false)
+    setActiveTab(sessionTabs.get(nodeId) || 'overview')
+  }, [nodeId, node?.kind])
+
+  const selectTab = (tab) => {
+    sessionTabs.set(nodeId, tab)
+    setActiveTab(tab)
+  }
 
   // A worker node reads ITS OWN app's block when the backend published one; every other node
   // keeps the top-level reading. Before the multi-app read, two of three worker services showed
@@ -2038,7 +2082,6 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
       saturation={saturationModel(node.service, serviceCapacity, { samples: shown.samples,
         queueDepth: snapshot?.summary?.by_stage?.[node.service?.stage]?.queued })}
       health={workerJobHealth(snapshot, node.service?.stage, { nowMs })}
-      placement={replicaJobLoad(snapshot, node.service, serviceCapacity)}
       queueDepth={snapshot?.summary?.by_stage?.[node.service?.stage]?.queued} />
   } else if (node?.kind === 'queue') {
     primary = <><QueueBar queue={queueModel(snapshot?.summary, { nowMs })} nowMs={nowMs}
@@ -2078,20 +2121,19 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
         background: 'rgba(28,22,32,.28)', cursor: 'default' }} />
     <aside role="dialog" aria-modal="true" aria-label={`${name} live details`} ref={panelRef} tabIndex={-1}
       style={{ position: 'fixed', zIndex: 80, top: 0, right: 0, bottom: 0,
-        width: 'clamp(360px, 38vw, 560px)', maxWidth: '100vw', overflowY: 'auto',
+        width: 'clamp(360px, 38vw, 560px)', maxWidth: '100vw', overflow: 'hidden',
         overflowX: 'hidden', boxSizing: 'border-box', padding: '0 20px 24px',
         background: 'var(--card, #fff)', color: 'var(--ink, #2b2330)',
-        borderLeft: `5px solid ${accent}`, display: 'grid', alignContent: 'start', gap: 12,
+        borderLeft: `5px solid ${accent}`, display: 'flex', flexDirection: 'column',
         boxShadow: '-12px 0 35px rgba(24,20,28,.22)', isolation: 'isolate' }}>
       <LiveHeader name={name} kind={node?.kind} state={state} connection={connection}
         generatedAt={snapshot?.generated_at} revision={revisionLabel(node, serviceCapacity)} nowMs={nowMs}
         onClose={onClose} onViewAll={onClose} />
 
-      {/* THE SEVEN SECTIONS, in this order for EVERY node kind. The order is the reading order of
-          an incident: what is it doing, is that healthy, how did it get here, what changed, what
-          is shouting, what are its limits, and what is it running. A section thin for this node
-          says why rather than disappearing — an absent section is a claim that there is nothing
-          to report, and usually the wrong one. */}
+      <DrawerTabs active={activeTab} onSelect={selectTab} uid={tabUid} />
+
+      <div className="liveops-tabbody">
+      <TabPanel tab="overview" active={activeTab} uid={tabUid}>
 
       <Section n={1} title="Current state">
         {state.detail
@@ -2102,6 +2144,24 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
       </Section>
 
       <Section n={2} title="Right now">{primary}</Section>
+
+      </TabPanel>
+
+      <TabPanel tab="replicas" active={activeTab} uid={tabUid}>
+        {node?.kind === 'worker'
+          ? <>
+            <WorkerReplicaTable replicas={node.service?.instances} nowMs={nowMs} />
+            <ReplicaJobLoad load={replicaJobLoad(snapshot, node.service, serviceCapacity)} />
+            <ReplicaLifecycle lifecycle={replicaLifecycle(serviceCapacity, node.service)} nowMs={nowMs}
+              measuredAt={serviceCapacity?.measured_at} />
+            <ProvisioningTimeline timeline={provisioningTimeline(replicaLifecycle(serviceCapacity, node.service))} />
+          </>
+          : <p className="muted" style={{ ...PANEL, fontSize: 12, margin: 0 }}>
+            Replica details apply to worker services. Select a worker node to inspect its fleet.
+          </p>}
+      </TabPanel>
+
+      <TabPanel tab="activity" active={activeTab} uid={tabUid}>
 
       <Section n={3} title="Last 15 minutes">
         <TrendStrip groups={groups} metricKey={metricKey} onMetric={setMetricKey} chart={chart}
@@ -2115,6 +2175,10 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
           showAll={showAll} onShowAll={() => setShowAll(true)}
           copied={copied} onCopy={copy} />
       </Section>
+
+      </TabPanel>
+
+      <TabPanel tab="diagnostics" active={activeTab} uid={tabUid}>
 
       <Section n={5} title="Alerts and platform health">
         <WorkflowCorrelation summary={snapshot?.summary} />
@@ -2144,6 +2208,8 @@ export default function LiveOpsDrawer({ nodeId, node, snapshot, capacity, connec
         <Tracing tracing={tracingModel(snapshot)} />
         {!!facts.length && <OperationalFacts groups={factGroups(facts)} />}
       </Section>
+      </TabPanel>
+      </div>
     </aside>
   </>
 }

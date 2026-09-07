@@ -1603,6 +1603,84 @@ describe('The seven-section drawer', () => {
   })
 })
 
+describe('Four-tab drawer navigation', () => {
+  const node = { kind: 'worker', label: 'Assess workers', service }
+  const tabs = (container) => [...container.querySelectorAll('[role="tab"]')]
+  const selected = (container) => tabs(container).find((tab) => tab.getAttribute('aria-selected') === 'true')
+
+  it('opens a newly selected node on Overview and exposes one selected panel', async () => {
+    const container = await mount({ nodeId: 'tabs-new-node', node })
+    expect(tabs(container).map((tab) => tab.textContent)).toEqual([
+      'Overview', 'Replicas', 'Activity', 'Diagnostics',
+    ])
+    expect(selected(container).textContent).toBe('Overview')
+    const visible = [...container.querySelectorAll('[role="tabpanel"]')].filter((panel) => !panel.hidden)
+    expect(visible).toHaveLength(1)
+    expect(visible[0].getAttribute('aria-labelledby')).toBe(selected(container).id)
+  })
+
+  it('connects every tab to its panel with the ARIA tab pattern', async () => {
+    const container = await mount({ nodeId: 'tabs-aria', node })
+    for (const tab of tabs(container)) {
+      const panel = container.querySelector(`#${tab.getAttribute('aria-controls')}`)
+      expect(panel).not.toBeNull()
+      expect(panel.getAttribute('role')).toBe('tabpanel')
+      expect(panel.getAttribute('aria-labelledby')).toBe(tab.id)
+      expect(tab.tabIndex).toBe(tab.getAttribute('aria-selected') === 'true' ? 0 : -1)
+    }
+  })
+
+  it('selects and focuses adjacent tabs with arrows, wrapping at either end', async () => {
+    const container = await mount({ nodeId: 'tabs-keyboard', node })
+    const overview = tabs(container)[0]
+    overview.focus()
+    await act(async () => overview.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'ArrowLeft', bubbles: true, cancelable: true,
+    })))
+    expect(selected(container).textContent).toBe('Diagnostics')
+    expect(document.activeElement.textContent).toBe('Diagnostics')
+
+    await act(async () => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'ArrowRight', bubbles: true, cancelable: true,
+    })))
+    expect(selected(container).textContent).toBe('Overview')
+    expect(document.activeElement.textContent).toBe('Overview')
+  })
+
+  it('supports Home and End keyboard navigation', async () => {
+    const container = await mount({ nodeId: 'tabs-home-end', node })
+    const overview = tabs(container)[0]
+    await act(async () => overview.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'End', bubbles: true, cancelable: true,
+    })))
+    expect(selected(container).textContent).toBe('Diagnostics')
+    await act(async () => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Home', bubbles: true, cancelable: true,
+    })))
+    expect(selected(container).textContent).toBe('Overview')
+  })
+
+  it('remembers a node tab during the session without changing a different node default', async () => {
+    const first = await mount({ nodeId: 'tabs-remember-a', node })
+    await click(buttonNamed(first, 'Activity'))
+    expect(selected(first).textContent).toBe('Activity')
+
+    const other = await mount({ nodeId: 'tabs-remember-b', node: { ...node, label: 'Other workers' } })
+    expect(selected(other).textContent).toBe('Overview')
+
+    const reopened = await mount({ nodeId: 'tabs-remember-a', node })
+    expect(selected(reopened).textContent).toBe('Activity')
+  })
+
+  it('keeps scrolling on the selected tab body instead of the drawer shell', async () => {
+    const container = await mount({ nodeId: 'tabs-scroll-shell', node })
+    const dialog = container.querySelector('[role="dialog"]')
+    expect(dialog.style.overflow).toBe('hidden')
+    expect(dialog.querySelector('.liveops-tabbody')).not.toBeNull()
+    expect(dialog.querySelector('[role="tabpanel"]:not([hidden])').classList).toContain('liveops-tabpanel')
+  })
+})
+
 describe('Capacity cost panel', () => {
   const workerNode = { kind: 'worker', label: 'Assess workers', service }
   const six = (c) => c.querySelector('[aria-label="6. Configuration and limits"]')
@@ -1737,7 +1815,8 @@ describe('Task 19 — worker and queue, as the brief specifies', () => {
     const container = await mount({ nodeId: 'stage:assess', node: workerNode,
       capacity: { ...capacity, replicas: [
         { name: 'r1', state: 'ready' }, { name: 'r2', state: 'starting' }] } })
-    const text = container.querySelector('[aria-label="2. Right now"]').textContent
+    await click(buttonNamed(container, 'Replicas'))
+    const text = container.querySelector('[role="tabpanel"]:not([hidden])').textContent
     expect(text).toContain('Requested')
     expect(text).toContain('Allocating')
     expect(text).toContain('Starting')
@@ -1890,10 +1969,13 @@ describe('What the worker service is doing', () => {
     expect(gauge.textContent).toContain('Worker utilization unavailable')
     expect(gauge.textContent).toContain('Employee Handbook.docx')
     expect(gauge.textContent).toContain('Benefits Policy.pdf')
-    expect(gauge.textContent).toContain('assess-replica-a')
-    expect(gauge.textContent).toContain('2 jobs')
-    expect(gauge.textContent).toContain('Slot capacity not reported')
     expect(gauge.textContent).not.toContain('0 of 0 slots busy')
+
+    await click(buttonNamed(container, 'Replicas'))
+    const replicas = container.querySelector('[role="tabpanel"]:not([hidden])')
+    expect(replicas.textContent).toContain('assess-replica-a')
+    expect(replicas.textContent).toContain('2 jobs')
+    expect(replicas.textContent).toContain('Slot capacity not reported')
   })
 
   it('names every document in flight, its criterion, and what is happening to it', async () => {

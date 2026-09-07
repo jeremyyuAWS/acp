@@ -3223,6 +3223,45 @@ html[data-wcag="on"] .wcag-toggle--on {
 .liveops-pulse { animation: liveops-pulse 1.8s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .liveops-pulse { animation: none; opacity: 1; } }
 
+.liveops-tabs {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0 -20px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--card, #fff);
+}
+.liveops-tabs [role="tab"] {
+  min-width: 0;
+  padding: 11px 4px 9px;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.liveops-tabs [role="tab"][aria-selected="true"] {
+  border-bottom-color: var(--plum);
+  color: var(--ink);
+}
+.liveops-tabs [role="tab"]:focus-visible { outline: 2px solid var(--plum); outline-offset: -2px; }
+.liveops-tabbody { flex: 1 1 auto; min-height: 0; }
+.liveops-tabpanel {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  box-sizing: border-box;
+  padding: 12px 0 0;
+  display: grid;
+  align-content: start;
+  gap: 12px;
+}
+.liveops-tabpanel[hidden] { display: none; }
+
 /* Live Operations map — the moving lines.
    ReactFlow animates an active edge by marching its dash pattern (`.react-flow__edge.animated`).
    The global prefers-reduced-motion rule near the top of this file only shortens animations to
