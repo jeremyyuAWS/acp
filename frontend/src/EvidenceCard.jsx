@@ -195,7 +195,10 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
   // The value the AI actually proposed — reviewTelemetry diffs the human's final value against
   // this to derive the `edited` calibration signal, so it must be the proposal, not the draft.
   const aiDraft = useRef(firstProposed(item) ?? item?.approved_value ?? null)
-  const modelCallId = useRef(null)
+  // Server-precomputed vision proposals already carry their exact call ID. A multi-instance
+  // card can contain several independent calls, so only bind the card-level decision when the
+  // decision has exactly one generated value; otherwise attribution would be false precision.
+  const modelCallId = useRef(instances.length === 1 ? instances[0]?.model_call_id || null : null)
   // Auto-draft plumbing: the card element (for the viewport observer), a once-guard so the auto
   // draft fires at most once, and whether the card has been scrolled into view yet.
   const rootRef = useRef(null)

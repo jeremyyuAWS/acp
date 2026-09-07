@@ -82,7 +82,8 @@ from urllib.parse import unquote, urlparse
 
 def proposal(locator, before, proposed_value, rationale, source, thumb=None, kind=None,
              explain_only=False, sc=None, why_review=None, context=None,
-             model: str | None = None, companion_file: str | None = None) -> dict:
+             model: str | None = None, companion_file: str | None = None,
+             model_call_id: str | None = None) -> dict:
     """One review card's worth of state.
 
     `why_review` and `context` exist because of what a reviewer was previously NOT told. A card
@@ -150,6 +151,10 @@ def proposal(locator, before, proposed_value, rationale, source, thumb=None, kin
         # and already embedded in many callers; this key is machine-readable and stable enough
         # to join against ai_calls records or the bench_models output.
         p["_model"] = model
+    if model_call_id:
+        # Exact immutable ai_calls row, carried with the generated value so a later reviewer
+        # decision can be attributed without guessing from provider/model/time proximity.
+        p["model_call_id"] = model_call_id
     return p
 
 

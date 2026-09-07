@@ -91,7 +91,8 @@ def _stub_vision(monkeypatch, alt="A filled box representing the quarterly figur
         # text read from the page render is written inline; an ungrounded guess is withheld and
         # deferred to a review card. (It is a weaker anchor here — the render is the whole PAGE,
         # so it says the page carried text, not the figure. Weaker is not nothing.)
-        return {"alt": alt, "grounded": grounded, "evidence": "stub", "model": "llava:7b"} if alt else None
+        return {"alt": alt, "grounded": grounded, "evidence": "stub", "model": "llava:7b",
+                "ai_call_id": "vision-pdf-call"} if alt else None
 
     monkeypatch.setattr(ai, "vision_is_available", lambda: available)
     monkeypatch.setattr(ai, "describe_image_structured", fake)

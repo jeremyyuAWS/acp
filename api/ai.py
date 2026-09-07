@@ -626,6 +626,15 @@ def _minimal_vision_prompt(style: str = "") -> str:
     return f"Describe this image {steer}."
 
 
+class _TracedVisionText(str):
+    """A normal string that retains the exact durable call which produced it."""
+
+    def __new__(cls, value: str, ai_call_id: str | None = None):
+        obj = super().__new__(cls, value)
+        obj.ai_call_id = ai_call_id
+        return obj
+
+
 def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = None,
                      file: str | None = None, model: str | None = None, clean: bool = True,
                      prompt_version: str | None = None) -> str | None:
@@ -739,8 +748,9 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
                   reason=reason, **_tr)
         return None
     if not clean:
-        _trace_ai("vision", prompt, raw, _t0, ok=True, reason=_providers.REASON_OK, **_tr)
-        return raw or None
+        call_id = _trace_ai("vision", prompt, raw, _t0, ok=True,
+                            reason=_providers.REASON_OK, **_tr)
+        return _TracedVisionText(raw, call_id) if raw else None
     alt = _clean_alt(raw)
     ok = bool(alt) and len(alt) >= 8 and " " in alt
     # A fourth way to end at None, and the transport had nothing to do with it: the model DID
@@ -750,9 +760,9 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     if not ok:
         print(f"[vision] {_tr['provider']} · model={mdl} — reply rejected by the alt-text guard: "
               f"reply_chars={len(alt or '')} (needs ≥8 chars and more than one word)", flush=True)
-    _trace_ai("vision", prompt, alt, _t0, ok=ok,
-              reason=_providers.REASON_OK if ok else _providers.REASON_UNUSABLE, **_tr)
-    return alt if ok else None
+    call_id = _trace_ai("vision", prompt, alt, _t0, ok=ok,
+                        reason=_providers.REASON_OK if ok else _providers.REASON_UNUSABLE, **_tr)
+    return _TracedVisionText(alt, call_id) if ok else None
 
 
 def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "", style: str = "",
@@ -806,6 +816,9 @@ def describe_image(image_bytes: bytes, *, filename: str = "", context: str = "",
         "processing_zone": escalation["zone"] if escalation
         else ("local" if prov.get("zone") == "local" else "customer_cloud"),
     }
+    call_id = escalation.get("ai_call_id") if escalation else getattr(alt, "ai_call_id", None)
+    if call_id:
+        out["ai_call_id"] = call_id
     if escalation:
         out["escalation"] = escalation["steps"]      # the transparent numbered path
         out["cost_usd"] = escalation["cost_usd"]
@@ -1043,6 +1056,9 @@ def describe_image_structured(image_bytes: bytes, *, filename: str = "", context
     else:
         evidence = "vision description only — no text in the image to anchor it; confirm it matches the intent"
     out = {"alt": alt, "grounded": grounded, "evidence": evidence, "model": model_used}
+    call_id = escalation.get("ai_call_id") if escalation else getattr(alt, "ai_call_id", None)
+    if call_id:
+        out["ai_call_id"] = call_id
     if escalation:
         out.update(provider=escalation["provider"], processing_zone=escalation["zone"],
                    cost_usd=escalation["cost_usd"], escalation=escalation["steps"])
@@ -1065,7 +1081,7 @@ def _escalate_vision(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     mdl = res.get("model")
     # Stay vendor-agnostic (rule 6): the provider names itself in its result; ai.py never hardcodes
     # a cloud vendor. 'cloud' is only a defensive fallback if an adapter omitted its own name.
-    _trace_ai("vision", prompt, res.get("text"), _t0, ok=bool(res.get("ok")), model=mdl,
+    call_id = _trace_ai("vision", prompt, res.get("text"), _t0, ok=bool(res.get("ok")), model=mdl,
               provider=res.get("provider") or "cloud", zone=res.get("zone"),
               cost_usd=res.get("cost_usd", 0.0), scan_id=scan_id, file=file,
               reason=res.get("reason"),
@@ -1081,6 +1097,7 @@ def _escalate_vision(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     return {
         "alt": alt, "model": mdl, "provider": res.get("provider"), "zone": res.get("zone"),
         "cost_usd": res.get("cost_usd", 0.0),
+        "ai_call_id": call_id,
         "steps": [
             {"provider": "ollama", "zone": provenance()["zone"],
              "outcome": "no grounded description"},
@@ -1266,7 +1283,7 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
             # numbered `escalation` steps and cost_usd only when a cloud escalation actually
             # occurred. No secret is carried — a provider name, a 'local'/'customer_cloud' zone,
             # and the numbered path only.
-            for k in ("provider", "processing_zone", "escalation", "cost_usd"):
+            for k in ("provider", "processing_zone", "escalation", "cost_usd", "ai_call_id"):
                 if res.get(k) is not None:
                     out[k] = res[k]
             return out
