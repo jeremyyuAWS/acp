@@ -56,6 +56,21 @@ describe('automationForecast', () => {
     expect(result.candidates + result.review + result.protected).toBe(result.total)
   })
 
+  it('explains human work using mutually exclusive categories with criteria and files', () => {
+    const result = automationForecast([
+      finding({ file: 'review.docx' }),
+      finding({ file: 'author.pdf', rule_id: 'WCAG_1_1_1', hasProposal: false, proposals: [] }),
+      finding({ file: 'rejected.pptx', rejectedFix: true }),
+    ], 3)
+    expect(result.humanCategories.map(({ key, findings, files }) => ({ key, findings, files }))).toEqual([
+      { key: 'threshold', findings: 1, files: 1 },
+      { key: 'authoring', findings: 1, files: 1 },
+      { key: 'rejected', findings: 1, files: 1 },
+    ])
+    expect(result.humanCategories[1].criteria).toEqual([{ criterion: '1.1.1', count: 1 }])
+    expect(result.humanCategories[1].fileNames).toEqual(['author.pdf'])
+  })
+
   it('falls back to Balanced for an invalid level', () => {
     expect(automationLevel(99).name).toBe('Balanced')
   })

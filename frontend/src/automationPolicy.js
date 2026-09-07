@@ -36,16 +36,49 @@ const requiredLevel = (finding) => {
   return 5
 }
 
+const fileCount = (rows) => new Set(rows.map((finding) => finding?.file).filter(Boolean)).size
+
+const protectedReason = (finding) => {
+  const sc = scOf(finding?.rule_id || finding?.ruleId)
+  const proposal = proposalMeta(finding)
+  if (finding?.rejectedFix) return 'rejected'
+  if (!finding?.hasProposal) return 'authoring'
+  if (methodForSc(sc) === 'human' || sc === '1.3.3' || proposal?.subjective) return 'judgement'
+  return 'judgement'
+}
+
+const categorySummary = (key, rows) => {
+  const criteria = new Map()
+  rows.forEach((finding) => {
+    const sc = scOf(finding?.rule_id || finding?.ruleId) || 'Other'
+    criteria.set(sc, (criteria.get(sc) || 0) + 1)
+  })
+  return {
+    key,
+    findings: rows.length,
+    files: fileCount(rows),
+    criteria: [...criteria.entries()]
+      .map(([criterion, count]) => ({ criterion, count }))
+      .sort((a, b) => b.count - a.count || a.criterion.localeCompare(b.criterion)),
+    fileNames: [...new Set(rows.map((finding) => finding?.file).filter(Boolean))].sort(),
+  }
+}
+
 export function automationForecast(findings = [], level = DEFAULT_AUTOMATION_LEVEL) {
   const rows = Array.isArray(findings) ? findings : []
   const buckets = { candidates: [], review: [], protected: [] }
+  const humanBuckets = { threshold: [], authoring: [], judgement: [], rejected: [] }
   rows.forEach((finding) => {
     const threshold = requiredLevel(finding)
-    if (threshold == null) buckets.protected.push(finding)
-    else if (threshold <= level) buckets.candidates.push(finding)
-    else buckets.review.push(finding)
+    if (threshold == null) {
+      buckets.protected.push(finding)
+      humanBuckets[protectedReason(finding)].push(finding)
+    } else if (threshold <= level) buckets.candidates.push(finding)
+    else {
+      buckets.review.push(finding)
+      humanBuckets.threshold.push(finding)
+    }
   })
-  const fileCount = (bucket) => new Set(bucket.map((finding) => finding?.file).filter(Boolean)).size
   return {
     total: rows.length,
     candidates: buckets.candidates.length,
@@ -54,6 +87,9 @@ export function automationForecast(findings = [], level = DEFAULT_AUTOMATION_LEV
     reviewFiles: fileCount(buckets.review),
     protected: buckets.protected.length,
     protectedFiles: fileCount(buckets.protected),
+    humanCategories: Object.entries(humanBuckets)
+      .map(([key, bucket]) => categorySummary(key, bucket))
+      .filter((category) => category.findings > 0),
   }
 }
 
