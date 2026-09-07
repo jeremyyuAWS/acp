@@ -2,19 +2,26 @@
 
 WHAT THIS IS, AND WHAT IT DELIBERATELY IS NOT
 ----------------------------------------------
-PRD §16 requires the exported ACR to be built on the official ITI VPAT® 2.5Rev template. That is
-Phase 5, and it is gated on a decision that has not been made: vendoring a third-party template
-into this repo carries the VPAT® trademark's usage terms, and this codebase's precedent for
-vendoring a third-party artifact is that it gets its own ADR first — ADR 0053, which frames the
-question and deliberately does not answer it. (This comment used to cite ADR 0029 as the
-precedent. It is not one: 0029 has no licensing or trademark reasoning in it at all.)
+PRD §16 asks for the exported ACR to follow the official ITI VPAT® 2.5Rev template. How far that
+may go was a licensing question — vendoring a third-party template into this repo carries the
+VPAT® trademark's usage terms — and ADR 0053 framed it as three separable questions. On
+2026-09-07 the owner answered the copyright one (Q2) as a scope: the template's section headings,
+table titles and column headers may be reproduced here; its prose may not; the file is not
+vendored. That is the ADR's Option C, and it is what ships: the headings live as data in
+config/vpat-2.5rev.json, per edition, and this projection lays the report out under them.
 
-So this module renders the report's CONTENT in the VPAT table's shape — the same rows, the same
-column meanings, the same four conformance terms — and nothing else. It emits JSON and a plain
-HTML table. It does not emit .docx, does not claim to be a VPAT, and its rendered output says so
-in as many words. Phase 5 replaces the renderer; the projection below is what it will fill the
-template's tables from, so the shape is built now and proven against real records rather than
-designed around a template nobody has committed yet.
+What was NOT answered is Q1, the service mark: whether a document ACP generates may be CALLED a
+VPAT. So every format still states on its face that it is not one, and nothing here may use the
+mark as a claim — tests/test_acr_vpat_layout.py fails if a heading ever does.
+
+This module therefore renders the report's CONTENT in the template's structure — the same rows,
+the same column meanings, the same four conformance terms, the same per-level tables and division
+headings — and every renderer fills from the one projection below: JSON and HTML here, PDF in
+acr_export_pdf (which wraps the HTML), Word in acr_export_docx. That single seam is why the
+honesty constraints are written once. (This docstring said for a day that Phase 5 "is gated on a
+decision that has not been made", that "Phase 5 replaces the renderer", and that this module
+"does not emit .docx" — the first two stopped being true on 2026-09-07 and the third in #1499.
+It used to cite ADR 0029 as the vendoring precedent, too; 0029 has no licensing reasoning in it.)
 
 THE HONESTY CONSTRAINTS TRAVEL WITH THE CONTENT, not with the renderer
 -----------------------------------------------------------------------
@@ -75,9 +82,11 @@ def project(report: dict, criteria: list[dict], *, evidence_by_criterion: dict[s
             stale_ids: set[str] | None = None) -> dict:
     """The report as the structure a VPAT table is filled from. Pure data; no formatting.
 
-    This is the seam Phase 5 plugs the ITI template into: the template's tables consume exactly
-    these rows. Keeping the projection separate from the renderer means the Word export inherits
-    the honesty checks above rather than reimplementing them.
+    This is the seam every renderer fills from: HTML, PDF and Word all consume exactly these
+    rows, grouped the way the ITI template lays them out (config/vpat-2.5rev.json, per edition).
+    Keeping the projection separate from the renderers means each inherits the honesty checks
+    above rather than reimplementing them — and a template we do not vendor is matched in one
+    place rather than three.
     """
     ev = evidence_by_criterion or {}
     stale = stale_ids or set()
@@ -126,8 +135,14 @@ def project(report: dict, criteria: list[dict], *, evidence_by_criterion: dict[s
             # Named, so a reader of the JSON knows what this is not.
             "edition": report.get("vpat_edition") or "(not selected)",
             "is_official_iti_template": False,
-            "note": ("Structural preview only. The official ITI VPAT® template is integrated in "
-                     "Phase 5; this output mirrors the VPAT table shape and is not a VPAT."),
+            # Read by people, not just tests: to_html() prints it in the notice and the PDF
+            # wraps that. It said "the official ITI VPAT® template is integrated in Phase 5" for
+            # a day after the opposite was decided (ADR 0053, Option C: match the structure, do
+            # not vendor the file). Q1 of that ADR — the name — is still open, so "not a VPAT"
+            # stays, and tests/test_acr_slice_1_4_3.py pins that it does.
+            "note": ("Structural preview only. This output follows the structure of the ITI "
+                     "VPAT® template — its sections, tables and headings — without being built "
+                     "on the template file, and it is not a VPAT."),
         },
         "report": {k: report.get(k) for k in (
             "report_title", "product_name", "product_version", "build_id", "release_date",
