@@ -2,9 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 
-const calls = vi.hoisted(() => ({ put: [], apply: [], validate: [], override: [], del: 0, putResult: null }))
+const calls = vi.hoisted(() => ({ put: [], apply: [], validate: [], override: [], del: 0, get: 0, putResult: null }))
 vi.mock('./api.js', () => ({
-  getCapacitySchedule: () => Promise.resolve(calls.snapshot),
+  getCapacitySchedule: () => { calls.get += 1; return Promise.resolve(calls.snapshot) },
   putCapacitySchedule: (body) => { calls.put.push(body); return calls.putFails ? Promise.reject(new Error('no')) : Promise.resolve(calls.putResult ?? { version: 8 }) },
   applyCapacitySchedule: (body) => { calls.apply.push(body); return Promise.resolve({ application: { state: 'applied' } }) },
   validateCapacitySchedule: (body) => { calls.validate.push(body); return Promise.resolve(calls.validation ?? { blocked: false, findings: [] }) },
@@ -20,7 +20,7 @@ async function mount({ admin = true, snapshot = SNAP } = {}) { calls.snapshot = 
 async function open(c, name = 'Edit schedule') { await act(async () => { button(c, name).click() }) }
 async function review(c) { await act(async () => { button(c, 'Continue').click() }); await act(async () => { button(c, 'Continue').click() }) }
 
-beforeEach(() => { document.body.innerHTML = ''; calls.put = []; calls.apply = []; calls.validate = []; calls.override = []; calls.del = 0; calls.putResult = null; calls.putFails = false; calls.validation = null; vi.restoreAllMocks(); vi.spyOn(window, 'confirm').mockReturnValue(true) })
+beforeEach(() => { document.body.innerHTML = ''; calls.put = []; calls.apply = []; calls.validate = []; calls.override = []; calls.del = 0; calls.get = 0; calls.putResult = null; calls.putFails = false; calls.validation = null; vi.restoreAllMocks(); vi.spyOn(window, 'confirm').mockReturnValue(true) })
 
 describe('guided schedule management', () => {
   it('keeps mutation controls away from view-only users', async () => { const c = await mount({ admin: false }); expect(button(c, 'Edit schedule')).toBeFalsy(); expect(c.textContent).toMatch(/View only/i) })
@@ -41,5 +41,5 @@ describe('temporary overrides', () => {
   it('offers bounded per-service controls for a custom override', async () => { const c = await mount(); await open(c, 'Temporary override'); setValue(c.querySelector('#ov-mode'), 'custom'); setValue(c.querySelector('#ov-assess'), '3'); setValue(c.querySelector('#ov-reason'), 'smaller test run'); await act(async () => button(c, 'Apply override').click()); expect(calls.override[0]).toMatchObject({ mode: 'custom', reason: 'smaller test run', floors: { assess: 3 } }); expect(window.confirm).toHaveBeenCalled() })
   it('shows and ends an active override', async () => { const snapshot = { ...SNAP, override: { mode: 'off_hours', actor: 'owner@example.com', reason: 'maintenance', expires_at: '2026-09-08T03:00:00Z', resumes_schedule_version: 7 } }; const c = await mount({ snapshot }); await open(c, 'Temporary override'); expect(c.textContent).toContain('owner@example.com'); expect(c.textContent).toContain('resumes automatically'); await act(async () => button(c, 'End override').click()); expect(calls.del).toBe(1) })
   it('does not offer overrides that cannot reach Azure', async () => { const c = await mount({ snapshot: { ...SNAP, applied: false, application_configured: false } }); expect(button(c, 'Temporary override').disabled).toBe(true); expect(c.textContent).toMatch(/overrides are unavailable until this schedule is applied/i); expect(calls.override).toHaveLength(0) })
-  it('surfaces reconciliation failures instead of claiming an override silently succeeded', async () => { const c = await mount({ snapshot: { ...SNAP, reconciliation: { state: 'partial', failures: 2, completed_at: '2026-09-07T16:00:00Z' } } }); expect(c.textContent).toMatch(/Capacity reconciliation:\s*partial/); expect(c.textContent).toContain('2 failed attempts') })
+  it('explains reconciliation failures and offers an immediate refresh', async () => { const c = await mount({ snapshot: { ...SNAP, reconciliation: { state: 'partial', failures: 2, completed_at: '2026-09-07T16:00:00Z' } } }); expect(c.textContent).toContain('Some services did not update'); expect(c.textContent).toContain('2 failed attempts'); expect(c.querySelector('[role="status"]').getAttribute('aria-live')).toBe('polite'); await act(async () => button(c, 'Refresh status').click()); expect(calls.get).toBe(2) })
 })
