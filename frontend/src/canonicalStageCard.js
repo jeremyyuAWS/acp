@@ -1,14 +1,5 @@
-const STAGE_LABELS = {
-  discover: 'Discover', assess: 'Assess', remediate: 'Remediate',
-  release: 'Release', conformance: 'Conformance',
-}
-
-const STATE_LABELS = {
-  queued: 'Waiting', processing: 'Processing', paused: 'Paused',
-  processing_complete: 'Reconciling', reconciling: 'Reconciling',
-  succeeded: 'Complete', failed: 'Failed', cancelled: 'Stopped manually',
-  integrity_failed: 'Needs attention', superseded: 'Superseded',
-}
+import { STATE_LABELS, stageDefinition, validStageActions } from './stageDefinitions.js'
+import { canonicalStageViewModels } from './stageAccountingModel.js'
 
 const number = (value) => (typeof value === 'number' && Number.isFinite(value) ? value : null)
 const PIPELINE_STAGE_ORDER = {
@@ -49,19 +40,7 @@ export function stageNeedsAttention(snapshot) {
     || ['failed', 'cancelled', 'integrity_failed', 'reconciling'].includes(snapshot?.state)
 }
 
-const DOMAIN_BUCKET_LABELS = {
-  waiting: 'Waiting', processing: 'Processing', assessed: 'Assessed',
-  published: 'Published · verified', completed_unverified: 'Completed · not verified',
-  resolved_verified: 'Resolved · verified', awaiting_review: 'Awaiting review',
-  approved_pending_verification: 'Approved · awaiting verification',
-  unchanged_no_fix: 'Unchanged · no fix', failed: 'Failed', excluded: 'Excluded',
-  superseded: 'Superseded', cancelled: 'Stopped manually', skipped: 'Skipped',
-}
-
-const domainBucketLabel = (key) => DOMAIN_BUCKET_LABELS[key]
-  || String(key).replaceAll('_', ' ').replace(/^./, (letter) => letter.toUpperCase())
-
-export function canonicalStageCardModel(snapshot) {
+export function canonicalStageCardModel(snapshot, context = {}) {
   if (!snapshot) return null
   const work = snapshot.counts?.work_items || {}
   const reconciliation = snapshot.reconciliation || {}
@@ -77,11 +56,20 @@ export function canonicalStageCardModel(snapshot) {
     && (!domainAvailable || domain.exact !== false)
   const stopping = snapshot.control?.cancel_requested === true
     && !['cancelled', 'failed', 'succeeded'].includes(snapshot.state)
+  const definition = stageDefinition(snapshot.stage)
+  const views = canonicalStageViewModels(snapshot, context)
   const stateLabel = stopping ? 'Stopping safely' : (STATE_LABELS[snapshot.state] || 'Status unavailable')
   return {
     stage: snapshot.stage,
-    stageLabel: STAGE_LABELS[snapshot.stage] || 'Stage',
+    stageLabel: definition?.label || 'Stage',
+    stageColor: definition?.color || null,
     stateLabel,
+    state: snapshot.state,
+    actions: validStageActions(snapshot.state, {
+      cancelRequested: stopping, isCurrent: context.isCurrent !== false,
+    }),
+    compact: views.compact,
+    expanded: views.expanded,
     integrityOk,
     total,
     accounted,
@@ -102,9 +90,7 @@ export function canonicalStageCardModel(snapshot) {
       accounted: domainAccounted,
       unaccounted: number(domain.unaccounted),
       exact: domain.exact === true,
-      buckets: Object.entries(domain.buckets).map(([key, value]) => [
-        domainBucketLabel(key), number(value),
-      ]),
+      buckets: views.expanded.counters.map(({ key, label }) => [label, number(domain.buckets[key])]),
     } : null,
     workItems: [
       ['Completed', number(work.completed)],
