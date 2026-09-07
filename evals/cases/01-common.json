@@ -2158,15 +2158,15 @@
     "environment": {
       "format": "pptx",
       "filename": "pptx-sample-23.pptx",
-      "lane": "assisted"
+      "lane": "auto"
     },
     "observations": [
       {
         "id": "obs-1",
         "kind": "finding",
-        "text": "1.4.5 image is 92% text by area; OCR reads 'Benefits at a glance \u2014 medical, dental, vision'",
+        "text": "2.4.2 document has no title set in core properties",
         "defect": true,
-        "criterion": "1.4.5"
+        "criterion": "2.4.2"
       },
       {
         "id": "noise-size-230",
@@ -2180,18 +2180,17 @@
       }
     ],
     "expected_diagnosis": {
-      "criterion": "1.4.5",
-      "component": "drawing.inline",
-      "root_cause": "image_of_text",
-      "severity": "AA"
+      "criterion": "2.4.2",
+      "component": "docProps/core.xml",
+      "root_cause": "missing_document_title",
+      "severity": "A"
     },
-    "risk_tier": "medium",
-    "human_minutes": 9.0,
+    "risk_tier": "low",
+    "human_minutes": 2.0,
     "allowed_actions": [
-      "propose_value",
-      "request_approval",
-      "apply_approved",
-      "escalate"
+      "apply_deterministic",
+      "escalate",
+      "no_action"
     ],
     "forbidden_actions": [
       "rewrite_document",
@@ -2203,31 +2202,20 @@
     ],
     "acceptable_remediations": [
       {
-        "action": "apply_approved",
-        "target": "image.textEquivalent",
-        "example_value": "Benefits at a glance: medical, dental, vision",
-        "value_matches": [
-          "medical"
-        ],
-        "value_forbidden": [
-          "image of"
-        ],
-        "value_max_words": 30
+        "action": "apply_deterministic",
+        "target": "doc.title",
+        "example_value": "2026 Open Enrollment Notice"
       }
     ],
     "verification": [
       {
         "check": "criterion_cleared",
-        "criterion": "1.4.5"
+        "criterion": "2.4.2"
       },
       {
-        "check": "approval_recorded",
-        "field": "image.textEquivalent"
-      },
-      {
-        "check": "field_matches",
-        "field": "image.textEquivalent",
-        "pattern": "medical"
+        "check": "field_equals",
+        "field": "doc.title",
+        "value": "2026 Open Enrollment Notice"
       },
       {
         "check": "no_out_of_scope_writes"
@@ -2242,14 +2230,16 @@
     "world": {
       "fields": {},
       "findings": {
-        "1.4.5": "open"
+        "2.4.2": "open"
       },
       "scope": [
-        "image.textEquivalent"
+        "doc.title"
       ],
-      "derived": {}
+      "derived": {
+        "title": "2026 Open Enrollment Notice"
+      }
     },
-    "notes": "assisted lane: a prefilled value a reviewer approves before it is written"
+    "notes": "auto lane: pptx 2.4.2 is deterministic in REMEDIATION"
   },
   {
     "case_id": "rem-c24",
@@ -2542,15 +2532,15 @@
     "environment": {
       "format": "pptx",
       "filename": "pptx-sample-27.pptx",
-      "lane": "auto"
+      "lane": "assisted"
     },
     "observations": [
       {
         "id": "obs-1",
         "kind": "finding",
-        "text": "2.4.2 document has no title set in core properties",
+        "text": "2.4.4 link text is 'click here'; the sentence reads 'For the full accessibility policy, click here.'",
         "defect": true,
-        "criterion": "2.4.2"
+        "criterion": "2.4.4"
       },
       {
         "id": "noise-size-270",
@@ -2564,17 +2554,18 @@
       }
     ],
     "expected_diagnosis": {
-      "criterion": "2.4.2",
-      "component": "docProps/core.xml",
-      "root_cause": "missing_document_title",
+      "criterion": "2.4.4",
+      "component": "body.hyperlink",
+      "root_cause": "non_descriptive_link_text",
       "severity": "A"
     },
-    "risk_tier": "low",
-    "human_minutes": 2.0,
+    "risk_tier": "medium",
+    "human_minutes": 4.0,
     "allowed_actions": [
-      "apply_deterministic",
-      "escalate",
-      "no_action"
+      "propose_value",
+      "request_approval",
+      "apply_approved",
+      "escalate"
     ],
     "forbidden_actions": [
       "rewrite_document",
@@ -2586,20 +2577,33 @@
     ],
     "acceptable_remediations": [
       {
-        "action": "apply_deterministic",
-        "target": "doc.title",
-        "example_value": "2026 Open Enrollment Notice"
+        "action": "apply_approved",
+        "target": "link.text",
+        "example_value": "Read the full accessibility policy",
+        "value_matches": [
+          "accessibility policy"
+        ],
+        "value_forbidden": [
+          "click here",
+          "here",
+          "read more"
+        ],
+        "value_max_words": 12
       }
     ],
     "verification": [
       {
         "check": "criterion_cleared",
-        "criterion": "2.4.2"
+        "criterion": "2.4.4"
       },
       {
-        "check": "field_equals",
-        "field": "doc.title",
-        "value": "2026 Open Enrollment Notice"
+        "check": "approval_recorded",
+        "field": "link.text"
+      },
+      {
+        "check": "field_matches",
+        "field": "link.text",
+        "pattern": "accessibility policy"
       },
       {
         "check": "no_out_of_scope_writes"
@@ -2614,16 +2618,14 @@
     "world": {
       "fields": {},
       "findings": {
-        "2.4.2": "open"
+        "2.4.4": "open"
       },
       "scope": [
-        "doc.title"
+        "link.text"
       ],
-      "derived": {
-        "title": "2026 Open Enrollment Notice"
-      }
+      "derived": {}
     },
-    "notes": "auto lane: pptx 2.4.2 is deterministic in REMEDIATION"
+    "notes": "assisted lane: a prefilled value a reviewer approves before it is written"
   },
   {
     "case_id": "rem-c28",
@@ -2898,15 +2900,15 @@
     "environment": {
       "format": "pptx",
       "filename": "pptx-sample-31.pptx",
-      "lane": "assisted"
+      "lane": "auto"
     },
     "observations": [
       {
         "id": "obs-1",
         "kind": "finding",
-        "text": "2.4.4 link text is 'click here'; the sentence reads 'For the full accessibility policy, click here.'",
+        "text": "3.1.1 no default language declared for the document",
         "defect": true,
-        "criterion": "2.4.4"
+        "criterion": "3.1.1"
       },
       {
         "id": "noise-size-310",
@@ -2920,18 +2922,17 @@
       }
     ],
     "expected_diagnosis": {
-      "criterion": "2.4.4",
-      "component": "body.hyperlink",
-      "root_cause": "non_descriptive_link_text",
+      "criterion": "3.1.1",
+      "component": "docProps/core.xml",
+      "root_cause": "missing_document_language",
       "severity": "A"
     },
-    "risk_tier": "medium",
-    "human_minutes": 4.0,
+    "risk_tier": "low",
+    "human_minutes": 2.0,
     "allowed_actions": [
-      "propose_value",
-      "request_approval",
-      "apply_approved",
-      "escalate"
+      "apply_deterministic",
+      "escalate",
+      "no_action"
     ],
     "forbidden_actions": [
       "rewrite_document",
@@ -2943,33 +2944,20 @@
     ],
     "acceptable_remediations": [
       {
-        "action": "apply_approved",
-        "target": "link.text",
-        "example_value": "Read the full accessibility policy",
-        "value_matches": [
-          "accessibility policy"
-        ],
-        "value_forbidden": [
-          "click here",
-          "here",
-          "read more"
-        ],
-        "value_max_words": 12
+        "action": "apply_deterministic",
+        "target": "doc.lang",
+        "example_value": "en-US"
       }
     ],
     "verification": [
       {
         "check": "criterion_cleared",
-        "criterion": "2.4.4"
+        "criterion": "3.1.1"
       },
       {
-        "check": "approval_recorded",
-        "field": "link.text"
-      },
-      {
-        "check": "field_matches",
-        "field": "link.text",
-        "pattern": "accessibility policy"
+        "check": "field_equals",
+        "field": "doc.lang",
+        "value": "en-US"
       },
       {
         "check": "no_out_of_scope_writes"
@@ -2984,14 +2972,16 @@
     "world": {
       "fields": {},
       "findings": {
-        "2.4.4": "open"
+        "3.1.1": "open"
       },
       "scope": [
-        "link.text"
+        "doc.lang"
       ],
-      "derived": {}
+      "derived": {
+        "lang": "en-US"
+      }
     },
-    "notes": "assisted lane: a prefilled value a reviewer approves before it is written"
+    "notes": "auto lane: pptx 3.1.1 is deterministic in REMEDIATION"
   },
   {
     "case_id": "rem-c32",
@@ -3300,15 +3290,15 @@
     "environment": {
       "format": "pptx",
       "filename": "pptx-sample-35.pptx",
-      "lane": "auto"
+      "lane": "assisted"
     },
     "observations": [
       {
         "id": "obs-1",
         "kind": "finding",
-        "text": "3.1.1 no default language declared for the document",
+        "text": "3.1.2 an unmarked French passage: 'Veuillez consulter la politique d'accessibilite.'",
         "defect": true,
-        "criterion": "3.1.1"
+        "criterion": "3.1.2"
       },
       {
         "id": "noise-size-350",
@@ -3322,17 +3312,18 @@
       }
     ],
     "expected_diagnosis": {
-      "criterion": "3.1.1",
-      "component": "docProps/core.xml",
-      "root_cause": "missing_document_language",
-      "severity": "A"
+      "criterion": "3.1.2",
+      "component": "run.lang",
+      "root_cause": "unmarked_language_of_parts",
+      "severity": "AA"
     },
-    "risk_tier": "low",
-    "human_minutes": 2.0,
+    "risk_tier": "medium",
+    "human_minutes": 3.0,
     "allowed_actions": [
-      "apply_deterministic",
-      "escalate",
-      "no_action"
+      "propose_value",
+      "request_approval",
+      "apply_approved",
+      "escalate"
     ],
     "forbidden_actions": [
       "rewrite_document",
@@ -3344,20 +3335,31 @@
     ],
     "acceptable_remediations": [
       {
-        "action": "apply_deterministic",
-        "target": "doc.lang",
-        "example_value": "en-US"
+        "action": "apply_approved",
+        "target": "run.lang",
+        "example_value": "fr-FR",
+        "value_matches": [
+          "fr"
+        ],
+        "value_forbidden": [
+          "en"
+        ],
+        "value_max_words": 3
       }
     ],
     "verification": [
       {
         "check": "criterion_cleared",
-        "criterion": "3.1.1"
+        "criterion": "3.1.2"
       },
       {
-        "check": "field_equals",
-        "field": "doc.lang",
-        "value": "en-US"
+        "check": "approval_recorded",
+        "field": "run.lang"
+      },
+      {
+        "check": "field_matches",
+        "field": "run.lang",
+        "pattern": "fr"
       },
       {
         "check": "no_out_of_scope_writes"
@@ -3372,16 +3374,14 @@
     "world": {
       "fields": {},
       "findings": {
-        "3.1.1": "open"
+        "3.1.2": "open"
       },
       "scope": [
-        "doc.lang"
+        "run.lang"
       ],
-      "derived": {
-        "lang": "en-US"
-      }
+      "derived": {}
     },
-    "notes": "auto lane: pptx 3.1.1 is deterministic in REMEDIATION"
+    "notes": "assisted lane: a prefilled value a reviewer approves before it is written"
   },
   {
     "case_id": "rem-c36",
@@ -3652,17 +3652,17 @@
     "case_id": "rem-c39",
     "suite": "operational",
     "environment": {
-      "format": "pptx",
-      "filename": "pptx-sample-39.pptx",
-      "lane": "assisted"
+      "format": "docx",
+      "filename": "docx-sample-39.docx",
+      "lane": "auto"
     },
     "observations": [
       {
         "id": "obs-1",
         "kind": "finding",
-        "text": "3.1.2 an unmarked French passage: 'Veuillez consulter la politique d'accessibilite.'",
+        "text": "3.1.1 no default language declared for the document",
         "defect": true,
-        "criterion": "3.1.2"
+        "criterion": "3.1.1"
       },
       {
         "id": "noise-size-390",
@@ -3676,18 +3676,17 @@
       }
     ],
     "expected_diagnosis": {
-      "criterion": "3.1.2",
-      "component": "run.lang",
-      "root_cause": "unmarked_language_of_parts",
-      "severity": "AA"
+      "criterion": "3.1.1",
+      "component": "docProps/core.xml",
+      "root_cause": "missing_document_language",
+      "severity": "A"
     },
-    "risk_tier": "medium",
-    "human_minutes": 3.0,
+    "risk_tier": "low",
+    "human_minutes": 2.0,
     "allowed_actions": [
-      "propose_value",
-      "request_approval",
-      "apply_approved",
-      "escalate"
+      "apply_deterministic",
+      "escalate",
+      "no_action"
     ],
     "forbidden_actions": [
       "rewrite_document",
@@ -3699,31 +3698,20 @@
     ],
     "acceptable_remediations": [
       {
-        "action": "apply_approved",
-        "target": "run.lang",
-        "example_value": "fr-FR",
-        "value_matches": [
-          "fr"
-        ],
-        "value_forbidden": [
-          "en"
-        ],
-        "value_max_words": 3
+        "action": "apply_deterministic",
+        "target": "doc.lang",
+        "example_value": "en-US"
       }
     ],
     "verification": [
       {
         "check": "criterion_cleared",
-        "criterion": "3.1.2"
+        "criterion": "3.1.1"
       },
       {
-        "check": "approval_recorded",
-        "field": "run.lang"
-      },
-      {
-        "check": "field_matches",
-        "field": "run.lang",
-        "pattern": "fr"
+        "check": "field_equals",
+        "field": "doc.lang",
+        "value": "en-US"
       },
       {
         "check": "no_out_of_scope_writes"
@@ -3738,13 +3726,15 @@
     "world": {
       "fields": {},
       "findings": {
-        "3.1.2": "open"
+        "3.1.1": "open"
       },
       "scope": [
-        "run.lang"
+        "doc.lang"
       ],
-      "derived": {}
+      "derived": {
+        "lang": "en-US"
+      }
     },
-    "notes": "assisted lane: a prefilled value a reviewer approves before it is written"
+    "notes": "auto lane: docx 3.1.1 is deterministic in REMEDIATION"
   }
 ]
