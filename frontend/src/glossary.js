@@ -8,6 +8,22 @@
 // Add a term here, then wrap its label with <Term k="that-key">label text</Term> (see Term.jsx) —
 // nothing else needs to change at the call site.
 export const GLOSSARY = {
+  assessment_assessed: {
+    term: 'Assessed',
+    body: 'Eligible documents whose accessibility checks have finished in this assessment run.',
+  },
+  assessment_processing: {
+    term: 'Processing',
+    body: 'Eligible documents currently being opened and checked by assessment workers.',
+  },
+  assessment_waiting: {
+    term: 'Waiting',
+    body: 'Eligible documents not yet finished or currently processing. They remain queued for this run.',
+  },
+  assessment_eligible: {
+    term: 'Eligible',
+    body: 'Documents in the selected scope whose file formats ACP can assess. This is the total for the run.',
+  },
   unreadable: {
     term: 'Could not be read',
     body: 'ACP tried to read this file’s metadata and could not — usually because it’s '
