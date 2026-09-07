@@ -131,7 +131,7 @@ def upload_release_package(owner: str, scan_id: str, job_id: str, stream) -> str
             try:
                 svc.create_container(_RELEASE_PACKAGE_CONTAINER)
             except Exception:
-                pass
+                swallowed("blob.upload_release_package: creating the package container failed", scan_id)
             stream.seek(0)
             blob.upload_blob(stream, overwrite=True)
         else:
