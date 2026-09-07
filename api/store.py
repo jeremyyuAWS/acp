@@ -12036,6 +12036,50 @@ class Store:
                 "item_count": len(ordered), "entries": ordered, "sealed_at": now,
                 "upstream_manifest_id": execution.get("input_manifest_id"), "contract_version": 1}
 
+    def seal_stage_if_ready(self, execution_id: str) -> dict | None:
+        """Seal a successful worker stage once its canonical partition is complete.
+
+        Every worker finishing the tail of a batch may race here.  The execution revision and
+        the manifest's unique execution key elect one winner; followers return the winner's
+        immutable manifest instead of treating the race as a failure.
+        """
+        execution = self.get_stage_execution(execution_id)
+        if not execution:
+            return None
+        if execution.get("output_manifest_id"):
+            return self.get_stage_output_manifest(execution["output_manifest_id"])
+        if execution.get("state") != "processing_complete":
+            return None
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT work_item_id,input_id,state,result_digest FROM stage_work_items "
+                "WHERE execution_id=%s ORDER BY input_id,work_item_id", (execution_id,))
+            items = self._db.fetchall(cur)
+        expected = execution.get("expected_items")
+        if expected is None or len(items) != int(expected) or any(
+                row.get("state") not in ("completed", "skipped") for row in items):
+            return None
+        entries = [{"work_item_id": row["work_item_id"], "input_id": row["input_id"],
+                    "outcome": row["state"], "result_digest": row.get("result_digest")}
+                   for row in items]
+        try:
+            return self.seal_stage_output_manifest(
+                execution_id, entries, expected_revision=int(execution["revision"]))
+        except RuntimeError:
+            winner = self.get_stage_execution(execution_id)
+            manifest_id = (winner or {}).get("output_manifest_id")
+            if manifest_id:
+                return self.get_stage_output_manifest(manifest_id)
+            raise
+
+    def current_stage_output_manifest(self, scan_id: str, stage: str) -> dict | None:
+        """Return only the sealed output of the current successful upstream stage."""
+        workflow = self.workflow_for_scan(scan_id) or {}
+        execution = self.current_stage_execution(workflow.get("id") or scan_id, stage)
+        if not execution or execution.get("state") != "succeeded" or not execution.get("output_manifest_id"):
+            return None
+        return self.get_stage_output_manifest(execution["output_manifest_id"])
+
     def stage_execution_snapshot(self, execution_id: str, *, owner: str | None = None) -> dict | None:
         execution = self.get_stage_execution(execution_id, owner=owner)
         if not execution:
@@ -12177,6 +12221,7 @@ class Store:
                 "UPDATE stage_executions SET state=%s,terminal_items=%s,revision=revision+1,updated_at=%s "
                 "WHERE execution_id=%s AND (state<>%s OR terminal_items<>%s)",
                 (state, terminal, now, job["batch_id"], state, terminal))
+        self.seal_stage_if_ready(job["batch_id"])
 
     def _start_stage_attempt(self, job: dict) -> None:
         """Append the immutable identity of a worker claim; retries get distinct rows."""
