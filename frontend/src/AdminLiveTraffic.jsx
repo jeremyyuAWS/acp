@@ -146,6 +146,14 @@ export function workerServiceRows(summary = {}) {
         jobs_in_flight: measured.jobs_in_flight,
         healthy_replicas: measured.healthy_replicas,
         stale_replicas: measured.stale_replicas,
+        // A replica draining after a deploy keeps its running jobs for up to nine minutes and
+        // takes no new ones. It is neither healthy nor stale, and without this row the slot total
+        // moves during every rollout with nothing on screen saying why. The held-job count is
+        // summed from the instances the backend already marks `occupied`, so the number here is
+        // the same one the gauge is counting as busy.
+        occupied_replicas: measured.occupied_replicas,
+        occupied_jobs: (measured.instances || []).reduce(
+          (sum, instance) => sum + (instance.occupied ? Number(instance.active_job_count || 0) : 0), 0),
         unattributed_running: measured.unattributed_running,
         utilization_pct: measured.utilization_pct,
         capacity_source: measured.capacity_source,
@@ -601,6 +609,17 @@ function reportedWorkerSize(capacity) {
   return `${cpu} · ${memory} RAM · ${storage} temporary disk`
 }
 
+// "1 draining, holding 8 jobs" — the sentence an operator needs mid-rollout. `null` when the
+// service predates the field, `None` when it reports zero: those are different facts, and a
+// drawer that showed "Not reported" for a lane with no drain would be reading absence as failure.
+export function drainingReplicasFact(service = {}) {
+  const count = service.occupied_replicas
+  if (count == null) return 'Not reported'
+  if (!count) return 'None'
+  const jobs = Number(service.occupied_jobs || 0)
+  return `${count} draining, holding ${jobs} ${jobs === 1 ? 'job' : 'jobs'}`
+}
+
 export function infrastructureDetail(data, snapshot = {}, capacity = null) {
   const summary = snapshot?.summary || {}
   if (data.kind === 'worker') {
@@ -612,6 +631,7 @@ export function infrastructureDetail(data, snapshot = {}, capacity = null) {
         ['Worker slots', service.slots == null ? 'Not reported'
           : `${service.active || 0} busy · ${service.available || 0} available of ${service.slots}`],
         ['Healthy replicas', service.healthy_replicas ?? 'Not reported'],
+        ['Draining replicas', drainingReplicasFact(service)],
         ['Stale replicas', service.stale_replicas ?? 'Not reported'],
         ['Jobs recorded in flight', service.jobs_in_flight ?? 'Not reported'],
         ['Unattributed running', service.unattributed_running ?? 'Not reported'],
@@ -765,6 +785,7 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
           ? `${service.active} busy of ${service.slots} slots. `
           : `slot utilization unavailable. ${service.jobs_in_flight || 0} jobs recorded in flight. `)
         + `${service.healthy_replicas != null ? `${service.healthy_replicas} healthy replicas. ` : ''}`
+        + `${service.occupied_replicas ? `${drainingReplicasFact(service)}. ` : ''}`
         + `${service.capacity_source === 'worker_instances' && service.jobs_in_flight != null
           ? `${service.jobs_in_flight} jobs recorded in flight. ` : ''}`
         + 'Select for details.',
@@ -773,6 +794,7 @@ export function buildTrafficGraph(snapshot, historyMap = new Map(), capacity = n
       detail: service.capacity_source === 'worker_instances' ? `${service.active} / ${service.slots} slots busy`
         + `${service.healthy_replicas != null ? ` · ${service.healthy_replicas} healthy replicas` : ''}`
         + `${service.jobs_in_flight != null ? ` · ${service.jobs_in_flight} jobs recorded in flight` : ''}`
+        + `${service.occupied_replicas ? ` · ${drainingReplicasFact(service)}` : ''}`
         + `${service.unattributed_running ? ` · ${service.unattributed_running} running job records are not attributed to live worker slots` : ''}`
         : `${service.jobs_in_flight || 0} jobs recorded in flight · ${service.capacity_unavailable_reason}`,
       // Named rather than "Tier:", which claimed a coverage one container app does not have.

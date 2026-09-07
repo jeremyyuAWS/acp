@@ -1636,9 +1636,18 @@ def _admin_activity_snapshot() -> dict:
             revision: sum(1 for item in row["instances"]
                           if item.get("fresh") and str(item.get("revision_name")) == revision)
             for revision in revisions}
-        if len(revisions) > 1:
+        # Only revisions that ACCEPT work count as mixed. `revisions` above is every fresh
+        # revision, and a draining old revision is fresh by design for its whole bounded shutdown
+        # (up to nine minutes) — so this warned on every rollout, for the entire drain, about the
+        # one state a rollout is supposed to pass through. Two revisions both claiming jobs is the
+        # genuinely mixed case: a promotion that did not retire the old one, or a stuck scale-down.
+        # `revision_distribution` deliberately keeps the draining revision so the drawer can still
+        # show it; this is about what is worth an alert, not what is worth displaying.
+        serving = {str(item.get("revision_name")) for item in row["instances"]
+                   if item.get("healthy") and item.get("revision_name")}
+        if len(serving) > 1:
             alerts.append({"code": "mixed_revisions", "severity": "warning",
-                           "message": f"Fresh replicas report {len(revisions)} active revisions."})
+                           "message": f"{len(serving)} revisions are both accepting work."})
         queued_for_role = sum(int(run.get("queued") or 0) for run in runs
                               if (run.get("stage") or "unknown") == stage)
         # `healthy_replicas`, not `worker_slots`. The two were interchangeable until draining

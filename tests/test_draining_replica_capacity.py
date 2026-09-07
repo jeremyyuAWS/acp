@@ -193,3 +193,31 @@ def test_a_queue_with_a_ready_replica_raises_nothing(monkeypatch):
         queued=40,
     )
     assert "no_capacity_with_queue" not in _alert_codes(snapshot, "assess")
+
+
+# --- mixed_revisions must not fire on the state every rollout passes through ------------------
+
+def test_a_draining_old_revision_beside_a_ready_new_one_is_not_mixed(monkeypatch):
+    """`revisions` counted every FRESH revision, and a draining replica is fresh by design for its
+    whole bounded shutdown. So this warned for up to nine minutes on every deploy, about the one
+    state a deploy is supposed to be in."""
+    now = datetime.now(timezone.utc)
+    snapshot = _snapshot_with(monkeypatch, [
+        instance("assess:old:p1", "old", "draining", slots=12, active=8, anchor=now),
+        instance("assess:new:p1", "new", "ready", slots=20, active=0, anchor=now),
+    ], queued=0)
+    assert "mixed_revisions" not in _alert_codes(snapshot, "assess")
+    # The draining revision is still SHOWN — silencing the alert must not hide the rollout.
+    row = snapshot["summary"]["worker_capacity_by_role"]["assess"]
+    assert set(row["revision_distribution"]) == {"rev-of-old", "rev-of-new"}
+
+
+def test_two_revisions_both_accepting_work_is_mixed(monkeypatch):
+    """The genuine case: a promotion that did not retire the old revision, or a scale-down that
+    stuck. Both are claiming jobs, and that is worth a warning."""
+    now = datetime.now(timezone.utc)
+    snapshot = _snapshot_with(monkeypatch, [
+        instance("assess:old:p1", "old", "busy", slots=12, active=8, anchor=now),
+        instance("assess:new:p1", "new", "ready", slots=20, active=0, anchor=now),
+    ], queued=0)
+    assert "mixed_revisions" in _alert_codes(snapshot, "assess")
