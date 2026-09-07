@@ -273,11 +273,43 @@ def build_ladder(runs: Sequence[RunResult], cases: Sequence[Case], gates: Gates 
     }
 
 
+def case_run_row(run: RunResult, repeat: int, r: CaseResult, case: Case) -> dict[str, Any]:
+    """The compact, per-case-run record the JSON report carries. Aggregates only, no prose:
+    enough to recompute a category's `safe` flag by hand and nothing a grader did not score."""
+    return {
+        "candidate": run.candidate,
+        "repeat": repeat,
+        "case_id": r.case_id,
+        "category": category_of(case),
+        "suite": r.suite,
+        "risk_tier": r.risk_tier,
+        "eligible": bool(case.automation_eligible),
+        "must_abstain": bool(case.must_abstain),
+        "verified_fix": r.verified_fix,
+        "autonomous_action": r.autonomous_action,
+        "escalated": r.escalated,
+        "abstention_correct": r.abstention_correct,
+        "critical_violations": list(r.critical_violations),
+        "violations": list(r.violations),
+        "usd": r.usd,
+        "cached": r.cached,
+        "parse_error": r.parse_error,
+    }
+
+
 def build_report(runs: Sequence[RunResult], cases: Sequence[Case],
                  gates: Gates = Gates()) -> dict[str, Any]:
+    by_id = {c.case_id: c for c in cases}
     reports = [build_candidate_report(r, cases, gates) for r in runs]
     return {
         "gates": asdict(gates),
+        # One row per case-run, so a per-category verdict in the ladder can be traced back to
+        # the observations that produced it. Without this the JSON carried only aggregates, and
+        # a reader who wanted to know WHICH of a category's 6 case-runs failed verification had
+        # to re-run the candidate (75 minutes and a bill, for a paid tier).
+        "results": [case_run_row(run, i, r, by_id[r.case_id])
+                    for run in runs for i, rep in enumerate(run.repeats) for r in rep.results
+                    if r.case_id in by_id],
         "corpus": {"cases": len(cases),
                    "suites": {s: len([c for c in cases if c.suite == s])
                               for s in sorted({c.suite for c in cases})},
