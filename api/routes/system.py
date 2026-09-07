@@ -1455,6 +1455,14 @@ def jobs(request: Request, status: str | None = None, limit: int = 100):
             "jobs": core.store.list_jobs(status=status, limit=limit, owner=owner)}
 
 
+#: Process states that hold work without accepting more. A draining worker keeps heartbeating for
+#: the whole bounded shutdown — ACP_SHUTDOWN_DRAIN_SECONDS is 540 on every worker lane
+#: (deploy/public/redeploy.sh) — precisely so its running jobs keep their process attribution, and
+#: worker_telemetry.WorkerInstanceReporter.draining() says so in as many words. Excluding these
+#: states from capacity discarded that attribution one layer further up.
+_OCCUPIED_PROCESS_STATES = frozenset({"draining", "unhealthy"})
+
+
 def _replica_capacity(instances: list[dict], *, now: datetime,
                       freshness_seconds: int | None = None) -> dict[str, dict]:
     """Aggregate process heartbeats into physical replicas, then into service roles.
@@ -1478,18 +1486,32 @@ def _replica_capacity(instances: list[dict], *, now: datetime,
         except (TypeError, ValueError):
             beat, age_s = None, float("inf")
         fresh = age_s <= freshness_seconds
-        healthy_process = fresh and instance.get("state") in {"ready", "busy"}
+        state = instance.get("state")
+        healthy_process = fresh and state in {"ready", "busy"}
+        # A fresh process that is DRAINING or UNHEALTHY still holds the jobs it already claimed.
+        # It will not claim more, so none of its free slots are capacity — but its occupied slots
+        # are genuinely busy, and dropping them is what made a nine-minute drain read as
+        # "0 of 20 slots (0%)" with documents in flight. See _OCCUPIED_PROCESS_STATES.
+        occupied_process = fresh and state in _OCCUPIED_PROCESS_STATES
         replica = replicas.setdefault(key, {
             **instance, "worker_id": worker_id, "replica_id": replica_id,
             "process_count": 0, "concurrency_limit": 0, "active_job_count": 0,
-            "fresh": False, "healthy": False, "age_s": None,
+            "fresh": False, "healthy": False, "occupied": False, "age_s": None,
         })
         replica["process_count"] += 1
         replica["fresh"] = replica["fresh"] or fresh
         replica["healthy"] = replica["healthy"] or healthy_process
+        replica["occupied"] = replica["occupied"] or occupied_process
         if healthy_process:
             replica["concurrency_limit"] += max(0, int(instance.get("concurrency_limit") or 0))
             replica["active_job_count"] += max(0, int(instance.get("active_job_count") or 0))
+        elif occupied_process:
+            # Slots and busy move together: this process is fully utilised by construction and
+            # offers no availability. Counting its concurrency_limit instead would invent free
+            # capacity on a container that is on its way out.
+            held = max(0, int(instance.get("active_job_count") or 0))
+            replica["concurrency_limit"] += held
+            replica["active_job_count"] += held
         if age_s != float("inf") and (replica["age_s"] is None or age_s < replica["age_s"]):
             replica["age_s"] = round(age_s, 1)
             replica["last_heartbeat_at"] = beat.isoformat() if beat else None
@@ -1504,11 +1526,20 @@ def _replica_capacity(instances: list[dict], *, now: datetime,
     for (role, _replica_id), replica in replicas.items():
         row = per_role.setdefault(role, {"role": role, "capacity_source": "worker_instances",
             "freshness_threshold_seconds": freshness_seconds, "healthy_replicas": 0,
-            "stale_replicas": 0, "worker_slots": 0, "busy_slots": 0, "instances": []})
-        if replica["healthy"]:
-            row["healthy_replicas"] += 1
+            "stale_replicas": 0, "occupied_replicas": 0, "worker_slots": 0, "busy_slots": 0,
+            "instances": []})
+        # Healthy AND occupied replicas both contribute; only healthy ones offer availability,
+        # which the per-process branch above has already encoded in the numbers.
+        if replica["healthy"] or replica["occupied"]:
             row["worker_slots"] += replica["concurrency_limit"]
             row["busy_slots"] += replica["active_job_count"]
+        if replica["healthy"]:
+            row["healthy_replicas"] += 1
+        elif replica["occupied"]:
+            # Counted separately from both: it is not healthy (it takes no new work) and not
+            # stale (it is reporting). Without this row an operator sees the slot total move
+            # during a rollout with nothing on the screen explaining why.
+            row["occupied_replicas"] += 1
         elif not replica["fresh"]:
             row["stale_replicas"] += 1
             replica["state"] = "stale"
@@ -1610,7 +1641,11 @@ def _admin_activity_snapshot() -> dict:
                            "message": f"Fresh replicas report {len(revisions)} active revisions."})
         queued_for_role = sum(int(run.get("queued") or 0) for run in runs
                               if (run.get("stage") or "unknown") == stage)
-        if queued_for_role and not row["worker_slots"]:
+        # `healthy_replicas`, not `worker_slots`. The two were interchangeable until draining
+        # replicas began contributing their held slots: a lane whose only replica is draining now
+        # reports non-zero worker_slots while being unable to accept a single queued job, which
+        # would have silently retired this alert during exactly the rollout window it is for.
+        if queued_for_role and not row["healthy_replicas"]:
             alerts.append({"code": "no_capacity_with_queue", "severity": "critical",
                            "message": f"{queued_for_role} job(s) are queued with no fresh reported capacity."})
         row["alerts"] = alerts
