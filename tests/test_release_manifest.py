@@ -85,6 +85,19 @@ def test_release_manifest_comes_from_persisted_server_evidence(monkeypatch):
     assert manifest["documents"][0]["corrected_sha256"] == "a" * 64
     assert manifest["documents"][0]["created"] is True
     assert manifest["manifest_generated_by"]["release_version"] == "2026.9.6.1"
+    assert manifest["document_reconciliation"] == {
+        "unit": "requested documents", "scope": "legacy Release record",
+        "equation": ("requested = waiting + processing + published + completed unverified "
+                     "+ failed + cancelled + skipped"),
+        "total": 1, "accounted": 1, "unaccounted": 0,
+        "buckets": {"waiting": 0, "processing": 0, "published": 1, "failed": 0,
+                    "cancelled": 0, "skipped": 0, "completed_unverified": 0},
+        "verified_receipt_count": None,
+        "published_receipt_rule": "completed receipt with verified=true",
+        "receipt_evidence_available": False, "exact": True,
+        "authority": "legacy_release_documents",
+    }
+    assert manifest["counts"]["verified_receipts"] is None
     assert manifest["canonical_stage_lineage"]["stages"][0]["reconciliation"]["exact"] is True
     finding = manifest["finding_reconciliation"]
     assert finding["status"] == "pending"
@@ -100,6 +113,42 @@ def test_release_manifest_comes_from_persisted_server_evidence(monkeypatch):
     assert "generated_at" not in manifest["canonical_stage_lineage"]["stages"][0]
     assert len(first["content_digest"]["value"]) == 64
     assert "not a digital signature" in first["digest_note"]
+
+
+def test_release_manifest_uses_canonical_requested_document_partition(monkeypatch):
+    class CanonicalStore(_Store):
+        def canonical_stage_lineage(self, sid, owner=None):
+            lineage = super().canonical_stage_lineage(sid, owner=owner)
+            lineage["stages"][0]["domain_reconciliation"] = {
+                "unit": "requested documents", "scope": "immutable Release request",
+                "equation": ("requested = waiting + processing + published + completed unverified "
+                             "+ failed + cancelled + skipped"),
+                "total": 7, "accounted": 7, "unaccounted": 0,
+                "buckets": {"waiting": 1, "processing": 1, "published": 1,
+                            "completed_unverified": 1, "failed": 1, "cancelled": 1,
+                            "skipped": 1},
+                "published_receipt_rule": "completed receipt with verified=true", "exact": True,
+            }
+            return lineage
+
+    monkeypatch.setattr(scans.core, "store", CanonicalStore())
+    monkeypatch.setattr(scans, "_remediation_snapshot", lambda sid: FINDING_SNAPSHOT)
+
+    manifest = scans.get_release_manifest("scan-1", _request())["manifest"]
+
+    reconciliation = manifest["document_reconciliation"]
+    assert reconciliation["authority"] == "canonical_stage_snapshot"
+    assert reconciliation["buckets"] == {
+        "waiting": 1, "processing": 1, "published": 1, "failed": 1,
+        "cancelled": 1, "skipped": 1, "completed_unverified": 1,
+    }
+    assert reconciliation["verified_receipt_count"] == 1
+    assert reconciliation["published_receipt_rule"] == "completed receipt with verified=true"
+    assert manifest["counts"] == {
+        "total": 7, "published": 1, "failed": 1, "remaining": 3,
+        "waiting": 1, "processing": 1, "cancelled": 1, "skipped": 1,
+        "completed_unverified": 1, "verified_receipts": 1,
+    }
 
 
 def test_release_manifest_preserves_legacy_unavailable_finding_account(monkeypatch):

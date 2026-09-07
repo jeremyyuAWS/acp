@@ -3765,6 +3765,53 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
     }
 
 
+def _release_document_reconciliation(status: dict, stage_lineage: dict | None) -> dict:
+    """Expose one complete requested-document partition, preferring canonical stage facts."""
+    release_stage = next((row for row in (stage_lineage or {}).get("stages", [])
+                          if row.get("stage") == "release"), None)
+    canonical = (release_stage or {}).get("domain_reconciliation")
+    names = ("waiting", "processing", "published", "failed", "cancelled", "skipped",
+             "completed_unverified")
+    if isinstance(canonical, dict) and canonical.get("unit") == "requested documents":
+        buckets = canonical.get("buckets") or {}
+        published = int(buckets.get("published") or 0)
+        return {
+            **canonical,
+            "buckets": {name: int(buckets.get(name) or 0) for name in names},
+            "verified_receipt_count": published,
+            "published_receipt_rule": canonical.get("published_receipt_rule")
+                                      or "completed receipt with verified=true",
+            "authority": "canonical_stage_snapshot",
+        }
+
+    # Rolling-deploy fallback for releases created before canonical Release executions existed.
+    # It accounts only states the durable legacy rows actually name; unknown rows remain visible
+    # as unaccounted instead of being guessed into a successful bucket.
+    buckets = {name: 0 for name in names}
+    legacy_states = {
+        "queued": "waiting", "pending": "waiting", "waiting": "waiting",
+        "running": "processing", "processing": "processing",
+        "published": "published", "failed": "failed", "cancelled": "cancelled",
+        "skipped": "skipped", "completed_unverified": "completed_unverified",
+    }
+    for document in status.get("documents", []):
+        bucket = legacy_states.get(str(document.get("status") or "").lower())
+        if bucket:
+            buckets[bucket] += 1
+    total = int(status.get("documents_total") or 0)
+    accounted = sum(buckets.values())
+    return {
+        "unit": "requested documents", "scope": "legacy Release record",
+        "equation": ("requested = waiting + processing + published + completed unverified "
+                     "+ failed + cancelled + skipped"),
+        "total": total, "accounted": accounted, "unaccounted": total - accounted,
+        "buckets": buckets, "verified_receipt_count": None,
+        "published_receipt_rule": "completed receipt with verified=true",
+        "receipt_evidence_available": False,
+        "exact": total == accounted, "authority": "legacy_release_documents",
+    }
+
+
 def _release_manifest_payload(status: dict, *, scan_id: str, owner: str,
                               snapshot_id: str | None,
                               stage_lineage: dict | None = None,
@@ -3798,6 +3845,8 @@ def _release_manifest_payload(status: dict, *, scan_id: str, owner: str,
         "created": bool(row.get("created_result")),
         "published_at": row.get("published_at"),
     } for row in status.get("documents", [])]
+    document_reconciliation = _release_document_reconciliation(status, stage_lineage)
+    release_buckets = document_reconciliation["buckets"]
     return {
         "schema_version": 1,
         "release_id": status.get("id"),
@@ -3813,11 +3862,19 @@ def _release_manifest_payload(status: dict, *, scan_id: str, owner: str,
         "release_folder": status.get("folder_name"),
         "original_files_unchanged": True,
         "counts": {
-            "total": int(status.get("documents_total") or 0),
-            "published": int(status.get("published") or 0),
-            "failed": int(status.get("failed") or 0),
-            "remaining": int(status.get("remaining") or 0),
+            "total": document_reconciliation["total"],
+            "published": release_buckets["published"],
+            "failed": release_buckets["failed"],
+            "remaining": (release_buckets["waiting"] + release_buckets["processing"]
+                          + release_buckets["completed_unverified"]),
+            "waiting": release_buckets["waiting"],
+            "processing": release_buckets["processing"],
+            "cancelled": release_buckets["cancelled"],
+            "skipped": release_buckets["skipped"],
+            "completed_unverified": release_buckets["completed_unverified"],
+            "verified_receipts": document_reconciliation["verified_receipt_count"],
         },
+        "document_reconciliation": document_reconciliation,
         "roots": roots,
         "documents": documents,
         "manifest_generated_by": {
