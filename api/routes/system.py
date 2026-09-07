@@ -1886,6 +1886,22 @@ def _liveops_canonical_lineages(runs: list[dict], lifecycle_events: list[dict] |
             swallowed("routes.system._liveops_canonical_lineages: reading lineage failed")
             continue
         if lineage and lineage.get("available"):
+            remediate = next((row for row in lineage.get("stages", [])
+                              if row.get("stage") == "remediate"), None)
+            facts_reader = getattr(core.store, "remediation_run_facts", None)
+            if remediate and callable(facts_reader):
+                try:
+                    import remediation_run
+                    snapshot = remediation_run.build_snapshot(facts_reader(scan_id))
+                    remediate["finding_accounting"] = {
+                        "finding_reconciliation": snapshot.get("finding_reconciliation"),
+                        "fixes": snapshot.get("fixes"),
+                        "review": snapshot.get("review"),
+                        "last_durable_update_at": snapshot.get("latest_progress_at"),
+                        "revision": snapshot.get("revision"),
+                    }
+                except Exception:
+                    swallowed("routes.system._liveops_canonical_lineages: reading finding accounting failed")
             lineages[scan_id] = lineage
     return lineages
 

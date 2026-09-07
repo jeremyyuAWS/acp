@@ -680,6 +680,23 @@ export function runFacts(run = {}, nowMs = Date.now()) {
   const control = canonical?.control
   const reconciliation = canonical?.reconciliation
   const delivery = canonical?.delivery
+  const findingAccounting = canonical?.finding_accounting
+  const findings = findingAccounting?.finding_reconciliation
+  const fixes = findingAccounting?.fixes
+  const review = findingAccounting?.review
+  const findingFacts = findingAccounting ? [
+    ['Assessed findings', findings?.assessed == null ? 'Not yet available' : `${findings.assessed} findings`],
+    ['Finding dispositions', findings?.accounted == null ? 'Not yet available'
+      : `${findings.accounted} of ${findings.assessed} findings accounted`],
+    ['Finding reconciliation', findings?.exact === true ? 'Exact'
+      : findings?.exact === false && findings?.accounted != null
+        ? `Accounting temporarily inconsistent · ${findings.unaccounted ?? 'Unknown'} findings unaccounted`
+        : 'Not yet available'],
+    ['Verified resolutions', findings?.resolved_verified == null ? 'Not yet available' : `${findings.resolved_verified} findings`],
+    ['Awaiting review', findings?.awaiting_review == null ? 'Not yet available'
+      : `${findings.awaiting_review} findings across ${review?.items ?? 'unknown'} review items`],
+    ['Change evidence', fixes ? `${fixes.applied ?? 0} applied changes · ${fixes.verified ?? 0} verified changes · ${fixes.verification_failures ?? 0} failed checks` : 'Not reported'],
+  ] : []
   const canonicalFacts = canonical ? [
     ['Canonical state', String(canonical.state || 'Not reported').replaceAll('_', ' ')],
     ['Stage execution', canonical.execution_id || 'Not reported'],
@@ -697,6 +714,7 @@ export function runFacts(run = {}, nowMs = Date.now()) {
     ['Input manifest', canonical.input_manifest_id || 'Not reported'],
     ['Sealed output', canonical.sealed_output
       ? `${canonical.sealed_output.item_count} work items · ${canonical.sealed_output.manifest_id}` : 'Not reported'],
+    ...findingFacts,
   ] : []
   return [
     ['User', run.owner || 'Not reported'],
