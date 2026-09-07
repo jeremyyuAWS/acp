@@ -72,10 +72,25 @@ def _configured_apps() -> tuple[str, ...]:
 
 _AZ_CONFIGURED = bool(_AZ_SUB and (_AZ_APP or _AZ_APP_NAMES))
 
-# Intentionally unset in this phase. A production Azure adapter is not installed until the
-# pinned SDK's merge-patch behaviour for a complete multi-rule scale block has been proven.
-# Tests inject the narrow CapacityGateway protocol from capacity_apply.
-_capacity_apply_gateway = None
+def _capacity_gateway_for_environment():
+    """Enable writes only for an explicitly opted-in, wholly staging-named fleet."""
+    enabled = os.environ.get("ACP_CAPACITY_APPLY_ENABLED") == "1"
+    # deploy/public/deploy.sh consumes ACP_DEPLOY_TARGET_ENV in the deployment process, then
+    # stamps the running container with ACP_DEPLOY_ENV. The API must gate on the value it
+    # actually receives, or staging can never opt in and a locally inherited deploy variable
+    # could be mistaken for runtime identity.
+    staging = os.environ.get("ACP_DEPLOY_ENV", "").strip().lower() == "staging"
+    apps = tuple(app for app in _configured_apps() if app)
+    if not (enabled and staging and _AZ_SUB and apps and
+            all(app.endswith("-staging") for app in apps)):
+        return None
+    from azure_capacity_gateway import default_gateway
+    return default_gateway(_AZ_SUB, _AZ_RG, allowed_apps=apps)
+
+
+# This is intentionally evaluated once at process start: changing the environment underneath a
+# running API must not turn a read-only process into an Azure writer.
+_capacity_apply_gateway = _capacity_gateway_for_environment()
 
 
 def _az_client():
