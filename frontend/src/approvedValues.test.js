@@ -33,7 +33,15 @@ describe('the approve payload carries one value per image', () => {
     //   !decorativeRow — a confirmed decorative image. The value is routed to the marker writer,
     //                    which ignores it; sending it would record an instruction as the
     //                    reviewer's approved TEXT.
-    expect(src).toMatch(/status === 'approved' && !resolution && !explainOnly && !decorativeRow/)
+    //
+    // ADR 0055 adds the ONE exception, and it is an exception to the first clause only:
+    // `described_not_replaced` resolves images-of-text by judgement AND carries the reviewer's
+    // description, which api/routes/hitl.py refuses the decision without. So the gate reads
+    // `(!resolution || describedRow)` — every other resolution still suppresses, which is what
+    // keeps #43 fixed.
+    expect(src).toMatch(/status === 'approved' && \(!resolution \|\| describedRow\)/)
+    expect(src).toMatch(/&& !explainOnly && !decorativeRow/)
+    expect(src).toMatch(/const describedRow = resolution === DESCRIBED_NOT_REPLACED/)
     expect(src).toMatch(/approvedValues/)
   })
 
@@ -43,7 +51,9 @@ describe('the approve payload carries one value per image', () => {
     const src = read('EvidenceCard.jsx')
     expect(src).toMatch(/const explainOnly = proposalList\.length > 0 && proposalList\.every\(\(p\) => p\.explain_only\)/)
     expect(src).toMatch(/const editable = !explainOnly && !decorativeRow/)
-    expect(src).toMatch(/const finalValue = \(resolution \|\| explainOnly \|\| decorativeRow\) \? null : t\.finalValue/)
+    // Same single exception as above: a described row DID author a value, so the audit line must
+    // carry it rather than reading as a judgement with nothing behind it.
+    expect(src).toMatch(/const finalValue = \(\(resolution && !describedRow\) \|\| explainOnly \|\| decorativeRow\)/)
   })
 
   it('a decorative row is confirmed against the image, never typed into', () => {

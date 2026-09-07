@@ -3,7 +3,7 @@ import { aiProvenance, getCopilotGuidance, getFileGeometry, getFileRemediationDi
 import Thumbnail from './Thumbnail.jsx'
 import BeforeAfterEvidence from './BeforeAfterEvidence.jsx'
 import RiskChip from './RiskChip.jsx'
-import { applyOutcomeCopy, authoringScaffold, buildEvidenceCard, describedImageType, evidenceOf, evidenceSignals, firstProposed, groupPages, guidanceSentence, houseStyleOf, imagesOfTextException, isValueFix, leadWithIsolatedImage, primaryActionLabel, proposalsOf, reviewIntent, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview, whyRecommendation, whySafeToApprove } from './reviewCard.js'
+import { applyOutcomeCopy, authoringScaffold, buildEvidenceCard, DESCRIBED_NOT_REPLACED, describedImageType, evidenceOf, evidenceSignals, firstProposed, groupPages, guidanceSentence, houseStyleOf, imagesOfTextException, isValueFix, leadWithIsolatedImage, primaryActionLabel, proposalsOf, reviewIntent, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview, whyRecommendation, whySafeToApprove } from './reviewCard.js'
 import ProposalThumb, { isSafeThumb } from './ProposalThumb.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
 import CaptionEditor from './CaptionEditor.jsx'
@@ -679,15 +679,26 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
     // that records the reviewer's text at all. Suppressing it here (which is what happened while
     // captions rode the explain-only branch) discards the correction at the moment of approval,
     // silently, because the machine's draft and the corrected file are both valid WebVTT.
-    const approvedValues = (status === 'approved' && !resolution && !explainOnly && !decorativeRow
-                            && instances.length)
+    // ADR 0055's resolution is the ONE that carries text, and every rule below has to know it.
+    // "A resolution stands in for the authored value" is true of decorative, essential logo and
+    // out-of-scope — each closes a finding by judgement having authored nothing. It is false of
+    // described_not_replaced: the reviewer kept the image AND wrote its description, the backend
+    // records that description as 1.1.1 alt text the document owes, and routes/hitl.py refuses the
+    // decision outright without one. Suppressing the values here would send the reviewer's work
+    // nowhere and turn a correct decision into a 422.
+    const describedRow = resolution === DESCRIBED_NOT_REPLACED
+    const approvedValues = (status === 'approved' && (!resolution || describedRow)
+                            && !explainOnly && !decorativeRow && instances.length)
       ? (multi ? values : [value || ''])
       : null
-    // A resolution stands in for the authored value: send no finalValue (nothing was written), and
-    // if the reviewer left the note blank, self-describe the exception so the audit line is legible.
-    const finalValue = (resolution || explainOnly || decorativeRow) ? null : t.finalValue
+    // Same exception, same reason: a described row DID author a value, so the audit line must
+    // carry it rather than reading as a judgement with nothing behind it.
+    const finalValue = ((resolution && !describedRow) || explainOnly || decorativeRow)
+      ? null : t.finalValue
     const noteOut = note || (resolution === 'decorative' ? 'Marked decorative — no description needed'
-      : resolution === 'essential_exception' ? 'Marked essential logo/brand — exempt' : null)
+      : resolution === 'essential_exception' ? 'Marked essential logo/brand — exempt'
+      : describedRow ? 'Kept the image of text and described it — described as alt text, not replaced'
+      : null)
     try {
       await onAct(card.id, status, noteOut, finalValue,
                   { edited: t.edited, reviewMs: t.reviewMs, aiValue: t.aiValue, approvedValues,
@@ -1399,16 +1410,42 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
             if (!exc) return null
             return (
               <div className="evcard-exception">
-                {exc.action ? (
-                  <>
-                    <span className="muted">{exc.prompt}</span>
-                    <button type="button" className="ghost small" disabled={busy}
-                            title={exc.action.title}
-                            onClick={() => decide('approved', null, exc.action.resolution)}>{exc.action.label}</button>
-                  </>
-                ) : (
-                  <span className="muted evcard-exception-note">{exc.note}</span>
-                )}
+                {/* The note and the action are no longer alternatives. A DATA image gets both:
+                    the guidance still leads (real text is the better fix whenever it is possible)
+                    and "keep it — describe it" follows as the way out when it is not. Before
+                    ADR 0055 this branch rendered guidance and nothing to click. */}
+                {exc.note && <span className="muted evcard-exception-note">{exc.note}</span>}
+                {exc.prompt && <span className="muted">{exc.prompt}</span>}
+                {exc.action && (() => {
+                  // A described decision CARRIES the reviewer's text, so the button waits for it —
+                  // and waits for text they actually WROTE, not the box as it came.
+                  //
+                  // The editor is seeded from `proposed_value` (ProposalEditors.seedValues), and on
+                  // a 1.4.5 card that draft is the OCR TRANSCRIPT: the words baked into the picture.
+                  // A transcript is not a description of the image. Accepting the unedited box would
+                  // write "Q3 revenue rose 12%" where "a slide titled Q3 revenue, reading …" belongs,
+                  // and would do it on the one path whose whole premise is that the picture stays.
+                  // The backend refuses to fall back to a draft for exactly this reason
+                  // (store.queue_described_image_alt); this is the same rule where the reviewer can
+                  // see it, as a disabled control with a reason rather than a click that 422s.
+                  const wantsText = !!exc.action.needsText
+                  const seeded = seedValues(instances)
+                  const authored = (v, i) => {
+                    const t = String(v || '').trim()
+                    return !!t && t !== String(seeded[i] || '').trim()
+                  }
+                  const hasOwnWords = multi
+                    ? values.some(authored)
+                    : authored(value, 0)
+                  const blocked = wantsText && !hasOwnWords
+                  return (
+                    <button type="button" className="ghost small" disabled={busy || blocked}
+                            title={blocked ? exc.action.needsTextHint : exc.action.title}
+                            onClick={() => decide('approved', null, exc.action.resolution)}>
+                      {exc.action.label}
+                    </button>
+                  )
+                })()}
               </div>
             )
           })()}
