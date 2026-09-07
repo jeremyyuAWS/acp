@@ -655,14 +655,37 @@ export function infrastructureDetail(data, snapshot = {}, capacity = null) {
 export function runFacts(run = {}, nowMs = Date.now()) {
   const wait = secondsSince(run.oldest_queued_at, nowMs)
   const updated = secondsSince(run.updated_at, nowMs)
+  const canonical = run.canonical
+  const work = canonical?.counts?.work_items
+  const control = canonical?.control
+  const reconciliation = canonical?.reconciliation
+  const delivery = canonical?.delivery
+  const canonicalFacts = canonical ? [
+    ['Canonical state', String(canonical.state || 'Not reported').replaceAll('_', ' ')],
+    ['Stage execution', canonical.execution_id || 'Not reported'],
+    ['Snapshot revision', canonical.revision == null ? 'Not reported' : `${canonical.revision}`],
+    ['Work-item accounting', work?.total == null ? 'Not reported'
+      : `${work.completed ?? 0} completed · ${work.processing ?? 0} processing · ${work.queued ?? 0} queued · ${work.failed ?? 0} failed · ${work.cancelled ?? 0} stopped · ${work.skipped ?? 0} skipped = ${work.total} work items`],
+    ['Reconciliation', reconciliation?.exact === true ? 'Exact'
+      : reconciliation?.exact === false ? `${reconciliation.unaccounted ?? 'Unknown'} unaccounted work items` : 'Not reported'],
+    ['Integrity', canonical.integrity?.ok === true ? 'Reconciled'
+      : canonical.integrity?.ok === false ? 'Accounting needs attention' : 'Not reported'],
+    ['Cancellation', control?.cancel_requested
+      ? `${control.awaiting_acknowledgement ?? 'Unknown'} awaiting acknowledgement${control.acknowledgement_deadline_at ? ` · deadline ${control.acknowledgement_deadline_at}` : ''}`
+      : 'Not requested'],
+    ['Delivery', delivery ? `${delivery.pending ?? 0} pending · ${delivery.retrying ?? 0} retrying · ${delivery.dead_lettered ?? 0} dead-lettered messages` : 'Not reported'],
+    ['Input manifest', canonical.input_manifest_id || 'Not reported'],
+    ['Sealed output', canonical.sealed_output
+      ? `${canonical.sealed_output.item_count} work items · ${canonical.sealed_output.manifest_id}` : 'Not reported'],
+  ] : []
   return [
     ['User', run.owner || 'Not reported'],
     ['Source', run.source || 'Not reported'],
     ['Workflow revision', `${Math.max(1, Number(run.workflow_revision || 1))}`],
     ['Workflow lineage', run.workflow_id || run.scan_id || 'Not reported'],
     ['Revision scan', run.scan_id || 'Not reported'],
-    ['Progress', `${run.completed ?? 0} of ${run.total ?? 0}`],
-    ['Queue', `${run.running ?? 0} active · ${run.queued ?? 0} waiting`],
+    ['Progress', run.total == null ? 'Not reported' : `${run.completed ?? 0} of ${run.total}`],
+    ['Queue', run.running == null && run.queued == null ? 'Not reported' : `${run.running ?? 0} active · ${run.queued ?? 0} waiting`],
     ['Status', run.status === 'recent' ? 'Recently completed'
       : run.status === 'cancelled' ? 'Stopped manually'
         : run.status === 'failed' ? 'Failed'
@@ -670,6 +693,7 @@ export function runFacts(run = {}, nowMs = Date.now()) {
     ['Oldest wait', wait == null ? 'Not reported' : formatDuration(wait)],
     ['Job type', run.current_job_type?.replaceAll('_', ' ') || 'Not reported'],
     ['Last activity', updated == null ? 'Not reported' : `${formatDuration(updated)} ago`],
+    ...canonicalFacts,
   ]
 }
 
