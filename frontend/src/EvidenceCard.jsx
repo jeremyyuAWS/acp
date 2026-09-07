@@ -143,6 +143,12 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
                              approved_value: e.approved_value }))
   const [values, setValues] = useState(() => seedValues(instances))
   const setValueAt = (i, v) => setValues((prev) => prev.map((x, j) => (j === i ? v : x)))
+  // Unlike `instances`, this also captures calls made on demand after the card mounted. Keep the
+  // identifier beside the value it produced; the two positional arrays travel together.
+  const [instanceCallIds, setInstanceCallIds] = useState(
+    () => instances.map((instance) => instance?.model_call_id || null))
+  const setCallIdAt = (i, callId) => setInstanceCallIds(
+    (prev) => prev.map((value, j) => (j === i ? callId || null : value)))
   // Approve-similar (#132): copy row i's description to every instance that is the SAME image
   // (byte-identical thumbnail) — a logo reused across slides gets described once.
   const applyToSimilar = (i) => {
@@ -199,6 +205,10 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
   // card can contain several independent calls, so only bind the card-level decision when the
   // decision has exactly one generated value; otherwise attribution would be false precision.
   const modelCallId = useRef(instances.length === 1 ? instances[0]?.model_call_id || null : null)
+  // Preserve each generated value's producer. Position i follows the same instances ordering as
+  // approvedValues, so a collapsed multi-image card never attributes every decision to whichever
+  // vision call happened to be first (or drops all attribution because there was more than one).
+  const modelCallIds = instanceCallIds
   // Auto-draft plumbing: the card element (for the viewport observer), a once-guard so the auto
   // draft fires at most once, and whether the card has been scrolled into view yet.
   const rootRef = useRef(null)
@@ -285,7 +295,11 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
       try {
         const r = await suggestFix(item.scan_id, item.file, item.rule_id, instances[i]?.locator)
         const s = (r?.suggestion || '').trim()
-        if (s && !r.is_template) { setValueAt(i, s); n += 1 }
+        if (s && !r.is_template) {
+          setValueAt(i, s)
+          setCallIdAt(i, r?.ai_call_id)
+          n += 1
+        }
         const esc = escalationFromDraft(r)   // surface the path from whichever image escalated (#378)
         if (esc) setDraftEscalation(esc)
         // House style is card-level (it keys on org + rule + format, all identical across this
@@ -319,6 +333,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
       const s = (r?.suggestion || '').trim()
       if (!s) { setDraftMsg({ kind: 'error', text: `Image ${i + 1}: the model returned nothing — write it yourself.` }); return }
       setValueAt(i, s)
+      setCallIdAt(i, r?.is_template ? null : r?.ai_call_id)
       if (instances.length === 1) modelCallId.current = r?.ai_call_id || null
       setOcrAid(r.ocr_text || null)
       // A per-image escalation reads off this image's own response (#378); keep any earlier one shown
@@ -676,7 +691,8 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
     try {
       await onAct(card.id, status, noteOut, finalValue,
                   { edited: t.edited, reviewMs: t.reviewMs, aiValue: t.aiValue, approvedValues,
-                    rejectReason, resolution, modelCallId: modelCallId.current })
+                    rejectReason, resolution, modelCallId: modelCallId.current,
+                    modelCallIds: modelCallIds.some(Boolean) ? modelCallIds : null })
       onResolved && onResolved(card.id, status)
     } catch (e) {
       // HitlBell rolls the optimistic list back and rethrows. Without this catch the rejection

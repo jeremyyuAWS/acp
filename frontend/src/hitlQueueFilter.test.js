@@ -60,6 +60,18 @@ describe('I.2 — listHitlQueue suppresses items whose PUT is still in flight', 
     await pending
   })
 
+  it('sends positional model-call identifiers for a multi-instance card', async () => {
+    const { resolvePut } = stubFetch()
+    const { updateHitlItem } = await import('./api.js')
+    const pending = updateHitlItem(ITEM.id, 'approved', null, null, {
+      modelCallIds: ['vision-1', null, 'vision-3'],
+    })
+    const [, opts] = fetch.mock.calls.find(([, options]) => options?.method === 'PUT')
+    expect(JSON.parse(opts.body).model_call_ids).toEqual(['vision-1', null, 'vision-3'])
+    resolvePut()
+    await pending
+  })
+
   it('filters out the acted-on item while the PUT is unresolved', async () => {
     stubFetch()
     const { listHitlQueue, updateHitlItem } = await import('./api.js')
