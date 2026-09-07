@@ -32,6 +32,9 @@ _CONFIG_SURVIVORS = {
     "campaign",            # admin-authored remediation programs
     "campaign_batch",
     "scope_rule",          # per-file WCAG scope RULES (config, like disposition_policy)
+    # The administrator-authored live remediation routing rule survives just like the other
+    # policy tables. Its action receipts and per-run immutable snapshots are DATA and are wiped.
+    "remediation_automation_policy",
     # The archive auto-fire POLICY (R9) — administrator-authored configuration, the same class as
     # disposition_policy beside it, and split from its records the same way: archive_execution and
     # archive_policy_snapshot are in _ANALYTICS_TABLES and go.

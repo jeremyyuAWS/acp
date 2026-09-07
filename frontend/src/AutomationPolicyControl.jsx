@@ -4,6 +4,7 @@ import { AUTOMATION_LEVELS, DEFAULT_AUTOMATION_LEVEL, automationForecast, automa
 import WhyFindingsStayWithPeople from './WhyFindingsStayWithPeople.jsx'
 import { reviewTimeImpact } from './reviewerTime.js'
 import './automation-policy.css'
+import AutomationPolicyActions from './AutomationPolicyActions.jsx'
 
 const storageKey = (runId) => `acp.remediation.automation-preview.${runId || 'current'}`
 const impact = (findings, files) => `${findings} ${findings === 1 ? 'finding' : 'findings'} across ${files} ${files === 1 ? 'file' : 'files'}`
@@ -140,6 +141,7 @@ export default function AutomationPolicyControl({ findings, runId = null, previe
         <p className="automation-policy__empty" role="status">There are no open eligible findings in this run, so no policy has anything to automate or route.</p>
       )}
       <p className="automation-policy__guardrail">Human-only, subjective, unsupported, missing-evidence and failed-verification work always stays in review. This preview does not change the active run or production policy.</p>
+      <AutomationPolicyActions runId={runId} previewLevel={level} onReset={setLevel} />
     </section>
   )
 }
