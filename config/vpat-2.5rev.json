@@ -1,0 +1,137 @@
+{
+  "_meta": {
+    "template": "ITI VPAT® 2.5Rev",
+    "revision": "April 2025",
+    "publisher": "Information Technology Industry Council (ITI)",
+    "source_page": "https://www.itic.org/policy/accessibility/vpat",
+    "retrieved": "2026-09-07",
+    "generated_by": "scripts/gen_vpat_structure.py",
+    "reproduction_scope": "Section HEADINGS, table titles and column headers only. The owner decided on 2026-09-07 (ADR 0053, Q2) that these may be reproduced in this repository and that the template's instructional and boilerplate prose may not. No such prose is present in this file, and the template .docx is not vendored. ADR 0053's Q1 — whether output may be CALLED a VPAT(R) — is NOT answered by that decision, so no renderer consuming this catalog may use the mark.",
+    "not_reproduced": [
+      "About This Document",
+      "Essential Requirements and Best Practices for Information & Communications Technology (ICT) Vendors",
+      "Getting Started",
+      "Essential Requirements for Authors",
+      "Best Practices for Authors",
+      "Posting the Final Document",
+      "Table Information for VPAT® Readers",
+      "Terms",
+      "Legal Disclaimer (Company)"
+    ]
+  },
+  "criteria_table_columns": [
+    "Criteria",
+    "Conformance Level",
+    "Remarks and Explanations"
+  ],
+  "standards_table_columns": [
+    "Standard/Guideline",
+    "Included In Report"
+  ],
+  "editions": {
+    "VPAT 2.5Rev WCAG": {
+      "report_sections": [
+        {
+          "heading": "WCAG 2.x Report",
+          "requirement_set": "wcag-2.2-aa",
+          "subsections": [
+            "Table 1: Success Criteria, Level A",
+            "Table 2: Success Criteria, Level AA",
+            "Table 3: Success Criteria, Level AAA"
+          ]
+        }
+      ]
+    },
+    "VPAT 2.5Rev 508": {
+      "report_sections": [
+        {
+          "heading": "WCAG 2.0 Report",
+          "requirement_set": "wcag-2.2-aa",
+          "subsections": [
+            "Table 1: Success Criteria, Level A",
+            "Table 2: Success Criteria, Level AA",
+            "Table 3: Success Criteria, Level AAA"
+          ]
+        },
+        {
+          "heading": "Revised Section 508 Report",
+          "requirement_set": "section-508",
+          "subsections": [
+            "Chapter 3: Functional Performance Criteria (FPC)",
+            "Chapter 4: Hardware",
+            "Chapter 5: Software",
+            "Chapter 6: Support Documentation and Services"
+          ]
+        }
+      ]
+    },
+    "VPAT 2.5Rev EU": {
+      "report_sections": [
+        {
+          "heading": "WCAG 2.x Report",
+          "requirement_set": "wcag-2.2-aa",
+          "subsections": [
+            "Table 1: Success Criteria, Level A",
+            "Table 2: Success Criteria, Level AA",
+            "Table 3: Success Criteria, Level AAA"
+          ]
+        },
+        {
+          "heading": "EN 301 549 Report",
+          "requirement_set": "en-301-549",
+          "subsections": [
+            "Clause 4: Functional Performance Statements (FPS)",
+            "Clause 5: Generic Requirements",
+            "Clause 6: ICT with Two-Way Voice Communication",
+            "Clause 7: ICT with Video Capabilities",
+            "Clause 8: Hardware",
+            "Clause 9: Web (see WCAG 2.x section)",
+            "Clause 10: Non-web Documents",
+            "Clause 11: Software",
+            "Clause 12: Documentation and Support Services",
+            "Clause 13: ICT Providing Relay or Emergency Service Access"
+          ]
+        }
+      ]
+    },
+    "VPAT 2.5Rev INT": {
+      "report_sections": [
+        {
+          "heading": "WCAG 2.x Report",
+          "requirement_set": "wcag-2.2-aa",
+          "subsections": [
+            "Table 1: Success Criteria, Level A",
+            "Table 2: Success Criteria, Level AA",
+            "Table 3: Success Criteria, Level AAA"
+          ]
+        },
+        {
+          "heading": "Revised Section 508 Report",
+          "requirement_set": "section-508",
+          "subsections": [
+            "Chapter 3: Functional Performance Criteria (FPC)",
+            "Chapter 4: Hardware",
+            "Chapter 5: Software",
+            "Chapter 6: Support Documentation and Services"
+          ]
+        },
+        {
+          "heading": "EN 301 549 Report",
+          "requirement_set": "en-301-549",
+          "subsections": [
+            "Clause 4: Functional Performance Statements (FPS)",
+            "Clause 5: Generic Requirements",
+            "Clause 6: ICT with Two-Way Voice Communication",
+            "Clause 7: ICT with Video Capabilities",
+            "Clause 8: Hardware",
+            "Clause 9: Web (see WCAG 2.x section)",
+            "Clause 10: Non-Web Documents",
+            "Clause 11: Software",
+            "Clause 12: Documentation and Support Services",
+            "Clause 13: ICT Providing Relay or Emergency Service Access"
+          ]
+        }
+      ]
+    }
+  }
+}
