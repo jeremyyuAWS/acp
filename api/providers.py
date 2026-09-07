@@ -602,7 +602,12 @@ _PRICE_PER_1M = {
     # substring like the rest, so keep the full version ids; an unknown Claude model → cost 0.
     "claude-opus-4-8": (5.00, 25.00),
     "claude-opus-5": (5.00, 25.00),
-    "claude-sonnet-5": (3.00, 15.00),
+    # (2.00, 10.00), not (3.00, 15.00). The latter is SONNET 4.6's price, carried onto Sonnet 5
+    # when the id was added — a generation's price attached to its successor's name. It
+    # over-quoted by 50%, so remediation_pilot's max_spend_usd guard stopped early rather than
+    # late; the direction was lucky, not designed, and a spend cap fed by a wrong number is
+    # exactly what ADR 0016 means by not inventing one.
+    "claude-sonnet-5": (2.00, 10.00),
     "claude-haiku-4-5": (1.00, 5.00),
     "claude-fable-5": (10.00, 50.00),
 }

@@ -70,7 +70,16 @@ def test_claude_text_generate_uses_governed_model_override(monkeypatch):
     result = providers.claude_text_generate("draft", model="claude-sonnet-5")
     assert sent["model"] == "claude-sonnet-5"
     assert result["model"] == "claude-sonnet-5"
-    assert result["cost_usd"] == 0.0045
+    # Derived from the model's own row, not written out. This asserted 0.0045 — 1000 in + 100 out
+    # at Sonnet 4.6's (3.00, 15.00), which claude-sonnet-5 was wrongly priced at. Correcting the
+    # table made this fail for being right, and the literal hid it: the price never appears here,
+    # only its product, so a grep for the old numbers does not find this line.
+    #
+    # The VALUE lives in tests/test_claude_list_prices.py. Here the table is an input, so a price
+    # change moves this expectation and a broken multiplication still fails it.
+    price = providers._price_for("claude-sonnet-5")
+    assert price, "claude-sonnet-5 has no row in _PRICE_PER_1M"
+    assert result["cost_usd"] == round(1000 / 1e6 * price[0] + 100 / 1e6 * price[1], 6)
 
 
 def test_claude_text_generate_returns_none_on_http_failure(monkeypatch):
