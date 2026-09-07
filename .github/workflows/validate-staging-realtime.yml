@@ -27,6 +27,10 @@ jobs:
       name: staging
       url: https://${{ vars.STAGING_FQDN }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
       - uses: azure/login@v2
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -39,11 +43,24 @@ jobs:
           STAGING_WORKER: ${{ vars.STAGING_ASSESS_WORKER || 'acp-assess-staging' }}
         run: |
           set -euo pipefail
+          source deploy/public/readiness_probe.sh
           REVISION=$(az containerapp show -g "$STAGING_RG" -n "$STAGING_WORKER" \
             --query properties.latestRevisionName -o tsv)
           REPLICA=$(az containerapp replica list -g "$STAGING_RG" -n "$STAGING_WORKER" \
             --revision "$REVISION" --query '[0].name' -o tsv)
           test -n "$REPLICA" || { echo "::error::staging worker has no running replica"; exit 1; }
-          az containerapp exec -g "$STAGING_RG" -n "$STAGING_WORKER" \
+          TRANSCRIPT=$(mktemp)
+          trap 'rm -f "$TRANSCRIPT"' EXIT
+          EXEC_EXIT=0
+          set +e
+          _aca_exec_tty az containerapp exec -g "$STAGING_RG" -n "$STAGING_WORKER" \
             --revision "$REVISION" --replica "$REPLICA" \
-            --command "sh -c 'cd /app && python -m performance.canonical_realtime_gate --redis-env REDIS_URL'"
+            --command "python /app/scripts/staging_realtime_gate.py" | tee "$TRANSCRIPT"
+          EXEC_EXIT=${PIPESTATUS[0]}
+          set -e
+          # The Linux Azure client can return nonzero while tearing down a successful websocket.
+          # Accept that only after the strict parser proves there is exactly one complete GO marker.
+          python3 scripts/parse_realtime_gate.py < "$TRANSCRIPT"
+          if [ "$EXEC_EXIT" -ne 0 ]; then
+            echo "::warning::Azure exec exited $EXEC_EXIT after a strictly validated GO marker"
+          fi
