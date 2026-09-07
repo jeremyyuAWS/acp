@@ -7039,6 +7039,55 @@ class Store:
                 self._db.execute(cur, "SELECT * FROM ai_calls ORDER BY ts DESC LIMIT %s", (limit,))
             return self._db.fetchall(cur)
 
+    def release_ai_provenance(self, scan_id: str, files: list[str]) -> list[dict]:
+        """Model calls for an exact release selection, with durable outcome linkage.
+
+        Review and validation rows are joined only through ``model_call_id`` and must also agree
+        with the call's scan and file.  Missing arrays mean no linked evidence was recorded; callers
+        must not reinterpret that absence as a zero-quality outcome.  For repeated decisions or
+        validation attempts, the latest immutable event per (call, item) is the current outcome.
+        """
+        selected = list(dict.fromkeys(str(name) for name in (files or []) if name))
+        if not selected:
+            return []
+        marks = ",".join(["%s"] * len(selected))
+        params = (scan_id, *selected)
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"SELECT * FROM ai_calls WHERE scan_id=%s AND file IN ({marks}) "
+                "ORDER BY ts DESC", params)
+            calls = [dict(row) for row in self._db.fetchall(cur)]
+            if not calls:
+                return []
+
+            self._db.execute(cur,
+                "SELECT e.model_call_id,e.item_id,e.rule_id,e.action,e.edited,e.created_at "
+                "FROM hitl_events e JOIN ai_calls c ON c.id=e.model_call_id "
+                f"WHERE c.scan_id=%s AND c.file IN ({marks}) "
+                "AND e.scan_id=c.scan_id AND e.file=c.file ORDER BY e.created_at", params)
+            latest_review: dict[tuple[str, str], dict] = {}
+            for row in self._db.fetchall(cur):
+                latest_review[(str(row["model_call_id"]), str(row["item_id"]))] = dict(row)
+
+            self._db.execute(cur,
+                "SELECT v.model_call_id,v.item_id,v.rule_id,v.outcome,v.detail,v.regressions,"
+                "v.created_at FROM ai_validation_outcomes v JOIN ai_calls c ON c.id=v.model_call_id "
+                f"WHERE c.scan_id=%s AND c.file IN ({marks}) "
+                "AND v.scan_id=c.scan_id AND v.file=c.file ORDER BY v.created_at", params)
+            latest_validation: dict[tuple[str, str], dict] = {}
+            for row in self._db.fetchall(cur):
+                item = dict(row)
+                item["regressions"] = self._decode_regressions(item.get("regressions"))
+                latest_validation[(str(item["model_call_id"]), str(item["item_id"]))] = item
+
+        for call in calls:
+            call_id = str(call["id"])
+            call["review_decisions"] = [row for (cid, _), row in latest_review.items()
+                                        if cid == call_id]
+            call["validation_outcomes"] = [row for (cid, _), row in latest_validation.items()
+                                           if cid == call_id]
+        return calls
+
     def ai_call_belongs_to_file(self, call_id: str, scan_id: str, file: str) -> bool:
         """True only for an exact model-call provenance row on this scan and file."""
         with self._db.cursor() as cur:
