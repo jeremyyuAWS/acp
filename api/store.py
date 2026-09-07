@@ -10110,6 +10110,24 @@ class Store:
                 "ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value",
                 (key, value))
 
+    def claim_maintenance_lease(self, name: str, *, lease_seconds: int = 3600,
+                                now: str | None = None) -> bool:
+        """Atomically elect one replica for recoverable, idempotent maintenance work."""
+        from datetime import datetime, timedelta, timezone
+        instant = datetime.fromisoformat(str(now).replace("Z", "+00:00")) if now else \
+            datetime.now(timezone.utc)
+        if instant.tzinfo is None:
+            instant = instant.replace(tzinfo=timezone.utc)
+        claimed_at = instant.isoformat()
+        expires_at = (instant + timedelta(seconds=max(1, int(lease_seconds)))).isoformat()
+        key = f"maintenance:{name}:lease"
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO app_settings(key,value) VALUES(%s,%s) "
+                "ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value "
+                "WHERE app_settings.value<=%s", (key, expires_at, claimed_at))
+            return (getattr(cur, "rowcount", 0) or 0) > 0
+
     # ── Per-user setting overrides (R7: owner default + per-user override) ─────────────────────
     # A per-user override is stored as an ordinary app_settings row under a namespaced key, so it
     # needs no schema change and inherits the settings table's persistence and RESET treatment. The
