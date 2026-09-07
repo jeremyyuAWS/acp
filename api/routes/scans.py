@@ -4150,7 +4150,13 @@ def download_release_package(sid: str, request: Request, body: ReleasePackageReq
         finally:
             output.close()
 
-    filename = f'{package_name or f"acp-release-{re.sub(r"[^A-Za-z0-9._-]", "_", sid)}"}.zip'
+    # Built in two steps rather than one nested f-string. The single-expression form —
+    # f'{package_name or f"acp-release-{re.sub(r"[^A-Za-z0-9._-]", "_", sid)}"}.zip' — reuses the
+    # inner f-string's own double quote inside its replacement field, which is PEP 701 and parses
+    # only on 3.12+. CI pins 3.12, so nothing here went red while `import api.routes` failed
+    # outright on 3.11 and took ~26 test modules with it. See tests/test_python_syntax_floor.py.
+    default_name = f"acp-release-{re.sub(r'[^A-Za-z0-9._-]', '_', sid)}"
+    filename = f"{package_name or default_name}.zip"
     ascii_filename = re.sub(r"[^A-Za-z0-9._ -]", "_", filename)
     disposition = f'attachment; filename="{ascii_filename}"'
     if ascii_filename != filename:
