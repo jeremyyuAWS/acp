@@ -25,8 +25,15 @@ export function fmtReviewMs(ms) {
 // actually happened. Returns null until at least one review has been recorded — a single data
 // point is a number, not a statistic, so require a couple before showing an average.
 export function measuredReviewTime(analytics, { minSamples = 2 } = {}) {
-  const n = analytics?.reviewed
-  const avg = fmtReviewMs(analytics?.avg_review_ms)
-  if (!avg || typeof n !== 'number' || n < minSamples) return null
-  return { avg, reviewed: n }
+  const n = analytics?.timed_reviews
+  const median = fmtReviewMs(analytics?.median_review_ms)
+  if (!median || typeof n !== 'number' || n < minSamples) return null
+  return { median, reviewed: n, basis: REVIEW_TIME_BASIS }
+}
+
+export function reviewTimeImpact(cardDelta, analytics, options) {
+  const measured = measuredReviewTime(analytics, options)
+  if (!measured || !Number.isFinite(cardDelta)) return null
+  return { ...measured, deltaMs: cardDelta * analytics.median_review_ms,
+    delta: fmtReviewMs(Math.abs(cardDelta * analytics.median_review_ms)), direction: Math.sign(cardDelta) }
 }
