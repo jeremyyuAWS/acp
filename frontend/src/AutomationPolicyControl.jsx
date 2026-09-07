@@ -5,7 +5,6 @@ import WhyFindingsStayWithPeople from './WhyFindingsStayWithPeople.jsx'
 import { reviewTimeImpact } from './reviewerTime.js'
 import './automation-policy.css'
 import AutomationPolicyActions from './AutomationPolicyActions.jsx'
-import AutomationPolicyActions from './AutomationPolicyActions.jsx'
 
 const storageKey = (runId) => `acp.remediation.automation-preview.${runId || 'current'}`
 const impact = (findings, files) => `${findings} ${findings === 1 ? 'finding' : 'findings'} across ${files} ${files === 1 ? 'file' : 'files'}`
