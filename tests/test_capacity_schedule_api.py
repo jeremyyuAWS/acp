@@ -268,7 +268,8 @@ def test_a_valid_write_persists_and_reads_back(store, admin):
     assert result["version"] == 1
     assert result["start"] == "07:00"
     assert control.get_capacity_schedule()["start"] == "07:00"
-    assert store_mod.load_schedule(store).applied is True
+    # Persistence records desired intent; only the separate apply endpoint may claim Azure state.
+    assert store_mod.load_schedule(store).applied is False
 
 
 def test_a_saved_schedule_is_not_yet_applied_to_azure(store, admin):

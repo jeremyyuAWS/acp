@@ -1505,6 +1505,35 @@ def _do_scheduled_scan():
               flush=True)
 
 
+def _enqueue_scheduled_scan(now=None) -> bool:
+    """Offer the current wall-clock occurrence to the durable queue.
+
+    APScheduler exists in every replica. All replicas calculate the same UTC interval bucket,
+    while Store.enqueue_scheduled_sweep atomically admits only one queue row for that bucket.
+    """
+    import datetime as _dt
+    cfg = get_store().get_schedule()
+    interval_minutes = int(cfg.get("interval_minutes") or 0)
+    if not cfg.get("enabled") or interval_minutes <= 0:
+        return False
+    instant = now or _dt.datetime.now(_dt.timezone.utc)
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=_dt.timezone.utc)
+    bucket = int(instant.timestamp()) // (interval_minutes * 60)
+    return get_store().enqueue_scheduled_sweep(f"{interval_minutes}:{bucket}")
+
+
+def _next_scheduled_scan_fire(interval_minutes: int, now=None):
+    """Return the next UTC interval boundary so independently-started replicas stay aligned."""
+    import datetime as _dt
+    instant = now or _dt.datetime.now(_dt.timezone.utc)
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=_dt.timezone.utc)
+    seconds = int(interval_minutes) * 60
+    next_epoch = ((int(instant.timestamp()) // seconds) + 1) * seconds
+    return _dt.datetime.fromtimestamp(next_epoch, tz=_dt.timezone.utc)
+
+
 def _derive_review_memory_tick() -> None:
     """Nightly ADR 0021 derivation: for every org, read recent HITL behaviour and PROPOSE
     (never activate) house-style rules. Best-effort; only armed when review memory is on."""
@@ -1521,8 +1550,9 @@ def reload_scheduler():
     cfg = get_store().get_schedule()
     scheduler.remove_all_jobs()
     if cfg["enabled"] and cfg["interval_minutes"] > 0:
-        scheduler.add_job(_do_scheduled_scan, "interval",
+        scheduler.add_job(_enqueue_scheduled_scan, "interval",
                           minutes=cfg["interval_minutes"],
+                          next_run_time=_next_scheduled_scan_fire(cfg["interval_minutes"]),
                           id="scheduled_local_scan",
                           coalesce=True, max_instances=1)
     # ADR 0021 stage 3 — nightly review-memory derivation, only when the feature is on. Dark
@@ -1575,7 +1605,7 @@ def _discovery_reservation(pool_size):
 # `scan` is deliberately NOT here. Under ACP_DEFER_ANALYSIS_TO_ASSESS=0 it downloads and analyses
 # the whole estate, and a lane sized for short metadata work must not be occupied for minutes by
 # one content job. It gets queue precedence (store.job_priority) but no dedicated slot.
-DISCOVERY_LANE_JOB_TYPES = ("scan_discover", "scan_folder")
+DISCOVERY_LANE_JOB_TYPES = ("scheduled_sweep", "scan_discover", "scan_folder")
 
 # Stage-owned queues. These tuples are intentionally disjoint: once the generic processing
 # service is retired, an Assess backlog cannot consume Remediate capacity and vice versa.

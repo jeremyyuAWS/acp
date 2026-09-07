@@ -133,6 +133,19 @@ def apply_policies(policies: Iterable[AppPolicy], gateway: CapacityGateway) -> d
             preflight[policy.app] = gateway.read_scale(policy.app)
         except Exception as error:  # noqa: BLE001 - the boundary returns a classified outcome
             preflight_errors[policy.app] = _error_code(error)
+    # Applying a complete scale block would delete rules the desired policy does not know how to
+    # reconstruct (notably Discovery's out-of-band CPU rule and Web's HTTP rule). Refuse the
+    # whole fleet before its first write; preserving an unknown rule without its auth shape is a
+    # guess with production consequences.
+    for policy in policies:
+        raw = preflight.get(policy.app)
+        if raw is None:
+            continue
+        actual = observed_policy(policy.app, raw)
+        known = {rule["name"] for rule in desired_policy(policy)["rules"]}
+        unexpected = sorted(rule["name"] for rule in actual["rules"] if rule["name"] not in known)
+        if unexpected:
+            preflight_errors[policy.app] = "unmanaged_scale_rules"
     if preflight_errors or any(value is None for value in preflight.values()):
         for policy in policies:
             if policy.app in preflight_errors:

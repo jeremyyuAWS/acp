@@ -273,6 +273,7 @@ _map_many([("POST", "/control/capacity-schedule/validate")],
 # capability that manages capacity — and each handler additionally enforces _require_admin, which
 # is the authoritative gate; this map narrows who may reach them.
 _map_many([("PUT", "/control/capacity-schedule"),
+           ("POST", "/control/capacity-schedule/apply"),
            ("POST", "/control/capacity-schedule/override"),
            ("DELETE", "/control/capacity-schedule/override")],
           {"settings.view", "workers.manage"})

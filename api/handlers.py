@@ -28,6 +28,12 @@ from scanner import run_scan
 logger = logging.getLogger(__name__)
 
 
+@handler("scheduled_sweep")
+def _scheduled_sweep(payload: dict, job: dict) -> None:
+    """Execute the one durable occurrence elected from all scheduler replicas."""
+    core._do_scheduled_scan()
+
+
 # Longest-predicted work first reduces the tail of a parallel Assess run: without it, a large PDF
 # or presentation that happens to be late in inventory order can occupy the final worker while all
 # other slots sit idle. Size is the strongest metadata-only signal available before download. For

@@ -86,6 +86,18 @@ def test_apply_preflights_every_app_before_any_write():
     assert gateway.applied == []
 
 
+def test_apply_refuses_to_replace_an_unmanaged_rule():
+    wanted = policy("one")
+    observed = scale_for(wanted)
+    observed["rules"].append({"name": "existing-cpu", "type": "cpu",
+                              "metadata": {"value": "50"}})
+    gateway = FakeGateway({"one": observed})
+    result = apply.apply_policies([wanted], gateway)
+    assert result["state"] == "preflight_failed"
+    assert result["apps"][0]["error_code"] == "unmanaged_scale_rules"
+    assert gateway.applied == []
+
+
 def test_apply_records_verified_per_app_success():
     policies = [policy("one"), policy("two")]
     gateway = FakeGateway({p.app: scale_for(p) for p in policies})
