@@ -780,6 +780,12 @@ _SCHEMA = [
       id TEXT PRIMARY KEY, model_call_id TEXT, scan_id TEXT, file TEXT, rule_id TEXT,
       item_id TEXT, outcome TEXT, detail TEXT, created_at TEXT
     )""",
+    # Which criteria the post-write re-scan found NEWLY failing: absent from the residual of the
+    # bytes BEFORE this write, present after it. A JSON list — empty when both re-scans ran and
+    # none appeared; NULL when there was no trustworthy baseline to compare against (a row written
+    # before this column, or a baseline re-scan that could not run), which is "unknown" and must
+    # never be read as "none". Additive; placed AFTER the CREATE above.
+    "ALTER TABLE ai_validation_outcomes ADD COLUMN IF NOT EXISTS regressions TEXT",
     # Configurable file disposition (ADR 0003, Phase 3). PREVIEW ONLY as of this
     # migration -- api/disposition.py's matches() tells you which documents a policy
     # would select; nothing executes a real move/rename/archive/delete yet. That
@@ -2319,8 +2325,10 @@ class _PgAdapter:
     # skipped and failed scheduled runs. Defaults preserve existing schedule rows and older
     # replicas ignore the additive columns during a rolling deploy.
     # v37 adds immutable post-write validation outcomes linked to exact accepted AI calls.
-    _SCHEMA_VERSION = 37
-    _SCHEMA_CHECKSUM_AT_VERSION = "e05e63425b0a87897a4dd4c044d7191b"
+    # v38 adds `regressions` to ai_validation_outcomes: the criteria a post-write re-scan
+    # found newly failing, so a draft's validation row can say what its write cost.
+    _SCHEMA_VERSION = 38
+    _SCHEMA_CHECKSUM_AT_VERSION = "ef03077fd7bdd340fdc8f57262219786"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -6751,15 +6759,20 @@ class Store:
         bounds the window (1 = today-ish, 30 = month); None = all time. `scan_id` scopes the
         rollup to one scan — the per-scan provenance the certification report embeds (§4)."""
         from datetime import datetime, timedelta, timezone
-        clauses, params_l = [], []
+        clauses, jclauses, params_l = [], [], []
         if since_days is not None:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=since_days)).isoformat()
             clauses.append("ts >= %s")
+            jclauses.append("c.ts >= %s")
             params_l.append(cutoff)
         if scan_id is not None:
             clauses.append("scan_id = %s")
+            jclauses.append("c.scan_id = %s")
             params_l.append(scan_id)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        # The same window, qualified for the joins below (hitl_events and ai_validation_outcomes
+        # both carry a scan_id of their own, so an unqualified clause would be ambiguous).
+        jwhere = (" WHERE " + " AND ".join(jclauses)) if jclauses else ""
         params = tuple(params_l)
         with self._db.cursor() as cur:
             self._db.execute(cur,
@@ -6810,6 +6823,19 @@ class Store:
                 "GROUP BY COALESCE(reason,'unrecorded') ORDER BY calls DESC", params)
             failure_reasons = [{"key": r["k"], "calls": r["calls"]} for r in self._db.fetchall(cur)]
 
+            # Reviewer decisions and post-write validation, at the SAME exact provider/model/zone
+            # grain, joined through the call id each decision and each validation row carries.
+            # This is the evidence a stronger-model rollout is actually judged on: not whether the
+            # call completed, but whether a human accepted the draft and whether the written value
+            # cleared the detector without breaking anything else. Nothing is inferred — a decision
+            # that recorded no model_call_id (human-authored work, or a card reviewed before the
+            # linkage existed) is absent from these counts rather than attributed by proximity.
+            linked = self._linked_outcomes_by_model(cur, jwhere, params)
+            for m in by_model:
+                key = (m["provider"], m["model"], m["zone"])
+                m["reviewed"] = linked["reviewed"].get(key, dict(self._EMPTY_REVIEWED))
+                m["validation"] = linked["validation"].get(key, dict(self._EMPTY_VALIDATION))
+
             calls = tot.get("calls", 0) or 0
             return {
                 "window_days": since_days,
@@ -6824,7 +6850,78 @@ class Store:
                 "by_zone": _group("zone"),
                 "by_surface": _group("surface"),
                 "failure_reasons": failure_reasons,
+                "reviewed": self._sum_buckets(linked["reviewed"].values(), self._EMPTY_REVIEWED),
+                "validation": self._sum_buckets(linked["validation"].values(),
+                                                self._EMPTY_VALIDATION),
             }
+
+    # Reviewer decisions linked to an exact model call. `approved` is an unedited acceptance,
+    # `edited` an acceptance the reviewer changed first, `rejected` a rejection; skips are not
+    # decisions and are not counted. `decisions` is the sum of the three.
+    _EMPTY_REVIEWED = {"decisions": 0, "approved": 0, "edited": 0, "rejected": 0}
+    # Post-write outcomes linked to an exact model call, one per (call, item) — the LATEST, so a
+    # could_not_verify that was later retried to verified_cleared counts once, as cleared. The
+    # five outcome counts partition `validated`; `newly_failing` cuts across them: rows of any
+    # outcome whose re-scan found a criterion failing that did not fail before the write.
+    _EMPTY_VALIDATION = {"validated": 0, "cleared": 0, "regressed": 0, "still_failing": 0,
+                         "could_not_verify": 0, "unresolved": 0, "newly_failing": 0}
+    _VALIDATION_BUCKET = {"verified_cleared": "cleared", "verified_regressed": "regressed",
+                          "verified_still_failing": "still_failing",
+                          "could_not_verify": "could_not_verify",
+                          "write_unresolved": "unresolved"}
+
+    @staticmethod
+    def _sum_buckets(buckets, empty: dict) -> dict:
+        total = dict(empty)
+        for b in buckets:
+            for k in total:
+                total[k] += int(b.get(k) or 0)
+        return total
+
+    def _linked_outcomes_by_model(self, cur, jwhere: str, params: tuple) -> dict:
+        """{'reviewed': {(provider, model, zone): bucket}, 'validation': {…}} for the calls in the
+        window — see ai_cost_rollup for what the buckets mean and why nothing here is inferred."""
+        reviewed: dict[tuple, dict] = {}
+        validation: dict[tuple, dict] = {}
+        self._db.execute(cur,
+            "SELECT c.provider AS provider, c.model AS model, c.zone AS zone, "
+            "e.model_call_id AS call_id, e.item_id AS item_id, e.action AS action, "
+            "e.created_at AS created_at "
+            "FROM hitl_events e JOIN ai_calls c ON c.id = e.model_call_id"
+            f"{jwhere} ORDER BY e.created_at", params)
+        latest: dict[tuple, dict] = {}
+        for r in self._db.fetchall(cur):
+            latest[(r["call_id"], r["item_id"])] = r        # ordered ascending: last wins
+        for r in latest.values():
+            action = {"approve": "approved", "edit": "edited", "reject": "rejected"}.get(
+                str(r.get("action") or ""))
+            if action is None:
+                continue
+            b = reviewed.setdefault((r["provider"], r["model"], r["zone"]),
+                                    dict(self._EMPTY_REVIEWED))
+            b[action] += 1
+            b["decisions"] += 1
+
+        self._db.execute(cur,
+            "SELECT c.provider AS provider, c.model AS model, c.zone AS zone, "
+            "v.model_call_id AS call_id, v.item_id AS item_id, v.outcome AS outcome, "
+            "v.regressions AS regressions, v.created_at AS created_at "
+            "FROM ai_validation_outcomes v JOIN ai_calls c ON c.id = v.model_call_id"
+            f"{jwhere} ORDER BY v.created_at", params)
+        latest = {}
+        for r in self._db.fetchall(cur):
+            latest[(r["call_id"], r["item_id"])] = r
+        for r in latest.values():
+            bucket = self._VALIDATION_BUCKET.get(str(r.get("outcome") or ""))
+            if bucket is None:
+                continue
+            b = validation.setdefault((r["provider"], r["model"], r["zone"]),
+                                      dict(self._EMPTY_VALIDATION))
+            b[bucket] += 1
+            b["validated"] += 1
+            if self._decode_regressions(r.get("regressions")):
+                b["newly_failing"] += 1
+        return {"reviewed": reviewed, "validation": validation}
 
     def ai_provider_health_stats(self, provider: str, *, window_hours: int = 24) -> dict:
         """Endpoint health snapshot for one cloud provider (ADR 0019/0016). All numbers come
@@ -7206,21 +7303,43 @@ class Store:
                  reviewer, datetime.now(timezone.utc).isoformat(), reject_reason or None,
                  model_call_id or None))
 
+    # Every outcome a post-write validation row may carry. Each names what the applier OBSERVED
+    # about ONE approved draft, never what it hoped:
+    #   write_unresolved        the value could not be written — the content it addressed no longer
+    #                           resolves in the document (nothing was verified, nothing changed)
+    #   could_not_verify        written, but the re-scan could not run to a trustworthy result;
+    #                           the bytes were discarded and the row stays unapplied
+    #   verified_still_failing  written and re-scanned; the target criterion still fails
+    #   verified_cleared        written; the target cleared; no criterion newly fails
+    #   verified_regressed      written; the target cleared; the re-scan found at least one
+    #                           criterion failing that did not fail before the write
+    # `regressions` on the row lists the newly-failing criteria for ANY outcome that re-scanned, so
+    # a still-failing write that also broke something is not hidden behind its primary outcome.
+    AI_VALIDATION_OUTCOMES = frozenset({
+        "write_unresolved", "could_not_verify", "verified_still_failing",
+        "verified_cleared", "verified_regressed"})
+
     def record_ai_validation_outcomes(self, scan_id: str, file: str, rule_id: str,
                                       item_ids: list[str], outcome: str, *,
-                                      detail: str | None = None) -> int:
+                                      detail: str | None = None,
+                                      regressions: list[str] | set[str] | None = None) -> int:
         """Append one post-write result for every exact model call accepted by these items.
 
         Replays of the same item/result are idempotent; a later retry may append a different
         outcome (for example could_not_verify followed by verified_cleared). Human-authored and
         historical items have no model_call_id and correctly produce no rows.
+
+        `regressions` is the set of criteria the re-scan found newly failing (see the column
+        comment in _SCHEMA): pass an empty collection when the comparison ran and found none, and
+        None when no baseline existed — the two are different facts and are stored differently.
         """
-        allowed = {"verified_cleared", "verified_still_failing", "could_not_verify"}
-        if outcome not in allowed:
+        if outcome not in self.AI_VALIDATION_OUTCOMES:
             raise ValueError(f"unsupported AI validation outcome: {outcome}")
         ids = [str(i) for i in dict.fromkeys(item_ids or []) if i]
         if not ids:
             return 0
+        reg_json = (None if regressions is None
+                    else json.dumps(sorted({str(r) for r in regressions if r})))
         marks = ",".join(["%s"] * len(ids))
         import hashlib
         from datetime import datetime, timezone
@@ -7238,16 +7357,63 @@ class Store:
                                   (str(row["model_call_id"]), str(row.get("rule_id") or rule_id)))
             for item_id, (call_id, event_rule_id) in latest.items():
                 event_id = hashlib.sha256(
-                    f"post-write:{call_id}:{scan_id}:{file}:{event_rule_id}:{item_id}:{outcome}".encode()
+                    f"post-write:{call_id}:{scan_id}:{file}:{event_rule_id}:{item_id}:{outcome}"
+                    f":{reg_json or ''}".encode()
                 ).hexdigest()[:32]
                 self._db.execute(cur,
                     "INSERT INTO ai_validation_outcomes(id,model_call_id,scan_id,file,rule_id,"
-                    "item_id,outcome,detail,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                    "item_id,outcome,detail,created_at,regressions) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                     "ON CONFLICT(id) DO NOTHING",
                     (event_id, call_id, scan_id, file, event_rule_id, item_id, outcome,
-                     (detail or None), now))
+                     (detail or None), now, reg_json))
                 inserted += max(0, int(cur.rowcount or 0))
         return inserted
+
+    def list_ai_validation_outcomes(self, scan_id: str | None = None, file: str | None = None,
+                                    limit: int = 500) -> list[dict]:
+        """The recorded post-write outcomes, oldest first, `regressions` decoded to a list (or
+        None when the row carries no baseline comparison)."""
+        clauses, params = [], []
+        if scan_id is not None:
+            clauses.append("scan_id=%s")
+            params.append(scan_id)
+        if file is not None:
+            clauses.append("file=%s")
+            params.append(file)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT * FROM ai_validation_outcomes" + where
+                             + " ORDER BY created_at LIMIT %s", (*params, limit))
+            out = []
+            for r in self._db.fetchall(cur):
+                r = dict(r)
+                r["regressions"] = self._decode_regressions(r.get("regressions"))
+                out.append(r)
+            return out
+
+    @staticmethod
+    def _decode_regressions(raw) -> list[str] | None:
+        if raw is None:
+            return None
+        try:
+            v = json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            return None
+        return [str(x) for x in v] if isinstance(v, list) else None
+
+    def approved_unapplied_item_locators(self, scan_id: str, file: str,
+                                         rule_ids) -> dict[str, list[str]]:
+        """{item_id: [locator, …]} for the approved-but-unapplied rows of `rule_ids` — exactly
+        the locators the applier hands the writer for each row (_row_approved_values), so a
+        locator the writer could not resolve can be attributed back to the review item, and
+        through it to the model call, that approved it."""
+        wanted = {str(r).strip() for r in (rule_ids or ()) if r}
+        out: dict[str, list[str]] = {}
+        for row in self._approved_unapplied_rows(scan_id, file):
+            if str(row.get("rule_id") or "").strip() in wanted:
+                out[str(row["id"])] = list(self._row_approved_values(row).keys())
+        return out
 
     # ADR 0019 §8.5 — thresholds for surfacing a rule as ready to migrate
     # Human-Assisted → AI-Assisted. All three conditions must hold simultaneously.
@@ -11366,11 +11532,19 @@ class Store:
             return []
 
     # ── Audit trail (maturity Phase 4) ────────────────────────────────────────
+    _VALIDATION_TITLES = {
+        "verified_cleared": "written and verified",
+        "verified_regressed": "written and verified, with a regression",
+        "verified_still_failing": "written but the criterion still fails",
+        "could_not_verify": "written but could not be verified",
+        "write_unresolved": "not written — content no longer found",
+    }
+
     def document_timeline(self, scan_id: str, file: str, limit: int = 300) -> list[dict]:
         """Chronological provenance for ONE document in ONE scan — the auditor's answer to
         "what happened to this file and who decided what". Assembled entirely from rows the
         pipeline already persists (scan_runs, file_records, ai_calls, hitl_queue,
-        hitl_events, applied_fixes, decision_log); nothing is inferred or fabricated
+        hitl_events, applied_fixes, ai_validation_outcomes, decision_log); nothing is inferred or fabricated
         (ADR 0016). Every event: {ts, kind, title, detail?, actor?, rule_id?}. Best-effort
         per source — a missing table (older DB) skips that source, never errors."""
         events: list[dict] = []
@@ -11421,6 +11595,21 @@ class Store:
                        (scan_id, file)):
             _add(r.get("created_at"), "fix", f"Fix written into document · {r.get('rule_id') or ''}".strip(" ·"),
                  detail=(r.get("value") or "")[:160] or None, rule_id=r.get("rule_id"))
+        # What happened to an approved AI draft AFTER the human said yes. A cleared (or regressed)
+        # write changed the document and is a `fix`; the other outcomes left the bytes untouched
+        # — the lane discards an unverified or still-failing write — and are recorded decisions.
+        for r in _rows("SELECT * FROM ai_validation_outcomes WHERE scan_id=%s AND file=%s "
+                       "ORDER BY created_at", (scan_id, file)):
+            outcome = str(r.get("outcome") or "")
+            label = self._VALIDATION_TITLES.get(outcome, outcome or "unrecorded outcome")
+            detail = (r.get("detail") or "").strip()
+            regs = self._decode_regressions(r.get("regressions"))
+            if regs:
+                detail = f"{detail + ' · ' if detail else ''}newly failing: {', '.join(regs)}"
+            _add(r.get("created_at"),
+                 "fix" if outcome in ("verified_cleared", "verified_regressed") else "decision",
+                 f"AI draft {label} · {r.get('rule_id') or ''}".strip(" ·"),
+                 detail=detail[:160] or None, rule_id=r.get("rule_id"))
         for r in _rows("SELECT * FROM decision_log WHERE scan_id=%s AND file=%s ORDER BY ts",
                        (scan_id, file)):
             action = r.get("action") or "decision"

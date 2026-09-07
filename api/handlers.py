@@ -4618,7 +4618,8 @@ def _apply_one_value_kind(
         *, scan_id: str, filename: str, working: bytes,
         values: dict[str, str], scs_to_clear: set[str],
         write_fn, diff_rule_id: str, credit_rule_ids: tuple[str, ...],
-        noun: str, job: dict, extra_work: bool = False) -> tuple[bytes, bool]:
+        noun: str, job: dict, extra_work: bool = False,
+        residual_state: dict | None = None) -> tuple[bytes, bool]:
     """Shared write → verify → credit sequence for one kind of approved value (alt text or
     link text) applied on top of `working`. Returns (new_working, uploaded_this_kind).
 
@@ -4631,6 +4632,15 @@ def _apply_one_value_kind(
     as {locator: text} — today, the decorative markings closed over by the alt lane, whose whole
     point is that they write no text. Without it a file whose only approved 1.1.1 decision was
     "decorative" short-circuits here and the marking never reaches the document.
+
+    residual_state: {"verification": Verification} — the residual re-scan of `working` as it
+    stands BEFORE this lane, shared across the lanes of one apply job. It is what makes "did
+    this write break something else" answerable: a criterion in this lane's re-scan that was
+    absent from the baseline is a regression, and is recorded on the draft's validation row
+    (verified_regressed, or `regressions` on a still-failing write). The credit gate above is
+    unchanged by it — a regression is recorded evidence, not a new reason to withhold — and a
+    lane that is credited advances the baseline, since its bytes become the next lane's
+    `working`. None (or a baseline that could not run) records "unknown", never "none".
     """
     if not values and not extra_work:
         return working, False
@@ -4641,11 +4651,25 @@ def _apply_one_value_kind(
     review_item_ids = []
     for rule_id in credit_rule_ids:
         review_item_ids.extend(core.store.approved_unapplied_item_ids(scan_id, filename, rule_id))
+    # The locators each item hands the writer, so an unresolved locator can be attributed to the
+    # item — and through its HITL event, the model call — that approved it.
+    try:
+        item_locators = core.store.approved_unapplied_item_locators(
+            scan_id, filename, credit_rule_ids)
+    except Exception:
+        swallowed("_apply_one_value_kind: reading the approved items' locators failed", scan_id)
+        item_locators = {}
+    # The items this lane's verification outcome describes. Narrowed below when an item's
+    # every locator failed to resolve: nothing of it was written, so the re-scan says nothing
+    # about it and it must not inherit a verified_cleared from its neighbours.
+    lane_items = list(review_item_ids)
 
-    def _model_outcome(outcome: str, detail: str) -> None:
+    def _model_outcome(outcome: str, detail: str, *, item_ids=None, regressions=None) -> None:
         try:
             core.store.record_ai_validation_outcomes(
-                scan_id, filename, diff_rule_id, review_item_ids, outcome, detail=detail)
+                scan_id, filename, diff_rule_id,
+                lane_items if item_ids is None else item_ids,
+                outcome, detail=detail, regressions=regressions)
         except Exception:
             swallowed("_apply_one_value_kind: recording the AI post-write outcome failed", scan_id)
 
@@ -4658,11 +4682,37 @@ def _apply_one_value_kind(
             "system", "apply.unresolved", scan_id=scan_id, file=filename,
             detail=f"{len(unresolved)} approved {noun} value(s) had no matching content: "
                    + ", ".join(unresolved[:5]))
+        # An item whose EVERY locator went unresolved had nothing written for it. That is a
+        # post-write outcome of its own — the draft was accepted for content the document no
+        # longer has — and it is recorded against the draft's call rather than folded into
+        # whatever the rest of the lane goes on to verify.
+        gone = set(unresolved)
+        unresolved_items = [i for i in lane_items
+                            if item_locators.get(i) and set(item_locators[i]) <= gone]
+        if unresolved_items:
+            _model_outcome("write_unresolved",
+                           f"{noun} locator(s) no longer resolve: "
+                           + ", ".join(sorted(gone)[:5]),
+                           item_ids=unresolved_items)
+            lane_items = [i for i in lane_items if i not in unresolved_items]
+    unresolved_note = (f"; {len(unresolved)} locator(s) unresolved and not written"
+                       if unresolved else "")
     if not applied:
         return working, False
 
     _phase(job, f"re-verifying the corrected copy ({noun})")
     verification = _verify_residual(fixed, filename)
+    # Newly-failing criteria: in this re-scan, absent from the baseline. Only decidable when both
+    # re-scans ran to a trustworthy result; otherwise "unknown" (None), which the row stores as
+    # such rather than as an empty list.
+    baseline = (residual_state or {}).get("verification")
+    regressions = (sorted(verification.residual - baseline.residual)
+                   if verification.ok and baseline is not None and baseline.ok else None)
+    if regressions:
+        core.store.log_decision(
+            "system", "apply.regression", scan_id=scan_id, file=filename,
+            detail=f"writing {len(applied)} {noun} value(s) made {regressions} fail on re-scan; "
+                   f"neither failed before the write")
     if not verification.ok:
         # COULD NOT VERIFY — the document was unreadable, the scan errored or timed out, an
         # engine was missing, or a rule threw and its criterion is simply absent from the
@@ -4675,7 +4725,9 @@ def _apply_one_value_kind(
             detail=f"wrote {len(applied)} {noun} value(s) but could not verify "
                    f"{sorted(scs_to_clear)}: {verification.reason}. Credit withheld; "
                    f"the approved value is kept for retry")
-        _model_outcome("could_not_verify", verification.reason or "verification unavailable")
+        _model_outcome("could_not_verify",
+                       (verification.reason or "verification unavailable") + unresolved_note,
+                       regressions=None)
         return working, False
     if not verification.cleared(scs_to_clear):
         # The value went in but the criterion still fails (content we never saw, or the engine
@@ -4686,7 +4738,9 @@ def _apply_one_value_kind(
             detail=f"wrote {len(applied)} {noun} value(s) but "
                    f"{sorted(verification.still_failing(scs_to_clear))} still fails on re-scan")
         _model_outcome("verified_still_failing",
-                       f"still failing: {sorted(verification.still_failing(scs_to_clear))}")
+                       f"still failing: {sorted(verification.still_failing(scs_to_clear))}"
+                       + unresolved_note,
+                       regressions=regressions)
         return working, False
 
     try:
@@ -4700,7 +4754,18 @@ def _apply_one_value_kind(
     for rule_id in credit_rule_ids:
         for item_id in core.store.approved_unapplied_item_ids(scan_id, filename, rule_id):
             core.store.mark_row_applied(item_id)
-    _model_outcome("verified_cleared", f"cleared on re-scan: {sorted(scs_to_clear)}")
+    if regressions:
+        _model_outcome("verified_regressed",
+                       f"cleared on re-scan: {sorted(scs_to_clear)}; newly failing: {regressions}"
+                       + unresolved_note,
+                       regressions=regressions)
+    else:
+        _model_outcome("verified_cleared",
+                       f"cleared on re-scan: {sorted(scs_to_clear)}" + unresolved_note,
+                       regressions=regressions)
+    if residual_state is not None:
+        # These bytes are the next lane's `working`; its regressions are measured from here.
+        residual_state["verification"] = verification
     core.store.log_decision(
         "system", "apply.applied", scan_id=scan_id, file=filename,
         detail=f"wrote {len(applied)} reviewer-approved {noun} value(s); "
@@ -4770,6 +4835,14 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
                                 file=filename, detail="no stored remediated copy to write into")
         return
 
+    # The residual of the copy BEFORE anything is written — one extra re-scan per apply job, and
+    # the only way a lane can tell a criterion it caused to fail from one that was failing all
+    # along. Shared across the lanes: each credited lane advances it to its own re-scan, because
+    # its bytes are what the next lane writes on top of. `_verify_residual` never raises (a
+    # re-scan that cannot run is Verification(ok=False)), so this cannot block the write.
+    _phase(job, "re-scanning the copy before writing (regression baseline)")
+    residual_state = {"verification": _verify_residual(working, filename)}
+
     # Office images carry part#rId locators written by apply_alt; PDF figures carry the
     # `pdf:fig:{page}:{seq}` locator minted by remediate_pdf and are written by
     # apply_pdf_approved. Same (bytes, {locator: value}) -> (fixed, applied, unresolved)
@@ -4788,7 +4861,8 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
         scan_id=scan_id, filename=filename, working=working,
         values=alt_values, extra_work=bool(deco_locators),
         scs_to_clear={"1.1.1"}, write_fn=alt_write_fn,
-        diff_rule_id="1.1.1", credit_rule_ids=("1.1.1",), noun="description", job=job)
+        diff_rule_id="1.1.1", credit_rule_ids=("1.1.1",), noun="description", job=job,
+        residual_state=residual_state)
 
     # 4.1.2 form-field accessible names. PDF keys on `pdf:field:…` and writes /TU; Word keys
     # on `docx:sdt:…` and writes w:alias. One lane, one criterion, the writer chosen by format.
@@ -4805,7 +4879,8 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
         working, field_uploaded = _apply_one_value_kind(
             scan_id=scan_id, filename=filename, working=working,
             values=field_values, scs_to_clear={"4.1.2"}, write_fn=field_write_fn,
-            diff_rule_id="4.1.2", credit_rule_ids=("4.1.2",), noun="field name", job=job)
+            diff_rule_id="4.1.2", credit_rule_ids=("4.1.2",), noun="field name", job=job,
+            residual_state=residual_state)
 
     link_uploaded = False
     if link_values:
@@ -4817,7 +4892,8 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
         working, link_uploaded = _apply_one_value_kind(
             scan_id=scan_id, filename=filename, working=working,
             values=link_values, scs_to_clear=set(link_scs), write_fn=link_write_fn,
-            diff_rule_id="2.4.4", credit_rule_ids=link_scs, noun="link text", job=job)
+            diff_rule_id="2.4.4", credit_rule_ids=link_scs, noun="link text", job=job,
+            residual_state=residual_state)
 
     # 1.3.3 sensory rewrites and 3.1.2 language marks (Word). Two lanes, not one, even though a
     # single module writes both: each lane may only credit the criterion its OWN re-scan saw
@@ -4829,7 +4905,8 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
         working, sensory_uploaded = _apply_one_value_kind(
             scan_id=scan_id, filename=filename, working=working,
             values=sensory_values, scs_to_clear={"1.3.3"}, write_fn=sensory_write_fn,
-            diff_rule_id="1.3.3", credit_rule_ids=("1.3.3",), noun="rewrite", job=job)
+            diff_rule_id="1.3.3", credit_rule_ids=("1.3.3",), noun="rewrite", job=job,
+            residual_state=residual_state)
 
     language_uploaded = False
     if language_values:
@@ -4838,7 +4915,8 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
         working, language_uploaded = _apply_one_value_kind(
             scan_id=scan_id, filename=filename, working=working,
             values=language_values, scs_to_clear={"3.1.2"}, write_fn=language_write_fn,
-            diff_rule_id="3.1.2", credit_rule_ids=("3.1.2",), noun="language mark", job=job)
+            diff_rule_id="3.1.2", credit_rule_ids=("3.1.2",), noun="language mark", job=job,
+            residual_state=residual_state)
 
     structure_label_uploaded = False
     if structure_label_values:
@@ -4853,7 +4931,8 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
             values=structure_label_values, scs_to_clear={"2.4.6"},
             write_fn=_struct_write_fn,
             diff_rule_id="2.4.6", credit_rule_ids=("2.4.6",),
-            noun="structure label", job=job)
+            noun="structure label", job=job,
+            residual_state=residual_state)
 
     # 1.4.5/1.4.9 image-of-text alt text. The approved OCR transcript is set as the picture's
     # descriptive alt (<p:cNvPr descr="...">) so every tool reading the file sees a description
@@ -4868,7 +4947,8 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
             values=image_of_text_values, scs_to_clear={"1.4.5", "1.4.9"},
             write_fn=apply_pptx_image_of_text,
             diff_rule_id="1.4.5", credit_rule_ids=("1.4.5", "1.4.9"),
-            noun="image-of-text alt text", job=job)
+            noun="image-of-text alt text", job=job,
+            residual_state=residual_state)
 
     if not (alt_uploaded or link_uploaded or field_uploaded
             or sensory_uploaded or language_uploaded or structure_label_uploaded
