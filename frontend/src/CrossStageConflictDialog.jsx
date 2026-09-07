@@ -22,11 +22,12 @@ export default function CrossStageConflictDialog({
   const returnFocus = useRef(null)
   const decisionRef = useRef(onDecision)
   const busyRef = useRef(busy)
+  const open = Boolean(conflict)
   decisionRef.current = onDecision
   busyRef.current = busy
 
   useEffect(() => {
-    if (!conflict) return undefined
+    if (!open) return undefined
     returnFocus.current = document.activeElement
     const dialog = dialogRef.current
     dialog?.querySelector('[data-default-action]')?.focus()
@@ -53,7 +54,7 @@ export default function CrossStageConflictDialog({
       const opener = returnFocus.current
       if (opener?.isConnected) queueMicrotask(() => opener.focus())
     }
-  }, [conflict])
+  }, [open])
 
   if (!conflict) return null
   const requested = stageName(requestedStage, 'upstream stage')
@@ -77,9 +78,12 @@ export default function CrossStageConflictDialog({
           <p id={descriptionId} style={{ margin: 0, lineHeight: 1.55 }}>
             Starting {requested} now conflicts with the active {active} execution. Choose which work should continue.
           </p>
-          <p style={{ margin: '12px 0 0', color: '#64748b', fontSize: 13, overflowWrap: 'anywhere' }}>
-            Active execution: {conflict.currentExecutionId}
-          </p>
+          {(conflict.currentExecutionId || conflict.currentScanId) && (
+            <p style={{ margin: '12px 0 0', color: '#64748b', fontSize: 13, overflowWrap: 'anywhere' }}>
+              {conflict.currentExecutionId ? 'Active execution' : 'Active workflow scan'}:{' '}
+              {conflict.currentExecutionId || conflict.currentScanId}
+            </p>
+          )}
           {error && <p role="alert" style={{ margin: '14px 0 0', padding: 10, borderRadius: 8,
             background: '#fef2f2', color: '#991b1b' }}>{error}</p>}
         </div>
