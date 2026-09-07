@@ -241,6 +241,20 @@ def test_whole_batch_failure_is_swallowed_and_counts_every_drop(monkeypatch):
     assert metrics["publish_drop_total"] == 3
 
 
+def test_batch_falls_back_for_legacy_single_write_transport(monkeypatch):
+    monkeypatch.setattr(shadow, "METRICS", shadow.Metrics())
+    transport = Transport()
+    publisher = shadow.ShadowPublisher(transport, start_worker=False)
+    for n in range(3):
+        publisher.submit(kind="assess.completed", owner="t", correlation_id="c",
+                         payload={"n": n})
+
+    publisher.publish_batch()
+
+    assert [event.payload for event in transport.events] == [{"n": 0}, {"n": 1}, {"n": 2}]
+    assert shadow.metrics_snapshot()["publish_success_total"] == 3
+
+
 def test_worker_outcomes_emit_only_truthful_registered_events(monkeypatch):
     transport = Transport()
     publisher = shadow.ShadowPublisher(transport, start_worker=False)
