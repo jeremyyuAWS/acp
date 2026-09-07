@@ -1,28 +1,28 @@
 """AI layer for ACP.
 
-Text backend: delegates to providers.text_generate() (the cloud path — Anthropic or
-OpenAI, whichever providers.active_text_provider() selects) then falls back to the
-locally-running Ollama instance on any failure or when no cloud secret resolves — callers
-never break and never need a key for the keyless local path.
+Text backend: delegates to providers.text_generate() (the cloud path — whichever governed
+provider providers.active_text_provider() selects) then falls back to the locally-running
+Ollama instance on any failure or when no cloud secret resolves — callers never break and
+never need a key for the keyless local path.
 
 Vision backend: uses providers.active_vision_provider(), which selects a cloud vision
 adapter when one is configured, otherwise falls back to Ollama.
 
 Config (env vars — cloud key and model name are consumed by providers.py):
-  ACP_TEXT_PROVIDER    — deploy default text vendor (anthropic | openai); the
-                         `ai_text_provider` admin setting overrides it. OpenAI text needs
-                         this selection AND a resolved key; Anthropic activates on its key.
+  ACP_TEXT_PROVIDER    — deploy default cloud text provider; the `ai_text_provider` admin
+                         setting overrides it. providers.TEXT_PROVIDERS names the vendors and
+                         providers.active_text_provider says what each needs before it will
+                         serve a call — this module names none of them (rule 6, ADR 0019 §1),
+                         and learns a provider's name only from a result at runtime.
   CLAUDE_TEXT_MODEL    — default claude-haiku-4-5 (text: suggest / simplify)
-  OPENAI_TEXT_MODEL    — default gpt-4o-mini (text, when the OpenAI lane is selected)
   OLLAMA_BASE_URL      — default http://localhost:11434 (Ollama fallback)
   OLLAMA_MODEL         — default llama3.2 (text fallback)
   OLLAMA_VISION_MODEL  — default moondream (vision fallback)
   OLLAMA_VISION_TIMEOUT— default 120s (CPU vision inference is heavier than text)
 
-The cloud provider key rides only in the request's auth header (x-api-key for
-Anthropic, Authorization for OpenAI; both managed by providers.py, which resolves a secret
-REFERENCE and never a pasted value); it is never stored, logged, returned in a response, or
-written to any database row.
+The cloud provider key rides only in the request's auth header (managed by providers.py,
+which resolves a secret REFERENCE and never a pasted value); it is never stored, logged,
+returned in a response, or written to any database row.
 """
 from __future__ import annotations
 import os
@@ -1307,10 +1307,10 @@ def suggest_fix(rule_id: str, rule_name: str, level: str, filename: str,
             import core as _core
             import remediation_pilot as _pilot
             _pilot_model = _pilot.decision(_core.store, file_format, rule_id).get("model")
-            # The pilot's model id belongs to the pilot's vendor, so the call is PINNED to it.
-            # Without that pin a deployment whose default text provider is OpenAI would post a
-            # Claude model id to chat-completions — a call that fails, and whose ai_calls row
-            # would name a model that never ran.
+            # The pilot's model id belongs to the pilot's own provider, so the call is PINNED
+            # to it. Without that pin, a deployment whose default text provider is a different
+            # one would be sent a model id that provider does not serve — a call that fails,
+            # and whose ai_calls row would name a model that never ran.
             _pilot_provider = _pilot.PROVIDER if _pilot_model else None
         except Exception:
             _pilot_model = _pilot_provider = None
