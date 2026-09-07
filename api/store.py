@@ -12268,6 +12268,119 @@ class Store:
                 "ON CONFLICT(event_id) DO NOTHING",
                 (event_id, execution_id, work_item_id, payload_digest, payload, now, now))
         return self.get_stage_execution(execution_id) or {"execution_id": execution_id}
+
+    def ensure_synchronous_stage_execution(self, *, scan_id: str, stage: str,
+                                           input_ids: list[str], input_snapshot_id: str,
+                                           request_fingerprint: str,
+                                           input_manifest_id: str | None = None) -> dict:
+        """Create/reuse job-less canonical work for an immediate application stage.
+
+        Failed or process-interrupted items are returned to ``queued`` on an exact replay while
+        completed items remain immutable.  No queue or outbox rows are fabricated: the HTTP
+        caller owns execution, and its durable item identities are the same canonical rows a
+        worker uses.
+        """
+        workflow = self.workflow_for_scan(scan_id) or {}
+        workflow_id = workflow.get("id") or scan_id
+        workflow_revision = int(workflow.get("revision") or 1)
+        owner = workflow.get("owner_email") or self._stage_owner(scan_id)
+        self._validate_input_manifest(workflow_id, input_manifest_id, input_snapshot_id)
+        ordered_inputs = sorted({str(value) for value in input_ids if str(value)})
+        execution_id = self._stage_identity(
+            workflow_id, stage, input_snapshot_id, request_fingerprint)[:24]
+        now = self._now()
+        with self._db.cursor() as cur:
+            if self._db.supports_skip_locked:
+                self._db.execute(cur, "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                                 (f"stage:{scan_id}:{stage}",))
+            self._db.execute(cur, "SELECT * FROM stage_executions WHERE execution_id=%s",
+                             (execution_id,))
+            existing = self._db.fetchone(cur)
+            if existing:
+                self._db.execute(cur,
+                    "SELECT input_id,state FROM stage_work_items WHERE execution_id=%s ORDER BY input_id",
+                    (execution_id,))
+                items = self._db.fetchall(cur)
+                if [row["input_id"] for row in items] != ordered_inputs:
+                    raise ValueError("synchronous stage identity contains different work items")
+                if existing.get("state") != "succeeded":
+                    self._db.execute(cur,
+                        "UPDATE stage_work_items SET state='queued',revision=revision+1,"
+                        "result_digest=NULL,terminal_reason=NULL,updated_at=%s WHERE execution_id=%s "
+                        "AND state IN ('processing','failed','cancelled')",
+                        (now, execution_id))
+                    self._db.execute(cur,
+                        "SELECT COUNT(*) AS terminal FROM stage_work_items WHERE execution_id=%s "
+                        "AND state IN ('completed','skipped')", (execution_id,))
+                    terminal = int((self._db.fetchone(cur) or {}).get("terminal") or 0)
+                    self._db.execute(cur,
+                        "UPDATE stage_executions SET state=%s,terminal_items=%s,revision=revision+1,"
+                        "updated_at=%s WHERE execution_id=%s",
+                        ("processing_complete" if terminal == len(ordered_inputs) and terminal else
+                         "queued", terminal, now, execution_id))
+                return {"execution_id": execution_id, "reused": True,
+                        "items": {row["input_id"]: self._work_item_identity(
+                            execution_id, row["input_id"]) for row in items}}
+            self._db.execute(cur,
+                "SELECT execution_id FROM stage_executions WHERE workflow_id=%s AND stage=%s "
+                "AND is_current=1 AND state IN ('accepted','queued','processing','paused',"
+                "'processing_complete','reconciling') LIMIT 1", (workflow_id, stage))
+            active = self._db.fetchone(cur)
+            if active:
+                raise ActiveStageExecutionError(scan_id, stage, active["execution_id"])
+            self._db.execute(cur,
+                "UPDATE stage_executions SET is_current=0,revision=revision+1,updated_at=%s "
+                "WHERE workflow_id=%s AND stage=%s AND is_current=1",
+                (now, workflow_id, stage))
+            self._db.execute(cur,
+                "INSERT INTO stage_executions(execution_id,workflow_id,workflow_revision,scan_id,"
+                "owner_email,stage,input_snapshot_id,request_fingerprint,state,revision,is_current,"
+                "expected_items,terminal_items,input_manifest_id,created_at,updated_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,'queued',1,1,%s,0,%s,%s,%s)",
+                (execution_id, workflow_id, workflow_revision, scan_id, owner, stage,
+                 input_snapshot_id, request_fingerprint, len(ordered_inputs), input_manifest_id,
+                 now, now))
+            items = {}
+            for input_id in ordered_inputs:
+                work_item_id = self._work_item_identity(execution_id, input_id)
+                self._db.execute(cur,
+                    "INSERT INTO stage_work_items(work_item_id,execution_id,input_id,job_id,state,"
+                    "revision,attempt,created_at,updated_at) "
+                    "VALUES(%s,%s,%s,NULL,'queued',1,0,%s,%s)",
+                    (work_item_id, execution_id, input_id, now, now))
+                items[input_id] = work_item_id
+        self._record_stage_started(scan_id, stage, execution_id, "synchronous", len(ordered_inputs))
+        return {"execution_id": execution_id, "reused": False, "items": items}
+
+    def finish_synchronous_stage_item(self, execution_id: str, input_id: str, *,
+                                      outcome: str, result: dict) -> dict:
+        """Apply one retry-safe terminal result and seal the execution when fully successful."""
+        import hashlib as _hashlib
+        import json as _json
+        if outcome not in ("completed", "failed", "cancelled"):
+            raise ValueError("unsupported synchronous stage outcome")
+        work_item_id = self._work_item_identity(execution_id, str(input_id))
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT revision,state FROM stage_work_items WHERE execution_id=%s AND work_item_id=%s",
+                (execution_id, work_item_id))
+            item = self._db.fetchone(cur)
+        if not item:
+            raise KeyError(work_item_id)
+        if item.get("state") == "completed" and outcome == "completed":
+            self.seal_stage_if_ready(execution_id)
+            return {"duplicate": True, "work_item_id": work_item_id}
+        payload = dict(result)
+        payload["result_digest"] = _hashlib.sha256(_json.dumps(
+            result, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+        event_type = f"work_item.{outcome}"
+        event_id = _hashlib.sha256(
+            f"sync-stage\0{work_item_id}\0{int(item['revision'])}\0{event_type}".encode()).hexdigest()
+        applied = self.apply_stage_event(
+            event_id=event_id, execution_id=execution_id, work_item_id=work_item_id,
+            event_type=event_type, expected_revision=int(item["revision"]), payload=payload)
+        self.seal_stage_if_ready(execution_id)
+        return {**applied, "work_item_id": work_item_id}
     def canonical_stage_lineage(self, scan_id: str, *, owner: str | None = None) -> dict:
         """Return the current sealed execution chain and one reconciliation authority per stage."""
         workflow = self.workflow_for_scan(scan_id, owner=owner)
