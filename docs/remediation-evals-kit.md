@@ -150,6 +150,11 @@ Adding a provider is a subclass with one method (`HttpModelCandidate._request`).
   violations on all three, 20% of traffic routed to a paid model, and every one still failing
   on autonomous-action precision and on cost (178x over budget after routing).
 
+**See also:** [Adversarial review-loop evals](adversarial-claude-evals.md) — 32 cases across alt
+text, headings/labels, link purpose, document language and semantic structure, scored through the
+reviewer → apply → re-scan loop (accepted unchanged / after editing / rejected or refused / applied
+/ cleared / regressions / latency and cost). Reuses this kit's schema, candidates and price book.
+
 ## 5. First run — what it found
 
 Default run (100 cases, 3 repeats, stubs + rule code):

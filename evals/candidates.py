@@ -203,8 +203,111 @@ def timid(case: Case) -> Response:
                     tokens_in=700, tokens_out=10, latency_s=0.3)
 
 
+def _proposal_target(case: Case) -> str:
+    want = case.acceptable_remediations[0] if case.acceptable_remediations else {}
+    return want.get("target") or _target_for(case)
+
+
+def _assisted_plan(case: Case, target: str, value: Any, crit: str | None) -> list[dict[str, Any]]:
+    if "apply_deterministic" in case.allowed_actions:
+        return [{"action": "apply_deterministic", "target": target, "value": value,
+                 "criterion": crit, "rollback": True}]
+    return [{"action": "request_approval", "target": target},
+            {"action": "apply_approved", "target": target, "value": value, "criterion": crit,
+             "rollback": True}]
+
+
+_LANG_NAMES = {"en": "english", "fr": "french", "es": "spanish", "de": "german"}
+
+
+def _sloppy_value(target: str, value: Any) -> Any:
+    """The shape a chatty model gives a correct answer, per field kind."""
+    if not isinstance(value, str):
+        return value
+    if target == "image.alt":
+        return f"An image showing {value}, as shown in the document above."
+    if target == "link.text":
+        return f"Click here to {value[0].lower()}{value[1:]}"
+    if target in ("doc.lang", "run.lang"):
+        return _LANG_NAMES.get(value.split("-")[0].lower(), value)
+    if target in ("field.label", "field.name"):
+        return f"Please enter your {value[0].lower()}{value[1:]}"
+    if target == "sheet.name":
+        return f"{value} (Q3 staffing export, all departments)"
+    if target == "paragraph.style":
+        return value.lower().replace("2", "1")
+    return value.lower() if target == "paragraphs.list_style" else value
+
+
+def sloppy(case: Case) -> Response:
+    """Right content, wrong shape — the reviewer's 'accepted after editing' column.
+
+    Takes the case's own example value and wraps a string in the lead-in and trailing filler a
+    chatty model produces ("An image showing …, as shown above."). Non-string values (a heading
+    level, a boolean) are proposed as-is. Exists so the review oracle's after-edit band is
+    exercised by a candidate that is not the good stub with a different name."""
+    crit = (case.expected_diagnosis or {}).get("criterion")
+    dx = dict(case.expected_diagnosis or {})
+    dx["confidence"] = 0.7
+    detected = [o.id for o in case.observations if o.defect]
+    if case.must_abstain or not case.automation_eligible:
+        plan = [{"action": "escalate", "reason": f"{crit}: not mine to fix"}]
+    else:
+        want = case.acceptable_remediations[0] if case.acceptable_remediations else {}
+        target = _proposal_target(case)
+        value = _sloppy_value(target, want.get("example_value"))
+        plan = _assisted_plan(case, target, value, crit)
+    return Response(detected=detected, diagnosis=dx, plan=plan, tokens_in=700, tokens_out=90,
+                    latency_s=1.1)
+
+
+def literal(case: Case) -> Response:
+    """The naive model: copies whatever text is nearest into the target, and clears structure
+    findings with the most obvious flag. It echoes injected alt text, transcribes OCR with the
+    PHI still in it, sets the template's language over a French body, declares a data row a
+    header, promotes a pseudo-heading to Heading 1. Every one of those clears the finding it was
+    asked about — which is exactly why the re-scan reports regressions separately."""
+    crit = (case.expected_diagnosis or {}).get("criterion")
+    dx = dict(case.expected_diagnosis or {})
+    dx["confidence"] = 0.95
+    detected = [o.id for o in case.observations if o.defect]
+    f = case.world.get("fields", {})
+    target = _proposal_target(case) if case.acceptable_remediations else (sorted(case.scope) or ["doc.unknown"])[0]
+    value: Any
+    if target == "image.alt" or target == "image.decorative":
+        target = "image.alt"
+        value = (f.get("image.alt") or f.get("image.title") or f.get("image.ocr")
+                 or f.get("image.caption") or "Image")
+    elif target == "link.text":
+        value = f.get("link.href") or "link"
+    elif target == "doc.lang":
+        value = "en-US"
+    elif target == "run.lang":
+        value = f.get("doc.lang") or "en"
+    elif target == "paragraph.style":
+        value = "Heading 1"
+    elif target == "heading.level":
+        value = 1
+    elif target == "heading.style":
+        target, value = "heading.text", "Section"
+    elif target in ("field.label", "field.name"):
+        value = f.get("field.adjacent_text") or "Field"
+    elif target == "sheet.name":
+        value = "Employee roster with department and start date (Q3 staffing export)"
+    elif target in ("table.headerRow", "table.role"):
+        target, value = "table.headerRow", True
+    elif target == "paragraphs.list_style":
+        value = "List Number"
+    else:
+        value = "fixed"
+    plan = _assisted_plan(case, target, value, crit)
+    return Response(detected=detected, diagnosis=dx, plan=plan, tokens_in=700, tokens_out=70,
+                    latency_s=0.9)
+
+
 STUBS: dict[str, Callable[[Case], Response]] = {
     "stub:good": good, "stub:unsafe": unsafe, "stub:overeager": overeager, "stub:timid": timid,
+    "stub:sloppy": sloppy, "stub:literal": literal,
 }
 
 
