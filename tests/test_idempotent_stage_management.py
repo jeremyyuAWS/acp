@@ -321,21 +321,10 @@ def test_current_stage_output_manifest_exposes_only_successfully_sealed_output(i
 
 def test_sealed_manifest_is_required_and_carried_across_stage_handoff(isolated_store):
     sid = _scan(isolated_store)
-    upstream = _submit(isolated_store, sid)
-    with isolated_store._db.cursor() as cur:
-        isolated_store._db.execute(cur,
-            "SELECT work_item_id,revision FROM stage_work_items WHERE execution_id=%s ORDER BY input_id",
-            (upstream["batch_id"],))
-        items = isolated_store._db.fetchall(cur)
-    for index, item in enumerate(items):
-        isolated_store.apply_stage_event(
-            event_id=f"handoff-complete-{index}", execution_id=upstream["batch_id"],
-            work_item_id=item["work_item_id"], event_type="work_item.completed",
-            expected_revision=item["revision"], payload={"result_digest": f"result:{index}"})
-    current = isolated_store.get_stage_execution(upstream["batch_id"], owner=OWNER)
-    manifest = isolated_store.seal_stage_output_manifest(
-        upstream["batch_id"], [{"document": "a.docx"}, {"document": "b.docx"}],
-        expected_revision=current["revision"], owner=OWNER)
+    job = isolated_store.claim_job("discover-handoff", job_types=("scan_discover",))
+    assert isolated_store.complete_job(
+        job["id"], worker_id="discover-handoff", attempt=job["attempts"])
+    manifest = isolated_store.current_stage_output_manifest(sid, "discover")
 
     downstream = isolated_store.enqueue_stage_batch(
         sid, "assess", "scan_assess", [{"file": "a.docx"}, {"file": "b.docx"}],
@@ -363,9 +352,62 @@ def test_stage_snapshot_publishes_one_intuitive_reconciliation_equation(isolated
     }
     lineage = isolated_store.canonical_stage_lineage(sid, owner=OWNER)
     assert lineage["available"] is True
-    assert lineage["integrity"]["ok"] is True
+    assert lineage["integrity"]["ok"] is False
     assert [stage["stage"] for stage in lineage["stages"]] == ["discover", "remediate"]
     assert lineage["stages"][0]["reconciliation"]["exact"] is True
+    assert {stage["stage"]: stage["reconciliation_status"] for stage in lineage["stages"]} == {
+        "discover": "partial", "remediate": "unavailable"}
+    assert lineage["integrity"]["inconsistent_stages"] == []
+    assert lineage["integrity"]["partial_stages"] == ["discover"]
+    assert lineage["integrity"]["unavailable_stages"] == ["remediate"]
+
+
+def test_handoff_rejects_wrong_stage_and_stale_same_workflow_manifests(isolated_store):
+    sid = _scan(isolated_store, "strict-stage-links")
+    first_job = isolated_store.claim_job("discover-1", job_types=("scan_discover",))
+    assert isolated_store.complete_job(
+        first_job["id"], worker_id="discover-1", attempt=first_job["attempts"])
+    first_manifest = isolated_store.current_stage_output_manifest(sid, "discover")
+
+    with pytest.raises(ValueError, match="sealed remediate output"):
+        isolated_store.enqueue_stage_batch(
+            sid, "release", "publish_file", [{"file": "a.docx"}],
+            snapshot_id=first_manifest["manifest_id"],
+            input_manifest_id=first_manifest["manifest_id"],
+            request_fingerprint="wrong-stage")
+
+    second = isolated_store.enqueue_stage_batch(
+        sid, "discover", "scan_discover", [{"scan_id": sid}], snapshot_id="inventory-v2",
+        request_fingerprint="discover-v2")
+    second_job = isolated_store.claim_job("discover-2", job_types=("scan_discover",))
+    assert second_job["batch_id"] == second["batch_id"]
+    assert isolated_store.complete_job(
+        second_job["id"], worker_id="discover-2", attempt=second_job["attempts"])
+
+    with pytest.raises(ValueError, match="not the current sealed discover output"):
+        isolated_store.enqueue_stage_batch(
+            sid, "assess", "scan_assess", [{"file": "a.docx"}],
+            snapshot_id=first_manifest["manifest_id"],
+            input_manifest_id=first_manifest["manifest_id"],
+            request_fingerprint="stale-discover")
+
+
+def test_lineage_flags_legacy_missing_link_and_terminal_nonexact_reconciliation(isolated_store):
+    sid = _scan(isolated_store, "lineage-honesty")
+    execution = _submit(isolated_store, sid)
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "UPDATE stage_executions SET state='failed',expected_items=3,terminal_items=2 "
+            "WHERE execution_id=%s", (execution["batch_id"],))
+
+    lineage = isolated_store.canonical_stage_lineage(sid, owner=OWNER)
+    remediate = next(row for row in lineage["stages"] if row["stage"] == "remediate")
+    assert remediate["reconciliation_status"] == "inconsistent"
+    assert remediate["reconciliation_consistent"] is False
+    assert "terminal_reconciliation_not_exact" in remediate["integrity"]["affected"]
+    assert lineage["integrity"]["ok"] is False
+    assert {link["reason"] for link in lineage["integrity"]["broken_manifest_links"]} == {
+        "unavailable"}
 
 
 def test_historical_backfill_is_idempotent_and_never_invents_evidence(isolated_store):
@@ -394,6 +436,26 @@ def test_historical_backfill_is_idempotent_and_never_invents_evidence(isolated_s
     assert snapshot["counts"]["work_items"]["completed"] == 1
     assert snapshot["counts"]["work_items"]["failed"] == 1
     assert snapshot["attempts"]["total"] == 0
+
+
+def test_observed_legacy_downstream_stage_exposes_unavailable_lineage(isolated_store):
+    sid = _scan(isolated_store, "legacy-assess-lineage")
+    batch = "legacy-assess-batch"
+    job_id = isolated_store.enqueue_job(
+        "scan_assess", {"file": "legacy.docx"}, scan_id=sid, batch_id=batch)
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "UPDATE jobs SET status='done',attempts=1 WHERE id=%s", (job_id,))
+    isolated_store.backfill_stage_executions()
+
+    lineage = isolated_store.canonical_stage_lineage(sid, owner=OWNER)
+    assess = next(row for row in lineage["stages"] if row["stage"] == "assess")
+    assert assess["reconciliation"]["exact"] is True
+    assert assess["reconciliation_status"] == "unavailable"
+    assert assess["reconciliation_consistent"] is False
+    assert next(link for link in lineage["integrity"]["broken_manifest_links"]
+                if link["stage"] == "assess")["reason"] == "unavailable"
+    assert "assess" in lineage["integrity"]["unavailable_stages"]
 
 
 def test_stop_is_requested_then_acknowledged_not_instantly_claimed(isolated_store):

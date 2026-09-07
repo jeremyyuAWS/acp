@@ -12187,8 +12187,12 @@ class Store:
                 row["entries"] = None
         return row
 
-    def _validate_input_manifest(self, workflow_id: str, input_manifest_id: str | None,
-                                 snapshot_id: str) -> None:
+    _PIPELINE_PREDECESSOR = {
+        "assess": "discover", "remediate": "assess", "release": "remediate",
+    }
+
+    def _validate_input_manifest(self, workflow_id: str, stage: str,
+                                 input_manifest_id: str | None, snapshot_id: str) -> None:
         if not input_manifest_id:
             return
         manifest = self.get_stage_output_manifest(input_manifest_id)
@@ -12198,6 +12202,16 @@ class Store:
             raise ValueError("input manifest belongs to a different workflow")
         if snapshot_id != input_manifest_id:
             raise ValueError("input snapshot must identify the sealed upstream manifest")
+        expected_stage = self._PIPELINE_PREDECESSOR.get(stage)
+        if expected_stage and manifest.get("stage") != expected_stage:
+            raise ValueError(
+                f"{stage} input must be a sealed {expected_stage} output manifest")
+        if expected_stage:
+            current = self.current_stage_execution(workflow_id, expected_stage)
+            if not current or current.get("state") != "succeeded" or \
+                    current.get("output_manifest_id") != input_manifest_id:
+                raise ValueError(
+                    f"{stage} input manifest is not the current sealed {expected_stage} output")
 
     def current_stage_execution(self, workflow_id: str, stage: str, *,
                                 owner: str | None = None) -> dict | None:
@@ -12284,7 +12298,6 @@ class Store:
         workflow_id = workflow.get("id") or scan_id
         workflow_revision = int(workflow.get("revision") or 1)
         owner = workflow.get("owner_email") or self._stage_owner(scan_id)
-        self._validate_input_manifest(workflow_id, input_manifest_id, input_snapshot_id)
         ordered_inputs = sorted({str(value) for value in input_ids if str(value)})
         execution_id = self._stage_identity(
             workflow_id, stage, input_snapshot_id, request_fingerprint)[:24]
@@ -12293,6 +12306,8 @@ class Store:
             if self._db.supports_skip_locked:
                 self._db.execute(cur, "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
                                  (f"stage:{scan_id}:{stage}",))
+            self._validate_input_manifest(
+                workflow_id, stage, input_manifest_id, input_snapshot_id)
             self._db.execute(cur, "SELECT * FROM stage_executions WHERE execution_id=%s",
                              (execution_id,))
             existing = self._db.fetchone(cur)
@@ -12416,8 +12431,49 @@ class Store:
         for row in stages:
             upstream = row.get("input_manifest_id")
             source = self.get_stage_output_manifest(upstream, owner=owner) if upstream else None
-            if upstream and (not source or source.get("workflow_id") != workflow_id):
-                broken_links.append({"stage": row["stage"], "input_manifest_id": upstream})
+            expected_stage = self._PIPELINE_PREDECESSOR.get(row["stage"])
+            current_source = (self.current_stage_execution(workflow_id, expected_stage, owner=owner)
+                              if expected_stage else None)
+            link_problem = None
+            if expected_stage and not upstream:
+                link_problem = "unavailable"
+            elif upstream and (not source or source.get("workflow_id") != workflow_id):
+                link_problem = "missing_or_wrong_workflow"
+            elif expected_stage and source.get("stage") != expected_stage:
+                link_problem = "wrong_stage"
+            elif expected_stage and (not current_source or
+                    current_source.get("output_manifest_id") != upstream):
+                link_problem = "stale"
+            if link_problem:
+                broken_links.append({"stage": row["stage"], "input_manifest_id": upstream,
+                                     "expected_upstream_stage": expected_stage,
+                                     "reason": link_problem})
+
+            work_exact = row.get("reconciliation", {}).get("exact")
+            domain_exact = row.get("domain_reconciliation", {}).get("exact")
+            terminal_or_sealed = row.get("state") in {
+                "succeeded", "failed", "cancelled", "integrity_failed"
+            } or bool(row.get("sealed_output"))
+            if work_exact is False or domain_exact is False:
+                reconciliation_status = "inconsistent"
+            elif work_exact is None or domain_exact is None or link_problem == "unavailable":
+                reconciliation_status = "unavailable"
+            elif link_problem:
+                reconciliation_status = "inconsistent"
+            elif work_exact is not True or domain_exact is not True:
+                reconciliation_status = "unavailable" if (
+                    work_exact is None or domain_exact is None) else "inconsistent"
+            elif terminal_or_sealed:
+                reconciliation_status = "exact"
+            else:
+                reconciliation_status = "partial"
+            row["reconciliation_status"] = reconciliation_status
+            row["reconciliation_consistent"] = reconciliation_status == "exact"
+            if terminal_or_sealed and reconciliation_status != "exact":
+                row["integrity"]["ok"] = False
+                affected = set(row["integrity"].get("affected") or [])
+                affected.add("terminal_reconciliation_not_exact")
+                row["integrity"]["affected"] = sorted(affected)
         return {
             "schema_version": 1, "workflow_id": workflow_id,
             "workflow_revision": int((workflow or {}).get("revision") or 1),
@@ -12425,10 +12481,16 @@ class Store:
             "stages": stages,
             "integrity": {
                 "ok": bool(stages) and not broken_links and
-                      all(row["integrity"]["ok"] for row in stages),
+                      all(row["integrity"]["ok"] and row["reconciliation_consistent"]
+                          for row in stages),
                 "broken_manifest_links": broken_links,
                 "inconsistent_stages": [row["stage"] for row in stages
-                                        if not row["integrity"]["ok"]],
+                                        if not row["integrity"]["ok"] or
+                                        row["reconciliation_status"] == "inconsistent"],
+                "partial_stages": [row["stage"] for row in stages
+                                   if row["reconciliation_status"] == "partial"],
+                "unavailable_stages": [row["stage"] for row in stages
+                                       if row["reconciliation_status"] == "unavailable"],
             },
         }
 
@@ -13514,7 +13576,6 @@ class Store:
         workflow_id = workflow.get("id") or scan_id
         workflow_revision = int(workflow.get("revision") or 1)
         owner = workflow.get("owner_email") or self._stage_owner(scan_id)
-        self._validate_input_manifest(workflow_id, input_manifest_id, snapshot_id)
         execution_hash = self._stage_identity(
             workflow_id, stage, snapshot_id, request_fingerprint)
         # Keep the historical 24-character batch shape for existing queue consumers while the
@@ -13526,6 +13587,7 @@ class Store:
                 self._db.execute(cur,
                     "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
                     (f"stage:{scan_id}:{stage}",))
+            self._validate_input_manifest(workflow_id, stage, input_manifest_id, snapshot_id)
             self._db.execute(cur,
                 "SELECT id,status,payload FROM jobs WHERE scan_id=%s AND batch_id=%s "
                 "ORDER BY created_at,id", (scan_id, batch_id))
