@@ -4073,9 +4073,13 @@ def download_release_package(sid: str, request: Request, body: ReleasePackageReq
         if data is None:
             raise HTTPException(409, f"corrected copy is not available for download: {name}")
         safe_name = re.sub(r'[\r\n"]', "_", name.rsplit("/", 1)[-1])
+        ascii_name = re.sub(r"[^A-Za-z0-9._ -]", "_", safe_name)
+        disposition = f'attachment; filename="{ascii_name}"'
+        if ascii_name != safe_name:
+            disposition += f"; filename*=UTF-8''{quote(safe_name)}"
         return Response(
             data, media_type=mimetypes.guess_type(safe_name)[0] or "application/octet-stream",
-            headers={"Content-Disposition": f'attachment; filename="{safe_name}"',
+            headers={"Content-Disposition": disposition,
                      "Cache-Control": "private, no-store",
                      "Content-Length": str(len(data))})
     documents: list[dict] = []
