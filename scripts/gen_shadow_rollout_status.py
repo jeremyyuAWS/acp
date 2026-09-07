@@ -17,14 +17,15 @@ from evals.schema import load_cases  # noqa: E402
 from evals.shadow_lane import compare, load_report  # noqa: E402
 from remediation_capability import REMEDIATION  # noqa: E402
 
-# The 142-case corpus: every (format, criterion) has at least two cases, so no category is
-# withheld for under-sampling. This is ONE run, where the previous pair was two runs on the
-# 100-case corpus — coverage bought at the cost of replication, and `evidence` below says so.
-# The comparison refuses to pool reports from different corpora, so this is a switch, not an
-# addition; the two 100-case reports stay committed and are still read by
-# scripts/shadow_lane_comparison.py.
+# Both runs on the fully-sampled corpus: every (format, criterion) has at least two cases, and
+# every verdict below now has two independent runs behind it — except the two categories whose
+# case count moved between the runs, which `compare` judges on the run that matches the corpus
+# and flags in `runs_not_pooled`. The two 100-case reports stay committed and readable through
+# scripts/shadow_lane_comparison.py; they are a different corpus generation and are not pooled
+# here.
 REPORTS = [
     ROOT / "evals/reports/2026-09-07-hosted-ladder-142.json",
+    ROOT / "evals/reports/2026-09-07-hosted-ladder-143-run2.json",
 ]
 OUTPUT = ROOT / "config/shadow-model-rollout.json"
 
@@ -38,13 +39,17 @@ def candidate_safety(reports: list[dict]) -> list[dict]:
     critical violation on docx:1.1.1; both facts belong on the same screen.
     """
     out = []
-    for rep in reports:
+    for rep, path in zip(reports, REPORTS):
         for c in rep["candidates"]:
             if not c["candidate"].startswith("anthropic:"):
                 continue
             m = c["metrics"]
             out.append({
                 "candidate": c["candidate"],
+                # One row per candidate PER RUN, named — the whole point is that Sonnet
+                # recorded its violation in one run and not the other, and a single merged
+                # row would have to either hide that or average it away.
+                "source_report": path.name,
                 "critical_violations": m["critical_violations"],
                 "autonomous_precision": m["autonomous_precision"],
                 "abstention_correctness": m["abstention_correctness"],
