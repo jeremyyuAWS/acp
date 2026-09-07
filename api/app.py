@@ -368,6 +368,11 @@ def _start_job_workers():
         swallowed("app.startup: configuring Application Insights tracing failed")
     core.reload_scheduler()
     core.start_scheduler()
+    # Overrides are Azure policy changes, not merely labels in Settings. The reconciler is
+    # deliberately armed only with the same fail-closed gateway used by the admin apply route.
+    import capacity_reconcile as _capacity_reconcile
+    from routes import control as _capacity_control
+    _capacity_reconcile.start(core.store, _capacity_control._capacity_apply_gateway)
     n = core.start_workers()
     if n:
         global _embedded_worker_reporter
@@ -430,6 +435,8 @@ def _drain_job_workers():
     # uvicorn to be killed with it still running. Independent of the drain above: a failed
     # drain must not leave the scheduler thread alive.
     try:
+        import capacity_reconcile as _capacity_reconcile
+        _capacity_reconcile.stop()
         core.stop_scheduler()
     except Exception as e:
         print(f"[acp] scheduler shutdown error: {e}", flush=True)

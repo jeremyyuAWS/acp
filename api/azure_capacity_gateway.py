@@ -26,20 +26,20 @@ def _sdk_models():
 class AzureCapacityGateway:
     """Apply complete scale blocks through Azure's JSON Merge Patch operation."""
 
-    def __init__(self, client: Any, resource_group: str, *, allowed_apps: tuple[str, ...] = ()):
+    def __init__(self, client: Any, resource_group: str, *, allowed_apps: tuple[str, ...]):
         self._client = client
         self._resource_group = resource_group
         self._allowed_apps = frozenset(allowed_apps)
         self._snapshots: dict[str, _Snapshot] = {}
 
     def _resolve_app(self, app: str) -> str:
-        """Resolve one logical policy name without ever broadening the staging allowlist."""
-        if not self._allowed_apps or app in self._allowed_apps:
+        """Resolve one logical policy name without ever broadening the deployment allowlist."""
+        if app in self._allowed_apps:
             return app
         staging_name = f"{app}-staging"
         if staging_name in self._allowed_apps:
             return staging_name
-        raise RuntimeError("capacity app is outside the configured staging fleet")
+        raise RuntimeError("capacity app is outside the configured deployment fleet")
 
     def read_scale(self, app: str) -> dict | None:
         target_app = self._resolve_app(app)
@@ -110,7 +110,7 @@ class AzureCapacityGateway:
 
 def default_gateway(subscription_id: str, resource_group: str, *,
                     allowed_apps: tuple[str, ...]) -> AzureCapacityGateway:
-    """Construct the managed-identity client only after the staging gate has passed."""
+    """Construct the managed-identity client only after the environment gate has passed."""
     from azure.identity import DefaultAzureCredential
     from azure.mgmt.appcontainers import ContainerAppsAPIClient
     return AzureCapacityGateway(

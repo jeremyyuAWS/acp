@@ -189,6 +189,7 @@ export const SCAN_ENQUEUE_TIMEOUT_MS = 30000
 // A timeout is an UNKNOWN outcome: the server may have finished after the browser stopped waiting,
 // so callers must re-read the schedule instead of claiming that nothing changed or retrying blind.
 export const CAPACITY_APPLY_TIMEOUT_MS = 120000
+export const CAPACITY_MUTATION_TIMEOUT_MS = 30000
 const bootFetch = (url, init = {}) => fetch(url, { ...init, signal: AbortSignal.timeout(BOOT_TIMEOUT_MS) })
 
 // AI provenance (ADR 0019 Phase 0): the active model + local/cloud zone, cached from /config so
@@ -1685,6 +1686,7 @@ export const putCapacitySchedule = (body) => (SIM
       method: 'PUT',
       headers: { ...headers(), 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(CAPACITY_MUTATION_TIMEOUT_MS),
     }).then(j))
 // The dry run. Returns findings and the projected fleet cost; saves nothing, on any path.
 export const validateCapacitySchedule = (body) => (SIM
@@ -1693,6 +1695,7 @@ export const validateCapacitySchedule = (body) => (SIM
       method: 'POST',
       headers: { ...headers(), 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(CAPACITY_MUTATION_TIMEOUT_MS),
     }).then(j))
 // Publish one already-saved version to Azure. The version is part of the body so the server can
 // reject a stale Review screen rather than applying a newer schedule the administrator did not
@@ -1712,11 +1715,13 @@ export const createCapacityOverride = (body) => (SIM
       method: 'POST',
       headers: { ...headers(), 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(CAPACITY_MUTATION_TIMEOUT_MS),
     }).then(j))
 export const deleteCapacityOverride = () => (SIM
   ? sim({ cleared: false })
   : fetch(`${BASE}/control/capacity-schedule/override`, {
       method: 'DELETE', headers: headers(),
+      signal: AbortSignal.timeout(CAPACITY_MUTATION_TIMEOUT_MS),
     }).then(j))
 // What ACP would apply to Azure under the current schedule — rendered, never applied. Read-only,
 // same grant as the schedule it derives from.
