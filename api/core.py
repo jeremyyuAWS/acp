@@ -2325,6 +2325,7 @@ def start_workers() -> int:
         import time as _t
         import sweeper as _sweeper
         import content_workspace_retention as _retention
+        import stage_outbox as _stage_outbox
         ticks = 0
         while True:
             try:
@@ -2339,6 +2340,11 @@ def start_workers() -> int:
                 # above this function) — a separate, untested-in-production thread is exactly
                 # how a capability sits fully built and never actually fires.
                 _retention.run_content_workspace_retention_sweep(get_store())
+                # The shared jobs table is ACP's production transport. Acknowledge canonical
+                # outbox messages only after their job/work-item identity is verified there;
+                # failures remain retryable and visible in Live Operations.
+                _stage_outbox.dispatch_database_jobs_once(
+                    get_store(), dispatcher_id=worker_process_instance_id("outbox"), limit=200)
                 ticks += 1
                 if ticks % 60 == 0:      # ~hourly: trim old completed jobs so the jobs
                     d = get_store().purge_done_jobs(older_than_hours=24)   # table + claim index don't bloat (audit P2)
