@@ -190,6 +190,8 @@ def ai_suggest(request: Request, scan_id: str = Query(...), file: str = Query(..
         image_bytes=img,
         style="" if safe_style == "regenerate" else safe_style,
         guidance=guidance,
+        scan_id=scan_id,
+        file=file,
     )
     if result is not None and guidance:
         # ADR 0021 §E — the memory that shaped this draft is visible on the card, "expandable to

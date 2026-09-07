@@ -683,6 +683,11 @@ thing the PRD does not mention.
   validation from transport success. Remaining: link model-call IDs to those reviewer and
   validation outcomes, then add criterion-level comparison and rollout gates.
 
+  **Reviewer-outcome linkage started:** on-demand text remediation drafts now retain the exact
+  `ai_calls.id` through the review card and persist it on the immutable HITL event. The API rejects
+  an identifier from another scan or file rather than guessing attribution. Remaining linkage:
+  vision and server-precomputed proposal batches, plus the post-write validation event.
+
   **Conformance and Release provenance slices implemented:** the immutable certification PDF now carries the
   same exact provider/model/zone rows with measured success/failure and latency, and states that
   call completion is not evidence of reviewer acceptance or post-write validation. Release's
