@@ -32,6 +32,7 @@ APP="${ACP_APP:-acp-app}"
 DISCOVERY_WORKER="${ACP_DISCOVERY_WORKER:-acp-discovery}"
 ASSESS_WORKER="${ACP_ASSESS_WORKER:-acp-assess}"
 REMEDIATE_WORKER="${ACP_REMEDIATE_WORKER:-acp-remediate}"
+GPU_APP="${ACP_GPU_APP:-acp-ollama}"
 LANE_WORKERS=("$DISCOVERY_WORKER" "$ASSESS_WORKER" "$REMEDIATE_WORKER")
 DEPLOY_TARGET_ENV="${ACP_DEPLOY_TARGET_ENV:-production}"
 # The ACP_WORKER_ROLE each lane worker runs as, POSITIONALLY paired with LANE_WORKERS above —
@@ -85,22 +86,25 @@ esac
   || die "app and discovery/assess/remediate worker targets must be four distinct names"
 
 # Capacity application is an API control-plane capability, so these settings are stamped only
-# onto the API revision. Production is fail-closed regardless of a caller's environment. Staging
-# may opt in, but only with the exact role-worker names and measured resource ceilings the route
-# uses for its preflight arithmetic.
+# onto the API revision. Either environment may opt in, but only with its exact role-worker names
+# and measured resource ceilings. The API independently rechecks its runtime environment and a
+# hard production allowlist before constructing an Azure writer.
 CAPACITY_APPLY_ENABLED=0
-if [ "$DEPLOY_TARGET_ENV" = staging ]; then
-  case "$CAPACITY_APPLY_REQUESTED" in 0|1) ;; *) die "ACP_CAPACITY_APPLY_ENABLED must be 0 or 1" ;; esac
-fi
-if [ "$DEPLOY_TARGET_ENV" = staging ] && [ "$CAPACITY_APPLY_REQUESTED" = 1 ]; then
-  [[ "$ACA_VCPU_QUOTA" =~ ^[0-9]+([.][0-9]+)?$ ]] \
-    || die "ACP_ACA_VCPU_QUOTA must be a positive number when staging capacity apply is enabled"
+case "$CAPACITY_APPLY_REQUESTED" in 0|1) ;; *) die "ACP_CAPACITY_APPLY_ENABLED must be 0 or 1" ;; esac
+if [ "$CAPACITY_APPLY_REQUESTED" = 1 ]; then
+  # Consumption-environment core quota is not exposed for every subscription. Preserve the
+  # API's explicit "not checked" warning when Azure returns no applicable quota; never invent
+  # a ceiling merely to enable the control.
+  if [ -n "$ACA_VCPU_QUOTA" ]; then
+    [[ "$ACA_VCPU_QUOTA" =~ ^[0-9]+([.][0-9]+)?$ ]] \
+      || die "ACP_ACA_VCPU_QUOTA must be a positive number when supplied"
+    awk -v n="$ACA_VCPU_QUOTA" 'BEGIN { exit !(n > 0) }' \
+      || die "ACP_ACA_VCPU_QUOTA must be greater than zero when supplied"
+  fi
   [[ "$PG_MAX_CONNECTIONS" =~ ^[0-9]+$ ]] \
-    || die "ACP_PG_MAX_CONNECTIONS must be a positive integer when staging capacity apply is enabled"
+    || die "ACP_PG_MAX_CONNECTIONS must be a positive integer when capacity apply is enabled"
   [[ "$PG_RESERVED_CONNECTIONS" =~ ^[0-9]+$ ]] \
-    || die "ACP_PG_RESERVED_CONNECTIONS must be a non-negative integer when staging capacity apply is enabled"
-  awk -v n="$ACA_VCPU_QUOTA" 'BEGIN { exit !(n > 0) }' \
-    || die "ACP_ACA_VCPU_QUOTA must be greater than zero when staging capacity apply is enabled"
+    || die "ACP_PG_RESERVED_CONNECTIONS must be a non-negative integer when capacity apply is enabled"
   [ "$PG_MAX_CONNECTIONS" -gt 0 ] \
     || die "ACP_PG_MAX_CONNECTIONS must be greater than zero when staging capacity apply is enabled"
   [ "$PG_RESERVED_CONNECTIONS" -lt "$PG_MAX_CONNECTIONS" ] \
@@ -111,13 +115,14 @@ API_ENV_VARS=(
   "ACP_DEPLOY_ENV=$DEPLOY_TARGET_ENV"
   "ACP_CAPACITY_APPLY_ENABLED=$CAPACITY_APPLY_ENABLED"
   "WORKER_APP_NAMES=$DISCOVERY_WORKER,$ASSESS_WORKER,$REMEDIATE_WORKER"
+  "CAPACITY_APPLY_APP_NAMES=$APP,$DISCOVERY_WORKER,$ASSESS_WORKER,$REMEDIATE_WORKER,$GPU_APP"
 )
-if [ "$DEPLOY_TARGET_ENV" = staging ]; then
+if [ "$CAPACITY_APPLY_ENABLED" = 1 ]; then
   API_ENV_VARS+=(
-    "ACP_ACA_VCPU_QUOTA=$ACA_VCPU_QUOTA"
     "ACP_PG_MAX_CONNECTIONS=$PG_MAX_CONNECTIONS"
     "ACP_PG_RESERVED_CONNECTIONS=$PG_RESERVED_CONNECTIONS"
   )
+  [ -z "$ACA_VCPU_QUOTA" ] || API_ENV_VARS+=("ACP_ACA_VCPU_QUOTA=$ACA_VCPU_QUOTA")
 fi
 
 # ── subscription: resolved per-call, never via `az account set` ────────────────────────────

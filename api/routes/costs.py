@@ -12,7 +12,7 @@ import os
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter
 
@@ -237,8 +237,12 @@ def billing_block(*, now=None) -> dict:
     # answer — it carries its own updated_at, so the panel says how old the figure is rather than
     # replacing a real measurement with an error.
     if clock < _billing_cache.get("blocked_until", 0.0):
-        return held if held is not None else _billing_unavailable(
+        if held is not None:
+            return held
+        block = _billing_unavailable(
             "throttled", "Azure billing actuals unavailable: Cost Management is throttling")
+        block["retry_in_s"] = max(0, round(_billing_cache["blocked_until"] - clock))
+        return block
 
     block = _query_billing()
     if block.get("unavailable_reason") == "throttled":
@@ -246,6 +250,9 @@ def billing_block(*, now=None) -> dict:
         _billing_cache["blocked_until"] = clock + (wait if wait else _BILLING_TTL_S)
         if held is not None:
             return held
+        # How long the hold has left, so the panel can name the retry time. Seconds from now, not
+        # a timestamp: this clock is monotonic and means nothing to a browser.
+        block["retry_in_s"] = max(0, round(_billing_cache["blocked_until"] - clock))
         return block
     _billing_cache["at"] = clock
     _billing_cache["value"] = block
@@ -324,6 +331,45 @@ def _memory_gib(value):
         return None
 
 
+def _billing_setup_row(billing: dict) -> dict:
+    """The setup row's account of the billing feed: FOUR states, where one boolean used to do.
+
+    On 2026-09-07 the panel read "Billing actuals — Not configured" while the tile beside it said
+    "Cost Management is throttling". Both came from `configured: False`, which is what every
+    failure shape sets — so a role that had just been granted and was working looked identical to
+    a role that was missing. An operator reading "Not configured" goes to fix configuration; the
+    only correct action for a throttle is to wait, and the row now says until when.
+
+      connected       a figure came back; `configured` stays True for every existing reader
+      throttled       Azure said back off — temporary, with `retry_at` when the hold lifts
+      not_configured  no subscription on the API service; nothing was asked
+      unavailable     asked and refused (a missing role, a bad token) — an operator's problem
+
+    `configured` is kept as exactly `state == "connected"`, so nothing that reads the old
+    boolean changes meaning. `reason` is the tile's own label, as before, so the two cannot
+    disagree about why.
+    """
+    reason = billing.get("unavailable_reason")
+    if billing.get("configured"):
+        state = "connected"
+    elif reason == "throttled":
+        state = "throttled"
+    elif reason == "not_configured":
+        state = "not_configured"
+    else:
+        state = "unavailable"
+    retry_at = None
+    retry_in = billing.get("retry_in_s")
+    if state == "throttled" and retry_in is not None:
+        retry_at = (datetime.now(timezone.utc) + timedelta(seconds=int(retry_in))).isoformat()
+    return {
+        "configured": state == "connected",
+        "state": state,
+        "reason": None if state == "connected" else billing.get("freshness_label"),
+        "retry_at": retry_at,
+    }
+
+
 @router.get("/control/costs")
 def get_costs():
     """Configured-capacity estimate plus an explicit placeholder for delayed billing actuals."""
@@ -368,10 +414,7 @@ def get_costs():
             # not connected" unconditionally, which is now a claim the code can actually check.
             # When it is NOT connected the reason is the billing block's own label, so the
             # setup row and the tile above it cannot disagree about why.
-            "billing_actuals": {
-                "configured": bool(billing.get("configured")),
-                "reason": None if billing.get("configured") else billing.get("freshness_label"),
-            },
+            "billing_actuals": _billing_setup_row(billing),
         },
     }
     if not response["configured"]:

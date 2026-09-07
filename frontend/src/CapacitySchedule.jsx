@@ -56,6 +56,18 @@ const SCALER = {
   not_configured: { label: 'Azure not configured', tone: 'var(--muted)' },
 }
 
+const RECONCILIATION = {
+  applying: { label: 'Updating Azure capacity…', pending: true },
+  leader_busy: { label: 'Another app instance is completing this update…', pending: true },
+  backoff: { label: 'The last update failed; an automatic retry is scheduled.', problem: true },
+  partial: { label: 'Some services did not update. ACP will retry automatically.', problem: true },
+  failed: { label: 'Azure did not confirm the capacity update. ACP will retry automatically.', problem: true },
+  stale: { label: 'The schedule changed during the update. ACP is reconciling the latest version.', problem: true },
+  applied: { label: 'Azure capacity matches the active scheduling policy.' },
+  ineligible: { label: 'Save and apply the current schedule before reconciling capacity.', problem: true },
+  disabled: { label: 'Azure capacity application is unavailable.', problem: true },
+}
+
 function Findings({ findings }) {
   if (!findings?.length) return null
   return (
@@ -75,6 +87,9 @@ export default function CapacitySchedule({ me = null } = {}) {
   const [snap, setSnap] = useState(null)
   const [failed, setFailed] = useState(false)
   const [reloads, setReloads] = useState(0)
+  const [fastRefreshUntil, setFastRefreshUntil] = useState(0)
+  const [workspace, setWorkspace] = useState(null)
+  const [confirmation, setConfirmation] = useState(null)
   // `me?.is_admin` is the exact value the backend's _require_admin checks, so the SPA and the API
   // cannot disagree about who sees the editor. It is not the gate — every write endpoint runs
   // that check itself — but a view-only user seeing controls that 403 is its own kind of wrong
@@ -90,6 +105,15 @@ export default function CapacitySchedule({ me = null } = {}) {
       .catch(() => { if (on) setFailed(true) })
     return () => { on = false }
   }, [reloads])
+
+  // Keep status fresh while Settings is open. After a mutation, briefly follow the reconciler at
+  // its own cadence so the administrator sees confirmation without closing and reopening.
+  useEffect(() => {
+    const fast = Date.now() < fastRefreshUntil
+    const delay = fast ? 2000 : 30000
+    const timer = window.setTimeout(() => setReloads((n) => n + 1), delay)
+    return () => window.clearTimeout(timer)
+  }, [reloads, fastRefreshUntil])
 
   if (failed) {
     return <div className="panel" style={{ padding: 12, fontSize: 13 }}>
@@ -110,25 +134,109 @@ export default function CapacitySchedule({ me = null } = {}) {
   const validation = snap.validation
   const blocked = !!validation?.blocked
   const capacity = validation?.capacity
+  const hasDrift = !!snap.drift_evaluated && !!snap.drift?.length
+  const overrideAvailable = !!snap.applied && !!snap.application_configured
+  const reconciliation = snap.reconciliation || {}
+  const reconciliationView = RECONCILIATION[reconciliation.state]
+  const applicationState = hasDrift
+    ? 'Drift detected'
+    : snap.applied ? 'Applied' : 'Saved changes not applied'
+  const dayNames = (snap.days || []).map((day) => ({
+    mon: 'Monday', tue: 'Tuesday', wed: 'Wednesday', thu: 'Thursday',
+    fri: 'Friday', sat: 'Saturday', sun: 'Sunday',
+  })[day] || day)
+  const weekdaySummary = dayNames.length === 5 && (snap.days || []).join(',') === 'mon,tue,wed,thu,fri'
+    ? 'Monday–Friday' : dayNames.join(', ')
+  const formatTime = (value) => {
+    const [hour, minute] = String(value || '').split(':').map(Number)
+    if (!Number.isFinite(hour)) return value
+    return new Date(2000, 0, 1, hour, minute || 0).toLocaleTimeString([], {
+      hour: 'numeric', minute: '2-digit',
+    })
+  }
+  const localTime = (() => {
+    try {
+      return new Intl.DateTimeFormat([], { timeZone: snap.timezone, hour: 'numeric', minute: '2-digit' }).format(new Date())
+    } catch { return null }
+  })()
+  const viewerTimezone = (() => {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' } catch { return 'UTC' }
+  })()
+  const viewerTimestamp = (value) => value
+    ? `${new Date(value).toLocaleString()} (${viewerTimezone})`
+    : null
+  const appliedPolicyMatches = reconciliation.desired_key
+    && reconciliation.applied_key === reconciliation.desired_key
+  const desiredAuthority = reconciliation.authority === 'manual_override' || snap.override
+    ? 'Temporary override' : reconciliation.authority === 'holiday_exception'
+    ? 'Holiday exception' : 'Saved weekly schedule'
 
   return (
     <div style={{ display: 'grid', gap: 12 }}>
       {/* §5.1's status summary. The first line says which schedule this IS, because every other
           number on the page is meaningless if it is read as the live one. */}
-      <div className="panel" style={{ padding: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-          <b style={{ fontSize: 14 }}>
-            {snap.applied ? MODE_LABEL[snap.effective_mode] || snap.effective_mode
-              : 'Proposed schedule — not in force'}
-          </b>
-          <span className="chip" style={{ fontSize: 11 }}>{snap.timezone}</span>
-          {!snap.enabled && <span className="chip" style={{ fontSize: 11 }}>Disabled</span>}
+      <section className="panel" style={{ padding: 16 }} aria-labelledby="capacity-schedule-status">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
+          <div>
+            <div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>ACTIVE NOW</div>
+            <h2 id="capacity-schedule-status" style={{ fontSize: 18, margin: 0 }}>
+              {snap.override ? 'Temporary override' : !snap.enabled ? 'Scheduling disabled'
+                : MODE_LABEL[snap.effective_mode] || snap.effective_mode}
+            </h2>
+            {!snap.applied && <div style={{ fontSize: 12, marginTop: 3 }}>Proposed schedule — not in force</div>}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 7 }}>
+              <span className="chip" style={{ fontSize: 11 }}>{applicationState}</span>
+              <span className="chip" style={{ fontSize: 11 }}>{snap.timezone}</span>
+              {localTime && <span className="muted" style={{ fontSize: 12 }}>{localTime} local time</span>}
+              {!isAdmin && <span className="chip" style={{ fontSize: 11 }}>View only</span>}
+            </div>
+          </div>
+          {isAdmin && (
+            <div aria-label="Schedule actions" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button type="button" onClick={() => setWorkspace('schedule')}>Edit schedule</button>
+              <button type="button" className="secondary" disabled={!overrideAvailable}
+                title={!overrideAvailable ? 'Apply the schedule and enable Azure capacity application first' : undefined}
+                onClick={() => setWorkspace('override')}>
+                Temporary override
+              </button>
+            </div>
+          )}
         </div>
+        {isAdmin && !overrideAvailable && (
+          <div role="note" className="muted" style={{ fontSize: 12, marginTop: 5 }}>
+            Temporary overrides are unavailable until this schedule is applied and Azure capacity application is enabled.
+          </div>
+        )}
+        {reconciliationView && (
+          <div role="status" aria-live="polite" style={{ fontSize: 12, marginTop: 5 }}>
+            <b>{reconciliationView.label}</b>
+            {reconciliation.completed_at ? <> Last checked {viewerTimestamp(reconciliation.completed_at)}.</> : null}
+            {reconciliation.failures ? <> {reconciliation.failures} failed attempt{reconciliation.failures === 1 ? '' : 's'}.</> : null}
+            {(reconciliationView.problem || reconciliationView.pending) && (
+              <button type="button" className="linklike" onClick={() => setReloads((n) => n + 1)}>
+                Refresh status
+              </button>
+            )}
+          </div>
+        )}
+        {confirmation && (
+          <div role="status" aria-live="polite" data-testid="schedule-confirmation"
+            style={{ marginTop: 8, padding: 9, borderLeft: '4px solid var(--success-fg)', fontSize: 12 }}>
+            <b>{confirmation}</b> This confirmation remains here while Scheduling is open.
+            <button type="button" className="linklike" onClick={() => setConfirmation(null)}>Dismiss</button>
+          </div>
+        )}
         <div className="muted" style={{ fontSize: 12, marginTop: 5 }}>
-          {snap.applied
+          {!isAdmin ? 'You can review this policy. A platform administrator must make changes. '
+            : null}
+          {snap.override
+            ? <>Set by <b>{snap.override.actor}</b> for “{snap.override.reason}”; expires{' '}
+                <b>{viewerTimestamp(snap.override.expires_at)}</b>, then schedule version{' '}
+                {snap.override.resumes_schedule_version} resumes.</>
+            : snap.applied
             ? <>Next transition {snap.next_transition_at
                 ? <>to {MODE_LABEL[snap.next_transition_to] || snap.next_transition_to} at{' '}
-                    <b>{new Date(snap.next_transition_at).toLocaleString()}</b></>
+                    <b>{viewerTimestamp(snap.next_transition_at)}</b></>
                 : 'not scheduled'}.</>
             : <>Nothing has applied this schedule. Warm capacity is whatever
                 Settings → Worker Configuration and the queue scalers are currently set to; this
@@ -140,7 +248,34 @@ export default function CapacitySchedule({ me = null } = {}) {
             {snap.timezone} and follow daylight saving without being rewritten.
           </div>
         )}
-      </div>
+      </section>
+
+      {!snap.enabled ? (
+        <div className="panel" style={{ padding: 12, fontSize: 12 }}>
+          <b>No weekly transitions are scheduled.</b>{' '}Worker Configuration and queue demand
+          currently determine warm capacity.
+        </div>
+      ) : (
+        <div className="panel" style={{ padding: 12, fontSize: 13 }}>
+          <b>{weekdaySummary}, {formatTime(snap.start)}–{formatTime(snap.end)} ({snap.timezone}).</b>{' '}
+          <span className="muted">Off-hours capacity applies at all other times.</span>
+        </div>
+      )}
+
+      {snap.override && (
+        <section className="panel" aria-labelledby="temporary-floor-heading"
+          style={{ padding: 12, borderLeft: '4px solid var(--warn-fg, #8a5a00)' }}>
+          <div id="temporary-floor-heading" className="muted" style={{ fontSize: 11 }}>TEMPORARY OVERRIDE FLOORS · ACTIVE</div>
+          <p style={{ margin: '5px 0 9px', fontSize: 12 }}>
+            These floors temporarily replace the weekly schedule below; they do not edit its draft values.
+          </p>
+          <dl style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(130px,1fr))', gap: 8, margin: 0 }}>
+            {SERVICES.filter(([key]) => snap.effective_floors?.[key] !== undefined).map(([key, label]) => (
+              <div key={key}><dt className="muted" style={{ fontSize: 11 }}>{label}</dt><dd style={{ margin: 0, fontWeight: 600 }}>{snap.effective_floors[key]} warm</dd></div>
+            ))}
+          </dl>
+        </section>
+      )}
 
       {/* Validation, second and prominent: this is the answer the phase exists to produce. */}
       {validation && (
@@ -169,53 +304,83 @@ export default function CapacitySchedule({ me = null } = {}) {
       {/* The editor, for administrators only. It re-reads through `onSaved` rather than patching
           state locally: warm capacity is real money and a real restart, and an optimistic floor
           that silently reverts is indistinguishable from one that saved. */}
-      {isAdmin && <CapacityScheduleEditor snap={snap} onSaved={() => setReloads((n) => n + 1)} />}
+      {isAdmin && workspace && (
+        <CapacityScheduleEditor snap={snap} initialView={workspace}
+          onClose={() => setWorkspace(null)}
+          onSaved={(message = 'Scheduling change saved.') => { setConfirmation(message); setWorkspace(null); setFastRefreshUntil(Date.now() + 60000); setReloads((n) => n + 1) }} />
+      )}
 
       {/* §5.3's table, with the observed column beside it so the two are read together. */}
-      <div className="panel" style={{ padding: 0, overflow: 'hidden' }}>
-        <div className="muted" style={{ fontSize: 11, padding: '9px 12px 5px' }}>SERVICE CAPACITY</div>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-          <thead>
-            <tr style={{ textAlign: 'left', borderTop: '1px solid var(--line)' }}>
-              <th style={{ padding: '6px 12px', fontWeight: 600 }}>Service</th>
-              <th style={{ padding: '6px 12px', fontWeight: 600, textAlign: 'right' }}>Business hours</th>
-              <th style={{ padding: '6px 12px', fontWeight: 600, textAlign: 'right' }}>Off hours</th>
-              <th style={{ padding: '6px 12px', fontWeight: 600, textAlign: 'right' }}>Maximum</th>
-              <th style={{ padding: '6px 12px', fontWeight: 600, textAlign: 'right' }}>Azure runs now</th>
-            </tr>
-          </thead>
-          <tbody>
-            {SERVICES.filter(([key]) => snap.maximums?.[key] !== undefined).map(([key, label]) => {
+      <section aria-labelledby="service-capacity-heading">
+        <div id="service-capacity-heading" className="muted" style={{ fontSize: 11, margin: '0 0 6px 2px' }}>
+          SERVICE CAPACITY
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 210px), 1fr))', gap: 8 }}>
+          {SERVICES.filter(([key]) => snap.maximums?.[key] !== undefined).map(([key, label]) => {
               const app = { web: 'acp-app', discovery: 'acp-discovery', assess: 'acp-assess',
                             remediate: 'acp-remediate', gpu: 'acp-ollama' }[key]
               const seen = snap.observed?.[app]
               return (
-                <tr key={key} style={{ borderTop: '1px solid var(--line)' }}>
-                  <td style={{ padding: '6px 12px' }}>{label}</td>
-                  <td style={{ padding: '6px 12px', textAlign: 'right' }}>{snap.business_hours[key]}</td>
-                  <td style={{ padding: '6px 12px', textAlign: 'right' }}>{snap.off_hours[key]}</td>
-                  <td style={{ padding: '6px 12px', textAlign: 'right' }}>{snap.maximums[key]}</td>
-                  {/* A reading Azure did not return stays a dash. Never a fabricated 0 — the
-                      difference between "no replicas" and "we could not ask" is the whole
-                      point of the column. */}
-                  <td style={{ padding: '6px 12px', textAlign: 'right' }} className="muted">
-                    {seen && seen.min_replicas != null
-                      ? `${seen.min_replicas}–${seen.max_replicas}`
-                      : '—'}
-                  </td>
-                </tr>
+                <article className="panel" key={key} data-service={key} style={{ padding: 12 }}>
+                  <b style={{ fontSize: 13 }}>{label}</b>
+                  <dl style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '5px 10px', margin: '9px 0 0', fontSize: 12 }}>
+                    <dt className="muted">Warm · business hours</dt><dd style={{ margin: 0 }}>{snap.business_hours[key]}</dd>
+                    <dt className="muted">Warm · off hours</dt><dd style={{ margin: 0 }}>{snap.off_hours[key]}</dd>
+                    <dt className="muted">Maximum when busy</dt><dd style={{ margin: 0 }}>{snap.maximums[key]}</dd>
+                    <dt className="muted">Azure configured range</dt>
+                    <dd style={{ margin: 0 }}>{seen && seen.min_replicas != null ? `${seen.min_replicas}–${seen.max_replicas}` : '—'}</dd>
+                  </dl>
+                  {snap.off_hours[key] === 0 && <div className="muted" style={{ fontSize: 11, marginTop: 8 }}>
+                    Scales to zero off hours; the first job may wait for startup.
+                  </div>}
+                </article>
               )
             })}
-          </tbody>
-        </table>
-      </div>
+        </div>
+      </section>
+
+      <section className="panel" aria-labelledby="capacity-verification-heading" style={{ padding: 12 }}>
+        <div id="capacity-verification-heading" className="muted" style={{ fontSize: 11 }}>POLICY VERIFICATION · READ ONLY</div>
+        <p className="muted" style={{ fontSize: 12, margin: '5px 0 10px' }}>
+          Desired is ACP’s current authority. Applied is the last policy certified by the reconciler. Azure is the range read from each app.
+        </p>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <caption className="sr-only">Desired, applied, and Azure capacity verification</caption>
+            <thead><tr><th scope="col" style={{ textAlign: 'left' }}>Service</th><th scope="col">Desired floor</th><th scope="col">Applied floor</th><th scope="col">Azure range</th></tr></thead>
+            <tbody>{SERVICES.filter(([key]) => snap.effective_floors?.[key] !== undefined).map(([key, label]) => {
+              const app = { web: 'acp-app', discovery: 'acp-discovery', assess: 'acp-assess', remediate: 'acp-remediate', gpu: 'acp-ollama' }[key]
+              const seen = snap.observed?.[app]
+              return <tr key={key} data-verification-service={key}>
+                <th scope="row" style={{ textAlign: 'left' }}>{label}</th>
+                <td style={{ textAlign: 'center' }}>{snap.effective_floors[key]}</td>
+                <td style={{ textAlign: 'center' }}>{appliedPolicyMatches ? snap.effective_floors[key] : 'Not verified'}</td>
+                <td style={{ textAlign: 'center' }}>{seen?.min_replicas != null && seen?.max_replicas != null ? `${seen.min_replicas}–${seen.max_replicas}` : 'Not reported'}</td>
+              </tr>
+            })}</tbody>
+          </table>
+        </div>
+        <div role="status" style={{ fontSize: 12, marginTop: 9 }}>
+          <b>Desired:</b> {desiredAuthority}. <b>Applied:</b>{' '}
+          {appliedPolicyMatches ? 'Matches desired policy.' : reconciliation.applied_key ? 'Does not yet match desired policy.' : 'Not yet verified.'}
+          {reconciliation.attempted_at ? <> Last attempt {viewerTimestamp(reconciliation.attempted_at)}.</> : null}
+        </div>
+      </section>
+
+      <details className="panel" style={{ padding: 12 }}>
+        <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 13 }}>
+          Diagnostics
+        </summary>
+        <div className="muted" style={{ fontSize: 11, marginTop: 4, marginBottom: 10 }}>
+          Azure attribution, queue scaler health, and configuration drift.
+        </div>
 
       {/* AC 14: whether capacity is where it is because of the schedule, the queue, an override
           or a deployment. `below_floor` is deliberately its own word — a tier running short of
           its floor looks identical to one sitting exactly on it in a bare replica count, and
           only one of them is a problem. */}
       {!!Object.keys(snap.attribution || {}).length && (
-        <div className="panel" style={{ padding: 12 }}>
+        <div style={{ padding: '8px 0' }}>
           <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>WHY CAPACITY IS WHERE IT IS</div>
           <div style={{ display: 'grid', gap: 5 }}>
             {Object.entries(snap.attribution).map(([service, why]) => (
@@ -244,7 +409,7 @@ export default function CapacitySchedule({ me = null } = {}) {
       )}
 
       {/* Scaler health. `pinned` is the state AC 10 did not have a word for. */}
-      <div className="panel" style={{ padding: 12 }}>
+      <div style={{ padding: '8px 0', borderTop: '1px solid var(--line)' }}>
         <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>QUEUE SCALERS</div>
         <div style={{ display: 'grid', gap: 5 }}>
           {Object.entries(snap.scalers || {}).map(([service, health]) => {
@@ -266,7 +431,7 @@ export default function CapacitySchedule({ me = null } = {}) {
       {/* Drift, and the reason it is not being evaluated. Saying "not evaluated" is the point:
           an empty drift list next to an obviously different Azure would otherwise read as
           agreement. */}
-      <div className="panel" style={{ padding: 12, fontSize: 12 }}>
+      <div style={{ padding: '8px 0', borderTop: '1px solid var(--line)', fontSize: 12 }}>
         <div className="muted" style={{ fontSize: 11, marginBottom: 6 }}>CONFIGURATION DRIFT</div>
         {!snap.drift_evaluated && (
           <span className="muted">
@@ -284,6 +449,7 @@ export default function CapacitySchedule({ me = null } = {}) {
           </ul>
         )}
       </div>
+      </details>
 
       {/* AC 15 and §13's non-goal, stated where somebody would otherwise assume the opposite.
           A tab called "Scheduling" in a product that already has scheduled re-scans is exactly

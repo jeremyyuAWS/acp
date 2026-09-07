@@ -1290,6 +1290,8 @@ _SCHEMA = [
       acp_version TEXT
     )""",
     "ALTER TABLE release_executions ADD COLUMN IF NOT EXISTS acp_version TEXT",
+    "ALTER TABLE release_executions ADD COLUMN IF NOT EXISTS parent_folder_id TEXT",
+    "ALTER TABLE release_executions ADD COLUMN IF NOT EXISTS parent_folder_name TEXT",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_release_scan_owner ON release_executions(scan_id,owner_email)",
     "CREATE INDEX IF NOT EXISTS idx_release_owner ON release_executions(owner_email,created_at)",
     """CREATE TABLE IF NOT EXISTS release_roots (
@@ -2370,8 +2372,8 @@ class _PgAdapter:
     # plus one deployment-wide set of administrator guardrails. All schedule columns are
     # additive and carry safe defaults for rolling replicas.
     # v40 adds fenced pre-write reservations and terminal evidence to provider-effect receipts.
-    _SCHEMA_VERSION = 40
-    _SCHEMA_CHECKSUM_AT_VERSION = "e16e8f397bd3079f3af52fea4f4bfe09"
+    _SCHEMA_VERSION = 41
+    _SCHEMA_CHECKSUM_AT_VERSION = "84b065bd5e6864a22d95c4adb580c50a"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -7037,6 +7039,55 @@ class Store:
                 self._db.execute(cur, "SELECT * FROM ai_calls ORDER BY ts DESC LIMIT %s", (limit,))
             return self._db.fetchall(cur)
 
+    def release_ai_provenance(self, scan_id: str, files: list[str]) -> list[dict]:
+        """Model calls for an exact release selection, with durable outcome linkage.
+
+        Review and validation rows are joined only through ``model_call_id`` and must also agree
+        with the call's scan and file.  Missing arrays mean no linked evidence was recorded; callers
+        must not reinterpret that absence as a zero-quality outcome.  For repeated decisions or
+        validation attempts, the latest immutable event per (call, item) is the current outcome.
+        """
+        selected = list(dict.fromkeys(str(name) for name in (files or []) if name))
+        if not selected:
+            return []
+        marks = ",".join(["%s"] * len(selected))
+        params = (scan_id, *selected)
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"SELECT * FROM ai_calls WHERE scan_id=%s AND file IN ({marks}) "
+                "ORDER BY ts DESC", params)
+            calls = [dict(row) for row in self._db.fetchall(cur)]
+            if not calls:
+                return []
+
+            self._db.execute(cur,
+                "SELECT e.model_call_id,e.item_id,e.rule_id,e.action,e.edited,e.created_at "
+                "FROM hitl_events e JOIN ai_calls c ON c.id=e.model_call_id "
+                f"WHERE c.scan_id=%s AND c.file IN ({marks}) "
+                "AND e.scan_id=c.scan_id AND e.file=c.file ORDER BY e.created_at", params)
+            latest_review: dict[tuple[str, str], dict] = {}
+            for row in self._db.fetchall(cur):
+                latest_review[(str(row["model_call_id"]), str(row["item_id"]))] = dict(row)
+
+            self._db.execute(cur,
+                "SELECT v.model_call_id,v.item_id,v.rule_id,v.outcome,v.detail,v.regressions,"
+                "v.created_at FROM ai_validation_outcomes v JOIN ai_calls c ON c.id=v.model_call_id "
+                f"WHERE c.scan_id=%s AND c.file IN ({marks}) "
+                "AND v.scan_id=c.scan_id AND v.file=c.file ORDER BY v.created_at", params)
+            latest_validation: dict[tuple[str, str], dict] = {}
+            for row in self._db.fetchall(cur):
+                item = dict(row)
+                item["regressions"] = self._decode_regressions(item.get("regressions"))
+                latest_validation[(str(item["model_call_id"]), str(item["item_id"]))] = item
+
+        for call in calls:
+            call_id = str(call["id"])
+            call["review_decisions"] = [row for (cid, _), row in latest_review.items()
+                                        if cid == call_id]
+            call["validation_outcomes"] = [row for (cid, _), row in latest_validation.items()
+                                           if cid == call_id]
+        return calls
+
     def ai_call_belongs_to_file(self, call_id: str, scan_id: str, file: str) -> bool:
         """True only for an exact model-call provenance row on this scan and file."""
         with self._db.cursor() as cur:
@@ -7695,11 +7746,11 @@ class Store:
                 "AND model_call_id IS NOT NULL AND action IN ('approve','edit') "
                 "ORDER BY created_at DESC", tuple(ids))
             rows = self._db.fetchall(cur)
-            latest: dict[str, tuple[str, str]] = {}
+            latest: dict[tuple[str, str], str] = {}
             for row in rows:
-                latest.setdefault(str(row["item_id"]),
-                                  (str(row["model_call_id"]), str(row.get("rule_id") or rule_id)))
-            for item_id, (call_id, event_rule_id) in latest.items():
+                key = (str(row["item_id"]), str(row["model_call_id"]))
+                latest.setdefault(key, str(row.get("rule_id") or rule_id))
+            for (item_id, call_id), event_rule_id in latest.items():
                 event_id = hashlib.sha256(
                     f"post-write:{call_id}:{scan_id}:{file}:{event_rule_id}:{item_id}:{outcome}"
                     f":{reg_json or ''}".encode()
@@ -8943,7 +8994,9 @@ class Store:
 
     def ensure_release_execution(self, scan_id: str, owner: str, source: str,
                                  documents_total: int, *,
-                                 preferred_folder_name: str | None = None) -> dict:
+                                 preferred_folder_name: str | None = None,
+                                 parent_folder_id: str | None = None,
+                                 parent_folder_name: str | None = None) -> dict:
         """Create/reconcile the one durable Release execution for a scan atomically.
 
         The total is grow-only: later approvals expand the same release, while a stale retry can
@@ -8960,8 +9013,9 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO release_executions(id,scan_id,owner_email,source,folder_name,"
-                "documents_total,status,created_at,updated_at,acp_version) "
-                "VALUES(%s,%s,%s,%s,%s,%s,'running',%s,%s,%s) "
+                "documents_total,status,created_at,updated_at,acp_version,"
+                "parent_folder_id,parent_folder_name) "
+                "VALUES(%s,%s,%s,%s,%s,%s,'running',%s,%s,%s,%s,%s) "
                 "ON CONFLICT(scan_id,owner_email) DO UPDATE SET "
                 "documents_total=CASE WHEN release_executions.documents_total < EXCLUDED.documents_total "
                 "THEN EXCLUDED.documents_total ELSE release_executions.documents_total END,"
@@ -8971,7 +9025,8 @@ class Store:
                 "THEN EXCLUDED.updated_at ELSE release_executions.updated_at END",
                 (release_id, scan_id, owner, source, folder_name,
                  requested_total, now, now,
-                 os.environ.get("ACP_BUILD_VERSION") or os.environ.get("ACP_VERSION") or "dev"))
+                 os.environ.get("ACP_BUILD_VERSION") or os.environ.get("ACP_VERSION") or "dev",
+                 parent_folder_id, parent_folder_name))
             self._db.execute(cur,
                 "SELECT * FROM release_executions WHERE scan_id=%s AND owner_email=%s",
                 (scan_id, owner))
@@ -9635,6 +9690,155 @@ class Store:
             created.append(item_id)
         return created
 
+    # ADR 0055. A reviewer who KEEPS an image of text and describes it resolves the 1.4.5
+    # finding by judgement and creates a 1.1.1 obligation the document did not have. The
+    # description lands on its own row under this suffix, and the suffix is doing three jobs.
+    #
+    # It keeps the row OFF the canonical 1.1.1 row. _canonical_rule_id maps only '/deferred', so
+    # this stays a separate decision — which it must, because enqueue_proposals REPLACES the
+    # proposals on an existing row: merging would silently destroy the vision lane's drafts for
+    # every other image in the deck, and flipping that row's status would approve them unread.
+    #
+    # It keeps the row out of _superseded_items, exactly as '/regressed' does: scan_rule_traces
+    # never holds a suffixed rule_id, and that helper never retracts a row with no trace.
+    #
+    # And it makes the row legible as what it is. Unlike '/deferred' (a criterion the machine
+    # gave up on) and '/regressed' (damage awaiting a decision), this row records a decision
+    # ALREADY TAKEN: it is written 'approved', because the reviewer approved the description on
+    # the 1.4.5 card and asking them to approve the same words twice is not review, it is
+    # bookkeeping. What it is NOT is applied — so count_unapplied_approved_values counts it and
+    # mark_file_compliant_if_reviewed refuses to certify until the description is written into
+    # the document AND a re-scan confirms 1.1.1 cleared. That refusal is the whole point: it is
+    # what stops the silent false certification ADR 0055 measured.
+    DESCRIBED_RULE_SUFFIX = "/described"
+    # The resolution that produces such a row. Defined here, beside the row it creates, and
+    # re-exported into routes.hitl's RESOLUTIONS vocabulary so the two cannot drift: the route
+    # validates against that vocabulary, and this method acts on the same string.
+    DESCRIBED_RESOLUTION = "described_not_replaced"
+
+    DESCRIBED_SOURCE_SCS = ("1.4.5", "1.4.9")
+
+    def queue_described_image_alt(self, item_id: str) -> str | None:
+        """Turn a described-not-replaced decision on `item_id` into 1.1.1 alt text the file owes.
+
+        The source row is an image-of-text card (1.4.5 or 1.4.9) the reviewer resolved by keeping
+        the images and describing them. The row is written under
+        '1.1.1<DESCRIBED_RULE_SUFFIX>' because alt text is what a description IS, whichever
+        image-of-text criterion prompted it.
+
+        THE VALUES ARE READ OFF THE PROPOSALS DIRECTLY, deliberately bypassing
+        _row_approved_values — which returns {} for any row carrying a resolution, and is right
+        to. That guard exists because approving "Mark as decorative" once wrote the card's own UI
+        label into the document as alt text (#43), and it stays exactly as strict. This is the
+        same bypass approved_decorative_locators already makes for the same reason: the row's
+        resolution is a judgement ABOUT images, and the per-image text beside it is real content
+        the reviewer authored. Reading it here, in one named place, is what lets the general
+        guard stay absolute.
+
+        No proposed_value fallback, unlike _row_approved_values. There a reviewer who edited
+        nothing has agreed to the draft they were shown; here the draft is the OCR TRANSCRIPT —
+        the words baked into the picture — and a transcript is not a description of the image.
+        Writing it as alt text would put "Q3 revenue rose 12%" where "a slide titled Q3 revenue,
+        reading …" belongs, and would do it silently on the one path where the reviewer's whole
+        decision was that the picture stays. An undescribed image contributes nothing.
+
+        Locators are stored UNTRANSLATED: the media index they use is resolved at apply time
+        against the bytes actually being written (handlers, via
+        apply_pptx_image_of_text.expand_media_locator_values), because an index resolved against
+        a stale copy can name a different picture.
+
+        Idempotent per (scan, file), MERGING by locator: a reviewer who revisits one image
+        replaces that image's description and leaves the others alone. Re-approving also clears
+        `applied`, because the row then owes the document content it does not carry — without
+        that, a second description added to an already-written row would be stored, never
+        written, and the file would certify carrying only the first.
+
+        No sync_hitl_finding_dispositions call, deliberately and for the same reason
+        queue_regression_review makes none: that helper projects a card's state onto the assessed
+        findings carrying its rule_id, and no finding is recorded under a suffixed one. The
+        findings this decision concerns are the 1.4.5 OCR ones, and they are dispositioned by the
+        source row's own sync — calling it here would either no-op or reach for unrelated 1.1.1
+        findings that no reviewer has looked at.
+
+        WHAT HAPPENS IF THE REVIEWER LATER REJECTS THE SOURCE ROW, stated because it is a real
+        asymmetry rather than an oversight: this row stays, so the description is still written as
+        alt text. That is deliberate — alt text on an image of text is never itself wrong, and
+        deleting a reviewer's authored prose because they reopened a different question would lose
+        work silently. Certification is unaffected either way: the reopened 1.4.5 row is no longer
+        approved, so mark_file_compliant_if_reviewed refuses on the all-approved gate until the
+        reviewer decides again. What this does NOT do is retract the alt obligation; if that turns
+        out to matter, the fix is a retraction path, not a silently different write here.
+
+        Returns the row id, or None when the source row is not a described image-of-text
+        decision, or carries no descriptions.
+        """
+        import json as _json
+        from datetime import datetime, timezone
+        src = self.get_hitl_item(item_id)
+        if not src:
+            return None
+        sc = str(src.get("rule_id") or "").strip()
+        if sc not in self.DESCRIBED_SOURCE_SCS:
+            return None
+        if str(src.get("resolution") or "").strip() != self.DESCRIBED_RESOLUTION:
+            return None
+        scan_id, file = src.get("scan_id"), src.get("file")
+        if not (scan_id and file):
+            return None
+        clean: dict[str, str] = {}
+        for p in (src.get("proposals") or []):
+            if not isinstance(p, dict):
+                continue
+            locator = str(p.get("locator") or "").strip()
+            text = str(p.get("approved_value") or "").strip()
+            if locator and text:
+                clean[locator] = text
+        if not clean:
+            return None
+        rule_id = f"1.1.1{self.DESCRIBED_RULE_SUFFIX}"
+        now = datetime.now(timezone.utc).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id, proposals FROM hitl_queue WHERE scan_id=%s AND file=%s AND rule_id=%s",
+                (scan_id, file, rule_id))
+            row = self._db.fetchone(cur)
+            existing: list[dict] = []
+            if row:
+                try:
+                    existing = _json.loads(row.get("proposals") or "[]") or []
+                except (ValueError, TypeError):
+                    existing = []
+            by_locator = {str(p.get("locator") or ""): p
+                          for p in existing if isinstance(p, dict)}
+            for locator, text in clean.items():
+                prior = by_locator.get(locator) or {}
+                by_locator[locator] = {
+                    "locator": locator,
+                    "before": prior.get("before") or "an image of text the reviewer kept",
+                    "proposed_value": text,
+                    "approved_value": text,
+                    "rationale": f"reviewer kept the image and described it, resolving WCAG {sc}",
+                    "source": "reviewer",
+                }
+            merged = [by_locator[k] for k in sorted(by_locator)]
+            blob = _json.dumps(merged)
+            if row:
+                self._db.execute(cur,
+                    "UPDATE hitl_queue SET proposals=%s, finding_count=%s, status='approved', "
+                    "applied=NULL, reviewed_at=%s WHERE id=%s",
+                    (blob, len(merged), now, row["id"]))
+                return row["id"]
+            new_id = uuid.uuid4().hex[:12]      # NOT item_id: that is the source row's
+            pages = self._pages_for(cur, scan_id, file, "1.1.1")
+            self._db.execute(cur,
+                "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,"
+                "finding_count,status,reviewed_at,page,pages,proposals) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,'approved',%s,%s,%s,%s)",
+                (new_id, now, scan_id, file, rule_id,
+                 "WCAG 1.1.1 — an image of text the reviewer kept and described"[:200],
+                 len(merged), now, pages[0] if pages else None, _pages_csv(pages), blob))
+        return new_id
+
     def unresolved_regression(self, scan_id: str, file: str) -> bool:
         """True when a write that REACHED this document broke a criterion and no human has
         accepted that yet. The certification gate's fail-closed half.
@@ -9926,10 +10130,20 @@ class Store:
         answers "which pieces of content is this row ABOUT" — the question a WCAG exception
         asks, since it is applied to the images themselves and carries no text at all.
 
-        Proposals only. A row's `evidence` entries are addressed by relationship id
-        (`part#rId2`, remediate_office), while apply_alt resolves a locator by the element's
-        NAME (`part#Picture 3`) — an evidence locator reaches no element, so handing one to a
-        writer buys an `apply.unresolved` log line and nothing else.
+        Proposals only — and the REASON recorded here was stale, which matters because the
+        behaviour it justifies is a narrowing rather than a forced choice. It said an evidence
+        locator (`part#rId2`, minted by remediate_office) "reaches no element", apply_alt
+        resolving only by the shape's NAME (`part#Picture 3`). That stopped being true when
+        apply_alt.resolve_target gained its r:embed branch: an rId fragment resolves to the same
+        element as the name (measured in tests/test_describe_instead_of_replace.py, and proved
+        end to end for the vision alt lane in tests/test_alt_locator_rid_writeback.py — the lane
+        that existed BECAUSE those locators were being dropped).
+
+        So excluding evidence is now a conservative scope, not an impossibility: the decorative
+        marking is withheld from a deferred row's images because nothing has verified that lane,
+        not because the locator could not reach them. Whether it SHOULD extend to evidence is a
+        real question with a real answer either way, and it is deliberately not decided here —
+        see approved_decorative_locators, whose docstring already records the consequence.
         """
         seen, out = set(), []
         for p in (row.get("proposals") or []):
@@ -10098,10 +10312,23 @@ class Store:
         """{locator: alt text} awaiting a write into `file`, from its approved 1.1.1 rows.
 
         Scoped to Non-text Content because apply_alt.py writes alt text and nothing else.
+
+        '1.1.1/described' joins '1.1.1' here, and only these two. That row is the ADR 0055
+        describe-instead-of-replace decision: a reviewer kept an image of text and wrote alt text
+        for it, which is 1.1.1 content owed to the document by every measure this function
+        applies. It is a SEPARATE row rather than the canonical one for the reasons at
+        DESCRIBED_RULE_SUFFIX, so reading only the bare '1.1.1' would store the description and
+        never write it — the dead end ADR 0055 exists to close.
+
+        Named explicitly rather than matched as '1.1.1/%'. A prefix match would silently adopt
+        whatever suffix someone adds next, and '/regressed' is already a row that must NOT be
+        read here: it carries no content by construction, and a client that posted a headline
+        value onto one would have it written into the document as alt text.
         """
+        wanted = {"1.1.1", f"1.1.1{self.DESCRIBED_RULE_SUFFIX}"}
         out: dict[str, str] = {}
         for row in self._approved_unapplied_rows(scan_id, file):
-            if str(row.get("rule_id") or "").strip() == "1.1.1":
+            if str(row.get("rule_id") or "").strip() in wanted:
                 out.update(self._row_approved_values(row))
         return out
 
@@ -10249,7 +10476,8 @@ class Store:
                     or self.approved_structure_label_values(scan_id, file)
                     or self.approved_images_of_text_values(scan_id, file))
 
-    def approve_proposal_values(self, item_id: str, values: list[str | None]) -> int:
+    def approve_proposal_values(self, item_id: str, values: list[str | None], *,
+                                draft_fallback: bool = True) -> int:
         """Record the reviewer's final text per instance, positionally.
 
         `values[i]` is the text for instance i: an edited string, or None/"" meaning "accept
@@ -10261,6 +10489,23 @@ class Store:
         model produced no draft — the values are written onto the evidence entries instead, in
         the SAME positional order the card rendered them. Evidence has no draft, so an empty value
         stays empty (the image is still undescribed) rather than falling back to anything.
+
+        `draft_fallback=False` turns that same "no fallback" behaviour on for a PROPOSALS row, and
+        the describe-instead-of-replace decision (ADR 0055) is why it exists.
+
+        THE BUG IT CLOSES, which is worth stating because the guard was in the wrong place and
+        looked right. queue_described_image_alt refuses to fall back to a draft, and its docstring
+        explains why at length: on a 1.4.5 card the draft is the OCR TRANSCRIPT — the words baked
+        into the picture — and a transcript is not a description of the image. But that function
+        runs SECOND. This one runs first, from the same request, and had already substituted the
+        transcript for every blank the reviewer left; by the time the guard looked, the transcript
+        was sitting in `approved_value` and was indistinguishable from authored prose.
+
+        So a reviewer describing a two-image deck — describing one, leaving the other alone —
+        filed the second picture's own text as its description, and the audit row recorded it as
+        `"source": "reviewer"`. Measured end to end before this fix. An empty description now
+        clears the value, exactly as it does for evidence: an undescribed image contributes
+        nothing, which is what ADR 0055 said it wanted all along.
         """
         import json as _json
         with self._db.cursor() as cur:
@@ -10269,7 +10514,7 @@ class Store:
             if not row:
                 return 0
             if row.get("proposals"):
-                col, has_draft = "proposals", True
+                col, has_draft = "proposals", draft_fallback
             elif row.get("evidence"):
                 col, has_draft = "evidence", False
             else:

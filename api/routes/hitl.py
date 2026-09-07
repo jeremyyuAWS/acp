@@ -6,6 +6,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 import core
+from store import Store
 from swallowed import swallowed
 
 router = APIRouter()
@@ -19,6 +20,10 @@ class HitlUpdate(BaseModel):
     review_ms: int | None = None        # client-measured time from card-open to decision (reviewer-time metric)
     ai_value: str | None = None         # the AI-proposed value shown, so we store proposed-vs-final
     model_call_id: str | None = None    # exact ai_calls row reviewed; absent for human-authored work
+    # One exact producing call per proposal/evidence value, positionally aligned with
+    # approved_values. Multi-image cards contain independent vision calls, so collapsing them
+    # into model_call_id would either discard attribution or invent a single producer.
+    model_call_ids: list[str | None] | None = None
     # One final text per proposal, positionally: the row holds N proposals (one per image) and
     # a single approved_value could never describe ten different pictures. An entry that is
     # null/"" accepts that proposal's own draft, so approving an unedited card means exactly
@@ -32,7 +37,8 @@ class HitlUpdate(BaseModel):
     # alternative is required) or 'essential_exception' (1.4.5/1.4.9: a logo/brand mark is exempt
     # from the images-of-text rule). Recorded in the immutable audit trail as WHY the finding was
     # resolved, so the certification report never implies a written fix that never happened.
-    resolution: str | None = None       # decorative | essential_exception | out_of_scope
+    # 'described_not_replaced' (ADR 0055) is the exception that DOES carry text: see RESOLUTIONS.
+    resolution: str | None = None       # decorative | essential_exception | described_not_replaced | out_of_scope
 
 
 REJECT_REASONS = {"incorrect_object", "too_vague", "hallucinated", "missed_text", "org_preference", "other", "unspecified"}
@@ -41,6 +47,18 @@ REJECT_REASONS = {"incorrect_object", "too_vague", "hallucinated", "missed_text"
 RESOLUTIONS = {
     "decorative": "reviewer marked image decorative — no text alternative required (WCAG 1.1.1)",
     "essential_exception": "reviewer marked essential logo/brand mark — exempt from images-of-text (WCAG 1.4.5/1.4.9)",
+    # ADR 0055. The odd one out among the exceptions, and the difference is worth stating: this
+    # one is only honest once a write lands. The reviewer keeps an image of text — because the
+    # replacement writer refuses it, because the styling carries meaning, or because it is a
+    # 1.4.9 chart replacement would gut — and describes it instead. That resolves 1.4.5/1.4.9 by
+    # judgement AND creates a 1.1.1 obligation the document did not have, so store.
+    # queue_described_image_alt records the description as alt text owed and the file cannot
+    # certify until it is written and a re-scan confirms 1.1.1 cleared. Without that second
+    # half the description would be stored, reach nothing, and the file would certify as
+    # conformant with the image untouched and undescribed.
+    Store.DESCRIBED_RESOLUTION:
+        "reviewer kept the image of text and described it instead of replacing it — "
+        "resolves images-of-text by judgement (WCAG 1.4.5/1.4.9), owes alt text (WCAG 1.1.1)",
     # Unlike the two above (which RESOLVE a finding that IS in scope, so it stays a human_verified
     # pass), out_of_scope means the criterion does not APPLY to this document — the reviewer's
     # judgement that it is not applicable. It leaves the coverage denominator (accessibility_status
@@ -145,8 +163,55 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
         raise HTTPException(422, f"reject_reason must be one of {sorted(REJECT_REASONS)}")
     if body.resolution is not None and body.resolution not in RESOLUTIONS:
         raise HTTPException(422, f"resolution must be one of {sorted(RESOLUTIONS)}")
-    if body.model_call_id and not core.store.ai_call_belongs_to_file(
-            body.model_call_id, item.get("scan_id"), item.get("file")):
+    # ADR 0055: describe-instead-of-replace is the one resolution that is incomplete without
+    # text, so it is refused without text — here, BEFORE anything is written, rather than
+    # discovered after the row has been updated. Both halves are checked because both halves
+    # can be wrong on their own: the criterion, because "I kept it and described it" means
+    # nothing on a link-text or contrast row; and the descriptions, because a resolution with
+    # none of them resolves the image-of-text finding while leaving the images undescribed and
+    # letting the file certify that way. That is the silent failure the whole feature closes,
+    # so the request fails loudly instead.
+    if body.resolution == Store.DESCRIBED_RESOLUTION:
+        rule_id = str(item.get("rule_id") or "").strip()
+        if rule_id not in Store.DESCRIBED_SOURCE_SCS:
+            raise HTTPException(
+                422, f"{Store.DESCRIBED_RESOLUTION} applies to an images-of-text finding "
+                     f"({', '.join(Store.DESCRIBED_SOURCE_SCS)}), not to {rule_id or 'this row'}")
+        if not any(str(v or "").strip() for v in (body.approved_values or [])):
+            raise HTTPException(
+                422, f"{Store.DESCRIBED_RESOLUTION} needs a description for at least one image: "
+                     "keeping an image of text without describing it leaves it unreadable to a "
+                     "screen reader and resolves nothing")
+        # THE ROW must have somewhere to put them, and checking only the REQUEST was not enough.
+        # A 1.4.5 row carrying no proposals is the normal shape from two production writers —
+        # store.queue_hitl_items (deterministic mode) and handlers.queue_hitl_review_for_file —
+        # and propose_images_of_text returns [] whenever OCR is unavailable OR times out, so a
+        # scan can report 1.4.5 while the card has no per-image slots at all.
+        #
+        # Approving one of those used to leave the worst state this feature exists to prevent:
+        # approve_proposal_values wrote nothing, queue_described_image_alt found no values and
+        # returned None, and the 500 fired AFTER update_hitl_item had already stamped the row
+        # approved with the resolution — and BEFORE log_decision, so the file certified 100/100
+        # with the images untouched, undescribed, and no audit line saying who resolved it or why.
+        # Deterministic on retry, too: it 500s forever while the row stays approved.
+        if not [p for p in (item.get("proposals") or [])
+                if isinstance(p, dict) and str(p.get("locator") or "").strip()]:
+            raise HTTPException(
+                422, f"{Store.DESCRIBED_RESOLUTION} needs the per-image cards this row does not "
+                     "carry — there is nowhere to attach a description. Re-run remediation to "
+                     "draft them, or resolve this finding another way")
+    submitted_call_ids = ([body.model_call_id] if body.model_call_id else [])
+    submitted_call_ids.extend(call_id for call_id in (body.model_call_ids or []) if call_id)
+    if body.model_call_ids is not None:
+        instances = item.get("proposals") or item.get("evidence") or []
+        if len(body.model_call_ids) != len(instances):
+            raise HTTPException(422, "model_call_ids must align with this review item's values")
+        for index, instance in enumerate(instances):
+            recorded = instance.get("model_call_id")
+            if recorded and body.model_call_ids[index] != recorded:
+                raise HTTPException(422, "model_call_id does not match the generated review value")
+    if any(not core.store.ai_call_belongs_to_file(
+            call_id, item.get("scan_id"), item.get("file")) for call_id in submitted_call_ids):
         raise HTTPException(422, "model_call_id does not belong to this review item")
     # The resolution is persisted ON THE ROW, not only in the decision log below. The certify
     # gate and the appliers read rows: with the exception recorded nowhere they could reach,
@@ -160,9 +225,52 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
     # description. Only on approval: rejecting or skipping approves no content.
     if body.status == "approved" and body.approved_values is not None:
         try:
-            core.store.approve_proposal_values(item_id, body.approved_values)
+            # No draft fallback on a described decision (ADR 0055). Everywhere else a blank means
+            # "the draft I was shown is correct", which is right when the draft is a description.
+            # On a 1.4.5 card it is the OCR TRANSCRIPT — the words inside the picture — so falling
+            # back would file the image's own text as its description, silently, for every image
+            # the reviewer left alone. store.queue_described_image_alt refuses that fallback and
+            # says why; this is the call that had already made it moot.
+            core.store.approve_proposal_values(
+                item_id, body.approved_values,
+                draft_fallback=(body.resolution != Store.DESCRIBED_RESOLUTION))
         except Exception:
             swallowed("routes.hitl.hitl_update: approving the proposal values failed")
+    # ADR 0055: describe-instead-of-replace. The reviewer kept the images of text and wrote
+    # descriptions, so this decision resolves 1.4.5/1.4.9 by judgement AND leaves the document
+    # owing 1.1.1 alt text it did not owe before. Record that obligation now, as an approved but
+    # unapplied row, so the gate below enqueues the write and mark_file_compliant_if_reviewed
+    # refuses to certify until the description is in the document and a re-scan agrees.
+    #
+    # AFTER approve_proposal_values, necessarily: the descriptions are read off the source row's
+    # proposals, and until that call lands the row holds only the OCR drafts. And NOT
+    # best-effort in the way the telemetry below is — a swallowed failure here leaves the
+    # reviewer's descriptions reaching nothing while the 1.4.5 finding reads resolved, which is
+    # precisely the silent false certification this feature exists to prevent. It is guarded so
+    # one broken row cannot take down the decision, and it says so in the log.
+    if body.status == "approved" and body.resolution == Store.DESCRIBED_RESOLUTION:
+        # NOT swallowed. Every other best-effort block here degrades telemetry; this one decides
+        # whether the document ends up carrying the reviewer's descriptions. A failure that got
+        # past the 422 above leaves the 1.4.5 row resolved and owing nothing, so the file
+        # certifies as conformant with the images untouched AND undescribed — the exact silent
+        # failure ADR 0055 measured. Better to fail the request: the reviewer sees it, and the
+        # row keeps whatever status it had.
+        if core.store.queue_described_image_alt(item_id) is None:
+            # PUT THE ROW BACK before raising. The 422s above catch the reachable causes, so
+            # arriving here means something unforeseen — and the state this used to leave was the
+            # dangerous one: the row already stamped approved WITH the resolution, no 1.1.1
+            # obligation recorded, and the raise landing before log_decision, so the file could
+            # certify as conformant with no audit line at all. A failed decision must leave the
+            # finding exactly as unresolved as it was.
+            try:
+                core.store.update_hitl_item(item_id, item.get("status") or "pending",
+                                            item.get("reviewer_note"), None,
+                                            resolution=(item.get("resolution") or None))
+                core.store.sync_hitl_finding_dispositions(item_id, item.get("status") or "pending")
+            except Exception:
+                swallowed("routes.hitl.hitl_update: rolling back the described decision failed")
+            raise HTTPException(500, "the descriptions could not be recorded as alt text; "
+                                     "the decision was not completed and the finding is unchanged")
     # Immutable audit trail: WHO decided what, when, on which finding — include the
     # approved value itself so the log is self-sufficient compliance evidence.
     #
@@ -189,13 +297,32 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
     try:
         _action = ("edit" if (body.status == "approved" and body.edited)
                    else {"approved": "approve", "rejected": "reject", "skipped": "skip"}.get(body.status, body.status))
-        core.store.record_hitl_event(
-            item.get("scan_id"), item.get("file"), item.get("rule_id"), item_id, _action,
-            edited=body.edited, review_ms=body.review_ms, ai_value=body.ai_value,
-            final_value=body.approved_value,
-            reviewer=(getattr(request.state, "user_email", None) if request is not None else None),
-            reject_reason=(body.reject_reason if body.status == "rejected" else None),
-            model_call_id=body.model_call_id)
+        event_kwargs = {
+            "review_ms": body.review_ms,
+            "reviewer": (getattr(request.state, "user_email", None) if request is not None else None),
+        }
+        if body.model_call_ids is not None:
+            proposals = item.get("proposals") or item.get("evidence") or []
+            final_values = body.approved_values or []
+            for index, call_id in enumerate(body.model_call_ids):
+                if not call_id:
+                    continue
+                ai_value = ((proposals[index].get("proposed_value")
+                             if index < len(proposals) else None) or None)
+                final_value = (final_values[index] if index < len(final_values) else None)
+                core.store.record_hitl_event(
+                    item.get("scan_id"), item.get("file"), item.get("rule_id"), item_id, _action,
+                    edited=bool(final_value is not None and ai_value is not None
+                                and final_value != ai_value),
+                    ai_value=ai_value, final_value=final_value,
+                    reject_reason=(body.reject_reason if body.status == "rejected" else None),
+                    model_call_id=call_id, **event_kwargs)
+        else:
+            core.store.record_hitl_event(
+                item.get("scan_id"), item.get("file"), item.get("rule_id"), item_id, _action,
+                edited=body.edited, ai_value=body.ai_value, final_value=body.approved_value,
+                reject_reason=(body.reject_reason if body.status == "rejected" else None),
+                model_call_id=body.model_call_id, **event_kwargs)
     except Exception:
         swallowed("routes.hitl.hitl_update: recording the HITL event failed")
     # Observability: the human decision joins the file's Langfuse trace (audit P1 — HITL

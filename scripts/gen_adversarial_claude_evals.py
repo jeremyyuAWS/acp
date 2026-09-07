@@ -58,6 +58,28 @@ VAGUE = ["click here", "here", "read more", "learn more", "more", "link", "downl
 URLISH = r"(^/|\.(pdf|docx?|xlsx?|html?)$|https?://|www\.)"
 ALT_LEADS = ["image of", "picture of", "photo of", "graphic of", "this image", "an image"]
 
+# CORRECT INTENT, WRONG SHAPE — and why these bands exist.
+#
+# A structural target takes a bare value: a bool for table.headerRow, an int for heading.level,
+# an enum for table.role and the style fields. Models routinely return the right answer as a
+# DESCRIPTION of the edit instead — "row1: w:trPr/w:tblHeader = true", "Scope: H3 -> H2",
+# "Apply real list semantics to the 5 page-7 paragraphs". Measured on 2026-09-07 across three
+# Claude tiers, that shape accounted for 9 of Opus 5's 17 rejections, 5 of Sonnet 5's 12 and 5 of
+# Haiku 4.5's 20 — so a corpus with no after-edit band here does not measure judgement, it
+# measures verbosity, and penalises the most verbose model hardest.
+#
+# The loop already has the right category for it: `accepted after editing` is defined as "right
+# content, wrong shape; the reviewer fixes it and approves", and that is exactly what a reviewer
+# does with "Scope: H3 -> H2" — they set the field to 2. The alt-text and link cases have carried
+# after-edit bands from the start; the structural ones were simply missed.
+#
+# These bands stay DISCRIMINATING: each requires the value to name the correct destination, and
+# forbids one that names a different one. A description of the WRONG edit is still rejected.
+HDR_AFFIRM = r"\b(true|yes|header|tblheader|firstrow|first row|row\s*1)\b"
+HDR_DENY = r"\b(false|no|layout|presentation|decorative)\b"
+LEVEL2 = r"\b(h|heading|level)\s*-?\s*2\b"
+NOT_LEVEL2_TARGET = r"(->|-->|→|\bto\b)\s*(h|heading|level)?\s*-?\s*[13-9]\b"
+
 # Distractor lines as the scan pipeline emits them. Two per case; detection precision needs them.
 NOISE = [
     ("engine", "engine DigitalA11y 1.8.2 · 14 rules · status ANALYSED · 2.9s"),
@@ -369,10 +391,13 @@ def build_headings_labels() -> list[dict[str, Any]]:
         scope=["heading.level"], derived={},
         example={"target": "heading.level", "example_value": 2},
         unchanged=[{"target": "heading.level", "equals": 2}],
-        after_edit=[],
+        after_edit=[{"target": "heading.level", "regex": LEVEL2,
+                     "forbids_regex": NOT_LEVEL2_TARGET, "edited_value": 2}],
         expected="accept",
         notes="a level skip with one correct answer: demote the first H3 to H2 and the second H3 "
-              "then follows an H2. Setting it to 1 leaves the skip in place and is rejected",
+              "then follows an H2. Setting it to 1 leaves the skip in place and is rejected. The "
+              "after-edit band takes 'H2' or 'Scope: H3 -> H2' and lands the integer; an arrow "
+              "pointing at any level but 2 is still rejected",
     ))
     out.append(case(
         cid="adv-hl-03", category="headings_labels", fmt="docx", crit="2.4.6", idx=13,
@@ -384,8 +409,10 @@ def build_headings_labels() -> list[dict[str, Any]]:
         fields={"heading.text": "", "heading.style": "Heading 2", "doc.outline": [1, 2, 2]},
         scope=["heading.style", "heading.text"], derived={},
         example={"target": "heading.style", "example_value": "Normal"},
-        unchanged=[{"target": "heading.style", "regex": r"^normal$"}],
-        after_edit=[],
+        # Word ships both; either de-heads the spacing paragraph, so neither needs an edit.
+        unchanged=[{"target": "heading.style", "regex": r"^(normal|body text)$"}],
+        after_edit=[{"target": "heading.style", "regex": r"\b(normal|body text|plain)\b",
+                     "forbids_regex": r"\bheading\b", "edited_value": "Normal"}],
         expected="either",
         notes="AMBIGUOUS: the empty heading is spacing, so demoting it to Normal is right; but a "
               "candidate cannot know whether a heading was MEANT here, so escalating is also right. "
@@ -657,7 +684,12 @@ def build_document_language() -> list[dict[str, Any]]:
         scope=["doc.lang"], derived={},
         example={"target": "doc.lang", "example_value": "en-US"},
         unchanged=[{"target": "doc.lang", "regex": r"^(en|es)(-[A-Za-z]{2})?$"}],
-        after_edit=[],
+        # Either column may be called the primary, so the after-edit path lands whichever the
+        # candidate named rather than a fixed one; a third language is still rejected.
+        after_edit=[{"target": "doc.lang", "regex": r"\b(english|eng)\b|^en\b",
+                     "forbids_regex": r"\b(french|german|fr-|de-)\b", "edited_value": "en-US"},
+                    {"target": "doc.lang", "regex": r"\b(spanish|espa[nñ]ol|esp)\b|^es\b",
+                     "forbids_regex": r"\b(french|german|fr-|de-)\b", "edited_value": "es-ES"}],
         expected="either",
         notes="AMBIGUOUS: a bilingual deck with no primary language. Either tag is defensible as "
               "the default (the other column then needs 3.1.2 marks); escalating to ask which "
@@ -733,9 +765,12 @@ def build_semantic_structure() -> list[dict[str, Any]]:
         scope=["table.headerRow"], derived={},
         example={"target": "table.headerRow", "example_value": True},
         unchanged=[{"target": "table.headerRow", "equals": True}],
-        after_edit=[],
+        after_edit=[{"target": "table.headerRow", "regex": HDR_AFFIRM,
+                     "forbids_regex": HDR_DENY, "edited_value": True}],
         expected="accept",
-        notes="clean: the first row is a header in all but markup",
+        notes="clean: the first row is a header in all but markup. The after-edit band takes a "
+              "value that DESCRIBES the edit ('row1: w:trPr/w:tblHeader = true') and lands the "
+              "boolean; one that denies it ('layout', 'false') is still rejected",
     ))
     out.append(case(
         cid="adv-ss-02", category="semantic_structure", fmt="xlsx", crit="1.3.1", idx=42,
@@ -767,6 +802,12 @@ def build_semantic_structure() -> list[dict[str, Any]]:
         example={"target": "paragraphs.list_style", "example_value": "List Bullet"},
         unchanged=[{"target": "paragraphs.list_style", "regex": r"^(list )?bullet$"}],
         after_edit=[{"target": "paragraphs.list_style", "regex": r"^(list )?(number|numbered)$",
+                     "edited_value": "List Bullet"},
+                    # A description of the conversion rather than a style name. Must name real
+                    # list semantics; "keep as typed bullets" or a heading style is not that.
+                    {"target": "paragraphs.list_style",
+                     "regex": r"\b(bullet|numpr|unordered|list (semantics|formatting|style)|real list)\b",
+                     "forbids_regex": r"\b(heading|keep|leave|as[- ]is|no change)\b",
                      "edited_value": "List Bullet"}],
         expected="accept",
         notes="typed bullets are text, not a list. A numbered style is the wrong list kind for "
@@ -783,8 +824,11 @@ def build_semantic_structure() -> list[dict[str, Any]]:
                 "table.role": "data"},
         scope=["table.headerRow", "table.role"], derived={},
         example={"target": "table.role", "example_value": "layout"},
-        unchanged=[{"target": "table.role", "regex": r"^layout$"}],
-        after_edit=[],
+        # `presentation` is what ARIA calls a layout table — the same decision, the other
+        # vocabulary — so it is accepted as proposed, not merely after an edit.
+        unchanged=[{"target": "table.role", "regex": r"^(layout|presentation)$"}],
+        after_edit=[{"target": "table.role", "regex": r"\b(layout|presentation|decorative)\b",
+                     "forbids_regex": r"\b(data|header)\b", "edited_value": "layout"}],
         expected="either",
         notes="AMBIGUOUS: a layout table. Marking it layout is right; headerRow=true clears 1.3.1 "
               "and raises 1.3.1:empty-header-cell (an image cell as a column header) and is "

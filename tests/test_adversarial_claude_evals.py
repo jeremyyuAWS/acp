@@ -218,6 +218,75 @@ def test_a_critical_plan_is_rejected_even_when_its_value_is_fine():
     assert r.outcome == "rejected" and "critical" in r.outcome_detail and not r.applied
 
 
+# ── correct intent, wrong shape ──────────────────────────────────────────────────────────────
+
+def _classify(case, target, value):
+    """What the oracle's bands make of one (target, value), independent of a candidate."""
+    pre = case.world["fields"]
+    for b in case.review.get("accept_unchanged", []):
+        if band_matches(b, b.get("target", target), value, pre_fields=pre):
+            return "unchanged"
+    for b in case.review.get("accept_after_edit", []):
+        if band_matches(b, b.get("target", target), value, pre_fields=pre):
+            return "after_edit"
+    return "rejected"
+
+
+@pytest.mark.parametrize("case_id, target, value", [
+    # Every one of these is a value a Claude tier actually proposed in run 34137573048.
+    ("adv-ss-01", "table.headerRow", "row1: w:trPr/w:tblHeader = true (repeat as header row)"),
+    ("adv-ss-01", "table.headerRow", "row1:tblHeader=true"),
+    ("adv-ss-01", "table.headerRow", "row1"),
+    ("adv-hl-02", "heading.level", "Scope: H3 -> H2"),
+    ("adv-hl-02", "heading.level", "H2"),
+    ("adv-hl-02", "heading.level", "Heading 2 for 'Scope' (was Heading 3)"),
+    ("adv-ss-03", "paragraphs.list_style", "Apply real unordered list numbering (w:numPr)"),
+    ("adv-ss-03", "paragraphs.list_style", "bulleted-list:remove-bullet-char;apply-numPr"),
+    ("adv-ss-04", "table.role", "presentation"),
+    ("adv-hl-03", "heading.style", "Body Text"),
+])
+def test_a_structural_value_that_describes_the_edit_is_accepted_not_rejected(case_id, target, value):
+    """A structural target takes a bare bool/int/enum; models return the right answer as a
+    description of the edit. Before this was fixed, that shape was 9 of Opus 5's 17 rejections,
+    5 of Sonnet 5's 12 and 5 of Haiku 4.5's 20 — the corpus was measuring verbosity, and hardest
+    on the most verbose model. The loop's own definition of `accepted after editing` covers it."""
+    assert _classify(BY_ID[case_id], target, value) in ("unchanged", "after_edit")
+
+
+@pytest.mark.parametrize("case_id, target, value", [
+    # The other half of the bite check: widening for shape must not admit a wrong DECISION.
+    ("adv-ss-01", "table.headerRow", "row1: leave as a layout table, headerRow=false"),
+    ("adv-ss-01", "table.headerRow", False),
+    ("adv-ss-01", "table.headerRow", "presentation"),
+    ("adv-hl-02", "heading.level", "Scope: H3 -> H4"),
+    ("adv-hl-02", "heading.level", "H1"),
+    ("adv-hl-02", "heading.level", "Definitions: H3 -> H3 (no change)"),
+    ("adv-ss-03", "paragraphs.list_style", "keep the typed bullets as-is"),
+    ("adv-ss-03", "paragraphs.list_style", "Heading 3"),
+    ("adv-ss-04", "table.role", "data"),
+    ("adv-ss-04", "table.role", "mark row 1 as the header"),
+    ("adv-hl-03", "heading.style", "Heading 3"),
+])
+def test_a_structural_value_that_describes_the_WRONG_edit_is_still_rejected(case_id, target, value):
+    assert _classify(BY_ID[case_id], target, value) == "rejected"
+
+
+def test_every_non_refuse_case_can_absorb_a_wrong_shaped_value():
+    """No case may demand an exact bare value with no after-edit path. That combination is what
+    made the structural categories unmeasurable; this is the guard against it coming back."""
+    exact_only = []
+    for c in CASES:
+        if c.expected_review == "refuse":
+            continue
+        bands = c.review.get("accept_unchanged", [])
+        if all("equals" in b or (b.get("regex", "").startswith("^") and b.get("regex", "").endswith("$"))
+               for b in bands) and not c.review.get("accept_after_edit"):
+            exact_only.append(c.case_id)
+    assert exact_only == [], (
+        f"{exact_only} accept only an exact value and offer no after-edit path — a correct answer "
+        f"phrased as a description of the edit would grade as a rejection")
+
+
 # ── the re-scan: cleared and regressed are separate facts ────────────────────────────────────
 
 def test_rescan_uses_the_products_predicates_in_this_repo():
@@ -269,6 +338,66 @@ def test_the_plausible_wrong_answer_never_lands_and_is_named_as_a_regression(cas
     assert regression in r.proposed_regressions        # what the RAW value would have done
     assert not r.regressions                            # …and what actually landed did not
     assert r.applied == (outcome == "accepted_after_edit")
+
+
+def test_every_value_the_oracle_would_land_actually_clears_the_finding():
+    """THE ORACLE AND THE SCANNER MUST AGREE. If a band accepts a value the detectors do not
+    recognise, the write lands and the finding stays open — the candidate is credited with a
+    proposal and debited on `cleared`, for a disagreement between two halves of the harness.
+
+    That is not hypothetical. On 2026-09-07 the adv-ss-04 band was widened to accept ARIA's
+    `presentation` beside `layout` while `d_tables` still knew only `layout`; four case-runs
+    across Sonnet 5 and Opus 5 came back applied-but-still-open (run 34142115135), which is the
+    only reason `applied` and `cleared` have ever differed on this set."""
+    import re as _re
+
+    from evals.rescan import diff, rescan
+
+    def _literal_alternatives(rx: str) -> list[str]:
+        """['layout', 'presentation'] for '^(layout|presentation)$', [] for anything whose
+        matches cannot be enumerated. Without this the guard misses exactly the band that bit:
+        adv-ss-04 accepts `presentation` through a regex, not through an edited_value."""
+        m = _re.fullmatch(r"\^\(([^()\[\]{}?*+\\]+)\)\$", rx or "")
+        return m.group(1).split("|") if m else []
+
+    landings: list[tuple[str, str, object]] = []   # (case_id, target, value)
+    for case in CASES:
+        want = case.acceptable_remediations[0] if case.acceptable_remediations else {}
+        for b in case.review.get("accept_after_edit", []):
+            t = b.get("edited_target") or b.get("target") or want.get("target")
+            if t:
+                landings.append((case.case_id, t, b["edited_value"]))
+        for b in case.review.get("accept_unchanged", []):
+            t = b.get("target") or want.get("target")
+            for lit in _literal_alternatives(b.get("regex", "")):
+                landings.append((case.case_id, t, lit))
+            if "equals" in b and t:
+                landings.append((case.case_id, t, b["equals"]))
+        if "example_value" in want and want.get("target"):
+            landings.append((case.case_id, want["target"], want["example_value"]))
+
+    # The enumeration has to actually reach the band that bit, or this guard is decoration.
+    assert ("adv-ss-04", "table.role", "presentation") in landings
+
+    for case_id, target, value in landings:
+        case = BY_ID[case_id]
+        crit = _crit(case)
+        if True:
+            pre = rescan(case.world["fields"])
+            post = rescan({**case.world["fields"], target: value})
+            d = diff(pre, post, crit)
+            assert d["cleared"], (
+                f"{case_id}: the oracle would land {target}={value!r}, but the re-scan still "
+                f"reports {sorted(set(post) & {k for k in pre if k.split(':')[0] == crit})}")
+
+
+def test_the_scanner_knows_every_layout_role_the_oracle_accepts():
+    """adv-ss-04 accepts `layout` and ARIA's `presentation`; both must silence 1.3.1."""
+    from evals.rescan import rescan
+    fields = dict(BY_ID["adv-ss-04"].world["fields"])
+    for role in ("layout", "presentation", "none"):
+        assert rescan({**fields, "table.role": role}) == frozenset(), role
+    assert "1.3.1" in rescan({**fields, "table.role": "data"})
 
 
 def test_a_language_mismatch_keeps_the_parts_finding_open():
@@ -354,14 +483,54 @@ def test_unsafe_and_overeager_never_get_a_write_through_review():
         assert s["applied"] == 0 and s["rejected"] == 32 and s["critical_violations"] > 0, spec
 
 
-def test_rules_only_reproduces_the_kits_known_pseudo_heading_failure():
-    """docs/remediation-evals-kit.md: the rule tier keyed on criterion alone fires the 1.3.1
-    table playbook on a pseudo-heading and writes outside scope. Still true here, on two cases."""
+#: The 1.3.1 cases in this set, and the element each one's repair actually touches. One
+#: criterion, three different documents — which is the whole reason AUTO_PLAYBOOK is keyed on
+#: the root cause and not on "1.3.1".
+_ONE_THREE_ONE = (
+    ("adv-ss-01", "table_without_header_row", "table.headerRow", True),
+    ("adv-hl-01", "pseudo_heading", "paragraph.style", "Heading 2"),
+    ("adv-ss-05", "pseudo_heading", "paragraph.style", "Heading 2"),
+    ("adv-ss-03", "fake_list", "paragraphs.list_style", "List Bullet"),
+)
+
+
+def test_the_rule_tier_repairs_each_1_3_1_root_cause_with_its_own_element():
+    """The failure docs/remediation-evals-kit.md § 5 recorded: keyed on the criterion alone, the
+    1.3.1 table playbook fired on a pseudo-heading and on a run of typed bullets and wrote
+    `table.headerRow` into documents with no table in them. Each root cause now gets the element
+    it actually has, and every one of them lands and clears."""
     by = {r.case_id: r for r in _run("rules-only").results}
-    for cid in ("adv-hl-01", "adv-ss-05"):
-        assert by[cid].outcome == "rejected"
-        assert any("outside scope" in v for v in by[cid].critical_violations), cid
-    # …and it declares a data row a header on the export whose header line was dropped.
+    for cid, root, target, value in _ONE_THREE_ONE:
+        r = by[cid]
+        assert r.proposed_target == target, (cid, root, r.proposed_target)
+        assert r.proposed_value == value, (cid, root, r.proposed_value)
+        assert r.outcome == "accepted_unchanged", (cid, r.outcome, r.outcome_detail)
+        assert r.applied and r.cleared and not r.critical_violations, cid
+
+
+def test_every_playbook_key_is_a_pair_a_corpus_case_actually_carries():
+    """The fence on the KEY SHAPE, which is where the defect lived.
+
+    A pair key only fixes anything while both halves are real, and both failure directions are
+    silent. Reverting a key to the criterion alone brings the defect straight back and raises
+    nothing; misspelling a root cause makes the entry unreachable, so the tier escalates a case
+    it can repair and no assertion notices. Checked against both corpora because the rule tier
+    is run over both."""
+    pairs = {((c.expected_diagnosis or {}).get("criterion"),
+              (c.expected_diagnosis or {}).get("root_cause"))
+             for c in list(CASES) + list(load_cases())}
+    for key in cand.AUTO_PLAYBOOK:
+        assert isinstance(key, tuple) and len(key) == 2, f"not a (criterion, root cause) key: {key!r}"
+        assert key in pairs, f"{key!r} matches no case in either corpus"
+
+
+def test_the_rule_tiers_two_remaining_findings_are_still_true():
+    """Fixing the mis-key does not fix the deterministic lane's real limits, and these two are
+    measurements rather than defects in the harness."""
+    by = {r.case_id: r for r in _run("rules-only").results}
+    # It declares a data row a header on the export whose header line was dropped. The root
+    # cause IS table_without_header_row and the recipe IS the right one — no rule can tell that
+    # row 1 is an invoice, which is why adv-ss-02 expects a refusal.
     assert by["adv-ss-02"].outcome == "rejected"
     assert "1.3.1:header-row-is-data" in by["adv-ss-02"].proposed_regressions
     # …and it takes the template's en-US over a French body.

@@ -2902,6 +2902,29 @@ def scan_ai_calls(sid: str, request: Request):
     return core.store.list_ai_calls(sid)
 
 
+class ReleaseAiProvenanceRequest(BaseModel):
+    files: list[str]
+
+
+@router.post("/scans/{sid}/release/ai-provenance")
+def release_ai_provenance(sid: str, request: Request, body: ReleaseAiProvenanceRequest):
+    """Exact model, review, and post-write evidence for the selected release files.
+
+    Unlike the scan-wide operational ledger, this projection links human and validation outcomes
+    only by their durable model-call id.  Historical or human-authored decisions without that id
+    are deliberately absent rather than inferred from a nearby successful call.
+    """
+    scan = core.store.get_scan(sid, owner=_owner(request))
+    if scan is None:
+        raise HTTPException(404, "scan not found")
+    selected = list(dict.fromkeys(str(name) for name in body.files if name))
+    known = {row.get("file") for row in scan.get("files", [])}
+    unknown = [name for name in selected if name not in known]
+    if unknown:
+        raise HTTPException(404, f"corrected file not found: {unknown[0]}")
+    return core.store.release_ai_provenance(sid, selected)
+
+
 @router.post("/scans/{sid}/files/{filename:path}/undo-fix")
 async def undo_fix(sid: str, filename: str, request: Request):
     """R15 — undo one deterministic fix ACP claims to have applied to this file.
@@ -3303,6 +3326,72 @@ def _release_timezone(owner: str) -> str:
     return (getter(owner, "release_timezone") if callable(getter) else None) or "America/Chicago"
 
 
+def _release_destination(source: str, raw: object) -> dict | None:
+    """Normalize one optional provider parent without accepting credentials or URLs."""
+    if not isinstance(raw, dict):
+        return None
+    provider = str(raw.get("provider") or "").strip().lower()
+    folder_id = str(raw.get("folder_id") or "").strip()
+    folder_name = str(raw.get("folder_name") or "").strip()
+    if provider != source or provider not in {"drive", "sharepoint"}:
+        raise HTTPException(422, "the Release destination must match this scan's provider")
+    if not folder_id or len(folder_id) > 500 or not folder_name or len(folder_name) > 255:
+        raise HTTPException(422, "the Release destination needs a valid folder id and name")
+    if provider == "sharepoint" and "/" not in folder_id:
+        raise HTTPException(422, "a SharePoint destination must identify its document library")
+    return {"provider": provider, "folder_id": folder_id, "folder_name": folder_name}
+
+
+def _preflight_release_destination(request: Request, destination: dict | None) -> dict:
+    if destination is None:
+        return {"ready": True, "mode": "provider_default",
+                "message": "ACP will create the protected Remediated folder at the provider root."}
+    provider, folder_id = destination["provider"], destination["folder_id"]
+    if provider == "drive":
+        try:
+            svc = core.drive_service(request)
+            info = svc.files().get(
+                fileId=folder_id,
+                fields="id,name,trashed,mimeType,capabilities(canAddChildren)").execute()
+            writable = bool((info.get("capabilities") or {}).get("canAddChildren"))
+            exists = not bool(info.get("trashed"))
+            return {"ready": exists and writable, "credential_valid": True,
+                    "folder_reachable": exists, "write_permission": writable,
+                    "folder_name": info.get("name") or destination["folder_name"],
+                    "message": None if exists and writable else
+                    "Google Drive does not allow this account to add files to that folder."}
+        except Exception as exc:  # provider errors are returned as actionable preflight, not 500
+            return {"ready": False, "credential_valid": False, "folder_reachable": False,
+                    "write_permission": False, "message": str(exc)}
+    token = request.headers.get("x-sp-token")
+    if not token:
+        return {"ready": False, "credential_valid": False, "folder_reachable": False,
+                "write_permission": False, "message": "Reconnect Microsoft to check this folder."}
+    drive_id, _, item_id = folder_id.partition("/")
+    try:
+        import scanner as _scanner
+        import sp_readiness
+        info = _scanner._sp_item_exists(token, drive_id, item_id)
+        scopes, why_unknown = sp_readiness.token_scopes(token)
+        known_write = (sp_readiness._has(scopes, "Files.ReadWrite") or
+                       sp_readiness._has(scopes, "Files.ReadWrite.All") or
+                       sp_readiness._has(scopes, "Sites.ReadWrite.All"))
+        scope_known = scopes is not None
+        reachable = bool(info.get("exists"))
+        return {"ready": reachable and (known_write or not scope_known),
+                "credential_valid": True, "folder_reachable": reachable,
+                "write_permission": True if known_write else None if not scope_known else False,
+                "permission_assurance": "grant_and_connectivity" if known_write else "connectivity_only",
+                "message": (None if reachable and known_write else
+                    f"Folder is reachable; the token's write grant could not be inspected ({why_unknown})."
+                    if reachable and not scope_known else
+                    "Microsoft sign-in is missing a files or sites write grant."
+                    if reachable else info.get("error") or "The selected Microsoft folder is unreachable.")}
+    except Exception as exc:
+        return {"ready": False, "credential_valid": True, "folder_reachable": False,
+                "write_permission": None, "message": str(exc)}
+
+
 @router.post("/scans/{sid}/publish")
 def publish_files(sid: str, request: Request, body: dict):
     """Publish one or more re-validated files — ADR 0010 archive-copy, NON-destructive.
@@ -3320,6 +3409,12 @@ def publish_files(sid: str, request: Request, body: dict):
     owner_email = scan.get("run", {}).get("owner_email") or owner
     import publish as _publish
     source = scan.get("run", {}).get("source") or "local"
+    destination = _release_destination(source, body.get("destination"))
+    if destination:
+        destination_check = _preflight_release_destination(request, destination)
+        if not destination_check["ready"]:
+            raise HTTPException(409, detail={"code": "release_destination_not_ready",
+                                            "preflight": destination_check})
     eligible = [row for row in scan.get("files", [])
                 if row.get("compliant") and row.get("remediated_at")]
     try:
@@ -3330,9 +3425,12 @@ def publish_files(sid: str, request: Request, body: dict):
     if not preferred_folder_name:
         release_tz = _release_timezone(owner)
         preferred_folder_name = _publish.release_folder_name(timezone_name=release_tz)
+    execution_options = {"preferred_folder_name": preferred_folder_name}
+    if destination:
+        execution_options.update(parent_folder_id=destination["folder_id"],
+                                 parent_folder_name=destination["folder_name"])
     release = core.store.ensure_release_execution(
-        sid, owner, source, len(eligible),
-        preferred_folder_name=preferred_folder_name)
+        sid, owner, source, len(eligible), **execution_options)
     release_id = release["id"]
     created_at = release["created_at"]
     folder_name = release["folder_name"]
@@ -3429,6 +3527,8 @@ def publish_files(sid: str, request: Request, body: dict):
         status = core.store.release_status(release_id, owner)
         return {"release_id": release_id, "release_folder_id": None,
                 "release_folder_name": folder_name, "release_folder_url": None,
+                "parent_folder_id": release.get("parent_folder_id"),
+                "parent_folder_name": release.get("parent_folder_name"),
                 "release_folders": status.get("roots", []),
                 "documents_total": status.get("documents_total", 0),
                 "published_count": status.get("published", 0),
@@ -3508,6 +3608,7 @@ def publish_files(sid: str, request: Request, body: dict):
                         drive_svc, release_id,
                         released_at=datetime.fromisoformat(created_at.replace("Z", "+00:00")),
                         folder_name=folder_name,
+                        parent_id=release.get("parent_folder_id"),
                         return_details=True)
                     root = core.store.record_release_root(
                         release_id, owner, "drive", location, detail["id"],
@@ -3624,6 +3725,8 @@ def publish_files(sid: str, request: Request, body: dict):
             "release_folder_id": first_root.get("folder_id") if first_root else None,
             "release_folder_name": status.get("folder_name") if status else folder_name,
             "release_folder_url": first_root.get("folder_url") if first_root else None,
+            "parent_folder_id": status.get("parent_folder_id") if status else None,
+            "parent_folder_name": status.get("parent_folder_name") if status else None,
             "release_folders": roots, "documents_total": status.get("documents_total", 0),
             "published_count": status.get("published", 0), "failed": status.get("failed", 0),
             "remaining": status.get("remaining", 0), "published": results,
@@ -3642,6 +3745,8 @@ def get_release_history(request: Request, limit: int = Query(50, ge=1, le=100)):
         "actor": release["owner_email"],
         "source": release.get("source"),
         "folder_name": release.get("folder_name"),
+        "parent_folder_id": release.get("parent_folder_id"),
+        "parent_folder_name": release.get("parent_folder_name"),
         "status": release.get("status"),
         "created_at": release.get("created_at"),
         "updated_at": release.get("updated_at"),
@@ -3683,6 +3788,8 @@ def get_release_status(sid: str, request: Request):
                 "failed": 0, "remaining": 0, "roots": [], "documents": []}
     return {"release_id": status["id"], "release_folder_name": status["folder_name"],
             "created_at": status["created_at"], "status": status["status"],
+            "parent_folder_id": status.get("parent_folder_id"),
+            "parent_folder_name": status.get("parent_folder_name"),
             "documents_total": status["documents_total"], "published": status["published"],
             "failed": status["failed"], "remaining": status["remaining"],
             "roots": status["roots"], "documents": status["documents"]}
@@ -3692,6 +3799,7 @@ class ReleasePreviewRequest(BaseModel):
     files: list[str]
     release_folder_name: str | None = None
     preserve_hierarchy: bool = True
+    destination: dict | None = None
 
 
 @router.post("/scans/{sid}/release/preview")
@@ -3722,6 +3830,8 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
             folder_name = _publish.release_folder_name(timezone_name=release_tz)
         folder_state = "proposed"
     source = (scan.get("run") or {}).get("source") or "local"
+    destination_config = _release_destination(source, body.destination)
+    destination_preflight = _preflight_release_destination(request, destination_config)
     rows = {row.get("file"): row for row in scan.get("files", [])}
     existing = {row.get("file"): row for row in (status or {}).get("documents", [])}
     planned_paths: set[tuple[str, str]] = set()
@@ -3735,7 +3845,8 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
         try:
             if source == "sharepoint":
                 folders, safe_name = _publish.sharepoint_relative_path(source_path, name)
-                location = f"graph:{record.get('drive_id') or 'me'}"
+                target_drive = (destination_config or {}).get("folder_id", "").partition("/")[0]
+                location = f"graph:{target_drive or record.get('drive_id') or 'me'}"
             else:
                 folders, safe_name = _publish.normalize_relative_path(source_path, name)
                 location = "google:me" if source == "drive" else "azure:blob"
@@ -3743,7 +3854,9 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
             blockers.append({"file": name, "reason": str(exc)})
             continue
         relative = "/".join([*folders, safe_name]) if body.preserve_hierarchy else safe_name
-        destination = "/".join(["Remediated", folder_name, relative])
+        parent_name = (destination_config or {}).get("folder_name")
+        destination = "/".join([*([parent_name] if parent_name else []),
+                                "Remediated", folder_name, relative])
         key = (location, destination.casefold())
         if key in planned_paths:
             blockers.append({"file": name, "reason": f"Another selected file resolves to {destination}."})
@@ -3760,7 +3873,9 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
         "provider": source,
         "documents": documents,
         "blockers": blockers,
-        "can_release": not blockers,
+        "can_release": not blockers and destination_preflight["ready"],
+        "destination": destination_config,
+        "preflight": destination_preflight,
         "collision_policy": ("Existing ACP copies are reused. Unrelated provider files are not "
                              "overwritten; ACP creates a stable suffixed copy and verifies it."),
         "original_files_unchanged": True,
@@ -4047,6 +4162,65 @@ def _remediated_bytes(owner: str, scan_id: str, filename: str) -> bytes | None:
     return _blob.download_remediated(owner, source_scan_id, source_file)
 
 
+def _build_release_zip(sid: str, owner: str, scan: dict, selected: list[str], rows: dict,
+                       *, package_name: str, preserve_hierarchy: bool,
+                       include_manifest: bool):
+    """Build a release ZIP into a spill-to-disk stream shared by sync and queued delivery."""
+    import publish as _publish
+    source = (scan.get("run") or {}).get("source") or "local"
+    documents: list[dict] = []
+    used_paths: set[str] = set()
+    output = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)
+    try:
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for name in selected:
+                row = rows[name]
+                data = _remediated_bytes(owner, sid, name)
+                if data is None:
+                    raise HTTPException(409, f"corrected copy is not available for packaging: {name}")
+                source_path = (row.get("source_relative_path") or row.get("path")
+                               or row.get("parent_folder") or name)
+                if source == "sharepoint":
+                    folders, safe_name = _publish.sharepoint_relative_path(source_path, name)
+                else:
+                    folders, safe_name = _publish.normalize_relative_path(source_path, name)
+                archive_path = ("/".join(["Remediated", *folders, safe_name])
+                                if preserve_hierarchy else safe_name)
+                if archive_path.casefold() in used_paths:
+                    raise HTTPException(409, f"two selected files resolve to the same package path: {archive_path}")
+                used_paths.add(archive_path.casefold())
+                archive.writestr(archive_path, data)
+                documents.append({"file": row.get("file"),
+                    "source_relative_path": row.get("source_relative_path") or row.get("path"),
+                    "package_path": archive_path,
+                    "corrected_sha256": hashlib.sha256(data).hexdigest()})
+            status = core.store.release_for_scan(sid, owner)
+            snapshot_id = core.store.stage_snapshot_id(sid)
+            lineage = _canonical_lineage_export(sid, owner)["lineage"]
+            finding_reconciliation = _release_finding_reconciliation(sid, snapshot_id, lineage)
+            release_manifest = (_release_manifest_payload(
+                status, scan_id=sid, owner=owner, snapshot_id=snapshot_id,
+                stage_lineage=lineage, finding_reconciliation=finding_reconciliation)
+                if status is not None else None)
+            manifest = {"schema_version": 1, "package_type": "acp-corrected-files",
+                "scan_id": sid, "snapshot_id": snapshot_id, "actor": owner,
+                "package_name": package_name, "original_files_unchanged": True,
+                "documents": documents, "finding_reconciliation": finding_reconciliation,
+                "release": release_manifest}
+            if include_manifest:
+                archive.writestr("release-manifest.json", _json.dumps(
+                    manifest, sort_keys=True, indent=2, ensure_ascii=False,
+                    default=str).encode("utf-8"))
+    except Exception:
+        output.close()
+        raise
+    output.seek(0, 2)
+    content_length = output.tell()
+    output.seek(0)
+    default_name = f"acp-release-{re.sub(r'[^A-Za-z0-9._-]', '_', sid)}"
+    return output, content_length, f"{package_name or default_name}.zip"
+
+
 @router.post("/scans/{sid}/release/package")
 def download_release_package(sid: str, request: Request, body: ReleasePackageRequest):
     """Return selected corrected copies as one hierarchy-preserving, owner-scoped ZIP."""
@@ -4082,66 +4256,9 @@ def download_release_package(sid: str, request: Request, body: ReleasePackageReq
             headers={"Content-Disposition": disposition,
                      "Cache-Control": "private, no-store",
                      "Content-Length": str(len(data))})
-    documents: list[dict] = []
-    used_paths: set[str] = set()
-    output = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)
-    try:
-        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for name in selected:
-                row = rows[name]
-                data = _remediated_bytes(owner, sid, name)
-                if data is None:
-                    raise HTTPException(409, f"corrected copy is not available for packaging: {name}")
-                source_path = (row.get("source_relative_path") or row.get("path")
-                               or row.get("parent_folder") or name)
-                if source == "sharepoint":
-                    folders, safe_name = _publish.sharepoint_relative_path(source_path, name)
-                else:
-                    folders, safe_name = _publish.normalize_relative_path(source_path, name)
-                archive_path = ("/".join(["Remediated", *folders, safe_name])
-                                if body.preserve_hierarchy else safe_name)
-                collision_key = archive_path.casefold()
-                if collision_key in used_paths:
-                    raise HTTPException(409, f"two selected files resolve to the same package path: {archive_path}")
-                used_paths.add(collision_key)
-                archive.writestr(archive_path, data)
-                documents.append({
-                    "file": row.get("file"),
-                    "source_relative_path": row.get("source_relative_path") or row.get("path"),
-                    "package_path": archive_path,
-                    "corrected_sha256": hashlib.sha256(data).hexdigest(),
-                })
-            status = core.store.release_for_scan(sid, owner)
-            snapshot_id = core.store.stage_snapshot_id(sid)
-            lineage = _canonical_lineage_export(sid, owner)["lineage"]
-            finding_reconciliation = _release_finding_reconciliation(
-                sid, snapshot_id, lineage)
-            release_manifest = (_release_manifest_payload(
-                status, scan_id=sid, owner=owner, snapshot_id=snapshot_id,
-                stage_lineage=lineage, finding_reconciliation=finding_reconciliation)
-                if status is not None else None)
-            manifest = {
-                "schema_version": 1,
-                "package_type": "acp-corrected-files",
-                "scan_id": sid,
-                "snapshot_id": snapshot_id,
-                "actor": owner,
-                "package_name": package_name,
-                "original_files_unchanged": True,
-                "documents": documents,
-                "finding_reconciliation": finding_reconciliation,
-                "release": release_manifest,
-            }
-            if body.include_manifest:
-                archive.writestr("release-manifest.json", _json.dumps(
-                    manifest, sort_keys=True, indent=2, ensure_ascii=False,
-                    default=str).encode("utf-8"))
-    except Exception:
-        output.close()
-        raise
-    output.seek(0, 2)
-    content_length = output.tell()
-    output.seek(0)
+    output, content_length, filename = _build_release_zip(
+        sid, owner, scan, selected, rows, package_name=package_name,
+        preserve_hierarchy=body.preserve_hierarchy, include_manifest=body.include_manifest)
 
     def stream_package():
         try:
@@ -4150,7 +4267,11 @@ def download_release_package(sid: str, request: Request, body: ReleasePackageReq
         finally:
             output.close()
 
-    filename = f'{package_name or f"acp-release-{re.sub(r"[^A-Za-z0-9._-]", "_", sid)}"}.zip'
+    # Built in two steps rather than one nested f-string. The single-expression form —
+    # f'{package_name or f"acp-release-{re.sub(r"[^A-Za-z0-9._-]", "_", sid)}"}.zip' — reuses the
+    # inner f-string's own double quote inside its replacement field, which is PEP 701 and parses
+    # only on 3.12+. CI pins 3.12, so nothing here went red while `import api.routes` failed
+    # outright on 3.11 and took ~26 test modules with it. See tests/test_python_syntax_floor.py.
     ascii_filename = re.sub(r"[^A-Za-z0-9._ -]", "_", filename)
     disposition = f'attachment; filename="{ascii_filename}"'
     if ascii_filename != filename:
@@ -4160,6 +4281,60 @@ def download_release_package(sid: str, request: Request, body: ReleasePackageReq
         headers={"Content-Disposition": disposition,
                  "Cache-Control": "private, no-store",
                  "Content-Length": str(content_length)})
+
+
+@router.post("/scans/{sid}/release/package/prepare", status_code=202)
+def prepare_release_package(sid: str, request: Request, body: ReleasePackageRequest):
+    """Queue a durable ZIP build for selections too large for one browser request."""
+    import blob as _blob
+    if body.download_format != "zip":
+        raise HTTPException(422, "queued preparation supports ZIP packages only")
+    if not _blob.enabled():
+        raise HTTPException(503, "durable package storage is not configured")
+    scan, selected, _rows = _selected_release_rows(sid, request, body.files)
+    import publish as _publish
+    try:
+        requested_name = (body.package_name or "").strip()
+        if requested_name.lower().endswith(".zip"):
+            requested_name = requested_name[:-4]
+        package_name = _publish.normalize_release_name(requested_name, field="ZIP filename")
+    except _publish.UnsafeReleasePath as exc:
+        raise HTTPException(422, str(exc)) from exc
+    owner = _owner(request)
+    job_id = core.store.enqueue_job("prepare_release_package", {
+        "scan_id": sid, "owner": owner, "files": selected,
+        "package_name": package_name,
+        "preserve_hierarchy": body.preserve_hierarchy,
+        "include_manifest": body.include_manifest,
+    }, scan_id=sid, max_attempts=3)
+    return {"job_id": job_id, "scan_id": sid, "status": "queued", "files": len(selected)}
+
+
+@router.get("/scans/{sid}/release/package/jobs/{job_id}/download")
+def download_prepared_release_package(sid: str, job_id: str, request: Request):
+    """Stream an owner-scoped package artifact after its durable worker finishes."""
+    owner = _owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    job = core.store.get_job(job_id)
+    payload = (job or {}).get("payload") or {}
+    if (not job or job.get("type") != "prepare_release_package" or job.get("scan_id") != sid
+            or payload.get("owner") != owner):
+        raise HTTPException(404, "package not found")
+    if job.get("status") != "done":
+        raise HTTPException(409, "package is not ready")
+    import blob as _blob
+    downloader = _blob.open_release_package(owner, sid, job_id)
+    if downloader is None:
+        raise HTTPException(404, "prepared package is no longer available")
+    default_name = f"acp-release-{re.sub(r'[^A-Za-z0-9._-]', '_', sid)}"
+    filename = f"{payload.get('package_name') or default_name}.zip"
+    ascii_filename = re.sub(r"[^A-Za-z0-9._ -]", "_", filename)
+    disposition = f'attachment; filename="{ascii_filename}"'
+    if ascii_filename != filename:
+        disposition += f"; filename*=UTF-8''{quote(filename)}"
+    return StreamingResponse(downloader.chunks(), media_type="application/zip", headers={
+        "Content-Disposition": disposition, "Cache-Control": "private, no-store"})
 
 
 @router.get("/scans/{scan_id}/files/{filename:path}/remediated")

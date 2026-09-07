@@ -96,4 +96,14 @@ describe('EvidenceCard — approving a deferred row', () => {
     expect(status).toBe('approved')
     expect(opts.modelCallId).toBe('vision-call-exact-7')
   })
+
+  it('attributes every value on a multi-instance vision card to its own call', async () => {
+    await mount({ ...deferred, evidence: [], proposals: [
+      { locator: 'slide1#rId2', proposed_value: 'A chart', model_call_id: 'vision-call-1' },
+      { locator: 'slide2#rId3', proposed_value: 'A map', model_call_id: 'vision-call-2' },
+    ] })
+    await clickText('Approve')
+    const [, , , , opts] = onAct.mock.calls[0]
+    expect(opts.modelCallIds).toEqual(['vision-call-1', 'vision-call-2'])
+  })
 })

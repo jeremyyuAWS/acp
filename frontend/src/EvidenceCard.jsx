@@ -3,7 +3,7 @@ import { aiProvenance, getCopilotGuidance, getFileGeometry, getFileRemediationDi
 import Thumbnail from './Thumbnail.jsx'
 import BeforeAfterEvidence from './BeforeAfterEvidence.jsx'
 import RiskChip from './RiskChip.jsx'
-import { applyOutcomeCopy, authoringScaffold, buildEvidenceCard, describedImageType, evidenceOf, evidenceSignals, firstProposed, groupPages, guidanceSentence, houseStyleOf, imagesOfTextException, isValueFix, leadWithIsolatedImage, primaryActionLabel, proposalsOf, reviewIntent, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview, whyRecommendation, whySafeToApprove } from './reviewCard.js'
+import { applyOutcomeCopy, authoringScaffold, buildEvidenceCard, DESCRIBED_NOT_REPLACED, describedImageType, evidenceOf, evidenceSignals, firstProposed, groupPages, guidanceSentence, houseStyleOf, imagesOfTextException, isValueFix, leadWithIsolatedImage, primaryActionLabel, proposalsOf, reviewIntent, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview, whyRecommendation, whySafeToApprove } from './reviewCard.js'
 import ProposalThumb, { isSafeThumb } from './ProposalThumb.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
 import CaptionEditor from './CaptionEditor.jsx'
@@ -143,6 +143,12 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
                              approved_value: e.approved_value }))
   const [values, setValues] = useState(() => seedValues(instances))
   const setValueAt = (i, v) => setValues((prev) => prev.map((x, j) => (j === i ? v : x)))
+  // Unlike `instances`, this also captures calls made on demand after the card mounted. Keep the
+  // identifier beside the value it produced; the two positional arrays travel together.
+  const [instanceCallIds, setInstanceCallIds] = useState(
+    () => instances.map((instance) => instance?.model_call_id || null))
+  const setCallIdAt = (i, callId) => setInstanceCallIds(
+    (prev) => prev.map((value, j) => (j === i ? callId || null : value)))
   // Approve-similar (#132): copy row i's description to every instance that is the SAME image
   // (byte-identical thumbnail) — a logo reused across slides gets described once.
   const applyToSimilar = (i) => {
@@ -199,6 +205,10 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
   // card can contain several independent calls, so only bind the card-level decision when the
   // decision has exactly one generated value; otherwise attribution would be false precision.
   const modelCallId = useRef(instances.length === 1 ? instances[0]?.model_call_id || null : null)
+  // Preserve each generated value's producer. Position i follows the same instances ordering as
+  // approvedValues, so a collapsed multi-image card never attributes every decision to whichever
+  // vision call happened to be first (or drops all attribution because there was more than one).
+  const modelCallIds = instanceCallIds
   // Auto-draft plumbing: the card element (for the viewport observer), a once-guard so the auto
   // draft fires at most once, and whether the card has been scrolled into view yet.
   const rootRef = useRef(null)
@@ -285,7 +295,11 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
       try {
         const r = await suggestFix(item.scan_id, item.file, item.rule_id, instances[i]?.locator)
         const s = (r?.suggestion || '').trim()
-        if (s && !r.is_template) { setValueAt(i, s); n += 1 }
+        if (s && !r.is_template) {
+          setValueAt(i, s)
+          setCallIdAt(i, r?.ai_call_id)
+          n += 1
+        }
         const esc = escalationFromDraft(r)   // surface the path from whichever image escalated (#378)
         if (esc) setDraftEscalation(esc)
         // House style is card-level (it keys on org + rule + format, all identical across this
@@ -319,6 +333,7 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
       const s = (r?.suggestion || '').trim()
       if (!s) { setDraftMsg({ kind: 'error', text: `Image ${i + 1}: the model returned nothing — write it yourself.` }); return }
       setValueAt(i, s)
+      setCallIdAt(i, r?.is_template ? null : r?.ai_call_id)
       if (instances.length === 1) modelCallId.current = r?.ai_call_id || null
       setOcrAid(r.ocr_text || null)
       // A per-image escalation reads off this image's own response (#378); keep any earlier one shown
@@ -664,19 +679,31 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
     // that records the reviewer's text at all. Suppressing it here (which is what happened while
     // captions rode the explain-only branch) discards the correction at the moment of approval,
     // silently, because the machine's draft and the corrected file are both valid WebVTT.
-    const approvedValues = (status === 'approved' && !resolution && !explainOnly && !decorativeRow
-                            && instances.length)
+    // ADR 0055's resolution is the ONE that carries text, and every rule below has to know it.
+    // "A resolution stands in for the authored value" is true of decorative, essential logo and
+    // out-of-scope — each closes a finding by judgement having authored nothing. It is false of
+    // described_not_replaced: the reviewer kept the image AND wrote its description, the backend
+    // records that description as 1.1.1 alt text the document owes, and routes/hitl.py refuses the
+    // decision outright without one. Suppressing the values here would send the reviewer's work
+    // nowhere and turn a correct decision into a 422.
+    const describedRow = resolution === DESCRIBED_NOT_REPLACED
+    const approvedValues = (status === 'approved' && (!resolution || describedRow)
+                            && !explainOnly && !decorativeRow && instances.length)
       ? (multi ? values : [value || ''])
       : null
-    // A resolution stands in for the authored value: send no finalValue (nothing was written), and
-    // if the reviewer left the note blank, self-describe the exception so the audit line is legible.
-    const finalValue = (resolution || explainOnly || decorativeRow) ? null : t.finalValue
+    // Same exception, same reason: a described row DID author a value, so the audit line must
+    // carry it rather than reading as a judgement with nothing behind it.
+    const finalValue = ((resolution && !describedRow) || explainOnly || decorativeRow)
+      ? null : t.finalValue
     const noteOut = note || (resolution === 'decorative' ? 'Marked decorative — no description needed'
-      : resolution === 'essential_exception' ? 'Marked essential logo/brand — exempt' : null)
+      : resolution === 'essential_exception' ? 'Marked essential logo/brand — exempt'
+      : describedRow ? 'Kept the image of text and described it — described as alt text, not replaced'
+      : null)
     try {
       await onAct(card.id, status, noteOut, finalValue,
                   { edited: t.edited, reviewMs: t.reviewMs, aiValue: t.aiValue, approvedValues,
-                    rejectReason, resolution, modelCallId: modelCallId.current })
+                    rejectReason, resolution, modelCallId: modelCallId.current,
+                    modelCallIds: modelCallIds.some(Boolean) ? modelCallIds : null })
       onResolved && onResolved(card.id, status)
     } catch (e) {
       // HitlBell rolls the optimistic list back and rethrows. Without this catch the rejection
@@ -1383,16 +1410,42 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
             if (!exc) return null
             return (
               <div className="evcard-exception">
-                {exc.action ? (
-                  <>
-                    <span className="muted">{exc.prompt}</span>
-                    <button type="button" className="ghost small" disabled={busy}
-                            title={exc.action.title}
-                            onClick={() => decide('approved', null, exc.action.resolution)}>{exc.action.label}</button>
-                  </>
-                ) : (
-                  <span className="muted evcard-exception-note">{exc.note}</span>
-                )}
+                {/* The note and the action are no longer alternatives. A DATA image gets both:
+                    the guidance still leads (real text is the better fix whenever it is possible)
+                    and "keep it — describe it" follows as the way out when it is not. Before
+                    ADR 0055 this branch rendered guidance and nothing to click. */}
+                {exc.note && <span className="muted evcard-exception-note">{exc.note}</span>}
+                {exc.prompt && <span className="muted">{exc.prompt}</span>}
+                {exc.action && (() => {
+                  // A described decision CARRIES the reviewer's text, so the button waits for it —
+                  // and waits for text they actually WROTE, not the box as it came.
+                  //
+                  // The editor is seeded from `proposed_value` (ProposalEditors.seedValues), and on
+                  // a 1.4.5 card that draft is the OCR TRANSCRIPT: the words baked into the picture.
+                  // A transcript is not a description of the image. Accepting the unedited box would
+                  // write "Q3 revenue rose 12%" where "a slide titled Q3 revenue, reading …" belongs,
+                  // and would do it on the one path whose whole premise is that the picture stays.
+                  // The backend refuses to fall back to a draft for exactly this reason
+                  // (store.queue_described_image_alt); this is the same rule where the reviewer can
+                  // see it, as a disabled control with a reason rather than a click that 422s.
+                  const wantsText = !!exc.action.needsText
+                  const seeded = seedValues(instances)
+                  const authored = (v, i) => {
+                    const t = String(v || '').trim()
+                    return !!t && t !== String(seeded[i] || '').trim()
+                  }
+                  const hasOwnWords = multi
+                    ? values.some(authored)
+                    : authored(value, 0)
+                  const blocked = wantsText && !hasOwnWords
+                  return (
+                    <button type="button" className="ghost small" disabled={busy || blocked}
+                            title={blocked ? exc.action.needsTextHint : exc.action.title}
+                            onClick={() => decide('approved', null, exc.action.resolution)}>
+                      {exc.action.label}
+                    </button>
+                  )
+                })()}
               </div>
             )
           })()}

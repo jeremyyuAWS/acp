@@ -120,6 +120,13 @@ def test_the_destructive_actions_are_behind_an_administrative_grant(routes):
             f"a separate administrative permission for actions like this")
 
 
+def test_release_ai_provenance_is_a_view_projection_not_a_publish_grant():
+    """The request body selects files but the endpoint only reads their recorded evidence."""
+    needed = capmap.required_capabilities(
+        "POST", "/scans/{sid}/release/ai-provenance")
+    assert needed == frozenset({"release.view"})
+
+
 # ── SSE (PRD §16) ─────────────────────────────────────────────────────────────
 
 def test_every_stream_requires_what_its_status_endpoint_requires(routes):

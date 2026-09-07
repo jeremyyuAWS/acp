@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react'
 import { normalizeLive } from './liveAssessment.js'
 import LiveHeartbeatBars from './LiveHeartbeatBars.jsx'
+import LiveCounter from './LiveCounter.jsx'
 import SourceVisibility from './SourceVisibility.jsx'
+import Term from './Term.jsx'
 
 // The Assess RUNNING screen (approved board assess-03). It replaces the mid-run KPI scoreboard
 // (LiveAssessment.jsx, kept but no longer mounted here) with a single per-DOCUMENT focus card.
@@ -227,6 +229,12 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
       <div className="assess-run-card" style={{ border: '1px solid var(--line,#e4e8ec)', borderRadius: 12,
                                                 padding: '14px 16px', background: 'var(--panel,#fff)' }}>
         <SourceVisibility source={m.source} scope={m.scope} />
+        <dl className="stage-live-accounting" aria-label="Live assessment accounting">
+          <div><dt><Term k="assessment_assessed">Assessed</Term></dt><dd><LiveCounter value={completed} /></dd></div>
+          <div><dt><Term k="assessment_processing">Processing</Term></dt><dd>{processing.toLocaleString()}</dd></div>
+          <div><dt><Term k="assessment_waiting">Waiting</Term></dt><dd>{Math.max(0, total - completed - processing).toLocaleString()}</dd></div>
+          <div><dt><Term k="assessment_eligible">Eligible</Term></dt><dd>{total.toLocaleString()}</dd></div>
+        </dl>
         {isPreparing ? (
           <PrepChecklist m={m} total={total} completed={completed}
                          processing={processing} elapsed={elapsed} />

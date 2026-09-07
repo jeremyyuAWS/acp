@@ -153,3 +153,49 @@ describe('Azure billing actuals', () => {
     expect(host.textContent).toContain('Not reported')
   })
 })
+
+// On 2026-09-07 the panel read "Billing actuals — Not configured" beside a tile saying "Cost
+// Management is throttling". The feed was fully configured; Azure was asking the app to wait.
+describe('A throttled billing feed is temporary, not unconfigured', () => {
+  const base = () => ({ configured: true, measured_at: new Date().toISOString(),
+    rate_source: 'East US 2 Consumption list price', estimated_hourly_usd: 3.5496, estimated_daily_usd: 85.19,
+    services: [], billing: { configured: false, delay_note: 'lag by about four hours',
+      freshness_label: 'Azure billing actuals unavailable: Cost Management is throttling' } })
+  const setup = (billing_actuals) => ({
+    capacity: { configured: true, available: true, reason: null },
+    rate_card: { configured: true, reason: null },
+    billing_actuals,
+  })
+
+  it('says Temporarily unavailable and when it will retry', async () => {
+    const root = await render({ ...base(), setup: setup({ configured: false, state: 'throttled',
+      reason: 'Azure billing actuals unavailable: Cost Management is throttling',
+      retry_at: new Date(Date.now() + 15 * 60000).toISOString() }) })
+    expect(host.textContent).toContain('Billing actualsTemporarily unavailable')
+    expect(host.textContent).not.toContain('Billing actualsNot configured')
+    expect(host.textContent).toContain('retrying at')
+    act(() => root.unmount())
+  })
+
+  it('falls back to the hour when Azure gave no retry time', async () => {
+    const root = await render({ ...base(), setup: setup({ configured: false, state: 'throttled',
+      reason: 'Azure billing actuals unavailable: Cost Management is throttling', retry_at: null }) })
+    expect(host.textContent).toContain('retrying within the hour')
+    act(() => root.unmount())
+  })
+
+  it('a refusal is Unavailable, and still counts as a missing input', async () => {
+    const root = await render({ ...base(), estimated_hourly_usd: null, estimated_daily_usd: null,
+      setup: setup({ configured: false, state: 'unavailable',
+        reason: 'Azure billing actuals unavailable: Cost Management Reader role needed' }) })
+    expect(host.textContent).toContain('Billing actualsUnavailable')
+    expect(host.textContent).toContain('1 input missing')
+    act(() => root.unmount())
+  })
+
+  it('a backend that predates `state` still reads as it always did', async () => {
+    const root = await render({ ...base(), setup: setup({ configured: false, reason: 'Azure Cost Management is not connected' }) })
+    expect(host.textContent).toContain('Billing actualsNot configured')
+    act(() => root.unmount())
+  })
+})

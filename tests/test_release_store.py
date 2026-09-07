@@ -39,6 +39,19 @@ def test_custom_folder_name_is_saved_once_and_stays_stable_on_retry(isolated_sto
     assert retry["folder_name"] == "Q3 Accessibility Release"
 
 
+def test_custom_parent_destination_is_saved_once_and_stays_stable_on_retry(isolated_store):
+    owner = "owner@example.com"
+    _scan(isolated_store, "scan-parent", owner)
+    first = isolated_store.ensure_release_execution(
+        "scan-parent", owner, "sharepoint", 2,
+        parent_folder_id="drive-a/folder-a", parent_folder_name="Finance")
+    retry = isolated_store.ensure_release_execution(
+        "scan-parent", owner, "sharepoint", 2,
+        parent_folder_id="drive-b/folder-b", parent_folder_name="Wrong retry target")
+    assert first["parent_folder_id"] == retry["parent_folder_id"] == "drive-a/folder-a"
+    assert first["parent_folder_name"] == retry["parent_folder_name"] == "Finance"
+
+
 def test_later_approvals_expand_and_reopen_a_completed_release(isolated_store):
     owner = "owner@example.com"
     _scan(isolated_store, "scan-expand", owner)

@@ -13,6 +13,7 @@ from routes import scans
 
 
 class _Store:
+    queued = None
     def get_scan(self, sid, owner=None):
         if sid != "scan-1" or owner != "owner@example.com":
             return None
@@ -35,6 +36,16 @@ class _Store:
                 "scan_id": sid, "generated_at": "volatile", "available": True,
                 "stages": [], "integrity": {"ok": True, "broken_manifest_links": [],
                                               "inconsistent_stages": []}}
+
+    def enqueue_job(self, job_type, payload, **kwargs):
+        self.queued = {"type": job_type, "payload": payload, **kwargs}
+        return "package-job-1"
+
+    def get_job(self, job_id):
+        if job_id != "package-job-1" or not self.queued:
+            return None
+        return {"id": job_id, "type": self.queued["type"], "scan_id": "scan-1",
+                "status": "done", "payload": self.queued["payload"]}
 
 
 def _request(owner="owner@example.com"):
@@ -196,3 +207,37 @@ def test_package_preview_reports_paths_size_coverage_and_recommendation(monkeypa
     assert preview["recommended_format"] == "original"
     assert preview["include_manifest"] is False
     assert preview["can_download"] is True
+
+
+def test_large_package_can_be_queued_and_downloaded_after_navigation(monkeypatch):
+    import blob
+    store = _Store()
+    monkeypatch.setattr(scans.core, "store", store)
+    monkeypatch.setattr(blob, "enabled", lambda: True)
+    queued = scans.prepare_release_package(
+        "scan-1", _request(), scans.ReleasePackageRequest(
+            files=["report.pdf", "form.docx"], package_name="Board files"))
+    assert queued == {"job_id": "package-job-1", "scan_id": "scan-1", "status": "queued", "files": 2}
+    assert store.queued["type"] == "prepare_release_package"
+    assert store.queued["payload"]["owner"] == "owner@example.com"
+
+    class _Download:
+        def chunks(self):
+            yield b"prepared-"
+            yield b"zip"
+    monkeypatch.setattr(blob, "open_release_package", lambda owner, sid, job_id: _Download())
+    response = scans.download_prepared_release_package(
+        "scan-1", "package-job-1", _request())
+    assert asyncio.run(_response_body(response)) == b"prepared-zip"
+    assert response.headers["content-disposition"] == 'attachment; filename="Board files.zip"'
+
+
+def test_prepared_package_download_is_owner_scoped(monkeypatch):
+    store = _Store()
+    store.queued = {"type": "prepare_release_package", "payload": {
+        "owner": "owner@example.com", "package_name": "Board files"}}
+    monkeypatch.setattr(scans.core, "store", store)
+    with pytest.raises(HTTPException) as exc:
+        scans.download_prepared_release_package(
+            "scan-1", "package-job-1", _request("other@example.com"))
+    assert exc.value.status_code == 404

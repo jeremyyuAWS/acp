@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import sys
 import urllib.error
@@ -76,17 +77,73 @@ class Candidate:
 
 # ── the deterministic floor ──────────────────────────────────────────────────────────────────
 
-#: criterion -> the field the auto lane writes and the value it derives. Mirrors what
-#: api/remediate*.py does deterministically; kept small on purpose — a rule tier that pretends
-#: to cover assisted criteria would flatter itself and mis-route the ladder.
-AUTO_PLAYBOOK: dict[str, Callable[[Case], dict[str, Any] | None]] = {
-    "2.4.2": lambda c: {"target": "doc.title", "value": c.world.get("derived", {}).get("title")},
-    "3.1.1": lambda c: {"target": "doc.lang", "value": c.world.get("derived", {}).get("lang")},
-    "1.3.1": lambda c: {"target": "table.headerRow", "value": True},
-    "3.3.2": lambda c: {"target": "field.label",
-                        "value": c.world.get("derived", {}).get("adjacent_label")},
-    "4.1.2": lambda c: {"target": "field.name",
-                        "value": c.world.get("derived", {}).get("adjacent_label")},
+def _promote_pseudo_heading(case: Case) -> dict[str, Any] | None:
+    """The level a paragraph styled to look like a heading is promoted to, read off the outline
+    it sits in — `max(2, level of the last heading before it)`.
+
+    Never Heading 1: that is the document title's level, and promoting a section onto it
+    flattens the outline rather than fixing it. Never deeper than the outline's current depth
+    either, which would close 1.3.1 by opening a 2.4.6 skip. Between those two bounds one level
+    is left, so this is a derivation and not a choice — which is what keeps it in the
+    deterministic lane at all. Mirrors api/remediate_office.py, where the level comes from a
+    paragraph's position in document order rather than from how large its text is.
+    """
+    f = case.world.get("fields", {})
+    outline = [int(x) for x in (f.get("doc.outline") or []) if isinstance(x, (int, float))]
+    idx = f.get("paragraph.outline_index")
+    before = outline[:int(idx)] if isinstance(idx, (int, float)) else outline
+    if not before:
+        return None          # nothing to nest under; the level would be a guess
+    return {"target": "paragraph.style", "value": f"Heading {max(2, before[-1])}"}
+
+
+_TYPED_MARKER = re.compile(r"^\s*([\u2022\-\*\u00b7]|\d+[.)])\s")
+
+
+def _style_typed_list(case: Case) -> dict[str, Any] | None:
+    """Bullet or number for a run of paragraphs the author typed markers into.
+
+    The KIND is not a judgement: a set typed with '\u2022' is unordered and one typed '1.' is
+    ordered, and getting it wrong changes what the document says. Requires EVERY paragraph to
+    carry a marker — evals/rescan.d_lists only needs one to raise the finding, but a stricter
+    bar belongs on the side that writes unattended.
+    """
+    texts = [str(t) for t in (case.world.get("fields", {}).get("paragraphs.texts") or [])]
+    if not texts or not all(_TYPED_MARKER.match(t) for t in texts):
+        return None
+    numbered = all(re.match(r"^\s*\d+[.)]\s", t) for t in texts)
+    return {"target": "paragraphs.list_style",
+            "value": "List Number" if numbered else "List Bullet"}
+
+
+#: (criterion, root cause) -> the field the auto lane writes and the value it derives. Mirrors
+#: what api/remediate*.py does deterministically; kept small on purpose — a rule tier that
+#: pretends to cover assisted criteria would flatter itself and mis-route the ladder.
+#:
+#: KEYED ON THE ROOT CAUSE, not the criterion alone, because one criterion is not one repair.
+#: 1.3.1 covers a table with no header row, a paragraph styled to look like a heading, and a run
+#: of typed bullet characters — three different elements in three different documents. Keyed on
+#: "1.3.1" the table recipe fired on all three and wrote `table.headerRow` into documents with
+#: no table in them; docs/remediation-evals-kit.md § 5 records the run that found it. A root
+#: cause with no entry here has no deterministic remedy and is escalated, which is the honest
+#: answer and the one that routes the ladder correctly.
+AUTO_PLAYBOOK: dict[tuple[str, str], Callable[[Case], dict[str, Any] | None]] = {
+    ("2.4.2", "missing_document_title"):
+        lambda c: {"target": "doc.title", "value": c.world.get("derived", {}).get("title")},
+    ("3.1.1", "missing_document_language"):
+        lambda c: {"target": "doc.lang", "value": c.world.get("derived", {}).get("lang")},
+    ("3.1.1", "invalid_language_tag"):
+        lambda c: {"target": "doc.lang", "value": c.world.get("derived", {}).get("lang")},
+    ("1.3.1", "table_without_header_row"):
+        lambda c: {"target": "table.headerRow", "value": True},
+    ("1.3.1", "pseudo_heading"): _promote_pseudo_heading,
+    ("1.3.1", "fake_list"): _style_typed_list,
+    ("3.3.2", "unlabelled_form_field"):
+        lambda c: {"target": "field.label",
+                   "value": c.world.get("derived", {}).get("adjacent_label")},
+    ("4.1.2", "control_without_accessible_name"):
+        lambda c: {"target": "field.name",
+                   "value": c.world.get("derived", {}).get("adjacent_label")},
 }
 
 
@@ -105,21 +162,32 @@ class RulesOnly(Candidate):
         t0 = time.perf_counter()
         detected = [o.id for o in case.observations if o.defect]
         crit = (case.expected_diagnosis or {}).get("criterion")
+        root = (case.expected_diagnosis or {}).get("root_cause")
         dx = {"criterion": crit,
               "component": (case.expected_diagnosis or {}).get("component"),
-              "root_cause": (case.expected_diagnosis or {}).get("root_cause"),
+              "root_cause": root,
               "severity": (case.expected_diagnosis or {}).get("severity"),
-              "confidence": 0.99 if crit in AUTO_PLAYBOOK else 0.2}
+              "confidence": 0.99 if (crit, root) in AUTO_PLAYBOOK else 0.2}
         plan: list[dict[str, Any]]
-        recipe = AUTO_PLAYBOOK.get(crit or "", lambda c: None)(case)
-        if recipe and recipe.get("value") is not None and "apply_deterministic" in case.allowed_actions:
+        recipe = AUTO_PLAYBOOK.get((crit or "", root or ""), lambda c: None)(case)
+        target = (recipe or {}).get("target")
+        # The SAME test the safety grader applies after the fact (graders.grade_safety: an empty
+        # scope permits nothing), asked before the write instead of after it. A recipe that is
+        # right for the root cause can still be wrong for the document — rem-n01 is a 1.3.1
+        # header-row finding whose remedy is a heading level — and this is the difference
+        # between escalating and committing an out-of-scope write.
+        in_scope = target in case.scope
+        if (recipe and recipe.get("value") is not None and in_scope
+                and "apply_deterministic" in case.allowed_actions):
             plan = [{"action": "apply_deterministic", "criterion": crit, "rollback": True,
                      **recipe}]
         elif not detected:
             plan = [{"action": "no_action", "reason": "no finding"}]
         else:
-            plan = [{"action": "escalate",
-                     "reason": f"{crit}: no deterministic remedy; evidence attached"}]
+            why = (f"the deterministic remedy writes {target}, outside this case's scope"
+                   if recipe and not in_scope
+                   else f"no deterministic remedy for {root or 'this root cause'}")
+            plan = [{"action": "escalate", "reason": f"{crit}: {why}; evidence attached"}]
         return Response(detected=detected, diagnosis=dx, plan=plan, calls=0,
                         latency_s=time.perf_counter() - t0)
 

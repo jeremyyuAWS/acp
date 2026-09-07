@@ -1156,10 +1156,11 @@ class SettingsUpdate(BaseModel):
 
 
 @router.get("/settings")
-def get_settings():
+def get_settings(request: Request = None):
     """Platform settings. ai_enabled=false → deterministic-only mode platform-wide
     (overrides per-scan ?ai=true and blocks /ai/explain). drive_mirror_enabled=false
     (ADR 0010) → remediated fixes stay Blob-only, no automatic Drive copy."""
+    user = (getattr(getattr(request, "state", None), "user_email", None) or "").strip()
     return {"ai_enabled": core.store.get_ai_enabled(),
             "drive_mirror_enabled": core.store.get_drive_mirror_enabled(),
             "drive_mirror_folder": core.store.get_drive_mirror_folder(),
@@ -1172,7 +1173,9 @@ def get_settings():
             # editor must show what is stored so a save round-trips. /config reports the
             # RESOLVED scope for everything that renders it — the two are different questions
             # and conflating them is how an editor starts overwriting what it never loaded.
-            "scan_scope": core.store.get_setting("scan_scope", "") or ""}
+            "scan_scope": core.store.get_setting("scan_scope", "") or "",
+            "release_destination": _release_destination(user) if user else None,
+            "release_templates": _release_templates(user) if user else []}
 
 
 @router.put("/settings")
@@ -1249,7 +1252,7 @@ def update_settings(body: SettingsUpdate, request: Request):
         core.store.log_decision(
             "admin", "settings.ai_enabled",
             detail=f"ai_enabled set to {body.ai_enabled}")
-    return get_settings()
+    return get_settings(request)
 
 
 # ── per-user scan-scope override (ADR 0035 stage 2 — the non-admin surface) ────────────
@@ -1263,6 +1266,82 @@ class MyScopeUpdate(BaseModel):
     # HAVING no override (to clear the override and fall back to the owner default, use DELETE).
     scan_scope: dict[str, list[str]] | str | None = None
     release_timezone: str | None = None
+    release_destination: dict | None = None
+    release_templates: list[dict] | None = None
+
+
+def _release_destination(user: str) -> dict | None:
+    raw = core.store.get_user_setting(user, "release_destination")
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _validate_release_destination(value: dict) -> dict:
+    provider = str(value.get("provider") or "").strip().lower()
+    if provider not in {"drive", "sharepoint"}:
+        raise HTTPException(422, "release_destination.provider must be drive or sharepoint")
+    folder_id = str(value.get("folder_id") or "").strip()
+    folder_name = str(value.get("folder_name") or "").strip()
+    if not folder_id or len(folder_id) > 500:
+        raise HTTPException(422, "release_destination.folder_id is required")
+    if not folder_name or len(folder_name) > 255:
+        raise HTTPException(422, "release_destination.folder_name is required")
+    # Persist only stable provider identifiers and the user-facing label. Tokens, URLs and
+    # arbitrary caller fields must never become durable preferences.
+    return {"provider": provider, "folder_id": folder_id, "folder_name": folder_name}
+
+
+def _release_templates(user: str) -> list[dict]:
+    raw = core.store.get_user_setting(user, "release_templates")
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    return value if isinstance(value, list) else []
+
+
+def _validate_release_templates(values: list[dict]) -> list[dict]:
+    if len(values) > 20:
+        raise HTTPException(422, "at most 20 Release templates can be saved")
+    cleaned, seen = [], set()
+    for raw in values:
+        if not isinstance(raw, dict):
+            raise HTTPException(422, "each Release template must be an object")
+        name = str(raw.get("name") or "").strip()
+        if not name or len(name) > 80:
+            raise HTTPException(422, "each Release template needs a name of 80 characters or fewer")
+        if name.casefold() in seen:
+            raise HTTPException(422, "Release template names must be unique")
+        seen.add(name.casefold())
+        method = str(raw.get("method") or "publish").strip().lower()
+        if method not in {"publish", "download", "acp"}:
+            raise HTTPException(422, "Release template method must be publish, download, or acp")
+        destination = raw.get("destination")
+        if destination is not None:
+            destination = _validate_release_destination(destination)
+        download_format = str(raw.get("download_format") or "zip").strip().lower()
+        if download_format not in {"zip", "original"}:
+            raise HTTPException(422, "download_format must be zip or original")
+        package_name = str(raw.get("package_name") or "").strip()
+        release_folder_name = str(raw.get("release_folder_name") or "").strip()
+        if len(package_name) > 100 or len(release_folder_name) > 100:
+            raise HTTPException(422, "template file and folder names must be 100 characters or fewer")
+        cleaned.append({
+            "name": name, "method": method, "destination": destination,
+            "preserve_hierarchy": raw.get("preserve_hierarchy") is not False,
+            "include_manifest": raw.get("include_manifest") is not False,
+            "include_verification_report": bool(raw.get("include_verification_report")),
+            "download_format": download_format, "package_name": package_name,
+            "release_folder_name": release_folder_name,
+        })
+    return cleaned
 
 
 def _require_user(request: Request) -> str:
@@ -1286,6 +1365,8 @@ def get_my_settings(request: Request):
         "scan_scope": core.store.get_user_setting(user, "scan_scope") or "",
         "owner_default": core.store.get_setting("scan_scope", "") or "",
         "release_timezone": core.store.get_user_setting(user, "release_timezone") or "America/Chicago",
+        "release_destination": _release_destination(user),
+        "release_templates": _release_templates(user),
     }
 
 
@@ -1295,6 +1376,31 @@ def update_my_settings(body: MyScopeUpdate, request: Request):
     and is never stored (same discipline as the admin PUT), because a stored-but-unparseable override
     is silently ignored at read time. `{}` and "" both store as "" (no restriction)."""
     user = _require_user(request)
+    if "release_templates" in body.model_fields_set:
+        templates = _validate_release_templates(body.release_templates or [])
+        core.store.set_user_setting(user, "release_templates", json.dumps(templates))
+        core.store.log_decision(user, "settings.mine.release_templates",
+                                detail=f"{len(templates)} Release templates saved")
+        if (body.scan_scope is None and body.release_timezone is None and
+                "release_destination" not in body.model_fields_set):
+            return {"scan_scope": core.store.get_user_setting(user, "scan_scope") or "",
+                    "release_timezone": core.store.get_user_setting(user, "release_timezone") or "America/Chicago",
+                    "release_destination": _release_destination(user),
+                    "release_templates": templates}
+    if "release_destination" in body.model_fields_set:
+        if body.release_destination is None:
+            core.store.clear_user_setting(user, "release_destination")
+            destination = None
+        else:
+            destination = _validate_release_destination(body.release_destination)
+            core.store.set_user_setting(user, "release_destination", json.dumps(destination))
+        core.store.log_decision(user, "settings.mine.release_destination",
+                                detail="release destination cleared" if destination is None else
+                                f"release destination set to {destination['provider']}:{destination['folder_id']}")
+        if body.scan_scope is None and body.release_timezone is None:
+            return {"scan_scope": core.store.get_user_setting(user, "scan_scope") or "",
+                    "release_timezone": core.store.get_user_setting(user, "release_timezone") or "America/Chicago",
+                    "release_destination": destination}
     if body.release_timezone is not None:
         import publish as _publish
         zone = body.release_timezone.strip() or "America/Chicago"

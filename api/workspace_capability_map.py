@@ -171,6 +171,9 @@ _map_many([
     ("POST", "/admin/activity/workflows/{scan_id}/stages/remediate/resume"),
 ], {"remediate.run"})
 _map_many([
+    # POST because the preview evaluates an unsaved slider payload; it is still a read-only
+    # calculation and grants no permission to execute remediation.
+    ("POST", "/remediation/automation-policy/preview"),
     ("GET", "/scans/{sid}/remediation-status"),
     # The reconciled run snapshot reads the same run as remediation-status and carries strictly
     # more of it — filenames, SharePoint site and library names, the run's own state — so it takes
@@ -208,9 +211,16 @@ _map_many([
     ("GET", "/releases"),
     ("GET", "/scans/{sid}/release"),
     ("GET", "/scans/{sid}/release/manifest"),
+    # This is a read-only projection despite using POST: the selected filenames are carried in
+    # the body so a large release is not constrained by URL length. It does not publish, approve,
+    # or persist anything, and therefore belongs to the same release.view boundary as the
+    # manifest and preview projections rather than the release.publish grant.
+    ("POST", "/scans/{sid}/release/ai-provenance"),
     ("POST", "/scans/{sid}/release/preview"),
     ("POST", "/scans/{sid}/release/package/preview"),
     ("POST", "/scans/{sid}/release/package"),
+    ("POST", "/scans/{sid}/release/package/prepare"),
+    ("GET", "/scans/{sid}/release/package/jobs/{job_id}/download"),
 ], {"release.view"})
 
 # Canonical cross-stage execution contract. Reads serve both stage cards and Live Operations;

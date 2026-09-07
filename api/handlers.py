@@ -28,6 +28,37 @@ from scanner import run_scan
 logger = logging.getLogger(__name__)
 
 
+@handler("prepare_release_package")
+def _prepare_release_package(payload: dict, job: dict) -> None:
+    """Build a large release archive off-request and persist it for later download."""
+    scan_id, owner = payload.get("scan_id"), payload.get("owner")
+    files = list(dict.fromkeys(payload.get("files") or []))
+    if not scan_id or not owner or not files or not job.get("id"):
+        raise FatalJobError("prepare_release_package job missing identity or files")
+    scan = core.store.get_scan(scan_id, owner=owner)
+    if scan is None:
+        raise FatalJobError("scan not found")
+    rows = {row.get("file"): row for row in scan.get("files", [])}
+    if any(name not in rows for name in files):
+        raise FatalJobError("corrected file not found")
+    _phase(job, "building the ZIP package")
+    from routes.scans import _build_release_zip
+    import blob as _blob
+    output = None
+    try:
+        output, _size, _filename = _build_release_zip(
+            scan_id, owner, scan, files, rows,
+            package_name=payload.get("package_name") or "",
+            preserve_hierarchy=payload.get("preserve_hierarchy") is not False,
+            include_manifest=payload.get("include_manifest") is not False)
+        _phase(job, "saving the package for download")
+        if not _blob.upload_release_package(owner, scan_id, job["id"], output):
+            raise FatalJobError("durable package storage is not configured")
+    finally:
+        if output is not None:
+            output.close()
+
+
 @handler("scheduled_sweep")
 def _scheduled_sweep(payload: dict, job: dict) -> None:
     """Execute the one durable occurrence elected from all scheduler replicas."""
@@ -801,12 +832,20 @@ def _publish_file(payload: dict, job: dict) -> None:
         release = core.store.release_status(release_id, owner)
         if not release:
             raise FatalJobError("release execution not found")
+        chosen_parent = release.get("parent_folder_id")
+        if chosen_parent:
+            chosen_drive, _, chosen_item = chosen_parent.partition("/")
+            drive_id, parent_folder_id = chosen_drive, chosen_item
+            location = f"graph:{drive_id}"
+        else:
+            parent_folder_id = None
         root = core.store.get_release_root(release_id, location, owner)
         if not root:
             claimed_name = core.store.claim_release_root_name(
                 release_id, owner, "sharepoint", location, release["folder_name"])
+            folder_options = {"parent_id": parent_folder_id} if parent_folder_id else {}
             detail = _publish.ensure_sharepoint_release_folder(
-                token, drive_id, release_id, claimed_name)
+                token, drive_id, release_id, claimed_name, **folder_options)
             root = core.store.record_release_root(
                 release_id, owner, "sharepoint", location, detail["id"],
                 detail["name"], detail.get("url"))
@@ -4689,6 +4728,19 @@ _FIELD_NAME_EXTS = ("pdf", "docx")
 # Replacing a chart with its axis labels destroys information, so 1.4.9 stays HUMAN and the
 # getter is narrowed to ("1.4.5",) rather than reading both bands into one map.
 _IMAGE_OF_TEXT_EXTS = ("pptx",)
+# ADR 0055. The 1.4.5 card's locator shape, recognised here only to decide whether the alt lane
+# needs the translation below — the translation itself lives beside the enumeration it mirrors,
+# in apply_office_image_of_text (docx/xlsx) and apply_pptx_image_of_text (pptx, delegated to by
+# the former so this file has ONE call site). Matching the shape rather than the rule_id is
+# deliberate: apply_alt cannot resolve this locator whatever row it came from, so the question
+# the lane actually has is "is any of this untranslated", not "which row wrote it".
+#
+# Imported from the module that owns the pattern rather than recompiled here, so the recogniser
+# and the translator can never disagree about what a media-index locator looks like.
+from apply_office_image_of_text import (
+    SUPPORTED_EXTS as _DESCRIBED_MEDIA_EXTS,
+    is_media_index_locator as _is_media_index_locator,
+)
 _IMAGE_OF_TEXT_SCS = ("1.4.5",)
 
 # Every format an approved value can actually be WRITTEN into — the format scope
@@ -4782,6 +4834,27 @@ def _apply_one_value_kind(
     unresolved_note = (f"; {len(unresolved)} locator(s) unresolved and not written"
                        if unresolved else "")
     if not applied:
+        # NOTHING REACHED THE DOCUMENT. Until this branch logged, that was the quietest failure
+        # in the lane: it returned here BEFORE any apply.unverified line, so annotate_apply_
+        # outcomes set no apply_outcome, reviewCard mounted no card, and the row — being
+        # `approved` — was not in the pending inbox either. The reviewer approved, clicked, and
+        # got a file that never publishes, with nothing anywhere to say why. Only an
+        # apply.unresolved line in the decision log recorded it, and nothing reads that for a card.
+        #
+        # A wedged file must never be invisible, so the same apply.unverified shape the two
+        # branches below use is written here too, naming the criteria so apply_outcome can match
+        # it to this row (normalise_sc('1.1.1/described') is '1.1.1', so a described row matches).
+        # Logged only when locators actually went unresolved: a lane with nothing to write is an
+        # ordinary no-op and must not manufacture an outcome for a reviewer to read.
+        if unresolved:
+            core.store.log_decision(
+                "system", "apply.unverified", scan_id=scan_id, file=filename,
+                detail=f"wrote no {noun} value(s) for {sorted(scs_to_clear)}: all "
+                       f"{len(unresolved)} approved locator(s) reach no image in this document. "
+                       f"Credit withheld; the approved value is kept for retry")
+            _model_outcome("write_unresolved",
+                           f"nothing written; every {noun} locator was unresolved"
+                           + unresolved_note, regressions=None)
         return working, False
 
     _phase(job, f"re-verifying the corrected copy ({noun})")
@@ -4938,6 +5011,35 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
     _phase(job, "re-scanning the copy before writing (regression baseline)")
     residual_state = {"verification": _verify_residual(working, filename)}
 
+    # ADR 0055: a described-not-replaced row carries the 1.4.5 card's own 'image N' locator — a
+    # media index, which apply_alt cannot read at all (parse_locator requires a '#'). Translate
+    # it here, against `working`: these are the bytes about to be written, and a media index
+    # resolved against any other copy can name a different picture.
+    #
+    # ONE LOCATOR BECOMES SEVERAL when the media part is placed more than once, because
+    # 'image N' names the part and not a placement. Describing only one of them would leave the
+    # others carrying their source filename, 1.1.1 would still fail on re-scan, and the lane
+    # would withhold the credit for a write that was actually correct — see
+    # apply_pptx_image_of_text.resolve_media_locators, where that was measured.
+    #
+    # THE TRANSLATION IS PER FORMAT, and that is not a tidy generalisation of the pptx one: a
+    # docx places every body picture in one part behind ONE relationship id, so the pptx-shaped
+    # 'part#rId' reaches only the first (apply_alt.resolve_target is first-match-wins), and an
+    # xlsx writes its relationship targets absolute and its attributes in the other order, so the
+    # pptx canonicaliser resolves nothing at all. Both measured on real packages; see
+    # apply_office_image_of_text, which owns the docx/xlsx translation and delegates pptx.
+    #
+    # Non-media locators pass through untouched, and an unresolvable one is LEFT AS IT IS so it
+    # reaches apply_alt, is reported unresolved, and appears in the apply.unresolved log under
+    # the name the reviewer's card used rather than one they never saw.
+    if ext in _DESCRIBED_MEDIA_EXTS and any(_is_media_index_locator(k) for k in alt_values):
+        try:
+            from apply_office_image_of_text import expand_media_locator_values
+            alt_values = expand_media_locator_values(working, alt_values, ext)
+        except Exception:
+            swallowed("_apply_approved_values: translating the media-index alt locators failed",
+                      scan_id)
+
     # Office images carry part#rId locators written by apply_alt; PDF figures carry the
     # `pdf:fig:{page}:{seq}` locator minted by remediate_pdf and are written by
     # apply_pdf_approved. Same (bytes, {locator: value}) -> (fixed, applied, unresolved)
@@ -4956,7 +5058,13 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
         scan_id=scan_id, filename=filename, working=working,
         values=alt_values, extra_work=bool(deco_locators),
         scs_to_clear={"1.1.1"}, write_fn=alt_write_fn,
-        diff_rule_id="1.1.1", credit_rule_ids=("1.1.1",), noun="description", job=job,
+        # '1.1.1/described' is credited by this lane because its content IS written by this
+        # lane (ADR 0055). Left out, the described row would be written into the document and
+        # never marked applied, so count_unapplied_approved_values would count it forever and
+        # the file could never certify — the permanently-unpublishable dead end, reached by
+        # doing everything else right.
+        diff_rule_id="1.1.1", noun="description", job=job,
+        credit_rule_ids=("1.1.1", f"1.1.1{core.store.DESCRIBED_RULE_SUFFIX}"),
         residual_state=residual_state)
 
     # 4.1.2 form-field accessible names. PDF keys on `pdf:field:…` and writes /TU; Word keys

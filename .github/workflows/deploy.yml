@@ -167,6 +167,12 @@ jobs:
           # redeploy.sh resolves again and that is fine — resolving a full sha is a no-op.
           ACP_PIN: ${{ steps.pin.outputs.sha }}
           ACP_DEPLOY_TARGET_ENV: production
+          # A production environment/repository variable, absent by default. The deploy script
+          # accepts only 0/1 and independently validates the fleet and resource ceilings.
+          ACP_CAPACITY_APPLY_ENABLED: ${{ vars.PRODUCTION_CAPACITY_APPLY_ENABLED || '0' }}
+          ACP_ACA_VCPU_QUOTA: ${{ vars.PRODUCTION_ACA_VCPU_QUOTA }}
+          ACP_PG_MAX_CONNECTIONS: ${{ vars.PRODUCTION_PG_MAX_CONNECTIONS }}
+          ACP_PG_RESERVED_CONNECTIONS: ${{ vars.PRODUCTION_PG_RESERVED_CONNECTIONS }}
           ACP_BLUE_GREEN: ${{ inputs.blue_green && '1' || '0' }}
           ACP_DEPLOY_WITH_ACTIVE_JOBS: ${{ inputs.deploy_with_active_jobs && '1' || '0' }}
           # Only reachable via an explicit manual dispatch with the checkbox set — `inputs` is

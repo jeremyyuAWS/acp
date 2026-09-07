@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import ScopeBanner from './ScopeBanner.jsx'
 import { documentSelection, documentScopeSentence } from './remediableScope.js'
-import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseManifest, previewReleaseDestination, previewReleasePackage, listHitlQueue, getSettings, getSourceStatus, rescoreFile, downloadReleasePackage } from './api.js'
+import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseManifest, previewReleaseDestination, previewReleasePackage, listHitlQueue, getSettings, getSourceStatus, rescoreFile, downloadReleasePackage, prepareReleasePackage, downloadPreparedReleasePackage, getQueueJob, putMyReleaseTemplates } from './api.js'
 import { releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
 import { SET_STATUS, certificationUniverse, releaseSetStatus } from './graduation.js'
 import { mirrorState, MIRROR } from './deliveryPolicy.js'
@@ -10,6 +10,9 @@ import ReleaseModelProvenance from './ReleaseModelProvenance.jsx'
 import ReleaseFileSelection, { releaseFileSize } from './ReleaseFileSelection.jsx'
 import ReleasePlanSummary, { formatReleaseBytes } from './ReleasePlanSummary.jsx'
 import ReleaseStepPanel from './ReleaseStepPanel.jsx'
+import LiveCounter from './LiveCounter.jsx'
+import ReleaseDestinationPicker from './ReleaseDestinationPicker.jsx'
+import ReleaseTemplates from './ReleaseTemplates.jsx'
 import './release-plan-summary.css'
 
 // Step 9 · Publish. Marks re-validated documents as published: the conformance status
@@ -36,11 +39,15 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [deliveryMethod, setDeliveryMethod] = useState('publish')
   const [packageName, setPackageName] = useState('')
   const [releaseFolderName, setReleaseFolderName] = useState('')
+  const [releaseDestination, setReleaseDestination] = useState(null)
   const [preserveHierarchy, setPreserveHierarchy] = useState(true)
   const [includeManifest, setIncludeManifest] = useState(true)
   const [includeVerificationReport, setIncludeVerificationReport] = useState(false)
   const [downloadFormat, setDownloadFormat] = useState('zip')
+  const [releaseTemplates, setReleaseTemplates] = useState([])
+  const [templateSaving, setTemplateSaving] = useState(false)
   const [packagePreview, setPackagePreview] = useState(null)
+  const [packageJob, setPackageJob] = useState(null)
   const [keptInAcp, setKeptInAcp] = useState(false)
   const [releasePreview, setReleasePreview] = useState(null)
   const [previewingRelease, setPreviewingRelease] = useState(false)
@@ -53,6 +60,34 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     try { return window.localStorage.getItem('acp.release.completionSound') === 'on' } catch { return false }
   })
   const [sel, setSel] = useState(null)
+  useEffect(() => {
+    if (!run?.id) { setPackageJob(null); return }
+    let stored = null
+    try { stored = JSON.parse(window.localStorage.getItem(`acp.release.package.${run.id}`) || 'null') } catch {}
+    setPackageJob(stored)
+  }, [run?.id])
+  useEffect(() => {
+    if (!packageJob?.job_id || !run?.id || ['done', 'dead', 'cancelled'].includes(packageJob.status)) return
+    let live = true, timer
+    const refresh = async () => {
+      try {
+        const status = await getQueueJob(packageJob.job_id)
+        if (!live) return
+        const next = { ...packageJob, ...status }
+        setPackageJob(next)
+        window.localStorage.setItem(`acp.release.package.${run.id}`, JSON.stringify(next))
+        if (!['done', 'dead', 'cancelled'].includes(status.status)) timer = window.setTimeout(refresh, 2000)
+        else if (status.status === 'done') setReleaseAnnouncement('Your ZIP package is ready to download.')
+      } catch (error) {
+        if (live) {
+          setReleaseError({ summary: 'Package progress could not be refreshed.', details: error?.message || 'ACP will try again.' })
+          timer = window.setTimeout(refresh, 5000)
+        }
+      }
+    }
+    refresh()
+    return () => { live = false; if (timer) window.clearTimeout(timer) }
+  }, [packageJob?.job_id, packageJob?.status, run?.id])
   // Why is the publish queue empty? A remediated file only becomes certifiable once its
   // human-review findings are approved. Fetch the pending HITL queue so the empty state can
   // say "N findings await review — approve them in Review first" instead of a dead-end.
@@ -72,9 +107,15 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [settings, setSettings] = useState(null)
   useEffect(() => {
     let live = true
-    getSettings().then((s) => { if (live && s) setSettings(s) }).catch(() => {})
+    getSettings().then((s) => {
+      if (!live || !s) return
+      setSettings(s)
+      setReleaseTemplates(Array.isArray(s.release_templates) ? s.release_templates : [])
+      const preference = s.release_destination?.provider === run?.source ? s.release_destination : null
+      setReleaseDestination((current) => current?.provider === run?.source ? current : preference)
+    }).catch(() => {})
     return () => { live = false }
-  }, [])
+  }, [run?.source])
   const ms = mirrorState(settings)
   const driveMirrorEnabled = ms === MIRROR.ON
   const driveMirrorFolder = settings?.drive_mirror_folder?.trim() || 'Remediated'
@@ -82,6 +123,45 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const sourceProduct = releaseProvider === 'sharepoint' ? 'SharePoint'
     : releaseProvider === 'drive' ? 'Google Drive' : run?.sourceName || 'connected source'
   const anyDrive = releaseProvider === 'drive' && ready.some((f) => f.drive_file_id)
+  const currentDeliveryPlan = {
+    method: deliveryMethod,
+    destination: releaseDestination,
+    preserve_hierarchy: preserveHierarchy,
+    include_manifest: includeManifest,
+    include_verification_report: includeVerificationReport,
+    download_format: downloadFormat,
+    package_name: packageName,
+    release_folder_name: releaseFolderName,
+  }
+  const applyDeliveryTemplate = (template) => {
+    setDeliveryMethod(template.method || 'publish')
+    setReleaseDestination(template.destination?.provider === releaseProvider ? template.destination : null)
+    setPreserveHierarchy(template.preserve_hierarchy !== false)
+    setIncludeManifest(template.include_manifest !== false)
+    setIncludeVerificationReport(Boolean(template.include_verification_report))
+    setDownloadFormat(template.download_format || 'zip')
+    setPackageName(template.package_name || '')
+    setReleaseFolderName(template.release_folder_name || '')
+    setReleasePreview(null); setPackagePreview(null); setKeptInAcp(false)
+    setReleaseAnnouncement(`${template.name} delivery template applied.`)
+  }
+  const persistDeliveryTemplates = async (next, successMessage) => {
+    setTemplateSaving(true); setReleaseError(null)
+    try {
+      const saved = await putMyReleaseTemplates(next)
+      const templates = Array.isArray(saved?.release_templates) ? saved.release_templates : next
+      setReleaseTemplates(templates)
+      setReleaseAnnouncement(successMessage)
+    } catch (error) {
+      setReleaseError({ summary: 'Delivery templates could not be saved.', details: error?.message || 'Try again.' })
+    } finally { setTemplateSaving(false) }
+  }
+  const saveDeliveryTemplate = (template) => {
+    const next = releaseTemplates.filter((item) => item.name.toLowerCase() !== template.name.toLowerCase())
+    return persistDeliveryTemplates([...next, template], `${template.name} delivery template saved.`)
+  }
+  const deleteDeliveryTemplate = (template) => persistDeliveryTemplates(
+    releaseTemplates.filter((item) => item.name !== template.name), `${template.name} delivery template deleted.`)
   // A release is confirmed before it runs: { kind: 'all' } or { kind: 'file', file }. The buttons
   // set this; the modal's confirm calls the real publish path below.
   const [confirm, setConfirm] = useState(null)
@@ -129,6 +209,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const publishableReady = ready.filter((f) => !done[f.file] && srcOf(f) !== 'stale')
   const selectableReady = ready.filter((f) => srcOf(f) !== 'stale')
   const selectedReady = selectableReady.filter((f) => selectedFiles.has(f.file))
+  const packagePlanKey = JSON.stringify({ files: selectedReady.map((file) => file.file).sort(),
+    packageName: packageName.trim().replace(/\.zip$/i, ''), preserveHierarchy, includeManifest })
+  const activePackageJob = packageJob?.plan_key === packagePlanKey ? packageJob : null
   const selectedPublishable = selectedReady.filter((f) => !done[f.file])
   const selectedSizes = selectedReady.map(releaseFileSize)
   const selectedEstimatedBytes = selectedSizes.length > 0 && selectedSizes.every((size) => size != null)
@@ -173,6 +256,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   }
   const rememberRelease = (res, expectedFiles = []) => {
     if (res?.release_id) setReleaseId(res.release_id)
+    if (res?.parent_folder_id) setReleaseDestination({
+      provider: releaseProvider, folder_id: res.parent_folder_id,
+      folder_name: res.parent_folder_name || 'Selected provider folder',
+    })
     const roots = res?.release_folders || res?.roots || []
     const mappedRoots = roots.map((root) => ({
       id: root.folder_id || root.id, name: root.folder_name || root.name,
@@ -272,10 +359,15 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     // Release state is durable; reload and resume polling when the selected scan changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [run?.id])
+  const publishSelectedFiles = (fileNames, folderName = '') => releaseDestination
+    ? publishAllFiles(run?.id, fileNames, folderName, { destination: releaseDestination })
+    : folderName ? publishAllFiles(run?.id, fileNames, folderName) : publishAllFiles(run?.id, fileNames)
   const publish = async (file) => {
     if (done[file]) return
     try {
-      const res = await publishFile(run?.id, file)
+      const res = releaseDestination
+        ? await publishFile(run?.id, file, releaseDestination)
+        : await publishFile(run?.id, file)
       const successful = rememberRelease(res, [file])
       if (releaseProvider === 'sharepoint' && res?.queued) {
         const status = await followSharePointRelease([file])
@@ -295,9 +387,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     const requested = fileNames ? new Set(fileNames) : null
     const pending = ready.filter((f) => !done[f.file] && (!requested || requested.has(f.file))).map((f) => f.file)
     try {
-      const res = preferredFolderName
-        ? await publishAllFiles(run?.id, pending, preferredFolderName)
-        : await publishAllFiles(run?.id, pending)
+      const res = await publishSelectedFiles(pending, preferredFolderName)
       const successful = rememberRelease(res, pending)
       if (releaseProvider === 'sharepoint' && res?.queued) {
         const status = await followSharePointRelease(pending)
@@ -316,8 +406,21 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     if (downloading || !selectedReady.length) return
     setDownloading(true)
     try {
-      await downloadReleasePackage(run?.id, selectedReady.map((file) => file.file), packageName,
-        { preserveHierarchy, includeManifest, downloadFormat })
+      if (activePackageJob?.status === 'done') {
+        await downloadPreparedReleasePackage(run?.id, activePackageJob.job_id, activePackageJob.package_name || packageName)
+      } else if (downloadFormat === 'zip' && ((packagePreview?.estimated_bytes || 0) >= 50 * 1024 * 1024 || selectedReady.length >= 100)) {
+        const queued = await prepareReleasePackage(run?.id, selectedReady.map((file) => file.file), packageName,
+          { preserveHierarchy, includeManifest })
+        const next = { ...queued, package_name: packageName, plan_key: packagePlanKey }
+        setPackageJob(next)
+        window.localStorage.setItem(`acp.release.package.${run.id}`, JSON.stringify(next))
+        setReleaseAnnouncement('Package preparation started. You can leave this tab and return when it is ready.')
+        setDownloading(false)
+        return
+      } else {
+        await downloadReleasePackage(run?.id, selectedReady.map((file) => file.file), packageName,
+          { preserveHierarchy, includeManifest, downloadFormat })
+      }
       if (includeVerificationReport) await openReport(run?.id, `acp-verification-${run?.id}.pdf`)
       setReleaseAnnouncement(downloadFormat === 'original'
         ? `Corrected file ${selectedReady[0]?.file || ''} downloaded.`
@@ -341,7 +444,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     setPublishing(true)
     const targets = setStatus.graduatable
     try {
-      const res = await publishAllFiles(run?.id, targets)
+      const res = await publishSelectedFiles(targets)
       const successful = rememberRelease(res, targets)
       if (releaseProvider === 'sharepoint' && res?.queued) {
         const status = await followSharePointRelease(targets)
@@ -429,7 +532,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     try {
       const preview = await previewReleaseDestination(
         run?.id, selectedPublishable.map((file) => file.file),
-        releaseFolder?.name || releaseFolderName, preserveHierarchy)
+        releaseFolder?.name || releaseFolderName, preserveHierarchy, releaseDestination)
       setReleasePreview(preview)
       if (!releaseFolder && !releaseFolderName.trim()) setReleaseFolderName(preview.folder_name || '')
       setBuilderStep(3)
@@ -451,6 +554,16 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const keepSelectedInAcp = () => {
     setKeptInAcp(true)
     setReleaseAnnouncement(`${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file remains' : 'files remain'} securely in ACP. No external copies were created and the originals were not changed.`)
+  }
+  const downloadQueuedPackage = async () => {
+    if (!packageJob?.job_id || packageJob.status !== 'done' || downloading) return
+    setDownloading(true)
+    try {
+      await downloadPreparedReleasePackage(run.id, packageJob.job_id, packageJob.package_name || '')
+      setReleaseAnnouncement('Prepared ZIP package downloaded.')
+    } catch (error) {
+      setReleaseError({ summary: 'The prepared ZIP could not be downloaded.', details: error?.message || 'Try preparing it again.' })
+    } finally { setDownloading(false) }
   }
 
   return (
@@ -483,6 +596,12 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           <b>{pubStarted ? publishedCount : 0}</b> released
           {failedCount > 0 && <><span className="muted"> · </span><b style={{ color: 'var(--error-fg-strong)' }}>{failedCount}</b> failed</>}
         </p>
+        <dl className="stage-live-accounting" aria-label="Live release accounting">
+          <div><dt>Released</dt><dd><LiveCounter value={pubStarted ? publishedCount : 0} /></dd></div>
+          <div><dt>Ready</dt><dd>{publishableReady.length.toLocaleString()}</dd></div>
+          <div><dt>Pending</dt><dd>{Math.max(0, ready.length - Object.keys(done).length - failedCount).toLocaleString()}</dd></div>
+          {failedCount > 0 && <div className="stage-live-accounting__exception"><dt>Failed</dt><dd>{failedCount.toLocaleString()}</dd></div>}
+        </dl>
         <details className="release-safeguards" style={{ marginTop: 12, borderTop: '1px solid var(--line)', paddingTop: 10 }}>
           <summary style={{ cursor: 'pointer', fontSize: 12.5, fontWeight: 600 }}>Release safeguards, destination, and evidence</summary>
           <div style={{ marginTop: 8, fontSize: 12.5, lineHeight: 1.6 }}>
@@ -501,6 +620,13 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           </div>
         </details>
       </section>
+      {packageJob && <section className="release-notice release-package-job" role="status" aria-label="Prepared package status">
+        <span><b>{packageJob.status === 'done' ? 'Download package ready' : packageJob.status === 'dead' ? 'Download package failed' : 'Download package in progress'}</b><br />
+          {packageJob.status === 'done' ? 'Prepared safely and available after navigation or reload.' : packageJob.phase || 'The package continues in the background.'}</span>
+        {packageJob.status === 'done'
+          ? <button className="qbtn approve" disabled={downloading} onClick={downloadQueuedPackage}>{downloading ? 'Downloading…' : 'Download ZIP'}</button>
+          : packageJob.status === 'dead' ? <button className="ghost" onClick={startRelease}>Prepare again</button> : null}
+      </section>}
       {releaseError && (
         <section className="release-recovery" role="alert" aria-labelledby="release-error-title">
           <div>
@@ -694,7 +820,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
             <ReleasePlanSummary compact count={selectedReady.length}
               excluded={staleReady.length + selectedReady.filter((file) => done[file.file]).length}
               method={deliveryMethod} provider={sourceProduct}
-              destination={releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}
+              destination={releaseDestination
+                ? `${releaseDestination.folder_name} / Remediated / <release name>`
+                : releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}
               preserveStructure={preserveHierarchy} estimatedBytes={packagePreview?.estimated_bytes ?? selectedEstimatedBytes} />
             {builderStep === 1 ? (
               <ReleaseStepPanel id="release-files-step" heading="Choose files" focusOnMount={false} className="release-builder__continue">
@@ -720,6 +848,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                   <span>Create no external copy. Return when you are ready to publish or download.</span>
                 </label>
               </fieldset>
+              <ReleaseTemplates templates={releaseTemplates} currentPlan={currentDeliveryPlan}
+                provider={releaseProvider} saving={templateSaving}
+                onApply={applyDeliveryTemplate} onSave={saveDeliveryTemplate} onDelete={deleteDeliveryTemplate} />
               <div className="release-destination-config" aria-live="polite">
                 {deliveryMethod === 'download' ? <>
                   <div className="release-destination-config__heading"><b>{downloadFormat === 'original' ? 'Download corrected file' : 'Download package'}</b><span>Saved by your browser</span></div>
@@ -745,7 +876,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                   <div className="release-includes"><span>✓ Corrected copies retained</span><span>✓ Review decisions retained</span><span>✓ Originals unchanged</span></div>
                 </> : releaseFolder ? <>
                   <div className="release-destination-config__heading"><b>{sourceProduct} destination</b><span>Connected source</span></div>
-                  <div className="release-destination-path">{releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}</div>
+                  <div className="release-destination-path">{releaseDestination
+                    ? `${releaseDestination.folder_name} / Remediated / ${releaseFolder.name}`
+                    : releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}</div>
                   <div className="release-name-field">
                   <label><b>Release folder name</b></label>
                   <div className="release-name-existing">{releaseFolder.name}</div>
@@ -753,7 +886,13 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                   </div>
                 </> : <>
                   <div className="release-destination-config__heading"><b>{sourceProduct} destination</b><span>Connected source</span></div>
-                  <div className="release-destination-path">{releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}</div>
+                  {(releaseProvider === 'drive' || releaseProvider === 'sharepoint') && <ReleaseDestinationPicker
+                    provider={releaseProvider} value={releaseDestination}
+                    onChange={(value) => { setReleaseDestination(value); setReleasePreview(null) }}
+                    onError={(error) => setReleaseError({ summary: 'The destination could not be saved.', details: error?.message || 'Try choosing the folder again.' })} />}
+                  <div className="release-destination-path">{releaseDestination
+                    ? `${releaseDestination.folder_name} / Remediated / <release name>`
+                    : releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}</div>
                   <div className="release-name-field">
                   <label htmlFor="release-folder-name"><b>Release folder name</b> <span>Optional</span></label>
                   <input id="release-folder-name" value={releaseFolderName} onChange={(e) => setReleaseFolderName(e.target.value)} placeholder="Automatic: release date and time" aria-describedby="release-name-help release-name-error" />
@@ -779,6 +918,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                       : `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file' : 'files'} will remain securely in ACP. No external copy will be created and original files will not be changed.`}</p>
                   {deliveryMethod === 'publish' && releasePreview && <div className="release-preview">
                     <div className="release-preview__heading"><b>Exact destination preview</b><span>{releasePreview.documents?.length || 0} files · {releasePreview.folder_state === 'existing' ? 'existing release folder' : 'new release folder'}</span></div>
+                    {releasePreview.preflight && <div className={`release-preflight ${releasePreview.preflight.ready ? 'release-preflight--ready' : 'release-preflight--blocked'}`} role={releasePreview.preflight.ready ? 'status' : 'alert'}>
+                      <b>{releasePreview.preflight.ready ? '✓ Destination ready' : 'Destination needs attention'}</b>
+                      {releasePreview.preflight.message && <span>{releasePreview.preflight.message}</span>}
+                    </div>}
                     {(releasePreview.documents || []).slice(0, 5).map((item) => <div className="release-preview__path" key={item.file}><span>{item.action === 'reuse' ? '↻ Reuse' : '+ Create'}</span><code>{item.destination_path}</code></div>)}
                     {(releasePreview.documents || []).length > 5 && <small>+{releasePreview.documents.length - 5} more paths</small>}
                     <p>{releasePreview.collision_policy}</p>
@@ -791,6 +934,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                     {!packagePreview.estimate_complete && <p className="muted">Final size will be calculated while preparing the download.</p>}
                     {(packagePreview.blockers || []).map((item) => <div className="release-name-error" role="alert" key={item.file}>{item.file}: {item.reason}</div>)}
                   </div>}
+                  {deliveryMethod === 'download' && activePackageJob && <div className={`release-preflight ${activePackageJob.status === 'done' ? 'release-preflight--ready' : activePackageJob.status === 'dead' ? 'release-preflight--blocked' : ''}`} role="status">
+                    <b>{activePackageJob.status === 'done' ? 'ZIP package ready' : activePackageJob.status === 'dead' ? 'Package preparation failed' : 'Preparing ZIP package'}</b>
+                    <span>{activePackageJob.status === 'done' ? 'The prepared download is available even after leaving and returning to Release.' : activePackageJob.phase || 'This work continues safely in the background.'}</span>
+                  </div>}
                   <ReleaseModelProvenance scanId={run?.id} selectedFiles={selectedReady.map((file) => file.file)} />
                 </div>
                 <div className="release-plan__actions">
@@ -798,7 +945,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                   {deliveryMethod === 'publish'
                     ? <button className="qbtn approve" disabled={readOnly || publishing || !selectedPublishable.length || !releasePreview?.can_release} onClick={() => setConfirm({ kind: 'selected', files: selectedPublishable.map((f) => f.file), folderName: releasePreview?.folder_name || releaseFolder?.name || releaseFolderName.trim() })}>{publishing ? 'Publishing…' : `Publish ${selectedPublishable.length} ${selectedPublishable.length === 1 ? 'copy' : 'copies'}`}</button>
                     : deliveryMethod === 'download'
-                      ? <button className="qbtn approve" disabled={downloading || !selectedReady.length || packagePreview?.can_download === false} onClick={downloadSelected}>{downloading ? 'Preparing download…' : downloadFormat === 'original' ? 'Download corrected file' : `Download ZIP (${selectedReady.length})`}</button>
+                      ? <button className="qbtn approve" disabled={downloading || !selectedReady.length || packagePreview?.can_download === false || (activePackageJob && !['done', 'dead'].includes(activePackageJob.status))} onClick={downloadSelected}>{downloading ? 'Preparing download…' : activePackageJob?.status === 'done' ? 'Download prepared ZIP' : activePackageJob?.status === 'dead' ? 'Retry package preparation' : downloadFormat === 'original' ? 'Download corrected file' : `Download ZIP (${selectedReady.length})`}</button>
                       : <button className="qbtn approve" disabled={!selectedReady.length || keptInAcp} onClick={keepSelectedInAcp}>{keptInAcp ? 'Kept in ACP' : `Keep ${selectedReady.length} in ACP`}</button>}
                 </div>
               </div>

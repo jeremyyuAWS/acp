@@ -1,70 +1,91 @@
 import { useEffect, useMemo, useState } from 'react'
 import CanonicalStageCard from './CanonicalStageCard.jsx'
-import { canonicalStageCardModel, priorCanonicalStages, stageNeedsAttention } from './canonicalStageCard.js'
+import CompletedStageDetails from './CompletedStageDetails.jsx'
+import LiveHeartbeatBars from './LiveHeartbeatBars.jsx'
+import { canonicalStageCardModel, canonicalWorkflowStages, currentCanonicalStage,
+  stageNeedsAttention } from './canonicalStageCard.js'
 
+const STAGES = ['discover', 'assess', 'remediate', 'release']
+const LABELS = { discover: 'Discover', assess: 'Assess', remediate: 'Remediate', release: 'Release' }
 const destination = { discover: 'discover', assess: 'assess', remediate: 'remediate', release: 'publish' }
+const terminal = (state) => ['succeeded', 'failed', 'cancelled', 'superseded', 'integrity_failed'].includes(state)
 
 function storageKey(lineage) {
   const workflow = lineage?.workflow_id || lineage?.scan_id || 'workflow'
   return `acp:workflow-stage-stack:${workflow}:${lineage?.workflow_revision ?? 'unknown'}`
 }
 
-export default function WorkflowStageStack({ lineage, view, onNavigate }) {
-  const stages = useMemo(() => priorCanonicalStages(lineage, view), [lineage, view])
-  const attentionStage = stages.find(stageNeedsAttention)?.stage || null
+function primaryOutcome(model) {
+  if (model.stage === 'discover') return `${model.domain?.total ?? '—'} ${model.domain?.unit || 'inventory documents'}`
+  if (model.stage === 'assess') {
+    const assessed = model.domain?.buckets.find(([label]) => label === 'Assessed')?.[1]
+    return `${assessed ?? '—'} assessed of ${model.domain?.total ?? '—'} eligible documents`
+  }
+  return `${model.domain?.accounted ?? model.accounted ?? '—'} of ${model.domain?.total ?? model.total ?? '—'} ${model.domain?.unit || model.unit}`
+}
+
+/** The sole outer shell for all four workflow stages. Detail nodes stay mounted under `hidden`
+ * so disclosure changes do not end live subscriptions or reset rolling heartbeat history. */
+export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = null,
+  stageDetails = {} }) {
+  const snapshots = useMemo(() => canonicalWorkflowStages(lineage), [lineage])
+  const current = useMemo(() => currentCanonicalStage(lineage), [lineage])
   const key = storageKey(lineage)
-  const [expanded, setExpanded] = useState(() => {
-    try { return sessionStorage.getItem(key) } catch { return null }
-  })
+  const [overrides, setOverrides] = useState({})
 
-  useEffect(() => {
-    let remembered = null
-    try { remembered = sessionStorage.getItem(key) } catch {}
-    setExpanded((current) => {
-      const candidate = remembered || current
-      return attentionStage || (stages.some((stage) => stage.stage === candidate) ? candidate : null)
-    })
-  }, [attentionStage, key, stages])
+  useEffect(() => { setOverrides({}) }, [key])
 
-  useEffect(() => {
-    try {
-      if (expanded) sessionStorage.setItem(key, expanded)
-      else sessionStorage.removeItem(key)
-    } catch {}
-  }, [expanded, key])
+  if (!snapshots.length) return null
+  const byStage = new Map(snapshots.map((snapshot) => [snapshot.stage, snapshot]))
 
-  if (!stages.length) return null
   return (
-    <section className="workflow-stage-stack" aria-label="Earlier workflow stages">
-      <div className="workflow-stage-stack__heading">
-        <strong>Workflow so far</strong>
-        <span className="muted">Earlier stages from this workflow revision</span>
-      </div>
-      {stages.map((snapshot) => {
-        const model = canonicalStageCardModel(snapshot)
-        const open = expanded === snapshot.stage
+    <section className="workflow-stage-stack" aria-label="Workflow stages"
+      data-current-stage={current?.stage || ''}>
+      {STAGES.map((stage) => {
+        const snapshot = byStage.get(stage)
+        const locked = !snapshot
+        const isCurrent = Boolean(snapshot && stage === current?.stage
+          && snapshot.execution_id === current?.execution_id)
+        const model = snapshot ? canonicalStageCardModel(snapshot, { isCurrent }) : null
+        const attention = Boolean(snapshot && stageNeedsAttention(snapshot))
+        const defaultOpen = attention || isCurrent
+        const open = locked ? false : (attention || (overrides[stage] ?? defaultOpen))
+        const detail = isCurrent ? stageDetails[stage] : null
+        const bodyId = `workflow-stage-${stage}`
         return (
-          <div className={`workflow-stage-stack__item${stageNeedsAttention(snapshot) ? ' needs-attention' : ''}`}
-               key={`${snapshot.stage}:${snapshot.execution_id || snapshot.revision}`}>
-            <button type="button" className="workflow-stage-stack__summary"
-                    aria-expanded={open}
-                    aria-controls={`workflow-stage-${snapshot.stage}`}
-                    onClick={() => setExpanded(open ? null : snapshot.stage)}>
+          <div className={`workflow-stage-stack__item${attention ? ' needs-attention' : ''}${isCurrent ? ' is-current' : ''}${locked ? ' is-locked' : ''}`}
+               data-stage={stage} data-current={isCurrent ? 'true' : 'false'}
+               key={`${stage}:${snapshot?.execution_id || snapshot?.revision || 'locked'}`}>
+            {locked ? <div className="workflow-stage-stack__summary" aria-disabled="true">
+              <span className="workflow-stage-stack__check" aria-hidden="true">·</span>
+              <span className="workflow-stage-stack__label"><b>{LABELS[stage]}</b> · Locked</span>
+              <span className="workflow-stage-stack__meta">
+                <span className="workflow-stage-stack__ownership">Not started</span>
+              </span>
+            </div> : <button type="button" className="workflow-stage-stack__summary"
+                    aria-expanded={open} aria-controls={bodyId}
+                    onClick={() => setOverrides((value) => ({ ...value, [stage]: !open }))}>
               <span className="workflow-stage-stack__check" aria-hidden="true">
-                {stageNeedsAttention(snapshot) ? '!' : '✓'}
+                {attention ? '!' : snapshot.state === 'succeeded' ? '✓' : '•'}
               </span>
-              <span><b>{model.stageLabel}</b> · {model.stateLabel}</span>
-              <span className="muted workflow-stage-stack__count">
-                {model.domain?.accounted ?? model.accounted ?? '—'} of {model.domain?.total ?? model.total ?? '—'} {model.domain?.unit || model.unit}
+              <span className="workflow-stage-stack__label"><b>{model.stageLabel}</b> · {model.stateLabel}</span>
+              <span className="workflow-stage-stack__meta">
+                <span className="muted workflow-stage-stack__count">{primaryOutcome(model)}</span>
+                <LiveHeartbeatBars measuredAt={receivedAt} stage={stage}
+                  historyKey={`${snapshot.workflow_id || lineage?.workflow_id || 'workflow'}:${snapshot.execution_id || stage}`}
+                  terminal={terminal(snapshot.state)} showText />
+                {isCurrent && <span className="workflow-stage-stack__ownership">Current</span>}
               </span>
-              <span aria-hidden="true">{open ? '−' : '+'}</span>
-            </button>
-            {open && (
-              <div id={`workflow-stage-${snapshot.stage}`} className="workflow-stage-stack__body">
-                <CanonicalStageCard snapshot={snapshot}
-                  onOpen={onNavigate ? () => onNavigate(destination[snapshot.stage]) : null} embedded />
-              </div>
-            )}
+              <span className="workflow-stage-stack__affordance" aria-hidden="true">{open ? '−' : '+'}</span>
+            </button>}
+            {!locked && <div id={bodyId} className="workflow-stage-stack__body" hidden={!open}>
+              {detail ? <div className="workflow-stage-stack__live-detail" data-detail-owner="current">{detail}</div> : (
+                ['discover', 'assess'].includes(stage) && terminal(snapshot.state)
+                  ? <CompletedStageDetails snapshot={snapshot} />
+                  : <CanonicalStageCard snapshot={snapshot} receivedAt={receivedAt}
+                      onOpen={onNavigate ? () => onNavigate(destination[stage]) : null} embedded />
+              )}
+            </div>}
           </div>
         )
       })}

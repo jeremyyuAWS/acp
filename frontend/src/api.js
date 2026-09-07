@@ -184,6 +184,12 @@ export const BOOT_TIMEOUT_MS = 8000
 // so the key is held rather than abandoned, and a resubmit reconciles to the same job instead of
 // enqueuing a second scan. Never shorten this without re-reading that contract.
 export const SCAN_ENQUEUE_TIMEOUT_MS = 30000
+// Applying a schedule can wait on several Azure control-plane updates, so it gets more room than
+// an ordinary read while still guaranteeing that the Review step eventually leaves "Applying".
+// A timeout is an UNKNOWN outcome: the server may have finished after the browser stopped waiting,
+// so callers must re-read the schedule instead of claiming that nothing changed or retrying blind.
+export const CAPACITY_APPLY_TIMEOUT_MS = 120000
+export const CAPACITY_MUTATION_TIMEOUT_MS = 30000
 const bootFetch = (url, init = {}) => fetch(url, { ...init, signal: AbortSignal.timeout(BOOT_TIMEOUT_MS) })
 
 // AI provenance (ADR 0019 Phase 0): the active model + local/cloud zone, cached from /config so
@@ -604,6 +610,14 @@ export const getAppliedFixes = (scanId) => (SIM || !scanId
 export const getScanAiCalls = (scanId) => (SIM || !scanId
   ? sim([])
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/ai_calls`, { headers: headers() }).then(j).catch(() => []))
+// Release review uses a server-scoped projection: reviewer and post-write rows are attached only
+// through their durable AI call id. An empty outcome array means "not recorded", never zero.
+export const getReleaseAiProvenance = (scanId, files = []) => (SIM || !scanId || !files.length
+  ? sim([])
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/ai-provenance`, {
+      method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ files }),
+    }).then(j))
 // Per-fix before→after evidence for one file — the original text/markup → remediated
 // version, persisted only for fixes that verifiably cleared. Feeds the certification PDF's
 // "Before → After" section, and the review drawer's evidence card. SIM serves the same
@@ -1159,6 +1173,14 @@ export const getFileRemediationState = (scanId, file) => (SIM
   ? sim([])
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/remediation-state`,
           { headers: headers() }).then(j))
+// The backend owns primary-reason precedence and integrity; callers render this response and
+// must not recreate its classification in the browser.
+export const previewRemediationAutomationPolicy = (findings, level) => (SIM
+  ? Promise.resolve(null)
+  : fetch(`${BASE}/remediation/automation-policy/preview`, {
+      method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ findings, level }),
+    }).then(j))
 // Platform settings (admin) — includes ADR 0010's Drive-mirror on/off + folder name.
 // SIM has no backend, so this is a browser-local store rather than a fresh literal each read,
 // and every answer it gives carries `simulated: true`. That flag is not decoration: see
@@ -1330,6 +1352,18 @@ export const putMyReleaseTimezone = (releaseTimezone) => (SIM
       method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ release_timezone: releaseTimezone }),
     }).then(j))
+export const putMyReleaseDestination = (releaseDestination) => (SIM
+  ? sim({ release_destination: releaseDestination, simulated: true })
+  : fetch(`${BASE}/settings/mine`, {
+      method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ release_destination: releaseDestination }),
+    }).then(j))
+export const putMyReleaseTemplates = (releaseTemplates) => (SIM
+  ? sim({ release_templates: releaseTemplates, simulated: true })
+  : fetch(`${BASE}/settings/mine`, {
+      method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ release_templates: releaseTemplates }),
+    }).then(j))
 // Download a remediated file's fixed bytes (ADR 0010) — Blob primary, Drive-mirror
 // fallback server-side. Authenticated fetch → blob → download, same pattern as
 // openReport (a bare <a href> would drop the Authorization header).
@@ -1427,6 +1461,7 @@ export const updateHitlItem = (itemId, status, reviewerNote = null, approvedValu
         approved_values: opts.approvedValues ?? null,
         edited: !!opts.edited, review_ms: opts.reviewMs ?? null, ai_value: opts.aiValue ?? null,
         model_call_id: opts.modelCallId ?? null,
+        model_call_ids: opts.modelCallIds ?? null,
         // Feedback intelligence: WHY a rejection happened (enum; bulk/keyboard paths send 'unspecified')
         reject_reason: opts.rejectReason ?? null,
         // WCAG exception the reviewer applied instead of writing a fix: 'decorative' (1.1.1 — image
@@ -1485,19 +1520,20 @@ export const rescoreFile = (scanId, file) => (SIM
   ? sim({ job_id: 'sim-rescore', workers: 1 }, 200)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/rescore?file=${encodeURIComponent(file)}`, { method: 'POST', headers: headers() }).then(j))
 // Record a file (or files) as published back to its source. Body drives both forms.
-export const publishFile = (scanId, file) => (SIM
+export const publishFile = (scanId, file, destination = null) => (SIM
   ? sim({ published: [{ file, published_at: new Date().toISOString() }] }, 150)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/publish`, {
       method: 'POST',
       headers: headers({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ file }),
+      body: JSON.stringify({ file, ...(destination ? { destination } : {}) }),
     }).then(j))
-export const publishAllFiles = (scanId, files, releaseFolderName = '') => (SIM
+export const publishAllFiles = (scanId, files, releaseFolderName = '', options = {}) => (SIM
   ? sim({ published: files.map((f) => ({ file: f, published_at: new Date().toISOString() })) }, 150)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/publish`, {
       method: 'POST',
       headers: headers({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ files, ...(releaseFolderName.trim() ? { release_folder_name: releaseFolderName.trim() } : {}) }),
+      body: JSON.stringify({ files, ...(releaseFolderName.trim() ? { release_folder_name: releaseFolderName.trim() } : {}),
+        ...(options.destination ? { destination: options.destination } : {}) }),
     }).then(j))
 export const getReleaseStatus = (scanId) => (SIM
   ? sim({ release_id: null, roots: [], documents: [], documents_total: 0, published: 0, failed: 0, remaining: 0 }, 50)
@@ -1505,13 +1541,14 @@ export const getReleaseStatus = (scanId) => (SIM
 export const listReleaseHistory = (limit = 50) => (SIM
   ? sim({ releases: [] }, 50)
   : fetch(`${BASE}/releases?limit=${encodeURIComponent(limit)}`, { headers: headers() }).then(j))
-export const previewReleaseDestination = (scanId, files, releaseFolderName = '', preserveHierarchy = true) => (SIM
+export const previewReleaseDestination = (scanId, files, releaseFolderName = '', preserveHierarchy = true, destination = null) => (SIM
   ? sim({ folder_name: releaseFolderName || '2026-09-06 12-00 UTC', folder_state: 'proposed', provider: 'drive',
       documents: files.map((file) => ({ file, provider_location: 'google:me', destination_path: `Remediated/${releaseFolderName || '2026-09-06 12-00 UTC'}/${file}`, action: 'create' })),
       blockers: [], can_release: true, collision_policy: 'Existing files are not overwritten.', original_files_unchanged: true }, 80)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/preview`, {
       method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ files, preserve_hierarchy: preserveHierarchy, ...(releaseFolderName.trim() ? { release_folder_name: releaseFolderName.trim() } : {}) }),
+      body: JSON.stringify({ files, preserve_hierarchy: preserveHierarchy, ...(releaseFolderName.trim() ? { release_folder_name: releaseFolderName.trim() } : {}),
+        ...(destination ? { destination } : {}) }),
     }).then(j))
 export const getReleaseManifest = (scanId) => (SIM
   ? sim({ manifest: { schema_version: 1, scan_id: scanId, documents: [] },
@@ -1553,6 +1590,34 @@ export const downloadReleasePackage = (scanId, files, packageName = '', options 
       a.download = downloadFormat === 'original'
         ? (match?.[1] || files[0]?.split('/').pop() || 'corrected-file')
         : requestedName ? `${requestedName}.zip` : (match?.[1] || `acp-release-${scanId}.zip`)
+      document.body.appendChild(a); a.click(); a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+    })
+}
+export const prepareReleasePackage = (scanId, files, packageName = '', options = {}) => (SIM
+  ? sim({ job_id: `package-${scanId}`, status: 'queued', files: files.length }, 100)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/package/prepare`, {
+      method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ files, preserve_hierarchy: options.preserveHierarchy !== false,
+        include_manifest: options.includeManifest !== false, download_format: 'zip',
+        ...(packageName.trim() ? { package_name: packageName.trim() } : {}) }),
+    }).then(j))
+export const downloadPreparedReleasePackage = (scanId, jobId, packageName = '') => {
+  if (SIM) return Promise.resolve()
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/package/jobs/${encodeURIComponent(jobId)}/download`,
+    { headers: headers() })
+    .then(async (r) => {
+      if (!r.ok) {
+        const detail = await r.json().then((body) => body?.detail).catch(() => null)
+        throw new Error(detail || `prepared package download ${r.status}`)
+      }
+      return r.blob()
+    })
+    .then((blob) => {
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a'); a.href = url
+      const requestedName = packageName.trim().replace(/\.zip$/i, '')
+      a.download = requestedName ? `${requestedName}.zip` : `acp-release-${scanId}.zip`
       document.body.appendChild(a); a.click(); a.remove()
       setTimeout(() => URL.revokeObjectURL(url), 60000)
     })
@@ -1680,6 +1745,7 @@ export const putCapacitySchedule = (body) => (SIM
       method: 'PUT',
       headers: { ...headers(), 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(CAPACITY_MUTATION_TIMEOUT_MS),
     }).then(j))
 // The dry run. Returns findings and the projected fleet cost; saves nothing, on any path.
 export const validateCapacitySchedule = (body) => (SIM
@@ -1688,6 +1754,19 @@ export const validateCapacitySchedule = (body) => (SIM
       method: 'POST',
       headers: { ...headers(), 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(CAPACITY_MUTATION_TIMEOUT_MS),
+    }).then(j))
+// Publish one already-saved version to Azure. The version is part of the body so the server can
+// reject a stale Review screen rather than applying a newer schedule the administrator did not
+// approve. SIM preserves the response contract but explicitly says no external write occurred.
+export const applyCapacitySchedule = (body) => (SIM
+  ? sim({ simulated: true, correlation_id: null, schedule_version: body.version,
+          application: { state: 'not_applied', applied_version: null } })
+  : fetch(`${BASE}/control/capacity-schedule/apply`, {
+      method: 'POST',
+      headers: { ...headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(CAPACITY_APPLY_TIMEOUT_MS),
     }).then(j))
 export const createCapacityOverride = (body) => (SIM
   ? sim({ override: null, correlation_id: null })
@@ -1695,11 +1774,13 @@ export const createCapacityOverride = (body) => (SIM
       method: 'POST',
       headers: { ...headers(), 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal: AbortSignal.timeout(CAPACITY_MUTATION_TIMEOUT_MS),
     }).then(j))
 export const deleteCapacityOverride = () => (SIM
   ? sim({ cleared: false })
   : fetch(`${BASE}/control/capacity-schedule/override`, {
       method: 'DELETE', headers: headers(),
+      signal: AbortSignal.timeout(CAPACITY_MUTATION_TIMEOUT_MS),
     }).then(j))
 // What ACP would apply to Azure under the current schedule — rendered, never applied. Read-only,
 // same grant as the schedule it derives from.

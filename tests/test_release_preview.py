@@ -25,8 +25,8 @@ class _Store:
         return self.status
 
 
-def _request(owner="owner@example.com"):
-    return SimpleNamespace(state=SimpleNamespace(user_email=owner))
+def _request(owner="owner@example.com", headers=None):
+    return SimpleNamespace(state=SimpleNamespace(user_email=owner), headers=headers or {})
 
 
 def test_preview_resolves_exact_path_without_writing(monkeypatch):
@@ -87,3 +87,50 @@ def test_preview_is_owner_scoped(monkeypatch):
             "scan-1", _request("other@example.com"),
             scans.ReleasePreviewRequest(files=["Report.pdf"]))
     assert exc.value.status_code == 404
+
+
+def test_preview_uses_selected_sharepoint_parent_and_requires_preflight(monkeypatch):
+    monkeypatch.setattr(scans.core, "store", _Store())
+    monkeypatch.setattr(scans, "_preflight_release_destination", lambda request, destination: {
+        "ready": True, "folder_reachable": True, "write_permission": True})
+    result = scans.preview_release_destination(
+        "scan-1", _request(), scans.ReleasePreviewRequest(
+            files=["Report.pdf"], release_folder_name="Release",
+            destination={"provider": "sharepoint", "folder_id": "target-drive/target-folder",
+                         "folder_name": "Board packets"}))
+    assert result["destination"]["folder_id"] == "target-drive/target-folder"
+    assert result["documents"][0]["provider_location"] == "graph:target-drive"
+    assert result["documents"][0]["destination_path"] == (
+        "Board packets/Remediated/Release/Clinical/Report.pdf")
+    assert result["can_release"] is True
+
+
+def test_preview_blocks_an_unready_selected_destination(monkeypatch):
+    monkeypatch.setattr(scans.core, "store", _Store())
+    monkeypatch.setattr(scans, "_preflight_release_destination", lambda request, destination: {
+        "ready": False, "folder_reachable": True, "write_permission": False,
+        "message": "Write access is required."})
+    result = scans.preview_release_destination(
+        "scan-1", _request(), scans.ReleasePreviewRequest(
+            files=["Report.pdf"], destination={
+                "provider": "sharepoint", "folder_id": "target-drive/target-folder",
+                "folder_name": "Board packets"}))
+    assert result["can_release"] is False
+    assert result["preflight"]["message"] == "Write access is required."
+
+
+def test_drive_preflight_uses_provider_can_add_children_capability(monkeypatch):
+    class Files:
+        def get(self, **kwargs):
+            assert kwargs["fileId"] == "finance"
+            return self
+        def execute(self):
+            return {"id": "finance", "name": "Finance", "trashed": False,
+                    "capabilities": {"canAddChildren": False}}
+    monkeypatch.setattr(scans.core, "drive_service",
+                        lambda request: SimpleNamespace(files=lambda: Files()))
+    result = scans._preflight_release_destination(_request(), {
+        "provider": "drive", "folder_id": "finance", "folder_name": "Finance"})
+    assert result["folder_reachable"] is True
+    assert result["write_permission"] is False
+    assert result["ready"] is False

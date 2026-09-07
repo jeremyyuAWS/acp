@@ -45,7 +45,7 @@ const remediate = () => renderToStaticMarkup(
 
 describe('SharePoint stays identified across the workflow', () => {
   it('passes the persisted source boundary to the compact Discover card on every tab', () => {
-    const compactCard = appSource.match(/view !== 'discover'[\s\S]{0,900}?<DiscoverRunProgress[\s\S]{0,900}?\/>/)?.[0] || ''
+    const compactCard = appSource.match(/discover: canonicalStage\?\.stage === 'discover'[\s\S]{0,900}?<DiscoverRunProgress[\s\S]{0,900}?\/>/)?.[0] || ''
     expect(compactCard).toContain('source={run?.source ?? null}')
     expect(compactCard).toContain('scope={run?.scope ?? null}')
   })

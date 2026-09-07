@@ -289,14 +289,32 @@ def test_a_self_hosted_openai_compatible_endpoint_reports_local(monkeypatch):
     assert a.zone == "local"
 
 
-@pytest.mark.parametrize("provider,model,resp,expect", [
-    # 1200 in @ $2.50/1M + 40 out @ $10/1M
-    ("openai", "gpt-4o", _openai_ok, round(1200 / 1e6 * 2.50 + 40 / 1e6 * 10.00, 6)),
-    # 1200 in @ $3/1M + 40 out @ $15/1M
-    ("anthropic", "claude-sonnet-5", _anthropic_ok, round(1200 / 1e6 * 3.00 + 40 / 1e6 * 15.00, 6)),
+def _expected_cost(model: str, prompt: int = 1200, completion: int = 40) -> float:
+    """The cost this model's own row implies for the stubbed usage.
+
+    DERIVED, not written out, and the reason is that writing it out went wrong. This test asserts
+    the ARITHMETIC — that cost comes from the usage the API actually returned, rather than from an
+    estimate — and it used to hardcode `1200/1e6*3.00 + 40/1e6*15.00` to do it. When
+    `claude-sonnet-5` was corrected from Sonnet 4.6's price to its own, that literal made this
+    test fail for being right: a second copy of a number whose owner had changed.
+
+    The VALUE of every Claude row is pinned separately, in tests/test_claude_list_prices.py, which
+    is where a wrong price should be caught. Here the table is the input, so a price change moves
+    this expectation with it and a broken multiplication still fails.
+    """
+    import providers
+    price = providers._price_for(model)
+    assert price, f"{model} has no row in _PRICE_PER_1M — this test cannot say what it should cost"
+    return round(prompt / 1e6 * price[0] + completion / 1e6 * price[1], 6)
+
+
+@pytest.mark.parametrize("provider,model,resp", [
+    ("openai", "gpt-4o", _openai_ok),
+    ("anthropic", "claude-sonnet-5", _anthropic_ok),
 ])
 def test_cost_is_computed_from_the_real_returned_usage(monkeypatch, isolated_store,
-                                                       provider, model, resp, expect):
+                                                       provider, model, resp):
+    expect = _expected_cost(model)
     import httpx
     _configured(isolated_store, monkeypatch, provider=provider, model=model)
     monkeypatch.setattr(httpx, "post", lambda *a, **k: resp())

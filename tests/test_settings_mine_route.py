@@ -110,3 +110,67 @@ def test_user_cannot_store_an_unsupported_release_timezone(monkeypatch, isolated
     response = c.put("/settings/mine", headers=_AUTH,
                      json={"release_timezone": "Europe/London"})
     assert response.status_code == 422
+
+
+def test_release_destination_round_trips_without_tokens_or_urls(monkeypatch, isolated_store):
+    c = _client(monkeypatch, isolated_store)
+    response = c.put("/settings/mine", headers=_AUTH, json={"release_destination": {
+        "provider": "drive", "folder_id": "folder-123", "folder_name": "Approved releases",
+        "token": "must-not-persist", "url": "https://example.invalid/private",
+    }})
+    assert response.status_code == 200, response.text
+    expected = {"provider": "drive", "folder_id": "folder-123",
+                "folder_name": "Approved releases"}
+    assert response.json()["release_destination"] == expected
+    assert c.get("/settings/mine", headers=_AUTH).json()["release_destination"] == expected
+    assert c.get("/settings", headers=_AUTH).json()["release_destination"] == expected
+    raw = isolated_store.get_user_setting("alice@hosp.org", "release_destination")
+    assert "must-not-persist" not in raw and "example.invalid" not in raw
+
+
+def test_release_destination_is_user_scoped_validated_and_clearable(monkeypatch, isolated_store):
+    c = _client(monkeypatch, isolated_store)
+    bad = c.put("/settings/mine", headers=_AUTH,
+                json={"release_destination": {"provider": "blob", "folder_id": "x", "folder_name": "X"}})
+    assert bad.status_code == 422
+    good = {"provider": "sharepoint", "folder_id": "drive/item", "folder_name": "Compliance"}
+    assert c.put("/settings/mine", headers=_AUTH, json={"release_destination": good}).status_code == 200
+    monkeypatch.setattr(__import__("core"), "verify_gis_token", lambda tok: "bob@hosp.org", raising=False)
+    assert c.get("/settings/mine", headers=_AUTH).json()["release_destination"] is None
+    monkeypatch.setattr(__import__("core"), "verify_gis_token", lambda tok: "alice@hosp.org", raising=False)
+    cleared = c.put("/settings/mine", headers=_AUTH, json={"release_destination": None})
+    assert cleared.status_code == 200
+    assert cleared.json()["release_destination"] is None
+
+
+def test_release_templates_round_trip_as_a_user_scoped_allowlisted_shape(monkeypatch, isolated_store):
+    c = _client(monkeypatch, isolated_store)
+    template = {
+        "name": "Finance ZIP", "method": "download",
+        "destination": {"provider": "drive", "folder_id": "finance", "folder_name": "Finance"},
+        "preserve_hierarchy": False, "include_manifest": True,
+        "include_verification_report": True, "download_format": "zip",
+        "package_name": "finance-accessible", "release_folder_name": "",
+        "token": "must-not-persist",
+    }
+    response = c.put("/settings/mine", headers=_AUTH,
+                     json={"release_templates": [template]})
+    assert response.status_code == 200, response.text
+    saved = response.json()["release_templates"]
+    assert saved[0]["name"] == "Finance ZIP"
+    assert saved[0]["preserve_hierarchy"] is False
+    assert "token" not in saved[0]
+    assert c.get("/settings", headers=_AUTH).json()["release_templates"] == saved
+    raw = isolated_store.get_user_setting("alice@hosp.org", "release_templates")
+    assert "must-not-persist" not in raw
+
+
+def test_release_templates_reject_duplicates_and_unsupported_methods(monkeypatch, isolated_store):
+    c = _client(monkeypatch, isolated_store)
+    duplicate = [{"name": "Standard", "method": "publish"},
+                 {"name": "standard", "method": "download"}]
+    assert c.put("/settings/mine", headers=_AUTH,
+                 json={"release_templates": duplicate}).status_code == 422
+    assert c.put("/settings/mine", headers=_AUTH, json={"release_templates": [
+        {"name": "Unsafe", "method": "replace-source"}]}).status_code == 422
+    assert isolated_store.get_user_setting("alice@hosp.org", "release_templates") is None

@@ -62,6 +62,12 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).toMatch(/Results appear when the run finishes/)
     expect(html).toContain('Live updates · refreshed 0s ago')
     expect(html.indexOf('successful live update')).toBeLessThan(html.indexOf('Live updates · refreshed'))
+    expect(html).toContain('aria-label="Live assessment accounting"')
+    expect(html).toMatch(/Assessed.*<\/dt><dd><span class="livecounter"/)
+    expect(html).toMatch(/Waiting.*<\/dt><dd>13<\/dd>/)
+    for (const term of ['Assessed', 'Processing', 'Waiting', 'Eligible']) {
+      expect(html).toContain(`aria-label="What does &quot;${term}&quot; mean?"`)
+    }
   })
 
   it('shows truthful cloud second-opinion use and remaining budgets', () => {

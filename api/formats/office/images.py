@@ -26,9 +26,38 @@ import re
 # The wrapper matters: pptx and xlsx put cNvPr on EVERY shape, and only pictures need alt.
 # xlsx drawings come in two namespace flavours — Excel authors the prefixed `<xdr:pic>`, while
 # openpyxl-family generators emit the same parts in the default namespace — so both are matched.
+#
+# THE PPTX ROW COVERS INHERITED PARTS TOO, and that was a hole rather than a scope decision. A
+# picture placed on a slideLayout or a slideMaster is a real image a real reader meets — every
+# slide using that layout renders it — but `ocr._ooxml_images` walks the ZIP NAMELIST while this
+# table walked only `ppt/slides/`. So such an image raised 1.4.5 (an `image N` review card) and
+# was invisible to 1.1.1 AND unreachable by the applier: exactly the FIRST failure direction this
+# docstring warns about, and ADR 0055's own first-listed motivating case ("an image referenced by
+# a layout or master — the reviewer sees a card they cannot action"). A described decision on one
+# could never be written, so the row stayed approved and unapplied forever, the file could never
+# certify, and nothing told the reviewer why.
+#
+# Widening this table fixes both halves at once, which is the whole reason it is one table: the
+# detector now reports the image, the resolver can address it, and the credit gate is asked a
+# question it can answer. Measured blast radius on a deck with no pictures on its layouts: NONE.
+# A blank python-pptx deck has 12 layout/master parts carrying 75 `<p:cNvPr>` elements and gains
+# zero findings, because the `p:pic` wrapper below admits only actual pictures — placeholders and
+# shapes are not images and never were.
+#
+# ONE DESCRIPTION FOR ONE IMAGE, even though many slides show it. A layout's picture is one
+# element behind one relationship, so it is described once and every inheriting slide carries
+# that description — the same fact about media parts that makes `image N` expand to every
+# placement, reached from the other side.
+#
+# `ppt/notesSlides/` is deliberately NOT here. It is the same shape and `ocr` cards a notes image
+# too, but tests/test_apply_alt.py asserts in as many words that notesSlides carry no images, and
+# overturning a stated claim belongs in the change that measures it rather than as a rider on
+# this one. Until then a notes image is a wedge that the apply.unverified path below now makes
+# VISIBLE rather than silent, which is the part that actually mattered.
 ALT_TARGETS = [
     (re.compile(r"^word/(document|header\d*|footer\d*)\.xml$"), "wp:docPr", None, True),
-    (re.compile(r"^ppt/slides/slide\d+\.xml$"), "p:cNvPr", "p:pic", False),
+    (re.compile(r"^ppt/(slides/slide|slideLayouts/slideLayout"
+                r"|slideMasters/slideMaster)\d+\.xml$"), "p:cNvPr", "p:pic", False),
     (re.compile(r"^xl/drawings/drawing\d+\.xml$"), r"(?:xdr:)?cNvPr", r"(?:xdr:)?pic", False),
 ]
 

@@ -1,11 +1,13 @@
-import { createElement } from 'react'
+import { createElement, act, useEffect, useState } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createTestRoot } from './testRoots.js'
 import CanonicalStageCard from './CanonicalStageCard.jsx'
-import { canonicalStageCardModel, currentCanonicalStage, priorCanonicalStages,
+import WorkflowStageStack from './WorkflowStageStack.jsx'
+import { canonicalStageCardModel, canonicalWorkflowStages, currentCanonicalStage, priorCanonicalStages,
   stageNeedsAttention } from './canonicalStageCard.js'
 
 const SNAPSHOT = {
@@ -40,6 +42,85 @@ describe('canonical stage card', () => {
     expect(html).toContain('Workflow revision 3 · snapshot revision 12')
     expect(html).toContain('execution-1')
     expect(html).toContain('Not yet sealed')
+    expect(html).toContain('<details>')
+    expect(html).not.toContain('<details open=""')
+    expect(html).toContain('View accounting')
+    expect(html).toContain('canonical-stage-card__progress')
+    expect(html).toContain('width:100%')
+  })
+
+  it('announces a live reconciliation delta without carrying it into another execution', async () => {
+    const { container, root } = createTestRoot()
+    await act(async () => { root.render(createElement(CanonicalStageCard, { snapshot: {
+      ...SNAPSHOT, state: 'processing_complete', domain_reconciliation: {
+        unit: 'inventory documents', total: 10, accounted: 4, exact: true, buckets: { Active: 4 },
+      },
+    } })) })
+    await act(async () => { root.render(createElement(CanonicalStageCard, { snapshot: {
+      ...SNAPSHOT, revision: 13, state: 'processing_complete', domain_reconciliation: {
+        unit: 'inventory documents', total: 10, accounted: 7, exact: true, buckets: { Active: 7 },
+      },
+    } })) })
+    expect(container.querySelector('.canonical-stage-card__delta').textContent).toBe('+3')
+    expect(container.querySelector('.canonical-stage-card__delta').getAttribute('aria-label')).toBe('3 newly reconciled')
+
+    await act(async () => { root.render(createElement(CanonicalStageCard, { snapshot: {
+      ...SNAPSHOT, execution_id: 'execution-2', revision: 1, domain_reconciliation: {
+        unit: 'inventory documents', total: 5, accounted: 1, exact: true, buckets: { Active: 1 },
+      },
+    } })) })
+    expect(container.querySelector('.canonical-stage-card__delta')).toBeNull()
+    await act(async () => { root.unmount() })
+  })
+
+  it('keeps embedded cards expanded because their parent disclosure owns the collapsed state', () => {
+    const html = renderToStaticMarkup(createElement(CanonicalStageCard, {
+      snapshot: SNAPSHOT, embedded: true, receivedAt: Date.now(),
+    }))
+    expect(html).not.toContain('canonical-stage-card__summary')
+    expect(html).toContain('Release · Processing')
+    expect(html).toContain('Workflow revision 3 · snapshot revision 12')
+    expect(html).toContain('live-heartbeat-bars')
+  })
+
+  it.each(['discover', 'assess', 'remediate', 'release'])('keeps %s live history in collapsed and expanded views', (stage) => {
+    const html = renderToStaticMarkup(createElement(CanonicalStageCard, {
+      snapshot: { ...SNAPSHOT, stage }, receivedAt: Date.now(),
+    }))
+    expect(html.match(/live-heartbeat-bars/g)).toHaveLength(2)
+    expect(html.match(new RegExp(`data-stage="${stage}"`, 'g'))).toHaveLength(2)
+    expect(html).toContain('Live · refreshed now')
+  })
+
+  it('labels terminal history final and leaves canonical totals authoritative', () => {
+    const html = renderToStaticMarkup(createElement(CanonicalStageCard, {
+      snapshot: { ...SNAPSHOT, state: 'succeeded' }, receivedAt: Date.now(),
+    }))
+    expect(html).toContain('Final · refreshed now')
+    expect(html).toContain('Integrity check: 10 of 10 work items accounted for')
+  })
+
+  it('keeps retained history mounted while an earlier-stage card collapses and expands', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-07T01:02:03Z'))
+    const { container, root } = createTestRoot()
+    const lineage = { workflow_id: 'workflow-collapse', workflow_revision: 3,
+      stages: [{ ...SNAPSHOT, stage: 'discover', state: 'succeeded' },
+        { ...SNAPSHOT, stage: 'assess', execution_id: 'assess-1', state: 'processing' }] }
+    await act(async () => { root.render(createElement(WorkflowStageStack, {
+      lineage, view: 'assess', receivedAt: Date.now(),
+    })) })
+    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(3)
+    const summary = container.querySelector('[data-stage="discover"] .workflow-stage-stack__summary')
+    await act(async () => { summary.click() })
+    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(3)
+    await act(async () => { summary.click() })
+    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(3)
+    expect(container.textContent).toContain('Final · refreshed now')
+    await act(async () => { vi.advanceTimersByTime(10_000) })
+    expect(container.textContent).toContain('Final · refreshed now')
+    await act(async () => { root.unmount() })
+    vi.useRealTimers()
   })
 
   it('never turns unknown totals into zero', () => {
@@ -69,7 +150,7 @@ describe('canonical stage card', () => {
 
   it('keeps the canonical partition visible while leased work drains after a stop request', () => {
     const html = render({ ...SNAPSHOT, control: { cancel_requested: true } })
-    expect(html).toContain('Release · Stopping safely')
+    expect(html).toContain('Stopping safely')
     expect(html).toContain('Processing</dt><dd')
     expect(html).toContain('>1</dd>')
     expect(html).toContain('Waiting</dt><dd')
@@ -79,7 +160,7 @@ describe('canonical stage card', () => {
   it('does not equate completed work items with resolved findings', () => {
     const html = render({ ...SNAPSHOT, state: 'succeeded',
       sealed_output: { manifest_id: 'manifest-1' } })
-    expect(html).toContain('Release · Complete')
+    expect(html).toContain('canonical-stage-card__state is-complete">Complete')
     expect(html).toContain('manifest-1')
     expect(html).toContain('does not mean every accessibility finding was resolved')
     expect(html).not.toContain('all findings resolved')
@@ -181,11 +262,11 @@ describe('cumulative workflow stage selection', () => {
 })
 
 describe('app-level canonical ownership', () => {
-  it('keeps one lineage hook and card alive outside the tab panel', () => {
+  it('keeps one lineage hook and workflow stack alive outside the tab panel', () => {
     const app = readFileSync(join(here, 'App.jsx'), 'utf8')
     const hook = app.indexOf('useCanonicalStageLineage(')
     const signIn = app.search(/^ {2}if \(!me\) return <SignIn/m)
-    const card = app.indexOf('<CanonicalStageCard')
+    const card = app.indexOf('<WorkflowStageStack')
     const panel = app.indexOf('id="workflow-panel"')
     expect(hook).toBeGreaterThan(-1)
     expect(hook).toBeLessThan(signIn)
@@ -194,10 +275,74 @@ describe('app-level canonical ownership', () => {
     expect(app.indexOf('<WorkflowStageStack')).toBeLessThan(panel)
   })
 
-  it('deduplicates the richer remediation card and the canonical Release fallback', () => {
+  it('mounts every live detail only through the canonical stack', () => {
     const app = readFileSync(join(here, 'App.jsx'), 'utf8')
-    expect(app).toContain("canonicalStage.stage !== 'remediate'")
     expect(app).toContain("canonicalAvailable={canonicalStage?.stage === 'release'}")
-    expect(app).toContain("{ release: 'publish', assess: 'assess', discover: 'discover' }")
+    expect(app.match(/<WorkflowStageStack/g)).toHaveLength(1)
+    expect(app.match(/<LiveAssessmentLive/g)).toHaveLength(1)
+    expect(app.match(/<RemediationRunCard/g)).toHaveLength(1)
+    expect(app).toContain('showRunProgress={false}')
+  })
+})
+
+describe('unified idempotent workflow integration', () => {
+  const stage = (name, state, revision, extra = {}) => ({
+    ...SNAPSHOT, stage: name, state, revision, workflow_revision: 7,
+    execution_id: `${name}-${revision}`, ...extra,
+  })
+
+  it('restores exactly one current Assess card with completed Discover above and future stages locked', async () => {
+    const { container, root } = createTestRoot()
+    const lineage = { workflow_id: 'restore', workflow_revision: 7, stages: [
+      stage('discover', 'succeeded', 3), stage('assess', 'processing', 4),
+    ] }
+    await act(async () => { root.render(createElement(WorkflowStageStack, { lineage })) })
+    expect(container.querySelectorAll('[data-current="true"]')).toHaveLength(1)
+    expect(container.querySelector('[data-current="true"]').dataset.stage).toBe('assess')
+    expect(container.querySelector('[data-stage="discover"] .workflow-stage-stack__body').hidden).toBe(true)
+    expect(container.querySelector('[data-stage="assess"] .workflow-stage-stack__body').hidden).toBe(false)
+    expect([...container.querySelectorAll('.is-locked')].map((node) => node.dataset.stage))
+      .toEqual(['remediate', 'release'])
+    expect(container.textContent).not.toContain('Discovering documents')
+    expect([...container.querySelectorAll('button')].some((button) => /^Stop\b/.test(button.textContent))).toBe(false)
+    await act(async () => { root.unmount() })
+  })
+
+  it('rejects stale revisions and never lets an upstream live flag reclaim downstream ownership', () => {
+    const lineage = { workflow_revision: 7, stages: [
+      stage('discover', 'processing', 99), stage('assess', 'processing', 4),
+      stage('assess', 'succeeded', 3),
+      stage('remediate', 'succeeded', 8, { workflow_revision: 6 }),
+    ] }
+    expect(canonicalWorkflowStages(lineage).map(({ stage: name, revision }) => [name, revision]))
+      .toEqual([['discover', 99], ['assess', 4]])
+    expect(currentCanonicalStage(lineage).stage).toBe('assess')
+  })
+
+  it('keeps the live detail instance and its state across collapse', async () => {
+    let mounts = 0
+    function Detail() {
+      const [samples, setSamples] = useState(12)
+      useEffect(() => { mounts += 1; return () => { mounts -= 1 } }, [])
+      return <button type="button" onClick={() => setSamples((value) => value + 1)}>{samples} samples</button>
+    }
+    const { container, root } = createTestRoot()
+    const lineage = { workflow_id: 'retained', workflow_revision: 7,
+      stages: [stage('discover', 'processing', 2)] }
+    await act(async () => { root.render(createElement(WorkflowStageStack, {
+      lineage, stageDetails: { discover: <Detail /> },
+    })) })
+    const summary = container.querySelector('[data-stage="discover"] .workflow-stage-stack__summary')
+    const detailButton = container.querySelector('.workflow-stage-stack__live-detail button')
+    await act(async () => { detailButton.click() })
+    expect(detailButton.textContent).toBe('13 samples')
+    await act(async () => { summary.click() })
+    expect(container.querySelector('[data-stage="discover"] .workflow-stage-stack__body').hidden).toBe(true)
+    expect(container.querySelector('.workflow-stage-stack__live-detail button').textContent).toBe('13 samples')
+    expect(mounts).toBe(1)
+    await act(async () => { summary.click() })
+    expect(container.querySelector('.workflow-stage-stack__live-detail button').textContent).toBe('13 samples')
+    expect(mounts).toBe(1)
+    await act(async () => { root.unmount() })
   })
 })

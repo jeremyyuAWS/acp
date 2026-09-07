@@ -571,6 +571,39 @@ squash-landed branch and false in general. On a stale HEAD the refusal is real i
 git fetch -q origin && git checkout main && git merge --ff-only origin/main
 ```
 
+**THAT COMMAND CAN FAIL, AND ON A SHALLOW CLONE IT FAILS LOUDLY AND LEAVES THE TREE WORSE.**
+Sessions here start shallow — `git rev-parse --is-shallow-repository` answers `true`, with
+grafted tips in `.git/shallow` — and a graft can truncate away the common ancestor entirely.
+Local `main` is then not merely behind; it reads as an *unrelated history*:
+
+```
+git merge-base main origin/main                        # prints nothing
+git merge --ff-only origin/main                        # fatal: refusing to merge unrelated histories
+git rev-list --left-right --count main...origin/main   # 50  118 — "ahead" of a branch it descends from
+```
+
+The two halves of that one-liner are chained with `&&`, so the `checkout` lands and the `merge`
+does not. You are left standing on the stale `main` you were trying to leave.
+
+**Why.** On 2026-09-07 a session ran exactly this while retiring its work. The checkout succeeded,
+the merge refused, and the SHARED checkout sat on a local `main` from three days earlier — a
+755-file, 213,675-line revert of everything merged since, in the directory other sessions read.
+Nothing was lost, because every commit was already on `origin/main`. What made that knowable
+rather than assumed was one call: GitHub answered `compare/d4ca3f24...main` with
+`ahead_by: 375, behind_by: 0` — the real `main` strictly contains the local one, so those 50
+"ahead" commits are the graft talking, not unpushed work.
+
+So check before you discard, and then move the pointer rather than merging into it:
+
+```
+curl -sS -H "Authorization: token $GITHUB_TOKEN" \
+  "https://api.github.com/repos/jeremyyuAWS/acp/compare/$(git rev-parse main)...main"   # behind_by: 0
+git fetch -q origin main && git checkout -B main origin/main
+```
+
+`--ff-only` cannot do this job on a grafted clone and `-B` can — but `-B` moves a shared branch
+pointer, so it is only safe once that `behind_by: 0` says nothing is stranded there.
+
 Grep the subject, not the message: `git log --grep` searches the body too, and later commits
 routinely cite earlier PR numbers. Confirming #43 that way returns #51, whose body mentions it.
 
