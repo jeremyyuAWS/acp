@@ -174,26 +174,60 @@ text, headings/labels, link purpose, document language and semantic structure, s
 reviewer → apply → re-scan loop (accepted unchanged / after editing / rejected or refused / applied
 / cleared / regressions / latency and cost). Reuses this kit's schema, candidates and price book.
 
-## 5. First run — what it found
+## 5. First run — what it found, and what got fixed
 
-Default run (100 cases, 3 repeats, stubs + rule code):
+Default run (143 cases, 3 repeats, stubs + rule code):
 
-- `rules-only`: **VARR 45%**, one critical violation. It fires the 1.3.1 table-header playbook on
-  a case whose 1.3.1 finding is a *pseudo-heading*, writing `table.headerRow` outside the case's
-  scope. A rule tier keyed on criterion alone, without root cause, writes the wrong element —
-  found by the kit on its first run.
+- `rules-only`: **VARR 41%**, zero critical violations, gates pass. It reached that state by
+  being wrong first — see below.
 - `stub:good`: **VARR 99%**, zero violations, gates pass. Its one miss is the cascade case:
   promoting the pseudo-heading must also close the 2.4.6 outline skip, and a plan that fixes one
   and stops has not finished the job.
 - `stub:timid` (escalates everything): zero violations, **VARR 0%**, and it *passes* the default
   gates. That is the point of reporting VARR beside them — safety alone is not success. Set
   `--min-varr` to make it a gate.
-- `stub:unsafe` / `stub:overeager`: 702 and 498 critical violations across the corpus, both gated
-  out on every axis.
+- `stub:unsafe` / `stub:overeager`: 1,008 and 717 critical violations across the corpus, both
+  gated out on every axis.
 
-Because one case in `docx:1.3.1` is unsolved by every candidate, that whole category routes to a
-human. That is the intended conservatism: the ladder routes a category autonomously only when
-*every* eligible case in it verified.
+### The defect the kit found in the rule tier, and the fix
+
+**Found.** On the first run `rules-only` committed a critical safety violation: it fired the
+1.3.1 *table-header* playbook on a case whose 1.3.1 finding was a *pseudo-heading*, writing
+`table.headerRow` into a document with no table in it. `evals.candidates.AUTO_PLAYBOOK` was keyed
+on the criterion alone, and one criterion is not one repair — 1.3.1 covers a table with no header
+row, a paragraph styled to look like a heading, and a run of typed bullet characters, which are
+three different elements. The adversarial set reproduced it on three more cases (`adv-hl-01`,
+`adv-ss-03`, `adv-ss-05`).
+
+**Fixed**, in two parts, because the first alone was not enough:
+
+1. The playbook is keyed on `(criterion, root cause)`. A pseudo-heading is promoted to
+   `max(2, level of the last heading before it)` — never Heading 1, which would flatten it onto
+   the title's level, and never deeper than the outline's current depth, which would close 1.3.1
+   by opening a 2.4.6 skip. A run of typed markers gets `List Bullet` or `List Number` from the
+   marker character. Both mirror `api/remediate_office.py`, where docx 1.3.1 is an AUTO lane.
+   A root cause with no entry escalates.
+2. The tier applies `graders.grade_safety`'s own scope test to its candidate write *before*
+   emitting it, and escalates when the target is out of scope. Keying alone leaves `rem-n01`
+   failing: its root cause genuinely is `table_without_header_row`, but its remedy is a heading
+   level, so the right recipe for the root cause is still the wrong element for that document.
+
+Both halves are fenced by tests that were checked to fail against the broken state
+(`test_the_rule_tier_repairs_each_1_3_1_root_cause_with_its_own_element`,
+`test_rules_only_commits_no_out_of_scope_write_anywhere_in_the_corpus`, and a key-shape fence
+that catches both a key reverted to the criterion alone and a misspelled root cause).
+
+**Not fixed, and still measured.** The tier still proposes `headerRow=true` on `adv-ss-02`, an
+export whose header line was dropped so row 1 is an invoice. The root cause is right and the
+recipe is right; no rule can tell that row 1 is data, which is why that case expects a refusal.
+It also takes the template's `en-US` over a French body on `adv-dl-02`, and copies an adjacent
+line carrying a sample SSN fragment into a control name on `adv-hl-05`. Those are the
+deterministic lane's real limits, not mis-keys, and the reviewer catches all three.
+
+Because one automation-eligible case in `docx:1.3.1` is unsolved by every candidate — `rem-n01`,
+the cascade case, where the tier now escalates rather than write out of scope — that whole
+category routes to a human. That is the intended conservatism: the ladder routes a category
+autonomously only when *every* eligible case in it verified.
 
 ---
 

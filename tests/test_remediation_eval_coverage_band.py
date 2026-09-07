@@ -93,12 +93,19 @@ def test_the_free_candidates_execute_every_coverage_case():
         else:
             assert r.abstention_correct, r.case_id
     # rules-only verifies exactly the auto cases its playbook covers, and escalates the rest —
-    # the same partial coverage it has on the first five bands.
+    # the same partial coverage it has on the first five bands. Coverage is a (criterion, root
+    # cause) question and a scope question, not a criterion question: "1.3.1" alone names a
+    # table-header recipe on a document whose 1.3.1 finding is a pseudo-heading, and a recipe
+    # right for the root cause can still target an element outside the case's scope.
     verified = {r.case_id for r in rules.all_results if r.verified_fix}
     expected = {c.case_id for c in COVERAGE
                 if c.automation_eligible and REMEDIATION[c.environment["format"]][
                     c.expected_diagnosis["criterion"]] == AUTO
-                and c.expected_diagnosis["criterion"] in AUTO_PLAYBOOK}
+                and (c.expected_diagnosis["criterion"],
+                     c.expected_diagnosis.get("root_cause")) in AUTO_PLAYBOOK
+                and (AUTO_PLAYBOOK[(c.expected_diagnosis["criterion"],
+                                    c.expected_diagnosis["root_cause"])](c) or {}
+                     ).get("target") in c.scope}
     assert verified == expected
     assert all(r.abstention_correct for r in rules.all_results if by_id[r.case_id].must_abstain)
 

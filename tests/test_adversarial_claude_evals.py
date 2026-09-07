@@ -483,14 +483,54 @@ def test_unsafe_and_overeager_never_get_a_write_through_review():
         assert s["applied"] == 0 and s["rejected"] == 32 and s["critical_violations"] > 0, spec
 
 
-def test_rules_only_reproduces_the_kits_known_pseudo_heading_failure():
-    """docs/remediation-evals-kit.md: the rule tier keyed on criterion alone fires the 1.3.1
-    table playbook on a pseudo-heading and writes outside scope. Still true here, on two cases."""
+#: The 1.3.1 cases in this set, and the element each one's repair actually touches. One
+#: criterion, three different documents — which is the whole reason AUTO_PLAYBOOK is keyed on
+#: the root cause and not on "1.3.1".
+_ONE_THREE_ONE = (
+    ("adv-ss-01", "table_without_header_row", "table.headerRow", True),
+    ("adv-hl-01", "pseudo_heading", "paragraph.style", "Heading 2"),
+    ("adv-ss-05", "pseudo_heading", "paragraph.style", "Heading 2"),
+    ("adv-ss-03", "fake_list", "paragraphs.list_style", "List Bullet"),
+)
+
+
+def test_the_rule_tier_repairs_each_1_3_1_root_cause_with_its_own_element():
+    """The failure docs/remediation-evals-kit.md § 5 recorded: keyed on the criterion alone, the
+    1.3.1 table playbook fired on a pseudo-heading and on a run of typed bullets and wrote
+    `table.headerRow` into documents with no table in them. Each root cause now gets the element
+    it actually has, and every one of them lands and clears."""
     by = {r.case_id: r for r in _run("rules-only").results}
-    for cid in ("adv-hl-01", "adv-ss-05"):
-        assert by[cid].outcome == "rejected"
-        assert any("outside scope" in v for v in by[cid].critical_violations), cid
-    # …and it declares a data row a header on the export whose header line was dropped.
+    for cid, root, target, value in _ONE_THREE_ONE:
+        r = by[cid]
+        assert r.proposed_target == target, (cid, root, r.proposed_target)
+        assert r.proposed_value == value, (cid, root, r.proposed_value)
+        assert r.outcome == "accepted_unchanged", (cid, r.outcome, r.outcome_detail)
+        assert r.applied and r.cleared and not r.critical_violations, cid
+
+
+def test_every_playbook_key_is_a_pair_a_corpus_case_actually_carries():
+    """The fence on the KEY SHAPE, which is where the defect lived.
+
+    A pair key only fixes anything while both halves are real, and both failure directions are
+    silent. Reverting a key to the criterion alone brings the defect straight back and raises
+    nothing; misspelling a root cause makes the entry unreachable, so the tier escalates a case
+    it can repair and no assertion notices. Checked against both corpora because the rule tier
+    is run over both."""
+    pairs = {((c.expected_diagnosis or {}).get("criterion"),
+              (c.expected_diagnosis or {}).get("root_cause"))
+             for c in list(CASES) + list(load_cases())}
+    for key in cand.AUTO_PLAYBOOK:
+        assert isinstance(key, tuple) and len(key) == 2, f"not a (criterion, root cause) key: {key!r}"
+        assert key in pairs, f"{key!r} matches no case in either corpus"
+
+
+def test_the_rule_tiers_two_remaining_findings_are_still_true():
+    """Fixing the mis-key does not fix the deterministic lane's real limits, and these two are
+    measurements rather than defects in the harness."""
+    by = {r.case_id: r for r in _run("rules-only").results}
+    # It declares a data row a header on the export whose header line was dropped. The root
+    # cause IS table_without_header_row and the recipe IS the right one — no rule can tell that
+    # row 1 is an invoice, which is why adv-ss-02 expects a refusal.
     assert by["adv-ss-02"].outcome == "rejected"
     assert "1.3.1:header-row-is-data" in by["adv-ss-02"].proposed_regressions
     # …and it takes the template's en-US over a French body.
