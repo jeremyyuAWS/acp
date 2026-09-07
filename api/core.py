@@ -1819,7 +1819,7 @@ ASSESS_LANE_JOB_TYPES = (
 # capacity — the exact cross-lane stall these disjoint tuples exist to prevent.
 REMEDIATE_LANE_JOB_TYPES = (
     "remediate_file", "deliver_corrected_copy", "rescore_file", "apply_approved_values",
-    "publish_file",
+    "publish_file", "prepare_release_package",
 )
 
 
