@@ -2135,19 +2135,44 @@ def _schedule_payload(schedule, now: datetime) -> dict:
 def _observed_apps() -> tuple[dict, bool]:
     """Azure's own view of each worker app, and whether Azure is configured at all.
 
-    Reuses get_capacity rather than making its own calls: that endpoint already returns each
-    app's `scale` block (min, max, polling interval, cooldown and every rule's metadata), which
-    is exactly what desired-versus-observed needs. §9 of the PRD gets its data source for free.
+    Reads only each app's scale configuration and current replica count. The full get_capacity
+    endpoint also reads
+    revisions, replicas, Azure Monitor metrics, service health and cost. Putting all of that on
+    the Settings boot path made this tab take tens of seconds even though the schedule only needs
+    min/max and scaler rules. Live replica telemetry remains on Monitor → Workers & Queue.
     """
     if not _AZ_CONFIGURED:
         return {}, False
     try:
-        capacity = get_capacity()
-    except Exception:  # noqa: BLE001 — drift is a comparison; with nothing to compare it is
-        # simply unknown, and an exception here must not take the schedule payload down with it.
-        swallowed("routes.control.capacity_schedule: reading observed capacity failed")
+        client = _az_client()
+    except Exception:  # noqa: BLE001 — Azure being unreachable must not hide durable intent
+        swallowed("routes.control.capacity_schedule: creating the Azure client failed")
         return {}, True
-    return capacity.get("apps") or {}, bool(capacity.get("configured"))
+
+    observed = {}
+    for app_name in (name for name in _configured_apps() if name):
+        try:
+            app = client.container_apps.get(_AZ_RG, app_name)
+            scale = app.properties.template.scale
+            current_replicas = None
+            revision = getattr(app.properties, "latest_ready_revision_name", None)
+            if revision:
+                try:
+                    replicas = client.container_apps_revision_replicas.list_replicas(
+                        _AZ_RG, app_name, revision)
+                    values = getattr(replicas, "value", None)
+                    current_replicas = len(values if values is not None else list(replicas))
+                except Exception:  # noqa: BLE001 — scale intent is still useful without telemetry
+                    swallowed(f"routes.control.capacity_schedule: reading {app_name} replicas failed")
+            observed[app_name] = {
+                "min_replicas": getattr(scale, "min_replicas", None),
+                "max_replicas": getattr(scale, "max_replicas", None),
+                "current_replicas": current_replicas,
+                "scale": _scale_block(app),
+            }
+        except Exception:  # noqa: BLE001 — one unreadable app must not hide the other tiers
+            swallowed(f"routes.control.capacity_schedule: reading {app_name} scale failed")
+    return observed, True
 
 
 @router.get("/control/capacity-schedule")

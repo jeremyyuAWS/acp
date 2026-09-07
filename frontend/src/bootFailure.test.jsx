@@ -140,6 +140,11 @@ describe('the boot reads are bounded', () => {
     expect(call(/bootFetch\(`\$\{BASE\}\/healthz`\)/)).toContain('bootFetch')
   })
 
+  it('the capacity schedule cannot leave its tab loading forever', () => {
+    expect(call(/bootFetch\(`\$\{BASE\}\/control\/capacity-schedule`[^)]*\)/))
+      .toContain('bootFetch')
+  })
+
   it('getScan is bounded, but on a LONGER ceiling than the light reads', () => {
     // Anchored on `}).then(` — the init object contains its own `})` inside headers(), which a
     // lazier pattern stops at and then reports a missing signal that is actually there.
