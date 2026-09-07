@@ -162,8 +162,10 @@ def test_an_internal_workflow_state_still_raises_on_an_en_row():
 def test_the_html_prints_an_eu_report_with_clause_tables(projection):
     html = acr_export_preview.to_html(projection)
     assert "EN 301 549 Report" in html
-    for caption in ("Clause 9: Web", "Clause 11: Software",
-                    "Clause 12: Documentation and support services"):
+    # The template's wording for the EU edition — clause 9 carries its cross-reference, and the
+    # template writes title case where the standard (and so ACP's catalog) writes sentence case.
+    for caption in ("Clause 9: Web (see WCAG 2.x section)", "Clause 11: Software",
+                    "Clause 12: Documentation and Support Services"):
         assert caption in html, caption
     assert "9.1.1.1 Non-text content" in html
     assert "11.7 User preferences" in html
@@ -191,7 +193,12 @@ def test_both_reports_appear_when_the_edition_obliges_both(en_catalog):
     html = acr_export_preview.to_html(proj)
     assert html.count("<h2>Revised Section 508 Report</h2>") == 1
     assert html.count("<h2>EN 301 549 Report</h2>") == 1
-    assert "Chapter 4: Hardware" in html and "Clause 9: Web" in html
+    # The template's wording on both standards at once. This fixture's EN catalog holds clauses
+    # 9, 11 and 12 only; the per-edition clause 10 spelling is pinned against the full catalog in
+    # test_acr_vpat_division_headings.py.
+    assert "Chapter 4: Hardware" in html
+    assert "Clause 9: Web (see WCAG 2.x section)" in html
+    assert "Clause 12: Documentation and Support Services" in html
 
 
 # ── the Word export, and the gate PRD §16 turns on ────────────────────────────────────────────
@@ -206,8 +213,8 @@ def test_the_word_document_carries_the_clauses_as_headings(projection, tmp_path)
     document = docx.Document(str(path))
     headings = [p.text for p in document.paragraphs if p.style.name.startswith("Heading")]
     assert "EN 301 549 Report" in headings
-    assert "Clause 9: Web" in headings
-    assert "Clause 12: Documentation and support services" in headings
+    assert "Clause 9: Web (see WCAG 2.x section)" in headings
+    assert "Clause 12: Documentation and Support Services" in headings
 
 
 def test_the_eu_word_document_passes_acps_own_analyser(projection):
