@@ -149,6 +149,10 @@ Adding a provider is a subclass with one method (`HttpModelCandidate._request`).
 - [Hosted run](remediation-evals-hosted-run.md) — the three Claude tiers. Zero critical
   violations on all three, 20% of traffic routed to a paid model, and every one still failing
   on autonomous-action precision and on cost (178x over budget after routing).
+- [Shadow-lane comparison](remediation-evals-shadow-lane-comparison.md) — two independent
+  hosted runs read against the current lane table, one verdict per (format, criterion):
+  enable / keep-human-only / insufficient-evidence. Two categories enable (2.4.4 on docx and
+  html, Sonnet); the first run's contrast wins did not replicate.
 
 ## 5. First run — what it found
 

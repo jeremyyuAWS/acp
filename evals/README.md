@@ -20,5 +20,6 @@ python -m pytest tests/test_remediation_evals_kit.py     # the graders still bit
 | `cost.py` | pricing shapes, the price book, the budget gate |
 | `harness.py` | candidates x cases x repeats, with the meter running |
 | `report.py` | VARR, hard gates, risk-tier breakdown, the routing ladder |
+| `shadow_lane.py` | reads committed reports against `REMEDIATION`: enable / keep-human-only / insufficient-evidence per category |
 
 Full documentation: [`docs/remediation-evals-kit.md`](../docs/remediation-evals-kit.md).
