@@ -11,6 +11,7 @@ import LiveAssessmentLive from './LiveAssessmentLive.jsx'
 import RemediationRunCard from './RemediationRunCard.jsx'
 import { useRemediationRun } from './useRemediationRun.js'
 import CanonicalStageCard from './CanonicalStageCard.jsx'
+import WorkflowStageStack from './WorkflowStageStack.jsx'
 import { currentCanonicalStage } from './canonicalStageCard.js'
 import { useCanonicalStageLineage } from './useCanonicalStageLineage.js'
 import { armNotifyOnComplete, notifyScanComplete, notifyScanFailed, notificationsSupported, notifyPermission } from './scanNotify.js'
@@ -2256,6 +2257,12 @@ export default function App() {
                           onStop={() => stopScan(primaryWorkflow?.stage === 'assess'
                             ? primaryWorkflow.scan_id
                             : (liveScanId || run?.id))} />
+
+      <WorkflowStageStack lineage={canonicalRun.lineage} view={view}
+        onNavigate={(next) => {
+          setView(next)
+          window.scrollTo({ top: 0, behavior: 'smooth' })
+        }} />
 
       {showCanonicalStage && (
         <CanonicalStageCard snapshot={canonicalStage}
