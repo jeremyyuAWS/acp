@@ -120,10 +120,15 @@ one. So every format still states on its face that it is not a VPAT, nothing use
 `tests/test_acr_vpat_layout.py::test_no_format_claims_to_be_a_vpat` fails if that ever drifts.
 Answering Q1 needs counsel or ITI; until then the documents are correct and modestly labelled.
 
-One thing the layout does not yet match: the Section 508 and EN 301 549 sub-headings are ACP's own
-wording rather than the template's — `Chapter 3: Functional Performance Criteria` where the
-template writes `… (FPC)`. The catalog carries the template's text, so this is wiring, not a
-question.
+The Section 508 and EN 301 549 sub-headings carry the template's wording too — `Chapter 3:
+Functional Performance Criteria (FPC)`, `Clause 9: Web (see WCAG 2.x section)` — chosen per
+EDITION, because the template disagrees with itself (`Non-web` in EU, `Non-Web` in INT) and the
+document should match the copy a reader holds. The catalog's own division names are kept beside
+them: `name` is data about the standard, `heading` data about the document, and a lookup that
+comes back empty prints what always printed rather than dropping a row. This paragraph said "does
+not yet match" for the forty minutes between #1653 and #1666, which is the third time this document
+has described a gap that had already closed; it is rewritten rather than deleted so the next reader
+knows the claim was checked.
 
 **All four editions ITI publishes are offerable.** Each obliges a report to carry a different
 requirement set, and `734fec29` made `vpat_edition` a checked claim rather than free text after
