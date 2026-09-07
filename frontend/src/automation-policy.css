@@ -1,43 +1,39 @@
-.automation-policy {
-  margin: 14px 0;
-  padding: 20px 22px 16px;
-  border: 1px solid color-mix(in srgb, var(--focus-ring) 44%, var(--line));
-  border-left: 5px solid var(--focus-ring);
-  border-radius: 12px;
-  background: linear-gradient(115deg, color-mix(in srgb, var(--focus-ring) 7%, var(--surface)) 0%, var(--surface) 56%);
-  box-shadow: 0 5px 18px rgb(40 24 45 / 7%);
-}
+.automation-policy { margin: 14px 0; padding: 20px 22px 16px; border: 1px solid color-mix(in srgb, var(--focus-ring) 44%, var(--line)); border-left: 5px solid var(--focus-ring); border-radius: 12px; background: linear-gradient(115deg, color-mix(in srgb, var(--focus-ring) 7%, var(--surface)) 0%, var(--surface) 56%); box-shadow: 0 5px 18px rgb(40 24 45 / 7%); }
 .automation-policy__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; }
 .automation-policy__eyebrow { color: var(--focus-ring); font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .automation-policy__eyebrow span { margin-left: 7px; padding: 2px 7px; border: 1px solid currentColor; border-radius: 999px; letter-spacing: 0; text-transform: none; }
 .automation-policy h2 { margin: 5px 0 3px; font-size: 20px; }
 .automation-policy__heading p { margin: 0; color: var(--muted); font-size: 13px; }
-.automation-policy__selection { min-width: 210px; text-align: right; }
-.automation-policy__selection strong { display: block; color: var(--focus-ring); font-size: 20px; }
-.automation-policy__selection span { display: block; color: var(--muted); font-size: 12px; }
-.automation-policy__slider { margin: 20px 4px 14px; }
-.automation-policy__slider input { width: 100%; accent-color: var(--focus-ring); cursor: pointer; }
-.automation-policy__ticks { position: relative; height: 14px; margin-top: 5px; color: var(--muted); font-size: 11px; }
-.automation-policy__ticks span { position: absolute; top: 0; white-space: nowrap; transform: translateX(-50%); }
-.automation-policy__ticks span:first-child { transform: none; }
-.automation-policy__ticks span:last-child { transform: translateX(-100%); }
-.automation-policy__results { margin-top: 4px; }
-.automation-policy__outcome { margin: 0 0 10px; font-size: 15px; line-height: 1.45; }
-.automation-policy__allocation { display: flex; height: 9px; overflow: hidden; border-radius: 999px; background: var(--line); }
-.automation-policy__allocation span { min-width: 3px; transition: width .25s ease; }
-.automation-policy__allocation .is-automatic { background: var(--success-fg); }
-.automation-policy__allocation .is-review { background: #b57a16; }
-.automation-policy__allocation .is-protected { background: var(--focus-ring); }
-.automation-policy__forecast { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-top: 9px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
-.automation-policy__forecast > div { padding: 11px 14px; border-right: 1px solid var(--line); }
-.automation-policy__forecast > div:last-child { border-right: 0; }
-.automation-policy__forecast b { display: block; margin: 3px 0 1px; font-size: 16px; line-height: 1.25; font-variant-numeric: tabular-nums; }
-.automation-policy__forecast span { color: var(--muted); font-size: 12px; }
-.automation-policy__forecast .automation-policy__label { display: block; color: var(--ink); font-weight: 750; }
-.automation-policy__forecast .automation-policy__delta { display: inline-block; margin-left: 7px; padding: 1px 6px; border-radius: 999px; font-size: 11px; font-variant-numeric: tabular-nums; animation: automation-delta-pop .55s ease both; }
-.automation-policy__forecast b + span + .automation-policy__delta { margin: 7px 0 0; }
-.automation-policy__delta.is-positive { color: var(--success-fg); background: var(--success-bg); }
-.automation-policy__delta.is-negative { color: var(--warn-fg); background: var(--warn-bg); }
+.automation-policy__policies { display: flex; align-items: center; gap: 10px; min-width: 360px; }
+.automation-policy__policies > div { flex: 1; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.automation-policy__policies .is-preview { border: 2px solid var(--focus-ring); background: color-mix(in srgb, var(--focus-ring) 7%, var(--surface)); }
+.automation-policy__policies span { display: block; color: var(--muted); font-size: 10px; font-weight: 700; text-transform: uppercase; }
+.automation-policy__policies strong { display: block; margin-top: 2px; font-size: 16px; }
+.automation-policy__policies .is-preview strong { color: var(--focus-ring); }
+.automation-policy__policies .automation-policy__policy-arrow { font-size: 18px; }
+.automation-policy__slider { margin: 22px 10px 16px; }
+.automation-policy__slider input { width: 100%; margin: 0; accent-color: var(--focus-ring); cursor: pointer; touch-action: pan-y; }
+.automation-policy__ticks { position: relative; height: 38px; margin-top: 3px; }
+.automation-policy__ticks button { position: absolute; top: 0; min-width: 44px; min-height: 34px; padding: 10px 4px 2px; border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 11px; cursor: pointer; transform: translateX(-50%); white-space: nowrap; }
+.automation-policy__ticks button:first-child { transform: none; margin-left: -4px; }
+.automation-policy__ticks button:last-child { transform: translateX(-100%); margin-left: 4px; }
+.automation-policy__ticks button > span { position: absolute; top: -8px; left: 50%; width: 2px; height: 8px; background: var(--line); }
+.automation-policy__ticks button.is-selected { color: var(--focus-ring); font-weight: 800; }
+.automation-policy__ticks button:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 1px; border-radius: 5px; }
+.automation-policy__description { margin: 0; min-height: 18px; text-align: center; color: var(--muted); font-size: 12px; }
+.automation-policy__outcome { margin: 0 0 12px; font-size: 15px; line-height: 1.45; }
+.automation-policy__flow { display: grid; grid-template-columns: minmax(120px, .55fr) 28px minmax(0, 2fr); align-items: stretch; }
+.automation-policy__source { display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); text-align: center; }
+.automation-policy__source span, .automation-policy__routes span { color: var(--muted); font-size: 12px; }
+.automation-policy__source b { font-size: 28px; font-variant-numeric: tabular-nums; }
+.automation-policy__flow-arrow { align-self: center; text-align: center; color: var(--muted); font-size: 20px; }
+.automation-policy__routes { display: grid; gap: 6px; }
+.automation-policy__routes > div { display: grid; grid-template-columns: minmax(130px, .7fr) minmax(180px, 1fr) auto; align-items: center; gap: 8px; padding: 9px 12px; border-left: 4px solid; border-radius: 7px; background: var(--surface); }
+.automation-policy__routes .is-automatic { border-color: var(--success-fg); }
+.automation-policy__routes .is-review { border-color: #b57a16; }
+.automation-policy__routes .is-protected { border-color: var(--focus-ring); }
+.automation-policy__routes b { font-size: 14px; font-variant-numeric: tabular-nums; }
+.automation-policy__delta { padding: 2px 7px; border-radius: 999px; background: var(--success-bg); color: var(--success-fg); font-size: 11px; font-style: normal; font-variant-numeric: tabular-nums; animation: automation-delta-pop .35s ease both; }
 .automation-policy__breakdown { margin-top: 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
 .automation-policy__breakdown > summary { padding: 11px 13px; cursor: pointer; font-weight: 700; }
 .automation-policy__categories { border-top: 1px solid var(--line); }
@@ -53,23 +49,25 @@
 .automation-policy__axis ul { list-style: none; padding: 0; margin: 6px 0 0; }
 .automation-policy__axis li { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; }
 .automation-policy__category.is-unknown { border-style: dashed; }
-@keyframes automation-delta-pop {
-  0% { opacity: 0; transform: translateY(5px) scale(.86); }
-  55% { opacity: 1; transform: translateY(-1px) scale(1.06); }
-  100% { opacity: 1; transform: translateY(0) scale(1); }
-}
-@media (prefers-reduced-motion: reduce) { .automation-policy__forecast .automation-policy__delta { animation: none; } .automation-policy__allocation span { transition: none; } }
+@keyframes automation-delta-pop { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .automation-policy__empty { margin: 12px 0 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); }
+.automation-policy__empty.is-error { border-color: var(--error-fg); color: var(--error-fg-strong); background: var(--error-bg); }
 .automation-policy__guardrail { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
+@media (prefers-reduced-motion: reduce) { .automation-policy__delta { animation: none; } }
 @media (max-width: 760px) {
+  .automation-policy { padding-inline: 14px; }
   .automation-policy__heading { display: block; }
-  .automation-policy__selection { margin-top: 12px; text-align: left; }
-  .automation-policy__forecast { grid-template-columns: 1fr; }
-  .automation-policy__forecast > div { border-right: 0; border-bottom: 1px solid var(--line); }
-  .automation-policy__forecast > div:last-child { border-bottom: 0; }
+  .automation-policy__policies { min-width: 0; margin-top: 12px; }
+  .automation-policy__flow { grid-template-columns: 1fr; gap: 6px; }
+  .automation-policy__flow-arrow { transform: rotate(90deg); }
+  .automation-policy__routes > div { grid-template-columns: 1fr; gap: 2px; }
   .automation-policy__category { grid-template-columns: 1fr; }
   .automation-policy__category > b { justify-self: start; }
   .automation-policy__category details { grid-column: 1; }
   .automation-policy__drilldown { grid-template-columns: 1fr; }
-  .automation-policy__ticks { font-size: 9px; }
+  .automation-policy__ticks button { font-size: 9px; }
+}
+@media (max-width: 430px) {
+  .automation-policy__policies { display: grid; grid-template-columns: 1fr; }
+  .automation-policy__policy-arrow { transform: rotate(90deg); text-align: center; }
 }
