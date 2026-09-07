@@ -73,6 +73,13 @@ export const VALUE_FIX = new Set([
 
 export const isValueFix = (sc) => VALUE_FIX.has(sc)
 
+// The one WCAG-exception resolution that CARRIES TEXT (ADR 0055). Named once, here, because three
+// places have to agree about it — the action this module offers, the value-suppression rule in
+// EvidenceCard.decide, and api/routes/hitl.py's 422 — and a string literal repeated across them is
+// how they drift. Mirrors store.Store.DESCRIBED_RESOLUTION on the backend.
+export const DESCRIBED_NOT_REPLACED = 'described_not_replaced'
+
+
 // What a proposal's raw value means once written. 3.1.2 proposes a bare ISO code ("es"), which
 // tells a reviewer nothing on its own; show the markup it becomes.
 const LANG_NAMES = { en: 'English', es: 'Spanish', fr: 'French', de: 'German', pt: 'Portuguese',
@@ -829,6 +836,36 @@ export function imagesOfTextException(sc, imgKind) {
       note: label === 'Chart'
         ? 'This is a chart, not a logo — the logotype exemption doesn’t apply. Provide its text as real, selectable text or an accessible data table, not baked into an image.'
         : `This ${noun} contains text and isn’t a logo — the logotype exemption doesn’t apply. Provide the text as real, selectable text rather than an image.`,
+      // ADR 0055 — the way OUT of what was, until now, a dead end. This branch told the reviewer
+      // what to do and gave them no button: correct about the logotype exemption, and useless if
+      // the picture has to stay. It has to stay more often than not here — replacing a chart with
+      // its axis labels destroys the data (which is why the 1.4.5 replacement lane exempts charts
+      // and the writer refuses grouped or layout-referenced images outright).
+      //
+      // So: keep the image, describe it. That resolves images-of-text by JUDGEMENT and leaves the
+      // document owing 1.1.1 alt text, which the backend records and verifies before the file can
+      // certify. Deliberately the second option and not the first — the note above still leads,
+      // because real text remains the better fix whenever it is possible.
+      //
+      // needsText is the honest half: this resolution is the one that carries content, and the
+      // route 422s without it (routes/hitl.py). The button stays disabled until the reviewer has
+      // actually written something, so the refusal is a disabled control with a reason rather than
+      // a failed request after the click.
+      action: {
+        label: '📝 Keep the image — describe it',
+        title: `Resolve by keeping this ${noun} and describing it. The image stays; your description is `
+             + 'written as its alt text (WCAG 1.1.1) and verified by a re-scan before the file can '
+             + 'certify. Images of text (WCAG 1.4.5/1.4.9) is recorded as resolved by judgement, not fixed.',
+        resolution: 'described_not_replaced',
+        needsText: true,
+        // The hint names the DRAFT problem, not just emptiness. The editor arrives pre-filled with
+        // the OCR transcript — the words inside the picture — and approving that as the image's
+        // description would describe the image with its own contents. The card requires the
+        // reviewer's own words; this says why, in the tooltip on the disabled button.
+        needsTextHint: 'Describe what the image conveys first, in your own words — the box holds the '
+                     + 'text read OUT of the picture, which is not a description of it. Keeping an '
+                     + 'image of text without describing it leaves it unreadable to a screen reader.',
+      },
     }
   }
   return {

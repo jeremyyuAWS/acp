@@ -40,7 +40,11 @@ describe('a companion row is authored, not merely confirmed', () => {
     // approve_proposal_values is the ONLY thing that records the edited text. Suppressing the
     // values here (as the explain-only branch does, correctly, for a structure map) loses the
     // correction silently — the machine's draft and the corrected file are both valid WebVTT.
-    const gate = src.match(/const approvedValues = \([^)]*\)/)[0]
+    // Read as TWO lines, like the `editable` assertion above — the single-line `\([^)]*\)` form
+    // this used stopped at the first close-paren, so it silently truncated once the gate grew a
+    // nested condition (ADR 0055 added `(!resolution || describedRow)`). Both facts it checks are
+    // unchanged; only the extraction was too narrow to see them.
+    const gate = src.match(/const approvedValues = [^\n]*\n[^\n]*/)[0]
     expect(gate).toContain('!explainOnly')
     expect(gate).not.toContain('companionRow')
   })
