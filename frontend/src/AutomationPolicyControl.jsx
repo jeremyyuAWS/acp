@@ -1,6 +1,8 @@
 import { useEffect, useId, useMemo, useState } from 'react'
-import { AUTOMATION_LEVELS, DEFAULT_AUTOMATION_LEVEL, automationForecast, automationLevel } from './automationPolicy.js'
+import { AUTOMATION_LEVELS, DEFAULT_AUTOMATION_LEVEL, automationForecast, automationLevel,
+  reviewCardImpact } from './automationPolicy.js'
 import WhyFindingsStayWithPeople from './WhyFindingsStayWithPeople.jsx'
+import { reviewTimeImpact } from './reviewerTime.js'
 import './automation-policy.css'
 
 const storageKey = (runId) => `acp.remediation.automation-preview.${runId || 'current'}`
@@ -14,7 +16,7 @@ const CATEGORY_COPY = {
 }
 
 export default function AutomationPolicyControl({ findings, runId = null, previewStatus = 'ready',
-  policyPreview = null }) {
+  policyPreview = null, reviewAnalytics = null }) {
   const sliderId = useId()
   const [level, setLevel] = useState(() => {
     try {
@@ -35,6 +37,10 @@ export default function AutomationPolicyControl({ findings, runId = null, previe
   const candidateDelta = forecast.candidates - baseline.candidates
   const humanDelta = human - (baseline.review + baseline.protected)
   const consistent = forecast.candidates + forecast.review + forecast.protected === forecast.total
+  const cardImpact = useMemo(() => reviewCardImpact(hasData ? findings : [], level), [findings, hasData, level])
+  const timeImpact = useMemo(() => reviewTimeImpact(cardImpact.delta, reviewAnalytics),
+    [cardImpact.delta, reviewAnalytics])
+  const announcement = `Preview ${selected.name}. ${cardImpact.preview} review ${cardImpact.preview === 1 ? 'card' : 'cards'}, ${signed(cardImpact.delta)} from the current ${cardImpact.current}.`
   const state = previewStatus === 'pending' ? 'pending'
     : previewStatus === 'inconsistent' ? 'inconsistent'
     : previewStatus === 'error' || !hasData ? 'unknown'
@@ -48,7 +54,7 @@ export default function AutomationPolicyControl({ findings, runId = null, previe
           <h2 id="automation-policy-title">Choose how much ACP can automate</h2>
           <p>Preview how this run’s eligible findings would route. Eligibility is unchanged.</p>
         </div>
-        <div className="automation-policy__policies" aria-live="polite">
+        <div className="automation-policy__policies">
           <div><span>Current production policy</span><strong>{production.name}</strong></div>
           <span className="automation-policy__policy-arrow" aria-hidden="true">→</span>
           <div className="is-preview"><span>Preview policy</span><strong>{selected.name}</strong></div>
@@ -79,12 +85,26 @@ export default function AutomationPolicyControl({ findings, runId = null, previe
       ) : state === 'inconsistent' ? (
         <p className="automation-policy__empty is-error" role="alert">Routing impact could not be reconciled. Refresh the run before using this preview.</p>
       ) : forecast.total > 0 ? (
-        <div className="automation-policy__results" aria-live="polite">
+        <div className="automation-policy__results">
+          <p className="automation-policy__sr-only" aria-live="polite" aria-atomic="true">{announcement}</p>
           <p className="automation-policy__outcome">
             {forecast.candidates === 0
               ? <><strong>{selected.name} would automate none of the {forecast.total} open findings.</strong> All {human} stay with people.</>
               : <>At <strong>{selected.name}</strong>, ACP would handle <strong>{forecast.candidates} of {forecast.total} findings automatically</strong>. The remaining <strong>{human}</strong> stay with people.</>}
           </p>
+          <div className="automation-policy__card-impact">
+            <span><b>{cardImpact.current}</b> current review {cardImpact.current === 1 ? 'card' : 'cards'}</span>
+            <span aria-hidden="true">→</span>
+            <span><b>{cardImpact.preview}</b> in this preview</span>
+            <span className={`automation-policy__delta ${cardImpact.delta <= 0 ? 'is-positive' : 'is-negative'}`}>
+              {signed(cardImpact.delta)} {Math.abs(cardImpact.delta) === 1 ? 'card' : 'cards'}
+            </span>
+          </div>
+          <p className="automation-policy__units">Review cards are decisions a person opens. Findings are accessibility issues; one card can cover several findings in a file.</p>
+          {timeImpact && cardImpact.delta !== 0 && <p className="automation-policy__time-impact" title={timeImpact.basis}>
+            Estimated human-review time {timeImpact.direction < 0 ? 'decreases' : 'increases'} by <b>{timeImpact.delta}</b>.
+            {' '}<span>Basis: measured median {timeImpact.median} across {timeImpact.reviewed} timed reviews.</span>
+          </p>}
           <div className="automation-policy__flow" role="group" aria-label={`Routing impact: ${forecast.total} open findings; ${forecast.candidates} automated; ${forecast.review} sent to review; ${forecast.protected} always requires a person`}>
             <div className="automation-policy__source"><span>Open findings</span><b>{forecast.total}</b></div>
             <span className="automation-policy__flow-arrow" aria-hidden="true">→</span>

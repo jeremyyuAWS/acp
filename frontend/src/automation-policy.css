@@ -21,7 +21,12 @@
 .automation-policy__ticks button.is-selected { color: var(--focus-ring); font-weight: 800; }
 .automation-policy__ticks button:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 1px; border-radius: 5px; }
 .automation-policy__description { margin: 0; min-height: 18px; text-align: center; color: var(--muted); font-size: 12px; }
+.automation-policy__sr-only { position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0; }
 .automation-policy__outcome { margin: 0 0 12px; font-size: 15px; line-height: 1.45; }
+.automation-policy__card-impact { display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 6px;font-size:14px;font-variant-numeric:tabular-nums; }
+.automation-policy__card-impact .automation-policy__delta { margin:0; }
+.automation-policy__units,.automation-policy__time-impact { margin:4px 0 10px;color:var(--muted);font-size:12px; }
+.automation-policy__time-impact b { color:var(--ink); }
 .automation-policy__flow { display: grid; grid-template-columns: minmax(120px, .55fr) 28px minmax(0, 2fr); align-items: stretch; }
 .automation-policy__source { display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 14px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); text-align: center; }
 .automation-policy__source span, .automation-policy__routes span { color: var(--muted); font-size: 12px; }

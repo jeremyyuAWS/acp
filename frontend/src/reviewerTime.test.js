@@ -56,16 +56,16 @@ describe('reviewer time is measured or it is not shown', () => {
   it('says nothing until enough reviews have actually happened', () => {
     expect(measuredReviewTime(null)).toBeNull()
     expect(measuredReviewTime({})).toBeNull()
-    expect(measuredReviewTime({ reviewed: 0, avg_review_ms: 0 })).toBeNull()
+    expect(measuredReviewTime({ timed_reviews: 0, median_review_ms: 0 })).toBeNull()
     // One decision is a number, not an average.
-    expect(measuredReviewTime({ reviewed: 1, avg_review_ms: 9000 })).toBeNull()
+    expect(measuredReviewTime({ timed_reviews: 1, median_review_ms: 9000 })).toBeNull()
     // Reviews recorded before review_ms was captured land here: count without timing.
-    expect(measuredReviewTime({ reviewed: 40, avg_review_ms: null })).toBeNull()
+    expect(measuredReviewTime({ timed_reviews: 0, median_review_ms: null })).toBeNull()
   })
 
   it('reports the average once it is real', () => {
-    expect(measuredReviewTime({ reviewed: 7, avg_review_ms: 23800 }))
-      .toEqual({ avg: '24s', reviewed: 7 })
+    expect(measuredReviewTime({ timed_reviews: 7, median_review_ms: 23800 }))
+      .toEqual({ median: '24s', reviewed: 7, basis: REVIEW_TIME_BASIS })
   })
 
   it('declares the measurement as its basis, and names the column it came from', () => {
@@ -75,7 +75,7 @@ describe('reviewer time is measured or it is not shown', () => {
 
   it('is sourced from the backend, not from sim.js', () => {
     const c = code('Remediate.jsx')
-    expect(c).toMatch(/getHitlAnalytics\(runId\)/)
+    expect(c).toMatch(/createReviewEvidenceCache\(getHitlAnalytics\)/)
     // Anchored to the setter: `if (!runId || SIM) return` appears elsewhere in this file, so a
     // bare match on it would pass even with the SIM guard deleted from the review-stats effect.
     expect(c).toMatch(/if \(!runId \|\| SIM\) \{ setReviewStats\(null\); return \}/)

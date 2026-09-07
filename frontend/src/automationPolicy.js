@@ -38,6 +38,17 @@ const requiredLevel = (finding) => {
 
 const fileCount = (rows) => new Set(rows.map((finding) => finding?.file).filter(Boolean)).size
 
+const findingCount = (row) => {
+  const raw = Number(row?.finding_count ?? row?._raw?.finding_count ?? 1)
+  return Number.isFinite(raw) && raw > 0 ? Math.round(raw) : 1
+}
+
+// A queue row is the durable review-card authority. Callers mark those rows explicitly; rows
+// representing automatic work are forecast inputs, not cards that already exist in the queue.
+const cardKey = (row, index) => row?.reviewCardId || row?._raw?.id || row?.id || `forecast:${index}`
+const cards = (rows) => new Set(rows.map((row, index) => cardKey(row, index))).size
+const findingTotal = (rows) => rows.reduce((sum, row) => sum + findingCount(row), 0)
+
 const protectedReason = (finding) => {
   const sc = scOf(finding?.rule_id || finding?.ruleId)
   const proposal = proposalMeta(finding)
@@ -55,7 +66,8 @@ const categorySummary = (key, rows) => {
   })
   return {
     key,
-    findings: rows.length,
+    findings: findingTotal(rows),
+    cards: cards(rows),
     files: fileCount(rows),
     criteria: [...criteria.entries()]
       .map(([criterion, count]) => ({ criterion, count }))
@@ -80,16 +92,27 @@ export function automationForecast(findings = [], level = DEFAULT_AUTOMATION_LEV
     }
   })
   return {
-    total: rows.length,
-    candidates: buckets.candidates.length,
+    total: findingTotal(rows),
+    candidates: findingTotal(buckets.candidates),
     candidateFiles: fileCount(buckets.candidates),
-    review: buckets.review.length,
+    review: findingTotal(buckets.review),
     reviewFiles: fileCount(buckets.review),
-    protected: buckets.protected.length,
+    protected: findingTotal(buckets.protected),
     protectedFiles: fileCount(buckets.protected),
     humanCategories: Object.entries(humanBuckets)
       .map(([key, bucket]) => categorySummary(key, bucket))
       .filter((category) => category.findings > 0),
+    reviewCards: cards([...buckets.review, ...buckets.protected]),
+    currentReviewCards: cards(rows.filter((row) => row?.isCurrentReviewCard)),
+  }
+}
+
+export function reviewCardImpact(findings = [], level = DEFAULT_AUTOMATION_LEVEL) {
+  const forecast = automationForecast(findings, level)
+  return {
+    current: forecast.currentReviewCards,
+    preview: forecast.reviewCards,
+    delta: forecast.reviewCards - forecast.currentReviewCards,
   }
 }
 

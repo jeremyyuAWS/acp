@@ -25,6 +25,8 @@ def test_events_and_analytics(st):
     assert a["approval_rate"] == round(2 / 3, 3)          # (approve+edit)/reviewed
     assert a["edit_rate"] == round(1 / 2, 3)              # edited/approvals — the calibration signal
     assert a["avg_review_ms"] == 6000                     # (4000+12000+2000)/3; skip excluded
+    assert a["median_review_ms"] == 4000
+    assert a["timed_reviews"] == 3
 
 
 def test_analytics_scoped_by_scan(st):
@@ -37,6 +39,7 @@ def test_analytics_scoped_by_scan(st):
 def test_empty_analytics_no_divide_by_zero(st):
     a = st.hitl_analytics("nope")
     assert a["total"] == 0 and a["approval_rate"] is None and a["avg_review_ms"] is None
+    assert a["median_review_ms"] is None and a["timed_reviews"] == 0
 
 
 def test_review_event_links_to_exact_model_call_without_inference(st):

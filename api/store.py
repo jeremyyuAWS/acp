@@ -7,6 +7,7 @@ Postgres is the target for the live demo: it handles concurrent scans without
 serializing writes and survives container restarts across all replicas.
 """
 from __future__ import annotations
+import statistics
 import contextlib
 import json
 import logging
@@ -7929,6 +7930,11 @@ class Store:
             "approval_rate": round(approvals / decided, 3) if decided else None,
             "edit_rate": round(edited_n / approvals, 3) if approvals else None,   # calibration signal
             "avg_review_ms": round(sum(ms) / len(ms)) if ms else None,
+            # The policy preview projects review effort from a typical completed card. Median is
+            # deliberately separate from the legacy average: it is robust to a card left open
+            # during a meeting and is still absent when no card was actually timed.
+            "median_review_ms": round(statistics.median(ms)) if ms else None,
+            "timed_reviews": len(ms),
             "reject_reasons": reasons,
             "promotable_rules": promotable_rules,
             "by_rule": by_rule,

@@ -45,7 +45,7 @@ describe('AutomationPolicyControl', () => {
     expect(container.querySelector('.automation-policy__policies .is-preview strong').textContent).toBe('Assisted')
     expect(container.textContent).toContain('1 finding across 1 file')
     expect(container.textContent).toContain('ACP automates')
-    const delta = container.querySelector('.automation-policy__delta')
+    const delta = container.querySelector('.automation-policy__routes .automation-policy__delta')
     expect(delta.textContent).toBe('+1 vs production')
     expect(container.textContent).toContain('The remaining 0 stay with people.')
     expect(container.textContent).toContain('This preview does not change the active run or production policy.')
@@ -62,7 +62,7 @@ describe('AutomationPolicyControl', () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(slider, '1')
       slider.dispatchEvent(new Event('input', { bubbles: true }))
     })
-    const deltas = [...container.querySelectorAll('.automation-policy__delta')]
+    const deltas = [...container.querySelectorAll('.automation-policy__routes .automation-policy__delta')]
     expect(deltas.map((node) => node.textContent)).toEqual(['−1 vs production', '+1 total human decisions'])
   })
 
@@ -129,6 +129,44 @@ describe('AutomationPolicyControl', () => {
     expect(container.querySelector('.automation-policy__flow')).not.toBeNull()
     expect(container.querySelector('.automation-policy__forecast')).toBeNull()
     expect(container.querySelector('.automation-policy__flow').getAttribute('aria-label')).toMatch(/Routing impact/)
+  })
+
+  it('separates authoritative review cards from the findings they cover', async () => {
+    const container = await mount({ runId: 'run-cards', findings: [
+      { id: 'card-1', isCurrentReviewCard: true, finding_count: 4, file: 'one.docx',
+        rule_id: 'WCAG_1_1_1', hasProposal: false },
+      { id: 'card-2', isCurrentReviewCard: true, finding_count: 2, file: 'two.docx',
+        rule_id: 'WCAG_1_1_1', hasProposal: false },
+    ] })
+    expect(container.textContent).toContain('2 current review cards')
+    expect(container.textContent).toContain('2 in this preview')
+    expect(container.textContent).toContain('6 findings across 2 files')
+    expect(container.textContent).toContain('one card can cover several findings')
+  })
+
+  it('shows estimated review-time change only from a measured median', async () => {
+    const findings = [{ id: 'card-1', isCurrentReviewCard: true, file: 'one.docx',
+      rule_id: 'WCAG_2_4_4', hasProposal: true, proposals: [{ proposed_value: 'Clear link' }] }]
+    const withoutMeasurement = await mount({ runId: 'no-time', findings, reviewAnalytics: { reviewed: 12 } })
+    expect(withoutMeasurement.textContent).not.toContain('Estimated human-review time')
+
+    const measured = await mount({ runId: 'time', findings,
+      reviewAnalytics: { timed_reviews: 5, median_review_ms: 12000 } })
+    const slider = measured.querySelector('input[type="range"]')
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(slider, '4')
+      slider.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    expect(measured.textContent).toContain('Estimated human-review time decreases by 12s')
+    expect(measured.textContent).toContain('Basis: measured median 12s across 5 timed reviews')
+  })
+
+  it('uses one atomic live region for a slider change', async () => {
+    const container = await mount({ runId: 'announce', findings: [{ id: 'card-1',
+      isCurrentReviewCard: true, file: 'one.docx', rule_id: 'WCAG_2_4_4', hasProposal: true,
+      proposals: [{ proposed_value: 'Clear link' }] }] })
+    expect(container.querySelectorAll('[aria-live]').length).toBe(1)
+    expect(container.querySelector('.automation-policy__sr-only').getAttribute('aria-atomic')).toBe('true')
   })
 
   it('has no automated accessibility violations', async () => {

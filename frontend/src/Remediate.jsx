@@ -34,6 +34,7 @@ import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
 import RemediationOpsPanel from './RemediationOpsPanel.jsx'
 import RemediationWorkspaceTabs from './RemediationWorkspaceTabs.jsx'
 import AutomationPolicyControl from './AutomationPolicyControl.jsx'
+import { createReviewEvidenceCache } from './reviewEvidenceCache.js'
 import './remediation-prior-results.css'
 import { deriveRemediateProcessingState } from './remediateProcessingState.js'
 import { groupFixesByRule, summarizeImpact, totalFixes, scOf } from './fixSummary.js'
@@ -314,6 +315,8 @@ function VerifyState({ state, pct, remaining, ready, latest }) {
 // readOnly: time-travel replay — historical scans are for looking, not enqueuing
 // real remediation jobs against (decisions stay editable: per-scan decision saves
 // are the time-travel feature itself).
+const reviewEvidence = createReviewEvidenceCache(getHitlAnalytics)
+
 export default function Remediate({ run, files = [], decisions = {}, setDecisions, triage = {}, setTriage, assignees = {}, setAssignees, myEmail = null, aiEnabled = true, readOnly = false, onRefresh, onHitlCount, onNavigate, cap = null, assessment = null, assessedAt = null,
                                    // The run's live state and its ONE stream, owned by
                                    // useRemediationRun at App level so both survive this
@@ -856,7 +859,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     ...(workPartition?.lanes?.automatic?.findings || []).map((finding) => ({
       ...finding, rule_id: finding.rule_id || finding.sc, hasProposal: true,
     })),
-    ...reviewNeeds,
+    ...reviewNeeds.map((finding) => ({ ...finding, isCurrentReviewCard: true,
+      reviewCardId: finding?._raw?.id || finding?.id })),
   ]
 
   const fixGroups = groupFixesByRule(fixSource)
@@ -921,14 +925,17 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // A review decision the server refused. Loud, and sticky until the next attempt.
   const [actError, setActError] = useState(null)
   const [reviewStats, setReviewStats] = useState(null)
+  const reviewEvidenceKey = reviewEvidence.key(runId, run?.revision)
   useEffect(() => {
     if (!runId || SIM) { setReviewStats(null); return }
     let live = true
-    const pull = () => getHitlAnalytics(runId).then((a) => { if (live) setReviewStats(a) }).catch(() => {})
+    const pull = (refresh = false) => reviewEvidence.load(runId, run?.revision, { refresh })
+      .then((result) => { if (live && result.key === reviewEvidenceKey) setReviewStats(result.value) }).catch(() => {})
     pull()
-    window.addEventListener('acp:hitl-changed', pull)
-    return () => { live = false; window.removeEventListener('acp:hitl-changed', pull) }
-  }, [runId])
+    const refresh = () => pull(true)
+    window.addEventListener('acp:hitl-changed', refresh)
+    return () => { live = false; window.removeEventListener('acp:hitl-changed', refresh) }
+  }, [runId, run?.revision, reviewEvidenceKey])
   const measured = measuredReviewTime(reviewStats)
 
   // Verification state — tied to the real re-scan/job state (§8), never "0 → 0".
@@ -1451,7 +1458,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                   AI draft edited <b style={{ color: 'var(--ink)' }}>{Math.round(reviewStats.edit_rate * 100)}%</b>
                 </span>
               )}
-              {measured && <span>Avg review <b style={{ color: 'var(--ink)' }}>{measured.avg}</b></span>}
+              {measured && <span title={measured.basis}>Median review <b style={{ color: 'var(--ink)' }}>{measured.median}</b></span>}
             </div>
           )}
           {/* AI Quality (feedback intelligence): which rules are weakest + WHY rejections happen —
@@ -1626,7 +1633,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         primary={primary}
         readOnly={readOnly}
         onOpenRunDetails={() => setRunDetailsOpen((v) => !v)} />
-      <AutomationPolicyControl key={runId || 'current'} findings={automationPolicyFindings} runId={runId} />
+      <AutomationPolicyControl key={runId || 'current'} findings={automationPolicyFindings} runId={runId}
+                               reviewAnalytics={reviewStats} />
       <RemediationWorkspaceTabs
         runId={runId}
         reviewCount={reviewCount}
