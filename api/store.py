@@ -4520,7 +4520,8 @@ class Store:
                          "lifecycle_evaluation", "effective_disposition",
                          "org_memory", "remediation_state", "finding_disposition",
                          "finding_disposition_event", "remediation_diff", "applied_fixes",
-                         "ai_calls", "second_opinion_reservations", "finding_comments",
+                         "ai_calls", "ai_validation_outcomes", "second_opinion_reservations",
+                         "finding_comments",
                          "scan_inputs",  # Stage 1 item 3: per-scan enqueue snapshots are customer data
                          "scan_folder_completions",  # which folders of a scan were counted done
                          "active_discovery_guard",  # transient lock state — cleared on reset
