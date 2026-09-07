@@ -56,6 +56,18 @@ const SCALER = {
   not_configured: { label: 'Azure not configured', tone: 'var(--muted)' },
 }
 
+const RECONCILIATION = {
+  applying: { label: 'Updating Azure capacity…', pending: true },
+  leader_busy: { label: 'Another app instance is completing this update…', pending: true },
+  backoff: { label: 'The last update failed; an automatic retry is scheduled.', problem: true },
+  partial: { label: 'Some services did not update. ACP will retry automatically.', problem: true },
+  failed: { label: 'Azure did not confirm the capacity update. ACP will retry automatically.', problem: true },
+  stale: { label: 'The schedule changed during the update. ACP is reconciling the latest version.', problem: true },
+  applied: { label: 'Azure capacity matches the active scheduling policy.' },
+  ineligible: { label: 'Save and apply the current schedule before reconciling capacity.', problem: true },
+  disabled: { label: 'Azure capacity application is unavailable.', problem: true },
+}
+
 function Findings({ findings }) {
   if (!findings?.length) return null
   return (
@@ -75,6 +87,7 @@ export default function CapacitySchedule({ me = null } = {}) {
   const [snap, setSnap] = useState(null)
   const [failed, setFailed] = useState(false)
   const [reloads, setReloads] = useState(0)
+  const [fastRefreshUntil, setFastRefreshUntil] = useState(0)
   const [workspace, setWorkspace] = useState(null)
   // `me?.is_admin` is the exact value the backend's _require_admin checks, so the SPA and the API
   // cannot disagree about who sees the editor. It is not the gate — every write endpoint runs
@@ -91,6 +104,15 @@ export default function CapacitySchedule({ me = null } = {}) {
       .catch(() => { if (on) setFailed(true) })
     return () => { on = false }
   }, [reloads])
+
+  // Keep status fresh while Settings is open. After a mutation, briefly follow the reconciler at
+  // its own cadence so the administrator sees confirmation without closing and reopening.
+  useEffect(() => {
+    const fast = Date.now() < fastRefreshUntil
+    const delay = fast ? 2000 : 30000
+    const timer = window.setTimeout(() => setReloads((n) => n + 1), delay)
+    return () => window.clearTimeout(timer)
+  }, [reloads, fastRefreshUntil])
 
   if (failed) {
     return <div className="panel" style={{ padding: 12, fontSize: 13 }}>
@@ -114,6 +136,7 @@ export default function CapacitySchedule({ me = null } = {}) {
   const hasDrift = !!snap.drift_evaluated && !!snap.drift?.length
   const overrideAvailable = !!snap.applied && !!snap.application_configured
   const reconciliation = snap.reconciliation || {}
+  const reconciliationView = RECONCILIATION[reconciliation.state]
   const applicationState = hasDrift
     ? 'Drift detected'
     : snap.applied ? 'Applied' : 'Saved changes not applied'
@@ -172,11 +195,16 @@ export default function CapacitySchedule({ me = null } = {}) {
             Temporary overrides are unavailable until this schedule is applied and Azure capacity application is enabled.
           </div>
         )}
-        {reconciliation.state && reconciliation.state !== 'idle' && (
-          <div role="status" style={{ fontSize: 12, marginTop: 5 }}>
-            Capacity reconciliation: <b>{reconciliation.state.replace(/_/g, ' ')}</b>
-            {reconciliation.completed_at ? <> · last completed {new Date(reconciliation.completed_at).toLocaleString()}</> : null}
-            {reconciliation.failures ? <> · {reconciliation.failures} failed attempt{reconciliation.failures === 1 ? '' : 's'}</> : null}
+        {reconciliationView && (
+          <div role="status" aria-live="polite" style={{ fontSize: 12, marginTop: 5 }}>
+            <b>{reconciliationView.label}</b>
+            {reconciliation.completed_at ? <> Last checked {new Date(reconciliation.completed_at).toLocaleString()} in your timezone.</> : null}
+            {reconciliation.failures ? <> {reconciliation.failures} failed attempt{reconciliation.failures === 1 ? '' : 's'}.</> : null}
+            {(reconciliationView.problem || reconciliationView.pending) && (
+              <button type="button" className="linklike" onClick={() => setReloads((n) => n + 1)}>
+                Refresh status
+              </button>
+            )}
           </div>
         )}
         <div className="muted" style={{ fontSize: 12, marginTop: 5 }}>
@@ -245,7 +273,7 @@ export default function CapacitySchedule({ me = null } = {}) {
       {isAdmin && workspace && (
         <CapacityScheduleEditor snap={snap} initialView={workspace}
           onClose={() => setWorkspace(null)}
-          onSaved={() => { setWorkspace(null); setReloads((n) => n + 1) }} />
+          onSaved={() => { setWorkspace(null); setFastRefreshUntil(Date.now() + 60000); setReloads((n) => n + 1) }} />
       )}
 
       {/* §5.3's table, with the observed column beside it so the two are read together. */}

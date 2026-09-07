@@ -26,9 +26,9 @@ item must carry its own regression test before merge.
 
 ## Remaining polish
 
-- [ ] Refresh reconciliation progress after an override, holiday transition, retry, or restore so
+- [x] Refresh reconciliation progress after an override, holiday transition, retry, or restore so
   an administrator does not have to close and reopen Settings to see the final state.
-- [ ] Render reconciliation state as plain-language outcomes with a clear retry/review action for
+- [x] Render reconciliation state as plain-language outcomes with a clear retry/review action for
   partial, failed, stale, or backoff states; reserve raw state names for diagnostics.
 - [ ] Label all transition, override-expiry, and reconciliation timestamps with the viewer's
   timezone, while retaining the schedule timezone beside schedule wall-clock fields.
