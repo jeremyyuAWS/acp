@@ -31,6 +31,7 @@ THRESHOLDS = {
     "missing_retry_events_max": 0,
     "missing_dead_letter_events_max": 0,
     "missing_latest_progress_events_max": 0,
+    "missing_warm_soak_events_max": 0,
     "publisher_drops_max": 0,
 }
 
@@ -264,18 +265,31 @@ def run(config: GateConfig) -> dict:
             realtime_shadow.observe_job(special, "dead", worker_id="load-gate", status="failed",
                                         detail={"emitted_ns": now})
 
-        deadline = time.monotonic() + config.timeout_seconds
-        while time.monotonic() < deadline:
-            written = sum(len(memory.rows(key)) for key in keys) if memory else sum(
-                int(transport.redis.xlen(key)) for key in keys)
-            with publisher._cv:
-                pending = len(publisher._lifecycle) + len(publisher._progress)
-            if (pending == 0 and not observed_transport.has_active_writes()
-                    and written >= expected_lossless + expected_progress):
-                break
-            time.sleep(0.01)
-        else:
+        def wait_for_drain(minimum_written: int) -> int:
+            deadline = time.monotonic() + config.timeout_seconds
+            while time.monotonic() < deadline:
+                written = sum(len(memory.rows(key)) for key in keys) if memory else sum(
+                    int(transport.redis.xlen(key)) for key in keys)
+                with publisher._cv:
+                    pending = len(publisher._lifecycle) + len(publisher._progress)
+                if (pending == 0 and not observed_transport.has_active_writes()
+                        and written >= minimum_written):
+                    return written
+                time.sleep(0.01)
             raise TimeoutError("publisher did not drain within the gate timeout")
+
+        first_wave_written = wait_for_drain(expected_lossless + expected_progress)
+
+        # A legal burst can fit entirely in the publisher's first batch.  Send a distinct second
+        # wave only after that batch drains so the same persistent client always supplies a real
+        # warm-path sample; do not change production batching or coalescing to manufacture one.
+        for owner in owners:
+            publisher.submit(
+                kind="assess.started", owner=owner, correlation_id=f"warm-soak-{run_id}",
+                scan_id=f"warm-soak-{run_id}", job_id=f"warm-soak-{owner}",
+                worker_id="load-gate", payload={"warm_soak": True},
+            )
+        wait_for_drain(first_wave_written + config.tenants)
 
         reader_for_replay, reader = reader, None
         per_owner = asyncio.run(_replay_all(reader_for_replay, owners))
@@ -309,6 +323,7 @@ def run(config: GateConfig) -> dict:
             if event.kind == "assess.progressed"
             and event.payload.get("progress") == config.progress_per_job - 1
         }
+        warm_soak_events = sum(event.payload.get("warm_soak") is True for event in all_events)
         metrics = {
             "gateway_latency_p95_ms": percentile(gateway_latencies, .95),
             "connection_warmup_latency_ms": observed_transport.warmup_latency_ms(),
@@ -329,6 +344,7 @@ def run(config: GateConfig) -> dict:
             "missing_retry_events": max(0, config.tenants - retry_events),
             "missing_dead_letter_events": max(0, config.tenants - dead_events),
             "missing_latest_progress_events": max(0, expected_progress - len(latest_progress_jobs)),
+            "missing_warm_soak_events": max(0, config.tenants - warm_soak_events),
             "missing_failed_events": max(0, config.tenants - failed_events),
             "publisher_drops": (
                 realtime_shadow.METRICS.snapshot()["publish_drop_total"] - drops_before
