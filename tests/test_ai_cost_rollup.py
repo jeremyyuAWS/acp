@@ -60,9 +60,16 @@ def test_model_rollup_keeps_provider_model_and_zone_together(isolated_store):
     rows = {(r["provider"], r["model"], r["zone"]): r
             for r in s.ai_cost_rollup(since_days=None)["by_model"]}
     cloud = rows[("openai", "gpt-5", "cloud")]
+    # Reviewer decisions and post-write validation ride on the same row, at the same grain, and
+    # are ZEROS here rather than absent: no decision or validation row named these calls. The
+    # linked case is tests/test_ai_validation_linkage.py.
     assert cloud == {"provider": "openai", "model": "gpt-5", "zone": "cloud",
                      "calls": 2, "ok": 1, "failed": 1,
-                     "avg_latency_ms": 500, "cost_usd": 0.03}
+                     "avg_latency_ms": 500, "cost_usd": 0.03,
+                     "reviewed": {"decisions": 0, "approved": 0, "edited": 0, "rejected": 0},
+                     "validation": {"validated": 0, "cleared": 0, "regressed": 0,
+                                    "still_failing": 0, "could_not_verify": 0,
+                                    "unresolved": 0, "newly_failing": 0}}
     assert rows[("ollama", "qwen3:32b", "local")]["failed"] == 0
 
 

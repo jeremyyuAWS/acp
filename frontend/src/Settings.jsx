@@ -236,6 +236,23 @@ export function DriveMirror() {
     </div>
   )
   const models = costs?.month?.by_model || []
+  // Reviewer decisions and post-write validation, joined to the call by the id each decision
+  // carries. A model with calls but no linked decision reads "Not linked" — never a rate
+  // computed over drafts nobody reviewed or over decisions that did not name their call.
+  const reviewedCell = (r) => {
+    if (!r || !Number(r.decisions)) return 'Not linked'
+    const accepted = Number(r.approved || 0) + Number(r.edited || 0)
+    return `${accepted} accepted (${Number(r.edited || 0)} edited) · ${Number(r.rejected || 0)} rejected`
+  }
+  const validationCell = (v) => {
+    if (!v || !Number(v.validated)) return 'Not linked'
+    const parts = [`${Number(v.cleared || 0)} cleared`]
+    if (Number(v.regressed)) parts.push(`${v.regressed} regressed`)
+    if (Number(v.still_failing)) parts.push(`${v.still_failing} still failing`)
+    if (Number(v.could_not_verify)) parts.push(`${v.could_not_verify} unverified`)
+    if (Number(v.unresolved)) parts.push(`${v.unresolved} not written`)
+    return parts.join(' · ')
+  }
   return (
     <div style={{ maxWidth: 560 }}>
       <h3 style={{ marginTop: 0 }}>AI usage &amp; cost <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>· governance</span></h3>
@@ -262,12 +279,14 @@ export function DriveMirror() {
             <h4 id="model-quality-title" style={{ margin: '0 0 4px' }}>Remediation model evidence</h4>
             <p className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>
               Last 30 days · measured calls only. Success means the model call completed; it does
-              not mean a reviewer accepted the draft or the corrected file passed validation.
+              not mean a reviewer accepted the draft or the corrected file passed validation —
+              those are the two columns on the right, counted from the decisions and re-scans
+              that name this exact call.
             </p>
             {models.length ? (
               <div style={{ overflowX: 'auto' }}>
                 <table className="simple-table" style={{ width: '100%', fontSize: 12 }}>
-                  <thead><tr><th>Model</th><th>Location</th><th>Calls</th><th>Call success</th><th>Avg latency</th><th>Spend</th></tr></thead>
+                  <thead><tr><th>Model</th><th>Location</th><th>Calls</th><th>Call success</th><th>Avg latency</th><th>Spend</th><th>Reviewer decisions</th><th>Post-write validation</th></tr></thead>
                   <tbody>{models.map((m) => {
                     const success = m.calls ? Math.round((Number(m.ok || 0) / Number(m.calls)) * 100) : null
                     return <tr key={`${m.provider}:${m.model}:${m.zone}`}>
@@ -277,14 +296,19 @@ export function DriveMirror() {
                       <td>{success == null ? 'Not measured' : `${success}%`}{m.failed ? ` · ${m.failed} failed` : ''}</td>
                       <td>{m.avg_latency_ms ? `${Number(m.avg_latency_ms).toLocaleString()} ms` : 'Not measured'}</td>
                       <td>${Number(m.cost_usd || 0).toFixed(4)}</td>
+                      <td>{reviewedCell(m.reviewed)}</td>
+                      <td>{validationCell(m.validation)}</td>
                     </tr>
                   })}</tbody>
                 </table>
               </div>
             ) : <p className="muted" style={{ fontSize: 12 }}>No model calls recorded in this window.</p>}
             <p className="muted" style={{ fontSize: 11.5, margin: '8px 0 0' }}>
-              Reviewer acceptance, edit rate and post-write validation are not reported here yet;
-              those outcomes are not currently linked to a model call, so ACP does not estimate them.
+              Reviewer decisions and post-write validation count only the drafts whose decision
+              recorded the exact model call. Drafts reviewed before that link existed, human-authored
+              values and multi-image cards read as not linked rather than estimated. "Regressed" means
+              the write cleared its criterion but made another one fail that did not fail before;
+              "not written" means the approved content could no longer be found in the document.
             </p>
           </section>
         </>
