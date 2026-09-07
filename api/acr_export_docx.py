@@ -329,8 +329,11 @@ def _add_requirement_section(document, section: dict | None, heading: str) -> No
     document.add_paragraph(", ".join(f"{k}: {v}" for k, v in section["totals"].items()))
 
     for chapter in section["chapters"]:
+        # The projection carries the template's wording for the division; the fallback is the
+        # shape this printed before the template's headings existed as data.
         label = chapter.get("label") or "Chapter"
-        document.add_heading(f"{label} {chapter['num']}: {chapter['name']}", level=3)
+        document.add_heading(
+            chapter.get("heading") or f"{label} {chapter['num']}: {chapter['name']}", level=3)
         document.add_paragraph(", ".join(f"{k}: {v}" for k, v in chapter["totals"].items()))
         table = document.add_table(rows=1, cols=3)
         table.style = "Table Grid"

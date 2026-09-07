@@ -117,7 +117,8 @@ def test_the_html_prints_the_508_report_with_its_own_tables(projection):
     html = acr_export_preview.to_html(projection)
     assert "Revised Section 508 Report" in html
     assert "36 CFR Part 1194" in html
-    for caption in ("Chapter 3: Functional Performance Criteria",
+    # The template's wording, including its `(FPC)`; ACP's catalog name has no abbreviation.
+    for caption in ("Chapter 3: Functional Performance Criteria (FPC)",
                     "Chapter 4: Hardware", "Chapter 5: Software",
                     "Chapter 6: Support Documentation and Services"):
         assert caption in html, caption
@@ -184,7 +185,7 @@ def test_the_word_document_carries_the_508_chapters_as_headings(docx_bytes, tmp_
     document = docx.Document(str(path))
     headings = [p.text for p in document.paragraphs if p.style.name.startswith("Heading")]
     assert "Revised Section 508 Report" in headings
-    assert "Chapter 3: Functional Performance Criteria" in headings
+    assert "Chapter 3: Functional Performance Criteria (FPC)" in headings
     assert "Chapter 6: Support Documentation and Services" in headings
 
 

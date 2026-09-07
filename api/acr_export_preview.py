@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 
 import acr_catalog
 from acr_catalog import (FINAL_STATUSES, REQ_EN_301_549, REQ_SECTION_508, REQ_WCAG,
@@ -113,10 +114,12 @@ def project(report: dict, criteria: list[dict], *, evidence_by_criterion: dict[s
 
     rows = [_row(c) for c in sorted(wcag, key=lambda r: (_PRINCIPLE_ORDER.get(r.get("principle"), 9),
                                                          _sortkey(r["criterion_num"])))]
+    edition = report.get("vpat_edition")
     section_508 = _section_508(
-        [_row(c) for c in sorted(five_oh_eight, key=lambda r: _sortkey(r["criterion_num"]))])
+        [_row(c) for c in sorted(five_oh_eight, key=lambda r: _sortkey(r["criterion_num"]))],
+        edition)
     en_301_549 = _en_301_549(
-        [_row(c) for c in sorted(european, key=lambda r: _sortkey(r["criterion_num"]))])
+        [_row(c) for c in sorted(european, key=lambda r: _sortkey(r["criterion_num"]))], edition)
 
     return {
         "template": {
@@ -154,7 +157,8 @@ def project(report: dict, criteria: list[dict], *, evidence_by_criterion: dict[s
     }
 
 
-def _grouped_section(rows: list[dict], *, citation: str, names: dict, label: str) -> dict | None:
+def _grouped_section(rows: list[dict], *, citation: str, names: dict, label: str,
+                     headings: dict | None = None) -> dict | None:
     """Rows grouped into the divisions their standard is organised by, or nothing at all.
 
     ONE IMPLEMENTATION, TWO STANDARDS. Section 508 prints Chapters 3-6 as separate tables and
@@ -171,16 +175,30 @@ def _grouped_section(rows: list[dict], *, citation: str, names: dict, label: str
     Grouped rather than left flat because the divisions ARE the document's structure. A flat list
     would have to be regrouped identically by the HTML renderer, the Word renderer and the PDF
     path, which is three chances to disagree about what the document contains.
+
+    `heading` is what a renderer prints above the division's table, and it is the ITI template's
+    own wording where the template has any — `Chapter 3: Functional Performance Criteria (FPC)`,
+    `Clause 9: Web (see WCAG 2.x section)` — keyed by the division NUMBER, which is the one thing
+    ACP's catalog and the template are guaranteed to agree on. `name` stays the catalog's: it is
+    data about the standard, `heading` is data about the document, and a test that checks one
+    should not be broken by the other changing. Where the template says nothing, `heading` is
+    built from `label`, number and `name`, which is exactly what every renderer printed before.
     """
     if not rows:
         return None
+    headings = headings or {}
     groups: list[dict] = []
     for num in sorted({r["chapter"] for r in rows if r["chapter"]}, key=_division_sortkey):
         in_group = [r for r in rows if r["chapter"] == num]
+        name = names.get(num) or f"{label} {num}"
+        # A division neither the template nor the catalog names is headed by its number once,
+        # not `Chapter 9: Chapter 9` — `name` already IS the fallback in that case.
+        fallback = f"{label} {num}: {name}" if names.get(num) else name
         groups.append({
             "num": num,
-            "name": names.get(num) or f"{label} {num}",
+            "name": name,
             "label": label,
+            "heading": headings.get(num) or fallback,
             "rows": in_group,
             "totals": _totals(in_group),
         })
@@ -206,6 +224,36 @@ def _catalog_division_names(meta_fn, key: str) -> dict:
         return {k: v.get("name") for k, v in (meta_fn() or {}).get(key, {}).items()}
     except (FileNotFoundError, KeyError, ValueError, AttributeError):  # pragma: no cover
         return {}
+
+
+# The template writes each division's heading as `Chapter N: …` or `Clause N: …`. The number is
+# the join key to ACP's rows, which store a division NUMBER (`chapter`); the rest of the string is
+# the template's wording and is used verbatim, including the parts ACP's catalogs do not carry —
+# the `(FPC)` and `(FPS)` abbreviations and clause 9's `(see WCAG 2.x section)`.
+_DIVISION_NUMBER = re.compile(r"^(?:Chapter|Clause)\s+(\d+):")
+
+
+def _template_division_headings(edition: str | None, requirement_set: str) -> dict:
+    """`{division number: the template's heading}` for one requirement set in one edition.
+
+    Per EDITION, not per standard, because the template is not consistent with itself: the EU
+    edition writes `Clause 10: Non-web Documents` and the INT edition `Clause 10: Non-Web
+    Documents`. Choosing per edition is what makes the document match the template a reader has
+    in front of them rather than a normalised version of it — the catalog captured the difference
+    deliberately, and normalising it here would undo that.
+
+    Empty for an unknown edition, and empty is a working answer: `_grouped_section` then prints
+    what it always printed. A heading lookup must never be the reason a division does not render.
+    """
+    out: dict = {}
+    for section in acr_catalog.vpat_report_sections(edition):
+        if section["requirement_set"] != requirement_set:
+            continue
+        for text in section["subsections"]:
+            m = _DIVISION_NUMBER.match(text)
+            if m:
+                out[m.group(1)] = text
+    return out
 
 
 # The template splits WCAG by conformance level — one table per level, three columns each,
@@ -269,26 +317,28 @@ def _wcag_section(rows: list[dict], edition: str | None, wcag_version: str) -> d
     return {"heading": heading, "wcag_version": wcag_version, "levels": levels}
 
 
-def _section_508(rows: list[dict]) -> dict | None:
+def _section_508(rows: list[dict], edition: str | None = None) -> dict | None:
     return _grouped_section(
         rows,
         citation="36 CFR Part 1194, Appendix C (Revised Section 508 Standards)",
         names=_catalog_division_names(acr_catalog.section_508_meta, "chapters"),
-        label="Chapter")
+        label="Chapter",
+        headings=_template_division_headings(edition, REQ_SECTION_508))
 
 
-def _en_301_549(rows: list[dict]) -> dict | None:
-    """The EU report. Nothing renders unless the rows are there, and they are not yet —
-    `config/en-301-549.json` is committed empty while its reproduction question is open, so this
-    returns None in every deployment today. It is written now so that the day the requirements
-    land, the edition opens by adding one member to `acr_catalog._RENDERABLE` rather than by
-    writing a renderer under time pressure."""
+def _en_301_549(rows: list[dict], edition: str | None = None) -> dict | None:
+    """The EU report. Nothing renders unless the rows are there — a WCAG or 508 report has none
+    and gets no `en_301_549` key at all, so a renderer keying off presence cannot print an empty
+    heading. This was written before `config/en-301-549.json` had content, against rows the tests
+    supplied, so that when the clauses landed (#1619) the edition opened by adding one member to
+    `acr_catalog._RENDERABLE` rather than by writing a renderer under time pressure."""
     return _grouped_section(
         rows,
         citation=(f"{acr_catalog.en_301_549_meta().get('citation') or 'EN 301 549'} "
                   f"({acr_catalog.en_301_549_meta().get('publisher') or 'CEN, CENELEC and ETSI'})"),
         names=_catalog_division_names(acr_catalog.en_301_549_meta, "clauses"),
-        label="Clause")
+        label="Clause",
+        headings=_template_division_headings(edition, REQ_EN_301_549))
 
 
 def _sortkey(num: str) -> tuple:
@@ -445,9 +495,10 @@ def _requirement_section_html(section: dict | None, heading: str, e) -> str:
                      f"<td>{e(r['conformance_level'])}{draft}</td>"
                      f"<td>{e(r['remarks'])}{stale}</td></tr>")
         counts = ", ".join(f"{k}: {v}" for k, v in chapter["totals"].items())
+        heading_text = (chapter.get("heading")
+                        or f'{chapter.get("label") or "Chapter"} {chapter["num"]}: {chapter["name"]}')
         out.append(
-            f'<table>\n  <caption>{e(chapter.get("label") or "Chapter")} {e(chapter["num"])}: '
-            f'{e(chapter["name"])} — {e(counts)}</caption>\n'
+            f'<table>\n  <caption>{e(heading_text)} — {e(counts)}</caption>\n'
             f'  <thead>\n    <tr><th scope="col">Criteria</th>'
             f'<th scope="col">Conformance Level</th>'
             f'<th scope="col">Remarks and Explanations</th></tr>\n  </thead>\n'
