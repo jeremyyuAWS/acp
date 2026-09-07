@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import ScopeBanner from './ScopeBanner.jsx'
 import { documentSelection, documentScopeSentence } from './remediableScope.js'
-import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseManifest, previewReleaseDestination, previewReleasePackage, listHitlQueue, getSettings, getSourceStatus, rescoreFile, downloadReleasePackage, putMyReleaseTemplates } from './api.js'
+import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseManifest, previewReleaseDestination, previewReleasePackage, listHitlQueue, getSettings, getSourceStatus, rescoreFile, downloadReleasePackage, prepareReleasePackage, downloadPreparedReleasePackage, getQueueJob, putMyReleaseTemplates } from './api.js'
 import { releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
 import { SET_STATUS, certificationUniverse, releaseSetStatus } from './graduation.js'
 import { mirrorState, MIRROR } from './deliveryPolicy.js'
@@ -47,6 +47,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [releaseTemplates, setReleaseTemplates] = useState([])
   const [templateSaving, setTemplateSaving] = useState(false)
   const [packagePreview, setPackagePreview] = useState(null)
+  const [packageJob, setPackageJob] = useState(null)
   const [keptInAcp, setKeptInAcp] = useState(false)
   const [releasePreview, setReleasePreview] = useState(null)
   const [previewingRelease, setPreviewingRelease] = useState(false)
@@ -59,6 +60,34 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     try { return window.localStorage.getItem('acp.release.completionSound') === 'on' } catch { return false }
   })
   const [sel, setSel] = useState(null)
+  useEffect(() => {
+    if (!run?.id) { setPackageJob(null); return }
+    let stored = null
+    try { stored = JSON.parse(window.localStorage.getItem(`acp.release.package.${run.id}`) || 'null') } catch {}
+    setPackageJob(stored)
+  }, [run?.id])
+  useEffect(() => {
+    if (!packageJob?.job_id || !run?.id || ['done', 'dead', 'cancelled'].includes(packageJob.status)) return
+    let live = true, timer
+    const refresh = async () => {
+      try {
+        const status = await getQueueJob(packageJob.job_id)
+        if (!live) return
+        const next = { ...packageJob, ...status }
+        setPackageJob(next)
+        window.localStorage.setItem(`acp.release.package.${run.id}`, JSON.stringify(next))
+        if (!['done', 'dead', 'cancelled'].includes(status.status)) timer = window.setTimeout(refresh, 2000)
+        else if (status.status === 'done') setReleaseAnnouncement('Your ZIP package is ready to download.')
+      } catch (error) {
+        if (live) {
+          setReleaseError({ summary: 'Package progress could not be refreshed.', details: error?.message || 'ACP will try again.' })
+          timer = window.setTimeout(refresh, 5000)
+        }
+      }
+    }
+    refresh()
+    return () => { live = false; if (timer) window.clearTimeout(timer) }
+  }, [packageJob?.job_id, packageJob?.status, run?.id])
   // Why is the publish queue empty? A remediated file only becomes certifiable once its
   // human-review findings are approved. Fetch the pending HITL queue so the empty state can
   // say "N findings await review — approve them in Review first" instead of a dead-end.
@@ -180,6 +209,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const publishableReady = ready.filter((f) => !done[f.file] && srcOf(f) !== 'stale')
   const selectableReady = ready.filter((f) => srcOf(f) !== 'stale')
   const selectedReady = selectableReady.filter((f) => selectedFiles.has(f.file))
+  const packagePlanKey = JSON.stringify({ files: selectedReady.map((file) => file.file).sort(),
+    packageName: packageName.trim().replace(/\.zip$/i, ''), preserveHierarchy, includeManifest })
+  const activePackageJob = packageJob?.plan_key === packagePlanKey ? packageJob : null
   const selectedPublishable = selectedReady.filter((f) => !done[f.file])
   const selectedSizes = selectedReady.map(releaseFileSize)
   const selectedEstimatedBytes = selectedSizes.length > 0 && selectedSizes.every((size) => size != null)
@@ -374,8 +406,21 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     if (downloading || !selectedReady.length) return
     setDownloading(true)
     try {
-      await downloadReleasePackage(run?.id, selectedReady.map((file) => file.file), packageName,
-        { preserveHierarchy, includeManifest, downloadFormat })
+      if (activePackageJob?.status === 'done') {
+        await downloadPreparedReleasePackage(run?.id, activePackageJob.job_id, activePackageJob.package_name || packageName)
+      } else if (downloadFormat === 'zip' && ((packagePreview?.estimated_bytes || 0) >= 50 * 1024 * 1024 || selectedReady.length >= 100)) {
+        const queued = await prepareReleasePackage(run?.id, selectedReady.map((file) => file.file), packageName,
+          { preserveHierarchy, includeManifest })
+        const next = { ...queued, package_name: packageName, plan_key: packagePlanKey }
+        setPackageJob(next)
+        window.localStorage.setItem(`acp.release.package.${run.id}`, JSON.stringify(next))
+        setReleaseAnnouncement('Package preparation started. You can leave this tab and return when it is ready.')
+        setDownloading(false)
+        return
+      } else {
+        await downloadReleasePackage(run?.id, selectedReady.map((file) => file.file), packageName,
+          { preserveHierarchy, includeManifest, downloadFormat })
+      }
       if (includeVerificationReport) await openReport(run?.id, `acp-verification-${run?.id}.pdf`)
       setReleaseAnnouncement(downloadFormat === 'original'
         ? `Corrected file ${selectedReady[0]?.file || ''} downloaded.`
@@ -510,6 +555,16 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     setKeptInAcp(true)
     setReleaseAnnouncement(`${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file remains' : 'files remain'} securely in ACP. No external copies were created and the originals were not changed.`)
   }
+  const downloadQueuedPackage = async () => {
+    if (!packageJob?.job_id || packageJob.status !== 'done' || downloading) return
+    setDownloading(true)
+    try {
+      await downloadPreparedReleasePackage(run.id, packageJob.job_id, packageJob.package_name || '')
+      setReleaseAnnouncement('Prepared ZIP package downloaded.')
+    } catch (error) {
+      setReleaseError({ summary: 'The prepared ZIP could not be downloaded.', details: error?.message || 'Try preparing it again.' })
+    } finally { setDownloading(false) }
+  }
 
   return (
     <>
@@ -565,6 +620,13 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
           </div>
         </details>
       </section>
+      {packageJob && <section className="release-notice release-package-job" role="status" aria-label="Prepared package status">
+        <span><b>{packageJob.status === 'done' ? 'Download package ready' : packageJob.status === 'dead' ? 'Download package failed' : 'Download package in progress'}</b><br />
+          {packageJob.status === 'done' ? 'Prepared safely and available after navigation or reload.' : packageJob.phase || 'The package continues in the background.'}</span>
+        {packageJob.status === 'done'
+          ? <button className="qbtn approve" disabled={downloading} onClick={downloadQueuedPackage}>{downloading ? 'Downloading…' : 'Download ZIP'}</button>
+          : packageJob.status === 'dead' ? <button className="ghost" onClick={startRelease}>Prepare again</button> : null}
+      </section>}
       {releaseError && (
         <section className="release-recovery" role="alert" aria-labelledby="release-error-title">
           <div>
@@ -872,6 +934,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                     {!packagePreview.estimate_complete && <p className="muted">Final size will be calculated while preparing the download.</p>}
                     {(packagePreview.blockers || []).map((item) => <div className="release-name-error" role="alert" key={item.file}>{item.file}: {item.reason}</div>)}
                   </div>}
+                  {deliveryMethod === 'download' && activePackageJob && <div className={`release-preflight ${activePackageJob.status === 'done' ? 'release-preflight--ready' : activePackageJob.status === 'dead' ? 'release-preflight--blocked' : ''}`} role="status">
+                    <b>{activePackageJob.status === 'done' ? 'ZIP package ready' : activePackageJob.status === 'dead' ? 'Package preparation failed' : 'Preparing ZIP package'}</b>
+                    <span>{activePackageJob.status === 'done' ? 'The prepared download is available even after leaving and returning to Release.' : activePackageJob.phase || 'This work continues safely in the background.'}</span>
+                  </div>}
                   <ReleaseModelProvenance scanId={run?.id} selectedFiles={selectedReady.map((file) => file.file)} />
                 </div>
                 <div className="release-plan__actions">
@@ -879,7 +945,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                   {deliveryMethod === 'publish'
                     ? <button className="qbtn approve" disabled={readOnly || publishing || !selectedPublishable.length || !releasePreview?.can_release} onClick={() => setConfirm({ kind: 'selected', files: selectedPublishable.map((f) => f.file), folderName: releasePreview?.folder_name || releaseFolder?.name || releaseFolderName.trim() })}>{publishing ? 'Publishing…' : `Publish ${selectedPublishable.length} ${selectedPublishable.length === 1 ? 'copy' : 'copies'}`}</button>
                     : deliveryMethod === 'download'
-                      ? <button className="qbtn approve" disabled={downloading || !selectedReady.length || packagePreview?.can_download === false} onClick={downloadSelected}>{downloading ? 'Preparing download…' : downloadFormat === 'original' ? 'Download corrected file' : `Download ZIP (${selectedReady.length})`}</button>
+                      ? <button className="qbtn approve" disabled={downloading || !selectedReady.length || packagePreview?.can_download === false || (activePackageJob && !['done', 'dead'].includes(activePackageJob.status))} onClick={downloadSelected}>{downloading ? 'Preparing download…' : activePackageJob?.status === 'done' ? 'Download prepared ZIP' : activePackageJob?.status === 'dead' ? 'Retry package preparation' : downloadFormat === 'original' ? 'Download corrected file' : `Download ZIP (${selectedReady.length})`}</button>
                       : <button className="qbtn approve" disabled={!selectedReady.length || keptInAcp} onClick={keepSelectedInAcp}>{keptInAcp ? 'Kept in ACP' : `Keep ${selectedReady.length} in ACP`}</button>}
                 </div>
               </div>

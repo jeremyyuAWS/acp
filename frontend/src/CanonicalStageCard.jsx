@@ -1,10 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { canonicalStageCardModel } from './canonicalStageCard.js'
+import LiveHeartbeatBars from './LiveHeartbeatBars.jsx'
 import './canonical-stage-card.css'
 
 const shown = (value) => value == null ? 'Not reported' : value.toLocaleString()
 
-export default function CanonicalStageCard({ snapshot, onOpen = null, embedded = false }) {
+export default function CanonicalStageCard({ snapshot, onOpen = null, embedded = false,
+  receivedAt = null }) {
   const model = canonicalStageCardModel(snapshot)
   if (!model) return null
   const accounted = model.domain ? model.domain.accounted : model.accounted
@@ -17,6 +19,9 @@ export default function CanonicalStageCard({ snapshot, onOpen = null, embedded =
     ? Math.max(0, Math.min(100, Math.round((accounted / total) * 100))) : null
   const previous = useRef({ executionId: model.executionId, accounted })
   const [delta, setDelta] = useState(null)
+  const terminal = ['succeeded', 'failed', 'cancelled', 'superseded', 'integrity_failed']
+    .includes(snapshot?.state)
+  const heartbeatKey = `${snapshot?.workflow_id || 'workflow'}:${model.executionId || model.stage}`
 
   useEffect(() => {
     const before = previous.current
@@ -38,6 +43,10 @@ export default function CanonicalStageCard({ snapshot, onOpen = null, embedded =
             Workflow revision {shown(model.workflowRevision)} · snapshot revision {shown(model.revision)}
           </div>
         </div>
+        <span className="canonical-stage-card__heartbeat">
+          <LiveHeartbeatBars measuredAt={receivedAt} stage={model.stage} historyKey={heartbeatKey}
+            terminal={terminal} showText />
+        </span>
         {onOpen && <button type="button" className="linklike" onClick={onOpen}>Open details →</button>}
       </div>
 
@@ -117,6 +126,8 @@ export default function CanonicalStageCard({ snapshot, onOpen = null, embedded =
               role="status" aria-label={`${delta} newly reconciled`}>+{delta}</span>}
           </span>
           <span className="canonical-stage-card__hint">View accounting</span>
+          <LiveHeartbeatBars measuredAt={receivedAt} stage={model.stage} historyKey={heartbeatKey}
+            terminal={terminal} showText />
           <span className="canonical-stage-card__chevron" aria-hidden="true">⌄</span>
           {progress != null && <span className="canonical-stage-card__progress" aria-hidden="true">
             <span style={{ width: `${progress}%` }} />

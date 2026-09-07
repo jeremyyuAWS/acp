@@ -1578,6 +1578,34 @@ export const downloadReleasePackage = (scanId, files, packageName = '', options 
       setTimeout(() => URL.revokeObjectURL(url), 60000)
     })
 }
+export const prepareReleasePackage = (scanId, files, packageName = '', options = {}) => (SIM
+  ? sim({ job_id: `package-${scanId}`, status: 'queued', files: files.length }, 100)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/package/prepare`, {
+      method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ files, preserve_hierarchy: options.preserveHierarchy !== false,
+        include_manifest: options.includeManifest !== false, download_format: 'zip',
+        ...(packageName.trim() ? { package_name: packageName.trim() } : {}) }),
+    }).then(j))
+export const downloadPreparedReleasePackage = (scanId, jobId, packageName = '') => {
+  if (SIM) return Promise.resolve()
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/package/jobs/${encodeURIComponent(jobId)}/download`,
+    { headers: headers() })
+    .then(async (r) => {
+      if (!r.ok) {
+        const detail = await r.json().then((body) => body?.detail).catch(() => null)
+        throw new Error(detail || `prepared package download ${r.status}`)
+      }
+      return r.blob()
+    })
+    .then((blob) => {
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a'); a.href = url
+      const requestedName = packageName.trim().replace(/\.zip$/i, '')
+      a.download = requestedName ? `${requestedName}.zip` : `acp-release-${scanId}.zip`
+      document.body.appendChild(a); a.click(); a.remove()
+      setTimeout(() => URL.revokeObjectURL(url), 60000)
+    })
+}
 
 // Queue state: depth by status + recent jobs (drives the in-app queue panel).
 export const getJobs = (status = null) => (SIM

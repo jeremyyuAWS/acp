@@ -1,11 +1,12 @@
 import { createElement, act } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createTestRoot } from './testRoots.js'
 import CanonicalStageCard from './CanonicalStageCard.jsx'
+import WorkflowStageStack from './WorkflowStageStack.jsx'
 import { canonicalStageCardModel, currentCanonicalStage, priorCanonicalStages,
   stageNeedsAttention } from './canonicalStageCard.js'
 
@@ -73,10 +74,52 @@ describe('canonical stage card', () => {
   })
 
   it('keeps embedded cards expanded because their parent disclosure owns the collapsed state', () => {
-    const html = renderToStaticMarkup(createElement(CanonicalStageCard, { snapshot: SNAPSHOT, embedded: true }))
+    const html = renderToStaticMarkup(createElement(CanonicalStageCard, {
+      snapshot: SNAPSHOT, embedded: true, receivedAt: Date.now(),
+    }))
     expect(html).not.toContain('canonical-stage-card__summary')
     expect(html).toContain('Release · Processing')
     expect(html).toContain('Workflow revision 3 · snapshot revision 12')
+    expect(html).toContain('live-heartbeat-bars')
+  })
+
+  it.each(['discover', 'assess', 'remediate', 'release'])('keeps %s live history in collapsed and expanded views', (stage) => {
+    const html = renderToStaticMarkup(createElement(CanonicalStageCard, {
+      snapshot: { ...SNAPSHOT, stage }, receivedAt: Date.now(),
+    }))
+    expect(html.match(/live-heartbeat-bars/g)).toHaveLength(2)
+    expect(html.match(new RegExp(`data-stage="${stage}"`, 'g'))).toHaveLength(2)
+    expect(html).toContain('Live · refreshed now')
+  })
+
+  it('labels terminal history final and leaves canonical totals authoritative', () => {
+    const html = renderToStaticMarkup(createElement(CanonicalStageCard, {
+      snapshot: { ...SNAPSHOT, state: 'succeeded' }, receivedAt: Date.now(),
+    }))
+    expect(html).toContain('Final · refreshed now')
+    expect(html).toContain('Integrity check: 10 of 10 work items accounted for')
+  })
+
+  it('keeps retained history mounted while an earlier-stage card collapses and expands', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-07T01:02:03Z'))
+    const { container, root } = createTestRoot()
+    const lineage = { workflow_id: 'workflow-collapse', workflow_revision: 3,
+      stages: [{ ...SNAPSHOT, stage: 'discover', state: 'succeeded' }] }
+    await act(async () => { root.render(createElement(WorkflowStageStack, {
+      lineage, view: 'assess', receivedAt: Date.now(),
+    })) })
+    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(1)
+    const summary = container.querySelector('.workflow-stage-stack__summary')
+    await act(async () => { summary.click() })
+    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(2)
+    await act(async () => { summary.click() })
+    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(1)
+    expect(container.textContent).toContain('Final · refreshed now')
+    await act(async () => { vi.advanceTimersByTime(10_000) })
+    expect(container.textContent).toContain('Final · refreshed now')
+    await act(async () => { root.unmount() })
+    vi.useRealTimers()
   })
 
   it('never turns unknown totals into zero', () => {

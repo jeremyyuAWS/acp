@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import CanonicalStageCard from './CanonicalStageCard.jsx'
+import LiveHeartbeatBars from './LiveHeartbeatBars.jsx'
 import { canonicalStageCardModel, priorCanonicalStages, stageNeedsAttention } from './canonicalStageCard.js'
 
 const destination = { discover: 'discover', assess: 'assess', remediate: 'remediate', release: 'publish' }
@@ -9,7 +10,7 @@ function storageKey(lineage) {
   return `acp:workflow-stage-stack:${workflow}:${lineage?.workflow_revision ?? 'unknown'}`
 }
 
-export default function WorkflowStageStack({ lineage, view, onNavigate }) {
+export default function WorkflowStageStack({ lineage, view, onNavigate, receivedAt = null }) {
   const stages = useMemo(() => priorCanonicalStages(lineage, view), [lineage, view])
   const attentionStage = stages.find(stageNeedsAttention)?.stage || null
   const key = storageKey(lineage)
@@ -57,11 +58,15 @@ export default function WorkflowStageStack({ lineage, view, onNavigate }) {
               <span className="muted workflow-stage-stack__count">
                 {model.domain?.accounted ?? model.accounted ?? '—'} of {model.domain?.total ?? model.total ?? '—'} {model.domain?.unit || model.unit}
               </span>
+              <LiveHeartbeatBars measuredAt={receivedAt} stage={model.stage}
+                historyKey={`${snapshot.workflow_id || lineage?.workflow_id || 'workflow'}:${snapshot.execution_id || snapshot.stage}`}
+                terminal={['succeeded', 'failed', 'cancelled', 'superseded', 'integrity_failed'].includes(snapshot.state)}
+                showText />
               <span aria-hidden="true">{open ? '−' : '+'}</span>
             </button>
             {open && (
               <div id={`workflow-stage-${snapshot.stage}`} className="workflow-stage-stack__body">
-                <CanonicalStageCard snapshot={snapshot}
+                <CanonicalStageCard snapshot={snapshot} receivedAt={receivedAt}
                   onOpen={onNavigate ? () => onNavigate(destination[snapshot.stage]) : null} embedded />
               </div>
             )}

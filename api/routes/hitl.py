@@ -182,6 +182,24 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
                 422, f"{Store.DESCRIBED_RESOLUTION} needs a description for at least one image: "
                      "keeping an image of text without describing it leaves it unreadable to a "
                      "screen reader and resolves nothing")
+        # THE ROW must have somewhere to put them, and checking only the REQUEST was not enough.
+        # A 1.4.5 row carrying no proposals is the normal shape from two production writers —
+        # store.queue_hitl_items (deterministic mode) and handlers.queue_hitl_review_for_file —
+        # and propose_images_of_text returns [] whenever OCR is unavailable OR times out, so a
+        # scan can report 1.4.5 while the card has no per-image slots at all.
+        #
+        # Approving one of those used to leave the worst state this feature exists to prevent:
+        # approve_proposal_values wrote nothing, queue_described_image_alt found no values and
+        # returned None, and the 500 fired AFTER update_hitl_item had already stamped the row
+        # approved with the resolution — and BEFORE log_decision, so the file certified 100/100
+        # with the images untouched, undescribed, and no audit line saying who resolved it or why.
+        # Deterministic on retry, too: it 500s forever while the row stays approved.
+        if not [p for p in (item.get("proposals") or [])
+                if isinstance(p, dict) and str(p.get("locator") or "").strip()]:
+            raise HTTPException(
+                422, f"{Store.DESCRIBED_RESOLUTION} needs the per-image cards this row does not "
+                     "carry — there is nowhere to attach a description. Re-run remediation to "
+                     "draft them, or resolve this finding another way")
     submitted_call_ids = ([body.model_call_id] if body.model_call_id else [])
     submitted_call_ids.extend(call_id for call_id in (body.model_call_ids or []) if call_id)
     if body.model_call_ids is not None:
@@ -207,7 +225,15 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
     # description. Only on approval: rejecting or skipping approves no content.
     if body.status == "approved" and body.approved_values is not None:
         try:
-            core.store.approve_proposal_values(item_id, body.approved_values)
+            # No draft fallback on a described decision (ADR 0055). Everywhere else a blank means
+            # "the draft I was shown is correct", which is right when the draft is a description.
+            # On a 1.4.5 card it is the OCR TRANSCRIPT — the words inside the picture — so falling
+            # back would file the image's own text as its description, silently, for every image
+            # the reviewer left alone. store.queue_described_image_alt refuses that fallback and
+            # says why; this is the call that had already made it moot.
+            core.store.approve_proposal_values(
+                item_id, body.approved_values,
+                draft_fallback=(body.resolution != Store.DESCRIBED_RESOLUTION))
         except Exception:
             swallowed("routes.hitl.hitl_update: approving the proposal values failed")
     # ADR 0055: describe-instead-of-replace. The reviewer kept the images of text and wrote
@@ -230,8 +256,21 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
         # failure ADR 0055 measured. Better to fail the request: the reviewer sees it, and the
         # row keeps whatever status it had.
         if core.store.queue_described_image_alt(item_id) is None:
+            # PUT THE ROW BACK before raising. The 422s above catch the reachable causes, so
+            # arriving here means something unforeseen — and the state this used to leave was the
+            # dangerous one: the row already stamped approved WITH the resolution, no 1.1.1
+            # obligation recorded, and the raise landing before log_decision, so the file could
+            # certify as conformant with no audit line at all. A failed decision must leave the
+            # finding exactly as unresolved as it was.
+            try:
+                core.store.update_hitl_item(item_id, item.get("status") or "pending",
+                                            item.get("reviewer_note"), None,
+                                            resolution=(item.get("resolution") or None))
+                core.store.sync_hitl_finding_dispositions(item_id, item.get("status") or "pending")
+            except Exception:
+                swallowed("routes.hitl.hitl_update: rolling back the described decision failed")
             raise HTTPException(500, "the descriptions could not be recorded as alt text; "
-                                     "the decision was not completed")
+                                     "the decision was not completed and the finding is unchanged")
     # Immutable audit trail: WHO decided what, when, on which finding — include the
     # approved value itself so the log is self-sufficient compliance evidence.
     #

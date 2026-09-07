@@ -34,6 +34,7 @@ import VersionToast from './VersionToast.jsx'
 import RealtimeShadowPanel from './RealtimeShadowPanel.jsx'
 import WorkflowContinuityBanner, { primaryActiveWorkflow } from './WorkflowContinuityBanner.jsx'
 import DiscoveryContinuityChoice from './DiscoveryContinuityChoice.jsx'
+import { StageStartConflictDialog } from './StageStartConflictDialog.jsx'
 // Lazy: KnowledgeGraph statically imports all of d3 (~250 kB min) — the only heavy
 // dep not already behind a dynamic import. Loading it on tab entry keeps d3 out of
 // the main chunk entirely.
@@ -2186,7 +2187,8 @@ export default function App() {
         </div>
       )}
       <DiscoveryContinuityChoice
-        choice={discoveryChoice}
+        choice={discoveryChoice && (discoveryChoice.recentCompatible
+          || (discoveryChoice.activeStage || 'discover') === 'discover') ? discoveryChoice : null}
         onContinue={() => {
           const scanId = discoveryChoice?.scanId
           const activeStage = discoveryChoice?.activeStage || 'discover'
@@ -2201,6 +2203,24 @@ export default function App() {
           if (pending) doScan(pending.source, pending.folder, pending.runScope, true)
         }}
         onDismiss={() => setDiscoveryChoice(null)}
+      />
+      <StageStartConflictDialog
+        choice={discoveryChoice && !discoveryChoice.recentCompatible
+          && (discoveryChoice.activeStage || 'discover') !== 'discover' ? discoveryChoice : null}
+        onContinue={() => {
+          const scanId = discoveryChoice?.scanId
+          const activeStage = discoveryChoice?.activeStage || 'discover'
+          setDiscoveryChoice(null)
+          if (scanId) switchScan(scanId)
+          goToView(activeStage)
+          window.scrollTo({ top: 0, behavior: 'smooth' })
+        }}
+        onRestart={() => {
+          const pending = discoveryChoice
+          setDiscoveryChoice(null)
+          if (pending) doScan(pending.source, pending.folder, pending.runScope, true)
+        }}
+        onCancel={() => setDiscoveryChoice(null)}
       />
       {/* Assessment has a real live card immediately below this fallback. Do not stack a
           generic “still running” banner above the richer card for the same work. */}
@@ -2261,14 +2281,14 @@ export default function App() {
                             ? primaryWorkflow.scan_id
                             : (liveScanId || run?.id))} />
 
-      <WorkflowStageStack lineage={canonicalRun.lineage} view={view}
+      <WorkflowStageStack lineage={canonicalRun.lineage} view={view} receivedAt={canonicalRun.receivedAt}
         onNavigate={(next) => {
           setView(next)
           window.scrollTo({ top: 0, behavior: 'smooth' })
         }} />
 
       {showCanonicalStage && (
-        <CanonicalStageCard snapshot={canonicalStage}
+        <CanonicalStageCard snapshot={canonicalStage} receivedAt={canonicalRun.receivedAt}
           onOpen={canonicalStage.stage === 'conformance' ? null : () => {
             setView({ release: 'publish', assess: 'assess', discover: 'discover' }[canonicalStage.stage]
               || canonicalStage.stage)
