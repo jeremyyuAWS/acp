@@ -222,9 +222,24 @@ python scripts/run_remediation_evals.py --repeats 3 --max-spend-usd 2.00 \
 ```
 
 `--estimate-only` prices the run and exits; `--max-spend-usd` refuses to start when the estimate
-exceeds it. The estimate deliberately quotes above what real runs measure (900 in / 300 out per
-call), because a guard that under-quotes green-lights the run that overspends, and cache hits
-only ever make the real bill smaller.
+exceeds it. The estimate quotes above what real runs measure — **900 in / 900 out per call, 15s
+of occupancy** — because a guard that under-quotes green-lights the run that overspends, and
+cache hits only ever make the real bill smaller.
+
+**Those figures are checked against invoices, not asserted.** This paragraph used to say
+`300 out / 3.0s`, and both were below what the runs were actually doing: the paid tiers all run
+adaptive thinking and emit up to 683 output tokens per call (Opus 5), so a measured Sonnet 5 run
+cost $0.65 against a $0.46 estimate — 41% *over* the number the guard had green-lit. The latency
+assumption was worse in relative terms, 3.0s against a measured 11.9s, and latency is what prices
+the `local_amortised` tier, so a local run was quoted at roughly a quarter of its cost.
+
+`tests/test_remediation_evals_kit.py` now re-prices **every paid run committed under
+`evals/reports/`** and fails if any real bill exceeds its estimate, plus a second guard that
+names which of the three assumptions slipped. Commit a report whose cost exceeds its estimate and
+the suite goes red — which is the moment to raise the nominal call deliberately, rather than
+discovering it on an invoice. The cost of erring the other way is accepted and visible: a Haiku
+run quotes roughly 3× its real cost, because the input assumption also sits well above its
+measured 364 tokens/call.
 
 In CI, `.github/workflows/remediation-evals.yml` runs the same command **on manual dispatch
 only**, with `ANTHROPIC_API_KEY` (or `EVALS_API_KEY`) as a repository secret. It is not wired to

@@ -363,10 +363,74 @@ def test_a_ladder_that_automates_nothing_reports_zero_coverage():
     assert "met by NOT automating" in md
 
 
-def test_the_spend_estimate_errs_high_because_the_other_direction_greenlights_overspend():
+#: Report candidate name -> the price-book tier it was billed at. Only the named vendor tiers
+#: can be re-priced from a report; `rules-only` is free and `ollama:` is occupancy-priced against
+#: a machine this test knows nothing about.
+_REPRICEABLE = {"anthropic:claude-haiku-4-5": "anthropic-haiku-4-5",
+                "anthropic:claude-sonnet-5": "anthropic-sonnet-5",
+                "anthropic:claude-opus-5": "anthropic-opus-5"}
+
+
+def _measured_runs():
+    """(report, candidate, billable_calls, usd_total) for every paid run committed under
+    evals/reports/. These are invoices, not fixtures — which is the point."""
+    import glob
+    out = []
+    for path in sorted(glob.glob(str(ROOT / "evals" / "reports" / "*.json"))):
+        for c in json.loads(Path(path).read_text()).get("candidates", []):
+            tier = _REPRICEABLE.get(c.get("candidate"))
+            cost = c.get("cost", {})
+            if tier and cost.get("billable_calls") and cost.get("usd_total"):
+                out.append((Path(path).name, tier, cost["billable_calls"], cost["usd_total"]))
+    return out
+
+
+def test_the_estimate_errs_high_against_every_run_ever_committed():
+    """THE CLAIM HAS TO BE CHECKED AGAINST INVOICES, NOT A CONSTANT.
+
+    This assertion used to read `ESTIMATE_TOKENS_OUT > 200`, a threshold taken from local runs
+    that predate adaptive thinking — so it passed while the estimate under-quoted every hosted
+    tier. The measured Sonnet 5 run cost $0.65 against a $0.46 estimate; Opus 5 emitted 683
+    output tokens per call against an assumed 300. A guard that under-quotes green-lights the
+    run that overspends, which is the one thing --max-spend-usd exists to prevent.
+
+    So the estimate is now checked against every paid run in evals/reports/. Add a report whose
+    real cost exceeds its estimate and this goes red, which is the moment to raise the nominal
+    call in evals/cost.py — deliberately, rather than discovering it on a bill."""
+    from evals.cost import estimate_run_usd
+
+    runs = _measured_runs()
+    assert len(runs) >= 6, "too few committed paid runs to make this a real check"
+    under = []
+    for report, tier, calls, actual in runs:
+        est = estimate_run_usd(PRICE_BOOK[tier], calls)
+        if est < actual:
+            under.append(f"{report}:{tier} estimate ${est:.4f} < actual ${actual:.4f}")
+    assert not under, "the spend guard under-quotes:\n  " + "\n  ".join(under)
+
+
+def test_the_nominal_call_sits_above_every_measured_one():
+    """The same claim at the level of the inputs, so a failure names WHICH assumption slipped."""
+    from evals.cost import ESTIMATE_LATENCY_S, ESTIMATE_TOKENS_IN, ESTIMATE_TOKENS_OUT
+    import glob
+    worst_in = worst_out = worst_lat = 0.0
+    for path in sorted(glob.glob(str(ROOT / "evals" / "reports" / "*.json"))):
+        for c in json.loads(Path(path).read_text()).get("candidates", []):
+            k = c.get("cost", {}); n = k.get("billable_calls") or 0
+            if not n:
+                continue
+            worst_in = max(worst_in, k.get("tokens_in", 0) / n)
+            worst_out = max(worst_out, k.get("tokens_out", 0) / n)
+            worst_lat = max(worst_lat, (k.get("latency_s_total") or 0) / n)
+    assert ESTIMATE_TOKENS_IN >= worst_in, f"in/call: {ESTIMATE_TOKENS_IN} < measured {worst_in:.0f}"
+    assert ESTIMATE_TOKENS_OUT >= worst_out, f"out/call: {ESTIMATE_TOKENS_OUT} < measured {worst_out:.0f}"
+    # Latency prices the local_amortised tier, so it under-quotes local runs the way the token
+    # assumptions under-quoted paid ones. It was 3.0s against a measured 11.9s.
+    assert ESTIMATE_LATENCY_S >= worst_lat, f"latency: {ESTIMATE_LATENCY_S} < measured {worst_lat:.1f}s"
+
+
+def test_the_spend_estimate_scales_linearly_and_is_free_when_the_tier_is():
     from evals.cost import ESTIMATE_TOKENS_IN, ESTIMATE_TOKENS_OUT, estimate_run_usd
-    assert ESTIMATE_TOKENS_IN > 760 and ESTIMATE_TOKENS_OUT > 200, \
-        "the estimate must sit above what the local runs measured, or the guard under-quotes"
     p = PRICE_BOOK["anthropic-haiku-4-5"]
     assert estimate_run_usd(p, 300) == pytest.approx(300 * p.usd(tokens_in=ESTIMATE_TOKENS_IN,
                                                                 tokens_out=ESTIMATE_TOKENS_OUT))
