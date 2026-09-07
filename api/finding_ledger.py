@@ -17,10 +17,19 @@ DISPOSITIONS = (
 )
 
 
-def normalize_instance_key(value: object, *, ordinal: int) -> str:
-    """Return a deterministic locator without preserving incidental whitespace."""
+def normalize_instance_key(value: object, *, ordinal: int,
+                           aggregate_scope: str | None = None) -> str:
+    """Return a deterministic locator without preserving incidental whitespace.
+
+    An ordinal synthesized from an aggregate count is only meaningful inside the immutable
+    assessment snapshot that supplied that count.  Namespace and zero-pad it so it cannot be
+    mistaken for the same element after reassessment and sorts in numeric instance order.
+    """
     text = re.sub(r"\s+", " ", str(value or "").strip()).casefold()
-    return text or f"aggregate-instance:{ordinal}"
+    if text:
+        return text
+    scope = str(aggregate_scope or "unspecified")
+    return f"aggregate-instance:{scope}:{max(0, int(ordinal)):012d}"
 
 
 def stable_finding_id(document_id: str, rule_id: str, instance_key: str) -> str:
@@ -33,13 +42,22 @@ def stable_finding_id(document_id: str, rule_id: str, instance_key: str) -> str:
 
 
 def reconcile(assessed: int, counts: dict[str, int], *, rows: int) -> dict:
+    assessed = int(assessed)
+    rows = int(rows)
     normalized = {key: int(counts.get(key) or 0) for key in DISPOSITIONS}
     accounted = sum(normalized.values())
     violations = []
+    invalid = {key: value for key, value in normalized.items() if value < 0}
+    if assessed < 0 or rows < 0 or invalid:
+        violations.append({"code": "invalid_finding_counts", "assessed": assessed,
+                           "rows": rows, "counts": invalid})
     if rows != assessed:
         violations.append({"code": "ledger_cardinality", "assessed": assessed, "rows": rows})
-    if accounted > assessed:
+    if rows > assessed or accounted > assessed:
         violations.append({"code": "finding_overcount", "assessed": assessed,
+                           "rows": rows, "accounted": accounted})
+    if accounted != rows:
+        violations.append({"code": "disposition_partition", "rows": rows,
                            "accounted": accounted})
     exact = not violations and rows == assessed and accounted == assessed
     return {

@@ -6792,9 +6792,12 @@ class Store:
                      str(d.get("before") or "")[:2000], str(d.get("after") or "")[:2000],
                      str(d.get("note") or "")[:500]))
         by_rule: dict[str, list[str]] = {}
-        for seq, diff in enumerate(diffs):
+        evidence_seq_by_rule: dict[str, int] = {}
+        for diff in diffs:
             rule_id = str(diff.get("rule_id") or "")
             if rule_id:
+                seq = evidence_seq_by_rule.get(rule_id, 0)
+                evidence_seq_by_rule[rule_id] = seq + 1
                 by_rule.setdefault(rule_id, []).append(f"remediation_diff:{file}:{rule_id}:{seq}")
         for rule_id, evidence_ids in by_rule.items():
             self.set_finding_group_disposition(
@@ -6815,6 +6818,18 @@ class Store:
 
         now = self._now()
         with self._db.cursor() as cur:
+            # Seeding is a snapshot operation, not an upsert from mutable live traces. Once any
+            # rows exist, an exact replay returns that frozen set; reusing a batch id for another
+            # snapshot fails closed instead of accumulating two assessments in one partition.
+            self._db.execute(cur,
+                "SELECT * FROM finding_disposition WHERE scan_id=%s AND batch_id=%s "
+                "ORDER BY file,rule_id,instance_key", (scan_id, batch_id))
+            seeded = self._db.fetchall(cur)
+            if seeded:
+                expected_snapshot = snapshot_id or scan_id
+                if any(row.get("snapshot_id") != expected_snapshot for row in seeded):
+                    raise ValueError(f"finding batch {batch_id} belongs to a different snapshot")
+                return seeded
             self._db.execute(cur,
                 "SELECT source,COALESCE(workflow_id,id) AS workflow_id FROM scan_runs WHERE id=%s",
                 (scan_id,))
@@ -6833,7 +6848,8 @@ class Store:
                     run.get("source") or "local", trace.get("drive_file_id"), trace["file"],
                     trace.get("checksum"))
                 for ordinal in range(1, int(trace.get("finding_count") or 0) + 1):
-                    instance_key = normalize_instance_key(None, ordinal=ordinal)
+                    instance_key = normalize_instance_key(
+                        None, ordinal=ordinal, aggregate_scope=snapshot_id or scan_id)
                     finding_id = stable_finding_id(document_id, trace["rule_id"], instance_key)
                     self._db.execute(cur,
                         "INSERT INTO finding_disposition(scan_id,batch_id,finding_id,workflow_id,"
@@ -6879,7 +6895,11 @@ class Store:
             if replay:
                 same = (replay.get("scan_id") == scan_id and replay.get("batch_id") == batch_id
                         and replay.get("finding_id") == finding_id
-                        and replay.get("to_disposition") == disposition)
+                        and replay.get("to_disposition") == disposition
+                        and int(replay.get("from_revision") or 0) == int(expected_revision)
+                        and replay.get("review_item_id") == review_item_id
+                        and (replay.get("fix_evidence_ids") or "[]") == evidence
+                        and replay.get("verified_at") == verified_at)
                 if not same:
                     raise FindingEventConflict(event_id)
                 self._db.execute(cur,
@@ -6939,14 +6959,18 @@ class Store:
         if disposition not in DISPOSITIONS:
             raise ValueError(f"invalid finding disposition: {disposition}")
         with self._db.cursor() as cur:
+            # The canonical current marker, not whichever job happens to sort newest. Historical
+            # jobs remain in the queue ledger forever and timestamp ties are routine in a batch.
             self._db.execute(cur,
-                "SELECT batch_id FROM jobs WHERE scan_id=%s AND type='remediate_file' "
-                "ORDER BY created_at DESC,id DESC LIMIT 1", (scan_id,))
+                "SELECT execution_id AS batch_id FROM stage_executions WHERE scan_id=%s "
+                "AND stage='remediate' AND is_current=1 ORDER BY created_at DESC,execution_id DESC "
+                "LIMIT 1", (scan_id,))
             batch_id = (self._db.fetchone(cur) or {}).get("batch_id")
             if not batch_id:
                 return 0
             self._db.execute(cur,
-                "SELECT finding_id,revision,disposition FROM finding_disposition WHERE scan_id=%s AND "
+                "SELECT finding_id,revision,disposition,review_item_id,fix_evidence_ids "
+                "FROM finding_disposition WHERE scan_id=%s AND "
                 "batch_id=%s AND file=%s AND rule_id=%s ORDER BY instance_key",
                 (scan_id, batch_id, file, rule_id))
             rows = self._db.fetchall(cur)
@@ -6954,14 +6978,21 @@ class Store:
             rows = [row for row in rows if row.get("disposition") != "resolved_verified"]
         if limit is not None:
             rows = rows[:max(0, int(limit))]
+        moved = 0
         for row in rows:
+            desired_evidence = json.dumps(fix_evidence_ids or [], separators=(",", ":"))
+            if (row.get("disposition") == disposition
+                    and row.get("review_item_id") == review_item_id
+                    and (row.get("fix_evidence_ids") or "[]") == desired_evidence):
+                continue
             self.transition_finding_disposition(
                 scan_id, batch_id, row["finding_id"], disposition,
                 expected_revision=int(row.get("revision") or 0),
                 event_id=f"{event_key}:{row['finding_id']}",
                 review_item_id=review_item_id, fix_evidence_ids=fix_evidence_ids,
                 verified_at=verified_at)
-        return len(rows)
+            moved += 1
+        return moved
 
     def sync_hitl_finding_dispositions(self, item_id: str, status: str) -> int:
         """Project one review-card state onto its assessed-finding rows."""

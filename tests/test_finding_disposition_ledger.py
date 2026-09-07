@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from finding_ledger import stable_finding_id
+from finding_ledger import normalize_instance_key, reconcile, stable_finding_id
 from store import FindingEventConflict, FindingRevisionConflict
 
 
@@ -44,6 +44,28 @@ def test_seed_creates_one_stable_finding_per_assessed_instance(isolated_store):
     assert all(row["disposition"] is None and row["revision"] == 0 for row in first)
 
 
+def test_seed_replay_is_frozen_and_rejects_snapshot_reuse(isolated_store):
+    sid = _assessment(isolated_store)
+    first = isolated_store.seed_finding_dispositions(sid, "batch-1", snapshot_id="snapshot-1")
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "UPDATE scan_rule_traces SET finding_count=99 WHERE scan_id=%s", (sid,))
+    replay = isolated_store.seed_finding_dispositions(
+        sid, "batch-1", snapshot_id="snapshot-1")
+    assert [row["finding_id"] for row in replay] == [row["finding_id"] for row in first]
+    assert len(replay) == 5
+    with pytest.raises(ValueError, match="different snapshot"):
+        isolated_store.seed_finding_dispositions(sid, "batch-1", snapshot_id="snapshot-2")
+
+
+def test_aggregate_identity_is_snapshot_scoped_and_sorts_numerically():
+    keys = [normalize_instance_key(None, ordinal=n, aggregate_scope="snapshot-1")
+            for n in (1, 2, 10)]
+    assert keys == sorted(keys)
+    assert normalize_instance_key(None, ordinal=1, aggregate_scope="snapshot-1") != \
+        normalize_instance_key(None, ordinal=1, aggregate_scope="snapshot-2")
+
+
 def test_finding_identity_does_not_depend_on_filename():
     assert stable_finding_id("sharepoint:item-7", "1.1.1", "image:rId4") == stable_finding_id(
         "sharepoint:item-7", "1.1.1", "image:rId4")
@@ -71,6 +93,26 @@ def test_transition_is_revision_protected_and_duplicate_events_are_noops(isolate
         isolated_store.transition_finding_disposition(
             sid, "batch-1", finding["finding_id"], "resolved_verified", expected_revision=1,
             event_id="review-event-1")
+    with pytest.raises(FindingEventConflict):
+        isolated_store.transition_finding_disposition(
+            sid, "batch-1", finding["finding_id"], "awaiting_review", expected_revision=0,
+            event_id="review-event-1", review_item_id="different-review")
+
+
+def test_failed_cas_rolls_back_event_append(isolated_store):
+    sid = _assessment(isolated_store)
+    finding = isolated_store.seed_finding_dispositions(sid, "batch-1")[0]
+    isolated_store.transition_finding_disposition(
+        sid, "batch-1", finding["finding_id"], "awaiting_review", expected_revision=0,
+        event_id="winner")
+    with pytest.raises(FindingRevisionConflict):
+        isolated_store.transition_finding_disposition(
+            sid, "batch-1", finding["finding_id"], "unchanged_no_fix", expected_revision=0,
+            event_id="loser")
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "SELECT COUNT(*) AS n FROM finding_disposition_event WHERE event_id='loser'")
+        assert isolated_store._db.fetchone(cur)["n"] == 0
 
 
 def test_exact_reconciliation_requires_one_disposition_per_finding(isolated_store):
@@ -108,6 +150,32 @@ def test_historical_batches_never_contribute_to_current_totals(isolated_store):
     assert current["exact"] is False
 
 
+def test_group_updates_use_canonical_current_execution_not_newest_historical_job(isolated_store):
+    sid = _assessment(isolated_store)
+    current = _batch(isolated_store, sid, "current")
+    isolated_store.seed_finding_dispositions(sid, current)
+    old = isolated_store.seed_finding_dispositions(sid, "historical")
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "INSERT INTO jobs(id,type,status,batch_id,scan_id,created_at,updated_at) "
+            "VALUES('z-historical','remediate_file','done','historical',%s,'9999','9999')", (sid,))
+    isolated_store.set_finding_group_disposition(
+        sid, "a.docx", "1.1.1", "awaiting_review", event_key="review-current")
+    assert {r["disposition"] for r in isolated_store.list_finding_dispositions(sid, current)
+            if r["rule_id"] == "1.1.1"} == {"awaiting_review"}
+    assert all(r["disposition"] is None for r in old)
+
+
+def test_reconciliation_reports_overcount_and_invalid_partition():
+    result = reconcile(2, {"resolved_verified": 2}, rows=3)
+    assert result["exact"] is False
+    assert {v["code"] for v in result["violations"]} == {
+        "ledger_cardinality", "finding_overcount", "disposition_partition"}
+
+    invalid = reconcile(1, {"resolved_verified": -1}, rows=1)
+    assert "invalid_finding_counts" in {v["code"] for v in invalid["violations"]}
+
+
 def test_verified_diff_resolves_all_instances_and_attaches_evidence(isolated_store):
     sid = _assessment(isolated_store)
     batch = _batch(isolated_store, sid)
@@ -123,6 +191,21 @@ def test_verified_diff_resolves_all_instances_and_attaches_evidence(isolated_sto
         sid, "a.docx", [{"rule_id": "1.1.1", "before": "missing", "after": "text"}])
     assert {r["revision"] for r in isolated_store.list_finding_dispositions(sid, batch)
             if r["rule_id"] == "1.1.1"} == {1}
+
+
+def test_mixed_rule_diff_evidence_uses_per_rule_ordinals(isolated_store):
+    sid = _assessment(isolated_store)
+    batch = _batch(isolated_store, sid)
+    isolated_store.seed_finding_dispositions(sid, batch)
+    isolated_store.record_remediation_diffs(sid, "a.docx", [
+        {"rule_id": "1.1.1", "before": "a", "after": "A"},
+        {"rule_id": "2.4.4", "before": "b", "after": "B"},
+        {"rule_id": "1.1.1", "before": "c", "after": "C"},
+    ])
+    by_rule = {r["rule_id"]: r for r in isolated_store.list_finding_dispositions(sid, batch)}
+    assert by_rule["1.1.1"]["fix_evidence_ids"] == [
+        "remediation_diff:a.docx:1.1.1:0", "remediation_diff:a.docx:1.1.1:1"]
+    assert by_rule["2.4.4"]["fix_evidence_ids"] == ["remediation_diff:a.docx:2.4.4:0"]
 
 
 def test_review_card_transitions_exact_finding_count_without_double_counting(isolated_store):
