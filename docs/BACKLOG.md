@@ -729,8 +729,11 @@ thing the PRD does not mention.
   same exact provider/model/zone rows with measured success/failure and latency, and states that
   call completion is not evidence of reviewer acceptance or post-write validation. Release's
   final review step now shows the same exact recorded provenance, scoped to the files selected for
-  that release, including measured calls, success/failure, mean latency and spend. Outcome linkage
-  remains open.
+  that release, including measured calls, success/failure, mean latency and spend. It also shows
+  reviewer decisions and post-write outcomes joined only through durable call ids; missing linkage
+  is labelled not recorded rather than rendered as zero. Remaining pilot work is to collect and
+  review real DOCX/HTML 2.4.4 traffic, decide whether either lane earns broader rollout, and add
+  exact per-generated-value attribution for multi-instance vision cards.
 
 ### From the PRD, deliberately not scheduled
 
