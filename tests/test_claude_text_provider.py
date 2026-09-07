@@ -54,6 +54,25 @@ def test_claude_text_generate_parses_messages_api_response(monkeypatch):
     assert result["model"] == providers.CLAUDE_TEXT_MODEL
 
 
+def test_claude_text_generate_uses_governed_model_override(monkeypatch):
+    monkeypatch.setattr(providers, "_ANTHROPIC_KEY", "test-key")
+    sent = {}
+    class _Resp:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"content": [{"type": "text", "text": "Useful destination"}],
+                    "usage": {"input_tokens": 1000, "output_tokens": 100}}
+    import httpx
+    def _post(*_args, **kwargs):
+        sent.update(kwargs["json"])
+        return _Resp()
+    monkeypatch.setattr(httpx, "post", _post)
+    result = providers.claude_text_generate("draft", model="claude-sonnet-5")
+    assert sent["model"] == "claude-sonnet-5"
+    assert result["model"] == "claude-sonnet-5"
+    assert result["cost_usd"] == 0.0045
+
+
 def test_claude_text_generate_returns_none_on_http_failure(monkeypatch):
     monkeypatch.setattr(providers, "_ANTHROPIC_KEY", "test-key")
     import httpx

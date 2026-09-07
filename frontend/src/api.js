@@ -1198,6 +1198,20 @@ export const putSecondOpinionPolicy = (policy) => (SIM
       headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(policy),
     }).then(j))
+export const getRemediationPilot = () => (SIM
+  ? sim({ enabled: false, running: false, categories: ['docx:2.4.4', 'html:2.4.4'],
+      provider: 'anthropic', model: 'claude-sonnet-5', stop_reasons: ['Pilot is off'],
+      max_calls: 100, max_spend_usd: 5, min_sample: 10, max_failure_rate: .1,
+      min_acceptance_rate: .9, max_edit_rate: .2, min_validation_clear_rate: .95,
+      metrics: { calls: 0, failed: 0, cost_usd: 0, decisions: 0, accepted: 0,
+        edited: 0, validated: 0, cleared: 0, regressed: 0, newly_failing: 0 } })
+  : fetch(`${BASE}/ai/remediation-pilot`, { headers: headers() }).then(j))
+export const putRemediationPilot = (policy) => (SIM
+  ? sim({ ...policy, running: !!policy.enabled, stop_reasons: policy.enabled ? [] : ['Pilot is off'], simulated: true })
+  : fetch(`${BASE}/ai/remediation-pilot`, {
+      method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(policy),
+    }).then(j))
 export const getAiProvidersHealth = (windowHours = 24) => (SIM
   ? sim({ window_hours: windowHours, providers: {} })
   : fetch(`${BASE}/ai/providers/health?window_hours=${windowHours}`, { headers: headers() }).then(j))
