@@ -23,4 +23,13 @@ describe('remediation model evidence', () => {
     expect(source).not.toMatch(/estimated acceptance|estimated edit rate/i)
     expect(source).not.toContain('are not reported here yet')
   })
+
+  it('shows the declared criterion-level rollout decision without licensing automation', () => {
+    expect(source).toContain('costs?.shadow_rollout')
+    expect(source).toContain('Stronger-model rollout gates')
+    expect(source).toContain("r.verdict === 'enable'")
+    expect(source).toContain('Assisted pilot—human approval required')
+    expect(source).toContain('Review all {rolloutRows.length} criterion-format decisions')
+    expect(source).toContain('The gate is evidence, not a deployment switch')
+  })
 })

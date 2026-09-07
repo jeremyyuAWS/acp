@@ -236,6 +236,15 @@ export function DriveMirror() {
     </div>
   )
   const models = costs?.month?.by_model || []
+  const rollout = costs?.shadow_rollout
+  const rolloutRows = rollout?.rows || []
+  const pilotRows = rolloutRows.filter((r) => r.verdict === 'enable')
+  const rolloutLabel = {
+    enable: 'Assisted pilot',
+    'keep-human-only': 'Keep human-only',
+    'insufficient-evidence': 'More evidence needed',
+    'no-change-rule-code': 'Keep rule code',
+  }
   // Reviewer decisions and post-write validation, joined to the call by the id each decision
   // carries. A model with calls but no linked decision reads "Not linked" — never a rate
   // computed over drafts nobody reviewed or over decisions that did not name their call.
@@ -311,6 +320,54 @@ export function DriveMirror() {
               "not written" means the approved content could no longer be found in the document.
             </p>
           </section>
+          {rollout && (
+            <section aria-labelledby="shadow-rollout-title" style={{ marginTop: 18, borderTop: '1px solid var(--line)', paddingTop: 16 }}>
+              <h4 id="shadow-rollout-title" style={{ margin: '0 0 4px' }}>Stronger-model rollout gates</h4>
+              <p className="muted" style={{ fontSize: 12, margin: '0 0 10px' }}>
+                Two independent shadow runs against the same governed corpus. These recommendations
+                can enable an assisted pilot only—every model draft still requires human approval.
+              </p>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+                {Object.entries(rollout.summary_categories || {}).map(([verdict, count]) => (
+                  <div key={verdict} style={{ border: '1px solid var(--line)', borderRadius: 8, padding: '7px 10px', minWidth: 112 }}>
+                    <b style={{ fontSize: 17 }}>{count}</b><br />
+                    <span className="muted" style={{ fontSize: 11 }}>{rolloutLabel[verdict] || verdict}</span>
+                  </div>
+                ))}
+              </div>
+              {pilotRows.length > 0 && <div style={{ overflowX: 'auto' }}>
+                <table className="simple-table" style={{ width: '100%', fontSize: 12 }}>
+                  <thead><tr><th>Criterion</th><th>Format</th><th>Recommended model</th><th>Evidence</th><th>Decision</th></tr></thead>
+                  <tbody>{pilotRows.map((r) => {
+                    const model = (r.enable_candidate || '').replace(/^anthropic:/, '')
+                    const candidate = r.candidates?.find((c) => c.candidate === r.enable_candidate)
+                    return <tr key={r.category}>
+                      <td><b>{r.criterion}</b></td><td>{String(r.format || '').toUpperCase()}</td>
+                      <td>{model || 'Not reported'}</td>
+                      <td>{candidate ? `${candidate.safe_runs}/${candidate.runs} safe runs · ${r.cases} cases` : `${r.cases} cases`}</td>
+                      <td>Assisted pilot—human approval required</td>
+                    </tr>
+                  })}</tbody>
+                </table>
+              </div>}
+              <details style={{ marginTop: 9 }}>
+                <summary style={{ cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>Review all {rolloutRows.length} criterion-format decisions</summary>
+                <div style={{ overflowX: 'auto', maxHeight: 320, marginTop: 8 }}>
+                  <table className="simple-table" style={{ width: '100%', fontSize: 11.5 }}>
+                    <thead><tr><th>Criterion</th><th>Format</th><th>Current lane</th><th>Gate</th><th>Why</th></tr></thead>
+                    <tbody>{rolloutRows.map((r) => <tr key={r.category}>
+                      <td>{r.criterion}</td><td>{String(r.format || '').toUpperCase()}</td><td>{r.current_lane}</td>
+                      <td>{rolloutLabel[r.verdict] || r.verdict}</td><td>{r.why}</td>
+                    </tr>)}</tbody>
+                  </table>
+                </div>
+              </details>
+              <p className="muted" style={{ fontSize: 11.5, margin: '8px 0 0' }}>
+                The gate is evidence, not a deployment switch. Rule-code wins remain unchanged at
+                zero model cost; inconsistent or under-sampled categories stay off.
+              </p>
+            </section>
+          )}
         </>
       )}
       <hr style={{ border: 0, borderTop: '1px solid var(--line)', margin: '20px 0' }} />

@@ -1,0 +1,2154 @@
+{
+  "decision_rule": {
+    "enable": "Safe in every shadow run, adequately sampled, and not dominated by rule code. Assisted pilot only; human approval remains required.",
+    "insufficient-evidence": "Under-sampled or inconsistent between shadow runs.",
+    "keep-human-only": "Adequately sampled with no consistently safe candidate, or every case requires abstention.",
+    "no-change-rule-code": "Deterministic rule code is safe in every run and remains the lower-cost choice."
+  },
+  "evidence": {
+    "independent_runs": 2,
+    "source_reports": [
+      "2026-09-04-hosted-ladder.json",
+      "2026-09-07-hosted-ladder.json"
+    ]
+  },
+  "rows": [
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0016394166666666688,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.01727916666666665,
+          "mean_varr": 0.8333333333333333,
+          "runs": 2,
+          "safe_runs": 1
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.007428333333333335,
+          "mean_varr": 0.5,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 2,
+      "category": "docx:1.1.1",
+      "criterion": "1.1.1",
+      "current_lane": "assisted",
+      "eligible": 2,
+      "enable_candidate": null,
+      "format": "docx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "unstable across runs: anthropic:claude-opus-5 safe in 1/2; current lane is assisted"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0013465666666666672,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.015683166666666658,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.005218933333333334,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 5,
+      "category": "docx:1.3.1",
+      "criterion": "1.3.1",
+      "current_lane": "auto",
+      "eligible": 4,
+      "enable_candidate": null,
+      "format": "docx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "keep-human-only",
+      "why": "no Claude tier verified every eligible case (4 of 5) in any of 2 run(s); current lane is auto"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0017109999999999994,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.02387416666666667,
+          "mean_varr": 0.3333333333333333,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.007121333333333334,
+          "mean_varr": 0.3333333333333333,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 1,
+      "category": "docx:1.3.2",
+      "criterion": "1.3.2",
+      "current_lane": "assisted",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "docx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0014686666666666654,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.01981333333333333,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.006561999999999998,
+          "mean_varr": 0.16666666666666666,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 1,
+      "category": "docx:1.3.3",
+      "criterion": "1.3.3",
+      "current_lane": "assisted",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "docx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.001484,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.01981583333333333,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.006191333333333333,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 1,
+      "category": "docx:1.3.5",
+      "criterion": "1.3.5",
+      "current_lane": "human",
+      "eligible": 0,
+      "enable_candidate": null,
+      "format": "docx",
+      "must_abstain": 1,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0016258333333333333,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.017170833333333337,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.006276666666666666,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 1,
+      "category": "docx:1.4.10",
+      "criterion": "1.4.10",
+      "current_lane": "human",
+      "eligible": 0,
+      "enable_candidate": null,
+      "format": "docx",
+      "must_abstain": 1,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0015431666666666666,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.019126666666666667,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.006927333333333333,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 1,
+      "category": "docx:1.4.12",
+      "criterion": "1.4.12",
+      "current_lane": "human",
+      "eligible": 0,
+      "enable_candidate": null,
+      "format": "docx",
+      "must_abstain": 1,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0008891666666666666,
+          "mean_varr": 0.16666666666666666,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.01575166666666667,
+          "mean_varr": 0.8333333333333333,
+          "runs": 2,
+          "safe_runs": 1
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.0054865,
+          "mean_varr": 0.3333333333333333,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 2,
+      "category": "docx:1.4.3",
+      "criterion": "1.4.3",
+      "current_lane": "auto",
+      "eligible": 2,
+      "enable_candidate": null,
+      "format": "docx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "unstable across runs: anthropic:claude-opus-5 safe in 1/2; current lane is auto"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0014820000000000002,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.021854999999999992,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.0058094999999999996,
+          "mean_varr": 0.8333333333333333,
+          "runs": 2,
+          "safe_runs": 1
+        }
+      ],
+      "cases": 2,
+      "category": "docx:1.4.5",
+      "criterion": "1.4.5",
+      "current_lane": "assisted",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "docx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "unstable across runs: anthropic:claude-sonnet-5 safe in 1/2; current lane is assisted"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0015635000000000002,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.020847500000000005,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.0053823333333333345,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 1,
+      "category": "docx:2.1.2",
+      "criterion": "2.1.2",
+      "current_lane": "human",
+      "eligible": 0,
+      "enable_candidate": null,
+      "format": "docx",
+      "must_abstain": 1,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0009038333333333337,
+          "mean_varr": 0.3333333333333333,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.009250277777777772,
+          "mean_varr": 0.3333333333333333,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.0025734444444444494,
+          "mean_varr": 0.3333333333333333,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 3,
+      "category": "docx:2.4.2",
+      "criterion": "2.4.2",
+      "current_lane": "auto",
+      "eligible": 3,
+      "enable_candidate": null,
+      "format": "docx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "no-change-rule-code",
+      "why": "rule code verified every eligible case (3) in all 2 run(s), free"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0006902916666666665,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.007912916666666672,
+          "mean_varr": 0.8333333333333333,
+          "runs": 2,
+          "safe_runs": 1
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.002760999999999997,
+          "mean_varr": 1.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 4,
+      "category": "docx:2.4.4",
+      "criterion": "2.4.4",
+      "current_lane": "assisted",
+      "eligible": 3,
+      "enable_candidate": "anthropic:claude-sonnet-5",
+      "format": "docx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "enable",
+      "why": "anthropic:claude-sonnet-5 safe in all 2 run(s) over 4 cases (3 eligible); current lane is assisted"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0013011666666666657,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.013025833333333348,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.00434699999999999,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 1,
+      "category": "docx:2.4.6",
+      "criterion": "2.4.6",
+      "current_lane": "auto",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "docx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0010993333333333328,
+          "mean_varr": 0.3333333333333333,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.009795208333333338,
+          "mean_varr": 1.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.003959749999999998,
+          "mean_varr": 1.0,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 4,
+      "category": "docx:3.1.1",
+      "criterion": "3.1.1",
+      "current_lane": "auto",
+      "eligible": 3,
+      "enable_candidate": null,
+      "format": "docx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "no-change-rule-code",
+      "why": "rule code verified every eligible case (3) in all 2 run(s), free; anthropic:claude-opus-5 also safe, dominated at $0"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.001344999999999999,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.018057916666666653,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.005391499999999999,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 2,
+      "category": "docx:3.1.2",
+      "criterion": "3.1.2",
+      "current_lane": "assisted",
+      "eligible": 0,
+      "enable_candidate": null,
+      "format": "docx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "keep-human-only",
+      "why": "all 2 cases must abstain; anthropic:claude-haiku-4-5 did not decline cleanly (acted, failed to escalate, or violated) in at least one of 2 run(s) \u2014 shadow says the human lane is load-bearing"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0015405000000000002,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.02118666666666661,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.008789666666666668,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 1,
+      "category": "docx:3.3.2",
+      "criterion": "3.3.2",
+      "current_lane": "auto",
+      "eligible": 0,
+      "enable_candidate": null,
+      "format": "docx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.001313333333333333,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.012297500000000036,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 1
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.004235666666666665,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 1,
+      "category": "docx:4.1.2",
+      "criterion": "4.1.2",
+      "current_lane": "auto",
+      "eligible": 0,
+      "enable_candidate": null,
+      "format": "docx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0013155000000000007,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.020834166666666674,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.004092000000000001,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 1,
+      "category": "html:1.3.1",
+      "criterion": "1.3.1",
+      "current_lane": "auto",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "html",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0015268333333333353,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.02722,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.007753000000000001,
+          "mean_varr": 0.16666666666666666,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 1,
+      "category": "html:1.3.3",
+      "criterion": "1.3.3",
+      "current_lane": "assisted",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "html",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0014985000000000003,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.015775833333333336,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.004218666666666666,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 1,
+      "category": "html:1.4.11",
+      "criterion": "1.4.11",
+      "current_lane": "human",
+      "eligible": 0,
+      "enable_candidate": null,
+      "format": "html",
+      "must_abstain": 1,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0016073333333333334,
+          "mean_varr": 0.8333333333333333,
+          "runs": 2,
+          "safe_runs": 1
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.020754999999999996,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.011707000000000004,
+          "mean_varr": 0.6666666666666666,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 1,
+      "category": "html:1.4.3",
+      "criterion": "1.4.3",
+      "current_lane": "auto",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "html",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0013210000000000014,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.024974166666666686,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.005159666666666668,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 1,
+      "category": "html:2.4.2",
+      "criterion": "2.4.2",
+      "current_lane": "auto",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "html",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0008436999999999997,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.01139233333333333,
+          "mean_varr": 0.8333333333333333,
+          "runs": 2,
+          "safe_runs": 1
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.002795933333333336,
+          "mean_varr": 1.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 5,
+      "category": "html:2.4.4",
+      "criterion": "2.4.4",
+      "current_lane": "assisted",
+      "eligible": 3,
+      "enable_candidate": "anthropic:claude-sonnet-5",
+      "format": "html",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "enable",
+      "why": "anthropic:claude-sonnet-5 safe in all 2 run(s) over 5 cases (3 eligible); current lane is assisted"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.001358500000000002,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.01609833333333336,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.004972666666666662,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 1,
+      "category": "html:2.4.6",
+      "criterion": "2.4.6",
+      "current_lane": "auto",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "html",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0017096666666666666,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.015692499999999998,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.004561999999999999,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 1,
+      "category": "html:2.4.9",
+      "criterion": "2.4.9",
+      "current_lane": "human",
+      "eligible": 0,
+      "enable_candidate": null,
+      "format": "html",
+      "must_abstain": 1,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0013648333333333338,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.02413333333333334,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.004413333333333334,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 1,
+      "category": "html:3.1.1",
+      "criterion": "3.1.1",
+      "current_lane": "auto",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "html",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0015511666666666684,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.01931333333333335,
+          "mean_varr": 1.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.005048666666666655,
+          "mean_varr": 1.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 1,
+      "category": "html:3.1.2",
+      "criterion": "3.1.2",
+      "current_lane": "assisted",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "html",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0013648333333333338,
+          "mean_varr": 0.8333333333333333,
+          "runs": 2,
+          "safe_runs": 1
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.01461416666666667,
+          "mean_varr": 1.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.003795666666666679,
+          "mean_varr": 1.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 1,
+      "category": "html:3.3.2",
+      "criterion": "3.3.2",
+      "current_lane": "auto",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "html",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0009360000000000003,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.01512527777777777,
+          "mean_varr": 0.4444444444444444,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.004329000000000003,
+          "mean_varr": 0.6666666666666666,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 3,
+      "category": "pdf:1.1.1",
+      "criterion": "1.1.1",
+      "current_lane": "assisted",
+      "eligible": 3,
+      "enable_candidate": null,
+      "format": "pdf",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "keep-human-only",
+      "why": "no Claude tier verified every eligible case (3 of 3) in any of 2 run(s); current lane is assisted"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0015475000000000003,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.0170025,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.007014333333333333,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 1,
+      "category": "pdf:1.3.5",
+      "criterion": "1.3.5",
+      "current_lane": "human",
+      "eligible": 0,
+      "enable_candidate": null,
+      "format": "pdf",
+      "must_abstain": 1,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0015478333333333334,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.014889166666666669,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.003810666666666667,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 1,
+      "category": "pdf:1.4.1",
+      "criterion": "1.4.1",
+      "current_lane": "human",
+      "eligible": 0,
+      "enable_candidate": null,
+      "format": "pdf",
+      "must_abstain": 1,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0015118333333333333,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.014276666666666665,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.004340666666666668,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 1,
+      "category": "pdf:1.4.11",
+      "criterion": "1.4.11",
+      "current_lane": "human",
+      "eligible": 0,
+      "enable_candidate": null,
+      "format": "pdf",
+      "must_abstain": 1,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0015248333333333333,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.015416666666666662,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.005491666666666667,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 1,
+      "category": "pdf:1.4.12",
+      "criterion": "1.4.12",
+      "current_lane": "human",
+      "eligible": 0,
+      "enable_candidate": null,
+      "format": "pdf",
+      "must_abstain": 1,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0012682666666666673,
+          "mean_varr": 0.8333333333333333,
+          "runs": 2,
+          "safe_runs": 1
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.017562666666666664,
+          "mean_varr": 0.8333333333333333,
+          "runs": 2,
+          "safe_runs": 1
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.0066560666666666685,
+          "mean_varr": 0.6666666666666666,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 5,
+      "category": "pdf:1.4.3",
+      "criterion": "1.4.3",
+      "current_lane": "auto",
+      "eligible": 2,
+      "enable_candidate": null,
+      "format": "pdf",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "unstable across runs: anthropic:claude-haiku-4-5 safe in 1/2, anthropic:claude-opus-5 safe in 1/2; current lane is auto"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0009007222222222225,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.010254444444444448,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.003427888888888891,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 3,
+      "category": "pdf:2.4.2",
+      "criterion": "2.4.2",
+      "current_lane": "auto",
+      "eligible": 3,
+      "enable_candidate": null,
+      "format": "pdf",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "no-change-rule-code",
+      "why": "rule code verified every eligible case (3) in all 2 run(s), free"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0012720000000000012,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.019863333333333323,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.0034786666666666625,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 1,
+      "category": "pdf:3.1.1",
+      "criterion": "3.1.1",
+      "current_lane": "auto",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "pdf",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0013933333333333324,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.015118333333333334,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.004880666666666669,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 1,
+      "category": "pdf:3.1.5",
+      "criterion": "3.1.5",
+      "current_lane": "human",
+      "eligible": 0,
+      "enable_candidate": null,
+      "format": "pdf",
+      "must_abstain": 1,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0014418333333333332,
+          "mean_varr": 1.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.015827500000000015,
+          "mean_varr": 1.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.004014333333333328,
+          "mean_varr": 1.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 1,
+      "category": "pdf:4.1.2",
+      "criterion": "4.1.2",
+      "current_lane": "auto",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "pdf",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0006835555555555555,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.009228472222222233,
+          "mean_varr": 0.6666666666666666,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.002544722222222221,
+          "mean_varr": 0.8333333333333333,
+          "runs": 2,
+          "safe_runs": 1
+        }
+      ],
+      "cases": 6,
+      "category": "pptx:1.1.1",
+      "criterion": "1.1.1",
+      "current_lane": "assisted",
+      "eligible": 4,
+      "enable_candidate": null,
+      "format": "pptx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "unstable across runs: anthropic:claude-sonnet-5 safe in 1/2; current lane is assisted"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0013361666666666674,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.00966333333333334,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.0041820000000000026,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 1,
+      "category": "pptx:1.3.1",
+      "criterion": "1.3.1",
+      "current_lane": "auto",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "pptx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0015109999999999963,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.015622499999999984,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.007398999999999998,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 1,
+      "category": "pptx:1.3.2",
+      "criterion": "1.3.2",
+      "current_lane": "auto",
+      "eligible": 0,
+      "enable_candidate": null,
+      "format": "pptx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0014924999999999997,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.021862499999999986,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.005925,
+          "mean_varr": 0.3333333333333333,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 1,
+      "category": "pptx:1.3.3",
+      "criterion": "1.3.3",
+      "current_lane": "assisted",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "pptx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0016071666666666671,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.010984999999999998,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.0036839999999999998,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 1,
+      "category": "pptx:1.4.1",
+      "criterion": "1.4.1",
+      "current_lane": "human",
+      "eligible": 0,
+      "enable_candidate": null,
+      "format": "pptx",
+      "must_abstain": 1,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0017118333333333332,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.014076666666666668,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.005382333333333334,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 1,
+      "category": "pptx:1.4.10",
+      "criterion": "1.4.10",
+      "current_lane": "human",
+      "eligible": 0,
+      "enable_candidate": null,
+      "format": "pptx",
+      "must_abstain": 1,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0015556666666666666,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.01630666666666667,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.0042576666666666665,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 1,
+      "category": "pptx:1.4.11",
+      "criterion": "1.4.11",
+      "current_lane": "human",
+      "eligible": 0,
+      "enable_candidate": null,
+      "format": "pptx",
+      "must_abstain": 1,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0016295000000000003,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.017412500000000004,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.005123333333333334,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 1,
+      "category": "pptx:1.4.12",
+      "criterion": "1.4.12",
+      "current_lane": "human",
+      "eligible": 0,
+      "enable_candidate": null,
+      "format": "pptx",
+      "must_abstain": 1,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0016611666666666684,
+          "mean_varr": 0.3333333333333333,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.03016916666666669,
+          "mean_varr": 0.8333333333333333,
+          "runs": 2,
+          "safe_runs": 1
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.010869333333333328,
+          "mean_varr": 0.3333333333333333,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 1,
+      "category": "pptx:1.4.3",
+      "criterion": "1.4.3",
+      "current_lane": "auto",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "pptx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0013330833333333337,
+          "mean_varr": 0.5,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.011223750000000015,
+          "mean_varr": 0.5,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.003387833333333328,
+          "mean_varr": 0.5,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 2,
+      "category": "pptx:2.4.2",
+      "criterion": "2.4.2",
+      "current_lane": "auto",
+      "eligible": 2,
+      "enable_candidate": null,
+      "format": "pptx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "no-change-rule-code",
+      "why": "rule code verified every eligible case (2) in all 2 run(s), free"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0013893333333333338,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.021845833333333325,
+          "mean_varr": 0.8333333333333333,
+          "runs": 2,
+          "safe_runs": 1
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.0037283333333333244,
+          "mean_varr": 0.16666666666666666,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 1,
+      "category": "pptx:2.4.4",
+      "criterion": "2.4.4",
+      "current_lane": "assisted",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "pptx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.001281833333333334,
+          "mean_varr": 0.5,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.009740833333333337,
+          "mean_varr": 1.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.0025438333333333398,
+          "mean_varr": 1.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 2,
+      "category": "pptx:3.1.1",
+      "criterion": "3.1.1",
+      "current_lane": "auto",
+      "eligible": 2,
+      "enable_candidate": null,
+      "format": "pptx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "no-change-rule-code",
+      "why": "rule code verified every eligible case (2) in all 2 run(s), free; anthropic:claude-opus-5, anthropic:claude-sonnet-5 also safe, dominated at $0"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0014901666666666674,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.015188333333333342,
+          "mean_varr": 1.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.0041120000000000045,
+          "mean_varr": 0.6666666666666666,
+          "runs": 2,
+          "safe_runs": 1
+        }
+      ],
+      "cases": 1,
+      "category": "pptx:3.1.2",
+      "criterion": "3.1.2",
+      "current_lane": "assisted",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "pptx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0012826666666666668,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.016318333333333334,
+          "mean_varr": 1.0,
+          "runs": 2,
+          "safe_runs": 2
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.005827333333333335,
+          "mean_varr": 0.8333333333333333,
+          "runs": 2,
+          "safe_runs": 1
+        }
+      ],
+      "cases": 1,
+      "category": "xlsx:1.1.1",
+      "criterion": "1.1.1",
+      "current_lane": "assisted",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "xlsx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.001114966666666666,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.013583500000000012,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.00330906666666667,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 5,
+      "category": "xlsx:1.3.1",
+      "criterion": "1.3.1",
+      "current_lane": "auto",
+      "eligible": 3,
+      "enable_candidate": null,
+      "format": "xlsx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "no-change-rule-code",
+      "why": "rule code verified every eligible case (3) in all 2 run(s), free"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0015668333333333346,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.018527499999999992,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.005164333333333336,
+          "mean_varr": 0.3333333333333333,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 1,
+      "category": "xlsx:1.3.3",
+      "criterion": "1.3.3",
+      "current_lane": "assisted",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "xlsx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0015940000000000004,
+          "mean_varr": 0.6666666666666666,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.02558750000000002,
+          "mean_varr": 0.8333333333333333,
+          "runs": 2,
+          "safe_runs": 1
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.009238333333333335,
+          "mean_varr": 0.5,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 1,
+      "category": "xlsx:1.4.3",
+      "criterion": "1.4.3",
+      "current_lane": "auto",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "xlsx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0015808333333333334,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.02113416666666666,
+          "mean_varr": 0.3333333333333333,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.007298666666666667,
+          "mean_varr": 0.8333333333333333,
+          "runs": 2,
+          "safe_runs": 1
+        }
+      ],
+      "cases": 1,
+      "category": "xlsx:1.4.5",
+      "criterion": "1.4.5",
+      "current_lane": "assisted",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "xlsx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0012776666666666654,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.011164999999999998,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.003672666666666681,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        }
+      ],
+      "cases": 1,
+      "category": "xlsx:2.4.2",
+      "criterion": "2.4.2",
+      "current_lane": "auto",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "xlsx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0013688333333333352,
+          "mean_varr": 0.0,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.01846916666666667,
+          "mean_varr": 0.8333333333333333,
+          "runs": 2,
+          "safe_runs": 1
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.004622666666666654,
+          "mean_varr": 1.0,
+          "runs": 2,
+          "safe_runs": 2
+        }
+      ],
+      "cases": 1,
+      "category": "xlsx:2.4.4",
+      "criterion": "2.4.4",
+      "current_lane": "assisted",
+      "eligible": 1,
+      "enable_candidate": null,
+      "format": "xlsx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "insufficient-evidence",
+      "why": "under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2"
+    },
+    {
+      "candidates": [
+        {
+          "candidate": "anthropic:claude-haiku-4-5",
+          "mean_usd_per_case": 0.0008655000000000006,
+          "mean_varr": 0.3333333333333333,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-opus-5",
+          "mean_usd_per_case": 0.005820000000000016,
+          "mean_varr": 0.4444444444444444,
+          "runs": 2,
+          "safe_runs": 0
+        },
+        {
+          "candidate": "anthropic:claude-sonnet-5",
+          "mean_usd_per_case": 0.0024291111111111132,
+          "mean_varr": 0.8888888888888888,
+          "runs": 2,
+          "safe_runs": 1
+        }
+      ],
+      "cases": 3,
+      "category": "xlsx:3.1.1",
+      "criterion": "3.1.1",
+      "current_lane": "auto",
+      "eligible": 3,
+      "enable_candidate": null,
+      "format": "xlsx",
+      "must_abstain": 0,
+      "runs": 2,
+      "verdict": "no-change-rule-code",
+      "why": "rule code verified every eligible case (3) in all 2 run(s), free"
+    }
+  ],
+  "schema_version": 1,
+  "summary_cases": {
+    "enable": 9,
+    "insufficient-evidence": 59,
+    "keep-human-only": 10,
+    "no-change-rule-code": 22
+  },
+  "summary_categories": {
+    "enable": 2,
+    "insufficient-evidence": 47,
+    "keep-human-only": 3,
+    "no-change-rule-code": 7
+  }
+}

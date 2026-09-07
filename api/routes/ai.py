@@ -405,6 +405,14 @@ def ai_costs():
     bytes off-network — which is itself the governance headline; a cloud adapter records real
     cost and this reflects it. Requires sign-in (governance data isn't exposed anonymously);
     the admin Settings panel reads it with the signed-in user's session."""
+    from pathlib import Path
+    import json
+    report_path = Path(__file__).resolve().parents[2] / "config" / "shadow-model-rollout.json"
+    try:
+        shadow_rollout = json.loads(report_path.read_text())
+    except (OSError, ValueError):
+        shadow_rollout = None
     return {"today": core.store.ai_cost_rollup(since_days=1),
             "month": core.store.ai_cost_rollup(since_days=30),
-            "all_time": core.store.ai_cost_rollup(since_days=None)}
+            "all_time": core.store.ai_cost_rollup(since_days=None),
+            "shadow_rollout": shadow_rollout}
