@@ -10,7 +10,6 @@ import { scanFailureDetail, hasFallbackInventory } from './scanFailureMessage.js
 import LiveAssessmentLive from './LiveAssessmentLive.jsx'
 import RemediationRunCard from './RemediationRunCard.jsx'
 import { useRemediationRun } from './useRemediationRun.js'
-import CanonicalStageCard from './CanonicalStageCard.jsx'
 import WorkflowStageStack from './WorkflowStageStack.jsx'
 import { currentCanonicalStage } from './canonicalStageCard.js'
 import { useCanonicalStageLineage } from './useCanonicalStageLineage.js'
@@ -540,11 +539,7 @@ export default function App() {
   const canonicalRun = useCanonicalStageLineage(primaryWorkflow?.scan_id || scan?.run?.id || null,
     getStageLineage)
   const canonicalStage = currentCanonicalStage(canonicalRun.lineage)
-  // Discover and Assess retain their familiar stage-specific live cards as the sole owner of
-  // their current-stage presentation. The generic canonical fallback is only for stages that do
-  // not yet have an equivalent persistent card here.
-  const showCanonicalStage = canonicalStage
-    && !['discover', 'assess', 'remediate'].includes(canonicalStage.stage)
+  const canonicalScanId = canonicalStage?.scan_id || canonicalRun.lineage?.scan_id || null
   // Durable (background queue) is the default (2026-08-21). The session-scoped path runs as a
   // bare in-process thread with no queue behind it — the code's own comment on it has always said
   // "lost if that replica restarts", and this app auto-deploys on every merge to main, so that was
@@ -2230,76 +2225,35 @@ export default function App() {
         onViewPrevious={(scanId) => { switchScan(scanId); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
         onLiveOps={() => { goToView('liveops'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
       />
-      {busy && progress && view !== 'discover' && (
-        <div style={{ margin: '0 16px 8px' }}>
-          <DiscoverRunProgress
-            progress={progress}
-            busy={busy}
-            sources={sources}
-            source={run?.source ?? null}
-            scope={run?.scope ?? null}
-            inv={inventorySnapshot({ run, inventory: run?.scope?.inventory ?? null })}
-            onStop={liveScanId ? () => stopScan(liveScanId) : undefined}
-            onReview={() => { setView('discover'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
-            onContinue={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
-            preflightDegraded={preflightDegraded}
-            runStartedAt={run?.started_at ?? null}
-          />
-        </div>
-      )}
-
-      {/* Live Assessment command center — KPIs + funnel + worker/lane, polled from /scans/{sid}/live.
-          Inert until the endpoint returns an available snapshot, so it is a no-op on backends without
-          it and adds nothing to the panel when there is nothing live to show.
-
-          Deliberately OUTSIDE the {busy && progress} scan banner above (2026-08-22): `busy` is
-          scan-specific (doScan/reconnectScan/reconnectJob), so this card previously activated only
-          during a Discover run and stayed dark through an assess-only one — including after a
-          reload mid-assess, since nothing set busy/liveScanId for that case at all. assessPhase
-          IS correctly restored on reload (AssessRunner's own sessionStorage resume calls
-          setPhase('running'), which its onPhase effect reports up here), so `run?.id` is a safe,
-          already-resilient source for scanId once assessPhase says a run is live.
-
-          This also completes AssessRunProgress's own half of a Board 3 assumption: its comment
-          already says "while the Assess running card is the one on screen, IT owns Stop" — that
-          logic (and the OUTER scan-banner's Stop-suppression above, when view === 'assess' &&
-          assessPhase === 'running') was written assuming this card would be live during assess.
-          It never was, until this line. */}
-      {/* Keep the authoritative live Assessment card directly below the tabs on EVERY view,
-          including Assess itself. AssessRunner's detailed file list answers a different question;
-          it is not a replacement for the compact stage-level card. `busy` is a DISCOVER-only
-          flag; local phase gives immediate feedback and the server-owned active workflow restores
-          the same card after sign-in or reload. */}
-      <LiveAssessmentLive scanId={primaryWorkflow?.stage === 'assess'
-                                    ? primaryWorkflow.scan_id
-                                    : (liveScanId || run?.id)}
-                          active={assessPhase === 'running' || primaryWorkflow?.stage === 'assess'}
-                          onStop={() => stopScan(primaryWorkflow?.stage === 'assess'
-                            ? primaryWorkflow.scan_id
-                            : (liveScanId || run?.id))} />
-
-      <WorkflowStageStack lineage={canonicalRun.lineage} view={view}
-        receivedAt={canonicalRun.receivedAt} />
-
-      {showCanonicalStage && (
-        <CanonicalStageCard snapshot={canonicalStage} receivedAt={canonicalRun.receivedAt}
-          onOpen={canonicalStage.stage === 'conformance' ? null : () => {
-            setView({ release: 'publish', assess: 'assess', discover: 'discover' }[canonicalStage.stage]
-              || canonicalStage.stage)
-            window.scrollTo({ top: 0, behavior: 'smooth' })
-          }} />
-      )}
-
-      {/* THE PERSISTENT REMEDIATION CARD. Outside the tabpanel on purpose: `<Remediate/>` below
-          is mounted only while `view === 'remediate'`, so a card rendered inside it — and the
-          state feeding it — is torn down the instant the user opens any other tab. A run that is
-          still applying fixes must stay visible from wherever they are. `useRemediationRun` owns
-          the snapshot for the same reason. */}
-      <RemediationRunCard snapshot={remRun.snapshot} receivedAt={remRun.receivedAt}
-                          connected={remRun.connected} events={remRun.events}
-                          onOpen={view === 'remediate' ? null : () => {
-                            setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' })
-                          }} />
+      <WorkflowStageStack lineage={canonicalRun.lineage} receivedAt={canonicalRun.receivedAt}
+        stageDetails={{
+          discover: canonicalStage?.stage === 'discover' && busy && progress
+            && (!canonicalScanId || liveScanId === canonicalScanId) ? (
+            <DiscoverRunProgress progress={progress} busy={busy} sources={sources}
+              source={run?.source ?? null} scope={run?.scope ?? null}
+              inv={inventorySnapshot({ run, inventory: run?.scope?.inventory ?? null })}
+              onStop={canonicalScanId ? () => stopScan(canonicalScanId) : undefined}
+              onReview={() => { setView('discover'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+              onContinue={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
+              preflightDegraded={preflightDegraded} runStartedAt={run?.started_at ?? null} />
+          ) : null,
+          assess: canonicalStage?.stage === 'assess' ? (
+            <LiveAssessmentLive scanId={canonicalScanId}
+              active onStop={canonicalScanId ? () => stopScan(canonicalScanId) : undefined} />
+          ) : null,
+          remediate: canonicalStage?.stage === 'remediate'
+            && (!remRun.snapshot?.scan_id || remRun.snapshot.scan_id === canonicalScanId) ? (
+            <RemediationRunCard snapshot={remRun.snapshot} receivedAt={remRun.receivedAt}
+              connected={remRun.connected} events={remRun.events}
+              onOpen={view === 'remediate' ? null : () => {
+                setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' })
+              }} />
+          ) : null,
+        }}
+        onNavigate={(next) => {
+          setView(next)
+          window.scrollTo({ top: 0, behavior: 'smooth' })
+        }} />
 
       <main id="main-content" tabIndex={-1}>
       <div id="workflow-panel" role="tabpanel" aria-labelledby={`workflow-tab-${view}`}>
@@ -2334,7 +2288,7 @@ export default function App() {
           openSourceKey={pendingSourceOpen} onOpenSourceHandled={() => setPendingSourceOpen(null)}
           onOpenAssess={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />}
 
-        {view === 'discover' && <Discover sources={sources} files={files} rawFiles={scan?.files ?? []} busy={busy} onScan={requestScan} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} delegations={delegations} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} preflightDegraded={preflightDegraded} preflightCapacityState={preflightCapacityState} scanPct={busy ? progressPct(progress) : 0} scanId={run?.id} activeScanId={liveScanId} jobId={discoverJobId} scope={run?.scope || null} run={run} scanList={scanList} runAt={inventorySnapshot({ run, inventory: run?.scope?.inventory || null })} decisions={decisions} setDecisions={setDecisions}
+        {view === 'discover' && <Discover sources={sources} files={files} rawFiles={scan?.files ?? []} busy={busy} onScan={requestScan} hasDriveToken={hasDriveToken} hasSPToken={hasSPToken} delegations={delegations} onAdvance={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} progress={progress} preflightDegraded={preflightDegraded} preflightCapacityState={preflightCapacityState} scanPct={busy ? progressPct(progress) : 0} scanId={run?.id} activeScanId={liveScanId} jobId={discoverJobId} scope={run?.scope || null} run={run} scanList={scanList} runAt={inventorySnapshot({ run, inventory: run?.scope?.inventory || null })} decisions={decisions} setDecisions={setDecisions} showRunProgress={false}
           // Bootstrap already confirmed a scan exists (its cached snapshot arrived) but the full
           // getScan() payload hasn't yet — the same `run`-is-null window Overview/Assess show a
           // preview card for. Discover's own `files`/`scope` fall back to `[]`/`null` in exactly

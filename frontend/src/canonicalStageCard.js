@@ -11,6 +11,32 @@ const VIEW_STAGE = {
   publish: 'release', monitor: 'conformance',
 }
 
+function workflowRevisionStages(lineage) {
+  const workflowRevision = number(lineage?.workflow_revision)
+  return (Array.isArray(lineage?.stages) ? lineage.stages : [])
+    .filter((stage) => PIPELINE_STAGE_ORDER[stage.stage] != null
+      && (workflowRevision == null || number(stage.workflow_revision) === workflowRevision))
+}
+
+/**
+ * One authoritative snapshot per stage in the current workflow revision. A downstream stage
+ * always owns the workflow once it exists: a delayed upstream event cannot make Discover current
+ * again after Assess has started. Revisions only choose between executions of the SAME stage.
+ */
+export function canonicalWorkflowStages(lineage) {
+  const newestByStage = new Map()
+  workflowRevisionStages(lineage).forEach((stage) => {
+    const previous = newestByStage.get(stage.stage)
+    if (!previous || number(stage.revision) > number(previous.revision)
+      || (number(stage.revision) === number(previous.revision)
+        && String(stage.last_durable_update_at || '') > String(previous.last_durable_update_at || ''))) {
+      newestByStage.set(stage.stage, stage)
+    }
+  })
+  return [...newestByStage.values()].sort((left, right) =>
+    PIPELINE_STAGE_ORDER[left.stage] - PIPELINE_STAGE_ORDER[right.stage])
+}
+
 export function priorCanonicalStages(lineage, view) {
   const currentStage = VIEW_STAGE[view]
   const currentOrder = currentStage === 'conformance' ? 4 : PIPELINE_STAGE_ORDER[currentStage]
@@ -104,17 +130,12 @@ export function canonicalStageCardModel(snapshot, context = {}) {
 }
 
 export function currentCanonicalStage(lineage) {
-  const stages = Array.isArray(lineage?.stages) ? lineage.stages : []
+  const stages = canonicalWorkflowStages(lineage)
   if (!stages.length) return null
-  const live = stages.filter((stage) => !['succeeded', 'cancelled', 'failed', 'superseded']
-    .includes(stage.state))
-  const candidates = live.length ? live : stages
-  return [...candidates].sort((left, right) => {
-    if (!live.length) {
-      const stageOrder = (PIPELINE_STAGE_ORDER[right.stage] ?? -1)
-        - (PIPELINE_STAGE_ORDER[left.stage] ?? -1)
-      if (stageOrder) return stageOrder
-    }
+  return [...stages].sort((left, right) => {
+    const stageOrder = (PIPELINE_STAGE_ORDER[right.stage] ?? -1)
+      - (PIPELINE_STAGE_ORDER[left.stage] ?? -1)
+    if (stageOrder) return stageOrder
     const updated = String(right.last_durable_update_at || '')
       .localeCompare(String(left.last_durable_update_at || ''))
     return updated || Number(right.revision || 0) - Number(left.revision || 0)
