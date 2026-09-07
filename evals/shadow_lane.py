@@ -187,6 +187,13 @@ def compare(reports: Sequence[Mapping[str, Any]], cases: Sequence[Case] | None,
     claude_names = shadow_candidates(reports, prefix)
     categories = sorted(set().union(*(set(r["ladder"]["routing"]) for r in reports)))
 
+    # Categories the CURRENT corpus has that these runs never saw. This is not
+    # insufficient-evidence — it is no evidence, and the difference matters on a panel: a lane
+    # the product actions with no row at all reads as "nothing to decide" rather than "not
+    # measured". It happens whenever the lane table moves after a run: pptx:1.4.5 went
+    # human -> assisted in #1715, entered the corpus, and the 142-case run predates it.
+    unmeasured = sorted(set(corpus_counts(cases) if cases is not None else {}) - set(categories))
+
     rows: list[dict[str, Any]] = []
     for cat in categories:
         fmt, _, crit = cat.partition(":")
@@ -229,6 +236,7 @@ def compare(reports: Sequence[Mapping[str, Any]], cases: Sequence[Case] | None,
     return {
         "reports": [r.get("_source", "<dict>") for r in reports],
         "corpus_cases": sum(v["cases"] for v in counts.values()),
+        "unmeasured_categories": unmeasured,
         "shadow_candidates": claude_names,
         "min_cases": min_cases,
         "rows": rows,
@@ -277,6 +285,11 @@ def render_markdown(cmp: Mapping[str, Any]) -> str:
              "runs and not others.")
     L.append("- **no-change-rule-code** — rule code safe in every run; a paid tier is dominated.\n")
 
+    if cmp.get("unmeasured_categories"):
+        L.append(f"**Not measured by these runs: {', '.join('`' + c + '`' for c in cmp['unmeasured_categories'])}.** "
+                 f"The lane table gained or changed these after the run, so the corpus covers them "
+                 f"and the report does not. They have no verdict here — which is not the same as "
+                 f"insufficient evidence, and is closed by a re-run, not by more cases.\n")
     L.append("### Summary\n")
     L.append("| verdict | categories | cases |")
     L.append("|---|---|---|")

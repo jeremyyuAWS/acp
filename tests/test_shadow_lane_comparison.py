@@ -260,3 +260,16 @@ def test_the_committed_142_run_picks_sonnet_for_html_2_4_4(cases):
     row = rows["html:2.4.4"]
     assert row["verdict"] == ENABLE and row["enable_candidate"] == S
     assert row["claude"][S]["mean_usd_per_case"] < row["claude"][O]["mean_usd_per_case"]
+
+
+def test_a_corpus_category_the_reports_never_saw_is_reported_as_unmeasured(cases):
+    """A lane that moves after a run enters the corpus with no measurement behind it. That is
+    no evidence, not insufficient evidence, and it must not vanish from the table."""
+    subset = [c for c in cases if category_of(c) != "pptx:1.4.5"]
+    r = _report({}, subset)
+    cmp = compare([r], cases, REMEDIATION)
+    assert "pptx:1.4.5" in cmp["unmeasured_categories"]
+    assert "pptx:1.4.5" not in {row["category"] for row in cmp["rows"]}
+    assert "pptx:1.4.5" in render_markdown(cmp)
+    # A report covering everything reports nothing unmeasured.
+    assert compare([_report({}, cases)], cases, REMEDIATION)["unmeasured_categories"] == []

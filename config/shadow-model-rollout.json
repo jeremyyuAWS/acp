@@ -2187,5 +2187,8 @@
     "insufficient-evidence": 0,
     "keep-human-only": 31,
     "no-change-rule-code": 17
-  }
+  },
+  "unmeasured_categories": [
+    "pptx:1.4.5"
+  ]
 }

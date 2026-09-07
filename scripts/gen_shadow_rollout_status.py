@@ -84,6 +84,9 @@ def build() -> dict:
                             f"{len(REPORTS)} runs: a verdict requires the tier to be safe in "
                             f"every one of them."),
         },
+        # Lanes the product actions that this run never saw (the table moved after it ran).
+        # Shown so the panel cannot present a partial table as a complete one.
+        "unmeasured_categories": result["unmeasured_categories"],
         "candidate_safety": candidate_safety(reports),
         "decision_rule": {
             "enable": "Safe in every shadow run, adequately sampled, and not dominated by rule code; where more than one tier is safe the cheapest by measured cost is named. Assisted pilot only; human approval remains required.",
