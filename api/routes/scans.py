@@ -4139,6 +4139,65 @@ def _remediated_bytes(owner: str, scan_id: str, filename: str) -> bytes | None:
     return _blob.download_remediated(owner, source_scan_id, source_file)
 
 
+def _build_release_zip(sid: str, owner: str, scan: dict, selected: list[str], rows: dict,
+                       *, package_name: str, preserve_hierarchy: bool,
+                       include_manifest: bool):
+    """Build a release ZIP into a spill-to-disk stream shared by sync and queued delivery."""
+    import publish as _publish
+    source = (scan.get("run") or {}).get("source") or "local"
+    documents: list[dict] = []
+    used_paths: set[str] = set()
+    output = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)
+    try:
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for name in selected:
+                row = rows[name]
+                data = _remediated_bytes(owner, sid, name)
+                if data is None:
+                    raise HTTPException(409, f"corrected copy is not available for packaging: {name}")
+                source_path = (row.get("source_relative_path") or row.get("path")
+                               or row.get("parent_folder") or name)
+                if source == "sharepoint":
+                    folders, safe_name = _publish.sharepoint_relative_path(source_path, name)
+                else:
+                    folders, safe_name = _publish.normalize_relative_path(source_path, name)
+                archive_path = ("/".join(["Remediated", *folders, safe_name])
+                                if preserve_hierarchy else safe_name)
+                if archive_path.casefold() in used_paths:
+                    raise HTTPException(409, f"two selected files resolve to the same package path: {archive_path}")
+                used_paths.add(archive_path.casefold())
+                archive.writestr(archive_path, data)
+                documents.append({"file": row.get("file"),
+                    "source_relative_path": row.get("source_relative_path") or row.get("path"),
+                    "package_path": archive_path,
+                    "corrected_sha256": hashlib.sha256(data).hexdigest()})
+            status = core.store.release_for_scan(sid, owner)
+            snapshot_id = core.store.stage_snapshot_id(sid)
+            lineage = _canonical_lineage_export(sid, owner)["lineage"]
+            finding_reconciliation = _release_finding_reconciliation(sid, snapshot_id, lineage)
+            release_manifest = (_release_manifest_payload(
+                status, scan_id=sid, owner=owner, snapshot_id=snapshot_id,
+                stage_lineage=lineage, finding_reconciliation=finding_reconciliation)
+                if status is not None else None)
+            manifest = {"schema_version": 1, "package_type": "acp-corrected-files",
+                "scan_id": sid, "snapshot_id": snapshot_id, "actor": owner,
+                "package_name": package_name, "original_files_unchanged": True,
+                "documents": documents, "finding_reconciliation": finding_reconciliation,
+                "release": release_manifest}
+            if include_manifest:
+                archive.writestr("release-manifest.json", _json.dumps(
+                    manifest, sort_keys=True, indent=2, ensure_ascii=False,
+                    default=str).encode("utf-8"))
+    except Exception:
+        output.close()
+        raise
+    output.seek(0, 2)
+    content_length = output.tell()
+    output.seek(0)
+    default_name = f"acp-release-{re.sub(r'[^A-Za-z0-9._-]', '_', sid)}"
+    return output, content_length, f"{package_name or default_name}.zip"
+
+
 @router.post("/scans/{sid}/release/package")
 def download_release_package(sid: str, request: Request, body: ReleasePackageRequest):
     """Return selected corrected copies as one hierarchy-preserving, owner-scoped ZIP."""
@@ -4174,66 +4233,9 @@ def download_release_package(sid: str, request: Request, body: ReleasePackageReq
             headers={"Content-Disposition": disposition,
                      "Cache-Control": "private, no-store",
                      "Content-Length": str(len(data))})
-    documents: list[dict] = []
-    used_paths: set[str] = set()
-    output = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)
-    try:
-        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            for name in selected:
-                row = rows[name]
-                data = _remediated_bytes(owner, sid, name)
-                if data is None:
-                    raise HTTPException(409, f"corrected copy is not available for packaging: {name}")
-                source_path = (row.get("source_relative_path") or row.get("path")
-                               or row.get("parent_folder") or name)
-                if source == "sharepoint":
-                    folders, safe_name = _publish.sharepoint_relative_path(source_path, name)
-                else:
-                    folders, safe_name = _publish.normalize_relative_path(source_path, name)
-                archive_path = ("/".join(["Remediated", *folders, safe_name])
-                                if body.preserve_hierarchy else safe_name)
-                collision_key = archive_path.casefold()
-                if collision_key in used_paths:
-                    raise HTTPException(409, f"two selected files resolve to the same package path: {archive_path}")
-                used_paths.add(collision_key)
-                archive.writestr(archive_path, data)
-                documents.append({
-                    "file": row.get("file"),
-                    "source_relative_path": row.get("source_relative_path") or row.get("path"),
-                    "package_path": archive_path,
-                    "corrected_sha256": hashlib.sha256(data).hexdigest(),
-                })
-            status = core.store.release_for_scan(sid, owner)
-            snapshot_id = core.store.stage_snapshot_id(sid)
-            lineage = _canonical_lineage_export(sid, owner)["lineage"]
-            finding_reconciliation = _release_finding_reconciliation(
-                sid, snapshot_id, lineage)
-            release_manifest = (_release_manifest_payload(
-                status, scan_id=sid, owner=owner, snapshot_id=snapshot_id,
-                stage_lineage=lineage, finding_reconciliation=finding_reconciliation)
-                if status is not None else None)
-            manifest = {
-                "schema_version": 1,
-                "package_type": "acp-corrected-files",
-                "scan_id": sid,
-                "snapshot_id": snapshot_id,
-                "actor": owner,
-                "package_name": package_name,
-                "original_files_unchanged": True,
-                "documents": documents,
-                "finding_reconciliation": finding_reconciliation,
-                "release": release_manifest,
-            }
-            if body.include_manifest:
-                archive.writestr("release-manifest.json", _json.dumps(
-                    manifest, sort_keys=True, indent=2, ensure_ascii=False,
-                    default=str).encode("utf-8"))
-    except Exception:
-        output.close()
-        raise
-    output.seek(0, 2)
-    content_length = output.tell()
-    output.seek(0)
+    output, content_length, filename = _build_release_zip(
+        sid, owner, scan, selected, rows, package_name=package_name,
+        preserve_hierarchy=body.preserve_hierarchy, include_manifest=body.include_manifest)
 
     def stream_package():
         try:
@@ -4247,8 +4249,6 @@ def download_release_package(sid: str, request: Request, body: ReleasePackageReq
     # inner f-string's own double quote inside its replacement field, which is PEP 701 and parses
     # only on 3.12+. CI pins 3.12, so nothing here went red while `import api.routes` failed
     # outright on 3.11 and took ~26 test modules with it. See tests/test_python_syntax_floor.py.
-    default_name = f"acp-release-{re.sub(r'[^A-Za-z0-9._-]', '_', sid)}"
-    filename = f"{package_name or default_name}.zip"
     ascii_filename = re.sub(r"[^A-Za-z0-9._ -]", "_", filename)
     disposition = f'attachment; filename="{ascii_filename}"'
     if ascii_filename != filename:
@@ -4258,6 +4258,60 @@ def download_release_package(sid: str, request: Request, body: ReleasePackageReq
         headers={"Content-Disposition": disposition,
                  "Cache-Control": "private, no-store",
                  "Content-Length": str(content_length)})
+
+
+@router.post("/scans/{sid}/release/package/prepare", status_code=202)
+def prepare_release_package(sid: str, request: Request, body: ReleasePackageRequest):
+    """Queue a durable ZIP build for selections too large for one browser request."""
+    import blob as _blob
+    if body.download_format != "zip":
+        raise HTTPException(422, "queued preparation supports ZIP packages only")
+    if not _blob.enabled():
+        raise HTTPException(503, "durable package storage is not configured")
+    scan, selected, _rows = _selected_release_rows(sid, request, body.files)
+    import publish as _publish
+    try:
+        requested_name = (body.package_name or "").strip()
+        if requested_name.lower().endswith(".zip"):
+            requested_name = requested_name[:-4]
+        package_name = _publish.normalize_release_name(requested_name, field="ZIP filename")
+    except _publish.UnsafeReleasePath as exc:
+        raise HTTPException(422, str(exc)) from exc
+    owner = _owner(request)
+    job_id = core.store.enqueue_job("prepare_release_package", {
+        "scan_id": sid, "owner": owner, "files": selected,
+        "package_name": package_name,
+        "preserve_hierarchy": body.preserve_hierarchy,
+        "include_manifest": body.include_manifest,
+    }, scan_id=sid, max_attempts=3)
+    return {"job_id": job_id, "scan_id": sid, "status": "queued", "files": len(selected)}
+
+
+@router.get("/scans/{sid}/release/package/jobs/{job_id}/download")
+def download_prepared_release_package(sid: str, job_id: str, request: Request):
+    """Stream an owner-scoped package artifact after its durable worker finishes."""
+    owner = _owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    job = core.store.get_job(job_id)
+    payload = (job or {}).get("payload") or {}
+    if (not job or job.get("type") != "prepare_release_package" or job.get("scan_id") != sid
+            or payload.get("owner") != owner):
+        raise HTTPException(404, "package not found")
+    if job.get("status") != "done":
+        raise HTTPException(409, "package is not ready")
+    import blob as _blob
+    downloader = _blob.open_release_package(owner, sid, job_id)
+    if downloader is None:
+        raise HTTPException(404, "prepared package is no longer available")
+    default_name = f"acp-release-{re.sub(r'[^A-Za-z0-9._-]', '_', sid)}"
+    filename = f"{payload.get('package_name') or default_name}.zip"
+    ascii_filename = re.sub(r"[^A-Za-z0-9._ -]", "_", filename)
+    disposition = f'attachment; filename="{ascii_filename}"'
+    if ascii_filename != filename:
+        disposition += f"; filename*=UTF-8''{quote(filename)}"
+    return StreamingResponse(downloader.chunks(), media_type="application/zip", headers={
+        "Content-Disposition": disposition, "Cache-Control": "private, no-store"})
 
 
 @router.get("/scans/{scan_id}/files/{filename:path}/remediated")

@@ -22,6 +22,7 @@ _CONTAINER = os.environ.get("ACP_BLOB_CONTAINER", "remediated")
 # {owner}/{scan_id}/{filename} way — kept out of 'remediated' so a preview is never
 # mistaken for a remediated artifact.
 _RENDER_CONTAINER = os.environ.get("ACP_BLOB_RENDER_CONTAINER", "thumbnails")
+_RELEASE_PACKAGE_CONTAINER = os.environ.get("ACP_BLOB_RELEASE_PACKAGE_CONTAINER", "release-packages")
 _ENABLED = bool(_ACCOUNT)
 _LOG = logging.getLogger(__name__)
 
@@ -111,6 +112,44 @@ def download_remediated(owner: str | None, scan_id: str, filename: str) -> bytes
     (e.g. a pre-ADR-0010 remediation that only ever wrote to Drive)."""
     svc = _service_client()
     if svc is None:
+        return None
+
+
+def upload_release_package(owner: str, scan_id: str, job_id: str, stream) -> str | None:
+    """Persist a prepared ZIP so request navigation cannot discard expensive packaging work."""
+    svc = _service_client()
+    if svc is None:
+        return None
+    blob = svc.get_blob_client(
+        container=_RELEASE_PACKAGE_CONTAINER,
+        blob=_blob_path(owner, scan_id, f"{job_id}.zip"))
+    try:
+        stream.seek(0)
+        blob.upload_blob(stream, overwrite=True)
+    except Exception as exc:
+        if getattr(exc, "status_code", None) == 404 or getattr(exc, "error_code", "") == "ContainerNotFound":
+            try:
+                svc.create_container(_RELEASE_PACKAGE_CONTAINER)
+            except Exception:
+                pass
+            stream.seek(0)
+            blob.upload_blob(stream, overwrite=True)
+        else:
+            raise
+    return blob.url
+
+
+def open_release_package(owner: str, scan_id: str, job_id: str):
+    """Return Azure's chunked downloader for a prepared package, or None when unavailable."""
+    svc = _service_client()
+    if svc is None:
+        return None
+    blob = svc.get_blob_client(
+        container=_RELEASE_PACKAGE_CONTAINER,
+        blob=_blob_path(owner, scan_id, f"{job_id}.zip"))
+    try:
+        return blob.download_blob(**_timeouts())
+    except Exception:
         return None
     blob = svc.get_blob_client(container=_CONTAINER, blob=_blob_path(owner, scan_id, filename))
     try:
