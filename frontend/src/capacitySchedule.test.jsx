@@ -130,7 +130,7 @@ describe('the validation verdict is the point of the read-only phase', () => {
 describe('the service table shows intent beside what Azure runs', () => {
   it('shows every service the schedule names, with its observed range', async () => {
     const c = await mount()
-    const row = [...c.querySelectorAll('tr')].find((r) => r.textContent.includes('Assess'))
+    const row = c.querySelector('[data-service="assess"]')
     expect(row, 'no Assess row').toBeTruthy()
     expect(row.textContent).toContain('5')     // business-hours floor
     expect(row.textContent).toContain('10')    // maximum
@@ -141,7 +141,7 @@ describe('the service table shows intent beside what Azure runs', () => {
     const c = await mount({ ...PROPOSED, observed: {
       'acp-assess': { min_replicas: null, max_replicas: null, current_replicas: null, scale_rules: [] },
     } })
-    const row = [...c.querySelectorAll('tr')].find((r) => r.textContent.includes('Assess'))
+    const row = c.querySelector('[data-service="assess"]')
     expect(row.textContent).toContain('—')
     expect(row.textContent).not.toContain('0–0')
   })
@@ -192,14 +192,29 @@ describe('drift says why it is not being evaluated', () => {
   })
 })
 
-describe('the tab stays read-only and points elsewhere for the rest', () => {
-  it('offers no control that could change capacity', async () => {
+describe('permissions and management actions', () => {
+  it('gives a view-only user an explicit explanation and no mutation controls', async () => {
     const c = await mount()
-    // Capacity CONTROLS live in Settings → Worker Configuration; a second writable capacity
-    // surface is exactly what the placement decision (PRD review R1) exists to avoid.
+    expect(c.textContent).toContain('View only')
+    expect(c.textContent).toMatch(/platform administrator must make changes/i)
     expect(c.querySelectorAll('button').length).toBe(0)
     expect(c.querySelectorAll('input').length).toBe(0)
     expect(c.querySelectorAll('select').length).toBe(0)
+  })
+
+  it('puts both administrator actions above the management workspace', async () => {
+    snapshot.current = PROPOSED
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    await act(async () => { createRoot(host).render(<CapacitySchedule me={{ is_admin: true }} />) })
+    await act(async () => { await Promise.resolve() })
+    const actions = host.querySelector('[aria-label="Schedule actions"]')
+    expect(actions.textContent).toContain('Edit schedule')
+    expect(actions.textContent).toContain('Temporary override')
+    expect(host.textContent).not.toContain('View only')
+    expect(host.textContent).not.toContain('Edit the schedule')
+    await act(async () => { [...actions.querySelectorAll('button')][0].click() })
+    expect(host.textContent).toContain('Edit the schedule')
   })
 
   it('sends the reader to Monitor for live counts and Worker Configuration to change capacity', async () => {
@@ -220,6 +235,40 @@ describe('the tab stays read-only and points elsewhere for the rest', () => {
     await act(async () => { c.querySelector('button').click(); await Promise.resolve() })
     expect(snapshot.calls).toBe(2)
     expect(c.textContent).toContain('Proposed schedule — not in force')
+  })
+})
+
+describe('at-a-glance schedule presentation', () => {
+  it('summarizes the active window and local timezone in plain language', async () => {
+    const c = await mount({ ...PROPOSED, enabled: true })
+    expect(c.textContent).toContain('Monday–Friday')
+    expect(c.textContent).toMatch(/6:00 AM.*8:00 PM/)
+    expect(c.textContent).toContain('Off-hours capacity applies at all other times')
+    expect(c.textContent).toContain('local time')
+  })
+
+  it('shows the authoritative source when scheduling is disabled', async () => {
+    const c = await mount()
+    expect(c.textContent).toContain('Scheduling disabled')
+    expect(c.textContent).toMatch(/Worker Configuration and queue demand/)
+  })
+
+  it('uses responsive service cards with understandable capacity labels', async () => {
+    const c = await mount()
+    expect(c.querySelectorAll('[data-service]').length).toBe(5)
+    const gpu = c.querySelector('[data-service="gpu"]')
+    expect(gpu.textContent).toContain('Warm · business hours')
+    expect(gpu.textContent).toContain('Maximum when busy')
+    expect(gpu.textContent).toMatch(/Scales to zero off hours/)
+  })
+
+  it('keeps technical details in a collapsed diagnostics disclosure', async () => {
+    const c = await mount()
+    const diagnostics = c.querySelector('details')
+    expect(diagnostics.open).toBe(false)
+    expect(diagnostics.querySelector('summary').textContent).toContain('Diagnostics')
+    expect(diagnostics.textContent).toContain('QUEUE SCALERS')
+    expect(diagnostics.textContent).toContain('CONFIGURATION DRIFT')
   })
 })
 

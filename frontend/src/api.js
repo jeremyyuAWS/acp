@@ -184,6 +184,11 @@ export const BOOT_TIMEOUT_MS = 8000
 // so the key is held rather than abandoned, and a resubmit reconciles to the same job instead of
 // enqueuing a second scan. Never shorten this without re-reading that contract.
 export const SCAN_ENQUEUE_TIMEOUT_MS = 30000
+// Applying a schedule can wait on several Azure control-plane updates, so it gets more room than
+// an ordinary read while still guaranteeing that the Review step eventually leaves "Applying".
+// A timeout is an UNKNOWN outcome: the server may have finished after the browser stopped waiting,
+// so callers must re-read the schedule instead of claiming that nothing changed or retrying blind.
+export const CAPACITY_APPLY_TIMEOUT_MS = 120000
 const bootFetch = (url, init = {}) => fetch(url, { ...init, signal: AbortSignal.timeout(BOOT_TIMEOUT_MS) })
 
 // AI provenance (ADR 0019 Phase 0): the active model + local/cloud zone, cached from /config so
@@ -1688,6 +1693,18 @@ export const validateCapacitySchedule = (body) => (SIM
       method: 'POST',
       headers: { ...headers(), 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+    }).then(j))
+// Publish one already-saved version to Azure. The version is part of the body so the server can
+// reject a stale Review screen rather than applying a newer schedule the administrator did not
+// approve. SIM preserves the response contract but explicitly says no external write occurred.
+export const applyCapacitySchedule = (body) => (SIM
+  ? sim({ simulated: true, correlation_id: null, schedule_version: body.version,
+          application: { state: 'not_applied', applied_version: null } })
+  : fetch(`${BASE}/control/capacity-schedule/apply`, {
+      method: 'POST',
+      headers: { ...headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(CAPACITY_APPLY_TIMEOUT_MS),
     }).then(j))
 export const createCapacityOverride = (body) => (SIM
   ? sim({ override: null, correlation_id: null })

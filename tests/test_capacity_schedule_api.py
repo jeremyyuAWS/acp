@@ -46,6 +46,13 @@ def test_the_schedule_reads_as_proposed_not_as_applied():
     assert payload["version"] == 0
 
 
+def test_the_schedule_reports_whether_application_is_available(monkeypatch):
+    monkeypatch.setattr(control, "_capacity_apply_gateway", None)
+    assert control.get_capacity_schedule()["application_configured"] is False
+    monkeypatch.setattr(control, "_capacity_apply_gateway", object())
+    assert control.get_capacity_schedule()["application_configured"] is True
+
+
 def test_the_payload_carries_the_prd_shape():
     payload = control.get_capacity_schedule()
     assert payload["timezone"] == "America/Los_Angeles"
