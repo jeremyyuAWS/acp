@@ -38,7 +38,30 @@ describe('AutomationPolicyControl', () => {
     })
     expect(container.querySelector('.automation-policy__selection strong').textContent).toBe('Assisted')
     expect(container.textContent).toContain('1 finding across 1 file')
-    expect(container.textContent).toContain('eligible for automation')
+    expect(container.textContent).toContain('automatic fixes at this setting')
+    const delta = container.querySelector('.automation-policy__delta')
+    expect(delta.textContent).toBe('+1')
+    expect(delta.getAttribute('aria-label')).toBe('Added 1 automatic fix')
     expect(container.textContent).toContain('This preview does not change the active run.')
+  })
+
+  it('animates and announces a negative delta when the threshold becomes stricter', async () => {
+    const container = await mount({
+      runId: 'run-3',
+      findings: [{ file: 'benefits.docx', rule_id: 'WCAG_2_4_4', hasProposal: true,
+        proposals: [{ proposed_value: 'Learn about benefits' }] }],
+    })
+    const slider = container.querySelector('input[type="range"]')
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(slider, '4')
+      slider.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(slider, '3')
+      slider.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const delta = container.querySelector('.automation-policy__delta')
+    expect(delta.textContent).toBe('−1')
+    expect(delta.getAttribute('aria-label')).toBe('Removed 1 automatic fix')
   })
 })

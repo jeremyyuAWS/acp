@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AUTOMATION_LEVELS, DEFAULT_AUTOMATION_LEVEL, automationForecast, automationLevel } from './automationPolicy.js'
 import './automation-policy.css'
 
@@ -19,6 +19,14 @@ export default function AutomationPolicyControl({ findings = [], runId = null })
 
   const selected = automationLevel(level)
   const forecast = useMemo(() => automationForecast(findings, level), [findings, level])
+  const previousCandidates = useRef(forecast.candidates)
+  const [candidateDelta, setCandidateDelta] = useState(null)
+
+  useEffect(() => {
+    const delta = forecast.candidates - previousCandidates.current
+    previousCandidates.current = forecast.candidates
+    setCandidateDelta(delta === 0 ? null : delta)
+  }, [forecast.candidates])
 
   return (
     <section className="automation-policy" aria-labelledby="automation-policy-title">
@@ -53,7 +61,17 @@ export default function AutomationPolicyControl({ findings = [], runId = null })
 
       {forecast.total > 0 ? (
         <div className="automation-policy__forecast" aria-live="polite">
-          <div><b>{impact(forecast.candidates, forecast.candidateFiles)}</b><span>eligible for automation</span></div>
+          <div>
+            <b>{impact(forecast.candidates, forecast.candidateFiles)}
+              {candidateDelta != null && (
+                <span key={`${level}-${candidateDelta}`} className={`automation-policy__delta ${candidateDelta > 0 ? 'is-positive' : 'is-negative'}`}
+                  role="status" aria-live="polite" aria-label={`${candidateDelta > 0 ? 'Added' : 'Removed'} ${Math.abs(candidateDelta)} automatic ${Math.abs(candidateDelta) === 1 ? 'fix' : 'fixes'}`}>
+                  {candidateDelta > 0 ? '+' : '−'}{Math.abs(candidateDelta)}
+                </span>
+              )}
+            </b>
+            <span>automatic fixes at this setting</span>
+          </div>
           <div><b>{impact(forecast.review, forecast.reviewFiles)}</b><span>kept for review by this setting</span></div>
           <div><b>{impact(forecast.protected, forecast.protectedFiles)}</b><span>always protected by safety rules</span></div>
         </div>
