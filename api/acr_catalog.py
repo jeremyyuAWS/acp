@@ -32,6 +32,7 @@ from pathlib import Path
 _CATALOG_PATH = Path(__file__).resolve().parent.parent / "config" / "wcag-2.2-aa.json"
 _SECTION_508_PATH = Path(__file__).resolve().parent.parent / "config" / "section-508.json"
 _EN_301_549_PATH = Path(__file__).resolve().parent.parent / "config" / "en-301-549.json"
+_VPAT_STRUCTURE_PATH = Path(__file__).resolve().parent.parent / "config" / "vpat-2.5rev.json"
 
 # The VPAT conformance vocabulary, verbatim. PRD §9: "Do not invent additional final statuses."
 SUPPORTS = "Supports"
@@ -340,16 +341,16 @@ def _blank_row(report_id: str, num: str, name: str, requirement_set: str) -> dic
 
 # ── EN 301 549 (phase 6.4) ────────────────────────────────────────────────────────────────────
 #
-# config/en-301-549.json, committed EMPTY. The readers exist so the catalog is reachable and
-# testable before its content arrives — the same posture 6.1 took for Section 508, minus the
-# content, because the content is what is blocked.
+# config/en-301-549.json, 314 clauses. It shipped EMPTY first, with these readers in place so the
+# catalog was reachable and testable before its content existed, and was populated once the
+# reproduction question was answered.
 #
-# WHAT IS BLOCKED, PRECISELY. Not access: the standard is published free of charge and the PDF was
-# fetched from this repo's network on 2026-09-06 (HTTP 200, 2 285 361 bytes). What is open is
-# whether its requirement text may be REPRODUCED here — the same question ADR 0053 frames for the
-# ITI template, and one for counsel. The stub records the question rather than answering it, and
-# `_meta.reportable_clauses` records the standard's own clause headings so an eventual parse has
-# something to be checked against.
+# WHAT THE QUESTION WAS, PRECISELY, because this comment described it as open for a day and the
+# description outlived the answer. Never access: the standard is published free of charge and the
+# PDF was fetched from this repo's network on 2026-09-06 (HTTP 200, 2 285 361 bytes). The question
+# was whether its text may be REPRODUCED here, and on 2026-09-06 the owner answered it narrowly —
+# clause NUMBERS and TITLES may be, the normative prose may not. `_meta.reproduction_scope` in the
+# catalog carries that decision; `scripts/gen_en_301_549_catalog.py` enforces it.
 
 
 @functools.lru_cache(maxsize=1)
@@ -358,12 +359,12 @@ def _load_en() -> dict:
 
 
 def en_301_549_meta() -> dict:
-    """The stub's provenance block — version, publisher, source URL, and what blocks it."""
+    """Provenance — version, publisher, source URL, and the scope its content is limited to."""
     return dict(_load_en()["_meta"])
 
 
 def en_301_549_requirements() -> list[dict]:
-    """Every EN 301 549 requirement this build holds. Empty today, and that is the honest answer."""
+    """Every EN 301 549 clause this build holds: numbers and titles, never requirement text."""
     return [dict(r) for r in _load_en()["requirements"]]
 
 
@@ -375,6 +376,52 @@ def en_301_549_sourced() -> bool:
     a renderer has to arrive too, which is what `_RENDERABLE` records.
     """
     return bool(_load_en()["requirements"])
+
+
+# ── ITI VPAT® 2.5Rev structure (acceptance row 13) ────────────────────────────────────────────
+#
+# config/vpat-2.5rev.json holds the template's section HEADINGS, table titles and column headers —
+# what a renderer needs to lay a report out the way a reader of the official template expects.
+#
+# WHAT IS NOT HERE, AND THE DISTINCTION MATTERS. The template .docx is not vendored, and its
+# instructional and boilerplate prose is not reproduced: ADR 0053's Q2 was answered on 2026-09-07
+# as a SCOPE (headings and titles yes, prose no), not as a permission to redistribute the file.
+# Q1 — whether ACP's output may be CALLED a VPAT® — is a service mark question and is NOT answered
+# by that decision. So nothing built on these readers may use the mark, and every rendered format
+# keeps the statement on its face that it is not a VPAT. A structure catalog cannot promote itself
+# into a naming licence, and this comment exists so that no reader assumes it did.
+
+
+@functools.lru_cache(maxsize=1)
+def _load_vpat() -> dict:
+    return json.loads(_VPAT_STRUCTURE_PATH.read_text(encoding="utf-8"))
+
+
+def vpat_structure_meta() -> dict:
+    """Provenance — template revision, publisher, source page, retrieval date, and the scope."""
+    return dict(_load_vpat()["_meta"])
+
+
+def vpat_table_columns() -> list[str]:
+    """The three column headers every requirement table in every edition of the template uses."""
+    return list(_load_vpat()["criteria_table_columns"])
+
+
+def vpat_standards_columns() -> list[str]:
+    """The two column headers of the Applicable Standards/Guidelines table."""
+    return list(_load_vpat()["standards_table_columns"])
+
+
+def vpat_report_sections(edition: str | None) -> list[dict]:
+    """The template's report sections for one edition, in the order it prints them.
+
+    Each is `{heading, requirement_set, subsections}`. Returns [] for an edition the template does
+    not publish rather than raising, because a caller asking about an unknown edition is asking a
+    question with an honest empty answer — the same reason `missing_requirement_sets` answers
+    rather than refuses.
+    """
+    ed = _load_vpat()["editions"].get(edition or "")
+    return [dict(s, subsections=list(s["subsections"])) for s in ed["report_sections"]] if ed else []
 
 
 def build_matrix(report_id: str, edition: str | None = None) -> list[dict]:
