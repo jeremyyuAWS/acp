@@ -1,6 +1,9 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import CanonicalStageCard from './CanonicalStageCard.jsx'
 import { canonicalStageCardModel, currentCanonicalStage } from './canonicalStageCard.js'
 
@@ -17,6 +20,7 @@ const SNAPSHOT = {
 }
 
 const render = (snapshot) => renderToStaticMarkup(createElement(CanonicalStageCard, { snapshot }))
+const here = dirname(fileURLToPath(import.meta.url))
 
 describe('canonical stage card', () => {
   it('renders the server-authored equation with an explicit unit and revisions', () => {
@@ -66,5 +70,26 @@ describe('current canonical stage selection', () => {
       { stage: 'discover', state: 'succeeded', revision: 8, last_durable_update_at: '2026-09-07T01:02:00Z' },
     ] })
     expect(stage.stage).toBe('assess')
+  })
+})
+
+describe('app-level canonical ownership', () => {
+  it('keeps one lineage hook and card alive outside the tab panel', () => {
+    const app = readFileSync(join(here, 'App.jsx'), 'utf8')
+    const hook = app.indexOf('useCanonicalStageLineage(')
+    const signIn = app.search(/^ {2}if \(!me\) return <SignIn/m)
+    const card = app.indexOf('<CanonicalStageCard')
+    const panel = app.indexOf('id="workflow-panel"')
+    expect(hook).toBeGreaterThan(-1)
+    expect(hook).toBeLessThan(signIn)
+    expect(card).toBeGreaterThan(-1)
+    expect(card).toBeLessThan(panel)
+  })
+
+  it('deduplicates the richer remediation card and the canonical Release fallback', () => {
+    const app = readFileSync(join(here, 'App.jsx'), 'utf8')
+    expect(app).toContain("canonicalStage.stage !== 'remediate'")
+    expect(app).toContain("canonicalAvailable={canonicalStage?.stage === 'release'}")
+    expect(app).toContain("{ release: 'publish', assess: 'assess', discover: 'discover' }")
   })
 })

@@ -811,6 +811,13 @@ export const getScanManifest = (id) => (SIM ? sim(null) : fetch(
   `${BASE}/scans/${encodeURIComponent(id)}/manifest`,
   { headers: headers(), cache: 'no-store', signal: AbortSignal.timeout(MANIFEST_READ_TIMEOUT_MS) },
 ).then(j))
+// One revisioned authority for execution state across Discover → Release. Domain metrics such as
+// findings and assessment outcomes stay on their own canonical snapshots; this contract answers
+// which stage ran, its work-item partition, integrity, and sealed handoff identity.
+export const getStageLineage = (id) => (SIM ? sim({ lineage: null, content_digest: null }) : fetch(
+  `${BASE}/scans/${encodeURIComponent(id)}/stage-lineage`,
+  { headers: headers(), cache: 'no-store' },
+).then(j))
 export const getScan = (id, knownRevision = null) => (SIM ? sim(simGetScan(id)) : fetch(`${BASE}/scans/${id}`, {
   headers: headers(knownRevision != null ? { 'If-None-Match': `W/"${knownRevision}"` } : {}),
   cache: 'no-store',
