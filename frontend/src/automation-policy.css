@@ -48,6 +48,11 @@
 .automation-policy__category details { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }
 .automation-policy__category details summary { cursor: pointer; }
 .automation-policy__category details p { margin: 6px 0 0; overflow-wrap: anywhere; }
+.automation-policy__drilldown { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 8px; }
+.automation-policy__axis > strong { font-size: 12px; color: var(--muted); }
+.automation-policy__axis ul { list-style: none; padding: 0; margin: 6px 0 0; }
+.automation-policy__axis li { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; }
+.automation-policy__category.is-unknown { border-style: dashed; }
 @keyframes automation-delta-pop {
   0% { opacity: 0; transform: translateY(5px) scale(.86); }
   55% { opacity: 1; transform: translateY(-1px) scale(1.06); }
@@ -65,5 +70,6 @@
   .automation-policy__category { grid-template-columns: 1fr; }
   .automation-policy__category > b { justify-self: start; }
   .automation-policy__category details { grid-column: 1; }
+  .automation-policy__drilldown { grid-template-columns: 1fr; }
   .automation-policy__ticks { font-size: 9px; }
 }
