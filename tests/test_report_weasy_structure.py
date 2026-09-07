@@ -56,6 +56,37 @@ def test_report_context_carries_canonical_stage_lineage():
     assert context["stage_lineage_status"] == "consistent"
 
 
+def test_report_carries_the_same_finding_reconciliation_attestation():
+    from report_tagged import _prepare_context
+    from report_weasy import render_html
+
+    reconciliation = {
+        "status": "reconciled",
+        "content_digest": {"algorithm": "SHA-256", "value": "b" * 64},
+        "outcomes": {"assessed": 17, "accounted": 17},
+    }
+    meta = {**_META, "finding_reconciliation": reconciliation}
+    context = _prepare_context(_RUN, _FILES, meta)
+    assert context["finding_reconciliation"] is reconciliation
+    html = render_html(_RUN, _FILES, meta)
+    assert "Finding reconciliation <strong>reconciled</strong>" in html
+    assert "17 of\n    17 assessed findings have one durable disposition" in html
+    assert "b" * 64 in html
+
+
+def test_report_fails_safe_when_finding_accounting_is_inconsistent():
+    from report_weasy import render_html
+
+    reconciliation = {
+        "status": "inconsistent",
+        "content_digest": {"algorithm": "SHA-256", "value": "c" * 64},
+        "outcomes": {"assessed": 17, "accounted": 19},
+    }
+    html = render_html(_RUN, _FILES, {**_META, "finding_reconciliation": reconciliation})
+    assert "Accounting is inconsistent; no complete-resolution claim is made." in html
+    assert "19 of" not in html
+
+
 def _build(tmp: Path, **over) -> Path:
     import report_weasy
     run = {**_RUN, **over.pop("run", {})}

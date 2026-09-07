@@ -4,6 +4,7 @@ import { counterRows, secondaryRows, freshness, headline, integrityAffects, part
 import { attemptStage, milestoneCrossings, retrySeconds } from './remediationLivePanel.js'
 import ActivityPulse from './ActivityPulse.jsx'
 import RemediationExceptions, { useRemediationExceptions, exceptionCount } from './RemediationExceptions.jsx'
+import { getFindingDispositions } from './api.js'
 import './remediation-ops-panel.css'
 import './remediation-live-detail.css'
 import './remediation-reconciliation.css'
@@ -151,6 +152,9 @@ function Secondary({ snapshot }) {
 }
 
 function FindingReconciliation({ snapshot }) {
+  const [drilldown, setDrilldown] = useState(null)
+  const [drilldownError, setDrilldownError] = useState(null)
+  const [drilldownLoading, setDrilldownLoading] = useState(false)
   const reconciliation = snapshot.finding_reconciliation
   if (!reconciliation) return null
   const assessed = reconciliation.assessed
@@ -165,21 +169,33 @@ function FindingReconciliation({ snapshot }) {
     || (reconciliation.violations || []).length > 0
   const exact = reconciliation.exact === true && !inconsistent
   const outcomes = [
-    ['Verified resolved', reconciliation.resolved_verified],
-    ['Awaiting human review', reconciliation.awaiting_review],
-    ['Approved, awaiting verification', reconciliation.approved_pending_verification],
-    ['Unchanged — no eligible fix', reconciliation.unchanged_no_fix],
-    ['Failed remediation', reconciliation.failed],
-    ['Excluded by policy', reconciliation.excluded],
-    ['Superseded by reassessment', reconciliation.superseded],
+    ['Verified resolved', reconciliation.resolved_verified, 'resolved_verified'],
+    ['Awaiting human review', reconciliation.awaiting_review, 'awaiting_review'],
+    ['Approved, awaiting verification', reconciliation.approved_pending_verification, 'approved_pending_verification'],
+    ['Unchanged — no eligible fix', reconciliation.unchanged_no_fix, 'unchanged_no_fix'],
+    ['Failed remediation', reconciliation.failed, 'remediation_failed'],
+    ['Excluded by policy', reconciliation.excluded, 'excluded_by_policy'],
+    ['Superseded by reassessment', reconciliation.superseded, 'superseded_by_reassessment'],
   ]
+  const openDrilldown = async (label, disposition) => {
+    setDrilldownLoading(true)
+    setDrilldownError(null)
+    try {
+      const result = await getFindingDispositions(snapshot.scan_id || snapshot.run_id, disposition)
+      setDrilldown({ label, items: result.items || [], batchId: result.batch_id })
+    } catch (error) {
+      setDrilldownError(String(error?.message || error))
+    } finally {
+      setDrilldownLoading(false)
+    }
+  }
   return <section className="remops-reconciliation" aria-labelledby="remops-reconciliation-title">
     <div><h3 id="remops-reconciliation-title">Assessment → Remediation accounting</h3><p className="muted">The units stay separate so completed processing is not mistaken for resolved findings.</p></div>
     {inconsistent && <p className="remops-accounting-note" role="status"><b>Accounting temporarily inconsistent.</b> ACP is preserving the last durable finding totals while it reconciles this snapshot.</p>}
     {exact ? <>
       <div aria-labelledby="remops-finding-outcomes"><h4 id="remops-finding-outcomes">Finding outcomes</h4><dl>
         <div><dt>Assessment findings</dt><dd>{count(assessed)} findings<span>Finding instances handed into this workflow</span></dd></div>
-        {outcomes.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{count(value)} findings</dd></div>)}
+        {outcomes.map(([label, value, disposition]) => <div key={label}><dt>{label}</dt><dd>{count(value)} findings{value > 0 && <button type="button" className="remops-finding-details" onClick={() => openDrilldown(label, disposition)}>View affected documents<span className="sr-only"> for {label.toLowerCase()}</span></button>}</dd></div>)}
         <div><dt>Findings accounted for</dt><dd>{count(reconciliation.accounted)} / {count(assessed)} findings<span>Every assessed finding has one current disposition</span></dd></div>
       </dl></div>
       <div aria-labelledby="remops-document-outcomes"><h4 id="remops-document-outcomes">Document outcomes</h4><dl>
@@ -189,6 +205,13 @@ function FindingReconciliation({ snapshot }) {
       <div aria-labelledby="remops-change-evidence"><h4 id="remops-change-evidence">Change evidence</h4><dl>
         <div><dt>Verified changes</dt><dd>{count(verifiedChanges)} changes<span>Before/after changes that passed re-check</span></dd></div>
       </dl></div>
+      {drilldownLoading && <p role="status">Loading finding evidence…</p>}
+      {drilldownError && <p role="alert">Finding evidence is unavailable: {drilldownError}</p>}
+      {drilldown && !drilldownLoading && <section className="remops-finding-drilldown" aria-labelledby="remops-finding-drilldown-title">
+        <div><h4 id="remops-finding-drilldown-title">{drilldown.label}: affected documents</h4><button type="button" onClick={() => setDrilldown(null)}>Close details</button></div>
+        <p className="muted">Current remediation batch {drilldown.batchId || 'not available'} · {drilldown.items.length.toLocaleString()} finding{drilldown.items.length === 1 ? '' : 's'}</p>
+        {drilldown.items.length ? <table><caption className="sr-only">Finding evidence for {drilldown.label.toLowerCase()}</caption><thead><tr><th scope="col">Document</th><th scope="col">Criterion</th><th scope="col">Instance</th><th scope="col">Evidence</th></tr></thead><tbody>{drilldown.items.map((item) => <tr key={item.finding_id}><th scope="row">{item.file || item.document_id}</th><td>{item.rule_id}</td><td>{item.instance_key}</td><td>{item.fix_evidence_ids?.length ? `${item.fix_evidence_ids.length} linked record${item.fix_evidence_ids.length === 1 ? '' : 's'}` : item.review_item_id ? 'Human review linked' : 'No linked evidence'}</td></tr>)}</tbody></table> : <p>No current findings are in this disposition.</p>}
+      </section>}
     </> : <>
       <dl>
         <div><dt>Assessment findings</dt><dd>{count(assessed)}{typeof assessed === 'number' && ' findings'}<span>Finding instances handed into this workflow</span></dd></div>

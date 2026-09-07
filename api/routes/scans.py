@@ -3089,6 +3089,47 @@ def stage_lineage(sid: str, request: Request):
     return _canonical_lineage_export(sid, owner)
 
 
+@router.get("/scans/{sid}/finding-dispositions")
+def finding_dispositions(sid: str, request: Request,
+                         disposition: str | None = Query(default=None)):
+    """Owner-scoped rows behind the current reconciliation buckets.
+
+    Counts still come from the canonical remediation snapshot.  This endpoint explains those
+    counts; it never reconstructs a second total and never includes historical batches.
+    """
+    owner = _owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    facts = core.store.remediation_run_facts(sid)
+    batch_id = facts.get("batch_id")
+    if not batch_id:
+        return {"scan_id": sid, "batch_id": None, "disposition": disposition,
+                "items": [], "available": False}
+    try:
+        items = core.store.finding_disposition_drilldown(
+            sid, batch_id, disposition=disposition)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"scan_id": sid, "batch_id": batch_id, "snapshot_id": sid,
+            "disposition": disposition, "items": items, "available": True}
+
+
+@router.get("/scans/{sid}/finding-dispositions/{finding_id}/events")
+def finding_disposition_events(sid: str, finding_id: str, request: Request):
+    """Owner-scoped transition history for a current-batch finding."""
+    owner = _owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    batch_id = core.store.remediation_run_facts(sid).get("batch_id")
+    if not batch_id:
+        raise HTTPException(404, "finding not found")
+    current = core.store.finding_disposition_drilldown(sid, batch_id)
+    if not any(row["finding_id"] == finding_id for row in current):
+        raise HTTPException(404, "finding not found")
+    return {"scan_id": sid, "batch_id": batch_id, "finding_id": finding_id,
+            "events": core.store.finding_disposition_events(sid, batch_id, finding_id)}
+
+
 #: Which renderer serves /scans/{sid}/report.pdf. "weasy" (the default) is the PDF/UA-1
 #: conformant one; "tagged" restores the previous Chromium renderer WITHOUT a redeploy, which is
 #: the point of the switch existing at all — the cutover shipped before two of the gates ADR 0034
@@ -3140,9 +3181,12 @@ def report_pdf(sid: str, request: Request):
     owner = _owner(request)
     rb = core.active_rubric()
     lineage_export = _canonical_lineage_export(sid, owner)
+    finding_reconciliation = _release_finding_reconciliation(
+        sid, res["run"].get("id") or sid, lineage_export["lineage"])
     meta = {"target": rb.cfg.get("conformance_target"), "version": rb.version,
             "hash": res["run"].get("rubric_hash") or rb.hash,
             "stage_lineage_digest": lineage_export["content_digest"]["value"],
+            "finding_reconciliation": finding_reconciliation,
             "stage_lineage_status": ("unavailable" if not
                 lineage_export["lineage"]["available"] else "consistent" if
                 lineage_export["lineage"]["integrity"]["ok"] else "inconsistent")}

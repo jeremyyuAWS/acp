@@ -217,6 +217,20 @@ dd { color: #2B2330; margin-left: 12px; }
   <strong>{{ stage_lineage_digest }}</strong>. Stage totals use sealed execution snapshots.
 </p>
 {% endif %}
+{% if finding_reconciliation %}
+<p class="muted">
+  Finding reconciliation <strong>{{ finding_reconciliation.status }}</strong> · SHA-256
+  <strong>{{ finding_reconciliation.content_digest.value }}</strong>.
+  {% if finding_reconciliation.status == 'reconciled' %}
+    {{ finding_reconciliation.outcomes.accounted }} of
+    {{ finding_reconciliation.outcomes.assessed }} assessed findings have one durable disposition.
+  {% elif finding_reconciliation.status == 'inconsistent' %}
+    Accounting is inconsistent; no complete-resolution claim is made.
+  {% else %}
+    Exact per-finding outcomes are not available for this snapshot.
+  {% endif %}
+</p>
+{% endif %}
 
 <!-- Certification decision -->
 <section aria-labelledby="decision-heading">
@@ -507,6 +521,7 @@ def _prepare_context(run: dict, files: list, meta: dict,
         "rubric_hash": rubric_hash,
         "stage_lineage_digest": meta.get("stage_lineage_digest"),
         "stage_lineage_status": meta.get("stage_lineage_status"),
+        "finding_reconciliation": meta.get("finding_reconciliation"),
         "total_files": total_files,
         "certifiable": certifiable,
         "avg_score": avg_score,

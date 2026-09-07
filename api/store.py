@@ -6877,6 +6877,52 @@ class Store:
                 row["fix_evidence_ids"] = []
         return rows
 
+    def finding_disposition_drilldown(self, scan_id: str, batch_id: str, *,
+                                      disposition: str | None = None) -> list[dict]:
+        """Return the ledger rows behind one canonical reconciliation bucket.
+
+        This is deliberately scoped to an explicit batch.  A caller cannot accidentally mix an
+        older remediation attempt into the current snapshot merely because both share a scan.
+        """
+        from finding_ledger import DISPOSITIONS
+        if disposition is not None and disposition not in DISPOSITIONS:
+            raise ValueError(f"invalid finding disposition: {disposition}")
+        with self._db.cursor() as cur:
+            sql = ("SELECT finding_id,document_id,file,rule_id,instance_key,disposition,"
+                   "review_item_id,fix_evidence_ids,verified_at,revision,updated_at "
+                   "FROM finding_disposition WHERE scan_id=%s AND batch_id=%s")
+            params: list[object] = [scan_id, batch_id]
+            if disposition is not None:
+                sql += " AND disposition=%s"
+                params.append(disposition)
+            sql += " ORDER BY file,rule_id,instance_key,finding_id"
+            self._db.execute(cur, sql, tuple(params))
+            rows = self._db.fetchall(cur)
+        for row in rows:
+            try:
+                row["fix_evidence_ids"] = json.loads(row.get("fix_evidence_ids") or "[]")
+            except (TypeError, ValueError):
+                row["fix_evidence_ids"] = []
+        return rows
+
+    def finding_disposition_events(self, scan_id: str, batch_id: str,
+                                   finding_id: str) -> list[dict]:
+        """Return append-only evidence for one finding in deterministic revision order."""
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT event_id,from_disposition,to_disposition,from_revision,to_revision,"
+                "review_item_id,fix_evidence_ids,verified_at,created_at "
+                "FROM finding_disposition_event WHERE scan_id=%s AND batch_id=%s "
+                "AND finding_id=%s ORDER BY to_revision,created_at,event_id",
+                (scan_id, batch_id, finding_id))
+            rows = self._db.fetchall(cur)
+        for row in rows:
+            try:
+                row["fix_evidence_ids"] = json.loads(row.get("fix_evidence_ids") or "[]")
+            except (TypeError, ValueError):
+                row["fix_evidence_ids"] = []
+        return rows
+
     def transition_finding_disposition(
             self, scan_id: str, batch_id: str, finding_id: str, disposition: str, *,
             expected_revision: int, event_id: str, review_item_id: str | None = None,
