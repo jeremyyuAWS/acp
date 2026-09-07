@@ -134,15 +134,45 @@ def test_compare_enable_requires_every_report(cases):
     assert two["verdict"] == INSUFFICIENT and two["claude"][S]["safe"] == [True, False]
 
 
-def test_compare_refuses_a_report_from_a_different_corpus(cases):
+def test_a_category_whose_case_count_moved_is_dropped_not_judged_on_the_stale_count(cases):
+    """The corpus gained a case in this category since the run. The old measurement is of a
+    different case set, so the category is unmeasured — not judged on what it used to be."""
     r = _report({}, cases)
     r["ladder"]["routing"]["docx:2.4.4"]["cases"] += 1
-    with pytest.raises(ValueError, match="cases in the report"):
-        compare([r], cases, REMEDIATION)
+    cmp = compare([r], cases, REMEDIATION)
+    assert "docx:2.4.4" in cmp["unmeasured_categories"]
+    assert "docx:2.4.4" not in {row["category"] for row in cmp["rows"]}
+    # Every other category is unaffected: one moved category does not void the comparison.
+    assert len(cmp["rows"]) == len({category_of(c) for c in cases}) - 1
+
+
+def test_compare_refuses_reports_with_nothing_in_common(cases):
     r = _report({}, cases)
-    r["ladder"]["routing"]["docx:9.9.9"] = r["ladder"]["routing"]["docx:2.4.4"]
-    with pytest.raises(ValueError, match="absent from the corpus"):
+    r["ladder"]["routing"] = {"zzz:9.9.9": {"cases": 1, "choice": "human", "why": "",
+                                            "candidates": {}}}
+    with pytest.raises(ValueError, match="not comparable at all"):
         compare([r], cases, REMEDIATION)
+
+
+def test_agreement_is_decided_per_category_not_across_the_whole_corpus(cases):
+    """Two runs, identical but for one category whose case count moved between them. The 58
+    that match are pooled and get two runs of evidence; the one that moved is judged only on
+    the run that matches the reference, and the row says so."""
+    a = _report({"docx:2.4.4": {S: True}}, cases, source="run-a")
+    b = _report({"docx:2.4.4": {S: True}}, cases, source="run-b")
+    a["ladder"]["routing"]["docx:3.1.1"]["cases"] += 1        # run-a saw a different case set
+    cmp = compare([a, b], cases, REMEDIATION)
+    rows = {x["category"]: x for x in cmp["rows"]}
+    assert rows["docx:2.4.4"]["runs"] == 2 and rows["docx:2.4.4"]["runs_not_pooled"] == 0
+    moved = rows["docx:3.1.1"]
+    assert moved["runs"] == 1 and moved["runs_not_pooled"] == 1
+    assert "were not pooled into it" in moved["why"]
+    assert "docx:3.1.1" in render_markdown(cmp) and "Judged on fewer runs" in render_markdown(cmp)
+    # The pooled category still needs BOTH runs safe to enable — pooling is not weakened.
+    # Safe in one and not the other is INSUFFICIENT ("unstable across runs"), never ENABLE.
+    b2 = _report({}, cases, source="run-b2")
+    assert {x["category"]: x for x in compare([a, b2], cases, REMEDIATION)["rows"]
+            }["docx:2.4.4"]["verdict"] == INSUFFICIENT
 
 
 def test_reports_carry_their_own_counts_and_must_agree(cases):
@@ -158,12 +188,6 @@ def test_reports_carry_their_own_counts_and_must_agree(cases):
     assert cmp["corpus_cases"] == len(cases) + 5
     row = {x["category"]: x for x in cmp["rows"]}["docx:2.4.4"]
     assert row["cases"] == 9 and row["verdict"] == ENABLE
-    other = _report({}, cases, source="different-corpus")
-    other["corpus"] = {"categories": {cat: {"cases": row["cases"], "eligible": row["cases"],
-                                            "must_abstain": 0}
-                                      for cat, row in other["ladder"]["routing"].items()}}
-    with pytest.raises(ValueError, match="different corpus"):
-        compare([r, other], None, REMEDIATION)
     with pytest.raises(ValueError, match="no corpus was passed"):
         compare([_report({}, cases)], None, REMEDIATION)
 
@@ -173,6 +197,7 @@ def test_the_two_committed_reports_still_compare_on_their_own_100_case_counts(ca
             for d in ("2026-09-04", "2026-09-07")]
     cmp = compare(reps, None, REMEDIATION)
     assert cmp["corpus_cases"] == 100 and len(cases) > 100
+    assert all(r["runs"] == 2 for r in cmp["rows"]), "same corpus: every category pools both runs"
     rows = {x["category"]: x for x in cmp["rows"]}
     assert rows["docx:2.4.4"]["verdict"] == ENABLE
     assert rows["xlsx:1.1.1"]["verdict"] == INSUFFICIENT
@@ -196,8 +221,10 @@ def test_markdown_names_every_category_and_verdict(cases):
 # ── the committed hosted report loads and compares ───────────────────────────────────────────
 
 def test_the_committed_hosted_report_compares_cleanly(cases):
+    """Judged on the corpus THAT RUN saw (`cases=None`), which is the only honest reading of a
+    historical run: the live corpus has moved several of its categories since."""
     path = ROOT / "evals" / "reports" / "2026-09-04-hosted-ladder.json"
-    cmp = compare([load_report(path)], cases, REMEDIATION)
+    cmp = compare([load_report(path)], None, REMEDIATION)
     rows = {x["category"]: x for x in cmp["rows"]}
     # The writeup's two well-evidenced paid wins.
     assert rows["docx:2.4.4"]["verdict"] == ENABLE

@@ -75,37 +75,44 @@ def corpus_counts(cases: Iterable[Case]) -> dict[str, dict[str, int]]:
     return category_counts(cases)
 
 
-def report_counts(reports: Sequence[Mapping[str, Any]],
-                  cases: Sequence[Case] | None) -> dict[str, dict[str, int]]:
-    """The per-category counts every report was run against.
+def reference_counts(reports: Sequence[Mapping[str, Any]],
+                     cases: Sequence[Case] | None) -> dict[str, dict[str, int]]:
+    """The per-category counts a verdict is judged against.
 
-    A report written since `corpus.categories` was added carries its own; older ones need the
-    corpus passed in, and it must match their ladder rows exactly. Either way every report must
-    agree with every other — a verdict pooled over runs on different corpora is not a verdict.
+    The live corpus when it is passed, otherwise the first report's own record of what it saw.
+    This is the REFERENCE; which runs are admissible for each category is decided per category
+    by `usable_reports`, not here.
     """
+    if cases is not None:
+        return corpus_counts(cases)
     carried = [r["corpus"]["categories"] for r in reports
                if isinstance(r.get("corpus"), Mapping) and "categories" in r["corpus"]]
-    if carried:
-        counts = carried[0]
-        for r, c in zip([r for r in reports if "categories" in r.get("corpus", {})], carried):
-            if c != counts:
-                raise ValueError(f"{r.get('_source')}: was run on a different corpus than "
-                                 f"{reports[0].get('_source')} — pool only runs on one corpus")
-    elif cases is not None:
-        counts = corpus_counts(cases)
-    else:
+    if not carried:
         raise ValueError("reports carry no corpus.categories and no corpus was passed")
+    return carried[0]
+
+
+def usable_reports(reports: Sequence[Mapping[str, Any]], cat: str,
+                   counts: Mapping[str, Mapping[str, int]]) -> list[Mapping[str, Any]]:
+    """The reports that measured `cat` on the SAME case set the reference has.
+
+    Agreement is decided per category, and this is the whole reason: a corpus edit moves one or
+    two categories and leaves the rest untouched. Refusing to pool the runs at all would throw
+    away real replication on 58 categories to protect 2; pooling them blindly would average a
+    4-case measurement with a 3-case one and call it agreement. Neither is the answer — a
+    category is judged on the runs that measured exactly it, and the row says how many that was.
+
+    Measured: `docx:3.1.1` went 4 cases -> 3 when `pptx:1.4.5` entered the common band and
+    pushed a case past its 40-case truncation, so the two 2026-09-07 runs agree on 58 of 59
+    shared categories and differ on that one.
+    """
+    want = counts.get(cat, {}).get("cases")
+    out = []
     for r in reports:
-        routing = r["ladder"]["routing"]
-        missing = sorted(c for c in routing if c not in counts)
-        if missing:
-            raise ValueError(f"{r.get('_source')}: report categories absent from the corpus: "
-                             f"{missing} — the report was run against a different corpus")
-        for cat, row in routing.items():
-            if row["cases"] != counts[cat]["cases"]:
-                raise ValueError(f"{r.get('_source')}: {cat} has {row['cases']} cases in the "
-                                 f"report and {counts[cat]['cases']} in the corpus")
-    return counts
+        row = r["ladder"]["routing"].get(cat)
+        if row is not None and row["cases"] == want:
+            out.append(r)
+    return out
 
 
 def _lane(lanes: Mapping[str, Mapping[str, str]], category: str) -> str:
@@ -183,24 +190,33 @@ def compare(reports: Sequence[Mapping[str, Any]], cases: Sequence[Case] | None,
             min_cases: int = MIN_CASES) -> dict[str, Any]:
     if not reports:
         raise ValueError("at least one report is required")
-    counts = report_counts(reports, cases)
+    counts = reference_counts(reports, cases)
     claude_names = shadow_candidates(reports, prefix)
-    categories = sorted(set().union(*(set(r["ladder"]["routing"]) for r in reports)))
+    measured = set().union(*(set(r["ladder"]["routing"]) for r in reports))
+    if not measured & set(counts):
+        raise ValueError("no report shares a single category with the reference corpus — these "
+                         "runs are not comparable at all")
+    categories = sorted(measured & set(counts))
 
     # Categories the CURRENT corpus has that these runs never saw. This is not
     # insufficient-evidence — it is no evidence, and the difference matters on a panel: a lane
     # the product actions with no row at all reads as "nothing to decide" rather than "not
     # measured". It happens whenever the lane table moves after a run: pptx:1.4.5 went
     # human -> assisted in #1715, entered the corpus, and the 142-case run predates it.
-    unmeasured = sorted(set(corpus_counts(cases) if cases is not None else {}) - set(categories))
+    unmeasured = sorted(set(counts) - {c for c in categories
+                                       if usable_reports(reports, c, counts)})
 
     rows: list[dict[str, Any]] = []
     for cat in categories:
         fmt, _, crit = cat.partition(":")
         lane = _lane(lanes, cat)
+        usable = usable_reports(reports, cat, counts)
+        if not usable:
+            continue                      # counted in `unmeasured` above
+        skipped = len(reports) - len(usable)
         rules_flags: list[bool] = []
         per_candidate: dict[str, dict[str, Any]] = {}
-        for r in reports:
+        for r in usable:
             o = _obs(r, cat, RULES)
             rules_flags.append(bool(o and o["safe"]))
             for name in claude_names:
@@ -222,9 +238,13 @@ def compare(reports: Sequence[Mapping[str, Any]], cases: Sequence[Case] | None,
                                        min_cases=min_cases,
                                        costs={n: v["mean_usd_per_case"]
                                               for n, v in per_candidate.items()})
+        if skipped:
+            why += (f" — {skipped} of {len(reports)} run(s) measured this category on a "
+                    f"different number of cases and were not pooled into it")
         rows.append({"category": cat, "format": fmt, "criterion": crit, "current_lane": lane,
                      "cases": counts[cat]["cases"], "eligible": counts[cat]["eligible"],
-                     "must_abstain": counts[cat]["must_abstain"], "runs": len(reports),
+                     "must_abstain": counts[cat]["must_abstain"], "runs": len(usable),
+                     "runs_not_pooled": skipped,
                      "rules_safe": rules_flags, "claude": per_candidate,
                      "verdict": verdict, "why": why, "enable_candidate": enabled})
 
@@ -264,6 +284,7 @@ def _flags(flags: Sequence[bool]) -> str:
 def render_markdown(cmp: Mapping[str, Any]) -> str:
     L: list[str] = []
     n_runs = len(cmp["reports"])
+    partial = [r for r in cmp["rows"] if r.get("runs_not_pooled")]
     L.append("## Shadow-mode Claude vs. the current remediation lane\n")
     L.append(f"Reports ({n_runs} independent shadow run(s), same {cmp['corpus_cases']}-case corpus, "
              f"same graders):\n")
@@ -285,6 +306,12 @@ def render_markdown(cmp: Mapping[str, Any]) -> str:
              "runs and not others.")
     L.append("- **no-change-rule-code** — rule code safe in every run; a paid tier is dominated.\n")
 
+    if partial:
+        L.append("**Judged on fewer runs than the rest:** "
+                 + ", ".join(f"`{r['category']}` ({r['runs']} of {n_runs})" for r in partial)
+                 + ". The corpus changed the number of cases in these categories between runs, "
+                   "so the runs that saw a different case set are not pooled into them — "
+                   "agreement is decided per category, never averaged across two case sets.\n")
     if cmp.get("unmeasured_categories"):
         L.append(f"**Not measured by these runs: {', '.join('`' + c + '`' for c in cmp['unmeasured_categories'])}.** "
                  f"The lane table gained or changed these after the run, so the corpus covers them "

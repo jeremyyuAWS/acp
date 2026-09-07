@@ -33,6 +33,7 @@ def test_the_panel_shows_candidate_safety_beside_the_rows_that_recommend_a_tier(
     recommending a tier while hiding what it did."""
     report = json.loads((ROOT / "config/shadow-model-rollout.json").read_text())
     safety = {c["candidate"]: c for c in report["candidate_safety"]}
+    assert report["unmeasured_categories"], "a lane the run never saw must still be listed"
     recommended = {r["enable_candidate"] for r in report["rows"] if r["verdict"] == "enable"}
     assert recommended and recommended <= set(safety), "every recommended tier needs its record"
     sonnet = safety["anthropic:claude-sonnet-5"]
@@ -47,9 +48,13 @@ def test_the_panel_shows_candidate_safety_beside_the_rows_that_recommend_a_tier(
 def test_the_evidence_block_states_the_replication_it_actually_has():
     report = json.loads((ROOT / "config/shadow-model-rollout.json").read_text())
     ev = report["evidence"]
-    assert ev["independent_runs"] == len(ev["source_reports"]) == 1
-    assert ev["corpus_cases"] == 142
-    assert "single run" in ev["replication"].lower()
+    assert ev["independent_runs"] == len(ev["source_reports"]) >= 1
+    # Derived, not pinned: it is the corpus the verdicts are judged against, which grows.
+    import sys
+    sys.path[:0] = [str(ROOT), str(ROOT / "api")]
+    from evals.schema import load_cases
+    assert ev["corpus_cases"] == len(load_cases())
+    assert ("single run" in ev["replication"].lower()) == (ev["independent_runs"] == 1)
 
 
 def test_ai_cost_endpoint_attaches_report_without_fabricating_a_fallback():

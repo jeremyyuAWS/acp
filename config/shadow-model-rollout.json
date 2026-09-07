@@ -42,7 +42,7 @@
     "no-change-rule-code": "Deterministic rule code is safe in every run and remains the lower-cost choice."
   },
   "evidence": {
-    "corpus_cases": 142,
+    "corpus_cases": 143,
     "independent_runs": 1,
     "replication": "Single run: a verdict here rests on one observation of each category, not on agreement between runs.",
     "source_reports": [
@@ -517,42 +517,6 @@
       "runs": 1,
       "verdict": "keep-human-only",
       "why": "no Claude tier verified every eligible case (2 of 2) in any of 1 run(s); current lane is auto"
-    },
-    {
-      "candidates": [
-        {
-          "candidate": "anthropic:claude-haiku-4-5",
-          "mean_usd_per_case": 0.001133499999999999,
-          "mean_varr": 0.3333333333333333,
-          "runs": 1,
-          "safe_runs": 0
-        },
-        {
-          "candidate": "anthropic:claude-opus-5",
-          "mean_usd_per_case": 0.011173333333333332,
-          "mean_varr": 1.0,
-          "runs": 1,
-          "safe_runs": 1
-        },
-        {
-          "candidate": "anthropic:claude-sonnet-5",
-          "mean_usd_per_case": 0.004479333333333335,
-          "mean_varr": 1.0,
-          "runs": 1,
-          "safe_runs": 0
-        }
-      ],
-      "cases": 4,
-      "category": "docx:3.1.1",
-      "criterion": "3.1.1",
-      "current_lane": "auto",
-      "eligible": 3,
-      "enable_candidate": null,
-      "format": "docx",
-      "must_abstain": 0,
-      "runs": 1,
-      "verdict": "no-change-rule-code",
-      "why": "rule code verified every eligible case (3) in all 1 run(s), free; anthropic:claude-opus-5 also safe, dominated at $0"
     },
     {
       "candidates": [
@@ -2180,15 +2144,16 @@
     "enable": 34,
     "insufficient-evidence": 0,
     "keep-human-only": 66,
-    "no-change-rule-code": 42
+    "no-change-rule-code": 38
   },
   "summary_categories": {
     "enable": 11,
     "insufficient-evidence": 0,
     "keep-human-only": 31,
-    "no-change-rule-code": 17
+    "no-change-rule-code": 16
   },
   "unmeasured_categories": [
+    "docx:3.1.1",
     "pptx:1.4.5"
   ]
 }
