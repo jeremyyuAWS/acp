@@ -2,18 +2,21 @@
 
 The gateway's provider abstraction covers the vision path used by `describe_image`,
 `describe_image_structured` and `validate_alt_text`, which funnel through
-`ai._vision_generate`. It also owns the optional Claude text transport used by governed
-remediation pilots; without its Anthropic secret, text falls back to the established local path.
+`ai._vision_generate`. It also owns the optional cloud TEXT transports used by governed
+remediation pilots — Anthropic (Messages API) and OpenAI (chat-completions), selected by
+`active_text_provider` and dispatched by `text_generate`; without a resolved cloud text secret,
+text falls back to the established local path.
 
 A provider is a small object with a uniform `generate(prompt, image_bytes, *, model, timeout)`
 that returns a normalized result dict — never raises, degrades to `ok=False`. `ai.py` keeps the
 prompt building, the honesty/cleaning guard, and the Langfuse+ai_calls trace; the provider owns
 only the transport + its own cost/zone metadata. Callers of `ai.*` are untouched (rule 4).
 
-The shipped selector supports the keyless Ollama floor; six owner-configured cloud adapters
-(Azure OpenAI, OpenAI, Anthropic, Gemini, Bedrock and Hugging Face); and the separately
-configured RunPod Serverless GPU route. Cloud activation requires explicit governance plus a
-resolved secret reference. The assistant never handles a key.
+The shipped selector supports the keyless Ollama floor; six owner-configured cloud vision
+adapters (Azure OpenAI, OpenAI, Anthropic, Gemini, Bedrock and Hugging Face); two cloud text
+transports (Anthropic, OpenAI); and the separately configured RunPod Serverless GPU route.
+Cloud activation requires explicit governance plus a resolved secret reference. The assistant
+never handles a key.
 """
 from __future__ import annotations
 
@@ -28,6 +31,23 @@ from swallowed import swallowed
 # Serverless is a separate deployment-level GPU route, so neither appears in this table.
 CLOUD_PROVIDERS = ("azure_openai", "openai", "anthropic", "gemini", "bedrock", "huggingface")
 
+# ── Cloud TEXT transports (ADR 0019 §1) ───────────────────────────────────────
+# The text lane mirrors the vision one: a vendor transport per provider, one selector
+# (active_text_provider), one dispatcher (text_generate) and one provenance function
+# (text_provider_provenance). Two vendors are implemented — Anthropic's Messages API and
+# OpenAI's chat-completions — because a governed remediation pilot runs on whichever key the
+# owner has provisioned, and a fix whose provenance cannot name the model that produced it is
+# not auditable (ADR 0016).
+#
+# NEITHER TRANSPORT EVER HANDLES A PASTED KEY. Each resolves a REFERENCE that ops or the
+# Settings page provisioned: the ops-provisioned environment secret, or — for OpenAI — the
+# governed provider row's `key_secret_ref`, which is the same env-name-or-`keyvault:` reference
+# the vision adapters resolve through `_resolve_key` (ADR 0019 §6, ADR 0050 write-through).
+# The key rides only in the request header; it is never logged, stored, traced or returned.
+#
+# The text providers this module can transport for. Selection is active_text_provider().
+TEXT_PROVIDERS = ("anthropic", "openai")
+
 # Claude text provider — module-level config so both the text seam below and the
 # vision auto-select in active_vision_provider() share the same source of truth.
 # The key rides only in the x-api-key request header: never logged, stored, or returned.
@@ -35,6 +55,17 @@ CLAUDE_TEXT_MODEL = os.environ.get("CLAUDE_TEXT_MODEL", "claude-haiku-4-5")
 _ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 _ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
 _ANTHROPIC_API_VERSION = "2023-06-01"
+
+# OpenAI text provider. `gpt-4o-mini` is the default because it is the cheap tier already
+# priced in _PRICE_PER_1M below — so the cost on every call is a real per-token measurement
+# rather than an invented one (ADR 0016) — and it is the OpenAI counterpart of the Anthropic
+# default's cheap tier. _OPENAI_TEXT_BASE_URL points the lane at an OpenAI-compatible endpoint
+# (self-hosted or gateway); the zone is DERIVED from it by zone_for_url, so pointing this at
+# your own infrastructure reports 'local' honestly instead of claiming a third party ran it.
+OPENAI_TEXT_MODEL = os.environ.get("OPENAI_TEXT_MODEL", "gpt-4o-mini")
+_OPENAI_KEY = os.environ.get("OPENAI_API_KEY", "")
+_OPENAI_TEXT_BASE_URL = os.environ.get(
+    "OPENAI_TEXT_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 
 
 def claude_text_generate(prompt: str, *, temperature: float = 0.4,
@@ -85,17 +116,180 @@ def claude_text_generate(prompt: str, *, temperature: float = 0.4,
         return None
 
 
+def _openai_text_key() -> str:
+    """The OpenAI key for the TEXT lane, resolved from a REFERENCE — never a pasted value.
+
+    Two references, both of which already exist; this adds no new way to handle a key:
+
+      1. the governed `openai` provider row's `key_secret_ref`, resolved by `_resolve_key`
+         (an environment-variable name, or a `keyvault:` name this product wrote through to the
+         deployment's Key Vault — ADR 0019 §6, ADR 0050). Read ONLY when that row is `enabled`,
+         so a key an admin provisioned for vision cannot start serving text without the admin
+         also enabling the provider;
+      2. otherwise the ops-provisioned `OPENAI_API_KEY` environment secret — the exact mechanism
+         the Anthropic text lane has always used for `ANTHROPIC_API_KEY`.
+
+    Returns "" when neither resolves, which is what keeps the keyless local floor intact.
+    """
+    try:
+        cfg = _config_for("openai")
+        if cfg.get("enabled"):
+            key = _resolve_key(cfg)
+            if key:
+                return key
+    except Exception:
+        swallowed("providers._openai_text_key: resolving the governed OpenAI key reference failed")
+    return _OPENAI_KEY
+
+
+def openai_text_generate(prompt: str, *, temperature: float = 0.4,
+                         max_tokens: int = 800, timeout: float = 30.0,
+                         model: str | None = None) -> dict | None:
+    """Single-turn text completion via OpenAI's chat-completions API.
+
+    The OpenAI half of the text seam: same signature, same normalized return shape and the same
+    never-raises contract as `claude_text_generate`, so `text_generate` can dispatch to either
+    without the caller learning which vendor ran.
+
+    Returns {text, prompt_tokens, completion_tokens, cost_usd, model, provider, zone, host}
+    or None when the key reference does not resolve or the call fails. Never raises."""
+    key = _openai_text_key()
+    if not key:
+        return None
+    import httpx
+    requested_model = model or OPENAI_TEXT_MODEL
+    url = f"{_OPENAI_TEXT_BASE_URL}/chat/completions"
+    try:
+        r = httpx.post(
+            url,
+            json={
+                "model": requested_model,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            # The key rides only in the Authorization header — never in the URL, a log line or
+            # the returned dict.
+            headers={"Authorization": f"Bearer {key}"},
+            timeout=timeout,
+        )
+        r.raise_for_status()
+        data = r.json() or {}
+        choice = (data.get("choices") or [{}])[0]
+        text = ((choice.get("message") or {}).get("content", "") or "").strip()
+        if not text:
+            return None
+        usage = data.get("usage") or {}
+        input_tok = usage.get("prompt_tokens", 0)
+        output_tok = usage.get("completion_tokens", 0)
+        price = _price_for(requested_model)
+        cost_usd = round(input_tok / 1e6 * price[0] + output_tok / 1e6 * price[1], 6) if price else 0.0
+        return {
+            "text": text,
+            "prompt_tokens": input_tok,
+            "completion_tokens": output_tok,
+            "cost_usd": cost_usd,
+            "model": requested_model,
+            "provider": "openai",
+            "zone": zone_for_url(_OPENAI_TEXT_BASE_URL),
+            "host": (urlparse(_OPENAI_TEXT_BASE_URL).hostname or "").lower(),
+        }
+    except Exception:
+        return None
+
+
+def _text_key_for(provider: str) -> str:
+    """One text provider's resolved key, or "" — internal, and the value never leaves this
+    module: `active_text_provider` uses it only to decide whether the provider is usable."""
+    if provider == "anthropic":
+        return _ANTHROPIC_KEY
+    if provider == "openai":
+        return _openai_text_key()
+    return ""
+
+
+def active_text_provider() -> str | None:
+    """Which cloud text provider serves this deployment, or None for the keyless local floor.
+
+    Order, and WHY it is this order:
+
+      1. an explicit selection — the `ai_text_provider` admin setting, else the
+         `ACP_TEXT_PROVIDER` deploy default — used only when that provider's key reference also
+         resolves. This mirrors `active_vision_provider`'s setting-beats-env precedence;
+      2. otherwise Anthropic when `ANTHROPIC_API_KEY` is present. This is the behaviour that
+         shipped, preserved exactly: a deployment that has only the Anthropic secret keeps
+         getting Anthropic text with nothing to reconfigure;
+      3. otherwise None → `ai.suggest_fix` uses the established local path.
+
+    OPENAI TEXT NEEDS THE EXPLICIT SELECTION, not just a key. `OPENAI_API_KEY` is present in
+    environments that run the evals kit and `scripts/judge_drafts.py`, and an enabled `openai`
+    row may exist for VISION only; auto-activating on either would start sending remediation
+    text to a third party that nobody agreed to send it to. Cloud egress is opt-in (ADR 0019
+    constraint 2), so the owner names the text provider and the key is the second half.
+
+    A selection whose key does not resolve degrades to (2) then (3) rather than erroring — a
+    stale selection can never break the local floor."""
+    choice = ""
+    try:
+        import core
+        choice = (core.store.get_setting("ai_text_provider") or "").strip().lower()
+    except Exception:
+        swallowed("providers.active_text_provider: reading the ai_text_provider setting failed")
+    if not choice:
+        choice = os.environ.get("ACP_TEXT_PROVIDER", "").strip().lower()
+    # A name this module has no text transport for (a vision-only provider, a typo) is not an
+    # error: it means "no preference", and the fallbacks below apply.
+    if choice in TEXT_PROVIDERS and _text_key_for(choice):
+        return choice
+    if _ANTHROPIC_KEY:
+        return "anthropic"
+    return None
+
+
+def text_generate(prompt: str, *, temperature: float = 0.4, max_tokens: int = 800,
+                  timeout: float = 30.0, model: str | None = None,
+                  provider: str | None = None) -> dict | None:
+    """The single text seam `ai.py` calls: dispatch to the selected vendor's transport.
+
+    `provider` PINS the call to one vendor and exists for the governed pilot lane, whose model
+    id is vendor-specific (`remediation_pilot.PROVIDER`/`MODEL`): dispatching a Claude model id
+    to OpenAI because OpenAI happens to be the deployment default would be a call that fails, or
+    worse, one whose ai_calls row names a model that never ran. A pinned provider whose key does
+    not resolve returns None, so the caller still degrades to the local path.
+
+    Returns the vendor-neutral result dict, or None. Never raises."""
+    name = (provider or active_text_provider() or "").strip().lower()
+    if name == "openai":
+        return openai_text_generate(prompt, temperature=temperature, max_tokens=max_tokens,
+                                    timeout=timeout, model=model)
+    if name == "anthropic":
+        return claude_text_generate(prompt, temperature=temperature, max_tokens=max_tokens,
+                                    timeout=timeout, model=model)
+    return None
+
+
 def text_provider_provenance() -> dict | None:
     """Return governance provenance for the configured cloud text provider, or None when
-    keyless (Ollama). ai.provenance() calls this so the zone/host are a single source of truth."""
-    if not _ANTHROPIC_KEY:
-        return None
-    return {
-        "provider": "anthropic",
-        "model": CLAUDE_TEXT_MODEL,
-        "zone": "cloud",
-        "host": "api.anthropic.com",
-    }
+    keyless (Ollama). ai.provenance() calls this so the zone/host are a single source of truth.
+
+    It reports whichever provider `active_text_provider` would actually use, so `/config` cannot
+    name one vendor while the next remediation draft is produced by another."""
+    name = active_text_provider()
+    if name == "anthropic":
+        return {
+            "provider": "anthropic",
+            "model": CLAUDE_TEXT_MODEL,
+            "zone": "cloud",
+            "host": "api.anthropic.com",
+        }
+    if name == "openai":
+        return {
+            "provider": "openai",
+            "model": OPENAI_TEXT_MODEL,
+            "zone": zone_for_url(_OPENAI_TEXT_BASE_URL),
+            "host": (urlparse(_OPENAI_TEXT_BASE_URL).hostname or "").lower(),
+        }
+    return None
 
 
 def zone_for_url(base_url: str) -> str:

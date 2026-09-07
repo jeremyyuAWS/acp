@@ -6,7 +6,10 @@ shipped:** model/zone/cost provenance, evidence-based trust states, the append-o
 Settings → **AI Governance**. `api/providers.py` now implements the local Ollama vision
 floor plus six governed cloud vision adapters — Azure OpenAI, OpenAI, Anthropic, Gemini,
 Bedrock and Hugging Face — and a separate RunPod Serverless GPU adapter. The text path can
-use Claude through Anthropic's Messages API for governed remediation pilots. Cloud use remains
+use Claude through Anthropic's Messages API or GPT through OpenAI's chat-completions API for
+governed remediation pilots, selected by `ACP_TEXT_PROVIDER` / the `ai_text_provider` admin
+setting; OpenAI text needs that explicit selection *and* a resolved secret reference, while
+Anthropic activates on its ops-provisioned key as it always has. Cloud use remains
 opt-in: without an enabled provider and a resolved secret, ACP uses the keyless local floor;
 an explicit stored administrator choice overrides the deployment environment. Offline/local-only
 policy remains the hard boundary described below. **Still prospective:** the complete Phase 3
@@ -22,7 +25,7 @@ ACP's callers still enter through the **single gateway module, `api/ai.py`** —
 HITL suggestions and digests do not choose vendors themselves. Transport adapters live behind
 that gateway in `api/providers.py`. The original implementation was Ollama-only; the shipped
 implementation also supports the six governed cloud vision adapters named in the status above,
-RunPod Serverless vision, and opt-in Claude text generation. The default configuration remains
+RunPod Serverless vision, and opt-in Claude or OpenAI text generation. The default configuration remains
 keyless and local-only, and it:
 
 - **returns the model name** on every result (`{"alt", "model": OLLAMA_VISION_MODEL}`),
