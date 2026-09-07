@@ -1,20 +1,19 @@
-"""AI provider adapter seam (ADR 0019 Phase 1, §1).
+"""AI provider adapter seam (ADR 0019, §1).
 
-The gateway's provider abstraction for the VISION path — the one place a cloud model ever
-earns its keep (complex charts a local captioner can't ground, ADR 0019 §3c). Text
-explanations stay local-Ollama-only by design (they need no cloud), so this seam covers
-`describe_image` / `describe_image_structured` / `validate_alt_text`, which all funnel through
-`ai._vision_generate`.
+The gateway's provider abstraction covers the vision path used by `describe_image`,
+`describe_image_structured` and `validate_alt_text`, which funnel through
+`ai._vision_generate`. It also owns the optional Claude text transport used by governed
+remediation pilots; without its Anthropic secret, text falls back to the established local path.
 
 A provider is a small object with a uniform `generate(prompt, image_bytes, *, model, timeout)`
 that returns a normalized result dict — never raises, degrades to `ok=False`. `ai.py` keeps the
 prompt building, the honesty/cleaning guard, and the Langfuse+ai_calls trace; the provider owns
 only the transport + its own cost/zone metadata. Callers of `ai.*` are untouched (rule 4).
 
-Slice 1 ships only the Ollama adapter (keyless, local, $0) wired behind the selector, so
-behaviour is byte-for-byte what the inline call did. Cloud adapters (Azure OpenAI first) drop in
-at `active_vision_provider()` behind the acceptance policy in a later slice — the assistant never
-handles a key; an admin enters it in the product Settings UI and it is stored as a secret ref.
+The shipped selector supports the keyless Ollama floor; six owner-configured cloud adapters
+(Azure OpenAI, OpenAI, Anthropic, Gemini, Bedrock and Hugging Face); and the separately
+configured RunPod Serverless GPU route. Cloud activation requires explicit governance plus a
+resolved secret reference. The assistant never handles a key.
 """
 from __future__ import annotations
 
@@ -25,9 +24,8 @@ from typing import Protocol, runtime_checkable
 from urllib.parse import urlparse
 from swallowed import swallowed
 
-# The cloud providers the gateway knows how to configure. Slice 2 stores config for all of them;
-# slice 3 wires the Azure OpenAI *adapter* first (the enterprise-safe default). Ollama is the
-# built-in local default and needs no key, so it is not in this table.
+# The six owner-governed cloud vision adapters. Ollama is the built-in local default; RunPod
+# Serverless is a separate deployment-level GPU route, so neither appears in this table.
 CLOUD_PROVIDERS = ("azure_openai", "openai", "anthropic", "gemini", "bedrock", "huggingface")
 
 # Claude text provider — module-level config so both the text seam below and the
@@ -1173,13 +1171,12 @@ def cloud_vision_provider() -> VisionProvider | None:
 
 
 def active_vision_provider() -> VisionProvider:
-    """Select the vision provider for this call (ADR 0019 §2 policy router — slice 1 stub).
+    """Select the vision provider for this call through ADR 0019's policy boundary.
 
-    Reads the admin `ai_vision_provider` setting (default 'ollama') and constructs the adapter
-    from `ai`'s current endpoint globals. Only 'ollama' is wired today; any other value falls
-    back to Ollama so an un-provisioned cloud selection can never break the local path. The
-    Azure OpenAI adapter + local-first acceptance policy slot in here next — this function stays
-    the single selection point so no `if provider ==` branching leaks into `ai.py`."""
+    An explicit stored administrator choice overrides the deployment environment. RunPod and
+    each governed cloud adapter are used only when their configuration resolves; otherwise the
+    selector returns the local Ollama floor. This remains the single selection point so vendor
+    branching does not leak into `ai.py`."""
     import ai as _ai
     _ai._maybe_refresh_endpoint()              # honour a runtime endpoint switch before selecting
     base_url = _ai.OLLAMA_BASE_URL
@@ -1223,7 +1220,7 @@ def active_vision_provider() -> VisionProvider:
                 "R2: ACP_VISION_PROVIDER=runpod_serverless but RUNPOD_ENDPOINT_ID is not set "
                 "— endpoint unconfigured. Falling back to local Ollama.",
             )
-    # A configured, enabled cloud provider (Azure OpenAI / OpenAI / Anthropic) is selected here; an
+    # A configured, enabled cloud provider is selected here; an
     # under-configured or unreachable-config selection falls through to the local floor so a stale
     # selection can never break the keyless local path.
     if choice in CLOUD_PROVIDERS:
