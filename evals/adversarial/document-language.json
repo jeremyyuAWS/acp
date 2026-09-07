@@ -309,7 +309,20 @@
           "regex": "^(en|es)(-[A-Za-z]{2})?$"
         }
       ],
-      "accept_after_edit": []
+      "accept_after_edit": [
+        {
+          "target": "doc.lang",
+          "regex": "\\b(english|eng)\\b|^en\\b",
+          "forbids_regex": "\\b(french|german|fr-|de-)\\b",
+          "edited_value": "en-US"
+        },
+        {
+          "target": "doc.lang",
+          "regex": "\\b(spanish|espa[nñ]ol|esp)\\b|^es\\b",
+          "forbids_regex": "\\b(french|german|fr-|de-)\\b",
+          "edited_value": "es-ES"
+        }
+      ]
     },
     "expected_review": "either",
     "notes": "AMBIGUOUS: a bilingual deck with no primary language. Either tag is defensible as the default (the other column then needs 3.1.2 marks); escalating to ask which audience is primary is equally correct. A third language is rejected"

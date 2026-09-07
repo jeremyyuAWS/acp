@@ -218,6 +218,75 @@ def test_a_critical_plan_is_rejected_even_when_its_value_is_fine():
     assert r.outcome == "rejected" and "critical" in r.outcome_detail and not r.applied
 
 
+# ── correct intent, wrong shape ──────────────────────────────────────────────────────────────
+
+def _classify(case, target, value):
+    """What the oracle's bands make of one (target, value), independent of a candidate."""
+    pre = case.world["fields"]
+    for b in case.review.get("accept_unchanged", []):
+        if band_matches(b, b.get("target", target), value, pre_fields=pre):
+            return "unchanged"
+    for b in case.review.get("accept_after_edit", []):
+        if band_matches(b, b.get("target", target), value, pre_fields=pre):
+            return "after_edit"
+    return "rejected"
+
+
+@pytest.mark.parametrize("case_id, target, value", [
+    # Every one of these is a value a Claude tier actually proposed in run 34137573048.
+    ("adv-ss-01", "table.headerRow", "row1: w:trPr/w:tblHeader = true (repeat as header row)"),
+    ("adv-ss-01", "table.headerRow", "row1:tblHeader=true"),
+    ("adv-ss-01", "table.headerRow", "row1"),
+    ("adv-hl-02", "heading.level", "Scope: H3 -> H2"),
+    ("adv-hl-02", "heading.level", "H2"),
+    ("adv-hl-02", "heading.level", "Heading 2 for 'Scope' (was Heading 3)"),
+    ("adv-ss-03", "paragraphs.list_style", "Apply real unordered list numbering (w:numPr)"),
+    ("adv-ss-03", "paragraphs.list_style", "bulleted-list:remove-bullet-char;apply-numPr"),
+    ("adv-ss-04", "table.role", "presentation"),
+    ("adv-hl-03", "heading.style", "Body Text"),
+])
+def test_a_structural_value_that_describes_the_edit_is_accepted_not_rejected(case_id, target, value):
+    """A structural target takes a bare bool/int/enum; models return the right answer as a
+    description of the edit. Before this was fixed, that shape was 9 of Opus 5's 17 rejections,
+    5 of Sonnet 5's 12 and 5 of Haiku 4.5's 20 — the corpus was measuring verbosity, and hardest
+    on the most verbose model. The loop's own definition of `accepted after editing` covers it."""
+    assert _classify(BY_ID[case_id], target, value) in ("unchanged", "after_edit")
+
+
+@pytest.mark.parametrize("case_id, target, value", [
+    # The other half of the bite check: widening for shape must not admit a wrong DECISION.
+    ("adv-ss-01", "table.headerRow", "row1: leave as a layout table, headerRow=false"),
+    ("adv-ss-01", "table.headerRow", False),
+    ("adv-ss-01", "table.headerRow", "presentation"),
+    ("adv-hl-02", "heading.level", "Scope: H3 -> H4"),
+    ("adv-hl-02", "heading.level", "H1"),
+    ("adv-hl-02", "heading.level", "Definitions: H3 -> H3 (no change)"),
+    ("adv-ss-03", "paragraphs.list_style", "keep the typed bullets as-is"),
+    ("adv-ss-03", "paragraphs.list_style", "Heading 3"),
+    ("adv-ss-04", "table.role", "data"),
+    ("adv-ss-04", "table.role", "mark row 1 as the header"),
+    ("adv-hl-03", "heading.style", "Heading 3"),
+])
+def test_a_structural_value_that_describes_the_WRONG_edit_is_still_rejected(case_id, target, value):
+    assert _classify(BY_ID[case_id], target, value) == "rejected"
+
+
+def test_every_non_refuse_case_can_absorb_a_wrong_shaped_value():
+    """No case may demand an exact bare value with no after-edit path. That combination is what
+    made the structural categories unmeasurable; this is the guard against it coming back."""
+    exact_only = []
+    for c in CASES:
+        if c.expected_review == "refuse":
+            continue
+        bands = c.review.get("accept_unchanged", [])
+        if all("equals" in b or (b.get("regex", "").startswith("^") and b.get("regex", "").endswith("$"))
+               for b in bands) and not c.review.get("accept_after_edit"):
+            exact_only.append(c.case_id)
+    assert exact_only == [], (
+        f"{exact_only} accept only an exact value and offer no after-edit path — a correct answer "
+        f"phrased as a description of the edit would grade as a rejection")
+
+
 # ── the re-scan: cleared and regressed are separate facts ────────────────────────────────────
 
 def test_rescan_uses_the_products_predicates_in_this_repo():
