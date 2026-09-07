@@ -144,6 +144,10 @@ export default function CapacityScheduleEditor({
     [overrideMode, setOverrideMode] = useState("business_hours"),
     [overrideDuration, setOverrideDuration] = useState("1h");
   const validationSequence = useRef(0);
+  const dialogRef = useRef(null);
+  useEffect(() => {
+    dialogRef.current?.focus();
+  }, []);
   const scheduleDirty = JSON.stringify(draft) !== JSON.stringify(original);
   const dirty = scheduleDirty || !!reason;
   const timezoneChoices = useMemo(
@@ -228,7 +232,7 @@ export default function CapacityScheduleEditor({
           );
         }
         setReason("");
-        onSaved?.();
+        onSaved?.(`Schedule version ${r?.version ?? snap.version + 1} saved as a draft.`);
       })
       .catch(() =>
         setError(
@@ -249,7 +253,7 @@ export default function CapacityScheduleEditor({
     setBusy(true);
     setError(null);
     applyCapacitySchedule({ version: snap.version, reason })
-      .then(() => onSaved?.())
+      .then(() => onSaved?.("Saved schedule sent to Azure; verification is in progress."))
       .catch((failure) => {
         const outcomes = failure?.detail?.application?.apps || [];
         const changed = outcomes
@@ -267,6 +271,13 @@ export default function CapacityScheduleEditor({
     if (!dirty || window.confirm("Discard your unsaved schedule changes?"))
       onClose?.();
   };
+  useEffect(() => {
+    const escape = (event) => {
+      if (event.key === "Escape" && !busy) close();
+    };
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
+  }, [busy, dirty]); // eslint-disable-line react-hooks/exhaustive-deps
   const override = () => {
     setBusy(true);
     createCapacityOverride({
@@ -277,7 +288,7 @@ export default function CapacityScheduleEditor({
     })
       .then((r) => {
         if (r?.detail) setError(String(r.detail));
-        else onSaved?.();
+        else onSaved?.("Temporary override saved; Azure verification is in progress.");
       })
       .catch(() =>
         setError("The override could not be created. Nothing was changed."),
@@ -287,7 +298,7 @@ export default function CapacityScheduleEditor({
   const endOverride = () => {
     setBusy(true);
     deleteCapacityOverride()
-      .then(() => onSaved?.())
+      .then(() => onSaved?.("Temporary override ended; the saved schedule is being restored."))
       .catch(() => setError("The override could not be ended."))
       .finally(() => setBusy(false));
   };
@@ -295,6 +306,10 @@ export default function CapacityScheduleEditor({
   if (initialView === "override")
     return (
       <section
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="false"
+        tabIndex={-1}
         className="panel"
         aria-labelledby="override-title"
         style={{ padding: 16, display: "grid", gap: 14 }}
@@ -312,12 +327,13 @@ export default function CapacityScheduleEditor({
             </div>
           </div>
           {onClose && (
-            <button className="ghost" onClick={onClose}>
+            <button type="button" className="ghost" onClick={onClose}>
               Close
             </button>
           )}
         </header>
-        {error && <div role="alert">{error}</div>}
+        {busy && <div role="status" aria-live="polite">Saving scheduling change…</div>}
+        {error && <div id="override-error" role="alert">{error}</div>}
         {(!snap.application_configured || !snap.applied) && !snap.override && (
           <div role="note" className="muted">
             Temporary overrides are unavailable until this schedule is applied and Azure capacity application is enabled.
@@ -331,9 +347,9 @@ export default function CapacityScheduleEditor({
               {new Intl.DateTimeFormat([], {
                 dateStyle: "medium",
                 timeStyle: "short",
-                timeZone: snap.timezone,
+                timeZone: userTimezone,
               }).format(new Date(snap.override.expires_at))}{" "}
-              ({snap.timezone}).
+              ({userTimezone}, your timezone).
             </p>
             <p className="muted">
               Reason: {snap.override.reason}. Schedule version{" "}
@@ -393,6 +409,7 @@ export default function CapacityScheduleEditor({
                         max={draft.maximums[service]}
                         value={draft.business_hours[service] ?? ""}
                         aria-invalid={!!errors[service]}
+                        aria-describedby={errors[service] ? "override-capacity-error" : undefined}
                         style={{ ...ctl, width: "100%" }}
                         onChange={(e) =>
                           count("business_hours", service, e.target.value)
@@ -404,6 +421,7 @@ export default function CapacityScheduleEditor({
                 <small className="muted">
                   Each value must stay within the saved schedule maximum.
                 </small>
+                {Object.keys(errors).length > 0 && <small id="override-capacity-error" role="alert">Custom floors must be whole numbers within the saved maximums.</small>}
               </fieldset>
             )}
             <label>
@@ -426,6 +444,7 @@ export default function CapacityScheduleEditor({
               <input
                 id="ov-reason"
                 value={overrideReason}
+                aria-required="true"
                 style={{ ...ctl, width: "100%" }}
                 onChange={(e) => setOverrideReason(e.target.value)}
               />
@@ -454,6 +473,10 @@ export default function CapacityScheduleEditor({
 
   return (
     <section
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="false"
+      tabIndex={-1}
       className="panel"
       aria-labelledby="editor-title"
       style={{ padding: 16, display: "grid", gap: 16 }}
@@ -470,7 +493,7 @@ export default function CapacityScheduleEditor({
           </div>
         </div>
         {onClose && (
-          <button className="ghost" onClick={close}>
+          <button type="button" className="ghost" onClick={close}>
             Close
           </button>
         )}
@@ -505,6 +528,7 @@ export default function CapacityScheduleEditor({
           {error}
         </div>
       )}
+      {busy && <div role="status" aria-live="polite">Saving or checking the schedule…</div>}
       {step === 0 && (
         <div style={{ display: "grid", gap: 14 }}>
           <div>

@@ -86,4 +86,24 @@ describe('scheduling control accessibility contract', () => {
     expect(confirm).toHaveBeenCalled()
     expect(calls.override).toBe(0)
   })
+
+  it('exposes an inline dialog, moves focus into it, and closes it with Escape', async () => {
+    const onClose = vi.fn()
+    const host = await render({ onClose })
+    const dialog = host.querySelector('[role="dialog"]')
+    expect(dialog.getAttribute('aria-labelledby')).toBe('editor-title')
+    expect(document.activeElement).toBe(dialog)
+    await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })))
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  it('connects custom override validation to its fields and marks the reason required', async () => {
+    const host = await render({ initialView: 'override' })
+    change(host.querySelector('#ov-mode'), 'custom')
+    change(host.querySelector('#ov-assess'), '11')
+    expect(host.querySelector('#ov-assess').getAttribute('aria-invalid')).toBe('true')
+    expect(host.querySelector('#ov-assess').getAttribute('aria-describedby')).toBe('override-capacity-error')
+    expect(host.querySelector('#override-capacity-error').getAttribute('role')).toBe('alert')
+    expect(host.querySelector('#ov-reason').getAttribute('aria-required')).toBe('true')
+  })
 })
