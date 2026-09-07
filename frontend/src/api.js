@@ -1165,6 +1165,14 @@ export const getFileRemediationState = (scanId, file) => (SIM
   ? sim([])
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/files/${encodeURIComponent(file)}/remediation-state`,
           { headers: headers() }).then(j))
+// The backend owns primary-reason precedence and integrity; callers render this response and
+// must not recreate its classification in the browser.
+export const previewRemediationAutomationPolicy = (findings, level) => (SIM
+  ? Promise.resolve(null)
+  : fetch(`${BASE}/remediation/automation-policy/preview`, {
+      method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ findings, level }),
+    }).then(j))
 // Platform settings (admin) — includes ADR 0010's Drive-mirror on/off + folder name.
 // SIM has no backend, so this is a browser-local store rather than a fresh literal each read,
 // and every answer it gives carries `simulated: true`. That flag is not decoration: see

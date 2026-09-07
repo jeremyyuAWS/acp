@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AUTOMATION_LEVELS, DEFAULT_AUTOMATION_LEVEL, automationForecast, automationLevel } from './automationPolicy.js'
+import WhyFindingsStayWithPeople from './WhyFindingsStayWithPeople.jsx'
 import './automation-policy.css'
 
 const storageKey = (runId) => `acp.remediation.automation-preview.${runId || 'current'}`
@@ -14,7 +15,7 @@ const CATEGORY_COPY = {
   rejected: ['Previously rejected', 'A reviewer already rejected the proposed fix'],
 }
 
-export default function AutomationPolicyControl({ findings = [], runId = null }) {
+export default function AutomationPolicyControl({ findings = [], runId = null, policyPreview = null }) {
   const [level, setLevel] = useState(() => {
     try {
       const saved = Number(sessionStorage.getItem(storageKey(runId)))
@@ -99,7 +100,7 @@ export default function AutomationPolicyControl({ findings = [], runId = null })
             </div>
           </div>
 
-          {forecast.humanCategories.length > 0 && (
+          {!policyPreview && forecast.humanCategories.length > 0 && (
             <details className="automation-policy__breakdown">
               <summary>Why {human} findings stay with people</summary>
               <div className="automation-policy__categories">
@@ -118,6 +119,7 @@ export default function AutomationPolicyControl({ findings = [], runId = null })
               </div>
             </details>
           )}
+          {policyPreview && <WhyFindingsStayWithPeople preview={policyPreview} />}
         </div>
       ) : (
         <p className="automation-policy__empty">No open review findings are available to preview for this run.</p>

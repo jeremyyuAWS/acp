@@ -1,0 +1,13 @@
+{
+  "level": 3,
+  "findings": [
+    {"id": "a", "file": "guide.docx", "criterion": "1.4.3", "format": "docx", "lane": "automatic"},
+    {"id": "b", "file": "guide.docx", "criterion": "2.4.4", "format": "docx", "lane": "review", "primary_reason": "confidence_below_threshold"},
+    {"id": "c", "file": "deck.pptx", "criterion": "1.1.1", "format": "pptx", "lane": "protected", "primary_reason": "subjective_decision"},
+    {"id": "d", "file": "report.pdf", "criterion": "1.3.1", "format": "pdf", "lane": "review", "evidence_complete": false},
+    {"id": "e", "file": "sheet.xlsx", "criterion": "1.3.1", "format": "xlsx", "lane": "review", "remediation_supported": false},
+    {"id": "f", "file": "unsafe.pdf", "criterion": "1.3.2", "format": "pdf", "lane": "protected", "safety_rule": true},
+    {"id": "g", "file": "failed.docx", "criterion": "3.1.1", "format": "docx", "lane": "protected", "verification_failed": true},
+    {"id": "h", "file": "unknown.bin", "criterion": null, "format": null, "lane": "protected"}
+  ]
+}

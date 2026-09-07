@@ -171,6 +171,9 @@ _map_many([
     ("POST", "/admin/activity/workflows/{scan_id}/stages/remediate/resume"),
 ], {"remediate.run"})
 _map_many([
+    # POST because the preview evaluates an unsaved slider payload; it is still a read-only
+    # calculation and grants no permission to execute remediation.
+    ("POST", "/remediation/automation-policy/preview"),
     ("GET", "/scans/{sid}/remediation-status"),
     # The reconciled run snapshot reads the same run as remediation-status and carries strictly
     # more of it — filenames, SharePoint site and library names, the run's own state — so it takes
