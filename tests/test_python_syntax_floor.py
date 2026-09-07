@@ -17,6 +17,7 @@ drift from the thing it models without saying so.
 from __future__ import annotations
 
 import io
+import shutil
 import subprocess
 import sys
 import tokenize
@@ -159,18 +160,33 @@ def test_the_detector_matches_the_measured_grammar(name):
         f"{name}: {source!r} -> {offending_fstrings(source)}")
 
 
+def _floor_interpreter(name: str = FLOOR_PYTHON) -> str | None:
+    """Path to a real `name` on this machine, or None.
+
+    `shutil.which` rather than a subprocess probe. `subprocess.run` RAISES FileNotFoundError for
+    a missing executable instead of returning a non-zero code, so a returncode check never runs
+    on the machine that lacks the interpreter — which is precisely the machine the check exists
+    for. Shipped that way once and CI, which has no python3.11, errored where it should have
+    skipped; test_a_missing_floor_interpreter_is_reported_not_raised is the guard for it.
+    """
+    return shutil.which(name)
+
+
+def test_a_missing_floor_interpreter_is_reported_not_raised():
+    assert _floor_interpreter("python3.11-definitely-not-installed") is None
+
+
 def test_the_detector_agrees_with_a_real_311():
     """The reimplementation is held to the interpreter it models. Skips where no 3.11 exists —
     including CI, which pins 3.12 — so this is a developer-machine check, and the parametrized
     table above is what actually runs everywhere."""
-    probe = subprocess.run([FLOOR_PYTHON, "-c", "import sys; print(sys.version_info[:2])"],
-                           capture_output=True, text=True)
-    if probe.returncode != 0:
+    interpreter = _floor_interpreter()
+    if interpreter is None:
         pytest.skip(f"no {FLOOR_PYTHON} on this machine")
     disagreed = []
     for name, (source, _expected) in sorted(_FORMS.items()):
         real = subprocess.run(
-            [FLOOR_PYTHON, "-c", "import ast,sys; ast.parse(sys.stdin.read())"],
+            [interpreter, "-c", "import ast,sys; ast.parse(sys.stdin.read())"],
             input=source, capture_output=True, text=True)
         really_rejected = real.returncode != 0
         if bool(offending_fstrings(source)) != really_rejected:
