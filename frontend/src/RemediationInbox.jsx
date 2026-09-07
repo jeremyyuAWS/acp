@@ -144,7 +144,7 @@ function QueueRow({ f, decisions, selected, onSelect, showFile = true }) {
             <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.02em',
                            background: 'var(--surface-2,#f0eef3)', color: 'var(--ink,#2a2340)',
                            borderRadius: 5, padding: '1px 6px',
-                           fontFamily: 'var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace)' }}>
+                           fontFamily: 'var(--font-mono)' }}>
               {r.sc}
             </span>
           )}
@@ -235,7 +235,7 @@ function ClusterRow({ row, shown, decisions, selectedId, onSelect, expanded, onT
                 <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.02em',
                                background: 'var(--surface-2,#f0eef3)', color: 'var(--ink,#2a2340)',
                                borderRadius: 5, padding: '1px 6px',
-                               fontFamily: 'var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace)' }}>
+                               fontFamily: 'var(--font-mono)' }}>
                   {row.sc}
                 </span>
               )}

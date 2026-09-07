@@ -75,7 +75,7 @@ const cap1 = (s) => s.charAt(0).toUpperCase() + s.slice(1)
 
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`
 
-const fname = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12.5 }
+const fname = { fontFamily: 'var(--font-mono)', fontSize: 12.5 }
 const numCell = { fontVariantNumeric: 'tabular-nums', fontWeight: 700, textAlign: 'left' }
 const subline = { fontSize: 11, marginTop: 2, lineHeight: 1.45 }
 

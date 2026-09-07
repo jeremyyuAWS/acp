@@ -41,7 +41,7 @@ const SEV_TAG_FG = { ...SEV_FG, MINOR: 'var(--muted)', UNKNOWN: 'var(--muted)' }
 
 const kicker = { fontSize: 11.5, letterSpacing: '.07em', textTransform: 'uppercase',
                  color: 'var(--muted)', fontWeight: 600 }
-const mono = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }
+const mono = { fontFamily: 'var(--font-mono)' }
 const bigNum = { fontSize: 22, fontWeight: 700, marginTop: 3, fontVariantNumeric: 'tabular-nums' }
 
 // The three fix modes, and the only three sentences this screen says about them.

@@ -66,9 +66,9 @@ export default function CanonicalStageCard({ snapshot, onOpen = null }) {
       </details>}
 
       <dl style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 20px', margin: '10px 0 0' }}>
-        <div><dt className="muted">Execution</dt><dd style={{ margin: 0 }}>{model.executionId || 'Not reported'}</dd></div>
-        <div><dt className="muted">Sealed output</dt><dd style={{ margin: 0 }}>{model.manifestId || 'Not yet sealed'}</dd></div>
-        <div><dt className="muted">Last durable update</dt><dd style={{ margin: 0 }}>{model.lastUpdatedAt || 'Not reported'}</dd></div>
+        <div><dt className="muted">Execution</dt><dd className="machine-value" style={{ margin: 0 }}>{model.executionId || 'Not reported'}</dd></div>
+        <div><dt className="muted">Sealed output</dt><dd className="machine-value" style={{ margin: 0 }}>{model.manifestId || 'Not yet sealed'}</dd></div>
+        <div><dt className="muted">Last durable update</dt><dd className="machine-value" style={{ margin: 0 }}>{model.lastUpdatedAt || 'Not reported'}</dd></div>
       </dl>
 
       <p className="muted" style={{ margin: '8px 0 0', fontSize: 12 }}>

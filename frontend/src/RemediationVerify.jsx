@@ -29,7 +29,7 @@ const card = { border: '1px solid var(--line)', borderRadius: 12, padding: '12px
 const lab = { fontSize: 11.5, color: 'var(--muted)', lineHeight: 1.35 }
 const val = { fontSize: 26, fontWeight: 700, fontVariantNumeric: 'tabular-nums', marginTop: 5, lineHeight: 1 }
 const sub = { fontSize: 11.5, color: 'var(--muted)', marginTop: 5, lineHeight: 1.45 }
-const mono = { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 12 }
+const mono = { fontFamily: 'var(--font-mono)', fontSize: 12 }
 const th = { textAlign: 'left', color: 'var(--muted)', fontWeight: 600, fontSize: 11,
              letterSpacing: '.04em', textTransform: 'uppercase', padding: '0 12px 8px 0' }
 const td = { padding: '9px 12px 9px 0', borderTop: '1px solid var(--line)', fontSize: 12.5,

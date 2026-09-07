@@ -295,7 +295,7 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
                   <div className="muted" style={{ marginBottom: 4 }}>Processing now</div>
                   {cur ? (
                     <>
-                      {cur.file && <strong style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>{cur.file}</strong>}
+                      {cur.file && <strong style={{ fontFamily: 'var(--font-mono)' }}>{cur.file}</strong>}
                       <ul aria-live="polite" style={{ margin: '6px 0 0', paddingLeft: 20 }}>
                         {activityLines(cur, completed, total, processing).map((line) => <li key={line}>{line}</li>)}
                       </ul>

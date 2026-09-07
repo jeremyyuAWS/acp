@@ -839,7 +839,7 @@ export default function Monitor({ run, scanList = [], sources = [], files = [], 
             saved no scan, so every figure on this page still describes the previous scan
             {schedLastAt ? <> from <b>{new Date(schedLastAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</b></> : null}.
             {lastSweep.error && (
-              <div style={{ marginTop: 6, fontSize: 12, fontFamily: 'ui-monospace, monospace', opacity: 0.85, wordBreak: 'break-word' }}>
+              <div style={{ marginTop: 6, fontSize: 12, fontFamily: 'var(--font-mono)', opacity: 0.85, wordBreak: 'break-word' }}>
                 {lastSweep.error}
               </div>
             )}

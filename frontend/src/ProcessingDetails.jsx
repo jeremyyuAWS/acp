@@ -131,7 +131,7 @@ export default function ProcessingDetails({ files, processing = 0, defaultOpen =
               return (
                 <tr key={r.file}>
                   <td style={{ ...cell, maxWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    <span style={{ fontFamily: 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace', fontSize: 11.5 }}
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5 }}
                           title={r.file}>{name}</span>
                     {r.folder && (
                       <div style={{ fontSize: 10.5, color: '#8891A3', marginTop: 1, overflow: 'hidden',

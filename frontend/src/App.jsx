@@ -2138,7 +2138,7 @@ export default function App() {
               check, "no workers available" — has no attempt-specific id to show and this is
               correctly omitted rather than showing an id that isn't the failed attempt's own. */}
           {liveScanId && (
-            <div style={{ fontWeight: 400, fontSize: 11.5, marginTop: 3, fontFamily: 'monospace' }}>
+            <div style={{ fontWeight: 400, fontSize: 11.5, marginTop: 3, fontFamily: 'var(--font-mono)' }}>
               Scan ID: {liveScanId}
             </div>
           )}
