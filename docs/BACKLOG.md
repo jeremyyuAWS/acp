@@ -683,10 +683,12 @@ thing the PRD does not mention.
   validation from transport success. Remaining: link model-call IDs to those reviewer and
   validation outcomes, then add criterion-level comparison and rollout gates.
 
-  **Conformance provenance slice implemented:** the immutable certification PDF now carries the
+  **Conformance and Release provenance slices implemented:** the immutable certification PDF now carries the
   same exact provider/model/zone rows with measured success/failure and latency, and states that
-  call completion is not evidence of reviewer acceptance or post-write validation. Release UI
-  provenance and outcome linkage remain open.
+  call completion is not evidence of reviewer acceptance or post-write validation. Release's
+  final review step now shows the same exact recorded provenance, scoped to the files selected for
+  that release, including measured calls, success/failure, mean latency and spend. Outcome linkage
+  remains open.
 
 ### From the PRD, deliberately not scheduled
 
