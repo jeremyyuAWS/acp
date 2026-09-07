@@ -58,20 +58,24 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
                key={`${stage}:${snapshot?.execution_id || snapshot?.revision || 'locked'}`}>
             {locked ? <div className="workflow-stage-stack__summary" aria-disabled="true">
               <span className="workflow-stage-stack__check" aria-hidden="true">·</span>
-              <span><b>{LABELS[stage]}</b> · Locked</span>
-              <span className="workflow-stage-stack__ownership">Not started</span>
+              <span className="workflow-stage-stack__label"><b>{LABELS[stage]}</b> · Locked</span>
+              <span className="workflow-stage-stack__meta">
+                <span className="workflow-stage-stack__ownership">Not started</span>
+              </span>
             </div> : <button type="button" className="workflow-stage-stack__summary"
                     aria-expanded={open} aria-controls={bodyId}
                     onClick={() => setOverrides((value) => ({ ...value, [stage]: !open }))}>
               <span className="workflow-stage-stack__check" aria-hidden="true">
                 {attention ? '!' : snapshot.state === 'succeeded' ? '✓' : '•'}
               </span>
-              <span><b>{model.stageLabel}</b> · {model.stateLabel}</span>
-              <span className="muted workflow-stage-stack__count">{primaryOutcome(model)}</span>
-              <LiveHeartbeatBars measuredAt={receivedAt} stage={stage}
-                historyKey={`${snapshot.workflow_id || lineage?.workflow_id || 'workflow'}:${snapshot.execution_id || stage}`}
-                terminal={terminal(snapshot.state)} showText />
-              <span className="workflow-stage-stack__ownership">{isCurrent ? 'Current' : ''}</span>
+              <span className="workflow-stage-stack__label"><b>{model.stageLabel}</b> · {model.stateLabel}</span>
+              <span className="workflow-stage-stack__meta">
+                <span className="muted workflow-stage-stack__count">{primaryOutcome(model)}</span>
+                <LiveHeartbeatBars measuredAt={receivedAt} stage={stage}
+                  historyKey={`${snapshot.workflow_id || lineage?.workflow_id || 'workflow'}:${snapshot.execution_id || stage}`}
+                  terminal={terminal(snapshot.state)} showText />
+                {isCurrent && <span className="workflow-stage-stack__ownership">Current</span>}
+              </span>
               <span className="workflow-stage-stack__affordance" aria-hidden="true">{open ? '−' : '+'}</span>
             </button>}
             {!locked && <div id={bodyId} className="workflow-stage-stack__body" hidden={!open}>
