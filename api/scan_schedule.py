@@ -11,6 +11,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 DAYS = tuple(range(7))  # Monday=0, matching datetime.weekday() and the HTTP contract.
+DEFAULT_CATCH_UP = timedelta(days=7)
 
 
 class ScheduleError(ValueError):
@@ -92,6 +93,53 @@ def due_occurrence(schedule: dict, now: datetime, *, grace: timedelta = timedelt
             "scheduled_for": instant.isoformat(),
             "local_date": local_day.isoformat(),
         }
+    return None
+
+
+def due_or_most_recent_occurrence(
+        schedule: dict, now: datetime, *, grace: timedelta = timedelta(minutes=5),
+        catch_up: timedelta = DEFAULT_CATCH_UP) -> dict | None:
+    """Return the on-time occurrence or at most one newest missed occurrence.
+
+    Catch-up is bounded both by ``catch_up`` and by the schedule's ``updated_at``. The latter
+    prevents enabling a schedule after today's chosen time from manufacturing a historic run.
+    A durable occurrence key makes repeated scheduler ticks harmless.
+    """
+    current = due_occurrence(schedule, now, grace=grace)
+    if current:
+        return {**current, "catch_up": False}
+    if not schedule.get("enabled"):
+        return None
+    days = normalize_days(schedule.get("days"))
+    if not days or catch_up <= timedelta(0):
+        return None
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    now = now.astimezone(timezone.utc)
+    floor = now - catch_up
+    updated_at = schedule.get("updated_at")
+    if updated_at:
+        try:
+            saved = datetime.fromisoformat(str(updated_at).replace("Z", "+00:00"))
+            if saved.tzinfo is None:
+                saved = saved.replace(tzinfo=timezone.utc)
+            floor = max(floor, saved.astimezone(timezone.utc))
+        except (TypeError, ValueError):
+            return None  # corrupt state must not manufacture background work
+    tz_name = str(schedule.get("timezone") or "UTC")
+    local_today = now.astimezone(zone(tz_name)).date()
+    for offset in range(8):
+        day = local_today - timedelta(days=offset)
+        if day.weekday() not in days:
+            continue
+        instant = occurrence_instant(day, str(schedule.get("local_time")), tz_name)
+        if floor <= instant <= now:
+            return {
+                "occurrence_key": occurrence_key(schedule, day),
+                "scheduled_for": instant.isoformat(),
+                "local_date": day.isoformat(),
+                "catch_up": True,
+            }
     return None
 
 

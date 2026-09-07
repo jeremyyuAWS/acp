@@ -1541,13 +1541,26 @@ def _enqueue_scheduled_scan(now=None) -> bool:
                  if hasattr(st, "list_enabled_user_scan_schedules") else [])
     admitted = False
     for cfg in schedules:
-        due = _scan_schedule.due_occurrence(cfg, instant)
+        due = _scan_schedule.due_or_most_recent_occurrence(cfg, instant)
         if not due:
             continue
         payload = {**due, "owner_email": cfg["owner_email"],
                    "source": cfg.get("source") or "drive",
                    "timezone": cfg["timezone"], "local_time": cfg["local_time"]}
-        admitted = st.enqueue_scheduled_sweep(due["occurrence_key"], payload) or admitted
+        run_after = None
+        if due.get("catch_up"):
+            # A fleet restart can recover many tenants at once. Spread catch-up admissions over
+            # five minutes with stable owner-based jitter; normal on-time scans remain immediate.
+            import hashlib as _hashlib
+            digest = _hashlib.sha256(cfg["owner_email"].lower().encode()).hexdigest()
+            delay = int(digest[:8], 16) % 300
+            run_after = (instant + _dt.timedelta(seconds=delay)).isoformat()
+        if run_after:
+            accepted = st.enqueue_scheduled_sweep(
+                due["occurrence_key"], payload, run_after=run_after)
+        else:
+            accepted = st.enqueue_scheduled_sweep(due["occurrence_key"], payload)
+        admitted = accepted or admitted
     if schedules:
         return admitted
 

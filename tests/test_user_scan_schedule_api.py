@@ -28,7 +28,8 @@ def test_store_keeps_user_schedules_isolated_and_lists_only_enabled(isolated_sto
     assert isolated_store.get_user_scan_schedule("nobody@example.com") == {
         "owner_email": "nobody@example.com", "enabled": False, "timezone": "UTC",
         "local_time": "09:00", "days": [0, 1, 2, 3, 4], "source": "drive",
-        "updated_at": None,
+        "updated_at": None, "last_enqueued_occurrence": None,
+        "metrics": {"scheduled": 0, "delayed": 0, "skipped": 0, "failed": 0},
     }
     assert [row["owner_email"] for row in isolated_store.list_enabled_user_scan_schedules()] == [
         "alice@example.com"]
@@ -70,12 +71,37 @@ def test_route_does_not_expose_another_users_sweep_outcome(isolated_store, monke
     import routes.system as system
 
     monkeypatch.setattr(system.core, "store", isolated_store)
+    isolated_store.save_user_scan_schedule(
+        "alice@example.com", True, "UTC", "09:00", [0, 1, 2, 3, 4])
     isolated_store.record_sweep_outcome(
         ok=False, when="2026-09-07T12:00:00+00:00", source="drive",
         error="alice-only failure", owner="alice@example.com")
 
     assert system.schedule(_Request("alice@example.com"))["last_sweep"]["ok"] is False
     assert system.schedule(_Request("bob@example.com"))["last_sweep"] is None
+    assert system.schedule(_Request("alice@example.com"))["metrics"]["failed"] == 1
+
+
+def test_schedule_metrics_count_admission_catch_up_skip_and_failure(isolated_store):
+    isolated_store.save_user_scan_schedule(
+        "alice@example.com", True, "UTC", "09:00", [0, 1, 2, 3, 4])
+    assert isolated_store.enqueue_scheduled_sweep(
+        "alice:on-time", {"owner_email": "alice@example.com", "catch_up": False}) is True
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "UPDATE jobs SET status='done' WHERE scheduled_owner=%s", ("alice@example.com",))
+    assert isolated_store.enqueue_scheduled_sweep(
+        "alice:catch-up", {"owner_email": "alice@example.com", "catch_up": True}) is True
+    isolated_store.record_sweep_outcome(
+        ok=True, when="2026-09-07T12:00:00+00:00", source="drive", skipped=True,
+        owner="alice@example.com")
+    isolated_store.record_sweep_outcome(
+        ok=False, when="2026-09-08T12:00:00+00:00", source="drive", error="unavailable",
+        owner="alice@example.com")
+
+    assert isolated_store.get_user_scan_schedule("alice@example.com")["metrics"] == {
+        "scheduled": 2, "delayed": 1, "skipped": 1, "failed": 1,
+    }
 
 
 def test_authenticated_schedule_status_does_not_use_another_users_scan(
