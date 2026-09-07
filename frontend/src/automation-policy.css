@@ -26,6 +26,15 @@
 .automation-policy__forecast > div:last-child { border-right: 0; }
 .automation-policy__forecast b { display: block; font-size: 16px; line-height: 1.25; }
 .automation-policy__forecast span { color: var(--muted); font-size: 12px; }
+.automation-policy__forecast .automation-policy__delta { display: inline-block; margin-left: 7px; padding: 1px 6px; border-radius: 999px; font-size: 11px; font-variant-numeric: tabular-nums; animation: automation-delta-pop .55s ease both; }
+.automation-policy__delta.is-positive { color: var(--success-fg); background: var(--success-bg); }
+.automation-policy__delta.is-negative { color: var(--warn-fg); background: var(--warn-bg); }
+@keyframes automation-delta-pop {
+  0% { opacity: 0; transform: translateY(5px) scale(.86); }
+  55% { opacity: 1; transform: translateY(-1px) scale(1.06); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) { .automation-policy__forecast .automation-policy__delta { animation: none; } }
 .automation-policy__empty { margin: 12px 0 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); }
 .automation-policy__guardrail { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
 @media (max-width: 760px) {

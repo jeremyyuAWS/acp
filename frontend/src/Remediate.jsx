@@ -845,7 +845,19 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const revalidatingCount = workflowCount('awaiting-validation')
   const blockedCount = workflowCount('blocked')
   // The deterministic batch, taken from the SAME partition RemediationWork's own button uses.
-  const autoBatch = batchScope(remediationWork(files, { cap, assessment }))
+  const workPartition = remediationWork(files, { cap, assessment })
+  const autoBatch = batchScope(workPartition)
+  // The policy preview must see the SAME deterministic findings that feed the primary action,
+  // plus proposal-backed review work. Passing only `reviewNeeds` made the slider claim there was
+  // nothing to preview while the header offered (for example) 13 automatic fixes. Deterministic
+  // rows gain the proposal-shaped fields automationPolicy expects; this changes preview routing
+  // only and does not broaden the server action's deterministic scope.
+  const automationPolicyFindings = [
+    ...(workPartition?.lanes?.automatic?.findings || []).map((finding) => ({
+      ...finding, rule_id: finding.rule_id || finding.sc, hasProposal: true,
+    })),
+    ...reviewNeeds,
+  ]
 
   const fixGroups = groupFixesByRule(fixSource)
   const impact = summarizeImpact(fixSource)
@@ -1614,7 +1626,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         primary={primary}
         readOnly={readOnly}
         onOpenRunDetails={() => setRunDetailsOpen((v) => !v)} />
-      <AutomationPolicyControl key={runId || 'current'} findings={reviewNeeds} runId={runId} />
+      <AutomationPolicyControl key={runId || 'current'} findings={automationPolicyFindings} runId={runId} />
       <RemediationWorkspaceTabs
         runId={runId}
         reviewCount={reviewCount}
