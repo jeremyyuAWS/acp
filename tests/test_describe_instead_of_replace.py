@@ -1,35 +1,35 @@
-"""ADR 0055's premises, measured. "Keep this image of text, but describe it" has no home today.
+"""ADR 0055's premises, and what implementing it did and did NOT change.
 
 WCAG 1.4.5 asks for real text INSTEAD of a picture of text, and #1715 shipped the fix that
-actually delivers that: apply_pptx_image_replacement swaps the picture for a text box and
-deletes the raster. But a reviewer sometimes decides the picture must STAY — the writer refuses
-it (a group, a layout-referenced part, no `<a:xfrm>`), the styling carries meaning a text box
-cannot, or it is a 1.4.9 chart where replacing the picture with its axis labels would destroy
-information. Their honest outcome is to keep the image and describe it.
+delivers it: apply_pptx_image_replacement swaps the picture for a text box and deletes the
+raster. But a reviewer sometimes decides the picture must STAY — the writer refuses it (a group,
+a layout-referenced part, no `<a:xfrm>`), the styling carries meaning, or it is a 1.4.9 chart
+where replacing the picture with its axis labels would destroy information.
 
-The review model has no cell for that decision, and the two ways a reviewer can express it today
-are both wrong — differently, and neither loudly. This file pins both, so ADR 0055 argues from
-measurements rather than from a reading of the code, and so the shape of the fix is falsifiable:
+This file was written BEFORE that decision had anywhere to go, to measure the two dead ends
+rather than argue them. ADR 0055 has since been implemented, and the file is now the record of
+which half of what it measured was a BUG to fix and which was a GUARD to keep — a distinction
+that is easy to lose and expensive to get wrong.
 
-  * `test_a_described_row_certifies_while_the_description_reaches_nothing` — the reviewer
-    records a resolution, and the description they wrote is dropped on the floor while the file
-    is marked 100/100 conformant. This is the exact defect mark_file_compliant_if_reviewed's
-    docstring records ("marked a PPTX 100/100 and conformant with WCAG 1.1.1 while its ten
-    images were still undescribed") arriving through a new door.
+  * FIXED. A described decision no longer certifies while the description reaches nothing.
+    `described_not_replaced` resolves 1.4.5 by judgement and records the description as 1.1.1
+    alt text the document owes, so the file cannot certify until it is written and a re-scan
+    agrees. Proved end to end in tests/test_remediation_verified_pptx_described.py, which also
+    holds the route's refusals — an incomplete described decision is rejected before any row is
+    touched, so the old behaviour cannot return through one.
 
-  * `test_without_a_resolution_the_description_is_fed_to_the_writer_that_deletes_the_image` —
-    the reviewer records no resolution, and their description is handed to the REPLACEMENT
-    writer. The picture they chose to keep is deleted, and prose ABOUT the image is written
-    where the image's OWN words belong. A description is not a transcript.
+  * KEPT, deliberately. Every OTHER resolution still swallows a value, and _row_is_resolved is
+    still absolute. That guard exists because approving "Mark as decorative" once wrote the
+    card's own UI label into the document as alt text (#43). ADR 0055 rejected relaxing it —
+    option A in the ADR — and routed around it instead, so the first test below still passes
+    unchanged and SHOULD. If it ever fails, the general guard has been weakened and #43 is back.
 
-WHAT WOULD MAKE THESE FAIL, which is the point of writing them down: implementing ADR 0055.
-The first fails when a described row is no longer allowed to certify with content outstanding;
-the second when a described row's value stops reaching the replacement lane. Both failures are
-the reminder to rewrite this file around the new behaviour, not a regression.
+  * KEPT. A transcript approved with NO resolution still goes to the replacement writer, which
+    deletes the picture. That is correct: it is the 1.4.5 fix, and it is what the reviewer asked
+    for when they did not say to keep the image.
 
-The third test is the other direction — the ONE capability ADR 0055 needs that does not exist
-today is a locator translation, and it establishes that the destination shape is real and
-already resolvable, so the design is not resting on an assumption about apply_alt.
+The third test pins the locator shape the design routes through, which is now load-bearing
+rather than prospective.
 """
 from __future__ import annotations
 
@@ -92,9 +92,11 @@ def test_a_described_row_certifies_while_the_description_reaches_nothing(st):
     accessor, and the file certifies with the image untouched AND undescribed — worse than
     either half alone, because the certification asserts the opposite.
 
-    'described' is used as the resolution string, but nothing here depends on that spelling:
-    _row_is_resolved tests only that the column is non-empty, so EVERY resolution a reviewer
-    could pick behaves this way.
+    STILL TRUE, AND DELIBERATELY. ADR 0055 did not relax this — it routed around it. The string
+    used below is a bare 'described', NOT the real 'described_not_replaced' resolution, and the
+    row is written directly rather than through the route, so this exercises the general guard
+    and not the new lane. _row_is_resolved tests only that the column is non-empty, so every
+    resolution WITHOUT a lane of its own still behaves exactly this way.
     """
     import store as store_mod
     item_id = _reviewed_image_of_text_row(st, value=DESCRIPTION, resolution="described")
@@ -112,8 +114,10 @@ def test_a_described_row_certifies_while_the_description_reaches_nothing(st):
     # ...so the file is certified 100/100 conformant with the picture untouched and undescribed.
     assert st.count_unapplied_approved_values(SID, FILE) == 0
     assert st.mark_file_compliant_if_reviewed(SID, FILE) is True, (
-        "if this now returns False, a described row no longer certifies with content "
-        "outstanding — ADR 0055 is implemented and this file should be rewritten around it")
+        "the general resolution guard has been weakened. This is NOT the ADR 0055 path — that "
+        "one goes through the route, which records the description as 1.1.1 alt text owed. This "
+        "is any OTHER resolution, and it must keep swallowing values: relaxing _row_is_resolved "
+        "was option A in the ADR and was rejected, because it re-opens #43 on every decision")
 
 
 def test_without_a_resolution_the_description_is_fed_to_the_writer_that_deletes_the_image(st):
@@ -134,8 +138,9 @@ def test_without_a_resolution_the_description_is_fed_to_the_writer_that_deletes_
 
     to_write = st.approved_images_of_text_values(SID, FILE, ("1.4.5",))
     assert to_write == {"image 1": DESCRIPTION}, (
-        "if this is now empty, the described value no longer reaches the replacement lane — "
-        "ADR 0055 is implemented and this file should be rewritten around it")
+        "a value approved with NO resolution must still reach the replacement lane: that is the "
+        "1.4.5 fix, and it is what the reviewer asked for by not saying to keep the image. "
+        "ADR 0055 added a separate path for keeping it; it did not change this one")
 
     # And the lane it reaches is the one that deletes the media part. Asserted against the
     # handler's own wiring rather than restated, so a future re-point of the 1.4.5 lane to some

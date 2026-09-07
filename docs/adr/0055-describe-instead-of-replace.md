@@ -1,11 +1,13 @@
 # ADR 0055 — Describe-instead-of-replace: a 1.4.5 image the reviewer keeps
 
-**Status:** Proposed — design only; no lane implements it in this change
+**Status:** Accepted — implemented as designed; see *As built* below for what implementation
+changed and what it taught
 **Date:** 2026-09-07
 **Related:** #1665 (the pptx 1.4.5 lane downgraded to HUMAN), #1715 (the replacement writer that
 clears it), #1724 (`apply_pptx_image_of_text` recorded as retired), ADR 0040 (provable vs.
 judgement review lanes), ADR 0031 (certification gated by coverage). Premises measured in
-`tests/test_describe_instead_of_replace.py`.
+`tests/test_describe_instead_of_replace.py`; the lane proved end to end in
+`tests/test_remediation_described_image_round_trip.py`.
 
 ## Context
 
@@ -135,8 +137,9 @@ docstring would have rejected its own best route.
 ## Consequences
 
 - `apply_pptx_image_of_text` stops being retired **in part**: its resolver is used, its writer is
-  not. `tests/test_apply_pptx_image_of_text_retired.py` will fail on the import, which is its
-  designed reminder — it should be narrowed to the writer, not deleted.
+  not. `tests/test_apply_pptx_image_of_text_retired.py` failed on the import exactly as intended,
+  and was narrowed to the writer rather than deleted — it now asserts both halves, so the
+  narrowing itself fails if the resolver ever loses its caller.
 - One reviewer decision produces two audit rows. The review inbox must present that as one
   action, not two cards; the second row is a consequence of the first, not an independent ask.
 - A described image is **1.4.5 not-fixed-by-choice and 1.1.1 fixed**. Any surface that reports
@@ -170,6 +173,41 @@ translation, which is a bounded, testable function over machinery that already e
 exception says the image is an essential logo or brand mark exempt from 1.4.5. A scanned
 signature block or a chart is neither, and recording it as one puts a false statement in the
 audit trail that a certification report will repeat.
+
+## As built
+
+The design held. Three things it did not anticipate, recorded because each was found by running
+the code rather than by reading it.
+
+**One locator is many placements.** `image N` names the MEDIA PART, not a picture, so a logo or
+diagram dropped on three slides is one entry in `ocr._ooxml_images` and one review card. The
+first draft of `resolve_media_locators` returned a single target; the other placements kept their
+source filename as `descr`, the detector reads that as junk, 1.1.1 still failed on re-scan, and
+the lane correctly withheld credit for a write that was otherwise right. It now returns every
+placement, and the round-trip fixture uses a two-slide deck so the regression cannot come back.
+This mirrors the replacement lane, which replaces every placement or none because the media part
+is deleted once — the same fact about the locator scheme, reached from the other side.
+
+**No `proposed_value` fallback on a described row.** Everywhere else, a reviewer who edited
+nothing has agreed to the draft they were shown. Here the draft is the OCR TRANSCRIPT, and a
+transcript is not a description: falling back would write the picture's own words as its alt
+text, silently, on the one path whose entire premise is that the picture stays. An undescribed
+image contributes nothing instead.
+
+**The capability registry refused the new fixture, and was right to.** The contract requires each
+`(format, criterion)` lane to be claimed by exactly one `test_remediation_verified_*` module, and
+`('pptx','1.1.1')` is already claimed by the alt fixture. This lane is a new PATH INTO an existing
+capability, not a new capability — the description is ordinary 1.1.1 alt text, written by the same
+`apply_alt_text` and verified against the same criterion. The fixture was therefore named out of
+the claiming namespace rather than the guard being widened: declaring the lane twice would tell
+the matrix it gained something it did not, and admitting an empty declaration would make a module
+that simply forgot to declare look deliberate.
+
+Two design decisions were confirmed by bite check rather than assumed. Crediting the described row
+against 1.4.5 instead of 1.1.1 — the failure mode the ADR argued was the reason for the whole
+split — does leave the row permanently unapplied and the file permanently uncertifiable. And
+dropping `1.1.1/described` from the alt lane's `credit_rule_ids` produces the same dead end from
+the other direction: the description reaches the document and the row is never marked applied.
 
 ## What this ADR does not decide
 

@@ -9641,6 +9641,155 @@ class Store:
             created.append(item_id)
         return created
 
+    # ADR 0055. A reviewer who KEEPS an image of text and describes it resolves the 1.4.5
+    # finding by judgement and creates a 1.1.1 obligation the document did not have. The
+    # description lands on its own row under this suffix, and the suffix is doing three jobs.
+    #
+    # It keeps the row OFF the canonical 1.1.1 row. _canonical_rule_id maps only '/deferred', so
+    # this stays a separate decision — which it must, because enqueue_proposals REPLACES the
+    # proposals on an existing row: merging would silently destroy the vision lane's drafts for
+    # every other image in the deck, and flipping that row's status would approve them unread.
+    #
+    # It keeps the row out of _superseded_items, exactly as '/regressed' does: scan_rule_traces
+    # never holds a suffixed rule_id, and that helper never retracts a row with no trace.
+    #
+    # And it makes the row legible as what it is. Unlike '/deferred' (a criterion the machine
+    # gave up on) and '/regressed' (damage awaiting a decision), this row records a decision
+    # ALREADY TAKEN: it is written 'approved', because the reviewer approved the description on
+    # the 1.4.5 card and asking them to approve the same words twice is not review, it is
+    # bookkeeping. What it is NOT is applied — so count_unapplied_approved_values counts it and
+    # mark_file_compliant_if_reviewed refuses to certify until the description is written into
+    # the document AND a re-scan confirms 1.1.1 cleared. That refusal is the whole point: it is
+    # what stops the silent false certification ADR 0055 measured.
+    DESCRIBED_RULE_SUFFIX = "/described"
+    # The resolution that produces such a row. Defined here, beside the row it creates, and
+    # re-exported into routes.hitl's RESOLUTIONS vocabulary so the two cannot drift: the route
+    # validates against that vocabulary, and this method acts on the same string.
+    DESCRIBED_RESOLUTION = "described_not_replaced"
+
+    DESCRIBED_SOURCE_SCS = ("1.4.5", "1.4.9")
+
+    def queue_described_image_alt(self, item_id: str) -> str | None:
+        """Turn a described-not-replaced decision on `item_id` into 1.1.1 alt text the file owes.
+
+        The source row is an image-of-text card (1.4.5 or 1.4.9) the reviewer resolved by keeping
+        the images and describing them. The row is written under
+        '1.1.1<DESCRIBED_RULE_SUFFIX>' because alt text is what a description IS, whichever
+        image-of-text criterion prompted it.
+
+        THE VALUES ARE READ OFF THE PROPOSALS DIRECTLY, deliberately bypassing
+        _row_approved_values — which returns {} for any row carrying a resolution, and is right
+        to. That guard exists because approving "Mark as decorative" once wrote the card's own UI
+        label into the document as alt text (#43), and it stays exactly as strict. This is the
+        same bypass approved_decorative_locators already makes for the same reason: the row's
+        resolution is a judgement ABOUT images, and the per-image text beside it is real content
+        the reviewer authored. Reading it here, in one named place, is what lets the general
+        guard stay absolute.
+
+        No proposed_value fallback, unlike _row_approved_values. There a reviewer who edited
+        nothing has agreed to the draft they were shown; here the draft is the OCR TRANSCRIPT —
+        the words baked into the picture — and a transcript is not a description of the image.
+        Writing it as alt text would put "Q3 revenue rose 12%" where "a slide titled Q3 revenue,
+        reading …" belongs, and would do it silently on the one path where the reviewer's whole
+        decision was that the picture stays. An undescribed image contributes nothing.
+
+        Locators are stored UNTRANSLATED: the media index they use is resolved at apply time
+        against the bytes actually being written (handlers, via
+        apply_pptx_image_of_text.expand_media_locator_values), because an index resolved against
+        a stale copy can name a different picture.
+
+        Idempotent per (scan, file), MERGING by locator: a reviewer who revisits one image
+        replaces that image's description and leaves the others alone. Re-approving also clears
+        `applied`, because the row then owes the document content it does not carry — without
+        that, a second description added to an already-written row would be stored, never
+        written, and the file would certify carrying only the first.
+
+        No sync_hitl_finding_dispositions call, deliberately and for the same reason
+        queue_regression_review makes none: that helper projects a card's state onto the assessed
+        findings carrying its rule_id, and no finding is recorded under a suffixed one. The
+        findings this decision concerns are the 1.4.5 OCR ones, and they are dispositioned by the
+        source row's own sync — calling it here would either no-op or reach for unrelated 1.1.1
+        findings that no reviewer has looked at.
+
+        WHAT HAPPENS IF THE REVIEWER LATER REJECTS THE SOURCE ROW, stated because it is a real
+        asymmetry rather than an oversight: this row stays, so the description is still written as
+        alt text. That is deliberate — alt text on an image of text is never itself wrong, and
+        deleting a reviewer's authored prose because they reopened a different question would lose
+        work silently. Certification is unaffected either way: the reopened 1.4.5 row is no longer
+        approved, so mark_file_compliant_if_reviewed refuses on the all-approved gate until the
+        reviewer decides again. What this does NOT do is retract the alt obligation; if that turns
+        out to matter, the fix is a retraction path, not a silently different write here.
+
+        Returns the row id, or None when the source row is not a described image-of-text
+        decision, or carries no descriptions.
+        """
+        import json as _json
+        from datetime import datetime, timezone
+        src = self.get_hitl_item(item_id)
+        if not src:
+            return None
+        sc = str(src.get("rule_id") or "").strip()
+        if sc not in self.DESCRIBED_SOURCE_SCS:
+            return None
+        if str(src.get("resolution") or "").strip() != self.DESCRIBED_RESOLUTION:
+            return None
+        scan_id, file = src.get("scan_id"), src.get("file")
+        if not (scan_id and file):
+            return None
+        clean: dict[str, str] = {}
+        for p in (src.get("proposals") or []):
+            if not isinstance(p, dict):
+                continue
+            locator = str(p.get("locator") or "").strip()
+            text = str(p.get("approved_value") or "").strip()
+            if locator and text:
+                clean[locator] = text
+        if not clean:
+            return None
+        rule_id = f"1.1.1{self.DESCRIBED_RULE_SUFFIX}"
+        now = datetime.now(timezone.utc).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT id, proposals FROM hitl_queue WHERE scan_id=%s AND file=%s AND rule_id=%s",
+                (scan_id, file, rule_id))
+            row = self._db.fetchone(cur)
+            existing: list[dict] = []
+            if row:
+                try:
+                    existing = _json.loads(row.get("proposals") or "[]") or []
+                except (ValueError, TypeError):
+                    existing = []
+            by_locator = {str(p.get("locator") or ""): p
+                          for p in existing if isinstance(p, dict)}
+            for locator, text in clean.items():
+                prior = by_locator.get(locator) or {}
+                by_locator[locator] = {
+                    "locator": locator,
+                    "before": prior.get("before") or "an image of text the reviewer kept",
+                    "proposed_value": text,
+                    "approved_value": text,
+                    "rationale": f"reviewer kept the image and described it, resolving WCAG {sc}",
+                    "source": "reviewer",
+                }
+            merged = [by_locator[k] for k in sorted(by_locator)]
+            blob = _json.dumps(merged)
+            if row:
+                self._db.execute(cur,
+                    "UPDATE hitl_queue SET proposals=%s, finding_count=%s, status='approved', "
+                    "applied=NULL, reviewed_at=%s WHERE id=%s",
+                    (blob, len(merged), now, row["id"]))
+                return row["id"]
+            new_id = uuid.uuid4().hex[:12]      # NOT item_id: that is the source row's
+            pages = self._pages_for(cur, scan_id, file, "1.1.1")
+            self._db.execute(cur,
+                "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,"
+                "finding_count,status,reviewed_at,page,pages,proposals) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,'approved',%s,%s,%s,%s)",
+                (new_id, now, scan_id, file, rule_id,
+                 "WCAG 1.1.1 — an image of text the reviewer kept and described"[:200],
+                 len(merged), now, pages[0] if pages else None, _pages_csv(pages), blob))
+        return new_id
+
     def unresolved_regression(self, scan_id: str, file: str) -> bool:
         """True when a write that REACHED this document broke a criterion and no human has
         accepted that yet. The certification gate's fail-closed half.
@@ -10114,10 +10263,23 @@ class Store:
         """{locator: alt text} awaiting a write into `file`, from its approved 1.1.1 rows.
 
         Scoped to Non-text Content because apply_alt.py writes alt text and nothing else.
+
+        '1.1.1/described' joins '1.1.1' here, and only these two. That row is the ADR 0055
+        describe-instead-of-replace decision: a reviewer kept an image of text and wrote alt text
+        for it, which is 1.1.1 content owed to the document by every measure this function
+        applies. It is a SEPARATE row rather than the canonical one for the reasons at
+        DESCRIBED_RULE_SUFFIX, so reading only the bare '1.1.1' would store the description and
+        never write it — the dead end ADR 0055 exists to close.
+
+        Named explicitly rather than matched as '1.1.1/%'. A prefix match would silently adopt
+        whatever suffix someone adds next, and '/regressed' is already a row that must NOT be
+        read here: it carries no content by construction, and a client that posted a headline
+        value onto one would have it written into the document as alt text.
         """
+        wanted = {"1.1.1", f"1.1.1{self.DESCRIBED_RULE_SUFFIX}"}
         out: dict[str, str] = {}
         for row in self._approved_unapplied_rows(scan_id, file):
-            if str(row.get("rule_id") or "").strip() == "1.1.1":
+            if str(row.get("rule_id") or "").strip() in wanted:
                 out.update(self._row_approved_values(row))
         return out
 

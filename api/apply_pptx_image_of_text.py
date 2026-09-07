@@ -1,19 +1,23 @@
-"""RETIRED — kept for revival, called by nothing. See tests/test_apply_pptx_image_of_text_retired.py.
+"""PARTLY RETIRED: the RESOLVER below is live, the WRITER is not.
 
 #1715 gave the pptx 1.4.5 lane a writer that clears the criterion: apply_pptx_image_replacement
-swaps the picture for a real text box and DELETES the image. Setting descr, which is what this
-module does, leaves the raster in ppt/media where ocr._ooxml_images reads it straight out of the
-zip — so the finding re-fires and the verify gate refuses the credit, which is why #1665 had
-already downgraded that lane to HUMAN. This module is correct at what it does; what it does is
-not a 1.4.5 fix.
+swaps the picture for a real text box and DELETES the image. Setting descr, which is what
+`apply_pptx_image_of_text` below does, leaves the raster in ppt/media where ocr._ooxml_images
+reads it straight out of the zip — so the finding re-fires and the verify gate refuses the
+credit, which is why #1665 had already downgraded that lane to HUMAN. That function is correct
+at what it does; what it does is not a 1.4.5 fix, and nothing calls it. See
+tests/test_apply_pptx_image_of_text_retired.py, which holds it that way.
 
-It has no 1.1.1 job either, and that was checked rather than assumed: 'image N' is emitted only
-by propose_images_of_text and enqueued only as 1.4.5, so no 1.1.1 row carries that locator;
-every 1.1.1 row uses 'part#name', which apply_alt_text already writes and a round-trip fixture
-already proves; and the OCR transcript already reaches 1.1.1 by a better path, through
-ai._transcribed_alt into the vision alt draft. The retirement test records what WOULD revive
-this module — a reviewer choosing to describe an image of text instead of replacing it — and
-what has to be designed first for that to be honest.
+WHAT IS LIVE: `resolve_media_locators`. ADR 0055 (describe-instead-of-replace) routes a
+reviewer's description of an image they chose to KEEP through the proven 1.1.1 alt lane, and the
+only thing standing between the two is a locator shape — the 1.4.5 proposer mints 'image N', a
+media index, and apply_alt cannot read it at all. This module already had the resolution that
+translation needs (_media_index + _slide_rels: media index -> canonical media path -> the rId a
+slide references it by), which is the whole reason #1724 kept the file rather than deleting it.
+
+So the revival is deliberately PARTIAL. `_patch_pics` — the half that sets descr — stays dead,
+because apply_alt_text already writes alt text, resolves both locator shapes, and has a
+round-trip fixture behind it. Two writers for one job is how they drift.
 
 Write reviewer-approved alt text into pptx images-of-text (WCAG 1.4.5 / 1.4.9).
 
@@ -125,6 +129,104 @@ def _patch_pics(
         return new_pic
 
     return _PIC_RE.sub(_replace_pic, xml), applied
+
+
+def is_media_index_locator(locator) -> bool:
+    """True for the 'image N' shape this module's enumeration mints.
+
+    LIVE. Exported so a caller can ask "does anything here need translating" without recompiling
+    the pattern — handlers uses it to decide whether the alt lane runs the expansion at all, and
+    a second copy of this regex somewhere else is how the recogniser and the translator start
+    disagreeing about which locators are media indices.
+    """
+    return bool(_IMAGE_LOC.match(str(locator or "").strip()))
+
+
+def resolve_media_locators(data: bytes, locators) -> dict[str, list[str]]:
+    """{'image N': ['ppt/slides/slideK.xml#rIdM', …]} — the ADR 0055 locator translation.
+
+    LIVE (unlike the writer below). It turns a locator only this module can read into ones the
+    proven 1.1.1 alt lane can: apply_alt.resolve_target matches an `r:embed` fragment to the
+    alt-bearing element of the picture that embeds it, exactly as it matches a shape name.
+
+    The chain is the one _media_index and _slide_rels already implemented for the writer:
+
+        'image N'  ->  the Nth ppt/media raster in zip-namelist order   (mirrors ocr._ooxml_images)
+                   ->  EVERY (slide, rId) pair that references that media part
+
+    ONE LOCATOR, MANY PLACEMENTS — which is why this returns a list and not a string, and the
+    reason was measured rather than reasoned about. 'image N' names the MEDIA PART, not a
+    picture: a logo or a diagram dropped on three slides is one entry in ocr._ooxml_images and
+    one review card. Describing only the first placement leaves the other two carrying whatever
+    descr they had (typically the source filename, which the detector reads as junk), so 1.1.1
+    would still fail on re-scan, the verify gate would withhold the credit, and the reviewer's
+    approved description would never be marked applied. A first draft of this function returned
+    one target and had exactly that hole.
+
+    This mirrors the 1.4.5 replacement lane, which replaces every placement or none because the
+    media part is deleted once. Same fact about the locator scheme, same all-or-nothing shape.
+
+    A locator is OMITTED rather than mapped to anything when it cannot be resolved — malformed,
+    an index past the end of the media list, or a media part no slide references (a layout's or
+    master's image, which apply_alt would not reach either). Silence is the honest answer: the
+    caller keeps the original, apply_alt reports it unresolved, and _apply_one_value_kind
+    withholds the credit. Guessing a different image would write a reviewer's description onto a
+    picture they never saw.
+
+    Slides are visited in zip-namelist order, and each slide's own rels in file order, so the
+    list is stable across runs for the same package.
+    """
+    wanted = [str(l).strip() for l in (locators or ()) if str(l or "").strip()]
+    if not wanted:
+        return {}
+
+    out: dict[str, list[str]] = {}
+    with zipfile.ZipFile(io.BytesIO(data)) as zin:
+        media_idx = _media_index(zin)
+        # canonical media path -> every 'slidepart#rId' that references it, in zip order.
+        refs: dict[str, list[str]] = {}
+        for name in zin.namelist():
+            if not re.fullmatch(r"ppt/slides/slide\d+\.xml", name):
+                continue
+            for rid, canonical in _slide_rels(zin, name).items():
+                refs.setdefault(canonical, []).append(f"{name}#{rid}")
+
+    for locator in wanted:
+        m = _IMAGE_LOC.match(locator)
+        if not m:
+            continue
+        n = int(m.group(1)) - 1
+        if n < 0 or n >= len(media_idx):
+            continue
+        placements = refs.get(media_idx[n])
+        if placements:
+            out[locator] = list(placements)
+    return out
+
+
+def expand_media_locator_values(data: bytes, values: dict[str, str]) -> dict[str, str]:
+    """`values` with every resolvable 'image N' key replaced by its placements' locators.
+
+    The form the alt lane actually wants: one flat {locator: text} map it can hand straight to
+    apply_alt_text. Each placement of a media part gets the SAME text, because the reviewer
+    described the image and every placement IS that image.
+
+    Keys that are not media-index locators pass through untouched — an ordinary 1.1.1 row's
+    'part#name' must not be disturbed — and so does a media-index locator that did not resolve,
+    so it reaches apply_alt, is reported unresolved, and shows up in the apply.unresolved log
+    under the name the reviewer's card used.
+    """
+    if not values:
+        return {}
+    media_keys = [k for k in values if _IMAGE_LOC.match(str(k).strip())]
+    if not media_keys:
+        return dict(values)
+    resolved = resolve_media_locators(data, media_keys)
+    out: dict[str, str] = {}
+    for locator, text in values.items():
+        for target in resolved.get(str(locator).strip(), [locator]):
+            out[target] = text
+    return out
 
 
 def apply_pptx_image_of_text(
