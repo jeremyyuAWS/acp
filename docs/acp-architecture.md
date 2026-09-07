@@ -319,7 +319,7 @@ Stage → code map:
 
 ## 5. Data model (Postgres, `store.py` `_SCHEMA`)
 
-Identical schema on SQLite and Postgres. The tables cluster into five groups:
+Identical schema on SQLite and Postgres. The tables cluster into six groups:
 
 **Scan run + results**
 - `scan_runs` — one row per scan: `status` (discover→running→finalized), `owner_email` (tenant key),
@@ -357,6 +357,18 @@ Identical schema on SQLite and Postgres. The tables cluster into five groups:
 **Queue & ops**
 - `jobs` — the durable queue (§3). `app_settings` — admin platform config (`ai_enabled`,
   `ai_base_url`, `ai_vision_model`, `scan_scope`, …). `schedule_config` — scheduled sweeps.
+
+**ACP's own conformance report (ADR 0047)** — eight `acr_*` tables, and the one group in this
+schema that is **not about customer documents**. See §11.
+- `acr_report` — one row per report: product version, `vpat_edition`, evaluation methods, status.
+- `acr_criterion` — the matrix. One row per (report × requirement), carrying `requirement_set`
+  (`wcag-2.2-aa` / `section-508` / `en-301-549`), `chapter` (the standard's own division), the
+  human's `final_status`, and `remarks`.
+- `acr_evidence` — what backs a decision: source kind, environment, tester, timestamps.
+- `acr_manual_test` / `acr_manual_step` — guided plan runs, one step row per prompt answered.
+- `acr_decision_log` — append-only, one row per applicability or status decision.
+- `acr_snapshot` — the immutable published revision plus its content digest.
+- `acr_role` — per-report grants; publication is gated on these, never on `core.is_admin`.
 
 **Frozen scope** is recorded once at discover/save and never mutated; remediation and the numeric
 score read `get_scan_scope` (`store.py:1478`), not the live global — so changing the operator scope
@@ -569,7 +581,65 @@ flowchart LR
 
 ---
 
-## 11. Where it's weak (named deliberately)
+## 11. ACP's own conformance report — the ACR workspace (ADR 0047)
+
+Everything above answers *"what is in the customer's documents?"*. This subsystem answers the
+inverse — **"what is true of ACP's own UI?"** — and produces the artifact a procurement team asks
+for: an Accessibility Conformance Report.
+
+The inversion is the whole design constraint. ADR 0047 rejected extending `assessment_policy` with
+WCAG 2.2 precisely because putting "criteria ACP detects in customer files" and "criteria ACP's UI
+is judged against" in one table is the conflation most likely to produce a false claim. They are
+separate tables, separate rules, separate vocabulary.
+
+**The matrix is built from catalogs, per VPAT edition.** ITI publishes four, and each obliges a
+different requirement set — `acr_catalog.build_matrix(report_id, edition)` reads the catalogs and
+writes one `acr_criterion` row per requirement:
+
+| Edition | Requirement sets | Rows |
+|---|---|---|
+| `VPAT 2.5Rev WCAG` | WCAG 2.2 A/AA | 55 |
+| `VPAT 2.5Rev 508` | + Revised Section 508 (36 CFR 1194 App. C) | 175 |
+| `VPAT 2.5Rev EU` | + EN 301 549 V3.2.1 | 369 |
+| `VPAT 2.5Rev INT` | all three | **489** |
+
+`requirement_sets_available()` answers a **conjunction** — a set is offered only when its catalog is
+populated *and* the exports can render it — so a future standard cannot open an edition by landing
+a catalog alone. An edition this deployment cannot honestly produce is refused at creation
+(`routes/acr.py:249`) and again at publication, on stored state.
+
+**The honesty rules are the same bar as §7, turned inward.**
+
+- **An automated pass never produces "Supports."** axe-core evidence is *evidence*, not a decision;
+  a criterion stays `needs_review` until a person decides it. This is the ACR's version of "ACP will
+  not report a pass it cannot evidence."
+- **Four conformance terms, and only four** — Supports, Partially Supports, Does Not Support, Not
+  Applicable. Internal workflow states are structurally barred from the conformance column
+  (`acr_export_preview._conformance_cell` raises), and `tests/test_acr_export_preview_guard.py`
+  exists because a green suite had already been mistaken for evidence that the guard worked.
+- **Counts, never a percentage.** Same house rule as the scan side: no compliance score.
+- **Publication is gated, then frozen.** `acr_validation.validate` returns every blocker — undecided
+  applicable criteria, stale evidence, missing metadata, incomplete manual plans — and
+  `POST /acr/{id}/publish` (`routes/acr.py:1134`) refuses while any remains. It is authorised by
+  `acr_authz.may_publish`, **never `core.is_admin`**, which returns True for every admin on the
+  platform. What publishes is an immutable `acr_snapshot` with a `content_digest`
+  (`acr_publish.py:125`) re-verified on every read; a correction is a **new revision**, never an edit.
+
+**One projection, four renderers.** `acr_export_preview.project()` produces the report as pure data;
+JSON, HTML, PDF and DOCX all render *that*, so the honesty constraints live once rather than four
+times. The Word export is refused outright if it fails ACP's own docx analyser — the one document
+this product cannot afford to hand over inaccessible.
+
+**On the ITI VPAT® template (ADR 0053).** The exported document follows the official template's
+structure — its section headings, per-level criteria tables and division headings, sourced per
+edition from `config/vpat-2.5rev.json` — **without the template file being vendored.** That was a
+licensing decision (Option C), not an engineering shortcut. Whether a document ACP generates may be
+*called* a VPAT® is a separate service-mark question, still open, which is why every format states
+on its face that it is not one.
+
+---
+
+## 12. Where it's weak (named deliberately)
 
 - **`acp-app` is pinned to a single replica** (min=max=1). Horizontal scale is the worker tier only.
 - **Deploy can wedge** in GitHub Actions (see ops note above); the fallback is manual and needs
@@ -593,7 +663,7 @@ flowchart LR
 
 ---
 
-## 12. Confirmed technical contract (for the deck)
+## 13. Confirmed technical contract (for the deck)
 
 Answers to the questions that recur when scoping the pilot as a production contract, each verified
 against `origin/main` with file:line anchors. **Re‑verify before each presentation — the code moves.**

@@ -460,6 +460,34 @@ and open a PR for any cell claiming more than the code supports).
 
 ---
 
+## The same bar, turned inward — ACP's own conformance report
+
+The capability matrix says what ACP can do to *your* documents. The ACR workspace answers the
+question a procurement team actually asks: **what is true of ACP's own UI?** It produces an
+Accessibility Conformance Report — the completed-VPAT artifact — about ACP itself.
+
+- **Four editions, built from catalogs.** ITI publishes WCAG, 508, EU and INT; each obliges a
+  different requirement set, and the matrix is generated per edition — 55 WCAG criteria, or **489
+  rows** for INT (55 WCAG + 120 Section 508 + 314 EN 301 549 clauses). An edition this deployment
+  cannot honestly produce is refused, at creation and again at publication.
+- **An automated pass is never a "Supports."** An axe-core run is evidence; a person decides. Four
+  conformance terms exist and no internal workflow state may appear where one belongs — enforced in
+  code, not by convention.
+- **Publication is gated, then frozen.** Undecided criteria, stale evidence, missing tester metadata
+  or an incomplete manual plan all block it. What ships is an immutable snapshot with a content
+  digest re-verified on read; a correction is a new revision, never an edit.
+- **The exported report must itself be accessible.** One projection renders to JSON, HTML, PDF and
+  DOCX, and the Word export is *refused* if it fails ACP's own docx analyser. A conformance report
+  nobody with a screen reader can read is the one document this product cannot hand over.
+- **It follows the ITI VPAT® template's structure without vendoring the file** — a licensing
+  decision, recorded in ADR 0053. Whether the output may be *called* a VPAT® is a separate
+  service-mark question, still open; every format says on its face that it is not one.
+
+Same honesty bar as the scan side, pointed at ourselves: counts rather than a compliance score, and
+no claim ACP cannot evidence.
+
+---
+
 ## Build & deploy — two automated chains
 
 The deploy is **no longer manual** (the old #1 weakness). CalVer `YYYY.M.D.N` — the count of the
