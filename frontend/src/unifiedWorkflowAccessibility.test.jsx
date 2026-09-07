@@ -68,7 +68,7 @@ afterEach(() => {
 })
 
 describe('unified canonical workflow experience', () => {
-  it('uses CanonicalStageCard for both the live card and historical disclosure body', () => {
+  it('uses the stage-specific Discover card for completed historical disclosure', () => {
     const live = renderToStaticMarkup(createElement(CanonicalStageCard, { snapshot: canonical() }))
     expect(live).toContain('data-testid="canonical-stage-card"')
     expect(live).toContain('12 of 12 eligible documents')
@@ -83,25 +83,48 @@ describe('unified canonical workflow experience', () => {
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     act(() => { toggle.click() })
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
-    expect(history.querySelector('[data-testid="canonical-stage-card"]')).not.toBeNull()
-    expect(history.textContent).toContain('12 of 12 eligible documents')
+    expect(history.querySelector('.discover-run-progress')).not.toBeNull()
+    expect(history.textContent).toContain('Discovery complete')
+    expect(history.textContent).not.toContain('Workflow so far')
+    expect(history.textContent).not.toContain('Workflow revision')
+    expect(history.textContent).not.toContain('Operational work-item progress')
+    expect(history.textContent).not.toContain('discover-4')
   })
 
-  it('keeps historical revisions read-only while preserving the accounting disclosure', () => {
+  it('uses the familiar completed Assess card and keeps historical revisions read-only', () => {
     const history = mount(createElement(WorkflowStageStack, {
       lineage: { workflow_id: 'workflow-1', workflow_revision: 4, stages: [
-        canonical({ stage: 'discover', state: 'succeeded', execution_id: 'discover-4' }),
+        canonical({ stage: 'assess', state: 'succeeded', execution_id: 'assess-4',
+          domain_reconciliation: {
+            unit: 'eligible documents', total: 12, accounted: 12, exact: true,
+            buckets: { waiting: 0, processing: 0, assessed: 12, failed: 0, cancelled: 0, skipped: 0 },
+          } }),
       ] },
-      view: 'assess',
+      view: 'remediate',
     }))
     const toggle = history.querySelector('.workflow-stage-stack__summary')
+    expect(toggle.textContent).toContain('Assess · Complete')
+    expect(toggle.textContent).toContain('12 assessed of 12 eligible documents')
+    expect(toggle.querySelectorAll('.live-heartbeat-bars i')).toHaveLength(12)
     act(() => { toggle.click() })
-    expect(history.querySelectorAll('button')).toHaveLength(1)
     expect(history.querySelector('.workflow-stage-stack__body')).not.toBeNull()
+    expect(history.querySelector('.assess-run-progress')).not.toBeNull()
+    expect(history.textContent).toContain('Assessment complete')
+    expect(history.textContent).not.toContain('Sealed output')
+    expect(history.textContent).not.toContain('Integrity check:')
+    expect(history.textContent).not.toContain('assess-4')
     for (const action of ['Start', 'Retry', 'Stop', 'Cancel', 'Apply']) {
       expect([...history.querySelectorAll('button')].some((button) =>
         button.textContent.trim().startsWith(action))).toBe(false)
     }
+  })
+
+  it('leaves current Discover and Assess presentation with their live stage cards', () => {
+    const app = readFileSync(join(here, 'App.jsx'), 'utf8')
+    expect(app).toContain("!['discover', 'assess', 'remediate'].includes(canonicalStage.stage)")
+    expect(app).toContain('<DiscoverRunProgress')
+    expect(app).toContain('<LiveAssessmentLive')
+    expect(app.indexOf('<WorkflowStageStack')).toBeLessThan(app.indexOf('id="workflow-panel"'))
   })
 
   it('retains a terminal run summary and its final durable activity', () => {
