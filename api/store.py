@@ -772,6 +772,14 @@ _SCHEMA = [
     # Explicit provenance join: which recorded model call a reviewer acted on. Nullable for
     # human-authored and historical decisions; never inferred from timestamps or filenames.
     "ALTER TABLE hitl_events ADD COLUMN IF NOT EXISTS model_call_id TEXT",
+    # Append-only post-write evidence for model-generated proposals. A reviewer acceptance says
+    # the draft looked right; this row says whether the corrected bytes subsequently cleared the
+    # detector. Keeping those as separate immutable events prevents transport success or approval
+    # from being misreported as validated remediation quality.
+    """CREATE TABLE IF NOT EXISTS ai_validation_outcomes (
+      id TEXT PRIMARY KEY, model_call_id TEXT, scan_id TEXT, file TEXT, rule_id TEXT,
+      item_id TEXT, outcome TEXT, detail TEXT, created_at TEXT
+    )""",
     # Configurable file disposition (ADR 0003, Phase 3). PREVIEW ONLY as of this
     # migration -- api/disposition.py's matches() tells you which documents a policy
     # would select; nothing executes a real move/rename/archive/delete yet. That
@@ -2310,8 +2318,9 @@ class _PgAdapter:
     # v36 adds durable owner-scoped operational counters for admitted, delayed catch-up,
     # skipped and failed scheduled runs. Defaults preserve existing schedule rows and older
     # replicas ignore the additive columns during a rolling deploy.
-    _SCHEMA_VERSION = 36
-    _SCHEMA_CHECKSUM_AT_VERSION = "f4bc5376c5574a2f0abd6c5078c4e2f8"
+    # v37 adds immutable post-write validation outcomes linked to exact accepted AI calls.
+    _SCHEMA_VERSION = 37
+    _SCHEMA_CHECKSUM_AT_VERSION = "e05e63425b0a87897a4dd4c044d7191b"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -4511,7 +4520,8 @@ class Store:
                          "lifecycle_evaluation", "effective_disposition",
                          "org_memory", "remediation_state", "finding_disposition",
                          "finding_disposition_event", "remediation_diff", "applied_fixes",
-                         "ai_calls", "second_opinion_reservations", "finding_comments",
+                         "ai_calls", "ai_validation_outcomes", "second_opinion_reservations",
+                         "finding_comments",
                          "scan_inputs",  # Stage 1 item 3: per-scan enqueue snapshots are customer data
                          "scan_folder_completions",  # which folders of a scan were counted done
                          "active_discovery_guard",  # transient lock state — cleared on reset
@@ -7195,6 +7205,49 @@ class Store:
                  1 if edited else 0, review_ms, ai_value or None, final_value or None,
                  reviewer, datetime.now(timezone.utc).isoformat(), reject_reason or None,
                  model_call_id or None))
+
+    def record_ai_validation_outcomes(self, scan_id: str, file: str, rule_id: str,
+                                      item_ids: list[str], outcome: str, *,
+                                      detail: str | None = None) -> int:
+        """Append one post-write result for every exact model call accepted by these items.
+
+        Replays of the same item/result are idempotent; a later retry may append a different
+        outcome (for example could_not_verify followed by verified_cleared). Human-authored and
+        historical items have no model_call_id and correctly produce no rows.
+        """
+        allowed = {"verified_cleared", "verified_still_failing", "could_not_verify"}
+        if outcome not in allowed:
+            raise ValueError(f"unsupported AI validation outcome: {outcome}")
+        ids = [str(i) for i in dict.fromkeys(item_ids or []) if i]
+        if not ids:
+            return 0
+        marks = ",".join(["%s"] * len(ids))
+        import hashlib
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat()
+        inserted = 0
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                f"SELECT item_id,model_call_id,rule_id FROM hitl_events WHERE item_id IN ({marks}) "
+                "AND model_call_id IS NOT NULL AND action IN ('approve','edit') "
+                "ORDER BY created_at DESC", tuple(ids))
+            rows = self._db.fetchall(cur)
+            latest: dict[str, tuple[str, str]] = {}
+            for row in rows:
+                latest.setdefault(str(row["item_id"]),
+                                  (str(row["model_call_id"]), str(row.get("rule_id") or rule_id)))
+            for item_id, (call_id, event_rule_id) in latest.items():
+                event_id = hashlib.sha256(
+                    f"post-write:{call_id}:{scan_id}:{file}:{event_rule_id}:{item_id}:{outcome}".encode()
+                ).hexdigest()[:32]
+                self._db.execute(cur,
+                    "INSERT INTO ai_validation_outcomes(id,model_call_id,scan_id,file,rule_id,"
+                    "item_id,outcome,detail,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                    "ON CONFLICT(id) DO NOTHING",
+                    (event_id, call_id, scan_id, file, event_rule_id, item_id, outcome,
+                     (detail or None), now))
+                inserted += max(0, int(cur.rowcount or 0))
+        return inserted
 
     # ADR 0019 §8.5 — thresholds for surfacing a rule as ready to migrate
     # Human-Assisted → AI-Assisted. All three conditions must hold simultaneously.

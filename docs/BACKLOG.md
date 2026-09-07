@@ -686,7 +686,9 @@ thing the PRD does not mention.
   **Reviewer-outcome linkage started:** on-demand text remediation drafts now retain the exact
   `ai_calls.id` through the review card and persist it on the immutable HITL event. The API rejects
   an identifier from another scan or file rather than guessing attribution. Remaining linkage:
-  post-write validation events. Vision and server-precomputed single-proposal cards now carry the
+  criterion-level comparison and rollout gates. Post-write validation now records an immutable
+  verified-cleared, still-failing or could-not-verify outcome against the exact accepted model
+  call. Vision and server-precomputed single-proposal cards now carry the
   exact producing call as well; multi-instance cards deliberately remain unattributed until the
   review contract can express one decision per generated value without false precision.
 

@@ -4635,6 +4635,20 @@ def _apply_one_value_kind(
     if not values and not extra_work:
         return working, False
 
+    # Freeze the exact review items before the lane changes their applied state. Their immutable
+    # HITL events carry model_call_id when a reviewer acted on an AI draft; human-authored work
+    # simply yields no model outcome row.
+    review_item_ids = []
+    for rule_id in credit_rule_ids:
+        review_item_ids.extend(core.store.approved_unapplied_item_ids(scan_id, filename, rule_id))
+
+    def _model_outcome(outcome: str, detail: str) -> None:
+        try:
+            core.store.record_ai_validation_outcomes(
+                scan_id, filename, diff_rule_id, review_item_ids, outcome, detail=detail)
+        except Exception:
+            swallowed("_apply_one_value_kind: recording the AI post-write outcome failed", scan_id)
+
     _phase(job, f"writing the approved {noun}")
     fixed, applied, unresolved = write_fn(working, values)
     if unresolved:
@@ -4661,6 +4675,7 @@ def _apply_one_value_kind(
             detail=f"wrote {len(applied)} {noun} value(s) but could not verify "
                    f"{sorted(scs_to_clear)}: {verification.reason}. Credit withheld; "
                    f"the approved value is kept for retry")
+        _model_outcome("could_not_verify", verification.reason or "verification unavailable")
         return working, False
     if not verification.cleared(scs_to_clear):
         # The value went in but the criterion still fails (content we never saw, or the engine
@@ -4670,6 +4685,8 @@ def _apply_one_value_kind(
             "system", "apply.unverified", scan_id=scan_id, file=filename,
             detail=f"wrote {len(applied)} {noun} value(s) but "
                    f"{sorted(verification.still_failing(scs_to_clear))} still fails on re-scan")
+        _model_outcome("verified_still_failing",
+                       f"still failing: {sorted(verification.still_failing(scs_to_clear))}")
         return working, False
 
     try:
@@ -4683,6 +4700,7 @@ def _apply_one_value_kind(
     for rule_id in credit_rule_ids:
         for item_id in core.store.approved_unapplied_item_ids(scan_id, filename, rule_id):
             core.store.mark_row_applied(item_id)
+    _model_outcome("verified_cleared", f"cleared on re-scan: {sorted(scs_to_clear)}")
     core.store.log_decision(
         "system", "apply.applied", scan_id=scan_id, file=filename,
         detail=f"wrote {len(applied)} reviewer-approved {noun} value(s); "
