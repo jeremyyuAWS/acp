@@ -211,6 +211,11 @@ _map_many([
     ("GET", "/releases"),
     ("GET", "/scans/{sid}/release"),
     ("GET", "/scans/{sid}/release/manifest"),
+    # This is a read-only projection despite using POST: the selected filenames are carried in
+    # the body so a large release is not constrained by URL length. It does not publish, approve,
+    # or persist anything, and therefore belongs to the same release.view boundary as the
+    # manifest and preview projections rather than the release.publish grant.
+    ("POST", "/scans/{sid}/release/ai-provenance"),
     ("POST", "/scans/{sid}/release/preview"),
     ("POST", "/scans/{sid}/release/package/preview"),
     ("POST", "/scans/{sid}/release/package"),

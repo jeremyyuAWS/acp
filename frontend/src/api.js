@@ -610,6 +610,14 @@ export const getAppliedFixes = (scanId) => (SIM || !scanId
 export const getScanAiCalls = (scanId) => (SIM || !scanId
   ? sim([])
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/ai_calls`, { headers: headers() }).then(j).catch(() => []))
+// Release review uses a server-scoped projection: reviewer and post-write rows are attached only
+// through their durable AI call id. An empty outcome array means "not recorded", never zero.
+export const getReleaseAiProvenance = (scanId, files = []) => (SIM || !scanId || !files.length
+  ? sim([])
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/ai-provenance`, {
+      method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ files }),
+    }).then(j))
 // Per-fix before→after evidence for one file — the original text/markup → remediated
 // version, persisted only for fixes that verifiably cleared. Feeds the certification PDF's
 // "Before → After" section, and the review drawer's evidence card. SIM serves the same

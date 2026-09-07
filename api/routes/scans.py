@@ -2902,6 +2902,29 @@ def scan_ai_calls(sid: str, request: Request):
     return core.store.list_ai_calls(sid)
 
 
+class ReleaseAiProvenanceRequest(BaseModel):
+    files: list[str]
+
+
+@router.post("/scans/{sid}/release/ai-provenance")
+def release_ai_provenance(sid: str, request: Request, body: ReleaseAiProvenanceRequest):
+    """Exact model, review, and post-write evidence for the selected release files.
+
+    Unlike the scan-wide operational ledger, this projection links human and validation outcomes
+    only by their durable model-call id.  Historical or human-authored decisions without that id
+    are deliberately absent rather than inferred from a nearby successful call.
+    """
+    scan = core.store.get_scan(sid, owner=_owner(request))
+    if scan is None:
+        raise HTTPException(404, "scan not found")
+    selected = list(dict.fromkeys(str(name) for name in body.files if name))
+    known = {row.get("file") for row in scan.get("files", [])}
+    unknown = [name for name in selected if name not in known]
+    if unknown:
+        raise HTTPException(404, f"corrected file not found: {unknown[0]}")
+    return core.store.release_ai_provenance(sid, selected)
+
+
 @router.post("/scans/{sid}/files/{filename:path}/undo-fix")
 async def undo_fix(sid: str, filename: str, request: Request):
     """R15 — undo one deterministic fix ACP claims to have applied to this file.
