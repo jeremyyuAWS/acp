@@ -1505,25 +1505,37 @@ export const getReleaseStatus = (scanId) => (SIM
 export const listReleaseHistory = (limit = 50) => (SIM
   ? sim({ releases: [] }, 50)
   : fetch(`${BASE}/releases?limit=${encodeURIComponent(limit)}`, { headers: headers() }).then(j))
-export const previewReleaseDestination = (scanId, files, releaseFolderName = '') => (SIM
+export const previewReleaseDestination = (scanId, files, releaseFolderName = '', preserveHierarchy = true) => (SIM
   ? sim({ folder_name: releaseFolderName || '2026-09-06 12-00 UTC', folder_state: 'proposed', provider: 'drive',
       documents: files.map((file) => ({ file, provider_location: 'google:me', destination_path: `Remediated/${releaseFolderName || '2026-09-06 12-00 UTC'}/${file}`, action: 'create' })),
       blockers: [], can_release: true, collision_policy: 'Existing files are not overwritten.', original_files_unchanged: true }, 80)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/preview`, {
       method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ files, ...(releaseFolderName.trim() ? { release_folder_name: releaseFolderName.trim() } : {}) }),
+      body: JSON.stringify({ files, preserve_hierarchy: preserveHierarchy, ...(releaseFolderName.trim() ? { release_folder_name: releaseFolderName.trim() } : {}) }),
     }).then(j))
 export const getReleaseManifest = (scanId) => (SIM
   ? sim({ manifest: { schema_version: 1, scan_id: scanId, documents: [] },
       content_digest: { algorithm: 'SHA-256', value: 'simulation' },
       digest_note: 'Simulation manifest.' }, 50)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/manifest`, { headers: headers() }).then(j))
-export const downloadReleasePackage = (scanId, files, packageName = '') => {
+export const previewReleasePackage = (scanId, files, options = {}) => (SIM
+  ? sim({ files: files.length, paths: files, estimated_bytes: null, estimate_complete: false,
+      preserve_hierarchy: options.preserveHierarchy !== false, include_manifest: options.includeManifest !== false,
+      blockers: [], can_download: true, recommended_format: files.length === 1 ? 'original' : 'zip' }, 80)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/package/preview`, {
+      method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ files, preserve_hierarchy: options.preserveHierarchy !== false,
+        include_manifest: options.includeManifest !== false }),
+    }).then(j))
+export const downloadReleasePackage = (scanId, files, packageName = '', options = {}) => {
   if (SIM) return Promise.resolve()
+  const downloadFormat = options.downloadFormat || 'zip'
   return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/package`, {
     method: 'POST',
     headers: headers({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ files, ...(packageName.trim() ? { package_name: packageName.trim() } : {}) }),
+    body: JSON.stringify({ files, preserve_hierarchy: options.preserveHierarchy !== false,
+      include_manifest: options.includeManifest !== false, download_format: downloadFormat,
+      ...(packageName.trim() ? { package_name: packageName.trim() } : {}) }),
   })
     .then(async (r) => {
       if (!r.ok) {
@@ -1538,7 +1550,9 @@ export const downloadReleasePackage = (scanId, files, packageName = '') => {
       const a = document.createElement('a')
       a.href = url
       const requestedName = packageName.trim().replace(/\.zip$/i, '')
-      a.download = requestedName ? `${requestedName}.zip` : (match?.[1] || `acp-release-${scanId}.zip`)
+      a.download = downloadFormat === 'original'
+        ? (match?.[1] || files[0]?.split('/').pop() || 'corrected-file')
+        : requestedName ? `${requestedName}.zip` : (match?.[1] || `acp-release-${scanId}.zip`)
       document.body.appendChild(a); a.click(); a.remove()
       setTimeout(() => URL.revokeObjectURL(url), 60000)
     })

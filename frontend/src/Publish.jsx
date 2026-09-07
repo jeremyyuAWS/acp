@@ -1,14 +1,14 @@
 import { useState, useEffect, useRef } from 'react'
 import ScopeBanner from './ScopeBanner.jsx'
 import { documentSelection, documentScopeSentence } from './remediableScope.js'
-import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseManifest, previewReleaseDestination, listHitlQueue, getSettings, getSourceStatus, rescoreFile, downloadReleasePackage } from './api.js'
+import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseManifest, previewReleaseDestination, previewReleasePackage, listHitlQueue, getSettings, getSourceStatus, rescoreFile, downloadReleasePackage } from './api.js'
 import { releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
 import { SET_STATUS, certificationUniverse, releaseSetStatus } from './graduation.js'
 import { mirrorState, MIRROR } from './deliveryPolicy.js'
 import ReleaseHistory from './ReleaseHistory.jsx'
 import ReleaseModelProvenance from './ReleaseModelProvenance.jsx'
 import ReleaseFileSelection, { releaseFileSize } from './ReleaseFileSelection.jsx'
-import ReleasePlanSummary from './ReleasePlanSummary.jsx'
+import ReleasePlanSummary, { formatReleaseBytes } from './ReleasePlanSummary.jsx'
 import ReleaseStepPanel from './ReleaseStepPanel.jsx'
 import './release-plan-summary.css'
 
@@ -36,6 +36,11 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [deliveryMethod, setDeliveryMethod] = useState('publish')
   const [packageName, setPackageName] = useState('')
   const [releaseFolderName, setReleaseFolderName] = useState('')
+  const [preserveHierarchy, setPreserveHierarchy] = useState(true)
+  const [includeManifest, setIncludeManifest] = useState(true)
+  const [includeVerificationReport, setIncludeVerificationReport] = useState(false)
+  const [downloadFormat, setDownloadFormat] = useState('zip')
+  const [packagePreview, setPackagePreview] = useState(null)
   const [keptInAcp, setKeptInAcp] = useState(false)
   const [releasePreview, setReleasePreview] = useState(null)
   const [previewingRelease, setPreviewingRelease] = useState(false)
@@ -311,8 +316,12 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     if (downloading || !selectedReady.length) return
     setDownloading(true)
     try {
-      await downloadReleasePackage(run?.id, selectedReady.map((file) => file.file), packageName)
-      setReleaseAnnouncement(`Package downloaded with ${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file' : 'files'} and a release manifest.`)
+      await downloadReleasePackage(run?.id, selectedReady.map((file) => file.file), packageName,
+        { preserveHierarchy, includeManifest, downloadFormat })
+      if (includeVerificationReport) await openReport(run?.id, `acp-verification-${run?.id}.pdf`)
+      setReleaseAnnouncement(downloadFormat === 'original'
+        ? `Corrected file ${selectedReady[0]?.file || ''} downloaded.`
+        : `Package downloaded with ${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file' : 'files'}${includeManifest ? ' and a release manifest' : ''}.`)
     } catch (error) {
       setReleaseAnnouncement(error?.message || 'The corrected files could not be packaged for download.')
       setReleaseError({ summary: 'The ZIP package could not be downloaded.', details: error?.message || 'ACP could not build the release package.', retry: downloadSelected })
@@ -397,18 +406,30 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     if (/[<>:"/\\|?*\u0000-\u001f\u007f]/.test(name)) return `${label} contains a character that cannot be used in a file or folder name.`
     return ''
   }
-  const deliveryNameError = deliveryMethod === 'download'
+  const deliveryNameError = deliveryMethod === 'download' && downloadFormat === 'zip'
     ? validateDeliveryName(packageName, 'ZIP filename')
     : deliveryMethod === 'publish' && !releaseFolder ? validateDeliveryName(releaseFolderName, 'Release folder name') : ''
   const reviewDelivery = async () => {
-    if (deliveryMethod === 'download') { setReleasePreview(null); setBuilderStep(3); return }
+    if (deliveryMethod === 'download') {
+      setPreviewingRelease(true)
+      try {
+        const preview = await previewReleasePackage(run?.id, selectedReady.map((file) => file.file),
+          { preserveHierarchy, includeManifest })
+        setPackagePreview(preview)
+        setBuilderStep(3)
+      } catch (error) {
+        setReleaseError({ summary: 'The download could not be checked.', details: error?.message || 'ACP could not preview the package.', retry: reviewDelivery })
+      }
+      setPreviewingRelease(false)
+      return
+    }
     if (deliveryMethod === 'acp') { setReleasePreview(null); setBuilderStep(3); return }
     setPreviewingRelease(true)
     setReleaseAnnouncement('')
     try {
       const preview = await previewReleaseDestination(
         run?.id, selectedPublishable.map((file) => file.file),
-        releaseFolder?.name || releaseFolderName)
+        releaseFolder?.name || releaseFolderName, preserveHierarchy)
       setReleasePreview(preview)
       if (!releaseFolder && !releaseFolderName.trim()) setReleaseFolderName(preview.folder_name || '')
       setBuilderStep(3)
@@ -671,10 +692,10 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
               <span className={builderStep === 3 ? 'active' : ''} aria-current={builderStep === 3 ? 'step' : undefined}>3 <b>Review</b></span>
             </div>
             <ReleasePlanSummary compact count={selectedReady.length}
-              excluded={ready.length - selectedPublishable.length}
+              excluded={staleReady.length + selectedReady.filter((file) => done[file.file]).length}
               method={deliveryMethod} provider={sourceProduct}
               destination={releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}
-              preserveStructure estimatedBytes={selectedEstimatedBytes} />
+              preserveStructure={preserveHierarchy} estimatedBytes={packagePreview?.estimated_bytes ?? selectedEstimatedBytes} />
             {builderStep === 1 ? (
               <ReleaseStepPanel id="release-files-step" heading="Choose files" focusOnMount={false} className="release-builder__continue">
                 <span className="muted">{selectedReady.length ? `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file is' : 'files are'} ready.` : 'Select at least one ready file.'}</span>
@@ -701,13 +722,23 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
               </fieldset>
               <div className="release-destination-config" aria-live="polite">
                 {deliveryMethod === 'download' ? <>
-                  <div className="release-destination-config__heading"><b>Download package</b><span>Saved by your browser</span></div>
-                  <div className="release-name-field">
+                  <div className="release-destination-config__heading"><b>{downloadFormat === 'original' ? 'Download corrected file' : 'Download package'}</b><span>Saved by your browser</span></div>
+                  {selectedReady.length === 1 && <fieldset className="release-download-format">
+                    <legend>Download format</legend>
+                    <label><input type="radio" name="download-format" checked={downloadFormat === 'original'} onChange={() => setDownloadFormat('original')} /> Corrected file directly</label>
+                    <label><input type="radio" name="download-format" checked={downloadFormat === 'zip'} onChange={() => setDownloadFormat('zip')} /> ZIP package</label>
+                  </fieldset>}
+                  {downloadFormat === 'zip' && <div className="release-name-field">
                   <label htmlFor="release-package-name"><b>ZIP filename</b> <span>Optional</span></label>
                   <input id="release-package-name" value={packageName} onChange={(e) => setPackageName(e.target.value)} placeholder={`acp-release-${run?.id || 'scan'}.zip`} aria-describedby="release-name-help release-name-error" />
                   <small id="release-name-help">“.zip” is added automatically. Leave blank to use the scan-based name.</small>
-                  </div>
-                  <div className="release-includes"><span>✓ Corrected files</span><span>✓ Original folder structure</span><span>✓ Release manifest with checksums</span></div>
+                  </div>}
+                  {downloadFormat === 'zip' && <div className="release-download-options">
+                    <label><input type="checkbox" checked={preserveHierarchy} onChange={(event) => setPreserveHierarchy(event.target.checked)} /> Preserve source folder structure</label>
+                    <label><input type="checkbox" checked={includeManifest} onChange={(event) => setIncludeManifest(event.target.checked)} /> Include release manifest with checksums</label>
+                  </div>}
+                  <div className="release-download-options"><label><input type="checkbox" checked={includeVerificationReport} onChange={(event) => setIncludeVerificationReport(event.target.checked)} /> Also download scope-limited verification report (PDF)</label></div>
+                  <div className="release-includes"><span>✓ Corrected files</span>{downloadFormat === 'zip' && preserveHierarchy && <span>✓ Original folder structure</span>}{downloadFormat === 'zip' && includeManifest && <span>✓ Release manifest with checksums</span>}</div>
                 </> : deliveryMethod === 'acp' ? <>
                   <div className="release-destination-config__heading"><b>ACP controlled storage</b><span>No external delivery</span></div>
                   <p className="muted">The corrected copies stay associated with this scan. You can return to Release later and choose another destination.</p>
@@ -742,7 +773,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                   <p>{deliveryMethod === 'publish'
                     ? `${selectedPublishable.length} unreleased corrected ${selectedPublishable.length === 1 ? 'copy' : 'copies'} will be published to ${(releaseFolder?.name || releaseFolderName.trim()) ? `the “${releaseFolder?.name || releaseFolderName.trim()}” release folder` : releaseDestinationPhrase({ provider: releaseProvider, anyDrive, driveMirrorEnabled, driveMirrorFolder })}. Already released files are excluded. Original files will not be changed.`
                     : deliveryMethod === 'download'
-                      ? `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file' : 'files'} will be packaged in “${packageName.trim().replace(/\.zip$/i, '') || `acp-release-${run?.id || 'scan'}`}.zip” with folder structure and a manifest. Your browser will ask where to save it. Original files will not be changed.`
+                      ? downloadFormat === 'original'
+                        ? `The corrected copy of “${selectedReady[0]?.file || 'this file'}” will download directly${includeVerificationReport ? ', followed by a separate scope-limited PDF report download' : ''}. Your browser will ask where to save it. The original file will not be changed.`
+                        : `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file' : 'files'} will be packaged in “${packageName.trim().replace(/\.zip$/i, '') || `acp-release-${run?.id || 'scan'}`}.zip”${preserveHierarchy ? ' with the source folder structure' : ' in one flat folder'}${includeManifest ? ' and a release manifest' : ''}${includeVerificationReport ? ', followed by a separate scope-limited PDF report download' : ''}. Your browser will ask where to save it. Original files will not be changed.`
                       : `${selectedReady.length} corrected ${selectedReady.length === 1 ? 'file' : 'files'} will remain securely in ACP. No external copy will be created and original files will not be changed.`}</p>
                   {deliveryMethod === 'publish' && releasePreview && <div className="release-preview">
                     <div className="release-preview__heading"><b>Exact destination preview</b><span>{releasePreview.documents?.length || 0} files · {releasePreview.folder_state === 'existing' ? 'existing release folder' : 'new release folder'}</span></div>
@@ -751,6 +784,13 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                     <p>{releasePreview.collision_policy}</p>
                     {(releasePreview.blockers || []).map((item) => <div className="release-name-error" role="alert" key={item.file}>{item.file}: {item.reason}</div>)}
                   </div>}
+                  {deliveryMethod === 'download' && packagePreview && <div className="release-preview">
+                    <div className="release-preview__heading"><b>Download preview</b><span>{packagePreview.files || 0} files · {formatReleaseBytes(packagePreview.estimated_bytes)}</span></div>
+                    {(packagePreview.paths || []).slice(0, 5).map((path) => <div className="release-preview__path" key={path}><span>+ Include</span><code>{path}</code></div>)}
+                    {(packagePreview.paths || []).length > 5 && <small>+{packagePreview.paths.length - 5} more paths</small>}
+                    {!packagePreview.estimate_complete && <p className="muted">Final size will be calculated while preparing the download.</p>}
+                    {(packagePreview.blockers || []).map((item) => <div className="release-name-error" role="alert" key={item.file}>{item.file}: {item.reason}</div>)}
+                  </div>}
                   <ReleaseModelProvenance scanId={run?.id} selectedFiles={selectedReady.map((file) => file.file)} />
                 </div>
                 <div className="release-plan__actions">
@@ -758,7 +798,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                   {deliveryMethod === 'publish'
                     ? <button className="qbtn approve" disabled={readOnly || publishing || !selectedPublishable.length || !releasePreview?.can_release} onClick={() => setConfirm({ kind: 'selected', files: selectedPublishable.map((f) => f.file), folderName: releasePreview?.folder_name || releaseFolder?.name || releaseFolderName.trim() })}>{publishing ? 'Publishing…' : `Publish ${selectedPublishable.length} ${selectedPublishable.length === 1 ? 'copy' : 'copies'}`}</button>
                     : deliveryMethod === 'download'
-                      ? <button className="qbtn approve" disabled={downloading || !selectedReady.length} onClick={downloadSelected}>{downloading ? 'Building package…' : `Download ZIP (${selectedReady.length})`}</button>
+                      ? <button className="qbtn approve" disabled={downloading || !selectedReady.length || packagePreview?.can_download === false} onClick={downloadSelected}>{downloading ? 'Preparing download…' : downloadFormat === 'original' ? 'Download corrected file' : `Download ZIP (${selectedReady.length})`}</button>
                       : <button className="qbtn approve" disabled={!selectedReady.length || keptInAcp} onClick={keepSelectedInAcp}>{keptInAcp ? 'Kept in ACP' : `Keep ${selectedReady.length} in ACP`}</button>}
                 </div>
               </div>
