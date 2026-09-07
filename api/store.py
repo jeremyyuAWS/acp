@@ -1290,6 +1290,8 @@ _SCHEMA = [
       acp_version TEXT
     )""",
     "ALTER TABLE release_executions ADD COLUMN IF NOT EXISTS acp_version TEXT",
+    "ALTER TABLE release_executions ADD COLUMN IF NOT EXISTS parent_folder_id TEXT",
+    "ALTER TABLE release_executions ADD COLUMN IF NOT EXISTS parent_folder_name TEXT",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_release_scan_owner ON release_executions(scan_id,owner_email)",
     "CREATE INDEX IF NOT EXISTS idx_release_owner ON release_executions(owner_email,created_at)",
     """CREATE TABLE IF NOT EXISTS release_roots (
@@ -8943,7 +8945,9 @@ class Store:
 
     def ensure_release_execution(self, scan_id: str, owner: str, source: str,
                                  documents_total: int, *,
-                                 preferred_folder_name: str | None = None) -> dict:
+                                 preferred_folder_name: str | None = None,
+                                 parent_folder_id: str | None = None,
+                                 parent_folder_name: str | None = None) -> dict:
         """Create/reconcile the one durable Release execution for a scan atomically.
 
         The total is grow-only: later approvals expand the same release, while a stale retry can
@@ -8960,8 +8964,9 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO release_executions(id,scan_id,owner_email,source,folder_name,"
-                "documents_total,status,created_at,updated_at,acp_version) "
-                "VALUES(%s,%s,%s,%s,%s,%s,'running',%s,%s,%s) "
+                "documents_total,status,created_at,updated_at,acp_version,"
+                "parent_folder_id,parent_folder_name) "
+                "VALUES(%s,%s,%s,%s,%s,%s,'running',%s,%s,%s,%s,%s) "
                 "ON CONFLICT(scan_id,owner_email) DO UPDATE SET "
                 "documents_total=CASE WHEN release_executions.documents_total < EXCLUDED.documents_total "
                 "THEN EXCLUDED.documents_total ELSE release_executions.documents_total END,"
@@ -8971,7 +8976,8 @@ class Store:
                 "THEN EXCLUDED.updated_at ELSE release_executions.updated_at END",
                 (release_id, scan_id, owner, source, folder_name,
                  requested_total, now, now,
-                 os.environ.get("ACP_BUILD_VERSION") or os.environ.get("ACP_VERSION") or "dev"))
+                 os.environ.get("ACP_BUILD_VERSION") or os.environ.get("ACP_VERSION") or "dev",
+                 parent_folder_id, parent_folder_name))
             self._db.execute(cur,
                 "SELECT * FROM release_executions WHERE scan_id=%s AND owner_email=%s",
                 (scan_id, owner))

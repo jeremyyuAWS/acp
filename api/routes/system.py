@@ -1156,10 +1156,11 @@ class SettingsUpdate(BaseModel):
 
 
 @router.get("/settings")
-def get_settings():
+def get_settings(request: Request = None):
     """Platform settings. ai_enabled=false → deterministic-only mode platform-wide
     (overrides per-scan ?ai=true and blocks /ai/explain). drive_mirror_enabled=false
     (ADR 0010) → remediated fixes stay Blob-only, no automatic Drive copy."""
+    user = (getattr(getattr(request, "state", None), "user_email", None) or "").strip()
     return {"ai_enabled": core.store.get_ai_enabled(),
             "drive_mirror_enabled": core.store.get_drive_mirror_enabled(),
             "drive_mirror_folder": core.store.get_drive_mirror_folder(),
@@ -1172,7 +1173,8 @@ def get_settings():
             # editor must show what is stored so a save round-trips. /config reports the
             # RESOLVED scope for everything that renders it — the two are different questions
             # and conflating them is how an editor starts overwriting what it never loaded.
-            "scan_scope": core.store.get_setting("scan_scope", "") or ""}
+            "scan_scope": core.store.get_setting("scan_scope", "") or "",
+            "release_destination": _release_destination(user) if user else None}
 
 
 @router.put("/settings")
@@ -1249,7 +1251,7 @@ def update_settings(body: SettingsUpdate, request: Request):
         core.store.log_decision(
             "admin", "settings.ai_enabled",
             detail=f"ai_enabled set to {body.ai_enabled}")
-    return get_settings()
+    return get_settings(request)
 
 
 # ── per-user scan-scope override (ADR 0035 stage 2 — the non-admin surface) ────────────
