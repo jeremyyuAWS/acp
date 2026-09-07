@@ -1,6 +1,7 @@
 """User scan recurrence is local-wall-clock correct and fleet-idempotent."""
 import sys
 import json
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -15,6 +16,11 @@ def _cfg(**overrides):
            "days": [0, 1, 2, 3, 4], "source": "drive"}
     out.update(overrides)
     return out
+
+
+def _save_cfg(store, owner="alice@example.com"):
+    return store.save_user_scan_schedule(
+        owner, True, "America/Los_Angeles", "09:30", [0, 1, 2, 3, 4], "drive")
 
 
 def test_local_time_tracks_daylight_saving_instead_of_a_fixed_utc_offset():
@@ -55,6 +61,29 @@ def test_weekday_filter_and_next_occurrence_use_the_users_calendar():
         2026, 9, 7, 16, 30, tzinfo=timezone.utc)
 
 
+def test_restart_catches_up_only_the_most_recent_missed_occurrence():
+    cfg = _cfg(days=[0, 1, 2, 3, 4], updated_at="2026-09-01T00:00:00+00:00")
+    recovered = schedule.due_or_most_recent_occurrence(
+        cfg, datetime(2026, 9, 9, 20, 0, tzinfo=timezone.utc))
+
+    assert recovered == {
+        "occurrence_key": "user-scan:alice@example.com:drive:America/Los_Angeles:2026-09-09:09:30",
+        "scheduled_for": "2026-09-09T16:30:00+00:00",
+        "local_date": "2026-09-09",
+        "catch_up": True,
+    }
+
+
+def test_catch_up_is_bounded_and_never_predates_schedule_creation():
+    now = datetime(2026, 9, 9, 20, 0, tzinfo=timezone.utc)
+    just_enabled = _cfg(days=[2], updated_at="2026-09-09T19:00:00+00:00")
+    stale = _cfg(days=[2], updated_at="2026-08-01T00:00:00+00:00")
+
+    assert schedule.due_or_most_recent_occurrence(just_enabled, now) is None
+    assert schedule.due_or_most_recent_occurrence(
+        stale, now, catch_up=timedelta(hours=2)) is None
+
+
 def test_invalid_timezone_time_and_days_are_rejected():
     for call in (
         lambda: schedule.zone("Mars/Olympus"),
@@ -92,6 +121,7 @@ def test_scheduler_offers_each_users_due_occurrence_with_owner_snapshot(monkeypa
 
 
 def test_durable_election_preserves_the_user_occurrence_snapshot(isolated_store):
+    _save_cfg(isolated_store)
     cfg = _cfg(owner_email="alice@example.com")
     due = schedule.due_occurrence(
         cfg, datetime(2026, 9, 7, 16, 30, tzinfo=timezone.utc))
@@ -103,3 +133,70 @@ def test_durable_election_preserves_the_user_occurrence_snapshot(isolated_store)
     saved = json.loads(jobs[0]["payload"])
     assert saved["owner_email"] == "alice@example.com"
     assert saved["local_date"] == "2026-09-07"
+
+
+def test_active_scheduled_scan_blocks_a_later_occurrence_for_same_owner(isolated_store):
+    _save_cfg(isolated_store)
+    first = {"owner_email": "Alice@Example.com", "local_date": "2026-09-07"}
+    second = {"owner_email": "alice@example.com", "local_date": "2026-09-08"}
+
+    assert isolated_store.enqueue_scheduled_sweep("alice:first", first) is True
+    assert isolated_store.enqueue_scheduled_sweep("alice:second", second) is False
+    active = isolated_store.active_scheduled_sweep("ALICE@example.com")
+    assert active and active["status"] == "queued"
+    assert len([job for job in isolated_store.list_jobs()
+                if job["type"] == "scheduled_sweep"]) == 1
+
+
+def test_different_owners_can_have_scheduled_scans_in_flight(isolated_store):
+    _save_cfg(isolated_store)
+    _save_cfg(isolated_store, "bob@example.com")
+    assert isolated_store.enqueue_scheduled_sweep(
+        "alice:first", {"owner_email": "alice@example.com"}) is True
+    assert isolated_store.enqueue_scheduled_sweep(
+        "bob:first", {"owner_email": "bob@example.com"}) is True
+
+
+def test_replicas_atomically_admit_only_one_occurrence_per_owner(isolated_store):
+    _save_cfg(isolated_store)
+    keys = [f"alice:{day}" for day in range(24)]
+    payload = {"owner_email": "alice@example.com"}
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        admitted = list(pool.map(
+            lambda key: isolated_store.enqueue_scheduled_sweep(key, payload), keys))
+
+    assert admitted.count(True) == 1
+
+
+def test_occurrence_watermark_survives_completed_job_retention(isolated_store):
+    _save_cfg(isolated_store)
+    key = "user-scan:alice@example.com:drive:America/Los_Angeles:2026-09-07:09:30"
+    payload = {"owner_email": "alice@example.com", "local_date": "2026-09-07"}
+    assert isolated_store.enqueue_scheduled_sweep(key, payload) is True
+    job = next(job for job in isolated_store.list_jobs() if job["type"] == "scheduled_sweep")
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur, "DELETE FROM jobs WHERE id=%s", (job["id"],))
+
+    assert isolated_store.enqueue_scheduled_sweep(key, payload) is False
+    assert isolated_store.get_user_scan_schedule(
+        "alice@example.com")["last_enqueued_occurrence"] == key
+
+
+def test_scheduler_marks_and_staggers_recovered_occurrences(monkeypatch):
+    import core
+    now = datetime(2026, 9, 9, 20, 0, tzinfo=timezone.utc)
+    offers = []
+
+    class Store:
+        def list_enabled_user_scan_schedules(self):
+            return [_cfg(updated_at="2026-09-01T00:00:00+00:00")]
+
+        def enqueue_scheduled_sweep(self, key, payload, run_after=None):
+            offers.append((key, payload, run_after))
+            return True
+
+    monkeypatch.setattr(core, "get_store", lambda: Store())
+    assert core._enqueue_scheduled_scan(now) is True
+    assert offers[0][1]["catch_up"] is True
+    delayed = datetime.fromisoformat(offers[0][2])
+    assert now <= delayed < now + timedelta(minutes=5)

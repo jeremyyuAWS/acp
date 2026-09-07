@@ -373,8 +373,17 @@ _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS user_scan_schedules (
       owner_email TEXT PRIMARY KEY, enabled INT NOT NULL, timezone TEXT NOT NULL,
       local_time TEXT NOT NULL, days TEXT NOT NULL, source TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL, last_enqueued_occurrence TEXT,
+      metric_admitted INT NOT NULL DEFAULT 0,
+      metric_delayed_catch_up INT NOT NULL DEFAULT 0,
+      metric_skipped INT NOT NULL DEFAULT 0,
+      metric_failed INT NOT NULL DEFAULT 0
     )""",
+    "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS last_enqueued_occurrence TEXT",
+    "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS metric_admitted INT NOT NULL DEFAULT 0",
+    "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS metric_delayed_catch_up INT NOT NULL DEFAULT 0",
+    "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS metric_skipped INT NOT NULL DEFAULT 0",
+    "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS metric_failed INT NOT NULL DEFAULT 0",
     # PRD Phase 3 (incremental connector sync). One row per source: the connector-native
     # cursor (Drive's changes.list page token today; a Graph delta link would be a future
     # row) that lets the scheduled sweep ask "what changed since last time" instead of
@@ -584,6 +593,13 @@ _SCHEMA = [
     # Error class persisted on failure so operators can diagnose dead-lettered jobs by
     # category (rate_limit / auth / corrupt / transient) without parsing last_error text.
     "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS error_class TEXT",
+    # Owner is denormalized only for scheduled sweeps so admission can atomically prevent one
+    # user's prior scheduled scan from overlapping their next occurrence. Interactive jobs stay
+    # NULL and retain their existing tenant linkage through scan_runs.
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS scheduled_owner TEXT",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_one_active_scheduled_owner "
+    "ON jobs(scheduled_owner) WHERE type='scheduled_sweep' "
+    "AND status IN ('queued','running') AND scheduled_owner IS NOT NULL",
     # Canonical workflow-stage authority. Queue rows remain the delivery mechanism; these rows
     # own identity, lifecycle and user-visible accounting across retries and reconnects.
     """CREATE TABLE IF NOT EXISTS stage_executions (
@@ -2288,8 +2304,14 @@ class _PgAdapter:
     # v34 is the additive union of v33's AI-call decision linkage and owner-scoped
     # user_scan_schedules. Older replicas ignore both; newer replicas no longer share one
     # process-wide cadence between signed-in users.
-    _SCHEMA_VERSION = 34
-    _SCHEMA_CHECKSUM_AT_VERSION = "45ccbaa2dcb309ae7fdc75e76281a9e5"
+    # v35 adds user_scan_schedules.last_enqueued_occurrence. This durable watermark survives
+    # jobs-table retention, so catch-up cannot recreate an occurrence after its done row is
+    # purged. It is nullable and ignored by older replicas, preserving rolling compatibility.
+    # v36 adds durable owner-scoped operational counters for admitted, delayed catch-up,
+    # skipped and failed scheduled runs. Defaults preserve existing schedule rows and older
+    # replicas ignore the additive columns during a rolling deploy.
+    _SCHEMA_VERSION = 36
+    _SCHEMA_CHECKSUM_AT_VERSION = "f4bc5376c5574a2f0abd6c5078c4e2f8"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -6442,22 +6464,35 @@ class Store:
         normalized = str(owner or "demo").strip().lower() or "demo"
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT owner_email,enabled,timezone,local_time,days,source,updated_at "
+                "SELECT owner_email,enabled,timezone,local_time,days,source,updated_at,"
+                "last_enqueued_occurrence,metric_admitted,metric_delayed_catch_up,"
+                "metric_skipped,metric_failed "
                 "FROM user_scan_schedules WHERE owner_email=%s", (normalized,))
             rows = self._db.fetchall(cur)
         if not rows:
             return {"owner_email": normalized, "enabled": False, "timezone": "UTC",
                     "local_time": "09:00", "days": [0, 1, 2, 3, 4],
-                    "source": "drive", "updated_at": None}
+                    "source": "drive", "updated_at": None,
+                    "last_enqueued_occurrence": None,
+                    "metrics": {"scheduled": 0, "delayed": 0,
+                                "skipped": 0, "failed": 0}}
         row = dict(rows[0])
         row["enabled"] = bool(row["enabled"])
         row["days"] = [int(day) for day in json.loads(row["days"])]
+        row["metrics"] = {
+            "scheduled": int(row.pop("metric_admitted") or 0),
+            "delayed": int(row.pop("metric_delayed_catch_up") or 0),
+            "skipped": int(row.pop("metric_skipped") or 0),
+            "failed": int(row.pop("metric_failed") or 0),
+        }
         return row
 
     def list_enabled_user_scan_schedules(self) -> list[dict]:
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "SELECT owner_email,enabled,timezone,local_time,days,source,updated_at "
+                "SELECT owner_email,enabled,timezone,local_time,days,source,updated_at,"
+                "last_enqueued_occurrence,metric_admitted,metric_delayed_catch_up,"
+                "metric_skipped,metric_failed "
                 "FROM user_scan_schedules WHERE enabled=1 ORDER BY owner_email")
             rows = self._db.fetchall(cur)
         schedules = []
@@ -6466,6 +6501,12 @@ class Store:
                 row = dict(raw)
                 row["enabled"] = True
                 row["days"] = [int(day) for day in json.loads(row["days"])]
+                row["metrics"] = {
+                    "scheduled": int(row.pop("metric_admitted") or 0),
+                    "delayed": int(row.pop("metric_delayed_catch_up") or 0),
+                    "skipped": int(row.pop("metric_skipped") or 0),
+                    "failed": int(row.pop("metric_failed") or 0),
+                }
                 schedules.append(row)
             except (TypeError, ValueError, json.JSONDecodeError):
                 # One corrupt historic row must not prevent every other user's due scan.
@@ -9906,6 +9947,16 @@ class Store:
             })
             if owner:
                 self.set_user_setting(str(owner).strip().lower(), self._SWEEP_KEY, value)
+                normalized = str(owner).strip().lower()
+                with self._db.cursor() as cur:
+                    if skipped:
+                        self._db.execute(cur,
+                            "UPDATE user_scan_schedules SET metric_skipped=metric_skipped+1 "
+                            "WHERE owner_email=%s", (normalized,))
+                    elif not ok:
+                        self._db.execute(cur,
+                            "UPDATE user_scan_schedules SET metric_failed=metric_failed+1 "
+                            "WHERE owner_email=%s", (normalized,))
             else:
                 self.set_setting(self._SWEEP_KEY, value)
         except Exception:
@@ -11371,7 +11422,8 @@ class Store:
                         (now, batch_id))
         return job_id
 
-    def enqueue_scheduled_sweep(self, occurrence_key: str, payload: dict | None = None) -> bool:
+    def enqueue_scheduled_sweep(self, occurrence_key: str, payload: dict | None = None,
+                                run_after: str | None = None) -> bool:
         """Durably enqueue one fleet-wide scheduled-sweep occurrence.
 
         Every API and worker replica owns an APScheduler process, so they can all offer the
@@ -11383,15 +11435,54 @@ class Store:
         import json as _json
         now = self._now()
         job_id = "sweep-" + _hashlib.sha256(occurrence_key.encode("utf-8")).hexdigest()[:32]
+        owner = str((payload or {}).get("owner_email") or "").strip().lower() or None
+        with self._db.cursor() as cur:
+            encoded = _json.dumps({**(payload or {}), "occurrence_key": occurrence_key})
+            if owner:
+                # INSERT and watermark advance share one transaction. The schedule predicate
+                # survives done-job retention; the partial unique index independently prevents
+                # two different occurrences for one owner from overlapping.
+                self._db.execute(cur,
+                    "INSERT INTO jobs(id,type,payload,status,priority,attempts,max_attempts,"
+                    "run_after,created_at,updated_at,scheduled_owner) "
+                    "SELECT %s,'scheduled_sweep',%s,'queued',%s,0,3,%s,%s,%s,%s "
+                    "FROM user_scan_schedules WHERE owner_email=%s "
+                    "AND (last_enqueued_occurrence IS NULL OR last_enqueued_occurrence<>%s) "
+                    "ON CONFLICT DO NOTHING",
+                    (job_id, encoded, job_priority("scheduled_sweep"), run_after or now,
+                     now, now, owner, owner, occurrence_key))
+            else:
+                # Legacy singleton schedules have no owner row or watermark. Preserve their
+                # original deterministic job-id behavior unchanged.
+                self._db.execute(cur,
+                    "INSERT INTO jobs(id,type,payload,status,priority,attempts,max_attempts,"
+                    "run_after,created_at,updated_at,scheduled_owner) "
+                    "VALUES(%s,'scheduled_sweep',%s,'queued',%s,0,3,%s,%s,%s,NULL) "
+                    "ON CONFLICT DO NOTHING",
+                    (job_id, encoded, job_priority("scheduled_sweep"), run_after or now, now, now))
+            admitted = (getattr(cur, "rowcount", 0) or 0) > 0
+            if admitted and owner:
+                self._db.execute(cur,
+                    "UPDATE user_scan_schedules SET last_enqueued_occurrence=%s,"
+                    "metric_admitted=metric_admitted+1,"
+                    "metric_delayed_catch_up=metric_delayed_catch_up+%s "
+                    "WHERE owner_email=%s",
+                    (occurrence_key, int(bool((payload or {}).get("catch_up"))), owner))
+            return admitted
+
+    def active_scheduled_sweep(self, owner: str) -> dict | None:
+        """Inspectable overlap state used by scheduler diagnostics and focused tests."""
+        normalized = str(owner or "").strip().lower()
+        if not normalized:
+            return None
         with self._db.cursor() as cur:
             self._db.execute(cur,
-                "INSERT INTO jobs(id,type,payload,status,priority,attempts,max_attempts,"
-                "run_after,created_at,updated_at) "
-                "VALUES(%s,'scheduled_sweep',%s,'queued',%s,0,3,%s,%s,%s) "
-                "ON CONFLICT(id) DO NOTHING",
-                (job_id, _json.dumps({**(payload or {}), "occurrence_key": occurrence_key}),
-                 job_priority("scheduled_sweep"), now, now, now))
-            return (getattr(cur, "rowcount", 0) or 0) > 0
+                "SELECT id,status,run_after,created_at FROM jobs "
+                "WHERE type='scheduled_sweep' AND scheduled_owner=%s "
+                "AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1",
+                (normalized,))
+            row = self._db.fetchone(cur)
+        return dict(row) if row else None
 
     def stage_snapshot_id(self, scan_id: str) -> str:
         """Stable identity of the immutable Discover/Assess input consumed downstream.
