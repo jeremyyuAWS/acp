@@ -130,6 +130,48 @@ def test_redis_transport_uses_isolated_namespace_retention_and_last_event_id():
     assert restored.effective_priority == Priority.NORMAL
 
 
+def test_redis_transport_warmup_opens_the_persistent_client_connection():
+    class FakeRedis:
+        def __init__(self):
+            self.pings = 0
+        def ping(self):
+            self.pings += 1
+            return True
+
+    transport = object.__new__(shadow.RedisStreamTransport)
+    transport.redis = FakeRedis()
+
+    assert transport.warmup() is True
+    assert transport.redis.pings == 1
+
+
+def test_shadow_warmup_is_observable_and_failure_falls_through(monkeypatch):
+    monkeypatch.setattr(shadow, "METRICS", shadow.Metrics())
+
+    class FailingWarmTransport(Transport):
+        def warmup(self):
+            raise TimeoutError("injected cold connection timeout")
+
+    transport = FailingWarmTransport()
+    publisher = shadow.ShadowPublisher(transport, start_worker=False)
+    publisher.warmup()  # must not raise or disable later best-effort publication
+    publisher.submit(kind="assess.completed", owner="t", correlation_id="c", payload={})
+    publisher.publish_one()
+
+    metrics = shadow.metrics_snapshot()
+    assert metrics["warmup_failure_total"] == 1
+    assert metrics["warmup_success_total"] == 0
+    assert metrics["publish_success_total"] == 1
+    assert len(transport.events) == 1
+
+    class WarmTransport(Transport):
+        def warmup(self):
+            return True
+
+    shadow.ShadowPublisher(WarmTransport(), start_worker=False).warmup()
+    assert shadow.metrics_snapshot()["warmup_success_total"] == 1
+
+
 class FakePipeline:
     def __init__(self, results=None, failure=None):
         self.commands = []

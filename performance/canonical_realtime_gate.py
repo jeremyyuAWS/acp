@@ -63,6 +63,11 @@ class MemoryRedis:
                 del rows[:len(rows) - maxlen]
             return row_id
 
+    def ping(self):
+        if self.delay_ms:
+            time.sleep(self.delay_ms / 1000)
+        return True
+
     def rows(self, key):
         with self._lock:
             return list(self.streams.get(key, ()))
@@ -102,8 +107,17 @@ class ObservedTransport:
         self.redis = transport.redis
         self._latencies_ms: dict[str, float] = {}
         self._batches: list[dict] = []
+        self._warmup_latency_ms: float | None = None
         self._active_writes = 0
         self._lock = threading.Lock()
+
+    def warmup(self):
+        started_ns = time.perf_counter_ns()
+        try:
+            return self.transport.warmup()
+        finally:
+            with self._lock:
+                self._warmup_latency_ms = (time.perf_counter_ns() - started_ns) / 1_000_000
 
     def write(self, event):
         started_ns = time.perf_counter_ns()
@@ -153,6 +167,10 @@ class ObservedTransport:
     def batch_observations(self) -> list[dict]:
         with self._lock:
             return [dict(batch) for batch in self._batches]
+
+    def warmup_latency_ms(self) -> float:
+        with self._lock:
+            return self._warmup_latency_ms or 0.0
 
 
 @dataclass(frozen=True)
@@ -293,6 +311,7 @@ def run(config: GateConfig) -> dict:
         }
         metrics = {
             "gateway_latency_p95_ms": percentile(gateway_latencies, .95),
+            "connection_warmup_latency_ms": observed_transport.warmup_latency_ms(),
             "cold_first_batch_latency_ms": cold_batch[0]["latency_ms"] if cold_batch else 0.0,
             "cold_first_batch_size": cold_batch[0]["size"] if cold_batch else 0,
             "warm_gateway_latency_p95_ms": percentile(warm_gateway_latencies, .95),
