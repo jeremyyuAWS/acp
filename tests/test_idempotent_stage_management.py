@@ -169,6 +169,78 @@ def test_output_manifest_is_sealed_from_deterministic_effect_receipts(isolated_s
     assert final["output_manifest_id"] == manifest["manifest_id"]
 
 
+def test_side_effect_is_reserved_before_write_and_completed_by_fencing_token(isolated_store):
+    reservation = isolated_store.reserve_side_effect(
+        execution_id="release-execution", work_item_id="release-item",
+        effect_type="sharepoint.publish", destination="graph:drive:folder:a.docx",
+        content_digest="sha256:corrected", worker_id="worker-1",
+        now="2026-09-06T10:00:00+00:00")
+    assert reservation["acquired"] is True
+    assert reservation["status"] == "reserved"
+
+    busy = isolated_store.reserve_side_effect(
+        execution_id="release-execution", work_item_id="release-item",
+        effect_type="sharepoint.publish", destination="graph:drive:folder:a.docx",
+        content_digest="sha256:corrected", worker_id="worker-2",
+        now="2026-09-06T10:01:00+00:00")
+    assert busy["acquired"] is False and busy["status"] == "reserved"
+
+    completed = isolated_store.finalize_side_effect(
+        reservation["effect_id"], reservation["reservation_token"],
+        {"provider_id": "copy-1", "verified": True},
+        now="2026-09-06T10:02:00+00:00")
+    assert completed["status"] == "completed"
+    assert completed["receipt"] == {"provider_id": "copy-1", "verified": True}
+
+    replay = isolated_store.reserve_side_effect(
+        execution_id="release-execution", work_item_id="release-item",
+        effect_type="sharepoint.publish", destination="graph:drive:folder:a.docx",
+        content_digest="sha256:corrected", worker_id="worker-2",
+        now="2026-09-06T10:03:00+00:00")
+    assert replay["acquired"] is False and replay["reused"] is True
+    assert replay["receipt"]["provider_id"] == "copy-1"
+
+
+def test_side_effect_collision_and_stale_owner_fail_closed(isolated_store):
+    first = isolated_store.reserve_side_effect(
+        execution_id="release-execution", work_item_id="release-item",
+        effect_type="sharepoint.publish", destination="graph:drive:folder:a.docx",
+        content_digest="sha256:first", worker_id="worker-1",
+        now="2026-09-06T10:00:00+00:00", lease_seconds=60)
+    with pytest.raises(ValueError, match="different content"):
+        isolated_store.reserve_side_effect(
+            execution_id="release-execution", work_item_id="release-item",
+            effect_type="sharepoint.publish", destination="graph:drive:folder:a.docx",
+            content_digest="sha256:second", worker_id="worker-2",
+            now="2026-09-06T10:02:00+00:00")
+
+    successor = isolated_store.reserve_side_effect(
+        execution_id="release-execution", work_item_id="release-item",
+        effect_type="sharepoint.publish", destination="graph:drive:folder:a.docx",
+        content_digest="sha256:first", worker_id="worker-2",
+        now="2026-09-06T10:02:00+00:00")
+    assert successor["acquired"] is True
+    with pytest.raises(RuntimeError, match="stale"):
+        isolated_store.finalize_side_effect(
+            first["effect_id"], first["reservation_token"], {"provider_id": "zombie"})
+
+
+def test_failed_side_effect_can_be_reclaimed_with_a_new_token(isolated_store):
+    first = isolated_store.reserve_side_effect(
+        execution_id="release-execution", work_item_id="release-item",
+        effect_type="sharepoint.publish", destination="graph:drive:folder:a.docx",
+        content_digest="sha256:corrected", worker_id="worker-1")
+    failed = isolated_store.fail_side_effect(
+        first["effect_id"], first["reservation_token"], "provider unavailable")
+    assert failed["status"] == "failed"
+    successor = isolated_store.reserve_side_effect(
+        execution_id="release-execution", work_item_id="release-item",
+        effect_type="sharepoint.publish", destination="graph:drive:folder:a.docx",
+        content_digest="sha256:corrected", worker_id="worker-2")
+    assert successor["acquired"] is True
+    assert successor["reservation_token"] != first["reservation_token"]
+
+
 def test_successful_runtime_batch_seals_output_automatically(isolated_store):
     sid = _scan(isolated_store, "runtime-seal")
     execution = _submit(isolated_store, sid)

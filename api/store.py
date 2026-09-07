@@ -696,8 +696,18 @@ _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS side_effect_receipts (
       effect_id TEXT PRIMARY KEY, execution_id TEXT NOT NULL, work_item_id TEXT,
       effect_type TEXT NOT NULL, destination TEXT NOT NULL, content_digest TEXT NOT NULL,
-      receipt TEXT, created_at TEXT NOT NULL
+      receipt TEXT, created_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'completed',
+      reservation_owner TEXT, reservation_token TEXT, lease_expires_at TEXT,
+      completed_at TEXT, failed_at TEXT, last_error TEXT
     )""",
+    "ALTER TABLE side_effect_receipts ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'completed'",
+    "ALTER TABLE side_effect_receipts ADD COLUMN IF NOT EXISTS reservation_owner TEXT",
+    "ALTER TABLE side_effect_receipts ADD COLUMN IF NOT EXISTS reservation_token TEXT",
+    "ALTER TABLE side_effect_receipts ADD COLUMN IF NOT EXISTS lease_expires_at TEXT",
+    "ALTER TABLE side_effect_receipts ADD COLUMN IF NOT EXISTS completed_at TEXT",
+    "ALTER TABLE side_effect_receipts ADD COLUMN IF NOT EXISTS failed_at TEXT",
+    "ALTER TABLE side_effect_receipts ADD COLUMN IF NOT EXISTS last_error TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_side_effect_reservation ON side_effect_receipts(status,lease_expires_at)",
     # Sensitive-data (PII) findings per document (ADR 0006). A detection dimension
     # orthogonal to WCAG. samples holds JSON array of MASKED strings only — never
     # raw PII (the masking is enforced in api/pii.py).
@@ -2359,8 +2369,9 @@ class _PgAdapter:
     # v39 adds owner-scoped schedule operation policy, occurrence history and notifications,
     # plus one deployment-wide set of administrator guardrails. All schedule columns are
     # additive and carry safe defaults for rolling replicas.
-    _SCHEMA_VERSION = 39
-    _SCHEMA_CHECKSUM_AT_VERSION = "1a02b63a4a2707559da654052ef9e0d3"
+    # v40 adds fenced pre-write reservations and terminal evidence to provider-effect receipts.
+    _SCHEMA_VERSION = 40
+    _SCHEMA_CHECKSUM_AT_VERSION = "e16e8f397bd3079f3af52fea4f4bfe09"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -12492,15 +12503,143 @@ class Store:
                 "status": "escalated" if escalated else "overdue" if overdue else
                           "stopping" if awaiting else "clear"}
 
+    @staticmethod
+    def _side_effect_identity(execution_id: str, work_item_id: str | None,
+                              effect_type: str, destination: str) -> str:
+        """Identify one intended external effect, independently of its proposed bytes.
+
+        Content is deliberately excluded. A replay which proposes different bytes for the same
+        stage item and destination is an integrity collision, not permission to perform a second
+        provider write.
+        """
+        import hashlib as _hashlib
+        material = "\0".join((execution_id, work_item_id or "", effect_type, destination))
+        return _hashlib.sha256(material.encode()).hexdigest()
+
+    @staticmethod
+    def _decode_side_effect_row(row: dict | None) -> dict | None:
+        import json as _json
+        if not row:
+            return None
+        result = dict(row)
+        if isinstance(result.get("receipt"), str):
+            try:
+                result["receipt"] = _json.loads(result["receipt"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("side-effect receipt contains malformed JSON") from exc
+        return result
+
+    def reserve_side_effect(self, *, execution_id: str, work_item_id: str | None,
+                            effect_type: str, destination: str, content_digest: str,
+                            worker_id: str, lease_seconds: int = 300,
+                            now: str | None = None) -> dict:
+        """Elect one worker before an external write and return its fencing token.
+
+        ``acquired`` is true only for the caller allowed to write. A completed reservation is a
+        replay and carries its durable provider receipt. An unexpired reservation is busy. Failed
+        or expired reservations may be reclaimed with a new token. Identity fields and content
+        must match exactly on every replay; disagreement fails before provider I/O.
+        """
+        from datetime import datetime, timezone, timedelta
+        now = now or self._now()
+        instant = datetime.fromisoformat(str(now).replace("Z", "+00:00"))
+        if instant.tzinfo is None:
+            instant = instant.replace(tzinfo=timezone.utc)
+        expires = (instant + timedelta(seconds=max(1, int(lease_seconds)))).isoformat()
+        effect_id = self._side_effect_identity(
+            execution_id, work_item_id, effect_type, destination)
+        token = uuid.uuid4().hex
+        reclaimed = False
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO side_effect_receipts(effect_id,execution_id,work_item_id,effect_type,"
+                "destination,content_digest,receipt,created_at,status,reservation_owner,"
+                "reservation_token,lease_expires_at) VALUES(%s,%s,%s,%s,%s,%s,NULL,%s,'reserved',"
+                "%s,%s,%s) ON CONFLICT(effect_id) DO NOTHING",
+                (effect_id, execution_id, work_item_id, effect_type, destination, content_digest,
+                 now, worker_id, token, expires))
+            inserted = (getattr(cur, "rowcount", 0) or 0) > 0
+            if not inserted:
+                self._db.execute(cur, "SELECT * FROM side_effect_receipts WHERE effect_id=%s",
+                                 (effect_id,))
+                existing = self._db.fetchone(cur)
+                if not existing:
+                    raise RuntimeError("side-effect reservation disappeared")
+                identity = (existing.get("execution_id"), existing.get("work_item_id"),
+                            existing.get("effect_type"), existing.get("destination"),
+                            existing.get("content_digest"))
+                proposed = (execution_id, work_item_id, effect_type, destination, content_digest)
+                if identity != proposed:
+                    raise ValueError("side-effect identity was replayed with different content")
+                if existing.get("status") == "completed":
+                    return {**self._decode_side_effect_row(existing), "acquired": False,
+                            "reused": True}
+                self._db.execute(cur,
+                    "UPDATE side_effect_receipts SET status='reserved',reservation_owner=%s,"
+                    "reservation_token=%s,lease_expires_at=%s,failed_at=NULL,last_error=NULL "
+                    "WHERE effect_id=%s AND (status='failed' OR "
+                    "(status='reserved' AND lease_expires_at<=%s))",
+                    (worker_id, token, expires, effect_id, now))
+                inserted = (getattr(cur, "rowcount", 0) or 0) > 0
+                reclaimed = inserted
+            self._db.execute(cur, "SELECT * FROM side_effect_receipts WHERE effect_id=%s",
+                             (effect_id,))
+            row = self._db.fetchone(cur)
+        return {**self._decode_side_effect_row(row), "acquired": inserted,
+                "reclaimed": reclaimed, "reused": False}
+
+    def finalize_side_effect(self, effect_id: str, reservation_token: str,
+                             receipt: dict, *, now: str | None = None) -> dict:
+        """Commit provider evidence only for the current reservation fencing token."""
+        import json as _json
+        now = now or self._now()
+        encoded = _json.dumps(receipt, sort_keys=True, separators=(",", ":"), default=str)
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE side_effect_receipts SET status='completed',receipt=%s,completed_at=%s,"
+                "lease_expires_at=NULL,last_error=NULL WHERE effect_id=%s AND status='reserved' "
+                "AND reservation_token=%s",
+                (encoded, now, effect_id, reservation_token))
+            if not (getattr(cur, "rowcount", 0) or 0):
+                self._db.execute(cur, "SELECT * FROM side_effect_receipts WHERE effect_id=%s",
+                                 (effect_id,))
+                existing = self._db.fetchone(cur)
+                if existing and existing.get("status") == "completed" \
+                        and existing.get("reservation_token") == reservation_token:
+                    return {**self._decode_side_effect_row(existing), "reused": True}
+                raise RuntimeError("side-effect reservation token is stale")
+            self._db.execute(cur, "SELECT * FROM side_effect_receipts WHERE effect_id=%s",
+                             (effect_id,))
+            row = self._db.fetchone(cur)
+        return {**self._decode_side_effect_row(row), "reused": False}
+
+    def fail_side_effect(self, effect_id: str, reservation_token: str, error: str,
+                         *, now: str | None = None) -> dict:
+        """Release after a definitive provider refusal so a later attempt may retry.
+
+        An ambiguous timeout must retain the reservation: after its lease expires the successor
+        uses ``reclaimed`` to verify the destination before deciding whether another write is safe.
+        """
+        now = now or self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE side_effect_receipts SET status='failed',failed_at=%s,last_error=%s,"
+                "lease_expires_at=NULL WHERE effect_id=%s AND status='reserved' "
+                "AND reservation_token=%s",
+                (now, str(error)[:1000], effect_id, reservation_token))
+            if not (getattr(cur, "rowcount", 0) or 0):
+                raise RuntimeError("side-effect reservation token is stale")
+            self._db.execute(cur, "SELECT * FROM side_effect_receipts WHERE effect_id=%s",
+                             (effect_id,))
+            row = self._db.fetchone(cur)
+        return self._decode_side_effect_row(row)
+
     def record_side_effect_receipt(self, *, execution_id: str, work_item_id: str | None,
                                    effect_type: str, destination: str, content_digest: str,
                                    receipt: dict | None = None) -> dict:
-        """Persist/reuse the deterministic receipt that makes an external write exactly-once."""
-        import hashlib as _hashlib
+        """Compatibility helper for already-completed synchronous effects."""
         import json as _json
-        material = "\0".join((execution_id, work_item_id or "", effect_type,
-                              destination, content_digest))
-        effect_id = _hashlib.sha256(material.encode()).hexdigest()
+        effect_id = self._side_effect_identity(execution_id, work_item_id, effect_type, destination)
         encoded = _json.dumps(receipt, sort_keys=True, separators=(",", ":"), default=str) \
             if receipt is not None else None
         with self._db.cursor() as cur:
@@ -12508,12 +12647,17 @@ class Store:
                              (effect_id,))
             existing = self._db.fetchone(cur)
             if existing:
-                return {**existing, "reused": True}
+                if existing.get("content_digest") != content_digest:
+                    raise ValueError("side-effect identity was replayed with different content")
+                if existing.get("status") != "completed":
+                    raise RuntimeError("side-effect reservation has not completed")
+                return {**self._decode_side_effect_row(existing), "reused": True}
             self._db.execute(cur,
                 "INSERT INTO side_effect_receipts(effect_id,execution_id,work_item_id,effect_type,"
-                "destination,content_digest,receipt,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                "destination,content_digest,receipt,created_at,status,completed_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,'completed',%s)",
                 (effect_id, execution_id, work_item_id, effect_type, destination,
-                 content_digest, encoded, self._now()))
+                 content_digest, encoded, self._now(), self._now()))
         return {"effect_id": effect_id, "execution_id": execution_id,
                 "work_item_id": work_item_id, "effect_type": effect_type,
                 "destination": destination, "content_digest": content_digest,
@@ -12581,7 +12725,8 @@ class Store:
                 with self._db.cursor() as cur:
                     self._db.execute(cur,
                         "SELECT effect_id FROM side_effect_receipts WHERE effect_id=%s "
-                        "AND execution_id=%s AND (work_item_id=%s OR %s IS NULL)",
+                        "AND execution_id=%s AND status='completed' "
+                        "AND (work_item_id=%s OR %s IS NULL)",
                         (effect_id, execution_id, entry.get("work_item_id"),
                          entry.get("work_item_id")))
                     if not self._db.fetchone(cur):
