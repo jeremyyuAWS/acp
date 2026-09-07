@@ -1439,6 +1439,7 @@ export const updateHitlItem = (itemId, status, reviewerNote = null, approvedValu
         approved_values: opts.approvedValues ?? null,
         edited: !!opts.edited, review_ms: opts.reviewMs ?? null, ai_value: opts.aiValue ?? null,
         model_call_id: opts.modelCallId ?? null,
+        model_call_ids: opts.modelCallIds ?? null,
         // Feedback intelligence: WHY a rejection happened (enum; bulk/keyboard paths send 'unspecified')
         reject_reason: opts.rejectReason ?? null,
         // WCAG exception the reviewer applied instead of writing a fix: 'decorative' (1.1.1 — image

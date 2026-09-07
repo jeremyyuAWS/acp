@@ -7697,11 +7697,11 @@ class Store:
                 "AND model_call_id IS NOT NULL AND action IN ('approve','edit') "
                 "ORDER BY created_at DESC", tuple(ids))
             rows = self._db.fetchall(cur)
-            latest: dict[str, tuple[str, str]] = {}
+            latest: dict[tuple[str, str], str] = {}
             for row in rows:
-                latest.setdefault(str(row["item_id"]),
-                                  (str(row["model_call_id"]), str(row.get("rule_id") or rule_id)))
-            for item_id, (call_id, event_rule_id) in latest.items():
+                key = (str(row["item_id"]), str(row["model_call_id"]))
+                latest.setdefault(key, str(row.get("rule_id") or rule_id))
+            for (item_id, call_id), event_rule_id in latest.items():
                 event_id = hashlib.sha256(
                     f"post-write:{call_id}:{scan_id}:{file}:{event_rule_id}:{item_id}:{outcome}"
                     f":{reg_json or ''}".encode()

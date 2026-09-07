@@ -9,6 +9,7 @@ resolution is recorded in the immutable audit trail as WHY the finding was resol
 from __future__ import annotations
 import sys
 import tempfile
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -145,5 +146,67 @@ def test_review_rejects_a_model_call_from_another_file(st, route):
                                 scan_id="s1", file="other.docx")
     with pytest.raises(HTTPException) as error:
         hitl_update(row["id"], HitlUpdate(status="approved", model_call_id=call_id), _req())
+    assert error.value.status_code == 422
+    assert st.get_hitl_item(row["id"])["status"] == "pending"
+
+
+def test_multi_instance_review_records_each_exact_vision_call(st, route):
+    """A collapsed card is one decision but each generated alt has its own producer."""
+    hitl_update, HitlUpdate, _jobs, _dec = route
+    row = _row(st)
+    call_ids = [st.record_ai_call(surface="vision", provider="ollama", model="llava",
+                                  zone="local", latency_ms=80, ok=True,
+                                  scan_id="s1", file="deck.pptx") for _ in range(2)]
+    evidence = [
+        {"locator": "slide1#Picture 1", "proposed_value": "A chart", "model_call_id": call_ids[0]},
+        {"locator": "slide2#Picture 2", "proposed_value": "A map", "model_call_id": call_ids[1]},
+    ]
+    with st._db.cursor() as cur:
+        st._db.execute(cur, "UPDATE hitl_queue SET evidence=%s WHERE id=%s",
+                       (json.dumps(evidence), row["id"]))
+    hitl_update(row["id"], HitlUpdate(status="approved",
+        approved_values=["A quarterly chart", "A map"], model_call_ids=call_ids), _req())
+    with st._db.cursor() as cur:
+        st._db.execute(cur, "SELECT model_call_id,ai_value,final_value,edited FROM hitl_events "
+                           "WHERE item_id=%s ORDER BY final_value", (row["id"],))
+        events = st._db.fetchall(cur)
+    assert {event["model_call_id"] for event in events} == set(call_ids)
+    assert {(event["ai_value"], event["final_value"], event["edited"]) for event in events} == {
+        ("A chart", "A quarterly chart", 1), ("A map", "A map", 0)}
+
+
+def test_multi_instance_review_rejects_a_foreign_call_before_recording(st, route):
+    from fastapi import HTTPException
+    hitl_update, HitlUpdate, _jobs, _dec = route
+    row = _row(st)
+    own = st.record_ai_call(surface="vision", provider="ollama", model="llava", zone="local",
+                            latency_ms=80, ok=True, scan_id="s1", file="deck.pptx")
+    foreign = st.record_ai_call(surface="vision", provider="ollama", model="llava", zone="local",
+                                latency_ms=80, ok=True, scan_id="other-scan", file="deck.pptx")
+    with pytest.raises(HTTPException) as error:
+        hitl_update(row["id"], HitlUpdate(status="approved",
+                    model_call_ids=[own, foreign]), _req())
+    assert error.value.status_code == 422
+    assert st.get_hitl_item(row["id"])["status"] == "pending"
+
+
+def test_multi_instance_review_rejects_a_same_file_call_attached_to_the_wrong_value(st, route):
+    """File ownership is necessary but insufficient when the proposal records its producer."""
+    from fastapi import HTTPException
+    hitl_update, HitlUpdate, _jobs, _dec = route
+    row = _row(st)
+    call_ids = [st.record_ai_call(surface="vision", provider="ollama", model="llava",
+                                  zone="local", latency_ms=80, ok=True,
+                                  scan_id="s1", file="deck.pptx") for _ in range(2)]
+    evidence = [
+        {"locator": "slide1#Picture 1", "proposed_value": "A chart", "model_call_id": call_ids[0]},
+        {"locator": "slide2#Picture 2", "proposed_value": "A map", "model_call_id": call_ids[1]},
+    ]
+    with st._db.cursor() as cur:
+        st._db.execute(cur, "UPDATE hitl_queue SET evidence=%s WHERE id=%s",
+                       (json.dumps(evidence), row["id"]))
+    with pytest.raises(HTTPException) as error:
+        hitl_update(row["id"], HitlUpdate(status="approved",
+                    model_call_ids=list(reversed(call_ids))), _req())
     assert error.value.status_code == 422
     assert st.get_hitl_item(row["id"])["status"] == "pending"

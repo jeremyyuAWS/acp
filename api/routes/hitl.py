@@ -19,6 +19,10 @@ class HitlUpdate(BaseModel):
     review_ms: int | None = None        # client-measured time from card-open to decision (reviewer-time metric)
     ai_value: str | None = None         # the AI-proposed value shown, so we store proposed-vs-final
     model_call_id: str | None = None    # exact ai_calls row reviewed; absent for human-authored work
+    # One exact producing call per proposal/evidence value, positionally aligned with
+    # approved_values. Multi-image cards contain independent vision calls, so collapsing them
+    # into model_call_id would either discard attribution or invent a single producer.
+    model_call_ids: list[str | None] | None = None
     # One final text per proposal, positionally: the row holds N proposals (one per image) and
     # a single approved_value could never describe ten different pictures. An entry that is
     # null/"" accepts that proposal's own draft, so approving an unedited card means exactly
@@ -145,8 +149,18 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
         raise HTTPException(422, f"reject_reason must be one of {sorted(REJECT_REASONS)}")
     if body.resolution is not None and body.resolution not in RESOLUTIONS:
         raise HTTPException(422, f"resolution must be one of {sorted(RESOLUTIONS)}")
-    if body.model_call_id and not core.store.ai_call_belongs_to_file(
-            body.model_call_id, item.get("scan_id"), item.get("file")):
+    submitted_call_ids = ([body.model_call_id] if body.model_call_id else [])
+    submitted_call_ids.extend(call_id for call_id in (body.model_call_ids or []) if call_id)
+    if body.model_call_ids is not None:
+        instances = item.get("proposals") or item.get("evidence") or []
+        if len(body.model_call_ids) != len(instances):
+            raise HTTPException(422, "model_call_ids must align with this review item's values")
+        for index, instance in enumerate(instances):
+            recorded = instance.get("model_call_id")
+            if recorded and body.model_call_ids[index] != recorded:
+                raise HTTPException(422, "model_call_id does not match the generated review value")
+    if any(not core.store.ai_call_belongs_to_file(
+            call_id, item.get("scan_id"), item.get("file")) for call_id in submitted_call_ids):
         raise HTTPException(422, "model_call_id does not belong to this review item")
     # The resolution is persisted ON THE ROW, not only in the decision log below. The certify
     # gate and the appliers read rows: with the exception recorded nowhere they could reach,
@@ -189,13 +203,32 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
     try:
         _action = ("edit" if (body.status == "approved" and body.edited)
                    else {"approved": "approve", "rejected": "reject", "skipped": "skip"}.get(body.status, body.status))
-        core.store.record_hitl_event(
-            item.get("scan_id"), item.get("file"), item.get("rule_id"), item_id, _action,
-            edited=body.edited, review_ms=body.review_ms, ai_value=body.ai_value,
-            final_value=body.approved_value,
-            reviewer=(getattr(request.state, "user_email", None) if request is not None else None),
-            reject_reason=(body.reject_reason if body.status == "rejected" else None),
-            model_call_id=body.model_call_id)
+        event_kwargs = {
+            "review_ms": body.review_ms,
+            "reviewer": (getattr(request.state, "user_email", None) if request is not None else None),
+        }
+        if body.model_call_ids is not None:
+            proposals = item.get("proposals") or item.get("evidence") or []
+            final_values = body.approved_values or []
+            for index, call_id in enumerate(body.model_call_ids):
+                if not call_id:
+                    continue
+                ai_value = ((proposals[index].get("proposed_value")
+                             if index < len(proposals) else None) or None)
+                final_value = (final_values[index] if index < len(final_values) else None)
+                core.store.record_hitl_event(
+                    item.get("scan_id"), item.get("file"), item.get("rule_id"), item_id, _action,
+                    edited=bool(final_value is not None and ai_value is not None
+                                and final_value != ai_value),
+                    ai_value=ai_value, final_value=final_value,
+                    reject_reason=(body.reject_reason if body.status == "rejected" else None),
+                    model_call_id=call_id, **event_kwargs)
+        else:
+            core.store.record_hitl_event(
+                item.get("scan_id"), item.get("file"), item.get("rule_id"), item_id, _action,
+                edited=body.edited, ai_value=body.ai_value, final_value=body.approved_value,
+                reject_reason=(body.reject_reason if body.status == "rejected" else None),
+                model_call_id=body.model_call_id, **event_kwargs)
     except Exception:
         swallowed("routes.hitl.hitl_update: recording the HITL event failed")
     # Observability: the human decision joins the file's Langfuse trace (audit P1 — HITL
