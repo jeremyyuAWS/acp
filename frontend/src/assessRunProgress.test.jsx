@@ -57,12 +57,11 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).toContain('Finance/Q3 Board Pack.pdf')
     expect(html).toContain('Describing 6 images that have no alt text')
     expect(html).toContain('Checking Non-text content')
-    expect(html).toContain('Assessment throughput')
-    expect(html).toContain('12 documents/min')
+    expect(html).toContain('successful live update')
     expect(html).toContain('about 1 min 50s left')
     expect(html).toMatch(/Results appear when the run finishes/)
     expect(html).toContain('Live updates · refreshed 0s ago')
-    expect(html.indexOf('Assessment throughput')).toBeLessThan(html.indexOf('Live updates · refreshed'))
+    expect(html.indexOf('successful live update')).toBeLessThan(html.indexOf('Live updates · refreshed'))
   })
 
   it('shows truthful cloud second-opinion use and remaining budgets', () => {
@@ -86,13 +85,13 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).not.toContain('Worker status unavailable')
   })
 
-  it('keeps current processing in the disclosure but moves throughput to the status corner', () => {
+  it('keeps current processing in the disclosure and shows one rolling heartbeat strip above status', () => {
     const html = render(SNAP, { ratePerMin: 12, points: [1, 3, 5, 8] })
     expect(html).toMatch(/<details open="" class="assess-live-details"/)
     expect(html).toContain('Live processing details')
     expect(html).toContain('Processing now')
-    expect(html.match(/Assessment throughput/g)).toHaveLength(1)
-    expect(html).toContain('width="92"')
+    expect(html).not.toContain('Assessment throughput')
+    expect(html.match(/live-heartbeat-bars/g)).toHaveLength(1)
   })
 
   it('never renders a mid-run verdict scoreboard', () => {

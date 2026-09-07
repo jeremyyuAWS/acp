@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { normalizeLive } from './liveAssessment.js'
-import LiveThroughput from './LiveThroughput.jsx'
+import LiveHeartbeatBars from './LiveHeartbeatBars.jsx'
 import SourceVisibility from './SourceVisibility.jsx'
 
 // The Assess RUNNING screen (approved board assess-03). It replaces the mid-run KPI scoreboard
@@ -237,8 +237,7 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
               <strong style={{ fontSize: 14.5 }}>{isFinished ? 'Assessment complete' : 'Assessing documents'}</strong>
               <div style={{ display: 'grid', justifyItems: 'end', gap: 3 }}>
                 {!isFinished && (
-                  <LiveThroughput mini points={throughput?.points || []} ratePerMin={throughput?.ratePerMin}
-                                  label="Assessment throughput" />
+                  <LiveHeartbeatBars measuredAt={measuredAt} />
                 )}
               <span role="status" style={{ fontSize: 11.5, padding: '2px 7px', borderRadius: 4,
                                             display: 'inline-flex', alignItems: 'center', gap: 5,
