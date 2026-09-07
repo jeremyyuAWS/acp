@@ -100,15 +100,45 @@ class ObservedTransport:
         self.transport = transport
         self.redis = transport.redis
         self._latencies_ms: dict[str, float] = {}
+        self._active_writes = 0
         self._lock = threading.Lock()
 
     def write(self, event):
         started_ns = time.perf_counter_ns()
-        row_id = self.transport.write(event)
-        latency_ms = (time.perf_counter_ns() - started_ns) / 1_000_000
         with self._lock:
-            self._latencies_ms[event.event_id] = latency_ms
-        return row_id
+            self._active_writes += 1
+        try:
+            row_id = self.transport.write(event)
+            latency_ms = (time.perf_counter_ns() - started_ns) / 1_000_000
+            with self._lock:
+                self._latencies_ms[event.event_id] = latency_ms
+            return row_id
+        finally:
+            with self._lock:
+                self._active_writes -= 1
+
+    def write_many(self, events):
+        # The in-memory transport has no atomic pipeline, so preserve each write's own
+        # observation boundary.  A real Redis pipeline makes the whole batch observable when
+        # execute returns; every event in that batch therefore shares that measured duration.
+        if not hasattr(self.redis, "pipeline"):
+            return [self.write(event) for event in events]
+        started_ns = time.perf_counter_ns()
+        with self._lock:
+            self._active_writes += 1
+        try:
+            results = self.transport.write_many(events)
+            latency_ms = (time.perf_counter_ns() - started_ns) / 1_000_000
+            with self._lock:
+                self._latencies_ms.update({event.event_id: latency_ms for event in events})
+            return results
+        finally:
+            with self._lock:
+                self._active_writes -= 1
+
+    def has_active_writes(self) -> bool:
+        with self._lock:
+            return self._active_writes > 0
 
     def latency_ms(self, event_id: str) -> float:
         with self._lock:
@@ -212,7 +242,8 @@ def run(config: GateConfig) -> dict:
                 int(transport.redis.xlen(key)) for key in keys)
             with publisher._cv:
                 pending = len(publisher._lifecycle) + len(publisher._progress)
-            if pending == 0 and written >= expected_lossless + expected_progress:
+            if (pending == 0 and not observed_transport.has_active_writes()
+                    and written >= expected_lossless + expected_progress):
                 break
             time.sleep(0.01)
         else:
