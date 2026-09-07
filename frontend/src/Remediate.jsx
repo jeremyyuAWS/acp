@@ -25,7 +25,7 @@ import FileDrawer, { SOURCE_URL } from './FileDrawer.jsx'
 import SegmentDrawer from './SegmentDrawer.jsx'
 import { SENIORITY_ORDER, REMEDIATION_ACTIONS } from './sim.js'
 import { PRI_RANK } from './ontology.js'
-import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, updateHitlItem, assignHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl, getQueueEstimate } from './api.js'
+import { remediateScan, getRemediationStatus, downloadRemediated, autoPopulateHitlQueue, listHitlQueue, listAllHitl, updateHitlItem, assignHitlItem, suggestFix, rescoreFile, getJob, getAppliedFixes, getScanRemediationDiffs, getHitlAnalytics, getScanAiCalls, openTraceUrl, getQueueEstimate } from './api.js'
 import { stageExecutionNotice } from './stageExecutionNotice.js'
 import { SIM, simProposalsFor } from './sim.js'
 import { TraceChip } from './Transparency.jsx'
@@ -88,6 +88,32 @@ const SEV_RANK = { CRITICAL: 0, SERIOUS: 1, MODERATE: 2, MINOR: 3 }
 // _SUGGEST_KIND). The drawer shows these as an editable AI draft instead of a static
 // canned template, and persists whatever the reviewer approves (approved_value).
 const AI_DRAFTABLE_SCS = new Set(['1.1.1', '2.4.4', '2.4.9'])
+
+// A pool-capacity response can arrive after the decision's transaction began. When the server
+// explicitly says `changes: unknown`, neither success nor failure is safe to infer from the PUT.
+// Re-read the durable queue (all statuses, not only pending) and settle from the row itself.
+export async function reconcileHitlPutFailure(itemId, wantedStatus, err, readQueue = listAllHitl) {
+  if (err?.code !== 'DB_CAPACITY_BUSY' || err?.changes !== 'unknown') {
+    return { outcome: 'not_saved', error: err }
+  }
+  try {
+    const rows = await readQueue()
+    const row = (rows || []).find((candidate) => String(candidate.id) === String(itemId))
+    if (row?.status === wantedStatus) return { outcome: 'saved', row }
+    if (row) return { outcome: 'not_saved', row, error: err }
+  } catch { /* the reconciliation read failed too; preserve uncertainty below */ }
+  return { outcome: 'unknown', error: err }
+}
+
+export function hitlFailureCopy(item, kind, err, outcome = 'not_saved') {
+  const action = kind === 'deferred' ? 'skip' : kind
+  const file = item?.file || 'this finding'
+  if (outcome === 'unknown') {
+    return `ACP could not confirm whether your ${action} of “${file}” was saved because database capacity was exhausted. `
+      + 'The card is showing its last known state — refresh the queue before trying again.'
+  }
+  return `Your ${action} of “${file}” was NOT saved: ${err?.message || err}. It is back in the queue — try again.`
+}
 
 function dbItemToUi(it, files) {
   const sc = (it.rule_id || '').replace(/^(WCAG_?|SC_)/, '').replace(/_/g, '.')
@@ -667,7 +693,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // believing they had signed something off that the server never recorded. In a compliance
   // product an unrecorded approval is worse than a visible failure. Put the card back, undo
   // the count, and say so.
-  const undoAct = (item, kind, err) => {
+  const undoAct = (item, kind, err, outcome = 'not_saved') => {
     if (item) {
       setQueue((q) => (q.some((x) => x.id === item.id) ? q : [item, ...q]))
       if (kind === 'deferred') setDeferredItems((d) => d.filter((x) => x.id !== item.id))
@@ -676,8 +702,22 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
     }
     setActed((a) => ({ ...a, [kind]: Math.max(0, (a[kind] || 0) - 1) }))
     window.dispatchEvent(new Event('acp:hitl-changed'))
-    setActError(`Your ${kind === 'deferred' ? 'skip' : kind} of “${item?.file || 'this finding'}” was NOT saved: `
-                + `${err?.message || err}. It is back in the queue — try again.`)
+    setActError(hitlFailureCopy(item, kind, err, outcome))
+  }
+
+  const settleActFailure = async (item, kind, wantedStatus, err) => {
+    const settled = await reconcileHitlPutFailure(item?.id, wantedStatus, err)
+    if (settled.outcome === 'saved') {
+      // The PUT response was lost to capacity pressure, but the durable row proves the decision
+      // landed. Keep the optimistic UI and refresh derived compliance state just as on a normal
+      // approval response. Never ask the reviewer to repeat an already-recorded decision.
+      window.dispatchEvent(new Event('acp:hitl-changed'))
+      try { const r = onRefresh?.(); if (r && typeof r.catch === 'function') r.catch(() => {}) }
+      catch { /* reconciliation already proved the decision; refresh remains cosmetic */ }
+      return
+    }
+    undoAct(item, kind, err, settled.outcome)
+    throw err
   }
 
   // Returns a promise that RESOLVES when the decision is durably recorded and REJECTS when the
@@ -695,7 +735,8 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       if (item) setDeferredItems((d) => [...d, item])
       setActed((a) => ({ ...a, deferred: a.deferred + 1 }))
       if (!SIM && item?.id) {
-        return updateHitlItem(item.id, 'skipped').catch((e) => { undoAct(item, 'deferred', e); throw e })
+        return updateHitlItem(item.id, 'skipped').catch(
+          (e) => settleActFailure(item, 'deferred', 'skipped', e))
       }
       return Promise.resolve()
     }
@@ -734,7 +775,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
           try { const r = onRefresh?.(); if (r && typeof r.catch === 'function') r.catch(() => {}) }
           catch { /* the refresh is cosmetic — never let it disturb a saved decision */ }
         },
-        (e) => { undoAct(item, kind, e); throw e },
+        (e) => settleActFailure(item, kind, apiStatus, e),
       )
     }
     return Promise.resolve()

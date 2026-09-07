@@ -26,6 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
 import core
+import store as _store
 from routes import ROUTERS
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,20 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="acp — accessibility compliance API", version="0.1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=False,
                    allow_methods=["*"], allow_headers=["*"], expose_headers=["X-Acp-Auth"])
+
+
+@app.middleware("http")
+async def _reserve_database_capacity_for_mutations(request, call_next):
+    """Keep read bursts from consuming every local connection needed by a user decision.
+
+    Background workers and non-HTTP callers retain mutation priority by default. Only methods
+    that cannot write are admitted through the bounded read gate in store.py.
+    """
+    token = _store.DB_READ_REQUEST.set(request.method.upper() in {"GET", "HEAD", "OPTIONS"})
+    try:
+        return await call_next(request)
+    finally:
+        _store.DB_READ_REQUEST.reset(token)
 
 # Not every environment has the Postgres driver installed (store.py's SQLite path doesn't need
 # it, and some dev boxes never install it) — guard the import so this module still loads there.
