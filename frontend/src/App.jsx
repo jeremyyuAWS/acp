@@ -2261,14 +2261,14 @@ export default function App() {
                             ? primaryWorkflow.scan_id
                             : (liveScanId || run?.id))} />
 
-      <WorkflowStageStack lineage={canonicalRun.lineage} view={view}
+      <WorkflowStageStack lineage={canonicalRun.lineage} view={view} receivedAt={canonicalRun.receivedAt}
         onNavigate={(next) => {
           setView(next)
           window.scrollTo({ top: 0, behavior: 'smooth' })
         }} />
 
       {showCanonicalStage && (
-        <CanonicalStageCard snapshot={canonicalStage}
+        <CanonicalStageCard snapshot={canonicalStage} receivedAt={canonicalRun.receivedAt}
           onOpen={canonicalStage.stage === 'conformance' ? null : () => {
             setView({ release: 'publish', assess: 'assess', discover: 'discover' }[canonicalStage.stage]
               || canonicalStage.stage)

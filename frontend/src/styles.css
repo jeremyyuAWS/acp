@@ -3306,7 +3306,7 @@ html[data-wcag="on"] .wcag-toggle--on {
 .workflow-stage-stack__summary {
   width: 100%;
   display: grid;
-  grid-template-columns: 20px minmax(150px, auto) 1fr 16px;
+  grid-template-columns: 20px minmax(150px, auto) 1fr minmax(148px, auto) 16px;
   align-items: center;
   gap: 8px;
   padding: 8px 14px;
@@ -3351,5 +3351,6 @@ html[data-wcag="on"] .wcag-toggle--on {
 @media (max-width: 700px) {
   .workflow-stage-stack__summary { grid-template-columns: 20px 1fr 16px; }
   .workflow-stage-stack__count { grid-column: 2; justify-self: start; }
+  .workflow-stage-stack__summary > .live-heartbeat { grid-column: 2; }
   .workflow-stage-stack__body { padding-left: 14px; }
 }
