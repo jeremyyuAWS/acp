@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import ScopeBanner from './ScopeBanner.jsx'
 import { documentSelection, documentScopeSentence } from './remediableScope.js'
-import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseManifest, previewReleaseDestination, previewReleasePackage, listHitlQueue, getSettings, getSourceStatus, rescoreFile, downloadReleasePackage } from './api.js'
+import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseManifest, previewReleaseDestination, previewReleasePackage, listHitlQueue, getSettings, getSourceStatus, rescoreFile, downloadReleasePackage, putMyReleaseTemplates } from './api.js'
 import { releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
 import { SET_STATUS, certificationUniverse, releaseSetStatus } from './graduation.js'
 import { mirrorState, MIRROR } from './deliveryPolicy.js'
@@ -12,6 +12,7 @@ import ReleasePlanSummary, { formatReleaseBytes } from './ReleasePlanSummary.jsx
 import ReleaseStepPanel from './ReleaseStepPanel.jsx'
 import LiveCounter from './LiveCounter.jsx'
 import ReleaseDestinationPicker from './ReleaseDestinationPicker.jsx'
+import ReleaseTemplates from './ReleaseTemplates.jsx'
 import './release-plan-summary.css'
 
 // Step 9 · Publish. Marks re-validated documents as published: the conformance status
@@ -43,6 +44,8 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const [includeManifest, setIncludeManifest] = useState(true)
   const [includeVerificationReport, setIncludeVerificationReport] = useState(false)
   const [downloadFormat, setDownloadFormat] = useState('zip')
+  const [releaseTemplates, setReleaseTemplates] = useState([])
+  const [templateSaving, setTemplateSaving] = useState(false)
   const [packagePreview, setPackagePreview] = useState(null)
   const [keptInAcp, setKeptInAcp] = useState(false)
   const [releasePreview, setReleasePreview] = useState(null)
@@ -78,6 +81,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
     getSettings().then((s) => {
       if (!live || !s) return
       setSettings(s)
+      setReleaseTemplates(Array.isArray(s.release_templates) ? s.release_templates : [])
       const preference = s.release_destination?.provider === run?.source ? s.release_destination : null
       setReleaseDestination((current) => current?.provider === run?.source ? current : preference)
     }).catch(() => {})
@@ -90,6 +94,45 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   const sourceProduct = releaseProvider === 'sharepoint' ? 'SharePoint'
     : releaseProvider === 'drive' ? 'Google Drive' : run?.sourceName || 'connected source'
   const anyDrive = releaseProvider === 'drive' && ready.some((f) => f.drive_file_id)
+  const currentDeliveryPlan = {
+    method: deliveryMethod,
+    destination: releaseDestination,
+    preserve_hierarchy: preserveHierarchy,
+    include_manifest: includeManifest,
+    include_verification_report: includeVerificationReport,
+    download_format: downloadFormat,
+    package_name: packageName,
+    release_folder_name: releaseFolderName,
+  }
+  const applyDeliveryTemplate = (template) => {
+    setDeliveryMethod(template.method || 'publish')
+    setReleaseDestination(template.destination?.provider === releaseProvider ? template.destination : null)
+    setPreserveHierarchy(template.preserve_hierarchy !== false)
+    setIncludeManifest(template.include_manifest !== false)
+    setIncludeVerificationReport(Boolean(template.include_verification_report))
+    setDownloadFormat(template.download_format || 'zip')
+    setPackageName(template.package_name || '')
+    setReleaseFolderName(template.release_folder_name || '')
+    setReleasePreview(null); setPackagePreview(null); setKeptInAcp(false)
+    setReleaseAnnouncement(`${template.name} delivery template applied.`)
+  }
+  const persistDeliveryTemplates = async (next, successMessage) => {
+    setTemplateSaving(true); setReleaseError(null)
+    try {
+      const saved = await putMyReleaseTemplates(next)
+      const templates = Array.isArray(saved?.release_templates) ? saved.release_templates : next
+      setReleaseTemplates(templates)
+      setReleaseAnnouncement(successMessage)
+    } catch (error) {
+      setReleaseError({ summary: 'Delivery templates could not be saved.', details: error?.message || 'Try again.' })
+    } finally { setTemplateSaving(false) }
+  }
+  const saveDeliveryTemplate = (template) => {
+    const next = releaseTemplates.filter((item) => item.name.toLowerCase() !== template.name.toLowerCase())
+    return persistDeliveryTemplates([...next, template], `${template.name} delivery template saved.`)
+  }
+  const deleteDeliveryTemplate = (template) => persistDeliveryTemplates(
+    releaseTemplates.filter((item) => item.name !== template.name), `${template.name} delivery template deleted.`)
   // A release is confirmed before it runs: { kind: 'all' } or { kind: 'file', file }. The buttons
   // set this; the modal's confirm calls the real publish path below.
   const [confirm, setConfirm] = useState(null)
@@ -743,6 +786,9 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                   <span>Create no external copy. Return when you are ready to publish or download.</span>
                 </label>
               </fieldset>
+              <ReleaseTemplates templates={releaseTemplates} currentPlan={currentDeliveryPlan}
+                provider={releaseProvider} saving={templateSaving}
+                onApply={applyDeliveryTemplate} onSave={saveDeliveryTemplate} onDelete={deleteDeliveryTemplate} />
               <div className="release-destination-config" aria-live="polite">
                 {deliveryMethod === 'download' ? <>
                   <div className="release-destination-config__heading"><b>{downloadFormat === 'original' ? 'Download corrected file' : 'Download package'}</b><span>Saved by your browser</span></div>

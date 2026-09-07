@@ -8,6 +8,8 @@ import { createTestRoot, unmountAll } from './testRoots.js'
 // worktree changes are proven in vitest, not the shared-checkout preview server).
 
 const publishAllFiles = vi.fn(() => Promise.resolve({ published: [] }))
+const getSettings = vi.fn(() => Promise.resolve({ drive_mirror_enabled: false, drive_mirror_folder: 'Remediated' }))
+const putMyReleaseTemplates = vi.fn((templates) => Promise.resolve({ release_templates: templates }))
 vi.mock('./api.js', () => ({
   openReport: vi.fn(), publishFile: vi.fn(() => Promise.resolve({})),
   publishAllFiles: (...a) => publishAllFiles(...a),
@@ -15,7 +17,8 @@ vi.mock('./api.js', () => ({
   listReleaseHistory: vi.fn(() => Promise.resolve({ releases: [] })),
   getReleaseManifest: vi.fn(() => Promise.resolve({ manifest: {} })),
   listHitlQueue: vi.fn(() => Promise.resolve([])),
-  getSettings: vi.fn(() => Promise.resolve({ drive_mirror_enabled: false, drive_mirror_folder: 'Remediated' })),
+  getSettings: (...a) => getSettings(...a),
+  putMyReleaseTemplates: (...a) => putMyReleaseTemplates(...a),
   getSourceStatus: vi.fn(() => Promise.resolve({ files: [], stale_count: 0 })),
   rescoreFile: vi.fn(() => Promise.resolve({})),
   previewReleaseDestination: vi.fn(() => Promise.resolve({ can_release: true, documents: [] })),
@@ -46,6 +49,17 @@ const held = (file, over = {}) => ({ file, compliant: false, score: 40, issues: 
 const run = { id: 'scan1', files: 3, certifiable: 2 }
 
 describe('Publish — W5 conditional-to-full graduation', () => {
+  it('loads and applies a saved delivery template in the guided workspace', async () => {
+    getSettings.mockResolvedValueOnce({ release_templates: [{ name: 'Finance ZIP', method: 'download', preserve_hierarchy: false }] })
+    const c = await mount({ run: { ...run, source: 'drive' }, files: [verified('a.pdf')], certified: [], onPublish: vi.fn() })
+    await act(async () => [...c.querySelectorAll('button')].find((b) => b.textContent === 'Choose delivery').click())
+    const disclosure = [...c.querySelectorAll('summary')].find((s) => /Saved delivery templates/.test(s.textContent))
+    disclosure.parentElement.open = true
+    await act(async () => [...disclosure.parentElement.querySelectorAll('button')].find((b) => b.textContent === 'Apply').click())
+    expect(c.querySelector('input[name="delivery-method"][value="download"]').checked).toBe(true)
+    expect(c.textContent).toMatch(/Finance ZIP delivery template applied/)
+  })
+
   it('shows the three real delivery destinations in the guided workspace', async () => {
     const c = await mount({ run, files: [verified('a.pdf')], certified: [], onPublish: vi.fn() })
     const choose = [...c.querySelectorAll('button')].find((b) => b.textContent === 'Choose delivery')
