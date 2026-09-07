@@ -115,6 +115,88 @@ def test_save_is_versioned_and_does_not_claim_azure_application(client):
     assert stale.status_code == 409
 
 
+class FakeCapacityGateway:
+    def __init__(self, fail_app=None):
+        self.scales, self.applied = {}, []
+        self.fail_app = fail_app
+
+    def read_scale(self, app):
+        return self.scales.get(app, {"min_replicas": 0, "max_replicas": 1, "rules": []})
+
+    def apply_scale(self, policy):
+        import capacity_apply
+        if policy.app == self.fail_app:
+            raise RuntimeError("credential=must-not-escape")
+        self.applied.append(policy.app)
+        wanted = capacity_apply.desired_policy(policy)
+        self.scales[policy.app] = {"min_replicas": wanted["min_replicas"],
+                                   "max_replicas": wanted["max_replicas"],
+                                   "rules": wanted["rules"]}
+
+
+def test_apply_requires_an_explicit_gateway_and_records_nothing(client):
+    import capacity_store
+    answer = client.post("/control/capacity-schedule/apply",
+                         json={"version": 0, "reason": "test"})
+    assert answer.status_code == 503
+    assert capacity_store.load_application(__import__("core").store)["state"] == "never_applied"
+
+
+def test_apply_revalidates_before_the_gateway_can_write(client, monkeypatch):
+    from routes import control
+    gateway = FakeCapacityGateway()
+    monkeypatch.setattr(control, "_capacity_apply_gateway", gateway)
+    # The unsaved proposal is deliberately over the database budget.
+    answer = client.post("/control/capacity-schedule/apply",
+                         json={"version": 0, "reason": "test"})
+    assert answer.status_code == 422
+    assert gateway.applied == []
+
+
+def test_apply_uses_the_injected_gateway_and_exposes_versioned_success(client, monkeypatch):
+    from routes import control
+    saved = client.put("/control/capacity-schedule", json=affordable())
+    assert saved.status_code == 200
+    gateway = FakeCapacityGateway()
+    monkeypatch.setattr(control, "_capacity_apply_gateway", gateway)
+    answer = client.post("/control/capacity-schedule/apply",
+                         json={"version": 1, "reason": "warm the workday"})
+    assert answer.status_code == 200, answer.json()
+    assert answer.json()["application"]["applied_version"] == 1
+    assert gateway.applied
+    current = client.get("/control/capacity-schedule").json()
+    assert current["applied"] is True
+    assert current["application"]["state"] == "applied"
+
+
+def test_partial_apply_is_persisted_without_an_applied_version(client, monkeypatch):
+    from routes import control
+    assert client.put("/control/capacity-schedule", json=affordable()).status_code == 200
+    gateway = FakeCapacityGateway(fail_app="acp-assess")
+    monkeypatch.setattr(control, "_capacity_apply_gateway", gateway)
+    answer = client.post("/control/capacity-schedule/apply",
+                         json={"version": 1, "reason": "test partial state"})
+    assert answer.status_code == 502
+    application = answer.json()["detail"]["application"]
+    assert application["state"] == "partial"
+    assert application["applied_version"] is None
+    assert "credential" not in str(answer.json())
+
+
+def test_editing_an_applied_schedule_makes_the_new_desired_version_unapplied(client, monkeypatch):
+    from routes import control
+    assert client.put("/control/capacity-schedule", json=affordable()).status_code == 200
+    monkeypatch.setattr(control, "_capacity_apply_gateway", FakeCapacityGateway())
+    assert client.post("/control/capacity-schedule/apply",
+                       json={"version": 1, "reason": "publish"}).status_code == 200
+    edited = affordable(version=1, start="07:00")
+    assert client.put("/control/capacity-schedule", json=edited).status_code == 200
+    current = client.get("/control/capacity-schedule").json()
+    assert current["version"] == 2
+    assert current["applied"] is False
+    assert current["application"]["applied_version"] == 1
+
+
 def test_unsafe_off_hours_zero_is_rejected(client):
     body = affordable()
     body["off_hours"]["assess"] = 0
@@ -143,5 +225,7 @@ def test_write_is_admin_only(monkeypatch, isolated_store):
     assert admin_only.post("/control/capacity-schedule/override",
                            json={"mode": "off_hours", "duration": "1h",
                                  "reason": "r"}).status_code == 403
+    assert admin_only.post("/control/capacity-schedule/apply",
+                           json={"version": 0, "reason": "r"}).status_code == 403
     # Reads stay open: §4 gives a view-only Settings user the right to inspect the schedule.
     assert admin_only.get("/control/capacity-schedule").status_code == 200

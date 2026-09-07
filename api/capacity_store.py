@@ -39,6 +39,7 @@ from swallowed import swallowed
 
 SCHEDULE_KEY = "capacity_schedule"
 OVERRIDE_KEY = "capacity_schedule_override"
+APPLICATION_KEY = "capacity_schedule_application"
 
 # §5.4's list, in minutes. `until_next_transition` is resolved against the schedule at the moment
 # the override is created, so an override never outlives the window it was meant to cover.
@@ -117,9 +118,8 @@ def save_schedule(store, proposed: sched.Schedule, *, actor: str, expected_versi
                   reason: str, correlation_id: str | None = None) -> sched.Schedule:
     """Persist a schedule, bumping its version. Refuses a stale write; audits either way.
 
-    The saved record is marked `applied=True` — it is now what ACP intends, which is what makes
-    drift meaningful (§9). Whether Azure has been told is a separate question this function does
-    not answer and must not imply.
+    Saving records intent, not Azure state. Application evidence lives separately under
+    APPLICATION_KEY, so a newly edited schedule cannot inherit an earlier version's success.
     """
     correlation_id = correlation_id or uuid.uuid4().hex[:12]
     current = load_schedule(store)
@@ -129,12 +129,59 @@ def save_schedule(store, proposed: sched.Schedule, *, actor: str, expected_versi
                detail=f"stale version {expected_version}, current {current.version}")
         raise ConcurrentEdit(expected_version, current.version)
 
-    saved = replace(proposed, version=current.version + 1, applied=True)
+    saved = replace(proposed, version=current.version + 1, applied=False)
     store.set_setting(SCHEDULE_KEY, _serialise(saved))
     _audit(store, actor, "settings.capacity_schedule.saved", reason=reason,
            correlation_id=correlation_id,
            detail=_diff_detail(current, saved))
     return saved
+
+
+def load_application(store) -> dict:
+    """Return durable application evidence, never a fabricated success."""
+    empty = {"state": "never_applied", "desired_version": None, "applied_version": None,
+             "apps": []}
+    try:
+        raw = store.get_setting(APPLICATION_KEY)
+        body = json.loads(raw) if raw else None
+    except Exception:  # noqa: BLE001
+        swallowed("capacity_store.load_application: reading application state failed")
+        return empty
+    return body if isinstance(body, dict) else empty
+
+
+def start_application(store, *, version: int, actor: str, reason: str,
+                      correlation_id: str) -> dict:
+    """Persist the attempt before an injected gateway is allowed to make its first write."""
+    previous = load_application(store)
+    body = {"state": "applying", "desired_version": int(version),
+            # A new attempt does not erase evidence of the last successful application. If this
+            # attempt fails, operators still need to know which version Azure was last verified
+            # against; success below replaces it with this desired version.
+            "applied_version": previous.get("applied_version"),
+            "attempted_at": _now().isoformat(), "actor": actor, "reason": reason,
+            "correlation_id": correlation_id, "apps": []}
+    store.set_setting(APPLICATION_KEY, json.dumps(body, sort_keys=True))
+    _audit(store, actor, "settings.capacity_schedule.apply_started", reason=reason,
+           correlation_id=correlation_id, detail=f"applying schedule v{version}")
+    return body
+
+
+def finish_application(store, attempt: dict, result: dict) -> dict:
+    """Persist the gateway's secret-free per-app result and audit its terminal state."""
+    successful = result.get("state") == "applied"
+    body = {**attempt, "state": result.get("state", "failed"),
+            "applied_version": (attempt["desired_version"] if successful
+                                else attempt.get("applied_version")),
+            "completed_at": _now().isoformat(), "apps": list(result.get("apps") or [])}
+    store.set_setting(APPLICATION_KEY, json.dumps(body, sort_keys=True))
+    _audit(store, attempt["actor"],
+           "settings.capacity_schedule.applied" if successful
+           else "settings.capacity_schedule.apply_failed",
+           reason=attempt["reason"], correlation_id=attempt["correlation_id"],
+           detail=f"schedule v{attempt['desired_version']} result={body['state']}; "
+                  + ", ".join(f"{r.get('app')}={r.get('status')}" for r in body["apps"]))
+    return body
 
 
 def _diff_detail(before: sched.Schedule, after: sched.Schedule) -> str:

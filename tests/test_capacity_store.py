@@ -77,13 +77,46 @@ def test_a_saved_schedule_survives_a_round_trip(store):
     assert reloaded.days == cs.PROPOSED.days, "a tuple field came back as something else"
 
 
-def test_saving_marks_the_schedule_applied_and_bumps_the_version(store):
-    """`applied` is what makes drift meaningful: a stored schedule is what ACP intends, so a
-    difference from Azure is now a real finding rather than the distance from a proposal."""
+def test_saving_marks_the_schedule_desired_but_unapplied_and_bumps_the_version(store):
+    """Saving intent cannot claim that a separate Azure operation succeeded."""
     first = store_mod.save_schedule(store, cs.PROPOSED, actor="a", expected_version=0, reason="r")
-    assert (first.version, first.applied) == (1, True)
+    assert (first.version, first.applied) == (1, False)
     second = store_mod.save_schedule(store, first, actor="a", expected_version=1, reason="r")
     assert second.version == 2
+
+
+def test_application_evidence_is_versioned_separately_from_the_schedule(store):
+    attempt = store_mod.start_application(store, version=3, actor="a", reason="r",
+                                          correlation_id="corr")
+    assert store_mod.load_application(store)["state"] == "applying"
+    finished = store_mod.finish_application(
+        store, attempt, {"state": "applied", "apps": [{"app": "worker", "status": "applied"}]})
+    assert finished["applied_version"] == 3
+    assert store_mod.load_application(store) == finished
+
+
+def test_partial_application_never_records_an_applied_version(store):
+    attempt = store_mod.start_application(store, version=3, actor="a", reason="r",
+                                          correlation_id="corr")
+    finished = store_mod.finish_application(
+        store, attempt, {"state": "partial",
+                         "apps": [{"app": "worker", "status": "apply_failed"}]})
+    assert finished["applied_version"] is None
+
+
+def test_failed_reapply_preserves_the_last_verified_applied_version(store):
+    first = store_mod.start_application(store, version=2, actor="a", reason="r",
+                                        correlation_id="first")
+    store_mod.finish_application(
+        store, first, {"state": "applied", "apps": [{"app": "worker", "status": "applied"}]})
+
+    retry = store_mod.start_application(store, version=3, actor="a", reason="r",
+                                        correlation_id="retry")
+    failed = store_mod.finish_application(
+        store, retry, {"state": "partial",
+                       "apps": [{"app": "worker", "status": "apply_failed"}]})
+
+    assert failed["applied_version"] == 2
 
 
 def test_an_unreadable_store_degrades_to_a_schedule_that_reads_as_not_in_force():

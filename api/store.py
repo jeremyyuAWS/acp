@@ -2470,7 +2470,7 @@ DISCOVERY_JOB_PRIORITY = 10
 # only `scan_discover`, so the entry job starts at once and then its folder jobs — the work that
 # actually enumerates the estate — drop back into the general queue behind the backlog. A
 # reserved lane without this covers the starting gun and not the race.
-_DISCOVERY_JOB_TYPES = frozenset({"scan_discover", "scan_folder", "scan"})
+_DISCOVERY_JOB_TYPES = frozenset({"scheduled_sweep", "scan_discover", "scan_folder", "scan"})
 
 
 def sharepoint_scope_sites(scope: dict | None) -> tuple[str, ...]:
@@ -10981,6 +10981,28 @@ class Store:
                         "revision=revision+1,updated_at=%s WHERE execution_id=%s",
                         (now, batch_id))
         return job_id
+
+    def enqueue_scheduled_sweep(self, occurrence_key: str) -> bool:
+        """Durably enqueue one fleet-wide scheduled-sweep occurrence.
+
+        Every API and worker replica owns an APScheduler process, so they can all offer the
+        same occurrence concurrently. The deterministic primary key makes the database the
+        election: exactly one INSERT wins and every other replica observes a harmless conflict.
+        Returns True only to the replica that created the queue row.
+        """
+        import hashlib as _hashlib
+        import json as _json
+        now = self._now()
+        job_id = "sweep-" + _hashlib.sha256(occurrence_key.encode("utf-8")).hexdigest()[:32]
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO jobs(id,type,payload,status,priority,attempts,max_attempts,"
+                "run_after,created_at,updated_at) "
+                "VALUES(%s,'scheduled_sweep',%s,'queued',%s,0,3,%s,%s,%s) "
+                "ON CONFLICT(id) DO NOTHING",
+                (job_id, _json.dumps({"occurrence_key": occurrence_key}),
+                 job_priority("scheduled_sweep"), now, now, now))
+            return (getattr(cur, "rowcount", 0) or 0) > 0
 
     def stage_snapshot_id(self, scan_id: str) -> str:
         """Stable identity of the immutable Discover/Assess input consumed downstream.
