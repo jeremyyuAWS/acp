@@ -92,7 +92,13 @@ jobs:
       - name: Check the keys the named candidates need
         env:
           CANDIDATES: ${{ inputs.candidates }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Either name. The kit reads ANTHROPIC_API_KEY and only that (evals/candidates.py:
+          # AnthropicCandidate), so ACP_ANTHROPIC_KEY — this repo's own namespaced convention,
+          # and the name api/providers.credential_for() expects as a key_secret_ref — is mapped
+          # ONTO it here rather than being read anywhere downstream. `||` yields the first
+          # non-empty operand, so setting either secret is enough and setting both prefers the
+          # unprefixed one.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || secrets.ACP_ANTHROPIC_KEY }}
           EVALS_API_KEY: ${{ secrets.EVALS_API_KEY }}
         run: |
           set -euo pipefail
@@ -104,8 +110,11 @@ jobs:
             esac
           done
           if [ "$need_anthropic" = 1 ] && [ -z "${ANTHROPIC_API_KEY}" ]; then
-            echo "::error::an anthropic: candidate was requested but the ANTHROPIC_API_KEY secret is empty."
-            echo "::error::Set it in Settings -> Secrets and variables -> Actions."
+            echo "::error::an anthropic: candidate was requested but no Anthropic key resolved."
+            echo "::error::Set ANTHROPIC_API_KEY or ACP_ANTHROPIC_KEY in Settings -> Secrets and"
+            echo "::error::variables -> ACTIONS -> Repository secrets. The Dependabot and Codespaces"
+            echo "::error::tabs on that same page are separate stores this job cannot read, and an"
+            echo "::error::Environment secret needs an environment: key on the job, which it has not."
             exit 1
           fi
           if [ "$need_hosted" = 1 ] && [ -z "${EVALS_API_KEY}" ]; then
@@ -160,7 +169,13 @@ jobs:
           FAIL_ON_GATE: ${{ inputs.fail_on_gate }}
           KIT: ${{ inputs.kit }}
           SCRIPT: ${{ steps.kit.outputs.script }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Either name. The kit reads ANTHROPIC_API_KEY and only that (evals/candidates.py:
+          # AnthropicCandidate), so ACP_ANTHROPIC_KEY — this repo's own namespaced convention,
+          # and the name api/providers.credential_for() expects as a key_secret_ref — is mapped
+          # ONTO it here rather than being read anywhere downstream. `||` yields the first
+          # non-empty operand, so setting either secret is enough and setting both prefers the
+          # unprefixed one.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || secrets.ACP_ANTHROPIC_KEY }}
           EVALS_API_KEY: ${{ secrets.EVALS_API_KEY }}
         run: |
           set -euo pipefail

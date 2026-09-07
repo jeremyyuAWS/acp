@@ -85,7 +85,7 @@ DISPROVEN = {
 # Write lanes are read from handlers.py rather than restated, so this cannot drift from what an
 # approved value can actually be written into.
 _LANE_CONSTS = ("_LINK_SCS_BY_EXT", "_SENSORY_EXTS", "_LANGUAGE_EXTS", "_STRUCTURE_LABEL_EXTS",
-                "_PDF_APPLY_EXTS", "_FIELD_NAME_EXTS", "_OFFICE_ALT_MIME")
+                "_PDF_APPLY_EXTS", "_FIELD_NAME_EXTS", "_OFFICE_ALT_MIME", "_IMAGE_OF_TEXT_EXTS")
 
 # A lane is remediation-VERIFIED only when a test writes an approved value and then checks the
 # saved document through the real path — not when the applier returns without raising, and not
@@ -231,6 +231,35 @@ REMEDIATION_VERIFIED: dict[tuple[str, str], str] = {
         "restored. The partial-write control uses THREE default tabs because the detector gates "
         "at two: renaming one of two would drop below the gate and clear the criterion, so that "
         "control would have proved nothing"),
+    ("2.4.6", "pptx"): (
+        "tests/test_remediation_verified_pptx_titles.py — approved titles for slides whose "
+        "layout has a title placeholder left empty go through handlers._apply_approved_values "
+        "with the re-scan UNPATCHED; python-pptx reads the titles back, the body text and the "
+        "already-titled slide survive, the first-party detector names no empty slide, and a "
+        "second real assessment no longer reports 2.4.6. THE LAST OF THE EIGHTEEN LANES TO GET "
+        "A PROOF: it was registered for months on a writer unit test alone, and writing the "
+        "round trip found that the writer matched only type=\"title\" while the detector also "
+        "counts ctrTitle (the Title Slide layout) — an approval aimed at a Title Slide was "
+        "refused as unresolved and never credited. The writer now accepts both and the proof "
+        "round-trips a Title Slide too. Controls: titling one of two empty slides is written "
+        "and never credited; a Blank slide (no title slot, not a finding) and a slide number "
+        "that does not exist are refused, never credited"),
+    ("1.4.5", "pptx"): (
+        "tests/test_remediation_verified_pptx_image_of_text.py — the only lane that DELETES "
+        "content, and the first genuine 1.4.5 fix in the product: the approved OCR transcript "
+        "replaces the picture with a real text box at the same rectangle and the image is "
+        "removed from the package, through handlers._apply_approved_values with the re-scan "
+        "UNPATCHED. python-pptx reads the text back as a shape, the title and body copy survive, "
+        "the media part and its relationship are gone, and a second real assessment no longer "
+        "reports 1.4.5. THE LOAD-BEARING TEST IS "
+        "test_removing_only_the_picture_does_not_clear_it: ocr._ooxml_images walks the ZIP "
+        "namelist for ppt/media/* and never opens a slide, so a writer that removed the <p:pic> "
+        "and left the bytes would pass every 'the text box is there' assertion and still fail "
+        "the criterion — the exact defect #1665 found in the descr lane. Controls: replacing one "
+        "of two images is written and never credited; a grouped picture (group-relative "
+        "coordinates) and a missing locator are refused with the deck untouched; and a 1.4.9 "
+        "approval never reaches this writer, because AAA exempts no charts and this one deletes "
+        "what it replaces"),
     ("1.1.1", "pdf"): (
         "tests/test_remediation_verified_pdf_writeback.py — /Alt on a tagged figure's structure "
         "element, through handlers._apply_approved_values with the re-scan UNPATCHED. The "
@@ -310,7 +339,10 @@ def write_lanes() -> set[tuple[str, str]]:
     for ext, scs in (consts.get("_LINK_SCS_BY_EXT") or {}).items():
         pairs.update((sc, ext) for sc in scs)
     for sc, key in (("1.3.3", "_SENSORY_EXTS"), ("3.1.2", "_LANGUAGE_EXTS"),
-                    ("2.4.6", "_STRUCTURE_LABEL_EXTS"), ("4.1.2", "_FIELD_NAME_EXTS")):
+                    ("2.4.6", "_STRUCTURE_LABEL_EXTS"), ("4.1.2", "_FIELD_NAME_EXTS"),
+                    # 1.4.5 only: _IMAGE_OF_TEXT_SCS narrows the lane to it, because the writer
+                    # deletes the image and 1.4.9 (AAA, no chart exemption) may be a chart.
+                    ("1.4.5", "_IMAGE_OF_TEXT_EXTS")):
         pairs.update((sc, ext) for ext in (consts.get(key) or ()))
     for ext in (consts.get("_OFFICE_ALT_MIME") or {}):
         pairs.add(("1.1.1", ext))

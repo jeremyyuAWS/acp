@@ -7089,7 +7089,8 @@ class Store:
                 out[r.get("finding_key")] = int(r.get("n") or 0)
         return out
 
-    def ai_cost_rollup(self, since_days: int | None = None, scan_id: str | None = None) -> dict:
+    def ai_cost_rollup(self, since_days: int | None = None, scan_id: str | None = None,
+                       surface: str | None = None) -> dict:
         """AI usage + cost governance rollup (ADR 0019 Phase 1). Every number is a real
         aggregate of recorded ai_calls rows — calls, success, latency, and the summed
         cost_usd (a genuine $0 for the keyless local-Ollama build: no per-token billing, no
@@ -7108,6 +7109,10 @@ class Store:
             clauses.append("scan_id = %s")
             jclauses.append("c.scan_id = %s")
             params_l.append(scan_id)
+        if surface is not None:
+            clauses.append("surface = %s")
+            jclauses.append("c.surface = %s")
+            params_l.append(surface)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         # The same window, qualified for the joins below (hitl_events and ai_validation_outcomes
         # both carry a scan_id of their own, so an unqualified clause would be ambiguous).
@@ -9580,6 +9585,85 @@ class Store:
         self.sync_hitl_finding_dispositions(item_id, "pending")
         return item_id
 
+    # A regression review row's rule_id: the criterion the write broke, suffixed. The suffix is
+    # load-bearing twice over.
+    #
+    # It keeps the row OUT of _superseded_items. That helper retracts a pending row whose
+    # scan_rule_traces outcome reads PASS — and a regressed criterion's trace says exactly that,
+    # because it passed at scan time, which is why it was never a review item. Keyed on the bare
+    # '1.4.3' the row would be hidden from the inbox the moment it was written, and the reviewer
+    # would be asked to resolve something they could not see. scan_rule_traces never holds a
+    # '/regressed' rule_id, and the helper deliberately never retracts a row with no trace.
+    #
+    # And it keeps the row off the canonical criterion row (_canonical_rule_id maps only
+    # '/deferred'), so a regression on a criterion that ALSO has real findings stays a separate
+    # decision rather than merging into them.
+    REGRESSED_RULE_SUFFIX = "/regressed"
+
+    def queue_regression_review(self, scan_id: str, file: str, criteria) -> list[str]:
+        """Queue one review row per criterion a reviewer-approved write BROKE, and return the
+        ids created. Idempotent per (scan, file, criterion): an existing row is left exactly as
+        it is, approved ones included, so a re-run of the apply job never reopens a regression a
+        human already accepted.
+
+        This is the other half of the certification block. `mark_file_compliant_if_reviewed`
+        refuses while a regression is unresolved, and without a row saying so the file would sit
+        at 'not certifiable' with nothing in the inbox to act on — the permanently-unpublishable
+        dead end that whole gate was built to avoid. The row carries no proposals and no value:
+        there is no text to write, only a decision to take, so approving it owes the document
+        nothing (see _row_owes_no_document_content) and the reviewer's real options are to
+        re-remediate or to record a WCAG exception with the existing `resolution` vocabulary.
+        """
+        from datetime import datetime, timezone
+        created: list[str] = []
+        for sc in sorted({str(c).strip() for c in (criteria or ()) if str(c).strip()}):
+            rule_id = f"{sc}{self.REGRESSED_RULE_SUFFIX}"
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "SELECT id FROM hitl_queue WHERE scan_id=%s AND file=%s AND rule_id=%s",
+                    (scan_id, file, rule_id))
+                if self._db.fetchone(cur):
+                    continue                      # already raised; never reopen a decided row
+                item_id = uuid.uuid4().hex[:12]
+                pages = self._pages_for(cur, scan_id, file, sc)
+                self._db.execute(cur,
+                    "INSERT INTO hitl_queue(id,created_at,scan_id,file,rule_id,rule_name,"
+                    "finding_count,status,page,pages) VALUES(%s,%s,%s,%s,%s,%s,%s,'pending',%s,%s)",
+                    (item_id, datetime.now(timezone.utc).isoformat(), scan_id, file, rule_id,
+                     f"WCAG {sc} — broken by an approved fix"[:200], 1,
+                     pages[0] if pages else None, _pages_csv(pages)))
+            created.append(item_id)
+        return created
+
+    def unresolved_regression(self, scan_id: str, file: str) -> bool:
+        """True when a write that REACHED this document broke a criterion and no human has
+        accepted that yet. The certification gate's fail-closed half.
+
+        The evidence is the `apply.regression` decision, which handlers logs ONLY on the credited
+        path — a still-failing write is discarded and its bytes never reach the document, so a
+        regression observed in them is evidence about the model and not a fact about the file.
+
+        Reading the log for existence and the queue for the decision keeps this parse-free: the
+        criteria come from the structured list at the moment of the write (queue_regression_review
+        above), never from the log's prose. And the two are deliberately independent — if the
+        queue write failed, there is no row to approve, and a file whose regression nobody could
+        see must not certify on that silence.
+        """
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM decision_log "
+                "WHERE action=%s AND scan_id=%s AND file=%s",
+                ("apply.regression", scan_id, file))
+            if not int((self._db.fetchone(cur) or {}).get("n") or 0):
+                return False
+            self._db.execute(cur,
+                "SELECT status FROM hitl_queue WHERE scan_id=%s AND file=%s AND rule_id LIKE %s",
+                (scan_id, file, f"%{self.REGRESSED_RULE_SUFFIX}"))
+            rows = self._db.fetchall(cur)
+        if not rows:
+            return True                           # regressed, and nothing was ever raised for it
+        return any((r.get("status") or "pending") != "approved" for r in rows)
+
     def queue_hitl_review_for_file(self, scan_id: str, file: str,
                                    rules: list[dict]) -> list[dict]:
         """Queue HITL review items for specific FAILing rules of ONE file — the human-
@@ -9942,7 +10026,18 @@ class Store:
         Kept as ALL-of, like `_row_is_explain_only`: a row mixing a companion with a writable
         proposal still owes the writable one, and `_row_approved_values` keeps that distinction
         per proposal. No mixed row exists today; the point is that the mixed case fails safe.
+
+        A REGRESSION row joins that set by construction: it carries no proposals, because there
+        is no content to write — only the decision to accept the damage or re-remediate. It has
+        to be named here rather than left to the no-proposals case, because a client can still
+        send a headline value and the legacy `approved_value` column would then count forever.
+        That is not hypothetical: the card resolves `1.1.1/regressed` to WCAG 1.1.1, which is in
+        the frontend's VALUE_FIX set, so it offers an editor — and a reviewer who types into it
+        would strand the file on a correct approval, the dead end this whole area exists to
+        close. The row's rule_id is the fact; what the client sent about it is not.
         """
+        if str(row.get("rule_id") or "").endswith(Store.REGRESSED_RULE_SUFFIX):
+            return True
         if Store._row_is_resolved(row) or Store._row_is_explain_only(row):
             return True
         props = [p for p in (row.get("proposals") or []) if isinstance(p, dict)]
@@ -10105,20 +10200,30 @@ class Store:
                 out.update(self._row_approved_values(row))
         return out
 
-    def approved_images_of_text_values(self, scan_id: str, file: str) -> dict[str, str]:
-        """{locator: OCR'd text} awaiting a write into `file`, from approved 1.4.5/1.4.9 rows.
+    def approved_images_of_text_values(self, scan_id: str, file: str,
+                                       rule_ids: tuple[str, ...] = ("1.4.5", "1.4.9"),
+                                       ) -> dict[str, str]:
+        """{locator: OCR'd text} awaiting a write into `file`, from approved image-of-text rows.
 
         Locator format depends on the source format:
           pptx  — 'image N' (1-based, matching ocr._ooxml_images enumeration order).
-                  Written by apply_pptx_image_of_text as <p:cNvPr descr="...">.
+                  Written by apply_pptx_image_replacement, which swaps the picture for a real
+                  text box and deletes the image.
           pdf   — 'pdf:fig:P:S' (page + per-page sequence, matching _figure_locators in
                   remediate_pdf). Written by apply_pdf_figure_alt via apply_pdf_approved.
-        Both criteria share one map because the proposer emits them for the same embedded
-        images and the applier writes alt text regardless of which band raised the finding.
+
+        `rule_ids` NARROWS the read, and the pptx 1.4.5 lane narrows it to ("1.4.5",) — the two
+        criteria are not interchangeable for a writer that DELETES the image. 1.4.5 exempts
+        charts and diagrams (ocr._looks_like_chart: a picture of data is not a picture of
+        prose), 1.4.9 is AAA and exempts nothing. So a 1.4.9 row can be a chart, and replacing a
+        chart with its axis labels destroys information the reviewer never agreed to lose. The
+        default keeps both for has_approved_values_to_write, which only asks whether a job is
+        worth enqueuing.
         """
+        wanted = {str(r).strip() for r in (rule_ids or ()) if r}
         out: dict[str, str] = {}
         for row in self._approved_unapplied_rows(scan_id, file):
-            if str(row.get("rule_id") or "").strip() in ("1.4.5", "1.4.9"):
+            if str(row.get("rule_id") or "").strip() in wanted:
                 out.update(self._row_approved_values(row))
         return out
 
@@ -10215,9 +10320,18 @@ class Store:
         undescribed. A file carrying an approved-but-unapplied value stays non-conformant until
         that value is actually applied and re-scanned — which is what `applied` records.
 
+        Approval is NOT the gate for a REGRESSION either. A reviewer-approved write can clear
+        the criterion it was for and break a different one — measured against the baseline
+        re-scan the apply job takes before writing — and the per-lane gates never look: each asks
+        only whether ITS criterion cleared. So a file could certify 100/100 while genuinely
+        failing a criterion its own remediation broke, which is the same shape as the bug the
+        paragraph above records. `unresolved_regression` closes it, and
+        `queue_regression_review` is what gives the reviewer something to act on rather than a
+        file stuck at 'not certifiable' with an empty inbox.
+
         Idempotent: an already-compliant file, an un-remediated file, one with any item still
-        pending / rejected / skipped, or one with an approved-but-unapplied value returns
-        False and changes nothing."""
+        pending / rejected / skipped, one with an approved-but-unapplied value, or one carrying
+        an unresolved regression returns False and changes nothing."""
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "SELECT compliant, remediated_at FROM file_records WHERE scan_id=%s AND file=%s",
@@ -10234,6 +10348,12 @@ class Store:
             return False   # still items pending / rejected / skipped — not fully resolved
         if self.count_unapplied_approved_values(scan_id, file):
             return False   # approved content that no remediator ever wrote into the document
+        if self.unresolved_regression(scan_id, file):
+            # An approved write broke a criterion and nobody has accepted that. Redundant with
+            # the all-approved gate above WHILE the review row exists — and that redundancy is
+            # the point: the row is written best-effort, and a file whose regression was never
+            # raised must not certify because the queue write is the thing that failed.
+            return False
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "UPDATE file_records SET compliant=1, score=100, status='pass' "

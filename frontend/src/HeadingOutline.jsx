@@ -16,7 +16,7 @@ function Outline({ items, title }) {
           <li key={i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', fontSize: 13, padding: '6px 10px',
                                paddingLeft: 10 + (Math.max(1, h.level) - 1) * 16,
                                borderTop: i ? '1px solid var(--line,#e2dce4)' : 'none' }}>
-            <span className="muted" style={{ fontFamily: 'var(--mono, ui-monospace, monospace)', fontSize: 11, fontWeight: 700, flex: '0 0 auto' }}>H{h.level}</span>
+            <span className="muted" style={{ fontFamily: 'var(--font-mono)', fontSize: 11, fontWeight: 700, flex: '0 0 auto' }}>H{h.level}</span>
             <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {h.text ? h.text : <span className="muted">(empty heading)</span>}
             </span>

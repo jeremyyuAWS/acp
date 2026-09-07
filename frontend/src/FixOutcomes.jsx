@@ -83,7 +83,7 @@ function OutcomeRow({ r, autoLane, onRetry, retried, busy }) {
       {r.reason
         ? <div className="fixoutcome-reason" style={{
             fontSize: 12, marginTop: 6, color: r.reasonSource === 'job' ? '#8A2A20' : 'var(--ink)',
-            fontFamily: r.reasonSource === 'job' ? 'ui-monospace, monospace' : 'inherit',
+            fontFamily: r.reasonSource === 'job' ? 'var(--font-mono)' : 'inherit',
             wordBreak: 'break-word',
           }}>{r.reason}</div>
         : <div className="fixoutcome-reason" style={{ ...muted, marginTop: 6 }}>

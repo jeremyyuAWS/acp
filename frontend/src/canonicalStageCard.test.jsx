@@ -5,7 +5,8 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import CanonicalStageCard from './CanonicalStageCard.jsx'
-import { canonicalStageCardModel, currentCanonicalStage } from './canonicalStageCard.js'
+import { canonicalStageCardModel, currentCanonicalStage, priorCanonicalStages,
+  stageNeedsAttention } from './canonicalStageCard.js'
 
 const SNAPSHOT = {
   workflow_id: 'workflow-1', workflow_revision: 3, stage: 'release',
@@ -125,6 +126,7 @@ describe('canonical stage card', () => {
       unaccounted: null, exact: false, buckets: { published: null, failed: null },
     } })
     expect(html).toContain('Accounting temporarily inconsistent.')
+    expect(html.match(/class="machine-value"/g)).toHaveLength(3)
     expect(html).not.toContain('10 of 10 requested documents')
     expect(html).not.toContain('Operational work-item progress')
   })
@@ -152,6 +154,32 @@ describe('current canonical stage selection', () => {
   })
 })
 
+describe('cumulative workflow stage selection', () => {
+  const lineage = { workflow_revision: 3, stages: [
+    { stage: 'discover', state: 'succeeded', revision: 2, workflow_revision: 3 },
+    { stage: 'assess', state: 'succeeded', revision: 4, workflow_revision: 3 },
+    { stage: 'remediate', state: 'processing', revision: 5, workflow_revision: 3 },
+    { stage: 'assess', state: 'succeeded', revision: 99, workflow_revision: 2 },
+  ] }
+
+  it('shows only predecessors from the same workflow revision', () => {
+    expect(priorCanonicalStages(lineage, 'discover')).toEqual([])
+    expect(priorCanonicalStages(lineage, 'assess').map((stage) => stage.stage)).toEqual(['discover'])
+    expect(priorCanonicalStages(lineage, 'remediate').map((stage) => [stage.stage, stage.revision]))
+      .toEqual([['discover', 2], ['assess', 4]])
+    expect(priorCanonicalStages(lineage, 'publish').map((stage) => stage.stage))
+      .toEqual(['discover', 'assess', 'remediate'])
+    expect(priorCanonicalStages(lineage, 'monitor').map((stage) => stage.stage))
+      .toEqual(['discover', 'assess', 'remediate'])
+  })
+
+  it('opens exceptional prior stages without treating a successful stage as exceptional', () => {
+    expect(stageNeedsAttention(lineage.stages[0])).toBe(false)
+    expect(stageNeedsAttention({ ...lineage.stages[0], state: 'failed' })).toBe(true)
+    expect(stageNeedsAttention({ ...lineage.stages[0], integrity: { ok: false } })).toBe(true)
+  })
+})
+
 describe('app-level canonical ownership', () => {
   it('keeps one lineage hook and card alive outside the tab panel', () => {
     const app = readFileSync(join(here, 'App.jsx'), 'utf8')
@@ -163,6 +191,7 @@ describe('app-level canonical ownership', () => {
     expect(hook).toBeLessThan(signIn)
     expect(card).toBeGreaterThan(-1)
     expect(card).toBeLessThan(panel)
+    expect(app.indexOf('<WorkflowStageStack')).toBeLessThan(panel)
   })
 
   it('deduplicates the richer remediation card and the canonical Release fallback', () => {

@@ -697,13 +697,33 @@ thing the PRD does not mention.
   multi-instance cards deliberately remain unattributed until the review contract can express
   one decision per generated value without false precision.
 
+  **A regression now blocks certification.** Recording a regression left the certificate itself
+  unchanged: each write-back lane only ever asked whether ITS criterion cleared, and
+  `mark_file_compliant_if_reviewed` gated on approvals plus written content, so a file whose
+  approved fix cleared 1.1.1 and broke 1.4.3 still reached 100/100, `status='pass'` and Publish.
+  A regression observed on the credited path — the only path whose bytes reach the document —
+  now raises a `{criterion}/regressed` review row and blocks certification until a human accepts
+  it, by re-remediating or by recording a WCAG exception. The suffix keeps the row out of
+  `_superseded_items`, which would otherwise retract it instantly: the regressed criterion's scan
+  trace still reads PASS, because passing at scan time is why it was never a review item. The
+  gate fails closed on a missing row, since a regression nobody can see in the inbox is exactly
+  the one that must not certify on that silence.
+
   **Criterion rollout report implemented:** Settings → AI Governance exposes the declared two-run
   shadow comparison at criterion-and-format grain. It shows all 59 decisions and identifies only
   `docx:2.4.4` and `html:2.4.4` with Sonnet 5 as eligible for an assisted pilot; human approval
   remains mandatory. Every other category stays with rule code, human-only, or insufficient
   evidence exactly as the committed evaluator decided. Remaining: run those two pilots against
-  real review traffic, enforce measured production stop gates, and add exact attribution for
-  multi-instance vision decisions.
+  real review traffic and add exact attribution for multi-instance vision decisions.
+
+  **Controlled pilot and stop gates implemented:** owner-only AI Governance can arm the two
+  evidence-approved lanes and no others. DOCX/HTML 2.4.4 opaque-link drafts then use Sonnet 5 but
+  remain approval-only. The backend re-evaluates a pilot-only 30-day evidence stream before every
+  call and automatically stops the stronger-model override on its call/spend ceiling, excessive
+  failures, low reviewer acceptance, excessive reviewer edits, low validation-clear rate, or the
+  first post-write regression. Off/stopped falls back to the established text lane; it never
+  blocks remediation. Remaining: collect and review real pilot traffic, then decide whether either
+  lane has earned broader rollout; multi-instance vision attribution is still separate work.
 
   **Conformance and Release provenance slices implemented:** the immutable certification PDF now carries the
   same exact provider/model/zone rows with measured success/failure and latency, and states that

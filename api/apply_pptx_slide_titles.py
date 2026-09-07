@@ -19,11 +19,17 @@ import zipfile
 # "slide 1", "slide 12" etc.
 _SLIDE_LOC = re.compile(r"^slide\s+(\d+)$", re.IGNORECASE)
 
-# A pptx title placeholder shape block.  The type="title" attr may be single or
-# double quoted, and the ph element may appear before or after other children of
-# nvSpPr, so we match the whole <p:sp>…</p:sp> by presence of the ph type marker.
+# A pptx title placeholder shape block.  The type attr may be single or double quoted, and
+# the ph element may appear before or after other children of nvSpPr, so we match the whole
+# <p:sp>…</p:sp> by presence of the ph type marker.
+#
+# BOTH "title" AND "ctrTitle". The Title Slide layout's centred title is `ctrTitle`, and the
+# detector (office_structure._PPTX_TITLE_PH) counts it as the slide's title for 2.4.6. This
+# regex matched only "title", so an approved title on a Title Slide was returned as unresolved
+# and never credited — found by tests/test_remediation_verified_pptx_titles.py, the lane's
+# first round-trip proof. The two must name the same shapes or the lane has a hole.
 _TITLE_SP = re.compile(
-    r"<p:sp\b[^>]*>.*?<p:ph[^>]+type=[\"']title[\"'][^>]*/?>.*?</p:sp>",
+    r"<p:sp\b[^>]*>.*?<p:ph[^>]+type=[\"'](?:title|ctrTitle)[\"'][^>]*/?>.*?</p:sp>",
     re.DOTALL,
 )
 

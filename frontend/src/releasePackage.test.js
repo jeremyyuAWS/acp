@@ -9,17 +9,26 @@ const publish = readFileSync(join(here, 'Publish.jsx'), 'utf8')
 
 describe('Release ZIP package', () => {
   it('posts selected names through the authenticated API and saves one ZIP', () => {
-    expect(api).toMatch(/export const downloadReleasePackage = \(scanId, files, packageName = ''\)/)
+    expect(api).toMatch(/export const previewReleasePackage/)
+    expect(api).toMatch(/release\/package\/preview/)
+    expect(api).toMatch(/export const downloadReleasePackage = \(scanId, files, packageName = '', options = \{\}\)/)
     expect(api).toMatch(/\/release\/package/)
     expect(api).toMatch(/headers: headers\(\{ 'Content-Type': 'application\/json' \}\)/)
     expect(api).toMatch(/package_name: packageName\.trim\(\)/)
-    expect(api).toMatch(/requestedName \? `\$\{requestedName\}\.zip`/)
+    expect(api).toMatch(/downloadFormat === 'original'/)
+    expect(api).toMatch(/preserve_hierarchy: options\.preserveHierarchy !== false/)
+    expect(api).toMatch(/include_manifest: options\.includeManifest !== false/)
   })
 
   it('explains the package contents before download', () => {
     expect(publish).toMatch(/one ZIP package with the source folder structure and a release manifest/i)
-    expect(publish).toMatch(/\.zip” with folder structure and a manifest/)
+    expect(publish).toMatch(/preserveHierarchy \? ' with the source folder structure' : ' in one flat folder'/)
     expect(publish).toMatch(/Download ZIP \(\$\{selectedReady\.length\}\)/)
+    expect(publish).toMatch(/Download corrected file/)
+    expect(publish).toMatch(/Include release manifest with checksums/)
+    expect(publish).toMatch(/Also download scope-limited verification report/)
+    expect(publish).toMatch(/Download preview/)
+    expect(publish).toMatch(/packagePreview\.blockers/)
   })
 
   it('collects and validates package or destination names before review', () => {

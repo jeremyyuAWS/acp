@@ -1,4 +1,21 @@
-"""Write reviewer-approved alt text into pptx images-of-text (WCAG 1.4.5 / 1.4.9).
+"""RETIRED — kept for revival, called by nothing. See tests/test_apply_pptx_image_of_text_retired.py.
+
+#1715 gave the pptx 1.4.5 lane a writer that clears the criterion: apply_pptx_image_replacement
+swaps the picture for a real text box and DELETES the image. Setting descr, which is what this
+module does, leaves the raster in ppt/media where ocr._ooxml_images reads it straight out of the
+zip — so the finding re-fires and the verify gate refuses the credit, which is why #1665 had
+already downgraded that lane to HUMAN. This module is correct at what it does; what it does is
+not a 1.4.5 fix.
+
+It has no 1.1.1 job either, and that was checked rather than assumed: 'image N' is emitted only
+by propose_images_of_text and enqueued only as 1.4.5, so no 1.1.1 row carries that locator;
+every 1.1.1 row uses 'part#name', which apply_alt_text already writes and a round-trip fixture
+already proves; and the OCR transcript already reaches 1.1.1 by a better path, through
+ai._transcribed_alt into the vision alt draft. The retirement test records what WOULD revive
+this module — a reviewer choosing to describe an image of text instead of replacing it — and
+what has to be designed first for that to be honest.
+
+Write reviewer-approved alt text into pptx images-of-text (WCAG 1.4.5 / 1.4.9).
 
 api/proposals.propose_images_of_text drafts OCR'd text for embedded raster images that
 contain readable prose, keyed by locator:

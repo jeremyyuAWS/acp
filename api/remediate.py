@@ -552,7 +552,7 @@ def _fix_abbr(tree, diffs=None) -> list:
 # text-model DRAFT surfaced as a Medium proposal (never applied). `proposals` collects
 # {**proposal, "sc": "2.4.4", "applied": bool} for the worker to enqueue with a validated
 # flag once the residual re-scan confirms the applied ones cleared.
-def _propose_links(tree, proposals, *, ai_enabled: bool, diffs=None) -> None:
+def _propose_links(tree, proposals, *, ai_enabled: bool, diffs=None, filename: str = "") -> None:
     if proposals is None:
         return
     import proposals as _prop
@@ -578,8 +578,8 @@ def _propose_links(tree, proposals, *, ai_enabled: bool, diffs=None) -> None:
                 # model_is_available(), not is_available(): suggest_fix drafts with the TEXT
                 # model, and a reachable Ollama missing OLLAMA_MODEL 404s on every call —
                 # see the _TEXT_GATE note in api/proposals.py.
-                res = (_ai.suggest_fix("2.4.4", "Link Purpose (In Context)", "A", "",
-                                       detail=f'link text "{text}" → {href}')
+                res = (_ai.suggest_fix("2.4.4", "Link Purpose (In Context)", "A", filename,
+                                       detail=f'link text "{text}" → {href}', file_format="html")
                        if _ai.model_is_available() else None)
             except Exception:
                 res = None
@@ -593,7 +593,7 @@ def _propose_links(tree, proposals, *, ai_enabled: bool, diffs=None) -> None:
 
 
 def remediate_html(html_text: str, *, ai_enabled: bool = True, diffs=None,
-                   proposals=None, in_scope=None) -> tuple[str, list, list]:
+                   proposals=None, in_scope=None, filename: str = "") -> tuple[str, list, list]:
     """Apply server-side HTML remediation.
 
     Returns (fixed_html, applied_changes, deferred_rule_ids):
@@ -629,7 +629,7 @@ def remediate_html(html_text: str, *, ai_enabled: bool = True, diffs=None,
             deferred.append(sc)
     # 2.4.4 link-text expansion — deterministic fixes applied inline, drafts collected.
     try:
-        _propose_links(tree, proposals, ai_enabled=ai_enabled, diffs=diffs)
+        _propose_links(tree, proposals, ai_enabled=ai_enabled, diffs=diffs, filename=filename)
         if proposals and any(p.get("applied") for p in proposals):
             applied.append("Expanded vague link text to describe its destination · 2.4.4")
     except Exception:

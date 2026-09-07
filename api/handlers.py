@@ -1167,7 +1167,7 @@ def _remediate_file(payload: dict, job: dict) -> None:
             fixed_html, applied, _deferred = remediate_html(
                 data.decode("utf-8", errors="replace"),
                 ai_enabled=core.store.get_ai_enabled(), diffs=rem_diffs,
-                proposals=inline_proposals, in_scope=_scope_allows)
+                proposals=inline_proposals, in_scope=_scope_allows, filename=filename)
         rem_skipped = _deferred
         fixed_bytes = fixed_html.encode("utf-8")
         mimetype = "text/html"
@@ -4673,15 +4673,23 @@ _PDF_APPLY_EXTS = ("pdf",)
 # so their 4.1.2 signal stays the ActiveX/OLE advisory no static write can resolve.
 _FIELD_NAME_EXTS = ("pdf", "docx")
 
-# 1.4.5/1.4.9 image-of-text alt text: the approved OCR text is written as the picture's
-# <p:cNvPr descr="..."> by apply_pptx_image_of_text. The write is correct and is kept, but the
-# lane is HUMAN for every format (remediation_capability), because the write cannot clear the
-# criterion it is credited against: the 1.4.5 detector (ocr.images_of_text) OCRs the raster
-# bytes, a descr attribute leaves those bytes untouched, so the finding re-fires on re-scan and
-# _apply_one_value_kind withholds credit. That is the gate working as designed — descr is a
-# 1.1.1 improvement, not removal of the image of text. PDF /Alt has the same shape and the
-# same outcome. Genuine 1.4.5 remediation means replacing the picture with real text.
+# 1.4.5 images of text: the approved OCR transcript REPLACES the picture. apply_pptx_image_replacement
+# swaps every <p:pic> showing it for a real text box at the same rectangle, drops the image
+# relationship, and deletes the media part from the package.
+#
+# Deleting the part is the whole lane, not a tidy-up. ocr._ooxml_images walks the ZIP NAMELIST
+# for ppt/media/* rasters — it never opens a slide — so removing only the <p:pic> leaves the
+# bytes tesseract reads and the finding re-fires. Writing descr instead — the pre-#1665 lane,
+# whose writer is now RETIRED and called by nothing (api/apply_pptx_image_of_text.py, and
+# tests/test_apply_pptx_image_of_text_retired.py holds it that way) — leaves those bytes
+# untouched too: it is a 1.1.1 improvement, not removal of the image of text.
+#
+# 1.4.5 ONLY, deliberately. 1.4.9 is AAA and exempts nothing, so a 1.4.9 row can be a chart —
+# and 1.4.5 exempts charts precisely because a picture of data is not a picture of prose.
+# Replacing a chart with its axis labels destroys information, so 1.4.9 stays HUMAN and the
+# getter is narrowed to ("1.4.5",) rather than reading both bands into one map.
 _IMAGE_OF_TEXT_EXTS = ("pptx",)
+_IMAGE_OF_TEXT_SCS = ("1.4.5",)
 
 # Every format an approved value can actually be WRITTEN into — the format scope
 # _apply_approved_values gates on, derived from the per-lane constants rather than restated, so
@@ -4784,11 +4792,6 @@ def _apply_one_value_kind(
     baseline = (residual_state or {}).get("verification")
     regressions = (sorted(verification.residual - baseline.residual)
                    if verification.ok and baseline is not None and baseline.ok else None)
-    if regressions:
-        core.store.log_decision(
-            "system", "apply.regression", scan_id=scan_id, file=filename,
-            detail=f"writing {len(applied)} {noun} value(s) made {regressions} fail on re-scan; "
-                   f"neither failed before the write")
     if not verification.ok:
         # COULD NOT VERIFY — the document was unreadable, the scan errored or timed out, an
         # engine was missing, or a rule threw and its criterion is simply absent from the
@@ -4831,6 +4834,21 @@ def _apply_one_value_kind(
         for item_id in core.store.approved_unapplied_item_ids(scan_id, filename, rule_id):
             core.store.mark_row_applied(item_id)
     if regressions:
+        # ONLY here, on the credited path. The two branches above return `working` — the bytes as
+        # they were BEFORE this lane — so a regression observed in a write they discarded is
+        # evidence about the draft (recorded on its outcome row above) and NOT a fact about the
+        # document. Logging or queueing it there would block a file over damage it never took.
+        core.store.log_decision(
+            "system", "apply.regression", scan_id=scan_id, file=filename,
+            detail=f"writing {len(applied)} {noun} value(s) made {regressions} fail on re-scan; "
+                   f"none of them failed before the write")
+        # The reviewer's way out. Certification is blocked by store.unresolved_regression until
+        # one of these is approved; queueing is best-effort because a failed write here must not
+        # lose the corrected copy, and the gate fails CLOSED on a missing row rather than open.
+        try:
+            core.store.queue_regression_review(scan_id, filename, regressions)
+        except Exception:
+            swallowed("_apply_one_value_kind: queueing the regression review failed", scan_id)
         _model_outcome("verified_regressed",
                        f"cleared on re-scan: {sorted(scs_to_clear)}; newly failing: {regressions}"
                        + unresolved_note,
@@ -4893,7 +4911,8 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
                        if ext in _LANGUAGE_EXTS else {})
     structure_label_values = (core.store.approved_structure_label_values(scan_id, filename)
                               if ext in _STRUCTURE_LABEL_EXTS else {})
-    image_of_text_values = (core.store.approved_images_of_text_values(scan_id, filename)
+    image_of_text_values = (core.store.approved_images_of_text_values(
+                                scan_id, filename, _IMAGE_OF_TEXT_SCS)
                             if ext in _IMAGE_OF_TEXT_EXTS else {})
     if not (alt_values or deco_locators or link_values or field_values
             or sensory_values or language_values or structure_label_values
@@ -5010,20 +5029,24 @@ def _apply_approved_values(payload: dict, job: dict) -> None:
             noun="structure label", job=job,
             residual_state=residual_state)
 
-    # 1.4.5/1.4.9 image-of-text alt text. The approved OCR transcript is set as the picture's
-    # descriptive alt (<p:cNvPr descr="...">) so every tool reading the file sees a description
-    # without relying on the human to paste it in manually (the HUMAN lane status before this).
-    # Two criteria, one lane: the proposer emits both against the same embedded images, the
-    # applier writes the same attribute either way, and the re-scan clears whichever it observes.
+    # 1.4.5 images of text. The approved transcript replaces the picture with a real text box and
+    # the image is deleted, so the words become selectable, resizable text and the raster the
+    # detector reads is gone. The writer refuses — returning the locator as unresolved, so no
+    # credit is given — when the image is referenced by a layout or master, sits in a group, or
+    # has no geometry of its own; see apply_pptx_image_replacement for why each is unwritable.
+    #
+    # scs_to_clear is 1.4.5 alone even though deleting the image also clears 1.4.9 for that
+    # picture: a deck with other images of text still fails 1.4.9, and that must not withhold
+    # credit for the 1.4.5 the reviewer actually fixed.
     image_of_text_uploaded = False
     if image_of_text_values:
-        from apply_pptx_image_of_text import apply_pptx_image_of_text
+        from apply_pptx_image_replacement import apply_pptx_image_replacement
         working, image_of_text_uploaded = _apply_one_value_kind(
             scan_id=scan_id, filename=filename, working=working,
-            values=image_of_text_values, scs_to_clear={"1.4.5", "1.4.9"},
-            write_fn=apply_pptx_image_of_text,
-            diff_rule_id="1.4.5", credit_rule_ids=("1.4.5", "1.4.9"),
-            noun="image-of-text alt text", job=job,
+            values=image_of_text_values, scs_to_clear={"1.4.5"},
+            write_fn=apply_pptx_image_replacement,
+            diff_rule_id="1.4.5", credit_rule_ids=_IMAGE_OF_TEXT_SCS,
+            noun="image-of-text replacement", job=job,
             residual_state=residual_state)
 
     if not (alt_uploaded or link_uploaded or field_uploaded

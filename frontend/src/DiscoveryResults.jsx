@@ -210,7 +210,7 @@ export default function DiscoveryResults({
       {scanId && (
         <>
           <p className="muted" style={{ margin: '4px 0 0', fontSize: 11.5,
-                                        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+                                        fontFamily: 'var(--font-mono)' }}>
             Scan ID: {scanId}{' '}
             <button type="button" className="linklike" style={{ fontSize: 11.5 }}
                     aria-expanded={showRaw} onClick={() => setShowRaw((s) => !s)}>
@@ -242,7 +242,7 @@ export default function DiscoveryResults({
               </div>
               <pre style={{ fontSize: 11, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                             maxHeight: 360, overflow: 'auto', margin: 0,
-                            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+                            fontFamily: 'var(--font-mono)' }}>
                 {JSON.stringify({ scan_id: scanId, status: runStatus, scope: rawScope, decisions: rawDecisions }, null, 2)}
               </pre>
             </div>

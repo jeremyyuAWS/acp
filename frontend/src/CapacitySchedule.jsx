@@ -83,6 +83,8 @@ export default function CapacitySchedule({ me = null } = {}) {
 
   useEffect(() => {
     let on = true
+    setSnap(null)
+    setFailed(false)
     getCapacitySchedule()
       .then((d) => { if (on) { setSnap(d); setFailed(false) } })
       .catch(() => { if (on) setFailed(true) })
@@ -97,6 +99,10 @@ export default function CapacitySchedule({ me = null } = {}) {
         in capacity — nothing has been altered. Live replica counts remain in
         Monitor → Workers &amp; Queue.
       </div>
+      <button type="button" className="secondary" style={{ marginTop: 10 }}
+        onClick={() => setReloads((n) => n + 1)}>
+        Try again
+      </button>
     </div>
   }
   if (!snap) return <div className="muted" style={{ padding: 12, fontSize: 13 }}>Loading the capacity schedule…</div>

@@ -1198,6 +1198,20 @@ export const putSecondOpinionPolicy = (policy) => (SIM
       headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify(policy),
     }).then(j))
+export const getRemediationPilot = () => (SIM
+  ? sim({ enabled: false, running: false, categories: ['docx:2.4.4', 'html:2.4.4'],
+      provider: 'anthropic', model: 'claude-sonnet-5', stop_reasons: ['Pilot is off'],
+      max_calls: 100, max_spend_usd: 5, min_sample: 10, max_failure_rate: .1,
+      min_acceptance_rate: .9, max_edit_rate: .2, min_validation_clear_rate: .95,
+      metrics: { calls: 0, failed: 0, cost_usd: 0, decisions: 0, accepted: 0,
+        edited: 0, validated: 0, cleared: 0, regressed: 0, newly_failing: 0 } })
+  : fetch(`${BASE}/ai/remediation-pilot`, { headers: headers() }).then(j))
+export const putRemediationPilot = (policy) => (SIM
+  ? sim({ ...policy, running: !!policy.enabled, stop_reasons: policy.enabled ? [] : ['Pilot is off'], simulated: true })
+  : fetch(`${BASE}/ai/remediation-pilot`, {
+      method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(policy),
+    }).then(j))
 export const getAiProvidersHealth = (windowHours = 24) => (SIM
   ? sim({ window_hours: windowHours, providers: {} })
   : fetch(`${BASE}/ai/providers/health?window_hours=${windowHours}`, { headers: headers() }).then(j))
@@ -1491,25 +1505,37 @@ export const getReleaseStatus = (scanId) => (SIM
 export const listReleaseHistory = (limit = 50) => (SIM
   ? sim({ releases: [] }, 50)
   : fetch(`${BASE}/releases?limit=${encodeURIComponent(limit)}`, { headers: headers() }).then(j))
-export const previewReleaseDestination = (scanId, files, releaseFolderName = '') => (SIM
+export const previewReleaseDestination = (scanId, files, releaseFolderName = '', preserveHierarchy = true) => (SIM
   ? sim({ folder_name: releaseFolderName || '2026-09-06 12-00 UTC', folder_state: 'proposed', provider: 'drive',
       documents: files.map((file) => ({ file, provider_location: 'google:me', destination_path: `Remediated/${releaseFolderName || '2026-09-06 12-00 UTC'}/${file}`, action: 'create' })),
       blockers: [], can_release: true, collision_policy: 'Existing files are not overwritten.', original_files_unchanged: true }, 80)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/preview`, {
       method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
-      body: JSON.stringify({ files, ...(releaseFolderName.trim() ? { release_folder_name: releaseFolderName.trim() } : {}) }),
+      body: JSON.stringify({ files, preserve_hierarchy: preserveHierarchy, ...(releaseFolderName.trim() ? { release_folder_name: releaseFolderName.trim() } : {}) }),
     }).then(j))
 export const getReleaseManifest = (scanId) => (SIM
   ? sim({ manifest: { schema_version: 1, scan_id: scanId, documents: [] },
       content_digest: { algorithm: 'SHA-256', value: 'simulation' },
       digest_note: 'Simulation manifest.' }, 50)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/manifest`, { headers: headers() }).then(j))
-export const downloadReleasePackage = (scanId, files, packageName = '') => {
+export const previewReleasePackage = (scanId, files, options = {}) => (SIM
+  ? sim({ files: files.length, paths: files, estimated_bytes: null, estimate_complete: false,
+      preserve_hierarchy: options.preserveHierarchy !== false, include_manifest: options.includeManifest !== false,
+      blockers: [], can_download: true, recommended_format: files.length === 1 ? 'original' : 'zip' }, 80)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/package/preview`, {
+      method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ files, preserve_hierarchy: options.preserveHierarchy !== false,
+        include_manifest: options.includeManifest !== false }),
+    }).then(j))
+export const downloadReleasePackage = (scanId, files, packageName = '', options = {}) => {
   if (SIM) return Promise.resolve()
+  const downloadFormat = options.downloadFormat || 'zip'
   return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/release/package`, {
     method: 'POST',
     headers: headers({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ files, ...(packageName.trim() ? { package_name: packageName.trim() } : {}) }),
+    body: JSON.stringify({ files, preserve_hierarchy: options.preserveHierarchy !== false,
+      include_manifest: options.includeManifest !== false, download_format: downloadFormat,
+      ...(packageName.trim() ? { package_name: packageName.trim() } : {}) }),
   })
     .then(async (r) => {
       if (!r.ok) {
@@ -1524,7 +1550,9 @@ export const downloadReleasePackage = (scanId, files, packageName = '') => {
       const a = document.createElement('a')
       a.href = url
       const requestedName = packageName.trim().replace(/\.zip$/i, '')
-      a.download = requestedName ? `${requestedName}.zip` : (match?.[1] || `acp-release-${scanId}.zip`)
+      a.download = downloadFormat === 'original'
+        ? (match?.[1] || files[0]?.split('/').pop() || 'corrected-file')
+        : requestedName ? `${requestedName}.zip` : (match?.[1] || `acp-release-${scanId}.zip`)
       document.body.appendChild(a); a.click(); a.remove()
       setTimeout(() => URL.revokeObjectURL(url), 60000)
     })
@@ -1639,7 +1667,7 @@ export const getCapacitySchedule = () => (SIM
           next_transition_at: null, next_transition_to: null, version: 0, applied: false,
           validation: null, scalers: {}, observed: {}, drift: [], drift_evaluated: false,
           azure_configured: false })
-  : fetch(`${BASE}/control/capacity-schedule`, { headers: headers() }).then(j))
+  : bootFetch(`${BASE}/control/capacity-schedule`, { headers: headers() }).then(j))
 // Phase 3's writes. All admin-only at the API (each handler runs _require_admin); the SPA hides
 // the controls too, which is convenience, not the gate.
 //

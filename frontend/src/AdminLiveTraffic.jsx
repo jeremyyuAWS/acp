@@ -351,6 +351,19 @@ export const TILE_KINDS = {
  * status line two rows down said "Complete". The header is the tile's TYPE cue, which is what
  * 1.4.1 needs it for, so the word JOB stays on every variant; the qualifier in front of it now
  * comes from the same state the status line reads, and so cannot contradict it. */
+// BOUNDED AT 100, and says so when the data is not. On 2026-09-07 an Assess tile read "200%" with
+// its bar drawn clean out of the card: two documents completed against an expected total of one.
+// The ratio was a true fact about stale counts; a gauge past 100% is not a fact about anything, and
+// the same rule that keeps utilisation at 100% applies here. The excess is reported separately as
+// `over`, so the tile can name the discrepancy instead of either hiding it or drawing it.
+export function runProgress(run = {}) {
+  const total = Number(run.total || 0)
+  const completed = Number(run.completed || 0)
+  if (!total) return { pct: 0, over: false, excess: 0 }
+  const raw = (completed / total) * 100
+  return { pct: Math.min(100, Math.round(raw)), over: completed > total, excess: Math.max(0, completed - total) }
+}
+
 export function runTileLabel(run = {}) {
   const state = runOperationalState(run)
   if (state === 'recent') return 'COMPLETED JOB'
@@ -385,10 +398,10 @@ export function tileStyle(kind, color) {
   }
 }
 
-function RunNode({ data }) {
+export function RunNode({ data }) {
   const cfg = STAGE[data.run.stage] || { label: data.run.stage, color: '#6B7280' }
   const accent = data.workflowColor || cfg.color
-  const pct = data.run.total ? Math.round((data.run.completed / data.run.total) * 100) : 0
+  const { pct, over, excess } = runProgress(data.run)
   const operationalState = runOperationalState(data.run)
   const statusLabel = operationalState === 'recent' ? 'Complete'
     : operationalState === 'attention' ? 'Needs attention'
@@ -413,9 +426,12 @@ function RunNode({ data }) {
       Workflow revision {Math.max(1, Number(data.run.workflow_revision || 1))}
     </div>
     <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>{data.run.owner}</div>
-    <div style={{ height: 5, background: 'var(--line)', borderRadius: 4, margin: '9px 0 7px' }}>
-      <div style={{ width: `${pct}%`, height: '100%', background: cfg.color, borderRadius: 4 }} />
+    <div style={{ height: 5, background: 'var(--line)', borderRadius: 4, margin: '9px 0 7px', overflow: 'hidden' }}>
+      <div data-testid="run-progress-bar" style={{ width: `${pct}%`, height: '100%', background: cfg.color, borderRadius: 4 }} />
     </div>
+    {over && <div className="muted" role="note" style={{ fontSize: 10, marginBottom: 5 }}>
+      {excess} more completed than the {data.run.total} expected · expected total is stale
+    </div>}
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'end' }}>
       <span style={{ fontSize: 12 }}>{operationalState === 'stopping'
         ? `${data.run.completed}/${data.run.total} complete · ${data.run.running || 0} draining`

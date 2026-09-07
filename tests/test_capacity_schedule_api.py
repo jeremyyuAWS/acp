@@ -85,7 +85,7 @@ def test_an_unconfigured_azure_reports_scalers_as_not_configured_never_as_health
 def test_a_failing_azure_read_does_not_take_the_schedule_down(monkeypatch):
     """The schedule is a durable intention; Azure being unreachable must not hide it."""
     monkeypatch.setattr(control, "_AZ_CONFIGURED", True)
-    monkeypatch.setattr(control, "get_capacity", lambda: (_ for _ in ()).throw(RuntimeError("azure down")))
+    monkeypatch.setattr(control, "_az_client", lambda: (_ for _ in ()).throw(RuntimeError("azure down")))
     payload = control.get_capacity_schedule()
     assert payload["business_hours"]["assess"] == 5
     assert {s["state"] for s in payload["scalers"].values()} == {"unreadable"}
@@ -93,15 +93,33 @@ def test_a_failing_azure_read_does_not_take_the_schedule_down(monkeypatch):
 
 def test_observed_capacity_is_surfaced_with_its_scale_rules(monkeypatch):
     monkeypatch.setattr(control, "_AZ_CONFIGURED", True)
-    monkeypatch.setattr(control, "get_capacity", lambda: {
-        "configured": True,
-        "apps": {
-            "acp-assess": {"min_replicas": 5, "max_replicas": 5, "current_replicas": 5,
-                           "scale": {"rules": [{"name": "assess-queue"}]}},
-            "acp-remediate": {"min_replicas": 5, "max_replicas": 10, "current_replicas": 6,
-                              "scale": {"rules": [{"name": "remediation-queue"}]}},
-        },
-    })
+    monkeypatch.setattr(control, "_configured_apps", lambda: ["acp-assess", "acp-remediate"])
+
+    def app(floor, ceiling, rule):
+        trigger = type("Queue", (), {"type": "azure-queue", "metadata": {},
+                                     "queue_length": 5, "queue_name": "jobs"})()
+        scale = type("Scale", (), {"min_replicas": floor, "max_replicas": ceiling,
+                                    "rules": [type("Rule", (), {"name": rule,
+                                                                 "custom": None,
+                                                                 "http": None,
+                                                                 "azure_queue": trigger})()]})()
+        return type("App", (), {"properties": type("Props", (), {
+            "template": type("Template", (), {"scale": scale})(),
+            "latest_ready_revision_name": "ready"})()})()
+
+    apps = {"acp-assess": app(5, 5, "assess-queue"),
+            "acp-remediate": app(5, 10, "remediation-queue")}
+    client = type("Client", (), {
+        "container_apps": type("ContainerApps", (), {
+            "get": lambda self, resource_group, name: apps[name]})(),
+        "container_apps_revision_replicas": type("Replicas", (), {
+            "list_replicas": lambda self, resource_group, name, revision:
+                type("Result", (), {"value": [object()] * (5 if name == "acp-assess" else 6)})()
+        })(),
+    })()
+    monkeypatch.setattr(control, "_az_client", lambda: client)
+    monkeypatch.setattr(control, "get_capacity", lambda: pytest.fail(
+        "the schedule read must not run the expensive fleet-observability path"))
     payload = control.get_capacity_schedule()
     assert payload["observed"]["acp-assess"]["scale_rules"] == ["assess-queue"]
     assert payload["observed"]["acp-remediate"]["current_replicas"] == 6
@@ -431,14 +449,11 @@ def test_an_unparseable_holiday_cannot_be_saved(store, admin):
 
 def test_the_payload_attributes_each_service(store, admin, monkeypatch):
     monkeypatch.setattr(control, "_AZ_CONFIGURED", True)
-    monkeypatch.setattr(control, "get_capacity", lambda: {
-        "configured": True,
-        "apps": {
+    monkeypatch.setattr(control, "_observed_apps", lambda: ({
             "acp-assess": {"current_replicas": 8, "min_replicas": 1, "max_replicas": 10},
             "acp-remediate": {"current_replicas": 5, "min_replicas": 1, "max_replicas": 10,
                               "draining_replicas": 2},
-        },
-    })
+        }, True))
     control.put_capacity_schedule(_fits(enabled=True), admin)
     attribution = control.get_capacity_schedule()["attribution"]
     assert attribution["assess"]["reason"] in ("queue", "scheduled", "below_floor")
@@ -448,8 +463,8 @@ def test_the_payload_attributes_each_service(store, admin, monkeypatch):
 
 def test_an_override_is_named_as_the_reason_capacity_is_where_it_is(store, admin, monkeypatch):
     monkeypatch.setattr(control, "_AZ_CONFIGURED", True)
-    monkeypatch.setattr(control, "get_capacity", lambda: {
-        "configured": True, "apps": {"acp-assess": {"current_replicas": 9}}})
+    monkeypatch.setattr(control, "_observed_apps", lambda: (
+        {"acp-assess": {"current_replicas": 9}}, True))
     control.put_capacity_schedule(_fits(enabled=True), admin)
     control.create_capacity_override(
         control.OverrideRequest(mode="custom", duration="1h", reason="batch",

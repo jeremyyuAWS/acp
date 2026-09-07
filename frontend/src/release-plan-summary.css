@@ -1,0 +1,11 @@
+.release-plan-summary { position: sticky; top: 12px; border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; background: var(--panel, #fff); display: grid; gap: 11px; min-width: 240px; }
+.release-plan-summary__heading { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+.release-plan-summary__heading span { color: var(--muted); font-size: 12px; }
+.release-plan-summary dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 7px 12px; margin: 0; font-size: 12.5px; }
+.release-plan-summary dt { color: var(--muted); }
+.release-plan-summary dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.release-plan-summary__safety { color: var(--success-fg); font-size: 12px; font-weight: 700; }
+.release-plan-summary__excluded { border-top: 1px solid var(--line); padding-top: 9px; color: var(--warn-fg); font-size: 12px; font-weight: 650; }
+.release-plan-summary--compact { position: static; }
+@media (max-width: 900px) { .release-plan-summary { position: static; } }
+@media (forced-colors: active) { .release-plan-summary { border: 1px solid CanvasText; } }

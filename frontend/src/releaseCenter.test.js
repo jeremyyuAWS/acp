@@ -7,12 +7,15 @@ import { dirname, join } from 'node:path'
 // modal + per-row destination). A full mount would need the whole run/files fixture stack; the
 // honesty-critical copy is unit-tested in releasePolicy.test.js — this pins that Publish.jsx uses it.
 const HERE = dirname(fileURLToPath(import.meta.url))
-const pub = () => readFileSync(join(HERE, 'Publish.jsx'), 'utf8')
+const pub = () => ['Publish.jsx', 'ReleaseFileSelection.jsx', 'ReleaseStepPanel.jsx',
+  'release-file-selection.css', 'release-accessibility.css']
+  .map((file) => readFileSync(join(HERE, file), 'utf8')).join('\n')
 
 describe('Release Center: honest policy panel', () => {
   it('reads the REAL policy from settings rather than hard-coding it', () => {
     const s = pub()
-    expect(s).toMatch(/import \{ releaseDestination, releaseDestinationPhrase, releaseConfirmLines \} from '\.\/releasePolicy\.js'/)
+    expect(s).toMatch(/releaseDestinationPhrase, releaseConfirmLines/)
+    expect(s).toMatch(/import \{ releaseDestination \} from '\.\/releasePolicy\.js'/)
     expect(s).toMatch(/getSettings\(\)\.then\(/)
     expect(s).toMatch(/mirrorState\(settings\)/)
     expect(s).toMatch(/driveMirrorEnabled = ms === MIRROR\.ON/)
@@ -67,7 +70,7 @@ describe('Release Center: confirmation before a release', () => {
 
   it('labels each row with where its corrected copy will land', () => {
     const s = pub()
-    expect(s).toMatch(/releaseDestination\(\{ provider: releaseProvider, driveFileId: f\.drive_file_id, driveMirrorEnabled, driveMirrorFolder \}\)\.label/)
+    expect(s).toMatch(/releaseDestination\(\{ provider: releaseProvider, driveFileId: file\.drive_file_id, driveMirrorEnabled, driveMirrorFolder \}\)\.label/)
   })
 
   it('shows one release destination and an accessible two-column document view', () => {
@@ -75,10 +78,10 @@ describe('Release Center: confirmation before a release', () => {
     expect(s).toMatch(/aria-label="Release destination"/)
     expect(s).toMatch(/Open release folder/)
     expect(s).toMatch(/Original files are unchanged/)
-    expect(s).toMatch(/Documents grouped by source folder/)
+    expect(s).toMatch(/className="release-selection__layout"/)
     expect(s).toMatch(/Selected document release details/)
     expect(s).toMatch(/aria-live="polite"/)
-    expect(s).toMatch(/<details[^>]*><summary>Audit history/)
+    expect(s).toMatch(/<details><summary>Audit history/)
   })
 
   it('follows durable SharePoint jobs instead of treating submission as completion', () => {
@@ -110,7 +113,8 @@ describe('Release Center: confirmation before a release', () => {
     const s = pub()
     expect(s).toMatch(/sourceProduct = releaseProvider === 'sharepoint' \? 'SharePoint'/)
     expect(s).toMatch(/changed at the source in \{sourceProduct\}/)
-    expect(s).toMatch(/Open in \{sourceProduct\}/)
+    expect(s).toMatch(/sourceProduct=\{sourceProduct\}/)
+    expect(s).toMatch(/Open released document/)
     expect(s).not.toMatch(/changed at the source in Drive/)
   })
 
@@ -157,7 +161,7 @@ describe('Release builder', () => {
   it('does not allow changed sources into the releasable selection', () => {
     const s = pub()
     expect(s).toMatch(/srcOf\(f\) !== 'stale'/)
-    expect(s).toMatch(/disabled=\{srcOf\(f\) === 'stale'\}/)
+    expect(s).toMatch(/disabled=\{fileStatus === 'changed'\}/)
   })
 
   it('moves focus from the overview action to the real builder', () => {
@@ -188,7 +192,7 @@ describe('Release builder', () => {
     const s = pub()
     expect(s).toMatch(/const \[builderStep, setBuilderStep\] = useState\(1\)/)
     expect(s).toMatch(/builderStep === 1 \? \(/)
-    expect(s).toMatch(/builderStep === 2 \? <>/)
+    expect(s).toMatch(/builderStep === 2 \? <ReleaseStepPanel/)
     expect(s).toMatch(/onClick=\{chooseDelivery\}>Choose delivery/)
     expect(s).toMatch(/const chooseDelivery = \(\) =>/)
     expect(s).toMatch(/onClick=\{reviewDelivery\}/)
@@ -230,9 +234,9 @@ describe('Release builder', () => {
 
   it('gives long file names a dedicated readable layout', () => {
     const s = pub()
-    expect(s).toMatch(/className="release-file-main"/)
-    expect(s).toMatch(/className="release-file-meta"/)
-    expect(s).toMatch(/className="release-file-destination"/)
-    expect(s).toMatch(/className="release-file-outcome"/)
+    expect(s).toMatch(/release-selection__name/)
+    expect(s).toMatch(/release-selection__meta/)
+    expect(s).toMatch(/release-selection__destination/)
+    expect(s).toMatch(/overflow-wrap: anywhere/)
   })
 })

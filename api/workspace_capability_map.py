@@ -209,6 +209,7 @@ _map_many([
     ("GET", "/scans/{sid}/release"),
     ("GET", "/scans/{sid}/release/manifest"),
     ("POST", "/scans/{sid}/release/preview"),
+    ("POST", "/scans/{sid}/release/package/preview"),
     ("POST", "/scans/{sid}/release/package"),
 ], {"release.view"})
 
@@ -297,11 +298,13 @@ _map_many([("GET", "/admin/analytics/overview"), ("GET", "/ai/costs")], {"analyt
 # ── Settings and platform administration ──────────────────────────────────────
 _map_many([("GET", "/settings"),
            ("GET", "/ai/providers"),
-           ("GET", "/ai/second-opinion-policy"), ("GET", "/ai/status"),
+           ("GET", "/ai/second-opinion-policy"), ("GET", "/ai/remediation-pilot"),
+           ("GET", "/ai/status"),
            ("GET", "/ai/providers/health"), ("GET", "/ai/providers/{provider}/health")],
           {"settings.view"})
 _map_many([("PUT", "/settings"), ("PUT", "/ai/providers"),
-           ("PUT", "/ai/second-opinion-policy"), ("POST", "/ai/providers/test"),
+           ("PUT", "/ai/second-opinion-policy"), ("PUT", "/ai/remediation-pilot"),
+           ("POST", "/ai/providers/test"),
            ("POST", "/ai/providers/{provider}/secret")],
           {"settings.view"})
 _map_many([("PUT", "/workers")], {"workers.manage"})

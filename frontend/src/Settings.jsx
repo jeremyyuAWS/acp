@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { resetDemoData, resetMyData, getAllowlist, setAllowlist, inviteTester, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, putAiProviderSecret, testAiProvider, getSecondOpinionPolicy, putSecondOpinionPolicy, getAiStatus, getAdmins, setAdmins, getMe, getToken, getCapacitySchedule, validateCapacitySchedule, putCapacitySchedule, getMyScope, putMyReleaseTimezone } from './api.js'
+import { resetDemoData, resetMyData, getAllowlist, setAllowlist, inviteTester, getSettings, updateSettings, getAiCosts, getAiProviders, putAiProvider, putAiProviderSecret, testAiProvider, getSecondOpinionPolicy, putSecondOpinionPolicy, getRemediationPilot, putRemediationPilot, getAiStatus, getAdmins, setAdmins, getMe, getToken, getCapacitySchedule, validateCapacitySchedule, putCapacitySchedule, getMyScope, putMyReleaseTimezone } from './api.js'
 import { SIM } from './sim.js'
 import WorkerReplicaControl from './WorkerReplicaControl.jsx'
 import ReviewMemory from './ReviewMemory.jsx'
@@ -789,6 +789,7 @@ export function AIProvidersPanel({ onAccess }) {
   const [providers, setProviders] = useState(null)
   const [policy, setPolicy] = useState(null)
   const [policyDraft, setPolicyDraft] = useState(null)
+  const [pilot, setPilot] = useState(null)
   const [draft, setDraft] = useState({})     // provider -> edited fields
   const [busy, setBusy] = useState('')
   const [note, setNote] = useState('')
@@ -806,10 +807,11 @@ export function AIProvidersPanel({ onAccess }) {
   // that could not persist anything.
   const [denied, setDenied] = useState(false)
   useEffect(() => {
-    Promise.all([getAiProviders(), getSecondOpinionPolicy()])
-      .then(([d, p]) => {
+    Promise.all([getAiProviders(), getSecondOpinionPolicy(), getRemediationPilot()])
+      .then(([d, p, remediationPilot]) => {
         setProviders(d.providers || [])
         setPolicy(p); setPolicyDraft(p)
+        setPilot(remediationPilot)
         setSecretWrite(d.secret_write || { available: false, reason: '', kind: '' })
         onAccess?.(true)
       })
@@ -818,7 +820,7 @@ export function AIProvidersPanel({ onAccess }) {
         setDenied(forbidden); setProviders([]); onAccess?.(!forbidden)
       })
   }, [])
-  if (!providers || !policyDraft) return null
+  if (!providers || !policyDraft || !pilot) return null
   // Nothing to show read-only either — the GET that would have supplied the rows is what 403'd.
   if (denied) return <ReadOnlyNotice />
   const edit = (p, field, val) => setDraft((d) => ({ ...d, [p]: { ...(d[p] || {}), [field]: val } }))
@@ -876,6 +878,16 @@ export function AIProvidersPanel({ onAccess }) {
   }
   const policyDirty = JSON.stringify(policyDraft) !== JSON.stringify(policy)
   const purposeEnabled = (policyDraft.criteria || []).includes('1.3.5')
+  const togglePilot = () => {
+    setBusy('remediation-pilot'); setNote('')
+    const next = { ...pilot, enabled: !pilot.enabled }
+    delete next.running; delete next.stop_reasons; delete next.metrics
+    delete next.provider; delete next.model; delete next.window_days
+    putRemediationPilot(next)
+      .then((res) => { setPilot(res); setNote(wrote(res, `✓ Remediation pilot ${res.enabled ? 'armed' : 'stopped'}`)) })
+      .catch((e) => setNote(e.message || 'pilot update failed'))
+      .finally(() => setBusy(''))
+  }
   return (
     <div>
       <h3 style={{ marginTop: 0 }}>AI providers <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>· governance &amp; bring-your-own-key</span></h3>
@@ -893,6 +905,30 @@ export function AIProvidersPanel({ onAccess }) {
         <code> AZURE_OPENAI_API_KEY</code>). The key value never touches the database, this page, or
         a log — only whether it’s present is shown.
       </p>
+      <section aria-labelledby="remediation-pilot-heading" style={{ border: `1px solid ${pilot.running ? '#6a9b3c' : 'var(--line)'}`, borderRadius: 10, padding: '12px 14px', margin: '14px 0' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <b id="remediation-pilot-heading">Sonnet-assisted remediation pilot</b>
+          <span style={{ marginLeft: 'auto', fontSize: 12, color: pilot.running ? '#2C5209' : 'var(--muted)' }}>
+            {pilot.running ? 'Running · human approval required' : pilot.enabled ? 'Automatically stopped' : 'Off'}
+          </span>
+        </div>
+        <p className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+          Limited to WCAG 2.4.4 link-purpose drafts in DOCX and HTML. Every draft stays in Review &amp; Approve; deterministic fixes and all other criteria are unchanged.
+        </p>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', fontSize: 12, marginBottom: 9 }}>
+          <span><b>{pilot.metrics?.calls || 0}</b> / {pilot.max_calls} calls</span>
+          <span><b>${Number(pilot.metrics?.cost_usd || 0).toFixed(4)}</b> / ${Number(pilot.max_spend_usd).toFixed(2)}</span>
+          <span><b>{pilot.metrics?.accepted || 0}</b> / {pilot.metrics?.decisions || 0} accepted</span>
+          <span><b>{pilot.metrics?.cleared || 0}</b> / {pilot.metrics?.validated || 0} validated clear</span>
+        </div>
+        {pilot.stop_reasons?.length > 0 && pilot.enabled && <p role="alert" style={{ color: 'var(--error-fg-strong)', fontSize: 12, margin: '7px 0' }}>
+          Stop gate: {pilot.stop_reasons.join(' · ')}
+        </p>}
+        <button className={pilot.enabled ? 'ghost small' : 'primary small'} disabled={busy === 'remediation-pilot'} onClick={togglePilot}>
+          {pilot.enabled ? 'Stop pilot' : 'Start controlled pilot'}
+        </button>
+        <span className="muted" style={{ marginLeft: 9, fontSize: 11.5 }}>30-day gates: failures ≤10% · acceptance ≥90% · edits ≤20% · validation ≥95% · any regression stops immediately</span>
+      </section>
       <section aria-labelledby="second-opinion-heading" style={{ border: '1px solid var(--line)', borderRadius: 10, padding: '12px 14px', margin: '14px 0' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <b id="second-opinion-heading">Assessment second opinions</b>

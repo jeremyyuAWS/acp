@@ -39,7 +39,10 @@ def test_every_category_now_has_at_least_two_cases():
 def test_the_band_holds_exactly_the_categories_the_other_bands_leave_single():
     single = {cat for cat, n in Counter(category_of(c) for c in OTHERS).items() if n == 1}
     assert {category_of(c) for c in COVERAGE} == single
-    assert len(COVERAGE) == len(single) == 42
+    # 42 -> 43 when pptx 1.4.5 became ASSISTED: that pair had no case at all while it was HUMAN
+    # (a human pair only ever appears as an abstain case, and this one had none), so the corpus
+    # gained a category. See EXPECTED_COUNTS in gen_remediation_eval_corpus for the check run.
+    assert len(COVERAGE) == len(single) == 43
     # one per category, no double-covering
     assert len({category_of(c) for c in COVERAGE}) == len(COVERAGE)
 

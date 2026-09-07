@@ -65,6 +65,30 @@ def test_the_key_is_checked_before_it_is_spent(wf):
     assert names.index(check["name"]) < names.index("Run the evals")
 
 
+def test_either_anthropic_secret_name_resolves_onto_the_one_the_kit_reads(wf):
+    """The kit reads ANTHROPIC_API_KEY and only that. This repo namespaces its secrets
+    (ACP_E2E_KEY, ACP_MONITOR_KEY, ...), so the Anthropic key may well be stored as
+    ACP_ANTHROPIC_KEY — the same name api/providers.credential_for() takes as a key_secret_ref.
+    Both must map onto ANTHROPIC_API_KEY in the job, in the check step AND the run step, or the
+    run authenticates as nobody in exactly the way five dispatches did on 2026-09-07."""
+    steps = wf["jobs"]["evals"]["steps"]
+    injecting = [s for s in steps if "ANTHROPIC_API_KEY" in (s.get("env") or {})]
+    assert len(injecting) == 2, "both the key check and the run step inject the credential"
+    for step in injecting:
+        expr = step["env"]["ANTHROPIC_API_KEY"]
+        assert "secrets.ANTHROPIC_API_KEY" in expr and "secrets.ACP_ANTHROPIC_KEY" in expr, \
+            f"{step.get('name')!r} accepts only one of the two names: {expr}"
+
+
+def test_the_key_error_names_the_store_not_just_the_page(wf):
+    """`Settings -> Secrets and variables -> Actions` alone sent a real user to the Dependabot
+    tab on that same page three times. The error has to name the store."""
+    check = next(s for s in wf["jobs"]["evals"]["steps"] if "Check the keys" in s.get("name", ""))
+    run = check["run"]
+    assert "ACP_ANTHROPIC_KEY" in run
+    assert "Dependabot" in run and "Repository secrets" in run
+
+
 def test_a_cancelled_paid_run_is_the_worst_outcome_so_it_does_not_cancel(wf):
     assert wf["concurrency"]["cancel-in-progress"] is False
     assert wf["permissions"] == {"contents": "read"}
@@ -87,7 +111,7 @@ def _cli(*args: str) -> subprocess.CompletedProcess:
 def test_estimate_only_prices_the_run_without_calling_anything():
     r = _cli("--estimate-only", "--repeats", "3", "-c", "anthropic:claude-opus-5")
     assert r.returncode == 0
-    assert "426 calls" in r.stderr and "$5.1120" in r.stderr  # 142 cases x 3 repeats, Opus list price
+    assert "429 calls" in r.stderr and "$5.1480" in r.stderr  # 143 cases x 3 repeats, Opus list price
 
 
 def test_the_spend_cap_refuses_before_the_first_call():
