@@ -9,9 +9,13 @@ const read = (f) => readFileSync(join(here, f), 'utf8')
 describe('review in place — the FileDrawer mounts the real EvidenceCard per finding', () => {
   const src = read('FileDrawer.jsx')
 
-  it('fetches pending review items scoped to this scan + file, and stays in sync with the bell', () => {
-    expect(src).toMatch(/listHitlQueue\(scanId, 'pending'\)/)
-    expect(src).toMatch(/\.filter\(\(r\) => r\.file === file\.file\)/)
+  it('fetches review items scoped to this scan + file — pending, plus approved ones the apply refused — and stays in sync with the bell', () => {
+    // No status filter on the fetch: an approved-but-refused row (apply_outcome) must reach the
+    // drawer, and reviewableInPlace (reviewCard.js) is the single definition of what is shown.
+    expect(src).toMatch(/listHitlQueue\(scanId\)/)
+    expect(src).not.toMatch(/listHitlQueue\(scanId, 'pending'\)/)
+    expect(src).toMatch(/\.filter\(\(r\) => r\.file === file\.file && reviewableInPlace\(r\)\)/)
+    expect(src).toMatch(/import \{[^}]*\breviewableInPlace\b[^}]*\} from '\.\/reviewCard\.js'/)
     expect(src).toMatch(/addEventListener\('acp:hitl-changed', load\)/)
   })
 
