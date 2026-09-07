@@ -211,6 +211,8 @@ _map_many([
     ("POST", "/scans/{sid}/release/preview"),
     ("POST", "/scans/{sid}/release/package/preview"),
     ("POST", "/scans/{sid}/release/package"),
+    ("POST", "/scans/{sid}/release/package/prepare"),
+    ("GET", "/scans/{sid}/release/package/jobs/{job_id}/download"),
 ], {"release.view"})
 
 # Canonical cross-stage execution contract. Reads serve both stage cards and Live Operations;

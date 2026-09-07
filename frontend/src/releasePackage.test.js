@@ -31,6 +31,17 @@ describe('Release ZIP package', () => {
     expect(publish).toMatch(/packagePreview\.blockers/)
   })
 
+  it('prepares large packages durably and resumes their status after navigation', () => {
+    expect(api).toMatch(/export const prepareReleasePackage/)
+    expect(api).toMatch(/release\/package\/prepare/)
+    expect(api).toMatch(/export const downloadPreparedReleasePackage/)
+    expect(publish).toMatch(/acp\.release\.package\.\$\{run\.id\}/)
+    expect(publish).toMatch(/50 \* 1024 \* 1024/)
+    expect(publish).toMatch(/selectedReady\.length >= 100/)
+    expect(publish).toMatch(/You can leave this tab and return when it is ready/)
+    expect(publish).toMatch(/Download prepared ZIP/)
+  })
+
   it('collects and validates package or destination names before review', () => {
     expect(publish).toMatch(/ZIP filename/)
     expect(publish).toMatch(/Release folder name/)

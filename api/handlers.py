@@ -28,6 +28,37 @@ from scanner import run_scan
 logger = logging.getLogger(__name__)
 
 
+@handler("prepare_release_package")
+def _prepare_release_package(payload: dict, job: dict) -> None:
+    """Build a large release archive off-request and persist it for later download."""
+    scan_id, owner = payload.get("scan_id"), payload.get("owner")
+    files = list(dict.fromkeys(payload.get("files") or []))
+    if not scan_id or not owner or not files or not job.get("id"):
+        raise FatalJobError("prepare_release_package job missing identity or files")
+    scan = core.store.get_scan(scan_id, owner=owner)
+    if scan is None:
+        raise FatalJobError("scan not found")
+    rows = {row.get("file"): row for row in scan.get("files", [])}
+    if any(name not in rows for name in files):
+        raise FatalJobError("corrected file not found")
+    _phase(job, "building the ZIP package")
+    from routes.scans import _build_release_zip
+    import blob as _blob
+    output = None
+    try:
+        output, _size, _filename = _build_release_zip(
+            scan_id, owner, scan, files, rows,
+            package_name=payload.get("package_name") or "",
+            preserve_hierarchy=payload.get("preserve_hierarchy") is not False,
+            include_manifest=payload.get("include_manifest") is not False)
+        _phase(job, "saving the package for download")
+        if not _blob.upload_release_package(owner, scan_id, job["id"], output):
+            raise FatalJobError("durable package storage is not configured")
+    finally:
+        if output is not None:
+            output.close()
+
+
 @handler("scheduled_sweep")
 def _scheduled_sweep(payload: dict, job: dict) -> None:
     """Execute the one durable occurrence elected from all scheduler replicas."""
