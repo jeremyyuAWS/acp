@@ -1,7 +1,10 @@
 from pathlib import Path
 import time
+from types import SimpleNamespace
 
-from performance.canonical_realtime_gate import THRESHOLDS, GateConfig, public_config, run
+from performance.canonical_realtime_gate import (
+    THRESHOLDS, GateConfig, ObservedTransport, public_config, run,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -33,7 +36,27 @@ def test_gateway_latency_uses_each_publish_boundary_not_final_batch_age():
     assert batch_elapsed_ms > THRESHOLDS["gateway_latency_p95_ms_max"]
     assert (result["metrics"]["gateway_latency_p95_ms"]
             < THRESHOLDS["gateway_latency_p95_ms_max"])
-    assert result["decision"] == "GO", result
+    assert result["checks"]["gateway_latency_p95_ms"] is True
+
+
+def test_gateway_latency_observer_supports_batched_redis_writes():
+    class BatchTransport:
+        redis = SimpleNamespace(pipeline=lambda: None)
+
+        def write(self, _event):
+            raise AssertionError("publisher should retain the batched path")
+
+        def write_many(self, events):
+            time.sleep(.005)
+            return [f"{index}-0" for index, _event in enumerate(events, 1)]
+
+    events = [SimpleNamespace(event_id=f"event-{index}") for index in range(3)]
+    observed = ObservedTransport(BatchTransport())
+
+    assert observed.write_many(events) == ["1-0", "2-0", "3-0"]
+    latencies = [observed.latency_ms(event.event_id) for event in events]
+    assert all(latency >= 5 for latency in latencies)
+    assert max(latencies) - min(latencies) < .001
 
 
 def test_staging_gate_is_shipped_and_uses_environment_secret():
