@@ -61,6 +61,17 @@ describe('DiscoverRunProgress renders nothing until a scan is live', () => {
   })
 })
 
+describe('live discovery accounting', () => {
+  it('uses animated counters for increasing inventory facts', () => {
+    const html = render({ phase: 'discovering', files_found: 12, folders_found: 4,
+      save_new: 7, save_updated: 2 }, true)
+    expect(html).toContain('aria-label="Live discovery accounting"')
+    expect(html).toMatch(/Documents found<\/dt><dd><span class="livecounter"/)
+    expect(html).toMatch(/Folders visited<\/dt><dd><span class="livecounter"/)
+    expect(html).toMatch(/Inventory saved<\/dt><dd><span class="livecounter"/)
+  })
+})
+
 describe('the discovery step checklist', () => {
   it('keeps the SharePoint boundary visible on the live card', () => {
     const html = renderToStaticMarkup(createElement(DiscoverRunProgress, {

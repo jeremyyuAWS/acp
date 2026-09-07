@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { normalizeLive } from './liveAssessment.js'
 import LiveHeartbeatBars from './LiveHeartbeatBars.jsx'
+import LiveCounter from './LiveCounter.jsx'
 import SourceVisibility from './SourceVisibility.jsx'
 
 // The Assess RUNNING screen (approved board assess-03). It replaces the mid-run KPI scoreboard
@@ -227,6 +228,12 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
       <div className="assess-run-card" style={{ border: '1px solid var(--line,#e4e8ec)', borderRadius: 12,
                                                 padding: '14px 16px', background: 'var(--panel,#fff)' }}>
         <SourceVisibility source={m.source} scope={m.scope} />
+        <dl className="stage-live-accounting" aria-label="Live assessment accounting">
+          <div><dt>Assessed</dt><dd><LiveCounter value={completed} /></dd></div>
+          <div><dt>Processing</dt><dd>{processing.toLocaleString()}</dd></div>
+          <div><dt>Waiting</dt><dd>{Math.max(0, total - completed - processing).toLocaleString()}</dd></div>
+          <div><dt>Eligible</dt><dd>{total.toLocaleString()}</dd></div>
+        </dl>
         {isPreparing ? (
           <PrepChecklist m={m} total={total} completed={completed}
                          processing={processing} elapsed={elapsed} />
