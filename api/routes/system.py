@@ -526,6 +526,38 @@ def pdf_engine_status() -> dict:
             "reason": None if found else "analysers.pdf_analyser not importable from that path"}
 
 
+def _langfuse_status() -> dict:
+    """Secret-free, ingestion-aware status for the optional trace exporter.
+
+    Langfuse's landing/readiness endpoint is deliberately not called here: its HTTP 200 only
+    establishes that the service is up, not that trace ingestion accepts writes (the two
+    disagreed during the September 2026 incident).  The exporter state is evidence from real
+    writes.  Keep the shallow check explicit so clients cannot silently relabel "not checked" as
+    healthy, and whitelist fields so a future SDK exception or configuration value never leaks
+    through this public endpoint.
+    """
+    safe = {
+        "configured", "state", "exporting", "pending", "attempts", "successes", "failures",
+        "consecutive_failures", "last_attempt_at", "last_success_at", "last_error_at",
+        "last_duration_s", "next_retry_at",
+    }
+    try:
+        import lf as _lf
+        raw = _lf.exporter_health()
+        if not isinstance(raw, dict):
+            raise TypeError("exporter health is not a mapping")
+        ingestion = {key: raw[key] for key in safe if key in raw}
+        ingestion.setdefault("configured", bool(getattr(_lf, "_ENABLED", False)))
+        ingestion.setdefault("state", "unknown")
+    except Exception as exc:  # telemetry diagnostics must never break deployment readiness
+        ingestion = {"configured": False, "state": "unknown",
+                     "error": f"{exc.__class__.__name__}: exporter status unavailable"}
+    return {
+        "shallow_health": {"checked": False, "state": "not_checked"},
+        "ingestion_exporter": ingestion,
+    }
+
+
 @router.get("/readyz")
 def readyz():
     """Functional readiness: can this deployment actually do work right now?
@@ -665,7 +697,10 @@ def readyz():
                     # 2026-09-01. See store.worker_roles_status.
                     "roles": role_status},
         "queue": queue,
-        "dependencies": {"redis": redis_status},
+        # Langfuse is optional, so failed export is visible but never flips pipeline readiness.
+        # `shallow_health` and `ingestion_exporter` stay separate: service-up was a false green
+        # during the incident while real trace writes returned HTTP 500.
+        "dependencies": {"redis": redis_status, "langfuse": _langfuse_status()},
         # `pdf` is the ANALYSER (can this deployment read a PDF); `pdf_renderer` is the tagged-PDF
         # WRITER (can it produce one). Deliberately not both under "pdf": they fail independently,
         # for unrelated reasons, and a single key would make one of them unanswerable.

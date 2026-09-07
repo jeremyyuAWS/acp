@@ -13,7 +13,10 @@ Env vars:
 """
 from __future__ import annotations
 import os
+import datetime as _datetime
+import random as _random
 import threading as _threading
+import time as _time
 
 _HOST = os.environ.get("LANGFUSE_HOST", "")
 _PK   = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
@@ -41,6 +44,60 @@ _client = None
 _flush_lock = _threading.Lock()
 _flush_requested = False
 _flush_thread = None
+_flush_started_mono = None
+_flush_attempts = 0
+_flush_successes = 0
+_flush_failures = 0
+_flush_consecutive_failures = 0
+_flush_last_attempt_at = None
+_flush_last_success_at = None
+_flush_last_error_at = None
+_flush_last_duration_s = None
+_flush_retry_mono = 0.0
+_flush_next_retry_at = None
+
+
+def _env_seconds(name: str, default: float, minimum: float = 0.0) -> float:
+    try:
+        return max(minimum, float(os.environ.get(name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _utc_now() -> str:
+    return _datetime.datetime.now(_datetime.timezone.utc).isoformat()
+
+
+def exporter_health() -> dict:
+    """Return process-local, content-free exporter health for readiness/Live Operations."""
+    with _flush_lock:
+        # The thread may spend a few final instructions recording/logging a failed attempt after
+        # the network call is over. `_flush_started_mono` is the exporting interval; thread
+        # liveness alone would briefly report a write that is no longer happening.
+        exporting = bool(_ENABLED and _flush_started_mono is not None
+                         and _flush_thread is not None and _flush_thread.is_alive())
+        stalled_after = _env_seconds("ACP_LANGFUSE_STALL_WARN_SECONDS", 30.0, 0.1)
+        stalled = bool(exporting and _flush_started_mono is not None
+                       and (_time.monotonic() - _flush_started_mono) >= stalled_after)
+        if not _ENABLED:
+            state = "disabled"
+        elif stalled or _flush_consecutive_failures:
+            state = "degraded"
+        elif exporting:
+            state = "exporting"
+        else:
+            state = "idle"
+        return {
+            "configured": _ENABLED, "state": state, "exporting": exporting,
+            "pending": _flush_requested, "attempts": _flush_attempts,
+            "successes": _flush_successes, "failures": _flush_failures,
+            "consecutive_failures": _flush_consecutive_failures,
+            "last_attempt_at": _flush_last_attempt_at,
+            "last_success_at": _flush_last_success_at,
+            "last_error_at": _flush_last_error_at,
+            "last_duration_s": _flush_last_duration_s,
+            "next_retry_at": _flush_next_retry_at,
+        }
 
 # Friendly source labels for trace names/summaries.
 _SOURCE_LABEL = {"drive": "Google Drive", "sharepoint": "SharePoint / OneDrive", "local": "local corpus"}
@@ -332,25 +389,62 @@ def flush():
         _flush_requested = True
         if _flush_thread is not None and _flush_thread.is_alive():
             return
+        if _time.monotonic() < _flush_retry_mono:
+            return
         _flush_thread = _threading.Thread(
             target=_flush_loop, daemon=True, name="langfuse-flush")
         _flush_thread.start()
 
 
 def _flush_loop():
-    global _flush_requested, _flush_thread
+    global _flush_requested, _flush_thread, _flush_started_mono, _flush_attempts
+    global _flush_successes, _flush_failures, _flush_consecutive_failures
+    global _flush_last_attempt_at, _flush_last_success_at, _flush_last_error_at
+    global _flush_last_duration_s, _flush_retry_mono, _flush_next_retry_at
     while True:
         with _flush_lock:
             if not _flush_requested:
                 _flush_thread = None
                 return
             _flush_requested = False
+            started = _time.monotonic()
+            _flush_started_mono = started
+            _flush_attempts += 1
+            _flush_last_attempt_at = _utc_now()
         try:
             lf = _lf()
             if lf:
                 lf.flush()
+            finished = _time.monotonic()
+            with _flush_lock:
+                _flush_successes += 1
+                _flush_consecutive_failures = 0
+                _flush_last_success_at = _utc_now()
+                _flush_last_duration_s = round(finished - started, 3)
+                _flush_started_mono = None
+                _flush_retry_mono = 0.0
+                _flush_next_retry_at = None
         except Exception:
+            finished = _time.monotonic()
+            with _flush_lock:
+                _flush_failures += 1
+                _flush_consecutive_failures += 1
+                _flush_last_error_at = _utc_now()
+                _flush_last_duration_s = round(finished - started, 3)
+                _flush_started_mono = None
+                base = _env_seconds("ACP_LANGFUSE_RETRY_BASE_SECONDS", 5.0, 0.0)
+                maximum = _env_seconds("ACP_LANGFUSE_RETRY_MAX_SECONDS", 300.0, base)
+                delay = min(maximum, base * (2 ** min(_flush_consecutive_failures - 1, 8)))
+                delay *= _random.uniform(0.8, 1.2)
+                _flush_retry_mono = finished + delay
+                _flush_next_retry_at = (
+                    _datetime.datetime.now(_datetime.timezone.utc)
+                    + _datetime.timedelta(seconds=delay)).isoformat()
+                # Keep the request pending, but do not sleep or occupy another thread. A later
+                # pipeline flush after the breaker deadline starts the coalesced retry.
+                _flush_requested = True
             swallowed("lf.flush: flushing Langfuse failed")
+            return
 
 
 _PROJECT_ID_CACHE: str | None = None
