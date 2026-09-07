@@ -6,7 +6,7 @@ const STAGE_LABELS = {
 const STATE_LABELS = {
   queued: 'Waiting', processing: 'Processing', paused: 'Paused',
   processing_complete: 'Reconciling', reconciling: 'Reconciling',
-  succeeded: 'Complete', failed: 'Failed', cancelled: 'Stopped',
+  succeeded: 'Complete', failed: 'Failed', cancelled: 'Stopped manually',
   integrity_failed: 'Needs attention', superseded: 'Superseded',
 }
 
@@ -21,7 +21,7 @@ export function canonicalStageCardModel(snapshot) {
   const integrityOk = snapshot.integrity?.ok !== false && reconciliation.exact !== false
   const stopping = snapshot.control?.cancel_requested === true
     && !['cancelled', 'failed', 'succeeded'].includes(snapshot.state)
-  const stateLabel = stopping ? 'Stopping' : (STATE_LABELS[snapshot.state] || 'Status unavailable')
+  const stateLabel = stopping ? 'Stopping safely' : (STATE_LABELS[snapshot.state] || 'Status unavailable')
   return {
     stage: snapshot.stage,
     stageLabel: STAGE_LABELS[snapshot.stage] || 'Stage',
@@ -38,6 +38,14 @@ export function canonicalStageCardModel(snapshot) {
     unaccounted: number(reconciliation.unaccounted),
     exact: reconciliation.exact === true,
     stopping,
+    workItems: [
+      ['Completed', number(work.completed)],
+      ['Failed', number(work.failed)],
+      ['Skipped', number(work.skipped)],
+      ['Processing', number(work.processing)],
+      ['Waiting', number(work.queued)],
+      ['Stopped manually', number(work.cancelled)],
+    ],
   }
 }
 
