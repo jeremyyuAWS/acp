@@ -244,37 +244,11 @@ def render(projection: dict, *, language: str = DOCUMENT_LANGUAGE,
             row.cells[0].text = name
             row.cells[1].text = value
 
-    wcag_version = str(report.get("wcag_version") or "2.2")
-    document.add_heading(f"WCAG {wcag_version} Report", level=2)
-
-    totals = ", ".join(f"{k}: {v}" for k, v in projection["totals"].items())
     # Counts, never a percentage — ADR 0016/0023 and PRD §4.4. A "% compliant" figure on a
     # conformance report is the exact thing the feature exists not to produce.
-    document.add_paragraph(totals)
+    document.add_paragraph(", ".join(f"{k}: {v}" for k, v in projection["totals"].items()))
 
-    table = document.add_table(rows=1, cols=4)
-    table.style = "Table Grid"
-    header = table.rows[0]
-    for index, label in enumerate(
-            ("Criteria", "Level", "Conformance Level", "Remarks and Explanations")):
-        header.cells[index].text = label
-    _repeat_header_row(header)
-
-    for crit in projection["criteria"]:
-        row = table.add_row()
-        row.cells[0].text = f"{crit['criterion_num']} {crit.get('criterion_name') or ''}".strip()
-        row.cells[1].text = crit.get("level") or ""
-        cell = crit["conformance_level"]
-        if not crit["decided"] and crit.get("draft_status"):
-            # Labelled, and never in the conformance column on its own — PRD §19 forbids a draft
-            # suggestion being presented as a decision.
-            cell = (f"{cell}\nACP draft suggestion (not a decision): {crit['draft_status']}")
-        row.cells[2].text = cell
-        remarks = crit.get("remarks") or ""
-        if crit.get("evidence_stale"):
-            remarks = (f"{remarks}\n{crit['evidence_stale']} stale evidence record(s), retained "
-                       f"for audit history").strip()
-        row.cells[3].text = remarks
+    _add_wcag_section(document, projection["wcag"])
 
     _add_requirement_section(document, projection.get("section_508"),
                              "Revised Section 508 Report")
@@ -288,6 +262,50 @@ def render(projection: dict, *, language: str = DOCUMENT_LANGUAGE,
     buffer = io.BytesIO()
     document.save(buffer)
     return buffer.getvalue()
+
+
+def _add_wcag_section(document, section: dict) -> None:
+    """The WCAG report as the template lays it out: one table per level, three columns each.
+
+    The Level column is gone, and nothing is lost by it: the level is the heading of the table the
+    row sits in, which is how the template does it and how a screen-reader user finds a level —
+    by navigating headings rather than by reading a column that repeats the same value 31 times.
+    Same reasoning, and same shape, as `_add_requirement_section` below.
+    """
+    document.add_heading(section["heading"], level=2)
+
+    for level in section["levels"]:
+        document.add_heading(level["heading"], level=3)
+        if level.get("not_evaluated"):
+            # Stated, not omitted. A missing table reads as "nothing to report"; PRD §19 forbids
+            # implying a claim about a standard that was not evaluated, in either direction.
+            document.add_paragraph(level["not_evaluated"])
+            continue
+        document.add_paragraph(", ".join(f"{k}: {v}" for k, v in level["totals"].items()))
+
+        table = document.add_table(rows=1, cols=3)
+        table.style = "Table Grid"
+        header = table.rows[0]
+        for index, label in enumerate(
+                ("Criteria", "Conformance Level", "Remarks and Explanations")):
+            header.cells[index].text = label
+        _repeat_header_row(header)
+
+        for crit in level["rows"]:
+            row = table.add_row()
+            row.cells[0].text = (
+                f"{crit['criterion_num']} {crit.get('criterion_name') or ''}".strip())
+            cell = crit["conformance_level"]
+            if not crit["decided"] and crit.get("draft_status"):
+                # Labelled, and never in the conformance column on its own — PRD §19 forbids a
+                # draft suggestion being presented as a decision.
+                cell = f"{cell}\nACP draft suggestion (not a decision): {crit['draft_status']}"
+            row.cells[1].text = cell
+            remarks = crit.get("remarks") or ""
+            if crit.get("evidence_stale"):
+                remarks = (f"{remarks}\n{crit['evidence_stale']} stale evidence record(s), "
+                           f"retained for audit history").strip()
+            row.cells[2].text = remarks
 
 
 def _add_requirement_section(document, section: dict | None, heading: str) -> None:

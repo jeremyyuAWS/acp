@@ -126,12 +126,17 @@ def test_the_html_prints_the_508_report_with_its_own_tables(projection):
 
 
 def test_the_508_tables_are_navigable_rather_than_one_long_grid(projection):
-    """Five tables: report information, the WCAG table, and one per 508 chapter. A single 175-row
-    table is technically valid and unusable with a screen reader, which is the failure mode an
-    accessibility report can least afford."""
+    """Seven tables: report information, WCAG Level A and Level AA, and one per 508 chapter. A
+    single 175-row table is technically valid and unusable with a screen reader, which is the
+    failure mode an accessibility report can least afford.
+
+    It was six until acceptance row 13 split the WCAG section into the template's per-level
+    tables. Level AAA adds a heading and a sentence saying it was not evaluated, and no table —
+    which is why this is seven and not eight.
+    """
     html = acr_export_preview.to_html(projection)
-    assert html.count("<caption>") == 6
-    assert html.count('<th scope="col">Criteria</th>') == 5   # WCAG + four chapters
+    assert html.count("<caption>") == 7
+    assert html.count('<th scope="col">Criteria</th>') == 6   # WCAG A + AA, four chapters
 
 
 def test_the_508_tables_carry_no_level_column(projection):
@@ -184,17 +189,27 @@ def test_the_word_document_carries_the_508_chapters_as_headings(docx_bytes, tmp_
 
 
 def test_the_508_word_tables_have_three_columns_and_a_header_row(docx_bytes, tmp_path_factory):
+    """Scoped to the 508 section by ROW COUNT, not by column count.
+
+    It used to select every three-column table in the document, which identified the 508 tables
+    only because the WCAG table was the four-column odd one out. Acceptance row 13 made the WCAG
+    section three-column too — one table per level, the way the ITI template lays it out — so the
+    old selector picked up Level A and Level AA as well and read 6 where it wanted 4. The
+    assertion it was making is still the right one; what was wrong was inferring "this is a 508
+    table" from a property the 508 tables never had to themselves.
+    """
     import docx
 
     path = tmp_path_factory.mktemp("docx") / "acr.docx"
     path.write_bytes(docx_bytes)
     document = docx.Document(str(path))
     three_col = [t for t in document.tables if len(t.columns) == 3]
-    assert len(three_col) == 4, "one table per reportable chapter"
+    assert len(three_col) == 6, "four 508 chapters, plus WCAG Level A and Level AA"
     for table in three_col:
         assert [c.text for c in table.rows[0].cells] == [
             "Criteria", "Conformance Level", "Remarks and Explanations"]
-    assert sum(len(t.rows) - 1 for t in three_col) == 120
+    # 120 Section 508 requirements + 55 WCAG A/AA criteria, every one of them printed.
+    assert sum(len(t.rows) - 1 for t in three_col) == 175
 
 
 def test_the_508_document_passes_acps_own_word_analyser(docx_bytes):
