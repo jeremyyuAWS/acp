@@ -160,9 +160,22 @@ promises against, and it is safe only because the owner carve-out means nobody c
   means the feature is only as useful as the manual testing that goes into it (Phase 3).
 * The ACR namespace decision means every admitted user can read the report. If a deployment needs
   ACRs invisible to some signed-in users, that is a new requirement, not a bug in this one.
-* The ITI VPAT® template is **not** vendored. Phase 1–4 ship a structural preview that says on its
-  face that it is not a VPAT. Vendoring the template is a licensing decision for Phase 5 and gets
-  its own ADR, following ADR 0029's precedent.
+* The ITI VPAT® template is **not** vendored — still true, and now by decision rather than by
+  deferral. Phase 1–4 shipped a structural preview that said on its face it is not a VPAT; on
+  2026-09-07 the owner answered the copyright half (**ADR 0053**, Q2) as a scope: the template's
+  section headings, table titles and column headers may be reproduced here, its prose may not, and
+  the file itself is not vendored. That is ADR 0053's **Option C**, and it is what ships — the
+  headings live in `config/vpat-2.5rev.json`, per edition. Whether a document ACP generates may be
+  *called* a VPAT is that ADR's **Q1**, still open, which is why every format continues to say on
+  its face that it is not one.
+
+  This bullet read "a licensing decision for Phase 5 … **following ADR 0029's precedent**" until
+  2026-09-07. ADR 0053 retracted the second half — 0029 vendored a first-party analyser and
+  contains no licensing or trademark reasoning at all — and its Consequences listed the code sites
+  repeating the claim, which were corrected. **This ADR, where the claim originated, was not on
+  that list**: the retraction reached the copies and missed the source. Recorded here rather than
+  quietly deleted, because "fix the citations that quote it" is a checklist that can complete while
+  leaving the thing being quoted intact.
 
 ## Alternatives considered
 
