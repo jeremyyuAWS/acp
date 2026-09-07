@@ -130,6 +130,117 @@ def test_redis_transport_uses_isolated_namespace_retention_and_last_event_id():
     assert restored.effective_priority == Priority.NORMAL
 
 
+class FakePipeline:
+    def __init__(self, results=None, failure=None):
+        self.commands = []
+        self.results = results
+        self.failure = failure
+        self.execute_calls = []
+
+    def xadd(self, *args, **kwargs):
+        self.commands.append((args, kwargs))
+        return self
+
+    def execute(self, **kwargs):
+        self.execute_calls.append(kwargs)
+        if self.failure:
+            raise self.failure
+        return self.results or [f"{n}-0" for n in range(1, len(self.commands) + 1)]
+
+
+class FakeBatchRedis:
+    def __init__(self, pipeline):
+        self.created_with = []
+        self._pipeline = pipeline
+
+    def pipeline(self, **kwargs):
+        self.created_with.append(kwargs)
+        return self._pipeline
+
+
+def test_batch_uses_one_nontransactional_round_trip_and_preserves_priority():
+    pipe = FakePipeline()
+    transport = object.__new__(shadow.RedisStreamTransport)
+    transport.redis = FakeBatchRedis(pipe)
+    transport.retention = 77
+    publisher = shadow.ShadowPublisher(transport, start_worker=False)
+    base = dict(owner="owner@example.com", correlation_id="scan-1")
+    publisher.submit(kind="assess.progressed", payload={"n": 1},
+                     coalesce_key="scan-1", **base)
+    publisher.submit(kind="assess.progressed", payload={"n": 2},
+                     coalesce_key="scan-1", **base)
+    publisher.submit(kind="assess.completed", payload={}, **base)
+
+    publisher.publish_batch()
+
+    assert transport.redis.created_with == [{"transaction": False}]
+    assert pipe.execute_calls == [{"raise_on_error": False}]
+    restored = [_with_stream_id(f"{n}-0", args[1])[1]
+                for n, (args, _kwargs) in enumerate(pipe.commands, 1)]
+    assert [event.kind for event in restored] == ["assess.completed", "assess.progressed"]
+    assert restored[-1].payload == {"n": 2}
+    for args, kwargs in pipe.commands:
+        assert args[0] == stream_key(owner_scope("owner@example.com"))
+        assert kwargs == {"maxlen": 77, "approximate": True}
+        assert set(args[1]) == {"event", "event_id"}
+
+
+def test_batch_is_bounded_without_weakening_lifecycle_priority():
+    pipe = FakePipeline()
+    transport = object.__new__(shadow.RedisStreamTransport)
+    transport.redis = FakeBatchRedis(pipe)
+    transport.retention = 77
+    publisher = shadow.ShadowPublisher(transport, max_batch=2, start_worker=False)
+    base = dict(owner="t", correlation_id="c")
+    publisher.submit(kind="assess.progressed", payload={"n": 1}, coalesce_key="job", **base)
+    for n in range(3):
+        publisher.submit(kind="assess.completed", payload={"n": n}, **base)
+
+    publisher.publish_batch()
+
+    restored = [_with_stream_id(f"{n}-0", args[1])[1]
+                for n, (args, _kwargs) in enumerate(pipe.commands, 1)]
+    assert [event.payload for event in restored] == [{"n": 0}, {"n": 1}]
+    assert len(publisher._lifecycle) == 1
+    assert len(publisher._progress) == 1
+
+
+def test_partial_batch_failures_are_counted_per_event(monkeypatch):
+    monkeypatch.setattr(shadow, "METRICS", shadow.Metrics())
+    pipe = FakePipeline(results=["1-0", TimeoutError("one command failed"), "3-0"])
+    transport = object.__new__(shadow.RedisStreamTransport)
+    transport.redis = FakeBatchRedis(pipe)
+    transport.retention = 77
+    publisher = shadow.ShadowPublisher(transport, start_worker=False)
+    for n in range(3):
+        publisher.submit(kind="assess.completed", owner="t", correlation_id="c",
+                         payload={"n": n})
+
+    publisher.publish_batch()
+
+    metrics = shadow.metrics_snapshot()
+    assert metrics["publish_success_total"] == 2
+    assert metrics["publish_drop_total"] == 1
+
+
+def test_whole_batch_failure_is_swallowed_and_counts_every_drop(monkeypatch):
+    monkeypatch.setattr(shadow, "METRICS", shadow.Metrics())
+    pipe = FakePipeline(failure=TimeoutError("pipeline unavailable"))
+    transport = object.__new__(shadow.RedisStreamTransport)
+    transport.redis = FakeBatchRedis(pipe)
+    transport.retention = 77
+    publisher = shadow.ShadowPublisher(transport, start_worker=False)
+    for n in range(3):
+        publisher.submit(kind="assess.completed", owner="t", correlation_id="c",
+                         payload={"n": n})
+
+    publisher.publish_batch()
+
+    metrics = shadow.metrics_snapshot()
+    assert metrics["publish_success_total"] == 0
+    assert metrics["publish_drop_total"] == 3
+
+
 def test_worker_outcomes_emit_only_truthful_registered_events(monkeypatch):
     transport = Transport()
     publisher = shadow.ShadowPublisher(transport, start_worker=False)
