@@ -93,11 +93,23 @@ describe('Settings → Scheduling shows a proposal, not a live schedule', () => 
     expect(c.textContent).toContain('Business hours')
     expect(c.textContent).not.toContain('Proposed schedule — not in force')
     expect(c.textContent).toMatch(/Next transition to Off hours/)
+    expect(c.textContent).toMatch(/Next transition[^.]+\([^)]+\)/)
   })
 
   it('reports a disabled applied schedule as having no scheduled transition, not a fabricated one', async () => {
     const c = await mount({ ...PROPOSED, applied: true })
     expect(c.textContent).toMatch(/Next transition not scheduled/)
+  })
+})
+
+describe('instant timestamps name the viewer timezone', () => {
+  it('labels reconciliation and override instants instead of relying on locale implicitly', async () => {
+    const c = await mount({ ...PROPOSED, applied: true, enabled: true,
+      reconciliation: { state: 'applied', completed_at: '2026-09-07T16:00:00Z' },
+      override: { mode: 'off_hours', actor: 'owner@example.com', reason: 'maintenance', expires_at: '2026-09-08T03:00:00Z', resumes_schedule_version: 3 },
+      effective_floors: { assess: 1 } })
+    expect(c.textContent).toMatch(/Last checked[^.]+\([^)]+\)/)
+    expect(c.textContent).toMatch(/expires[^;]+\([^)]+\)/)
   })
 })
 

@@ -89,6 +89,7 @@ export default function CapacitySchedule({ me = null } = {}) {
   const [reloads, setReloads] = useState(0)
   const [fastRefreshUntil, setFastRefreshUntil] = useState(0)
   const [workspace, setWorkspace] = useState(null)
+  const [confirmation, setConfirmation] = useState(null)
   // `me?.is_admin` is the exact value the backend's _require_admin checks, so the SPA and the API
   // cannot disagree about who sees the editor. It is not the gate — every write endpoint runs
   // that check itself — but a view-only user seeing controls that 403 is its own kind of wrong
@@ -158,6 +159,17 @@ export default function CapacitySchedule({ me = null } = {}) {
       return new Intl.DateTimeFormat([], { timeZone: snap.timezone, hour: 'numeric', minute: '2-digit' }).format(new Date())
     } catch { return null }
   })()
+  const viewerTimezone = (() => {
+    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' } catch { return 'UTC' }
+  })()
+  const viewerTimestamp = (value) => value
+    ? `${new Date(value).toLocaleString()} (${viewerTimezone})`
+    : null
+  const appliedPolicyMatches = reconciliation.desired_key
+    && reconciliation.applied_key === reconciliation.desired_key
+  const desiredAuthority = reconciliation.authority === 'manual_override' || snap.override
+    ? 'Temporary override' : reconciliation.authority === 'holiday_exception'
+    ? 'Holiday exception' : 'Saved weekly schedule'
 
   return (
     <div style={{ display: 'grid', gap: 12 }}>
@@ -198,7 +210,7 @@ export default function CapacitySchedule({ me = null } = {}) {
         {reconciliationView && (
           <div role="status" aria-live="polite" style={{ fontSize: 12, marginTop: 5 }}>
             <b>{reconciliationView.label}</b>
-            {reconciliation.completed_at ? <> Last checked {new Date(reconciliation.completed_at).toLocaleString()} in your timezone.</> : null}
+            {reconciliation.completed_at ? <> Last checked {viewerTimestamp(reconciliation.completed_at)}.</> : null}
             {reconciliation.failures ? <> {reconciliation.failures} failed attempt{reconciliation.failures === 1 ? '' : 's'}.</> : null}
             {(reconciliationView.problem || reconciliationView.pending) && (
               <button type="button" className="linklike" onClick={() => setReloads((n) => n + 1)}>
@@ -207,17 +219,24 @@ export default function CapacitySchedule({ me = null } = {}) {
             )}
           </div>
         )}
+        {confirmation && (
+          <div role="status" aria-live="polite" data-testid="schedule-confirmation"
+            style={{ marginTop: 8, padding: 9, borderLeft: '4px solid var(--success-fg)', fontSize: 12 }}>
+            <b>{confirmation}</b> This confirmation remains here while Scheduling is open.
+            <button type="button" className="linklike" onClick={() => setConfirmation(null)}>Dismiss</button>
+          </div>
+        )}
         <div className="muted" style={{ fontSize: 12, marginTop: 5 }}>
           {!isAdmin ? 'You can review this policy. A platform administrator must make changes. '
             : null}
           {snap.override
             ? <>Set by <b>{snap.override.actor}</b> for “{snap.override.reason}”; expires{' '}
-                <b>{new Date(snap.override.expires_at).toLocaleString()}</b>, then schedule version{' '}
+                <b>{viewerTimestamp(snap.override.expires_at)}</b>, then schedule version{' '}
                 {snap.override.resumes_schedule_version} resumes.</>
             : snap.applied
             ? <>Next transition {snap.next_transition_at
                 ? <>to {MODE_LABEL[snap.next_transition_to] || snap.next_transition_to} at{' '}
-                    <b>{new Date(snap.next_transition_at).toLocaleString()}</b></>
+                    <b>{viewerTimestamp(snap.next_transition_at)}</b></>
                 : 'not scheduled'}.</>
             : <>Nothing has applied this schedule. Warm capacity is whatever
                 Settings → Worker Configuration and the queue scalers are currently set to; this
@@ -241,6 +260,21 @@ export default function CapacitySchedule({ me = null } = {}) {
           <b>{weekdaySummary}, {formatTime(snap.start)}–{formatTime(snap.end)} ({snap.timezone}).</b>{' '}
           <span className="muted">Off-hours capacity applies at all other times.</span>
         </div>
+      )}
+
+      {snap.override && (
+        <section className="panel" aria-labelledby="temporary-floor-heading"
+          style={{ padding: 12, borderLeft: '4px solid var(--warn-fg, #8a5a00)' }}>
+          <div id="temporary-floor-heading" className="muted" style={{ fontSize: 11 }}>TEMPORARY OVERRIDE FLOORS · ACTIVE</div>
+          <p style={{ margin: '5px 0 9px', fontSize: 12 }}>
+            These floors temporarily replace the weekly schedule below; they do not edit its draft values.
+          </p>
+          <dl style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(130px,1fr))', gap: 8, margin: 0 }}>
+            {SERVICES.filter(([key]) => snap.effective_floors?.[key] !== undefined).map(([key, label]) => (
+              <div key={key}><dt className="muted" style={{ fontSize: 11 }}>{label}</dt><dd style={{ margin: 0, fontWeight: 600 }}>{snap.effective_floors[key]} warm</dd></div>
+            ))}
+          </dl>
+        </section>
       )}
 
       {/* Validation, second and prominent: this is the answer the phase exists to produce. */}
@@ -273,7 +307,7 @@ export default function CapacitySchedule({ me = null } = {}) {
       {isAdmin && workspace && (
         <CapacityScheduleEditor snap={snap} initialView={workspace}
           onClose={() => setWorkspace(null)}
-          onSaved={() => { setWorkspace(null); setFastRefreshUntil(Date.now() + 60000); setReloads((n) => n + 1) }} />
+          onSaved={(message = 'Scheduling change saved.') => { setConfirmation(message); setWorkspace(null); setFastRefreshUntil(Date.now() + 60000); setReloads((n) => n + 1) }} />
       )}
 
       {/* §5.3's table, with the observed column beside it so the two are read together. */}
@@ -302,6 +336,34 @@ export default function CapacitySchedule({ me = null } = {}) {
                 </article>
               )
             })}
+        </div>
+      </section>
+
+      <section className="panel" aria-labelledby="capacity-verification-heading" style={{ padding: 12 }}>
+        <div id="capacity-verification-heading" className="muted" style={{ fontSize: 11 }}>POLICY VERIFICATION · READ ONLY</div>
+        <p className="muted" style={{ fontSize: 12, margin: '5px 0 10px' }}>
+          Desired is ACP’s current authority. Applied is the last policy certified by the reconciler. Azure is the range read from each app.
+        </p>
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+            <caption className="sr-only">Desired, applied, and Azure capacity verification</caption>
+            <thead><tr><th scope="col" style={{ textAlign: 'left' }}>Service</th><th scope="col">Desired floor</th><th scope="col">Applied floor</th><th scope="col">Azure range</th></tr></thead>
+            <tbody>{SERVICES.filter(([key]) => snap.effective_floors?.[key] !== undefined).map(([key, label]) => {
+              const app = { web: 'acp-app', discovery: 'acp-discovery', assess: 'acp-assess', remediate: 'acp-remediate', gpu: 'acp-ollama' }[key]
+              const seen = snap.observed?.[app]
+              return <tr key={key} data-verification-service={key}>
+                <th scope="row" style={{ textAlign: 'left' }}>{label}</th>
+                <td style={{ textAlign: 'center' }}>{snap.effective_floors[key]}</td>
+                <td style={{ textAlign: 'center' }}>{appliedPolicyMatches ? snap.effective_floors[key] : 'Not verified'}</td>
+                <td style={{ textAlign: 'center' }}>{seen?.min_replicas != null && seen?.max_replicas != null ? `${seen.min_replicas}–${seen.max_replicas}` : 'Not reported'}</td>
+              </tr>
+            })}</tbody>
+          </table>
+        </div>
+        <div role="status" style={{ fontSize: 12, marginTop: 9 }}>
+          <b>Desired:</b> {desiredAuthority}. <b>Applied:</b>{' '}
+          {appliedPolicyMatches ? 'Matches desired policy.' : reconciliation.applied_key ? 'Does not yet match desired policy.' : 'Not yet verified.'}
+          {reconciliation.attempted_at ? <> Last attempt {viewerTimestamp(reconciliation.attempted_at)}.</> : null}
         </div>
       </section>
 
