@@ -1263,6 +1263,33 @@ class MyScopeUpdate(BaseModel):
     # HAVING no override (to clear the override and fall back to the owner default, use DELETE).
     scan_scope: dict[str, list[str]] | str | None = None
     release_timezone: str | None = None
+    release_destination: dict | None = None
+
+
+def _release_destination(user: str) -> dict | None:
+    raw = core.store.get_user_setting(user, "release_destination")
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _validate_release_destination(value: dict) -> dict:
+    provider = str(value.get("provider") or "").strip().lower()
+    if provider not in {"drive", "sharepoint"}:
+        raise HTTPException(422, "release_destination.provider must be drive or sharepoint")
+    folder_id = str(value.get("folder_id") or "").strip()
+    folder_name = str(value.get("folder_name") or "").strip()
+    if not folder_id or len(folder_id) > 500:
+        raise HTTPException(422, "release_destination.folder_id is required")
+    if not folder_name or len(folder_name) > 255:
+        raise HTTPException(422, "release_destination.folder_name is required")
+    # Persist only stable provider identifiers and the user-facing label. Tokens, URLs and
+    # arbitrary caller fields must never become durable preferences.
+    return {"provider": provider, "folder_id": folder_id, "folder_name": folder_name}
 
 
 def _require_user(request: Request) -> str:
@@ -1286,6 +1313,7 @@ def get_my_settings(request: Request):
         "scan_scope": core.store.get_user_setting(user, "scan_scope") or "",
         "owner_default": core.store.get_setting("scan_scope", "") or "",
         "release_timezone": core.store.get_user_setting(user, "release_timezone") or "America/Chicago",
+        "release_destination": _release_destination(user),
     }
 
 
@@ -1295,6 +1323,20 @@ def update_my_settings(body: MyScopeUpdate, request: Request):
     and is never stored (same discipline as the admin PUT), because a stored-but-unparseable override
     is silently ignored at read time. `{}` and "" both store as "" (no restriction)."""
     user = _require_user(request)
+    if "release_destination" in body.model_fields_set:
+        if body.release_destination is None:
+            core.store.clear_user_setting(user, "release_destination")
+            destination = None
+        else:
+            destination = _validate_release_destination(body.release_destination)
+            core.store.set_user_setting(user, "release_destination", json.dumps(destination))
+        core.store.log_decision(user, "settings.mine.release_destination",
+                                detail="release destination cleared" if destination is None else
+                                f"release destination set to {destination['provider']}:{destination['folder_id']}")
+        if body.scan_scope is None and body.release_timezone is None:
+            return {"scan_scope": core.store.get_user_setting(user, "scan_scope") or "",
+                    "release_timezone": core.store.get_user_setting(user, "release_timezone") or "America/Chicago",
+                    "release_destination": destination}
     if body.release_timezone is not None:
         import publish as _publish
         zone = body.release_timezone.strip() or "America/Chicago"
