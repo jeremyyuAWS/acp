@@ -1,4 +1,9 @@
-"""Bounded load/isolation gate for the default-off canonical realtime path."""
+"""Bounded load/isolation gate for the default-off canonical realtime path.
+
+Two classes of check come out of one run (see TIMING_CHECKS and evaluate): structural checks,
+which CI asserts on an in-memory run, and timing checks, which the report carries for the
+staging gate to judge on real hardware. docs/runbooks/canonical-realtime-load-gate.md says why.
+"""
 from __future__ import annotations
 
 import argparse
@@ -32,8 +37,47 @@ THRESHOLDS = {
     "missing_dead_letter_events_max": 0,
     "missing_latest_progress_events_max": 0,
     "missing_warm_soak_events_max": 0,
+    "progress_out_of_order_max": 0,
     "publisher_drops_max": 0,
 }
+
+# The checks whose outcome depends on the WALL CLOCK and the scheduler: a latency percentile,
+# and the coalescing ratio, which is how many publisher drains happened to interleave with the
+# submit loop (measured 12–14 progress writes for the same 600 submissions across 15 identical
+# in-memory runs, and 13 and 15 on two CI runs of one commit that had bounded it at 12). Every
+# other check is STRUCTURAL: it holds or fails by construction of the publisher and the store
+# — no cross-tenant row, no lost lifecycle event, every job's final progress written, in order —
+# whatever the machine is doing. The two classes decide differently: the staging gate's GO
+# requires both (a slow gateway is a real NO-GO for enabling the feature), while the in-memory
+# CI run asserts only the structural class and REPORTS the timing class, because a p95 measured
+# on a shared CI runner is evidence about the runner, and a test that fails on it is a flake
+# waiting to happen rather than a finding.
+TIMING_CHECKS = frozenset({
+    "gateway_latency_p95_ms", "warm_gateway_latency_p95_ms",
+    "submit_latency_p95_ms", "coalesced_write_ratio",
+})
+
+
+def evaluate(metrics: dict) -> dict:
+    """Decide from a metrics dict alone — no clock, no threads — so the verdict is unit-testable
+    with fixed inputs. Returns the per-check booleans, the same booleans split by class, and two
+    decisions: `decision` (GO only if every check holds; what the staging gate exits on) and
+    `structural_decision` (GO if every non-timing check holds; what CI asserts)."""
+    checks = {
+        name.removesuffix("_max"): metrics[name.removesuffix("_max")] <= threshold
+        for name, threshold in THRESHOLDS.items()
+    }
+    checks["missing_failed_events"] = metrics["missing_failed_events"] == 0
+    checks["persistent_client_warm_soak"] = metrics["warm_batch_count"] >= 1
+    timing = {name: ok for name, ok in checks.items() if name in TIMING_CHECKS}
+    structural = {name: ok for name, ok in checks.items() if name not in TIMING_CHECKS}
+    return {
+        "checks": checks,
+        "timing_checks": timing,
+        "structural_checks": structural,
+        "structural_decision": "GO" if all(structural.values()) else "NO-GO",
+        "decision": "GO" if all(checks.values()) else "NO-GO",
+    }
 
 
 def percentile(values: list[float], fraction: float) -> float:
@@ -41,6 +85,21 @@ def percentile(values: list[float], fraction: float) -> float:
     if not ordered:
         return 0.0
     return ordered[min(len(ordered) - 1, int((len(ordered) - 1) * fraction))]
+
+
+def out_of_order_progress_jobs(events) -> int:
+    """How many jobs have a written progress value that does not exceed the one before it, in
+    stream order. Coalescing may DROP intermediate progress; it must never reorder it. Pure, so
+    the invariant is testable on a handful of events rather than inferred from a live run."""
+    progress_by_job: dict[str, list[int]] = {}
+    for event in events:
+        if event.kind == "assess.progressed":
+            progress_by_job.setdefault(event.job_id, []).append(
+                int(event.payload.get("progress", -1)))
+    return sum(
+        any(later <= earlier for earlier, later in zip(values, values[1:]))
+        for values in progress_by_job.values()
+    )
 
 
 class MemoryRedis:
@@ -101,11 +160,16 @@ class AsyncMemoryRedis:
 
 
 class ObservedTransport:
-    """Record each event's publish-to-observable latency at its own write boundary."""
+    """Record each event's publish-to-observable latency at its own write boundary.
 
-    def __init__(self, transport):
+    `clock` returns nanoseconds and defaults to the real monotonic counter. A test hands in a
+    fake so the per-boundary accounting below can be asserted exactly, rather than against a
+    sleep whose real duration is whatever the runner allowed."""
+
+    def __init__(self, transport, *, clock=time.perf_counter_ns):
         self.transport = transport
         self.redis = transport.redis
+        self._clock = clock
         self._latencies_ms: dict[str, float] = {}
         self._batches: list[dict] = []
         self._warmup_latency_ms: float | None = None
@@ -113,20 +177,20 @@ class ObservedTransport:
         self._lock = threading.Lock()
 
     def warmup(self):
-        started_ns = time.perf_counter_ns()
+        started_ns = self._clock()
         try:
             return self.transport.warmup()
         finally:
             with self._lock:
-                self._warmup_latency_ms = (time.perf_counter_ns() - started_ns) / 1_000_000
+                self._warmup_latency_ms = (self._clock() - started_ns) / 1_000_000
 
     def write(self, event):
-        started_ns = time.perf_counter_ns()
+        started_ns = self._clock()
         with self._lock:
             self._active_writes += 1
         try:
             row_id = self.transport.write(event)
-            latency_ms = (time.perf_counter_ns() - started_ns) / 1_000_000
+            latency_ms = (self._clock() - started_ns) / 1_000_000
             with self._lock:
                 self._latencies_ms[event.event_id] = latency_ms
                 self._batches.append({"latency_ms": latency_ms, "size": 1,
@@ -142,12 +206,12 @@ class ObservedTransport:
         # execute returns; every event in that batch therefore shares that measured duration.
         if not hasattr(self.redis, "pipeline"):
             return [self.write(event) for event in events]
-        started_ns = time.perf_counter_ns()
+        started_ns = self._clock()
         with self._lock:
             self._active_writes += 1
         try:
             results = self.transport.write_many(events)
-            latency_ms = (time.perf_counter_ns() - started_ns) / 1_000_000
+            latency_ms = (self._clock() - started_ns) / 1_000_000
             with self._lock:
                 self._latencies_ms.update({event.event_id: latency_ms for event in events})
                 self._batches.append({"latency_ms": latency_ms, "size": len(events),
@@ -324,6 +388,10 @@ def run(config: GateConfig) -> dict:
             and event.payload.get("progress") == config.progress_per_job - 1
         }
         warm_soak_events = sum(event.payload.get("warm_soak") is True for event in all_events)
+        # Structural — the submit loop is one thread and the publisher drains each bucket in
+        # order — so it holds regardless of how many drains the scheduler interleaved.
+        # `all_events` is in replay (stream) order per owner, which is what the invariant is on.
+        progress_out_of_order = out_of_order_progress_jobs(all_events)
         metrics = {
             "gateway_latency_p95_ms": percentile(gateway_latencies, .95),
             "connection_warmup_latency_ms": observed_transport.warmup_latency_ms(),
@@ -346,19 +414,14 @@ def run(config: GateConfig) -> dict:
             "missing_latest_progress_events": max(0, expected_progress - len(latest_progress_jobs)),
             "missing_warm_soak_events": max(0, config.tenants - warm_soak_events),
             "missing_failed_events": max(0, config.tenants - failed_events),
+            "progress_out_of_order": progress_out_of_order,
             "publisher_drops": (
                 realtime_shadow.METRICS.snapshot()["publish_drop_total"] - drops_before
             ),
         }
-        checks = {
-            name.removesuffix("_max"): metrics[name.removesuffix("_max")] <= threshold
-            for name, threshold in THRESHOLDS.items()
-        }
-        checks["missing_failed_events"] = metrics["missing_failed_events"] == 0
-        checks["persistent_client_warm_soak"] = metrics["warm_batch_count"] >= 1
         return {"schema_version": 1, "mode": "redis" if config.redis_url else "in-memory-ci",
                 "config": public_config(config), "thresholds": THRESHOLDS, "metrics": metrics,
-                "checks": checks, "decision": "GO" if all(checks.values()) else "NO-GO"}
+                **evaluate(metrics)}
     finally:
         realtime_shadow._publisher = previous
         if previous_enabled is None:
