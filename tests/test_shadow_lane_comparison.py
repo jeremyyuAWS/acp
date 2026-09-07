@@ -145,6 +145,39 @@ def test_compare_refuses_a_report_from_a_different_corpus(cases):
         compare([r], cases, REMEDIATION)
 
 
+def test_reports_carry_their_own_counts_and_must_agree(cases):
+    # A report written after `corpus.categories` was added is judged on the counts IT saw,
+    # even when the committed corpus has since grown.
+    r = _report({"docx:2.4.4": {S: True}}, cases, source="carried")
+    r["corpus"] = {"categories": {cat: {"cases": row["cases"], "eligible": row["cases"],
+                                        "must_abstain": 0}
+                                  for cat, row in r["ladder"]["routing"].items()}}
+    r["corpus"]["categories"]["docx:2.4.4"]["cases"] = 9
+    r["ladder"]["routing"]["docx:2.4.4"]["cases"] = 9
+    cmp = compare([r], None, REMEDIATION)
+    assert cmp["corpus_cases"] == len(cases) + 5
+    row = {x["category"]: x for x in cmp["rows"]}["docx:2.4.4"]
+    assert row["cases"] == 9 and row["verdict"] == ENABLE
+    other = _report({}, cases, source="different-corpus")
+    other["corpus"] = {"categories": {cat: {"cases": row["cases"], "eligible": row["cases"],
+                                            "must_abstain": 0}
+                                      for cat, row in other["ladder"]["routing"].items()}}
+    with pytest.raises(ValueError, match="different corpus"):
+        compare([r, other], None, REMEDIATION)
+    with pytest.raises(ValueError, match="no corpus was passed"):
+        compare([_report({}, cases)], None, REMEDIATION)
+
+
+def test_the_two_committed_reports_still_compare_on_their_own_100_case_counts(cases):
+    reps = [load_report(ROOT / "evals" / "reports" / f"{d}-hosted-ladder.json")
+            for d in ("2026-09-04", "2026-09-07")]
+    cmp = compare(reps, None, REMEDIATION)
+    assert cmp["corpus_cases"] == 100 and len(cases) > 100
+    rows = {x["category"]: x for x in cmp["rows"]}
+    assert rows["docx:2.4.4"]["verdict"] == ENABLE
+    assert rows["xlsx:1.1.1"]["verdict"] == INSUFFICIENT
+
+
 def test_shadow_candidates_is_the_intersection(cases):
     a = _report({}, cases)
     b = _report({}, cases)

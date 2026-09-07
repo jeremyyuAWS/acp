@@ -129,7 +129,7 @@ def test_validator_rejects_review_typos(mutation, needle):
 
 def test_the_kit_corpus_still_loads_without_the_new_keys():
     kit = load_cases()
-    assert len(kit) == 100 and all(c.category is None and not c.review for c in kit)
+    assert len(kit) == 142 and all(c.category is None and not c.review for c in kit)
 
 
 # ── the oracle ───────────────────────────────────────────────────────────────────────────────

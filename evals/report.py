@@ -273,6 +273,19 @@ def build_ladder(runs: Sequence[RunResult], cases: Sequence[Case], gates: Gates 
     }
 
 
+def category_counts(cases: Iterable[Case]) -> dict[str, dict[str, int]]:
+    """Per category: how many cases, how many automation-eligible, how many must-abstain. The
+    report carries this so it stays comparable after the corpus grows — a verdict over an old
+    run must use the counts THAT run saw, not today's."""
+    out: dict[str, dict[str, int]] = {}
+    for c in cases:
+        row = out.setdefault(category_of(c), {"cases": 0, "eligible": 0, "must_abstain": 0})
+        row["cases"] += 1
+        row["eligible"] += int(bool(c.automation_eligible))
+        row["must_abstain"] += int(bool(c.must_abstain))
+    return dict(sorted(out.items()))
+
+
 def case_run_row(run: RunResult, repeat: int, r: CaseResult, case: Case) -> dict[str, Any]:
     """The compact, per-case-run record the JSON report carries. Aggregates only, no prose:
     enough to recompute a category's `safe` flag by hand and nothing a grader did not score."""
@@ -315,7 +328,8 @@ def build_report(runs: Sequence[RunResult], cases: Sequence[Case],
                               for s in sorted({c.suite for c in cases})},
                    "risk_tiers": {t: len([c for c in cases if c.risk_tier == t])
                                   for t in sorted({c.risk_tier for c in cases})},
-                   "must_abstain": len([c for c in cases if c.must_abstain])},
+                   "must_abstain": len([c for c in cases if c.must_abstain]),
+                   "categories": category_counts(cases)},
         "candidates": [asdict(r) for r in reports],
         "ladder": build_ladder(runs, cases, gates),
     }
