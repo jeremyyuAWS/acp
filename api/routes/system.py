@@ -1763,7 +1763,7 @@ def _admin_activity_snapshot() -> dict:
         pressure = "busy"
     else:
         pressure = "healthy"
-    workflows = _workflow_rows(runs, stage_events)
+    workflows = _workflow_rows(runs, stage_events, _liveops_canonical_lineages(runs, stage_events))
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "runs": runs,
@@ -1862,7 +1862,27 @@ def _recovery_summary(events: list[dict] | None) -> dict:
     }
 
 
-def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None) -> list[dict]:
+def _liveops_canonical_lineages(runs: list[dict], lifecycle_events: list[dict] | None = None) -> dict[str, dict]:
+    """Read canonical stage state without making Live Ops unavailable during a rolling deploy."""
+    reader = getattr(core.store, "canonical_stage_lineage", None)
+    if not callable(reader):
+        return {}
+    scan_ids = {str(row.get("scan_id") or "").strip() for row in runs}
+    scan_ids.update(str(row.get("scan_id") or "").strip() for row in lifecycle_events or [])
+    lineages = {}
+    for scan_id in sorted(scan_ids - {""}):
+        try:
+            lineage = reader(scan_id)
+        except Exception:
+            swallowed("routes.system._liveops_canonical_lineages: reading lineage failed")
+            continue
+        if lineage and lineage.get("available"):
+            lineages[scan_id] = lineage
+    return lineages
+
+
+def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None,
+                   canonical_lineages: dict[str, dict] | None = None) -> list[dict]:
     """Turn stage aggregates into the durable workflow contract used by Live Ops.
 
     New scans carry a persisted workflow execution and revision. Its external id deliberately
@@ -2014,11 +2034,43 @@ def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None)
             "next_retry_at": None,
         })
     for workflow in grouped.values():
+        lineage = (canonical_lineages or {}).get(workflow["scan_id"])
+        canonical_by_stage = {row.get("stage"): row for row in (lineage or {}).get("stages", [])}
+        for stage in workflow["stages"]:
+            canonical = canonical_by_stage.get(stage["stage"])
+            stage["canonical"] = canonical
+            if not canonical:
+                continue
+            counts = (canonical.get("counts") or {}).get("work_items") or {}
+            stage.update({
+                "stage_run_id": canonical.get("execution_id") or stage["stage_run_id"],
+                "status": ({"succeeded": "completed", "cancelled": "cancelled",
+                            "failed": "failed", "integrity_failed": "failed",
+                            "queued": "waiting", "paused": "waiting"}
+                           .get(canonical.get("state"), "running")),
+                "total": counts.get("total"), "completed": counts.get("completed"),
+                "active": counts.get("processing"), "waiting": counts.get("queued"),
+                "failed": counts.get("failed"), "cancelled": counts.get("cancelled"),
+                "skipped": counts.get("skipped"),
+                "latest_progress_at": canonical.get("last_durable_update_at"),
+                "cancel_requested": bool((canonical.get("control") or {}).get("cancel_requested")),
+                "cancel_requested_at": (canonical.get("control") or {}).get("cancel_requested_at"),
+            })
+            state = canonical.get("state")
+            if state == "cancelled":
+                stage["terminal_outcome"] = "cancelled"
+            elif state in ("failed", "integrity_failed"):
+                stage["terminal_outcome"] = "failed"
+            elif state == "succeeded":
+                stage["terminal_outcome"] = "completed"
+            workflow["workflow_revision"] = int(
+                canonical.get("workflow_revision") or (lineage or {}).get("workflow_revision") or 1)
         workflow["stages"].sort(key=lambda row: (stage_order.get(row["stage"], 99), row["stage"]))
         active = [row for row in workflow["stages"] if row["status"] != "completed"]
         if active:
             workflow["current_stage"] = active[-1]["stage"]
-            workflow["status"] = ("stopping" if any(row.get("cancel_requested") for row in active) else
+            workflow["status"] = ("stopping" if any(row.get("cancel_requested") and row["status"] != "cancelled"
+                                                      for row in active) else
                                   "running" if any(row["status"] == "running" for row in active) else
                                   "waiting" if any(row["status"] == "waiting" for row in active) else
                                   "stopped" if all(row["status"] == "cancelled" for row in active) else

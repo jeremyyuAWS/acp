@@ -148,6 +148,37 @@ describe('Admin live traffic graph', () => {
       ]))
   })
 
+  it('labels canonical accounting, integrity, and manual stopping without conflating failures', () => {
+    const facts = runFacts({ status: 'cancelled', canonical: {
+      execution_id: 'execution-1', revision: 4, state: 'cancelled',
+      counts: { work_items: { total: 5, completed: 2, processing: 0, queued: 0,
+        failed: 0, cancelled: 2, skipped: 1 } },
+      reconciliation: { exact: true, unaccounted: 0 }, integrity: { ok: true },
+      control: { cancel_requested: true, awaiting_acknowledgement: 0,
+        acknowledgement_deadline_at: '2026-09-06T00:02:00Z' },
+      delivery: { pending: 0, retrying: 0, dead_lettered: 0 },
+      input_manifest_id: 'input-1',
+      sealed_output: { item_count: 5, manifest_id: 'output-1' },
+    } })
+    expect(facts).toEqual(expect.arrayContaining([
+      ['Status', 'Stopped manually'],
+      ['Canonical state', 'cancelled'],
+      ['Work-item accounting', '2 completed · 0 processing · 0 queued · 0 failed · 2 stopped · 1 skipped = 5 work items'],
+      ['Reconciliation', 'Exact'],
+      ['Integrity', 'Reconciled'],
+      ['Sealed output', '5 work items · output-1'],
+    ]))
+  })
+
+  it('does not manufacture zero progress when canonical totals are unknown', () => {
+    expect(runFacts({ canonical: { state: 'running', counts: { work_items: { total: null } } } }))
+      .toEqual(expect.arrayContaining([
+        ['Progress', 'Not reported'],
+        ['Queue', 'Not reported'],
+        ['Work-item accounting', 'Not reported'],
+      ]))
+  })
+
   it('keeps a durable completed stage connected after its queue rows age out', () => {
     const graph = buildTrafficGraph({ summary: {}, runs: [
       { scan_id: 'one', stage: 'assess', owner: 'a', source: 'sharepoint', status: 'active',
