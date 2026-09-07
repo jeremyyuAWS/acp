@@ -73,7 +73,8 @@ def policy():
 
 def test_read_captures_snapshot_and_normalizes_custom_rules():
     operations = Operations(app_model())
-    gateway = gateway_mod.AzureCapacityGateway(SimpleNamespace(container_apps=operations), "rg")
+    gateway = gateway_mod.AzureCapacityGateway(
+        SimpleNamespace(container_apps=operations), "rg", allowed_apps=("acp-assess-staging",))
     assert gateway.read_scale("acp-assess-staging") == {
         "min_replicas": 1, "max_replicas": 10,
         "rules": [{"name": "assess-queue", "type": "postgresql",
@@ -84,7 +85,8 @@ def test_read_captures_snapshot_and_normalizes_custom_rules():
 def test_apply_builds_complete_custom_scale_patch_with_if_match(monkeypatch):
     monkeypatch.setattr(gateway_mod, "_sdk_models", lambda: MODELS)
     operations = Operations(app_model())
-    gateway = gateway_mod.AzureCapacityGateway(SimpleNamespace(container_apps=operations), "rg")
+    gateway = gateway_mod.AzureCapacityGateway(
+        SimpleNamespace(container_apps=operations), "rg", allowed_apps=("acp-assess-staging",))
     gateway.read_scale("acp-assess-staging")
     gateway.apply_scale(policy())
 
@@ -107,7 +109,8 @@ def test_apply_builds_complete_custom_scale_patch_with_if_match(monkeypatch):
 def test_apply_fails_closed_without_complete_snapshot(monkeypatch, location, etag):
     monkeypatch.setattr(gateway_mod, "_sdk_models", lambda: MODELS)
     operations = Operations(app_model(location=location), etag=etag)
-    gateway = gateway_mod.AzureCapacityGateway(SimpleNamespace(container_apps=operations), "rg")
+    gateway = gateway_mod.AzureCapacityGateway(
+        SimpleNamespace(container_apps=operations), "rg", allowed_apps=("acp-assess-staging",))
     gateway.read_scale("acp-assess-staging")
     with pytest.raises(RuntimeError, match="snapshot"):
         gateway.apply_scale(policy())
@@ -117,7 +120,8 @@ def test_apply_fails_closed_without_complete_snapshot(monkeypatch, location, eta
 def test_apply_requires_read_first(monkeypatch):
     monkeypatch.setattr(gateway_mod, "_sdk_models", lambda: MODELS)
     operations = Operations(app_model())
-    gateway = gateway_mod.AzureCapacityGateway(SimpleNamespace(container_apps=operations), "rg")
+    gateway = gateway_mod.AzureCapacityGateway(
+        SimpleNamespace(container_apps=operations), "rg", allowed_apps=("acp-assess-staging",))
     with pytest.raises(RuntimeError, match="snapshot"):
         gateway.apply_scale(policy())
     assert operations.updates == []
@@ -130,6 +134,15 @@ def test_gateway_refuses_an_app_outside_its_configured_fleet():
         allowed_apps=("acp-assess-staging",))
     with pytest.raises(RuntimeError, match="outside"):
         gateway.read_scale("unrelated-production-app")
+
+
+def test_empty_allowlist_refuses_every_app():
+    operations = Operations(app_model())
+    gateway = gateway_mod.AzureCapacityGateway(
+        SimpleNamespace(container_apps=operations), "rg", allowed_apps=())
+    with pytest.raises(RuntimeError, match="outside"):
+        gateway.read_scale("acp-assess")
+    assert operations.gets == []
 
 
 def test_logical_app_maps_only_to_its_exact_allowed_staging_name(monkeypatch):

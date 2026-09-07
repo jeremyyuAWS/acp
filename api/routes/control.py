@@ -62,6 +62,10 @@ _AZ_APP  = os.environ.get("WORKER_APP_NAME") or None
 # the retired `acp-worker` default as a real incident, and a guessed list would repeat it three
 # times over.
 _AZ_APP_NAMES = tuple(n.strip() for n in (os.environ.get("WORKER_APP_NAMES") or "").split(",") if n.strip())
+_CAPACITY_APP_NAMES = tuple(n.strip() for n in (
+    os.environ.get("CAPACITY_APPLY_APP_NAMES") or "").split(",") if n.strip())
+_PRODUCTION_CAPACITY_APPS = frozenset(
+    ("acp-app", "acp-discovery", "acp-assess", "acp-remediate", "acp-ollama"))
 
 
 def _configured_apps() -> tuple[str, ...]:
@@ -73,16 +77,20 @@ def _configured_apps() -> tuple[str, ...]:
 _AZ_CONFIGURED = bool(_AZ_SUB and (_AZ_APP or _AZ_APP_NAMES))
 
 def _capacity_gateway_for_environment():
-    """Enable writes only for an explicitly opted-in, wholly staging-named fleet."""
+    """Enable writes only for an explicitly opted-in and allowlisted fleet."""
     enabled = os.environ.get("ACP_CAPACITY_APPLY_ENABLED") == "1"
     # deploy/public/deploy.sh consumes ACP_DEPLOY_TARGET_ENV in the deployment process, then
     # stamps the running container with ACP_DEPLOY_ENV. The API must gate on the value it
     # actually receives, or staging can never opt in and a locally inherited deploy variable
     # could be mistaken for runtime identity.
-    staging = os.environ.get("ACP_DEPLOY_ENV", "").strip().lower() == "staging"
-    apps = tuple(app for app in _configured_apps() if app)
-    if not (enabled and staging and _AZ_SUB and apps and
-            all(app.endswith("-staging") for app in apps)):
+    target = os.environ.get("ACP_DEPLOY_ENV", "").strip().lower()
+    # Write targets are separate from observation targets: a complete schedule also owns the web
+    # and GPU scale blocks. Production must name all five explicitly or a sequential apply could
+    # update only the workers and then fail halfway through on an unallowlisted app.
+    apps = _CAPACITY_APP_NAMES or tuple(app for app in _configured_apps() if app)
+    staging_fleet = target == "staging" and all(app.endswith("-staging") for app in apps)
+    production_fleet = target == "production" and frozenset(apps) == _PRODUCTION_CAPACITY_APPS
+    if not (enabled and _AZ_SUB and _AZ_RG and apps and (staging_fleet or production_fleet)):
         return None
     from azure_capacity_gateway import default_gateway
     return default_gateway(_AZ_SUB, _AZ_RG, allowed_apps=apps)
@@ -2412,8 +2420,8 @@ def put_capacity_schedule(body: ScheduleWrite, request: Request):
 def apply_capacity_schedule(body: ScheduleApply, request: Request):
     """Apply one validated desired version through an explicitly configured gateway.
 
-    There is deliberately no production gateway yet. Without one this endpoint stops before it
-    records an attempt or makes any external call; a test fake is the only current implementation.
+    Without an explicitly enabled, environment-matched and allowlisted Azure gateway this stops
+    before it records an attempt or makes any external call.
     """
     import capacity_apply as apply_mod
     import capacity_policy as policy_mod
@@ -2434,11 +2442,6 @@ def apply_capacity_schedule(body: ScheduleApply, request: Request):
     validation = _validate_schedule(schedule)
     if validation["blocked"]:
         raise HTTPException(422, {"message": "this schedule cannot be applied", **validation})
-    # The rendered cron policy cannot enforce date exceptions. Refuse rather than spend Azure
-    # money on a policy known to disagree with the saved schedule.
-    if schedule.holidays:
-        raise HTTPException(422, "holiday exceptions cannot yet be applied by Azure cron rules")
-
     actor, correlation_id = _actor(request), uuid.uuid4().hex[:12]
     attempt = store_mod.start_application(
         core.store, version=schedule.version, actor=actor, reason=body.reason.strip(),
@@ -2453,6 +2456,8 @@ def apply_capacity_schedule(body: ScheduleApply, request: Request):
                 "application": application}
     if result["state"] != "applied":
         raise HTTPException(502, response)
+    import capacity_reconcile
+    capacity_reconcile.wake()
     return response
 
 
@@ -2477,6 +2482,8 @@ def create_capacity_override(body: OverrideRequest, request: Request):
             reason=body.reason, actor=actor, schedule=schedule, correlation_id=correlation_id)
     except store_mod.OverrideError as e:
         raise HTTPException(422, str(e)) from e
+    import capacity_reconcile
+    capacity_reconcile.wake()
     return {"override": override, "correlation_id": correlation_id,
             "resumes": {"version": schedule.version, "enabled": schedule.enabled}}
 
@@ -2492,6 +2499,8 @@ def delete_capacity_override(request: Request):
     actor = _actor(request)
     existing = store_mod.get_override(core.store)
     store_mod.clear_override(core.store, actor=actor)
+    import capacity_reconcile
+    capacity_reconcile.wake()
     return {"cleared": bool(existing)}
 
 
@@ -2528,9 +2537,6 @@ def get_capacity_policy():
                                                subscription=_AZ_SUB)
                         if _AZ_CONFIGURED and _AZ_SUB else []),
         "transitions_create_no_revision": True,
-        # Stated, not omitted: a KEDA cron rule cannot express an exception to its own window, so
-        # a schedule's holidays are observed by ACP and not by Azure. A policy view that listed
-        # the holidays without saying that would be the most expensive kind of quiet wrongness
-        # here — an operator would believe capacity drops on the day, and it would not.
+        # KEDA cron cannot express date exceptions; ACP's reconciler enforces and restores them.
         "holidays": policy_mod.holiday_enforcement(schedule),
     }

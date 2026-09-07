@@ -570,12 +570,10 @@ December"*; it has no way to say *"every weekday except the 25th of December"*. 
 exclusion needs one rule per contiguous run of working days between holidays — unbounded, and
 republished as the calendar moves, when every republish is a revision §6.4 exists to avoid.
 
-So on a holiday, **Azure holds the business-hours floor and ACP knows it should not.** That is a
-day of wasted spend, not a correctness failure, and it is stated in three places rather than
-discovered from a bill: `GET …/policy` returns `holidays.enforced_by_policy: false` with the
-reason, the tab says it beside the dates, and the editor says it beside the field. The two ways to
-actually close it — republish without the schedule for the day (two revisions), or a temporary
-override (no revision, but four hours at a time) — are recorded next to the caveat.
+ACP closes that cron limitation with its capacity reconciler. At the start of a configured local
+holiday it publishes the saved off-hours floors, and after that local day it restores the weekly
+policy. Both writes are audited and retried with bounded backoff. `GET …/policy` identifies this
+mechanism, and the editor explains the automatic behavior beside the dates.
 
 **One bug this turned up.** `next_transition` searched nine local days. A schedule naming a single
 weekday, with a holiday on the next occurrence of that weekday, has its next transition fifteen

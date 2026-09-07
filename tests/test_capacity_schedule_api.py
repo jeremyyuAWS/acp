@@ -280,6 +280,8 @@ def test_every_write_is_admin_only(store, admin, monkeypatch):
     from fastapi import HTTPException
     outsider = _Req("someone@example.com")
     for call in (lambda: control.put_capacity_schedule(_fits(), outsider),
+                 lambda: control.apply_capacity_schedule(
+                     control.ScheduleApply(version=0, reason="r"), outsider),
                  lambda: control.create_capacity_override(
                      control.OverrideRequest(mode="off_hours", duration="1h", reason="r"), outsider),
                  lambda: control.delete_capacity_override(outsider)):
@@ -433,12 +435,11 @@ def test_a_saved_holiday_round_trips_and_reaches_the_policy_view(store, admin):
     payload = control.get_capacity_schedule()
     assert payload["holidays"] == ["2026-12-25"]
     policy = control.get_capacity_policy()
-    # THE HONEST FIELD. Listing the holidays without saying Azure cannot observe them would be
-    # the most expensive quiet wrongness here: an operator would believe capacity drops on the
-    # day, and the bill would say otherwise.
+    # KEDA cron cannot express exceptions, so the response names ACP's enforcement mechanism.
     assert policy["holidays"]["declared"] == ["2026-12-25"]
-    assert policy["holidays"]["enforced_by_policy"] is False
-    assert "cron rule cannot express" in policy["holidays"]["reason"]
+    assert policy["holidays"]["enforced_by_policy"] is True
+    assert policy["holidays"]["mechanism"] == "capacity_reconciler"
+    assert "restores" in policy["holidays"]["reason"]
 
 
 def test_a_schedule_without_holidays_reports_them_as_enforceable(store, admin):

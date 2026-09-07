@@ -40,6 +40,7 @@ from swallowed import swallowed
 SCHEDULE_KEY = "capacity_schedule"
 OVERRIDE_KEY = "capacity_schedule_override"
 APPLICATION_KEY = "capacity_schedule_application"
+RECONCILIATION_KEY = "capacity_schedule_reconciliation"
 
 # §5.4's list, in minutes. `until_next_transition` is resolved against the schedule at the moment
 # the override is created, so an override never outlives the window it was meant to cover.
@@ -182,6 +183,42 @@ def finish_application(store, attempt: dict, result: dict) -> dict:
            detail=f"schedule v{attempt['desired_version']} result={body['state']}; "
                   + ", ".join(f"{r.get('app')}={r.get('status')}" for r in body["apps"]))
     return body
+
+
+def load_reconciliation(store) -> dict:
+    """Durable evidence for automatic override application/restoration."""
+    empty = {"state": "idle", "desired_key": None, "applied_key": None,
+             "failures": 0, "next_attempt_at": None, "apps": []}
+    try:
+        raw = store.get_setting(RECONCILIATION_KEY)
+        body = json.loads(raw) if raw else None
+    except Exception:  # noqa: BLE001
+        swallowed("capacity_store.load_reconciliation: reading reconciliation state failed")
+        return empty
+    return {**empty, **body} if isinstance(body, dict) else empty
+
+
+def save_reconciliation(store, body: dict, *, action: str, reason: str,
+                        correlation_id: str) -> dict:
+    """Persist one secret-free reconcile outcome and append its audit record."""
+    safe = {
+        "state": body.get("state", "failed"),
+        "desired_key": body.get("desired_key"),
+        "applied_key": body.get("applied_key"),
+        "schedule_version": body.get("schedule_version"),
+        "authority": body.get("authority"),
+        "attempted_at": body.get("attempted_at"),
+        "completed_at": body.get("completed_at"),
+        "next_attempt_at": body.get("next_attempt_at"),
+        "failures": int(body.get("failures") or 0),
+        "apps": list(body.get("apps") or []),
+    }
+    store.set_setting(RECONCILIATION_KEY, json.dumps(safe, sort_keys=True))
+    _audit(store, "capacity-reconciler", action, reason=reason,
+           correlation_id=correlation_id,
+           detail=(f"desired={safe['desired_key']} state={safe['state']}; "
+                   + ", ".join(f"{r.get('app')}={r.get('status')}" for r in safe["apps"])))
+    return safe
 
 
 def _diff_detail(before: sched.Schedule, after: sched.Schedule) -> str:

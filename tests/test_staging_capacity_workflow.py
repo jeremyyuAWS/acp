@@ -44,9 +44,18 @@ def test_staging_deploy_passes_capacity_gateway_inputs_to_redeploy():
 def test_redeploy_stamps_gateway_settings_only_on_both_api_rollout_paths():
     script = (ROOT / "deploy/public/redeploy.sh").read_text()
     assert 'CAPACITY_APPLY_ENABLED=0' in script
-    assert '[ "$DEPLOY_TARGET_ENV" = staging ] && [ "$CAPACITY_APPLY_REQUESTED" = 1 ]' in script
+    assert '[ "$CAPACITY_APPLY_REQUESTED" = 1 ]' in script
     assert '"WORKER_APP_NAMES=$DISCOVERY_WORKER,$ASSESS_WORKER,$REMEDIATE_WORKER"' in script
+    assert '"CAPACITY_APPLY_APP_NAMES=$APP,$DISCOVERY_WORKER,$ASSESS_WORKER,$REMEDIATE_WORKER,$GPU_APP"' in script
     assert script.count('--set-env-vars "${API_ENV_VARS[@]}"') == 2
     assert "ACP_PG_RESERVED_CONNECTIONS must be smaller" in script
     for worker_update in script.split('for a in "${LANE_WORKERS[@]}"; do')[1:3]:
         assert 'API_ENV_VARS' not in worker_update.split("done", 1)[0]
+
+
+def test_production_deploy_requires_explicit_capacity_opt_in_and_limits():
+    deploy = (ROOT / ".github/workflows/deploy.yml").read_text()
+    assert "vars.PRODUCTION_CAPACITY_APPLY_ENABLED || '0'" in deploy
+    for name in ("PRODUCTION_ACA_VCPU_QUOTA", "PRODUCTION_PG_MAX_CONNECTIONS",
+                 "PRODUCTION_PG_RESERVED_CONNECTIONS"):
+        assert f"vars.{name}" in deploy
