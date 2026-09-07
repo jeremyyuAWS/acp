@@ -4679,9 +4679,10 @@ _FIELD_NAME_EXTS = ("pdf", "docx")
 #
 # Deleting the part is the whole lane, not a tidy-up. ocr._ooxml_images walks the ZIP NAMELIST
 # for ppt/media/* rasters — it never opens a slide — so removing only the <p:pic> leaves the
-# bytes tesseract reads and the finding re-fires. Writing descr instead (the pre-#1665 lane,
-# still available as apply_pptx_image_of_text) leaves those bytes untouched too: it is a 1.1.1
-# improvement, not removal of the image of text, which is why that lane was HUMAN.
+# bytes tesseract reads and the finding re-fires. Writing descr instead — the pre-#1665 lane,
+# whose writer is now RETIRED and called by nothing (api/apply_pptx_image_of_text.py, and
+# tests/test_apply_pptx_image_of_text_retired.py holds it that way) — leaves those bytes
+# untouched too: it is a 1.1.1 improvement, not removal of the image of text.
 #
 # 1.4.5 ONLY, deliberately. 1.4.9 is AAA and exempts nothing, so a 1.4.9 row can be a chart —
 # and 1.4.5 exempts charts precisely because a picture of data is not a picture of prose.
