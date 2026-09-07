@@ -59,6 +59,10 @@
 .automation-policy__empty.is-error { border-color: var(--error-fg); color: var(--error-fg-strong); background: var(--error-bg); }
 .automation-policy__guardrail { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
 @media (prefers-reduced-motion: reduce) { .automation-policy__delta { animation: none; } }
+.automation-policy__actions { display: flex; gap: .65rem; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+.automation-policy__actions button { min-height: 2.75rem; padding: .6rem .9rem; }
+.automation-policy__actions p { flex-basis: 100%; margin: .25rem 0 0; }
+.automation-policy__actions p[role="alert"] { color: var(--danger, #b42318); }
 @media (max-width: 760px) {
   .automation-policy { padding-inline: 14px; }
   .automation-policy__heading { display: block; }

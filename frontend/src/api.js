@@ -1070,6 +1070,18 @@ export const getRemediationSnapshot = (scanId) => (SIM
   ? sim(null)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/snapshot`,
           { headers: headers(), cache: 'no-store' }).then(j))
+export const getRemediationAutomationPolicy = (scanId) => (SIM
+  ? sim({ policy: { level: 3, revision: 0 }, run_policy_snapshot: null,
+          capabilities: { apply_waiting: false } })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/automation-policy`,
+          { headers: headers(), cache: 'no-store' }).then(j))
+export const submitRemediationPolicyAction = (scanId, action, level, expectedRevision, idempotencyKey) => (SIM
+  ? sim({ action, policy: { level, revision: expectedRevision + 1 }, duplicate: false })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/automation-policy/actions`, {
+      method: 'POST',
+      headers: headers({ 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey }),
+      body: JSON.stringify({ action, level, expected_revision: expectedRevision }),
+    }).then(j))
 export const getFindingDispositions = (scanId, disposition = null) => (SIM
   ? sim({ scan_id: scanId, batch_id: null, disposition, items: [], available: false })
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/finding-dispositions${

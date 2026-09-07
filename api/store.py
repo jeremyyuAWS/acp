@@ -557,6 +557,25 @@ _SCHEMA = [
       id TEXT PRIMARY KEY, ts TEXT, actor TEXT, action TEXT,
       scan_id TEXT, file TEXT, rule_id TEXT, detail TEXT
     )""",
+    # Remediation automation policy is tenant-owned configuration.  A preview is never written
+    # here: only an explicit policy action may advance revision.  Action receipts make retries
+    # exactly-once, while run snapshots are insert-only so later preference changes cannot alter
+    # the policy under which an accepted run was routed.
+    """CREATE TABLE IF NOT EXISTS remediation_automation_policy (
+      owner_email TEXT PRIMARY KEY, level INT NOT NULL, revision INT NOT NULL,
+      updated_at TEXT NOT NULL, updated_by TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS remediation_policy_action (
+      owner_email TEXT NOT NULL, idempotency_key TEXT NOT NULL, request_digest TEXT NOT NULL,
+      action TEXT NOT NULL, result_json TEXT NOT NULL, created_at TEXT NOT NULL,
+      PRIMARY KEY(owner_email,idempotency_key)
+    )""",
+    """CREATE TABLE IF NOT EXISTS remediation_run_policy_snapshot (
+      scan_id TEXT NOT NULL, batch_id TEXT NOT NULL, snapshot_id TEXT NOT NULL,
+      owner_email TEXT NOT NULL, level INT NOT NULL, policy_revision INT NOT NULL,
+      created_at TEXT NOT NULL, created_by TEXT NOT NULL,
+      PRIMARY KEY(scan_id,batch_id)
+    )""",
     # R18 · Comments on a finding — a human discussion thread anchored to ONE finding
     # (scan × file × criterion × instance), so a judgement call and any disagreement about it
     # live next to the finding rather than in a chat elsewhere. Append-only, like decision_log:
@@ -2373,8 +2392,10 @@ class _PgAdapter:
     # plus one deployment-wide set of administrator guardrails. All schedule columns are
     # additive and carry safe defaults for rolling replicas.
     # v40 adds fenced pre-write reservations and terminal evidence to provider-effect receipts.
-    _SCHEMA_VERSION = 41
-    _SCHEMA_CHECKSUM_AT_VERSION = "84b065bd5e6864a22d95c4adb580c50a"
+    # v42 adds the tenant policy, exactly-once command receipt, and immutable run-policy
+    # snapshot tables. All are additive and ignored by older replicas during rolling deploys.
+    _SCHEMA_VERSION = 42
+    _SCHEMA_CHECKSUM_AT_VERSION = "0075c2c6dbc6d6e37fa43f31c7b5c595"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1

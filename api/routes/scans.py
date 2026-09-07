@@ -742,14 +742,20 @@ async def remediate_scan(sid: str, request: Request):
     # create new work rather than hand back a completed execution for the old value.
     selected_files = sorted(p["file"] for p in payloads)
     decision_digest = core.store.remediation_decision_digest(sid, selected_files, owner=owner)
+    import remediation_automation_policy as automation_policy
+    policy_snapshot = automation_policy.snapshot_for_future_run(core.store, owner)
     request_fingerprint = _json.dumps(
-        {"files": selected_files, "decision_digest": decision_digest}, sort_keys=True)
+        {"files": selected_files, "decision_digest": decision_digest,
+         "automation_policy_snapshot_id": policy_snapshot["snapshot_id"]}, sort_keys=True)
     for payload in payloads:
         # Provenance only; no decision content enters the queue payload.
         payload["decision_digest"] = decision_digest
+        payload["automation_policy"] = policy_snapshot
     execution = _enqueue_stage_batch(
         sid, "remediate", "remediate_file", payloads, snapshot_id=snapshot_id,
         request_fingerprint=request_fingerprint, input_manifest_id=input_manifest_id)
+    automation_policy.bind_run_snapshot(core.store, owner, owner, sid,
+                                        execution["batch_id"], policy_snapshot)
     core.store.seed_finding_dispositions(sid, execution["batch_id"], snapshot_id=snapshot_id)
     # AFTER the jobs exist, never before: the run is "accepted" precisely when durable work has
     # been enqueued for it, and an acceptance event that led the enqueue would let the panel show
@@ -1728,6 +1734,45 @@ def remediation_snapshot(sid: str, request: Request, response: Response):
         raise HTTPException(404, "scan not found")
     response.headers["Cache-Control"] = "no-store"
     return _remediation_snapshot(sid)
+
+
+@router.get("/scans/{sid}/remediation/automation-policy")
+def remediation_automation_policy(sid: str, request: Request):
+    """Saved future-run policy plus the truthful active-run action capability."""
+    if core.store.get_scan(sid, owner=_owner(request)) is None:
+        raise HTTPException(404, "scan not found")
+    import remediation_automation_policy as policy
+    return policy.read(core.store, _owner(request), scan_id=sid)
+
+
+@router.post("/scans/{sid}/remediation/automation-policy/actions")
+async def remediation_automation_policy_action(sid: str, request: Request):
+    """Route one explicit preview action; slider movement never reaches this endpoint."""
+    owner = _owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    key = (request.headers.get("idempotency-key") or "").strip()
+    if not (16 <= len(key) <= 128):
+        raise HTTPException(400, "Idempotency-Key must contain 16 to 128 characters")
+    import remediation_automation_policy as policy
+    try:
+        body = await request.json()
+        return policy.execute(core.store, owner, owner, action=body.get("action"),
+                              level=body.get("level"),
+                              expected_revision=body.get("expected_revision"),
+                              idempotency_key=key)
+    except policy.PolicyConflict as exc:
+        raise HTTPException(409, detail={"code": "stale_policy_revision",
+                                        "message": "The policy changed. Review the latest setting and try again.",
+                                        "current": exc.current}) from exc
+    except policy.IdempotencyConflict as exc:
+        raise HTTPException(409, detail={"code": "idempotency_key_reused",
+                                        "message": "That request key was already used for a different action."}) from exc
+    except policy.ActiveRunUnsupported as exc:
+        raise HTTPException(409, detail={"code": "active_run_routing_unsupported",
+                                        "message": "This run cannot be safely re-routed after it starts."}) from exc
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 # ── Exceptions and scoped recovery (PRD §6E, §11) ─────────────────────────────
