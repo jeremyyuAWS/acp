@@ -32,6 +32,26 @@ logger = logging.getLogger(__name__)
 def _scheduled_sweep(payload: dict, job: dict) -> None:
     """Execute the one durable occurrence elected from all scheduler replicas."""
     if payload.get("owner_email"):
+        decision = core._scheduled_scan_admission(payload)
+        # Admission counts active owner jobs. At handler time that population includes this
+        # very scheduled_sweep (and the partial unique index guarantees there is no second
+        # one). Do not make a concurrency limit of one reject itself forever.
+        if (not decision.get("admit") and decision.get("reason") == "owner_concurrency_limit"
+                and int(decision.get("owner_active") or 0) <= 1):
+            decision = {**decision, "admit": True, "reason": None}
+        if not decision.get("admit"):
+            owner, key = payload["owner_email"], payload.get("occurrence_key")
+            if decision.get("terminal"):
+                core._schedule_lifecycle_complete(
+                    core.get_store(), payload, result="skipped", error=decision.get("reason"))
+                return
+            defer = getattr(core.get_store(), "defer_scheduled_sweep", None)
+            if callable(defer) and decision.get("run_after") and key:
+                defer(owner, key, decision["run_after"],
+                      decision.get("reason") or "queue_policy", payload.get("scheduled_for"))
+            # The durable worker's ordinary failure path returns this same job to queued with
+            # backoff.  No new occurrence key is minted, so fleet dedupe remains intact.
+            raise RuntimeError(f"scheduled scan deferred: {decision.get('reason') or 'queue policy'}")
         core._do_scheduled_scan(payload)
     else:
         core._do_scheduled_scan()
