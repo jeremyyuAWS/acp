@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json as _json
 import logging
+import mimetypes
 import os
 import re
 import tempfile
@@ -3690,6 +3691,7 @@ def get_release_status(sid: str, request: Request):
 class ReleasePreviewRequest(BaseModel):
     files: list[str]
     release_folder_name: str | None = None
+    preserve_hierarchy: bool = True
 
 
 @router.post("/scans/{sid}/release/preview")
@@ -3740,7 +3742,7 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
         except _publish.UnsafeReleasePath as exc:
             blockers.append({"file": name, "reason": str(exc)})
             continue
-        relative = "/".join([*folders, safe_name])
+        relative = "/".join([*folders, safe_name]) if body.preserve_hierarchy else safe_name
         destination = "/".join(["Remediated", folder_name, relative])
         key = (location, destination.casefold())
         if key in planned_paths:
@@ -3762,6 +3764,7 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
         "collision_policy": ("Existing ACP copies are reused. Unrelated provider files are not "
                              "overwritten; ACP creates a stable suffixed copy and verifies it."),
         "original_files_unchanged": True,
+        "preserve_hierarchy": body.preserve_hierarchy,
     }
 
 
@@ -3961,6 +3964,74 @@ def get_release_manifest(sid: str, request: Request):
 class ReleasePackageRequest(BaseModel):
     files: list[str]
     package_name: str | None = None
+    preserve_hierarchy: bool = True
+    include_manifest: bool = True
+    download_format: str = "zip"
+
+
+class ReleasePackagePreviewRequest(BaseModel):
+    files: list[str]
+    preserve_hierarchy: bool = True
+    include_manifest: bool = True
+
+
+def _selected_release_rows(sid: str, request: Request, files: list[str]) -> tuple[dict, list[str], dict]:
+    """Return an owner-scoped scan, de-duplicated selection, and indexed file rows."""
+    scan = core.store.get_scan(sid, owner=_owner(request))
+    if scan is None:
+        raise HTTPException(404, "scan not found")
+    selected = list(dict.fromkeys(name for name in files if name))
+    if not selected:
+        raise HTTPException(422, "select at least one corrected file")
+    rows = {row.get("file"): row for row in scan.get("files", [])}
+    unknown = [name for name in selected if name not in rows]
+    if unknown:
+        raise HTTPException(404, f"corrected file not found: {unknown[0]}")
+    return scan, selected, rows
+
+
+@router.post("/scans/{sid}/release/package/preview")
+def preview_release_package(sid: str, request: Request, body: ReleasePackagePreviewRequest):
+    """Estimate a download before reading corrected blobs or building an archive."""
+    scan, selected, rows = _selected_release_rows(sid, request, body.files)
+    source = (scan.get("run") or {}).get("source") or "local"
+    paths: list[str] = []
+    blockers: list[dict] = []
+    seen: set[str] = set()
+    estimated_bytes = 0
+    sized = 0
+    import publish as _publish
+    for name in selected:
+        row = rows[name]
+        source_path = (row.get("source_relative_path") or row.get("path")
+                       or row.get("parent_folder") or name)
+        try:
+            if source == "sharepoint":
+                folders, safe_name = _publish.sharepoint_relative_path(source_path, name)
+            else:
+                folders, safe_name = _publish.normalize_relative_path(source_path, name)
+        except _publish.UnsafeReleasePath as exc:
+            blockers.append({"file": name, "reason": str(exc)})
+            continue
+        path = "/".join(["Remediated", *folders, safe_name]) if body.preserve_hierarchy else safe_name
+        if path.casefold() in seen:
+            blockers.append({"file": name, "reason": f"Another selected file resolves to {path}."})
+            continue
+        seen.add(path.casefold())
+        paths.append(path)
+        size = row.get("remediated_size") or row.get("size") or row.get("file_size")
+        if isinstance(size, (int, float)) and size >= 0:
+            estimated_bytes += int(size)
+            sized += 1
+    return {
+        "scan_id": sid, "files": len(selected), "paths": paths,
+        "estimated_bytes": estimated_bytes if sized else None,
+        "estimate_complete": sized == len(selected),
+        "preserve_hierarchy": body.preserve_hierarchy,
+        "include_manifest": body.include_manifest,
+        "blockers": blockers, "can_download": not blockers,
+        "recommended_format": "original" if len(selected) == 1 else "zip",
+    }
 
 
 def _remediated_bytes(owner: str, scan_id: str, filename: str) -> bytes | None:
@@ -3979,16 +4050,11 @@ def _remediated_bytes(owner: str, scan_id: str, filename: str) -> bytes | None:
 @router.post("/scans/{sid}/release/package")
 def download_release_package(sid: str, request: Request, body: ReleasePackageRequest):
     """Return selected corrected copies as one hierarchy-preserving, owner-scoped ZIP."""
-    scan = core.store.get_scan(sid, owner=_owner(request))
-    if scan is None:
-        raise HTTPException(404, "scan not found")
-    selected = list(dict.fromkeys(name for name in body.files if name))
-    if not selected:
-        raise HTTPException(422, "select at least one corrected file")
-    rows = {row.get("file"): row for row in scan.get("files", [])}
-    unknown = [name for name in selected if name not in rows]
-    if unknown:
-        raise HTTPException(404, f"corrected file not found: {unknown[0]}")
+    scan, selected, rows = _selected_release_rows(sid, request, body.files)
+    if body.download_format not in {"zip", "original"}:
+        raise HTTPException(422, "download_format must be 'zip' or 'original'")
+    if body.download_format == "original" and len(selected) != 1:
+        raise HTTPException(422, "direct download requires exactly one corrected file")
 
     import publish as _publish
     try:
@@ -4001,6 +4067,17 @@ def download_release_package(sid: str, request: Request, body: ReleasePackageReq
         raise HTTPException(422, str(exc)) from exc
     owner = _owner(request)
     source = (scan.get("run") or {}).get("source") or "local"
+    if body.download_format == "original":
+        name = selected[0]
+        data = _remediated_bytes(owner, sid, name)
+        if data is None:
+            raise HTTPException(409, f"corrected copy is not available for download: {name}")
+        safe_name = re.sub(r'[\r\n"]', "_", name.rsplit("/", 1)[-1])
+        return Response(
+            data, media_type=mimetypes.guess_type(safe_name)[0] or "application/octet-stream",
+            headers={"Content-Disposition": f'attachment; filename="{safe_name}"',
+                     "Cache-Control": "private, no-store",
+                     "Content-Length": str(len(data))})
     documents: list[dict] = []
     used_paths: set[str] = set()
     output = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024)
@@ -4017,7 +4094,8 @@ def download_release_package(sid: str, request: Request, body: ReleasePackageReq
                     folders, safe_name = _publish.sharepoint_relative_path(source_path, name)
                 else:
                     folders, safe_name = _publish.normalize_relative_path(source_path, name)
-                archive_path = "/".join(["Remediated", *folders, safe_name])
+                archive_path = ("/".join(["Remediated", *folders, safe_name])
+                                if body.preserve_hierarchy else safe_name)
                 collision_key = archive_path.casefold()
                 if collision_key in used_paths:
                     raise HTTPException(409, f"two selected files resolve to the same package path: {archive_path}")
@@ -4050,9 +4128,10 @@ def download_release_package(sid: str, request: Request, body: ReleasePackageReq
                 "finding_reconciliation": finding_reconciliation,
                 "release": release_manifest,
             }
-            archive.writestr("release-manifest.json", _json.dumps(
-                manifest, sort_keys=True, indent=2, ensure_ascii=False,
-                default=str).encode("utf-8"))
+            if body.include_manifest:
+                archive.writestr("release-manifest.json", _json.dumps(
+                    manifest, sort_keys=True, indent=2, ensure_ascii=False,
+                    default=str).encode("utf-8"))
     except Exception:
         output.close()
         raise

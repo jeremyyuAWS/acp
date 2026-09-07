@@ -70,6 +70,16 @@ def test_preview_blocks_case_insensitive_destination_collision(monkeypatch):
     assert result["blockers"][0]["file"] == "report.pdf"
 
 
+def test_preview_can_flatten_the_source_hierarchy(monkeypatch):
+    monkeypatch.setattr(scans.core, "store", _Store())
+    result = scans.preview_release_destination(
+        "scan-1", _request(), scans.ReleasePreviewRequest(
+            files=["Report.pdf"], release_folder_name="Release",
+            preserve_hierarchy=False))
+    assert result["documents"][0]["destination_path"] == "Remediated/Release/Report.pdf"
+    assert result["preserve_hierarchy"] is False
+
+
 def test_preview_is_owner_scoped(monkeypatch):
     monkeypatch.setattr(scans.core, "store", _Store())
     with pytest.raises(HTTPException) as exc:
@@ -77,4 +87,3 @@ def test_preview_is_owner_scoped(monkeypatch):
             "scan-1", _request("other@example.com"),
             scans.ReleasePreviewRequest(files=["Report.pdf"]))
     assert exc.value.status_code == 404
-
