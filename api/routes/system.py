@@ -2046,6 +2046,35 @@ def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None,
             "total": int(detail.get("documents") or 0), "max_attempts_seen": completed.get("attempt"),
             "started_at": started.get("occurred_at"), "updated_at": completed.get("occurred_at"),
         })
+    # Canonical executions define the workflow's stage set. Queue rows and lifecycle events are
+    # intentionally lossy operational projections: synchronous stages have no job, and terminal
+    # jobs eventually age out of both projections. Seed any missing canonical stage before the
+    # telemetry pass so those durable facts cannot disappear from Live Operations.
+    represented = {(str(run.get("scan_id") or ""), str(run.get("stage") or "")) for run in runs}
+    run_by_scan = {}
+    for run in runs:
+        run_by_scan.setdefault(str(run.get("scan_id") or ""), run)
+    for scan_id, lineage in (canonical_lineages or {}).items():
+        exemplar = run_by_scan.get(str(scan_id)) or {}
+        for canonical in (lineage or {}).get("stages", []):
+            stage = str(canonical.get("stage") or "").strip()
+            key = (str(scan_id), stage)
+            if not stage or key in represented:
+                continue
+            runs.append({
+                "scan_id": str(scan_id), "stage": stage,
+                "workflow_id": canonical.get("workflow_id") or lineage.get("workflow_id"),
+                "workflow_revision": (canonical.get("workflow_revision") or
+                                      lineage.get("workflow_revision") or 1),
+                "owner": (lineage.get("owner_email") or lineage.get("owner") or
+                          exemplar.get("owner") or "unknown"),
+                "source": lineage.get("source") or exemplar.get("source") or "unknown",
+                "running": 0, "queued": 0, "failed": 0, "completed": 0, "total": 0,
+                "started_at": canonical.get("created_at"),
+                "updated_at": canonical.get("last_durable_update_at"),
+                "max_attempts_seen": 0,
+            })
+            represented.add(key)
     stage_order = {"discover": 0, "assess": 1, "remediate": 2, "release": 3}
     now = datetime.now(timezone.utc)
     for run in runs:
@@ -2158,6 +2187,9 @@ def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None,
                 stage["terminal_outcome"] = "completed"
             workflow["workflow_revision"] = int(
                 canonical.get("workflow_revision") or (lineage or {}).get("workflow_revision") or 1)
+            canonical_updated = canonical.get("last_durable_update_at")
+            if str(canonical_updated or "") > str(workflow.get("updated_at") or ""):
+                workflow["updated_at"] = canonical_updated
         workflow["stages"].sort(key=lambda row: (stage_order.get(row["stage"], 99), row["stage"]))
         active = [row for row in workflow["stages"] if row["status"] != "completed"]
         if active:
