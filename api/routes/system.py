@@ -1174,7 +1174,8 @@ def get_settings(request: Request = None):
             # RESOLVED scope for everything that renders it — the two are different questions
             # and conflating them is how an editor starts overwriting what it never loaded.
             "scan_scope": core.store.get_setting("scan_scope", "") or "",
-            "release_destination": _release_destination(user) if user else None}
+            "release_destination": _release_destination(user) if user else None,
+            "release_templates": _release_templates(user) if user else []}
 
 
 @router.put("/settings")
@@ -1266,6 +1267,7 @@ class MyScopeUpdate(BaseModel):
     scan_scope: dict[str, list[str]] | str | None = None
     release_timezone: str | None = None
     release_destination: dict | None = None
+    release_templates: list[dict] | None = None
 
 
 def _release_destination(user: str) -> dict | None:
@@ -1294,6 +1296,54 @@ def _validate_release_destination(value: dict) -> dict:
     return {"provider": provider, "folder_id": folder_id, "folder_name": folder_name}
 
 
+def _release_templates(user: str) -> list[dict]:
+    raw = core.store.get_user_setting(user, "release_templates")
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    return value if isinstance(value, list) else []
+
+
+def _validate_release_templates(values: list[dict]) -> list[dict]:
+    if len(values) > 20:
+        raise HTTPException(422, "at most 20 Release templates can be saved")
+    cleaned, seen = [], set()
+    for raw in values:
+        if not isinstance(raw, dict):
+            raise HTTPException(422, "each Release template must be an object")
+        name = str(raw.get("name") or "").strip()
+        if not name or len(name) > 80:
+            raise HTTPException(422, "each Release template needs a name of 80 characters or fewer")
+        if name.casefold() in seen:
+            raise HTTPException(422, "Release template names must be unique")
+        seen.add(name.casefold())
+        method = str(raw.get("method") or "publish").strip().lower()
+        if method not in {"publish", "download", "acp"}:
+            raise HTTPException(422, "Release template method must be publish, download, or acp")
+        destination = raw.get("destination")
+        if destination is not None:
+            destination = _validate_release_destination(destination)
+        download_format = str(raw.get("download_format") or "zip").strip().lower()
+        if download_format not in {"zip", "original"}:
+            raise HTTPException(422, "download_format must be zip or original")
+        package_name = str(raw.get("package_name") or "").strip()
+        release_folder_name = str(raw.get("release_folder_name") or "").strip()
+        if len(package_name) > 100 or len(release_folder_name) > 100:
+            raise HTTPException(422, "template file and folder names must be 100 characters or fewer")
+        cleaned.append({
+            "name": name, "method": method, "destination": destination,
+            "preserve_hierarchy": raw.get("preserve_hierarchy") is not False,
+            "include_manifest": raw.get("include_manifest") is not False,
+            "include_verification_report": bool(raw.get("include_verification_report")),
+            "download_format": download_format, "package_name": package_name,
+            "release_folder_name": release_folder_name,
+        })
+    return cleaned
+
+
 def _require_user(request: Request) -> str:
     """The signed-in user's email, or 401. Per-user settings are keyed to identity, so — unlike the
     admin gate, which no-ops in local dev — this REQUIRES a stamped user: there is no per-user
@@ -1316,6 +1366,7 @@ def get_my_settings(request: Request):
         "owner_default": core.store.get_setting("scan_scope", "") or "",
         "release_timezone": core.store.get_user_setting(user, "release_timezone") or "America/Chicago",
         "release_destination": _release_destination(user),
+        "release_templates": _release_templates(user),
     }
 
 
@@ -1325,6 +1376,17 @@ def update_my_settings(body: MyScopeUpdate, request: Request):
     and is never stored (same discipline as the admin PUT), because a stored-but-unparseable override
     is silently ignored at read time. `{}` and "" both store as "" (no restriction)."""
     user = _require_user(request)
+    if "release_templates" in body.model_fields_set:
+        templates = _validate_release_templates(body.release_templates or [])
+        core.store.set_user_setting(user, "release_templates", json.dumps(templates))
+        core.store.log_decision(user, "settings.mine.release_templates",
+                                detail=f"{len(templates)} Release templates saved")
+        if (body.scan_scope is None and body.release_timezone is None and
+                "release_destination" not in body.model_fields_set):
+            return {"scan_scope": core.store.get_user_setting(user, "scan_scope") or "",
+                    "release_timezone": core.store.get_user_setting(user, "release_timezone") or "America/Chicago",
+                    "release_destination": _release_destination(user),
+                    "release_templates": templates}
     if "release_destination" in body.model_fields_set:
         if body.release_destination is None:
             core.store.clear_user_setting(user, "release_destination")
