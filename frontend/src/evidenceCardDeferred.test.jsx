@@ -84,4 +84,16 @@ describe('EvidenceCard — approving a deferred row', () => {
     expect(opts.approvedValues).toBeNull()
     expect(opts.rejectReason).toBe('too_vague')
   })
+
+  it('attributes a single precomputed vision proposal to its exact model call', async () => {
+    await mount({ ...deferred, finding_count: 1, evidence: [], proposals: [{
+      locator: 'ppt/slides/slide1.xml#rId2', thumb: PNG,
+      proposed_value: 'A nurse reviews a patient chart.',
+      model_call_id: 'vision-call-exact-7',
+    }] })
+    await clickText('Approve')
+    const [, status, , , opts] = onAct.mock.calls[0]
+    expect(status).toBe('approved')
+    expect(opts.modelCallId).toBe('vision-call-exact-7')
+  })
 })

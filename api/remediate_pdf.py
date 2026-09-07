@@ -884,7 +884,7 @@ def _fix_pdf_figure_alt(pdf, source_path: str, *, ai_enabled: bool,
             page_cache[page_num] = _render_page_png(source_path, page_num)
         return page_cache[page_num]
 
-    def _defer(fig, page_num, img, draft=""):
+    def _defer(fig, page_num, img, draft="", model_call_id=None):
         """Emit a per-figure review card for a figure we could not auto-caption."""
         nonlocal deferred
         deferred += 1
@@ -900,7 +900,8 @@ def _fix_pdf_figure_alt(pdf, source_path: str, *, ai_enabled: bool,
             source=("AI vision could not ground a description — human authors"
                     if not draft else "AI vision draft — confirm it matches the figure"),
             kind="pdf-figure-alt",
-            thumb=(_prop.thumb_b64(img, max_edge=_PAGE_THUMB_EDGE) if img else None)))
+            thumb=(_prop.thumb_b64(img, max_edge=_PAGE_THUMB_EDGE) if img else None),
+            model_call_id=model_call_id))
 
     for fig in missing:
         page_num = _resolve_page_number(fig, pdf)
@@ -927,12 +928,14 @@ def _fix_pdf_figure_alt(pdf, source_path: str, *, ai_enabled: bool,
             continue
         if anchor is None:
             # Ungrounded guess → the reviewer decides, we do not assert it (see helper).
-            _defer(fig, page_num, img, draft=res.get("alt", ""))
+            _defer(fig, page_num, img, draft=res.get("alt", ""),
+                   model_call_id=res.get("ai_call_id"))
             continue
         try:
             fig["/Alt"] = pikepdf.String(res["alt"])
         except Exception:
-            _defer(fig, page_num, img, draft=res.get("alt", ""))
+            _defer(fig, page_num, img, draft=res.get("alt", ""),
+                   model_call_id=res.get("ai_call_id"))
             continue
         if applied_fixes is not None:
             applied_fixes.append({

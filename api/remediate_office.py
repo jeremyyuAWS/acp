@@ -617,6 +617,7 @@ def _vision_alt(xml, m, tag, selfclose, pic_spans, entries, part_name, vision_en
             thumb=_thumb_b64(img),
             sc="1.1.1",
             model=res.get("model"),
+            model_call_id=res.get("ai_call_id"),
             # The reason this is a proposal and not an applied fix, stated rather than implied.
             # Every branch above this one auto-applied because it had an anchor — the image's own
             # OCR text, or an independent second reading that agreed. This branch has neither, so
