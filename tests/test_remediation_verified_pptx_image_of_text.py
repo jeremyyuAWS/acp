@@ -354,6 +354,22 @@ def test_the_row_is_credited_and_the_copy_is_stored(applied):
 
 
 @needs_ocr
+def test_the_write_introduces_no_new_failure(applied, deck):
+    """Since #1712 a fix that breaks another criterion blocks certification, and this is the one
+    lane that both DELETES content and INSERTS a shape — the two edits most able to disturb
+    something else. Measured rather than assumed.
+
+    1.1.1 and 1.4.9 clear here too, and that is not the lane overreaching: the picture they were
+    about is gone, so the criteria it failed go with it. The assertion is one-directional for
+    that reason — nothing NEW may appear, and 1.4.5 must be among what left.
+    """
+    blob, _ = applied
+    before, after = _assess(deck), _assess(blob.data)
+    assert after - before == set(), f"the write introduced {sorted(after - before)}"
+    assert "1.4.5" in before - after
+
+
+@needs_ocr
 def test_one_image_on_two_slides_is_replaced_on_both(store, monkeypatch):
     """One media part, two placements, one locator. The part is deleted once, so every picture
     of it must become a text box or the deck would reference a part that is not there."""
