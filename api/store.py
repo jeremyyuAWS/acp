@@ -9729,11 +9729,30 @@ class Store:
                 shadowed.update((sid, f) for f in self._shadowed_files(cur, sid))
             rows = [r for r in rows if (r["scan_id"], r["file"]) not in shadowed]
             superseded = self._superseded_items(cur, rows)
+            unverified = self._apply_unverified_decisions(cur, rows)
+        # An approved row whose write was attempted and refused credit gets `apply_outcome`, so
+        # the review card can say why nothing changed. Pending rows are untouched (no key).
+        from apply_outcome import annotate_apply_outcomes
+        annotate_apply_outcomes(rows, unverified)
         if include_superseded:
             for r in rows:
                 r["superseded"] = r["id"] in superseded
             return rows
         return [r for r in rows if r["id"] not in superseded]
+
+    def _apply_unverified_decisions(self, cur, rows: list[dict]) -> list[dict]:
+        """Every apply.unverified decision for the scans holding an approved-but-unapplied row —
+        the evidence that a write ran and was refused credit. Read here, interpreted in
+        apply_outcome.py; nothing is read when no row could carry an outcome."""
+        scans = sorted({r["scan_id"] for r in rows
+                        if str(r.get("status") or "") == "approved" and not r.get("applied")})
+        if not scans:
+            return []
+        marks = ",".join(["%s"] * len(scans))
+        self._db.execute(cur,
+            f"SELECT ts,action,scan_id,file,detail FROM decision_log "
+            f"WHERE action=%s AND scan_id IN ({marks})", ("apply.unverified", *scans))
+        return [dict(r) for r in self._db.fetchall(cur)]
 
     def _superseded_items(self, cur, rows: list[dict]) -> set[str]:
         """The ids of queue rows whose finding has stopped being work.
