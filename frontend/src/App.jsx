@@ -22,6 +22,7 @@ import { getSources, getRubric, getConfig, getMe, getMyAccess, getMyScope, getCa
 import { beginOrResumeIntent, completeIntent, abandonIntent, outcomeIsUncertain } from './submitIntent'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
+import { useAutoDismissDetails } from './a11y.js'
 import { loadDelegations } from './OwnerDelegate.jsx'
 import { loadRolePrivileges } from './RolePrivilege.jsx'
 import { loadFileTypeConfig, visibleForFileTypes } from './FileTypeConfig.jsx'
@@ -412,6 +413,8 @@ export default function App() {
   const savedDecRef = useRef({ scanId: null, decisions: {}, triage: {}, assignees: {} })  // last-persisted snapshot
   const hydratingRef = useRef(false)                    // suppress the save effect during hydration
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const accountMenuRef = useRef(null)
+  useAutoDismissDetails(accountMenuRef, 5000)
   const [scanList, setScanList] = useState([])
   // true only when the user explicitly picked an older scan from the time-travel picker —
   // distinguishes "user went back in time" from "a new scan arrived while they were reading".
@@ -1807,7 +1810,7 @@ export default function App() {
               <PrivateAiBadge aiEnabled={aiEnabled} />
             </div>
           </details>
-          <details className="header-menu account-menu">
+          <details className="header-menu account-menu" ref={accountMenuRef}>
             <summary aria-label={`Account menu for ${me.email}`}>
               <span className="account-avatar" aria-hidden="true">{(me.name || me.email || '?').split(/\s|@/).filter(Boolean).slice(0, 2).map(s => s[0]).join('').toUpperCase()}</span>
               <span className="account-chevron" aria-hidden="true">⌄</span>
