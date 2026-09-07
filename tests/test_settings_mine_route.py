@@ -123,6 +123,7 @@ def test_release_destination_round_trips_without_tokens_or_urls(monkeypatch, iso
                 "folder_name": "Approved releases"}
     assert response.json()["release_destination"] == expected
     assert c.get("/settings/mine", headers=_AUTH).json()["release_destination"] == expected
+    assert c.get("/settings", headers=_AUTH).json()["release_destination"] == expected
     raw = isolated_store.get_user_setting("alice@hosp.org", "release_destination")
     assert "must-not-persist" not in raw and "example.invalid" not in raw
 
