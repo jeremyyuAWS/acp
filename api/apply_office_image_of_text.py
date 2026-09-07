@@ -42,17 +42,27 @@ pptx resolver's own policy: silence leaves the row unapplied and the file uncert
 is the safe direction. Guessing would write a reviewer's description onto a picture they never
 saw.
 
-pptx is DELEGATED, not reimplemented. Its lane is proven end to end by
-tests/test_remediation_described_image_round_trip.py and nothing here improves it, so this
-module is the one call site handlers needs and pptx passes straight through.
+ALL THREE FORMATS NOW USE THE WALK BELOW, pptx included. It began as a docx/xlsx module that
+delegated pptx to the proven slides-only resolver, and that delegation is gone because the
+slides-only walk had two holes the generic one does not:
+
+  * an image referenced only by a `slideLayout` or `slideMaster` was unreachable, so a described
+    decision on it wedged the file permanently and silently — ADR 0055's own first-listed
+    motivating case;
+  * a single slide showing the SAME picture twice shares one relationship id, so the per-rId
+    locator reached only the first placement — the docx failure above, in pptx clothing.
+
+Both dissolve by deriving the part list from `ALT_TARGETS` and each locator from
+`apply_alt.resolve_target`, which is what this module already did for docx and xlsx.
+`apply_pptx_image_of_text.resolve_media_locators` now delegates HERE, so there is one
+implementation and its callers and tests are unchanged.
 
 WHAT THIS LANE REACHES, AND WHAT IT DOES NOT — measured, because the boundary is invisible
 
-REACHED: every part in `formats.office.images.ALT_TARGETS`. For Word that is the body AND page
-headers and footers (`word/header1.xml`, `word/footer1.xml`, …), which is worth saying because
-the pptx equivalent is NOT reachable — an image referenced only by a slideLayout or slideMaster
-has no locator any of this can mint. The formats differ here; assuming they match gets it
-backwards in both directions.
+REACHED: every part in `formats.office.images.ALT_TARGETS` — for Word the body plus page headers
+and footers, for PowerPoint slides plus slideLayouts and slideMasters, for Excel the drawing
+parts. Derived, never restated: widening that table widens the detector, this resolver and the
+writer together, which is the only reason the credit gate stays meaningful.
 
 NOT REACHED: a media part no alt-bearing part references — a footnote image, a VML sheet
 header graphic, a picture inside a chart part. `ocr._ooxml_images` walks the ZIP NAMELIST and
@@ -65,12 +75,11 @@ ONLY carded image is unreachable wedges: the described row is approved, nothing 
 written for it, `count_unapplied_approved_values` counts it forever and the file can never
 certify. Safe (no false certification) but with no way out for the reviewer.
 
-THAT WEDGE IS NOT NEW AND NOT DOCX/XLSX-SPECIFIC — the merged pptx lane has the identical shape
-for a slideLayout image. What this module changes is how often docx and xlsx reach it: before it,
-the locator was never translated at all, so EVERY described decision on those formats wedged.
-The proper fix is to refuse the decision up front, exactly as #1761 refuses a row with nowhere to
-put a description, and it needs the package bytes at the route — its own change, for all three
-formats at once. Pinned meanwhile by
+THE RESIDUAL WEDGE IS NOW VISIBLE RATHER THAN SILENT. It still exists — nothing here can reach a
+media part no alt-bearing part references — but `handlers._apply_one_value_kind` now logs
+`apply.unverified` when a lane writes NOTHING because every locator was unresolved, so
+`apply_outcome` renders a card telling the reviewer the description reached no image instead of
+leaving them with a file that never publishes and no explanation. Pinned by
 tests/test_remediation_described_image_office_round_trip.py::
 test_an_unreachable_image_wedges_the_file_rather_than_certifying_it_falsely.
 """
@@ -85,10 +94,7 @@ import zipfile
 # IMPORTED, never recompiled or reimplemented: one owner for the shape, one implementation per
 # format. This import is also what keeps `apply_pptx_image_of_text`'s resolver half provably
 # live — tests/test_apply_pptx_image_of_text_retired.py asserts some api/ module uses it.
-from apply_pptx_image_of_text import (  # noqa: F401  (re-exported for handlers)
-    expand_media_locator_values as _expand_pptx,
-    is_media_index_locator,
-)
+from apply_pptx_image_of_text import is_media_index_locator  # noqa: F401 (re-exported)
 
 # The alt-bearing element per part, and the writer's own resolution of a locator fragment to an
 # element. Private names, imported deliberately: this module's whole job is to mint locators
@@ -108,8 +114,7 @@ _IMAGE_LOC = re.compile(r"^image\s+(\d+)$", re.IGNORECASE)
 # GUARANTEED and assuming it is is measured failure 3 above.
 _REL_EL = re.compile(r"<Relationship\b[^>]*/?>", re.IGNORECASE)
 
-# The formats this module translates for. pptx is here because it is delegated, so handlers has
-# exactly one question to ask and one module to ask it of.
+# The formats this module translates for — all of them, through one walk.
 SUPPORTED_EXTS = ("docx", "xlsx", "pptx")
 
 
@@ -214,17 +219,20 @@ def _placements(zin: zipfile.ZipFile, wanted: set[str]) -> dict[str, list[str]]:
     return found
 
 
-def resolve_media_locators(data: bytes, locators, ext: str) -> dict[str, list[str]]:
-    """{'image N': ['<part>#<fragment>', …]} — ADR 0055's translation, for docx and xlsx.
-
-    Same contract as the pptx resolver it stands beside, and pptx is delegated to that one:
+def resolve_media_locators(data: bytes, locators, ext: str = "") -> dict[str, list[str]]:
+    """{'image N': ['<part>#<fragment>', …]} — ADR 0055's translation, for every Office format.
 
         'image N'  ->  the Nth media part in ocr._ooxml_images order
                    ->  EVERY placement of it that an alt-bearing element addresses
 
+    `ext` is accepted for the caller's convenience and no longer selects an implementation: the
+    parts to walk come from ALT_TARGETS, which already knows which of them belong to which
+    format, so a per-format branch here could only ever disagree with it.
+
     ONE LOCATOR, MANY PLACEMENTS, for the reason the pptx module measured and for a second one
-    it could not have seen: 'image N' names the MEDIA PART, and in Word every placement of that
-    part additionally shares a single relationship id. Describing one and not the others leaves
+    it could not have seen: 'image N' names the MEDIA PART, and in Word — and on a pptx slide
+    showing one picture twice — every placement of that part shares a single relationship id.
+    Describing one and not the others leaves
     the rest carrying their source filename, which the 1.1.1 detector reads as junk, so the
     re-scan still reports 1.1.1, the lane withholds the credit, and the reviewer's approved
     description is never marked applied. Measured on a two-placement .docx, both ways.
@@ -235,10 +243,6 @@ def resolve_media_locators(data: bytes, locators, ext: str) -> dict[str, list[st
     unresolved, and the credit is withheld: an undescribed image is a finding, a wrongly
     described one is a reviewer's signature on prose about a picture they never saw.
     """
-    if (ext or "").lower().lstrip(".") == "pptx":
-        from apply_pptx_image_of_text import resolve_media_locators as _pptx
-        return _pptx(data, locators)
-
     wanted = [str(l).strip() for l in (locators or ()) if str(l or "").strip()]
     if not wanted:
         return {}
@@ -272,7 +276,7 @@ def resolve_media_locators(data: bytes, locators, ext: str) -> dict[str, list[st
 
 
 def expand_media_locator_values(data: bytes, values: dict[str, str],
-                                ext: str) -> dict[str, str]:
+                                ext: str = "") -> dict[str, str]:
     """`values` with every resolvable 'image N' key replaced by its placements' locators.
 
     The flat {locator: text} map the alt lane hands straight to apply_alt_text. Each placement of
@@ -284,8 +288,6 @@ def expand_media_locator_values(data: bytes, values: dict[str, str],
     so it reaches apply_alt, is reported unresolved, and appears in the apply.unresolved log
     under the name the reviewer's card used rather than one they never saw.
     """
-    if (ext or "").lower().lstrip(".") == "pptx":
-        return _expand_pptx(data, values)
     if not values:
         return {}
     if not any(_IMAGE_LOC.match(str(k).strip()) for k in values):

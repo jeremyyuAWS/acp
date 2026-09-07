@@ -143,65 +143,32 @@ def is_media_index_locator(locator) -> bool:
 
 
 def resolve_media_locators(data: bytes, locators) -> dict[str, list[str]]:
-    """{'image N': ['ppt/slides/slideK.xml#rIdM', …]} — the ADR 0055 locator translation.
+    """{'image N': ['<part>#<fragment>', …]} — the ADR 0055 locator translation, DELEGATED.
 
-    LIVE (unlike the writer below). It turns a locator only this module can read into ones the
-    proven 1.1.1 alt lane can: apply_alt.resolve_target matches an `r:embed` fragment to the
-    alt-bearing element of the picture that embeds it, exactly as it matches a shape name.
+    STILL LIVE, and still the pptx entry point its callers and #1742's tests know. What changed
+    is that the walk now lives in apply_office_image_of_text, which derives its part list from
+    formats.office.images.ALT_TARGETS and each locator from apply_alt.resolve_target itself.
 
-    The chain is the one _media_index and _slide_rels already implemented for the writer:
+    WHY THE SLIDES-ONLY WALK THAT USED TO BE HERE WAS REPLACED — two holes, both measured:
 
-        'image N'  ->  the Nth ppt/media raster in zip-namelist order   (mirrors ocr._ooxml_images)
-                   ->  EVERY (slide, rId) pair that references that media part
+      * It scanned `ppt/slides/slide\d+\.xml` alone, so a picture on a slideLayout or
+        slideMaster resolved to NOTHING. That image still raises 1.4.5 (ocr._ooxml_images walks
+        the zip namelist), so a reviewer could describe it and the description could never be
+        written: the row stayed approved and unapplied forever and the file could never certify.
+        It is ADR 0055's own first-listed motivating case, and the lane did not serve it.
+      * It emitted one locator per (slide, rId). A single slide showing the SAME picture twice
+        shares one relationship id, so only the first placement was described — the identical
+        first-match-wins hole that made the docx translation need a per-placement locator.
 
-    ONE LOCATOR, MANY PLACEMENTS — which is why this returns a list and not a string, and the
-    reason was measured rather than reasoned about. 'image N' names the MEDIA PART, not a
-    picture: a logo or a diagram dropped on three slides is one entry in ocr._ooxml_images and
-    one review card. Describing only the first placement leaves the other two carrying whatever
-    descr they had (typically the source filename, which the detector reads as junk), so 1.1.1
-    would still fail on re-scan, the verify gate would withhold the credit, and the reviewer's
-    approved description would never be marked applied. A first draft of this function returned
-    one target and had exactly that hole.
+    Both dissolve in the shared walk, so keeping a second implementation here could only let the
+    two drift. The contract is unchanged: one locator in, every placement out, and an
+    unresolvable locator OMITTED rather than guessed at.
 
-    This mirrors the 1.4.5 replacement lane, which replaces every placement or none because the
-    media part is deleted once. Same fact about the locator scheme, same all-or-nothing shape.
-
-    A locator is OMITTED rather than mapped to anything when it cannot be resolved — malformed,
-    an index past the end of the media list, or a media part no slide references (a layout's or
-    master's image, which apply_alt would not reach either). Silence is the honest answer: the
-    caller keeps the original, apply_alt reports it unresolved, and _apply_one_value_kind
-    withholds the credit. Guessing a different image would write a reviewer's description onto a
-    picture they never saw.
-
-    Slides are visited in zip-namelist order, and each slide's own rels in file order, so the
-    list is stable across runs for the same package.
+    Imported lazily because apply_office_image_of_text imports `is_media_index_locator` from this
+    module at import time, and a module-level import back would close the cycle.
     """
-    wanted = [str(l).strip() for l in (locators or ()) if str(l or "").strip()]
-    if not wanted:
-        return {}
-
-    out: dict[str, list[str]] = {}
-    with zipfile.ZipFile(io.BytesIO(data)) as zin:
-        media_idx = _media_index(zin)
-        # canonical media path -> every 'slidepart#rId' that references it, in zip order.
-        refs: dict[str, list[str]] = {}
-        for name in zin.namelist():
-            if not re.fullmatch(r"ppt/slides/slide\d+\.xml", name):
-                continue
-            for rid, canonical in _slide_rels(zin, name).items():
-                refs.setdefault(canonical, []).append(f"{name}#{rid}")
-
-    for locator in wanted:
-        m = _IMAGE_LOC.match(locator)
-        if not m:
-            continue
-        n = int(m.group(1)) - 1
-        if n < 0 or n >= len(media_idx):
-            continue
-        placements = refs.get(media_idx[n])
-        if placements:
-            out[locator] = list(placements)
-    return out
+    from apply_office_image_of_text import resolve_media_locators as _shared
+    return _shared(data, locators, "pptx")
 
 
 def expand_media_locator_values(data: bytes, values: dict[str, str]) -> dict[str, str]:

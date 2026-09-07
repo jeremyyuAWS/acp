@@ -22,6 +22,11 @@ import re
 ACTION = "apply.unverified"
 STILL_FAILING = "still_failing"
 COULD_NOT_VERIFY = "could_not_verify"
+# Nothing reached the document at all: every approved locator resolved to no element. Distinct
+# from STILL_FAILING (the value went in and the criterion still failed) because the reviewer's
+# next move is different — there is nothing to re-check, the description named an image this
+# document cannot carry alt text for, and re-running the apply job will not change that.
+NOTHING_WRITTEN = "nothing_written"
 
 _SC_RE = re.compile(r"'(\d+\.\d+\.\d+)'")
 _ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}")
@@ -41,8 +46,13 @@ def normalise_sc(rule_id) -> str:
 def parse_unverified(detail: str | None) -> dict:
     """{outcome, criteria, reason} from an apply.unverified detail string; {} if unrecognised.
 
-    Exactly two shapes are written by _apply_one_value_kind. Anything else is not asserted on —
+    Exactly THREE shapes are written by _apply_one_value_kind. Anything else is not asserted on —
     a decision this code cannot read must never become a claim on the card.
+
+    The third — "reach no image in this document" — is the wedge case, and it was silent before
+    it existed: the lane returned at `if not applied:` without logging, so a reviewer whose
+    approved description named an unreachable image (a picture on a pptx slideLayout, a footnote
+    image, a VML sheet graphic) got no card and a file that never published.
     """
     text = " ".join(str(detail or "").split())
     if not text:
@@ -54,6 +64,10 @@ def parse_unverified(detail: str | None) -> dict:
                 "reason": (m.group(1).strip() if m else "")}
     if "still fails on re-scan" in text:
         return {"outcome": STILL_FAILING, "criteria": criteria, "reason": ""}
+    # Matched on its own wording rather than by elimination: the detail says "wrote no" and names
+    # no reason clause, so neither shape above can claim it, and this stays a positive test.
+    if "reach no image in this document" in text:
+        return {"outcome": NOTHING_WRITTEN, "criteria": criteria, "reason": ""}
     return {}
 
 
