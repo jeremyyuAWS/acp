@@ -87,7 +87,7 @@ def _cli(*args: str) -> subprocess.CompletedProcess:
 def test_estimate_only_prices_the_run_without_calling_anything():
     r = _cli("--estimate-only", "--repeats", "3", "-c", "anthropic:claude-opus-5")
     assert r.returncode == 0
-    assert "426 calls" in r.stderr and "$5.1120" in r.stderr  # 142 cases x 3 repeats, Opus list price
+    assert "429 calls" in r.stderr and "$5.1480" in r.stderr  # 143 cases x 3 repeats, Opus list price
 
 
 def test_the_spend_cap_refuses_before_the_first_call():

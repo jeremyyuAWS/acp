@@ -30,6 +30,7 @@ why the lane is `assisted` rather than `auto`.
 """
 from __future__ import annotations
 
+import functools
 import glob
 import io
 import sys
@@ -59,9 +60,9 @@ BODY = "Unrelated body copy that must survive the write."
 # Rendered into the picture, and therefore also what OCR should read back out. Deliberately
 # more than _MIN_WORDS (10) real words and no numerals, so the 1.4.5 band takes it and
 # _looks_like_chart does not mistake it for a chart.
-LINES = ["Benefits at a glance",
+LINES = ("Benefits at a glance",
          "Medical dental and vision cover",
-         "Enrollment closes on Friday"]
+         "Enrollment closes on Friday")
 
 
 def _ocr_ready() -> bool:
@@ -83,10 +84,18 @@ def _font():
     return ImageFont.load_default()
 
 
-def _png(lines: list[str], size: tuple[int, int] = (760, 260)) -> Path:
+@functools.lru_cache(maxsize=None)
+def _png(lines: tuple[str, ...], size: tuple[int, int] = (760, 260)) -> Path:
     """A picture of prose. Big enough to clear _MIN_PIXELS (20000) and legible enough that
     tesseract reads the words back — a fixture OCR cannot read would make every assertion
-    below vacuous, which `test_the_picture_is_really_an_image_of_text` guards."""
+    below vacuous, which `test_the_picture_is_really_an_image_of_text` guards.
+
+    CACHED, and the decks below are too. Tesseract is CPU-bound and the backend suite runs
+    `-n auto` on a small runner, so an OCR-heavy file does not just cost its own time: it can
+    push OTHER tests' reads past ACP_OCR_TIMEOUT_S, which surfaces as an OCR_IMAGE_UNREAD
+    advisory in a test that was asserting a clean read. Observed exactly that on a loaded box.
+    Building each distinct image and deck once keeps this file's contribution bounded.
+    """
     from PIL import Image, ImageDraw
     im = Image.new("RGB", size, "white")
     d = ImageDraw.Draw(im)
@@ -98,6 +107,7 @@ def _png(lines: list[str], size: tuple[int, int] = (760, 260)) -> Path:
     return p
 
 
+@functools.lru_cache(maxsize=None)
 def _deck(*, pictures: int = 1, on_slides: int = 1, titled: bool = True) -> bytes:
     """`on_slides` slides, each carrying `pictures` copies of the SAME image-of-text.
 
@@ -122,14 +132,15 @@ def _deck(*, pictures: int = 1, on_slides: int = 1, titled: bool = True) -> byte
     return out.read_bytes()
 
 
+@functools.lru_cache(maxsize=None)
 def _two_images_deck() -> bytes:
     """Two DIFFERENT images of text, so a one-of-two approval leaves the criterion failing."""
     from pptx import Presentation
     from pptx.util import Inches
 
     a = _png(LINES)
-    b = _png(["Contact the benefits team", "Questions answered every Tuesday",
-              "Ask about dependent cover"])
+    b = _png(("Contact the benefits team", "Questions answered every Tuesday",
+              "Ask about dependent cover"))
     prs = Presentation()
     slide = prs.slides.add_slide(prs.slide_layouts[5])
     slide.shapes.title.text = TITLE
