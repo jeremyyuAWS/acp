@@ -12923,6 +12923,113 @@ class Store:
             return None
         return self.get_stage_output_manifest(execution["output_manifest_id"])
 
+    def _stage_domain_reconciliation(self, execution: dict, partitions: dict[str, int]) -> dict:
+        """Reconcile one stage in the domain unit its operator actually recognizes.
+
+        The generic work-item partition remains the queue authority.  This companion view makes
+        the stage boundary explicit: Discover counts inventory, Assess counts eligible inputs,
+        Remediate counts findings and Release counts requested/published documents.  All reads are
+        from durable ledgers; no progress event or client-side counter is treated as evidence.
+        """
+        stage = execution["stage"]
+        scan_id = execution["scan_id"]
+        execution_id = execution["execution_id"]
+        queued = int(partitions.get("queued", 0))
+        processing = int(partitions.get("processing", 0))
+        failed = int(partitions.get("failed", 0))
+        cancelled = int(partitions.get("cancelled", 0))
+        skipped = int(partitions.get("skipped", 0))
+        completed = int(partitions.get("completed", 0))
+
+        if stage == "discover":
+            lifecycle = {str(key): int(value) for key, value in
+                         self.count_lifecycle_by_status(scan_id).items()}
+            inventory = int(self.count_inventory(scan_id))
+            partitioned = sum(lifecycle.values())
+            return {
+                "unit": "inventory documents", "scope": "discovered inventory",
+                "equation": "inventory = sum(lifecycle status buckets)",
+                "total": inventory, "partitioned": partitioned,
+                "unaccounted": inventory - partitioned,
+                "buckets": lifecycle, "exact": inventory == partitioned,
+            }
+
+        if stage == "assess":
+            eligible = execution.get("expected_items")
+            accounted = queued + processing + completed + failed + cancelled + skipped
+            return {
+                "unit": "eligible documents", "scope": "immutable Assess input",
+                "equation": ("eligible = waiting + processing + assessed + failed + cancelled "
+                             "+ skipped"),
+                "total": eligible, "accounted": accounted,
+                "unaccounted": None if eligible is None else int(eligible) - accounted,
+                "buckets": {"waiting": queued, "processing": processing,
+                            "assessed": completed, "failed": failed,
+                            "cancelled": cancelled, "skipped": skipped},
+                "exact": eligible is not None and int(eligible) == accounted,
+            }
+
+        if stage == "remediate":
+            findings = self.finding_reconciliation(scan_id, execution_id)
+            buckets = {
+                "resolved_verified": findings["resolved_verified"],
+                "awaiting_review": findings["awaiting_review"],
+                "approved_pending_verification": findings["approved_pending_verification"],
+                "unchanged_no_fix": findings["unchanged_no_fix"],
+                "failed": findings["failed"], "excluded": findings["excluded"],
+                "superseded": findings["superseded"],
+            }
+            return {
+                "unit": "assessed findings", "scope": "current Remediate execution",
+                "equation": "assessed findings = sum(current disposition buckets)",
+                "total": findings["assessed"], "accounted": findings["accounted"],
+                "unaccounted": findings["unaccounted"], "buckets": buckets,
+                "exact": findings["exact"], "violations": findings["violations"],
+            }
+
+        if stage == "release":
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "SELECT work_item_id,receipt FROM side_effect_receipts "
+                    "WHERE execution_id=%s AND status='completed'", (execution_id,))
+                receipts = self._db.fetchall(cur)
+            verified_items = set()
+            for receipt_row in receipts:
+                receipt = receipt_row.get("receipt")
+                if isinstance(receipt, str):
+                    try:
+                        receipt = json.loads(receipt)
+                    except (TypeError, ValueError):
+                        receipt = None
+                if isinstance(receipt, dict) and receipt.get("verified") is True \
+                        and receipt_row.get("work_item_id"):
+                    verified_items.add(receipt_row["work_item_id"])
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "SELECT work_item_id FROM stage_work_items WHERE execution_id=%s "
+                    "AND state='completed'", (execution_id,))
+                completed_ids = {row["work_item_id"] for row in self._db.fetchall(cur)}
+            published = len(verified_items & completed_ids)
+            completed_unverified = max(0, completed - published)
+            requested = execution.get("expected_items")
+            accounted = (queued + processing + published + completed_unverified + failed +
+                         cancelled + skipped)
+            return {
+                "unit": "requested documents", "scope": "immutable Release request",
+                "equation": ("requested = waiting + processing + published + completed unverified "
+                             "+ failed + cancelled + skipped"),
+                "total": requested, "accounted": accounted,
+                "unaccounted": None if requested is None else int(requested) - accounted,
+                "buckets": {"waiting": queued, "processing": processing,
+                            "published": published,
+                            "completed_unverified": completed_unverified,
+                            "failed": failed, "cancelled": cancelled, "skipped": skipped},
+                "published_receipt_rule": "completed receipt with verified=true",
+                "exact": requested is not None and int(requested) == accounted,
+            }
+
+        return {"unit": "work items", "scope": "this execution", "available": False}
+
     def stage_execution_snapshot(self, execution_id: str, *, owner: str | None = None) -> dict | None:
         execution = self.get_stage_execution(execution_id, owner=owner)
         if not execution:
@@ -12959,6 +13066,12 @@ class Store:
             "queued", "processing", "completed", "failed", "cancelled", "skipped"})
         if unknown_states:
             violations.append({"code": "unknown_work_item_state", "states": unknown_states})
+        domain_reconciliation = self._stage_domain_reconciliation(execution, partitions)
+        if domain_reconciliation.get("exact") is False:
+            violations.append({"code": f"{execution['stage']}_domain_partition",
+                               "total": domain_reconciliation.get("total"),
+                               "accounted": domain_reconciliation.get(
+                                   "accounted", domain_reconciliation.get("partitioned"))})
         return {
             "workflow_id": execution["workflow_id"],
             "workflow_revision": int(execution["workflow_revision"]),
@@ -12996,8 +13109,9 @@ class Store:
                 "unaccounted": None if expected is None else int(expected) - accounted,
                 "exact": expected is not None and int(expected) == accounted and not unknown_states,
             },
+            "domain_reconciliation": domain_reconciliation,
             "integrity": {"ok": not violations,
-                          "affected": ["work_item_partition"] if violations else [],
+                          "affected": sorted({violation["code"] for violation in violations}),
             "violations": violations},
         }
 
