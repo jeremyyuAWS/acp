@@ -737,8 +737,18 @@ export default function App() {
       }).catch(() => {})
     }
     const id = setInterval(refresh, 15_000)
+    // Another browser tab can start, stop, or finish a stage while this one is in the
+    // background. Refresh as soon as the user returns so the durable compact card reconciles
+    // immediately instead of displaying the previous state for up to one polling interval.
+    // The server remains authoritative; this is the same owner-scoped read used by the timer.
+    window.addEventListener('focus', refresh)
     document.addEventListener('visibilitychange', refresh)
-    return () => { alive = false; clearInterval(id); document.removeEventListener('visibilitychange', refresh) }
+    return () => {
+      alive = false
+      clearInterval(id)
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', refresh)
+    }
   }, [me])
 
   // Publish writes back per file; refetching once per click would fire dozens of
