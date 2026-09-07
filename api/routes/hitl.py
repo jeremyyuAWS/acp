@@ -206,7 +206,6 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
         event_kwargs = {
             "review_ms": body.review_ms,
             "reviewer": (getattr(request.state, "user_email", None) if request is not None else None),
-            "reject_reason": (body.reject_reason if body.status == "rejected" else None),
         }
         if body.model_call_ids is not None:
             proposals = item.get("proposals") or item.get("evidence") or []
@@ -222,11 +221,13 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
                     edited=bool(final_value is not None and ai_value is not None
                                 and final_value != ai_value),
                     ai_value=ai_value, final_value=final_value,
+                    reject_reason=(body.reject_reason if body.status == "rejected" else None),
                     model_call_id=call_id, **event_kwargs)
         else:
             core.store.record_hitl_event(
                 item.get("scan_id"), item.get("file"), item.get("rule_id"), item_id, _action,
                 edited=body.edited, ai_value=body.ai_value, final_value=body.approved_value,
+                reject_reason=(body.reject_reason if body.status == "rejected" else None),
                 model_call_id=body.model_call_id, **event_kwargs)
     except Exception:
         swallowed("routes.hitl.hitl_update: recording the HITL event failed")
