@@ -354,6 +354,15 @@ describe('Primary visualization per node', () => {
     expect(buttonNamed(container, 'Stop assess stage')).toBeFalsy()
   })
 
+  it('does not keep a terminal manual stop in the stopping state', async () => {
+    const run = { ...snapshot.runs[0], status: 'cancelled', queued: 0, running: 0,
+      cancel_requested: true, cancel_requested_at: iso(-30) }
+    const container = await mount({ nodeId: 's1:assess', node: { kind: 'run', run },
+      onCancelStage: async () => ({}) })
+    expect(container.textContent).not.toContain('Stopping assess')
+    expect(buttonNamed(container, 'Stop assess stage')).toBeFalsy()
+  })
+
   it('explains the safe stopping boundary for every stage', () => {
     expect(stoppingGuidance('discover')).toContain('Documents already discovered are preserved')
     expect(stoppingGuidance('assess')).toContain('Completed assessment results are preserved')

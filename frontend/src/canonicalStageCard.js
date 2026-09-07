@@ -11,6 +11,9 @@ const STATE_LABELS = {
 }
 
 const number = (value) => (typeof value === 'number' && Number.isFinite(value) ? value : null)
+const PIPELINE_STAGE_ORDER = {
+  discover: 0, assess: 1, remediate: 2, release: 3,
+}
 
 export function canonicalStageCardModel(snapshot) {
   if (!snapshot) return null
@@ -56,6 +59,11 @@ export function currentCanonicalStage(lineage) {
     .includes(stage.state))
   const candidates = live.length ? live : stages
   return [...candidates].sort((left, right) => {
+    if (!live.length) {
+      const stageOrder = (PIPELINE_STAGE_ORDER[right.stage] ?? -1)
+        - (PIPELINE_STAGE_ORDER[left.stage] ?? -1)
+      if (stageOrder) return stageOrder
+    }
     const updated = String(right.last_durable_update_at || '')
       .localeCompare(String(left.last_durable_update_at || ''))
     return updated || Number(right.revision || 0) - Number(left.revision || 0)

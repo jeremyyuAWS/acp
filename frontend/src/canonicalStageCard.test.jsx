@@ -93,6 +93,18 @@ describe('current canonical stage selection', () => {
     ] })
     expect(stage.stage).toBe('assess')
   })
+
+  it('shows the furthest pipeline stage when every stage is terminal', () => {
+    const stage = currentCanonicalStage({ stages: [
+      { stage: 'release', state: 'cancelled', revision: 2,
+        last_durable_update_at: '2026-09-07T01:00:00Z' },
+      { stage: 'discover', state: 'succeeded', revision: 8,
+        last_durable_update_at: '2026-09-07T01:04:00Z' },
+      { stage: 'remediate', state: 'succeeded', revision: 6,
+        last_durable_update_at: '2026-09-07T01:03:00Z' },
+    ] })
+    expect(stage.stage).toBe('release')
+  })
 })
 
 describe('app-level canonical ownership', () => {
