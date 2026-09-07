@@ -104,7 +104,8 @@ make it a lead worth routing on, because VARR is pooled over categories where So
 - **Do not:** promote any `human` lane on this evidence. No human-lane category reached `enable`.
   Sonnet and Opus declined the must-abstain cases at 99% and 96% in both runs, and Haiku at
   97–98%, which says the human lane is respected, not that it is unnecessary — and on
-  `docx:3.1.2` specifically, Haiku acted where it should have declined, in both runs.
+  `docx:3.1.2` specifically, Haiku neither acted nor escalated one of the two cases in 2 of 3
+  repeats of both runs, which the abstention grader counts as a failure to decline.
 - **Do not:** read `no-change-rule-code` as "Claude failed" — on `3.1.1` docx/pptx Opus was safe
   in both runs too. It is dominated by a free tier that verified 100%.
 - **Before any further lane decision:** sample the 42 single-case categories. 71% of categories
@@ -234,7 +235,7 @@ Per Claude tier: safe runs / mean VARR / mean $ per case. `rules` is `rules-only
 | 3.1.1 | pdf | auto | 1 (1) | 2/2 | 0/2 / 0% / $0.0013 | 0/2 / 0% / $0.0199 | 0/2 / 0% / $0.0035 | **insufficient-evidence** | under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2 |
 | 3.1.1 | pptx | auto | 2 (2) | 2/2 | 0/2 / 50% / $0.0013 | 2/2 / 100% / $0.0097 | 2/2 / 100% / $0.0025 | **no-change-rule-code** | rule code verified every eligible case (2) in all 2 run(s), free; anthropic:claude-opus-5, anthropic:claude-sonnet-5 also safe, dominated at $0 |
 | 3.1.1 | xlsx | auto | 3 (3) | 2/2 | 0/2 / 33% / $0.0009 | 0/2 / 44% / $0.0058 | 1/2 / 89% / $0.0024 | **no-change-rule-code** | rule code verified every eligible case (3) in all 2 run(s), free |
-| 3.1.2 | docx | assisted | 2 (0) | 2/2 | 0/2 / 0% / $0.0013 | 2/2 / 0% / $0.0181 | 2/2 / 0% / $0.0054 | **keep-human-only** | all 2 cases must abstain; anthropic:claude-haiku-4-5 acted or violated in at least one of 2 run(s) — shadow says the human lane is load-bearing |
+| 3.1.2 | docx | assisted | 2 (0) | 2/2 | 0/2 / 0% / $0.0013 | 2/2 / 0% / $0.0181 | 2/2 / 0% / $0.0054 | **keep-human-only** | all 2 cases must abstain; anthropic:claude-haiku-4-5 did not decline cleanly (acted, failed to escalate, or violated) in at least one of 2 run(s) — shadow says the human lane is load-bearing |
 | 3.1.2 | html | assisted | 1 (1) | 0/2 | 0/2 / 0% / $0.0016 | 2/2 / 100% / $0.0193 | 2/2 / 100% / $0.0050 | **insufficient-evidence** | under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2 |
 | 3.1.2 | pptx | assisted | 1 (1) | 0/2 | 0/2 / 0% / $0.0015 | 2/2 / 100% / $0.0152 | 1/2 / 67% / $0.0041 | **insufficient-evidence** | under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2 |
 | 3.1.5 | pdf | human | 1 (0) | 2/2 | 2/2 / 0% / $0.0014 | 2/2 / 0% / $0.0151 | 2/2 / 0% / $0.0049 | **insufficient-evidence** | under-sampled: 1 case(s) in the corpus; the ladder itself refuses to route on fewer than 2 |
