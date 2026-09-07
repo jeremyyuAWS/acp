@@ -154,8 +154,15 @@ def test_output_manifest_is_sealed_from_deterministic_effect_receipts(isolated_s
         execution_id=execution["batch_id"], work_item_id=items[0]["work_item_id"],
         effect_type="publish", destination="drive:item-a", content_digest="sha256:0")
     assert replay["effect_id"] == receipt["effect_id"] and replay["reused"] is True
+    with pytest.raises(ValueError, match="unknown side-effect receipt"):
+        isolated_store.seal_stage_output_manifest(
+            execution["batch_id"], [{"work_item_id": items[1]["work_item_id"],
+                                     "effect_ids": [receipt["effect_id"]]}],
+            expected_revision=current["revision"], owner=OWNER)
     manifest = isolated_store.seal_stage_output_manifest(
-        execution["batch_id"], [{"effect_id": receipt["effect_id"], "document": "a.docx"}],
+        execution["batch_id"], [{"work_item_id": items[0]["work_item_id"],
+                                 "effect_ids": [receipt["effect_id"]],
+                                 "document": "a.docx"}],
         expected_revision=current["revision"], owner=OWNER)
     final = isolated_store.get_stage_execution(execution["batch_id"], owner=OWNER)
     assert final["state"] == "succeeded"
@@ -165,9 +172,18 @@ def test_output_manifest_is_sealed_from_deterministic_effect_receipts(isolated_s
 def test_successful_runtime_batch_seals_output_automatically(isolated_store):
     sid = _scan(isolated_store, "runtime-seal")
     execution = _submit(isolated_store, sid)
+    receipt_id = None
+    receipt_input_id = None
     for worker in ("worker-1", "worker-2"):
         job = isolated_store.claim_job(worker, job_types=("remediate_file",))
         assert job is not None
+        item = isolated_store.stage_work_item_for_job(job["id"])
+        if receipt_id is None:
+            receipt_input_id = item["input_id"]
+            receipt_id = isolated_store.record_side_effect_receipt(
+                execution_id=execution["batch_id"], work_item_id=item["work_item_id"],
+                effect_type="publish", destination="drive:item-a", content_digest="sha256:0",
+            )["effect_id"]
         assert isolated_store.complete_job(
             job["id"], worker_id=worker, attempt=int(job["attempts"])) is True
 
@@ -177,6 +193,47 @@ def test_successful_runtime_batch_seals_output_automatically(isolated_store):
     assert manifest["item_count"] == 2
     assert {entry["input_id"] for entry in manifest["entries"]} == {"a.docx", "b.docx"}
     assert {entry["outcome"] for entry in manifest["entries"]} == {"completed"}
+    assert [entry for entry in manifest["entries"] if entry.get("effect_ids")] == [{
+        "work_item_id": isolated_store._work_item_identity(execution["batch_id"], receipt_input_id),
+        "input_id": receipt_input_id, "outcome": "completed", "result_digest": None,
+        "effect_ids": [receipt_id],
+    }]
+
+
+def test_release_lineage_freezes_the_exact_upstream_finding_partition(isolated_store):
+    sid = "release-lineage"
+    workflow_id = f"workflow-{sid}"
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "INSERT INTO scan_runs(id,source,status,owner_email,workflow_id,workflow_revision) "
+            "VALUES(%s,'sharepoint','done',%s,%s,1)", (sid, OWNER, workflow_id))
+        isolated_store._db.execute(cur,
+            "INSERT INTO file_records(scan_id,file,drive_file_id,checksum) "
+            "VALUES(%s,'a.docx','provider-a','content-a')", (sid,))
+        isolated_store._db.execute(cur,
+            "INSERT INTO scan_rule_traces(scan_id,file,rule_id,outcome,finding_count) "
+            "VALUES(%s,'a.docx','1.1.1','FAIL',2)", (sid,))
+    remediate = isolated_store.enqueue_stage_batch(
+        sid, "remediate", "remediate_file", [{"file": "a.docx"}],
+        snapshot_id="assessment-snapshot", request_fingerprint="remediate-lineage")
+    findings = isolated_store.seed_finding_dispositions(
+        sid, remediate["batch_id"], snapshot_id="assessment-snapshot")
+    job = isolated_store.claim_job("remediate-worker", job_types=("remediate_file",))
+    assert isolated_store.complete_job(
+        job["id"], worker_id="remediate-worker", attempt=int(job["attempts"])) is True
+    upstream = isolated_store.current_stage_output_manifest(sid, "remediate")
+    release = isolated_store.enqueue_stage_batch(
+        sid, "release", "publish_file", [{"file": "a.docx"}],
+        snapshot_id=upstream["manifest_id"], input_manifest_id=upstream["manifest_id"],
+        request_fingerprint="release-lineage")
+
+    lineage = isolated_store.release_finding_lineage(release["batch_id"], "a.docx")
+    assert lineage == {
+        "upstream_execution_id": remediate["batch_id"],
+        "snapshot_id": "assessment-snapshot",
+        "findings": [{"finding_id": row["finding_id"], "disposition": None, "revision": 0}
+                     for row in sorted(findings, key=lambda row: row["finding_id"])],
+    }
 
 
 def test_current_stage_output_manifest_exposes_only_successfully_sealed_output(isolated_store):

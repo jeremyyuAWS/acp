@@ -823,6 +823,18 @@ def _publish_file(payload: dict, job: dict) -> None:
         execution_id = (job or {}).get("batch_id")
         if callable(receipt_writer) and execution_id:
             work_item = core.store.stage_work_item_for_job((job or {}).get("id"))
+            lineage_reader = getattr(core.store, "release_finding_lineage", None)
+            finding_lineage = (lineage_reader(execution_id, filename)
+                               if callable(lineage_reader) else None)
+            provider_receipt = {
+                "provider_id": publication.get("id"), "url": publication.get("url"),
+                "created": bool(publication.get("created")),
+            }
+            if finding_lineage is not None:
+                # Freeze the exact Remediation findings this provider revision releases.  This
+                # belongs in the immutable side-effect receipt, not in a later request-time
+                # projection whose current disposition may have changed by the time it is read.
+                provider_receipt["finding_lineage"] = finding_lineage
             receipt_writer(
                 execution_id=execution_id,
                 work_item_id=(work_item or {}).get("work_item_id"),
@@ -830,8 +842,7 @@ def _publish_file(payload: dict, job: dict) -> None:
                 destination=f"graph:{drive_id or 'me'}:{root['folder_id']}:{'/'.join([*folders, released_name])}",
                 content_digest=(publication.get("checksum") or record.get("corrected_sha256")
                                 or f"provider-id:{publication.get('id') or released_name}"),
-                receipt={"provider_id": publication.get("id"), "url": publication.get("url"),
-                         "created": bool(publication.get("created"))})
+                receipt=provider_receipt)
         published_at = core.store.record_publish(
             scan_id, filename, published_url=publication.get("url"))
         core.store.record_release_document(release_id, owner, {
