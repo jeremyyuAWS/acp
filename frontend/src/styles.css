@@ -3338,7 +3338,7 @@ html[data-wcag="on"] .wcag-toggle--on {
 .workflow-stage-stack__summary {
   width: 100%;
   display: grid;
-  grid-template-columns: 20px minmax(150px, auto) 1fr minmax(148px, auto) 16px;
+  grid-template-columns: 20px minmax(150px, 220px) minmax(0, 1fr) 16px;
   align-items: center;
   gap: 8px;
   padding: 8px 14px;
@@ -3349,11 +3349,29 @@ html[data-wcag="on"] .wcag-toggle--on {
   text-align: left;
   font: inherit;
 }
+.workflow-stage-stack__label { min-width: 0; }
+.workflow-stage-stack__meta {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px 14px;
+  overflow: hidden;
+}
 .workflow-stage-stack__summary:hover { background: color-mix(in srgb, var(--card) 94%, var(--plum)); }
 .workflow-stage-stack__summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: -2px; }
 .workflow-stage-stack__check { color: var(--success-fg); font-weight: 750; }
 .needs-attention .workflow-stage-stack__check { color: var(--warn-fg); }
-.workflow-stage-stack__count { justify-self: end; font-size: 12px; font-variant-numeric: tabular-nums; }
+.workflow-stage-stack__count {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.workflow-stage-stack__ownership { flex: 0 0 auto; white-space: nowrap; }
+.workflow-stage-stack__affordance { justify-self: end; }
 .workflow-stage-stack__body { padding: 0 14px 12px 42px; }
 .workflow-stage-stack__body[hidden] { display: none; }
 .stage-live-accounting {
@@ -3381,9 +3399,14 @@ html[data-wcag="on"] .wcag-toggle--on {
   font-variant-numeric: tabular-nums;
 }
 .stage-live-accounting__exception dd { color: var(--error-fg-strong); }
-@media (max-width: 700px) {
+@media (max-width: 900px) {
   .workflow-stage-stack__summary { grid-template-columns: 20px 1fr 16px; }
-  .workflow-stage-stack__count { grid-column: 2; justify-self: start; }
-  .workflow-stage-stack__summary > .live-heartbeat { grid-column: 2; }
+  .workflow-stage-stack__meta {
+    grid-column: 2;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+    overflow: visible;
+  }
+  .workflow-stage-stack__affordance { grid-column: 3; grid-row: 1; }
   .workflow-stage-stack__body { padding-left: 14px; }
 }
