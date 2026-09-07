@@ -714,8 +714,16 @@ thing the PRD does not mention.
   `docx:2.4.4` and `html:2.4.4` with Sonnet 5 as eligible for an assisted pilot; human approval
   remains mandatory. Every other category stays with rule code, human-only, or insufficient
   evidence exactly as the committed evaluator decided. Remaining: run those two pilots against
-  real review traffic, enforce measured production stop gates, and add exact attribution for
-  multi-instance vision decisions.
+  real review traffic and add exact attribution for multi-instance vision decisions.
+
+  **Controlled pilot and stop gates implemented:** owner-only AI Governance can arm the two
+  evidence-approved lanes and no others. DOCX/HTML 2.4.4 opaque-link drafts then use Sonnet 5 but
+  remain approval-only. The backend re-evaluates a pilot-only 30-day evidence stream before every
+  call and automatically stops the stronger-model override on its call/spend ceiling, excessive
+  failures, low reviewer acceptance, excessive reviewer edits, low validation-clear rate, or the
+  first post-write regression. Off/stopped falls back to the established text lane; it never
+  blocks remediation. Remaining: collect and review real pilot traffic, then decide whether either
+  lane has earned broader rollout; multi-instance vision attribution is still separate work.
 
   **Conformance and Release provenance slices implemented:** the immutable certification PDF now carries the
   same exact provider/model/zone rows with measured success/failure and latency, and states that

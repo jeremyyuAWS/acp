@@ -40,7 +40,8 @@ _ANTHROPIC_API_VERSION = "2023-06-01"
 
 
 def claude_text_generate(prompt: str, *, temperature: float = 0.4,
-                         max_tokens: int = 800, timeout: float = 30.0) -> dict | None:
+                         max_tokens: int = 800, timeout: float = 30.0,
+                         model: str | None = None) -> dict | None:
     """Single-turn text completion via the Anthropic Messages API.
 
     Returns {text, prompt_tokens, completion_tokens, cost_usd, model, provider, zone, host}
@@ -48,11 +49,12 @@ def claude_text_generate(prompt: str, *, temperature: float = 0.4,
     if not _ANTHROPIC_KEY:
         return None
     import httpx
+    requested_model = model or CLAUDE_TEXT_MODEL
     try:
         r = httpx.post(
             _ANTHROPIC_MESSAGES_URL,
             json={
-                "model": CLAUDE_TEXT_MODEL,
+                "model": requested_model,
                 "max_tokens": max_tokens,
                 "temperature": temperature,
                 "messages": [{"role": "user", "content": prompt}],
@@ -69,14 +71,14 @@ def claude_text_generate(prompt: str, *, temperature: float = 0.4,
         usage = data.get("usage") or {}
         input_tok = usage.get("input_tokens", 0)
         output_tok = usage.get("output_tokens", 0)
-        # claude-haiku-4-5: $1.00/$5.00 per 1M input/output tokens
-        cost_usd = round(input_tok / 1e6 * 1.00 + output_tok / 1e6 * 5.00, 6)
+        price = _price_for(requested_model)
+        cost_usd = round(input_tok / 1e6 * price[0] + output_tok / 1e6 * price[1], 6) if price else 0.0
         return {
             "text": text,
             "prompt_tokens": input_tok,
             "completion_tokens": output_tok,
             "cost_usd": cost_usd,
-            "model": CLAUDE_TEXT_MODEL,
+            "model": requested_model,
             "provider": "anthropic",
             "zone": "cloud",
             "host": "api.anthropic.com",

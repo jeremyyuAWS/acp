@@ -7089,7 +7089,8 @@ class Store:
                 out[r.get("finding_key")] = int(r.get("n") or 0)
         return out
 
-    def ai_cost_rollup(self, since_days: int | None = None, scan_id: str | None = None) -> dict:
+    def ai_cost_rollup(self, since_days: int | None = None, scan_id: str | None = None,
+                       surface: str | None = None) -> dict:
         """AI usage + cost governance rollup (ADR 0019 Phase 1). Every number is a real
         aggregate of recorded ai_calls rows — calls, success, latency, and the summed
         cost_usd (a genuine $0 for the keyless local-Ollama build: no per-token billing, no
@@ -7108,6 +7109,10 @@ class Store:
             clauses.append("scan_id = %s")
             jclauses.append("c.scan_id = %s")
             params_l.append(scan_id)
+        if surface is not None:
+            clauses.append("surface = %s")
+            jclauses.append("c.surface = %s")
+            params_l.append(surface)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
         # The same window, qualified for the joins below (hitl_events and ai_validation_outcomes
         # both carry a scan_id of their own, so an unqualified clause would be ambiguous).

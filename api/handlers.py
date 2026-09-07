@@ -1167,7 +1167,7 @@ def _remediate_file(payload: dict, job: dict) -> None:
             fixed_html, applied, _deferred = remediate_html(
                 data.decode("utf-8", errors="replace"),
                 ai_enabled=core.store.get_ai_enabled(), diffs=rem_diffs,
-                proposals=inline_proposals, in_scope=_scope_allows)
+                proposals=inline_proposals, in_scope=_scope_allows, filename=filename)
         rem_skipped = _deferred
         fixed_bytes = fixed_html.encode("utf-8")
         mimetype = "text/html"
