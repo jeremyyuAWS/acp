@@ -113,6 +113,39 @@ describe('the panel renders the server snapshot and never assembles its own', ()
     expect(html).not.toContain('<dd>0<span>Finding instances')
   })
 
+  it('renders exact findings, document outcomes, and change evidence as separate units', () => {
+    const exact = { ...SNAP, finding_reconciliation: {
+      assessed: 47, resolved_verified: 20, awaiting_review: 9,
+      approved_pending_verification: 3, unchanged_no_fix: 8, failed: 2,
+      excluded: 4, superseded: 1, accounted: 47, unaccounted: 0,
+      exact: true, violations: [],
+    } }
+    const html = render({ snapshot: exact, connected: true, receivedAt: Date.now() })
+    for (const heading of ['Finding outcomes', 'Document outcomes', 'Change evidence']) {
+      expect(html).toContain(`>${heading}<`)
+    }
+    expect(html).toContain('47 / 47 findings')
+    expect(html).toContain('20 findings')
+    expect(html).toContain('2 findings')
+    expect(html).toContain('21 changes')
+    expect(html).not.toContain('These values do not form a subtraction')
+    expect(html).not.toContain('all findings resolved')
+  })
+
+  it('fails visibly when canonical finding accounting is inconsistent', () => {
+    const broken = { ...SNAP,
+      finding_reconciliation: { ...SNAP.finding_reconciliation, exact: false,
+        accounted: 49, unaccounted: 0,
+        violations: [{ code: 'finding_overcount', assessed: 47, accounted: 49 }] },
+      integrity: { ok: false, affected: ['finding_reconciliation'], violations: [] },
+    }
+    const html = render({ snapshot: broken, connected: true, receivedAt: Date.now() })
+    expect(html).toContain('Accounting temporarily inconsistent.')
+    expect(html).toContain('preserving the last durable finding totals')
+    expect(html).not.toContain('ACP does not yet track an exact disposition')
+    expect(html).not.toContain('Every assessed finding has one current disposition')
+  })
+
   it('announces the headline only — not every counter increment', () => {
     const html = render({ snapshot: SNAP, connected: true, receivedAt: Date.now() })
     const live = html.match(/aria-live="polite"[^>]*>([^<]*)</g) || []

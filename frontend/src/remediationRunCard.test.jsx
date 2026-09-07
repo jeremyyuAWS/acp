@@ -27,6 +27,12 @@ const SNAP = {
   throughput: { documents_per_minute: 1.8, sample_documents: 9,
                 buckets: [0, 1, 0, 0, 0, 1, 1, 1, 2, 2] },
   review: { documents: 2, items: 3 },
+  finding_reconciliation: {
+    assessed: 31, resolved_verified: null, awaiting_review: 7,
+    approved_pending_verification: null, unchanged_no_fix: null, failed: null,
+    excluded: null, superseded: null, accounted: null, unaccounted: null,
+    exact: false, violations: [],
+  },
   phases: [
     { key: 'preparing', label: 'Preparing', status: 'completed', detail: null },
     { key: 'applying', label: 'Applying approved fixes', status: 'active', detail: null },
@@ -220,6 +226,42 @@ describe('the card outlives a tab change', () => {
     const hook = readFileSync(join(here, 'useRemediationRun.js'), 'utf8')
     const effect = hook.slice(hook.indexOf('useEffect'))
     expect(effect.indexOf('setSnapshot(null)')).toBeLessThan(effect.indexOf('if (!runId)'))
+  })
+})
+
+describe('finding reconciliation stays honest in the compact card', () => {
+  it('shows the durable exact account with explicit finding and change units', () => {
+    const exact = { ...SNAP, finding_reconciliation: {
+      assessed: 31, resolved_verified: 18, awaiting_review: 7,
+      approved_pending_verification: 2, unchanged_no_fix: 2, failed: 1,
+      excluded: 1, superseded: 0, accounted: 31, unaccounted: 0,
+      exact: true, violations: [],
+    } }
+    const html = render({ snapshot: exact, receivedAt: Date.now() })
+    expect(html).toContain('aria-label="Finding reconciliation"')
+    expect(html).toContain('Findings: 31 / 31 accounted')
+    expect(html).toContain('7 awaiting human review')
+    expect(html).toContain('Verified changes:')
+    expect(html).toMatch(/Verified changes:[\s\S]*?>21<\/span>[\s\S]*? changes/)
+  })
+
+  it('labels a legacy snapshot as pending without inventing a remainder', () => {
+    const html = render({ snapshot: SNAP, receivedAt: Date.now() })
+    expect(html).toContain('Finding reconciliation pending')
+    expect(html).toContain('31 assessed findings')
+    expect(html).toContain('7 represented by review items')
+    expect(html).not.toContain('findings remaining')
+  })
+
+  it('shows an integrity warning instead of a reconciled claim', () => {
+    const broken = { ...SNAP,
+      finding_reconciliation: { ...SNAP.finding_reconciliation, accounted: 35,
+        violations: [{ code: 'finding_overcount' }] },
+      integrity: { ok: false, affected: ['finding_reconciliation'], violations: [] },
+    }
+    const html = render({ snapshot: broken, receivedAt: Date.now() })
+    expect(html).toContain('Accounting temporarily inconsistent.')
+    expect(html).not.toContain('Findings: 35 / 31 accounted')
   })
 })
 
