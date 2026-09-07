@@ -278,8 +278,54 @@ const dirOf = (p) => {
   return parts.length > 1 ? parts.slice(0, -1).join('/') : ''
 }
 
+// hitl_queue.apply_outcome → { state, criteria, reason, ts } | null. The backend attaches it to an
+// APPROVED, unapplied row from the newest apply.unverified decision for that scan + file whose
+// criteria include this row's SC (api/apply_outcome.py). Anything else → null: the card must not
+// invent a post-write story for a row nothing has been written for.
+export const APPLY_OUTCOME_STATES = new Set(['still_failing', 'could_not_verify'])
+export function applyOutcomeOf(item) {
+  const o = item?.apply_outcome
+  if (!o || !APPLY_OUTCOME_STATES.has(o.outcome)) return null
+  return {
+    state: o.outcome,
+    criteria: Array.isArray(o.criteria) ? o.criteria.filter(Boolean) : [],
+    reason: o.reason || '',
+    ts: o.ts || null,
+  }
+}
+
+// Which queue rows the FileDrawer reviews IN PLACE: the pending ones (a decision is wanted), plus
+// an approved row whose write was attempted and refused credit. The reviewer approved something,
+// nothing visibly changed, and the drawer is the only place that can tell them why — the inbox
+// (ReviewCenter) stays pending-only because it is a queue of decisions still to make.
+export const reviewableInPlace = (row) =>
+  !!row && (row.status === 'pending'
+    || (row.status === 'approved' && !row.applied && !!applyOutcomeOf(row)))
+
+// The line shown under the ladder. The headline names the fact; the body names the consequence —
+// the corrected copy was discarded and nothing was credited — without promising that a retry
+// behaves differently. For a detector that reads what the write cannot change (pptx 1.4.5: OCR
+// over the raster, descr on the shape) it never will.
+export function applyOutcomeCopy(card) {
+  const o = card?.applyOutcome
+  if (!o) return null
+  const scs = o.criteria.length ? o.criteria.join(', ') : (card.sc || 'the criterion')
+  if (o.state === 'could_not_verify') {
+    return {
+      headline: 'Written, but the re-scan could not verify it.',
+      body: `The corrected copy was not kept and nothing was credited, so the document is unchanged and ${scs} still fails. `
+          + 'Your approved value is preserved for a retry.' + (o.reason ? ` Reason: ${o.reason}.` : ''),
+    }
+  }
+  return {
+    headline: `Written, but ${scs} still fails on re-scan.`,
+    body: 'The corrected copy was not kept and nothing was credited, so the document is unchanged. '
+        + 'Your approved value is preserved, but re-approving repeats the same write — this criterion needs a different fix.',
+  }
+}
+
 // item: a HITL queue row { id, scan_id, file, rule_id, rule_name, finding_count, approved_value,
-//                          proposals, validated }
+//                          proposals, validated, apply_outcome? }
 // diffs: this file's remediation_diff rows (getFileRemediationDiffs) — filtered to this SC here.
 export function buildEvidenceCard(item, diffs = []) {
   const sc = scOf(item?.rule_id)
@@ -354,6 +400,9 @@ export function buildEvidenceCard(item, diffs = []) {
     locator: firstLocator(item),
     rationale: firstRationale(item),
     proposalSource: firstSource(item),
+    // Post-write outcome — present only on an APPROVED row whose value was written to a working
+    // copy and then refused credit (hitl_queue.apply_outcome). null for a pending row.
+    applyOutcome: applyOutcomeOf(item),
   }
 }
 
@@ -362,11 +411,25 @@ export function buildEvidenceCard(item, diffs = []) {
 // that hasn't happened: for a value-fix the write + re-scan run ON approval, so those stages read
 // 'todo' until the proposal was already applied and re-scan-validated (`proposal.validated`) — the
 // card must never show a green "written / re-scanned" while the document still fails.
-// Returns [{ label, state: 'done' | 'current' | 'todo' }] in pipeline order.
+// Returns [{ label, state: 'done' | 'current' | 'todo' | 'failed' }] in pipeline order.
 export function verificationLadder(card) {
   const c = card || {}
   const hasProposal = !!(c.proposal && c.proposal.list && c.proposal.list.length)
   const validated = !!(c.proposal && c.proposal.validated)
+  // Approved, written, refused. The write ran on a WORKING COPY, the re-scan did not clear the
+  // criterion (or could not run), and that copy was discarded — so the label says "working copy",
+  // never "document": the document the reviewer has is unchanged. The pipeline stopped at re-scan.
+  // Checked first: an outcome exists only when a write happened, which only a value-fix does.
+  if (c.applyOutcome) {
+    return [
+      { label: hasProposal ? 'AI draft generated' : 'Detected', state: 'done' },
+      { label: 'Human review', state: 'done' },
+      { label: 'Written to a working copy', state: 'done' },
+      { label: c.applyOutcome.state === 'could_not_verify' ? 'Re-scan could not verify' : 'Re-scan verified',
+        state: 'failed' },
+      { label: 'Certified', state: 'todo' },
+    ]
+  }
   // Judgement finding (contrast accepted, link text deemed adequate): nothing is written and nothing
   // is re-scanned — the human sign-off IS the resolution, so the pipeline is short and honest.
   if (c.certifiesOnApprove) {

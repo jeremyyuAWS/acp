@@ -48,6 +48,8 @@ class Metrics:
             return {
                 "publish_success_total": successes,
                 "publish_drop_total": self._counts["drop"],
+                "warmup_success_total": self._counts["warmup_success"],
+                "warmup_failure_total": self._counts["warmup_failure"],
                 "publish_latency_ms_total": self._latency_ms_total,
                 "publish_latency_ms_average": (
                     self._latency_ms_total / successes if successes else 0.0
@@ -67,6 +69,10 @@ class RedisStreamTransport:
         )
         self.retention = retention
 
+    def warmup(self) -> bool:
+        """Establish the persistent Redis connection before the first observed event."""
+        return bool(self.redis.ping())
+
     def write(self, event: RealtimeEvent) -> str:
         return self.redis.xadd(
             stream_key(event.owner_scope),
@@ -74,6 +80,23 @@ class RedisStreamTransport:
             maxlen=self.retention,
             approximate=True,
         )
+
+    def write_many(self, events: list[RealtimeEvent]) -> list:
+        """Write one ordered batch with a single Redis network round trip."""
+        if not hasattr(self.redis, "pipeline"):
+            # Lightweight test/in-process transports need not implement redis-py's pipeline API.
+            return [self.write(event) for event in events]
+        pipe = self.redis.pipeline(transaction=False)
+        for event in events:
+            pipe.xadd(
+                stream_key(event.owner_scope),
+                {"event": event.to_json(), "event_id": event.event_id},
+                maxlen=self.retention,
+                approximate=True,
+            )
+        # Keep individual Redis command failures in the result so the publisher can report
+        # exactly which events were dropped instead of turning a partial batch into all-or-none.
+        return pipe.execute(raise_on_error=False)
 
 
 @dataclass(frozen=True)
@@ -83,9 +106,11 @@ class Pending:
 
 
 class ShadowPublisher:
-    def __init__(self, transport, *, max_progress: int = 256, start_worker: bool = True):
+    def __init__(self, transport, *, max_progress: int = 256, max_batch: int = 128,
+                 start_worker: bool = True):
         self.transport = transport
         self.max_progress = max_progress
+        self.max_batch = max(1, max_batch)
         self._lifecycle = deque()
         self._progress = OrderedDict()
         self._cv = threading.Condition()
@@ -136,6 +161,19 @@ class ShadowPublisher:
             _key, item = self._progress.popitem(last=False)
             return item
 
+    def _take_batch(self) -> list[Pending]:
+        """Take a bounded snapshot, preserving lifecycle priority and progress order."""
+        with self._cv:
+            while not self._lifecycle and not self._progress:
+                self._cv.wait()
+            batch = []
+            while self._lifecycle and len(batch) < self.max_batch:
+                batch.append(self._lifecycle.popleft())
+            while not self._lifecycle and self._progress and len(batch) < self.max_batch:
+                _key, item = self._progress.popitem(last=False)
+                batch.append(item)
+            return batch
+
     def publish_one(self) -> None:
         item = self._take()
         started = time.monotonic()
@@ -146,9 +184,46 @@ class ShadowPublisher:
             METRICS.record("drop")
             swallowed("realtime_shadow.ShadowPublisher.publish_one: Redis publish failed")
 
+    def publish_batch(self) -> None:
+        items = self._take_batch()
+        started = time.monotonic()
+        try:
+            events = [item.event for item in items]
+            batch_writer = getattr(self.transport, "write_many", None)
+            # The publisher contract predates Redis batching and intentionally supports small
+            # observing/in-process transports. Keep that boundary compatible; Redis still takes
+            # the one-round-trip write_many path while simple transports remain truthful.
+            results = (batch_writer(events) if callable(batch_writer)
+                       else [self.transport.write(event) for event in events])
+        except Exception:
+            for _item in items:
+                METRICS.record("drop")
+            swallowed("realtime_shadow.ShadowPublisher.publish_batch: Redis batch failed")
+            return
+        latency_ms = (time.monotonic() - started) * 1000.0
+        for result in results:
+            if isinstance(result, Exception):
+                METRICS.record("drop")
+                swallowed("realtime_shadow.ShadowPublisher.publish_batch: Redis publish failed")
+            else:
+                METRICS.record("success", latency_ms)
+
+    def warmup(self) -> None:
+        """Warm only the shadow transport; failure must never affect durable worker work."""
+        warmup = getattr(self.transport, "warmup", None)
+        if not callable(warmup):
+            return
+        try:
+            warmup()
+            METRICS.record("warmup_success")
+        except Exception:
+            METRICS.record("warmup_failure")
+            swallowed("realtime_shadow.ShadowPublisher.warmup: Redis warm-up failed")
+
     def _run(self) -> None:
+        self.warmup()
         while True:
-            self.publish_one()
+            self.publish_batch()
 
 
 _publisher = None

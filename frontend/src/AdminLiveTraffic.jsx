@@ -72,11 +72,13 @@ export const JOB_STATE_FILTERS = [
 
 /** One stable vocabulary for card labels, filtering and assistive text. */
 export function runOperationalState(run = {}) {
+  // A durable terminal outcome outranks the request that led to it. Cancellation flags remain
+  // useful audit data after acknowledgement, but must not leave a stopped run looking active.
+  if (run.status === 'cancelled') return 'cancelled'
   if (run.cancel_requested === true) return 'stopping'
   if (run.paused === true) return 'paused'
   if (run.stalled === true) return 'stalled'
   if (run.status === 'failed' || Number(run.failed || 0) > 0) return 'attention'
-  if (run.status === 'cancelled') return 'cancelled'
   if (run.status === 'recent') return 'recent'
   return 'active'
 }

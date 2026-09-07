@@ -16,9 +16,13 @@ import { listAcrReports, createAcrReport, getAcrReport, listAcrCriteria, getAcrV
 // api/accessibility_status.py already states the house rule this follows: "counts only, never a
 // percentage of an invented denominator". So the header is "12 of 55 decided", never "22%".
 //
-// Manual testing and the export-history tabs the PRD also names are Phase 3 and Phase 5; they are
-// deliberately absent rather than stubbed, because an empty tab reads as a broken feature and a
-// missing one reads as work not yet done.
+// The PRD also names manual testing and export history. Neither is a tab here, and neither is
+// missing: manual test plans run per criterion inside AcrCriterionDetail (AcrManualTestPlan,
+// Phase 3), the draft exports are the 'export' tab below, and publication with its revision
+// history and downloads is AcrPublish under 'publication' (Phases 4-5). This comment said for
+// weeks that both were "deliberately absent" as unbuilt phases; the rule it was applying — an
+// empty tab reads as a broken feature — still holds, which is why manual testing sits with the
+// criterion it belongs to rather than in a tab of its own.
 
 const TABS = [['overview', 'Overview'], ['criteria', 'Criteria'], ['gaps', 'Evidence gaps'],
               ['validation', 'Validation'], ['publication', 'Publication'],

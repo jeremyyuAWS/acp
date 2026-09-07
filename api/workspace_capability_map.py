@@ -238,8 +238,11 @@ _map_many([("GET", "/scans/{sid}/report.pdf")], {"release.view", "reports.export
 
 # ── Monitor ───────────────────────────────────────────────────────────────────
 _map_many([("GET", "/monitor/estate"), ("GET", "/schedule"),
+           ("GET", "/schedule/history"), ("GET", "/schedule/notifications"),
            ("GET", "/analytics/compliance-trend")], {"monitor.view"})
-_map_many([("PUT", "/schedule")], {"monitor.view", "settings.view"})
+_map_many([("PUT", "/schedule"),
+           ("POST", "/schedule/notifications/{notification_id}/read")],
+          {"monitor.view", "settings.view"})
 
 # ── Live Operations ───────────────────────────────────────────────────────────
 _map_many([("GET", "/admin/activity"), ("GET", "/jobs"), ("GET", "/jobs/{job_id}"),
@@ -284,6 +287,9 @@ _map_many([("PUT", "/control/capacity-schedule"),
 # The rendered policy is a READ — what ACP would apply, inspectable before anyone applies it,
 # which is the whole argument for showing it. Same grant as the schedule it derives from.
 _map_many([("GET", "/control/capacity-schedule/policy")], {"operations.view", "settings.view"})
+_map_many([("GET", "/admin/schedule-guardrails"),
+           ("PUT", "/admin/schedule-guardrails")],
+          {"settings.view", "workers.manage"})
 
 # ── Scan Analytics ────────────────────────────────────────────────────────────
 _map_many([("GET", "/admin/analytics/overview"), ("GET", "/ai/costs")], {"analytics.view"})

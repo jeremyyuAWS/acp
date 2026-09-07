@@ -384,6 +384,35 @@ _SCHEMA = [
     "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS metric_delayed_catch_up INT NOT NULL DEFAULT 0",
     "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS metric_skipped INT NOT NULL DEFAULT 0",
     "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS metric_failed INT NOT NULL DEFAULT 0",
+    "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS source_scope TEXT NOT NULL DEFAULT '{}'",
+    "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS notification_policy TEXT NOT NULL DEFAULT 'failures'",
+    "ALTER TABLE user_scan_schedules ADD COLUMN IF NOT EXISTS queue_policy TEXT NOT NULL DEFAULT '{}'",
+    """CREATE TABLE IF NOT EXISTS schedule_occurrences (
+      owner_email TEXT NOT NULL, occurrence_key TEXT NOT NULL, planned_at TEXT NOT NULL,
+      actual_started_at TEXT, completed_at TEXT, delay_reason TEXT, result TEXT,
+      duration_ms INT, changed INT, error TEXT,
+      run_after TEXT, deferral_count INT NOT NULL DEFAULT 0,
+      PRIMARY KEY(owner_email, occurrence_key)
+    )""",
+    "ALTER TABLE schedule_occurrences ADD COLUMN IF NOT EXISTS run_after TEXT",
+    "ALTER TABLE schedule_occurrences ADD COLUMN IF NOT EXISTS deferral_count INT NOT NULL DEFAULT 0",
+    """CREATE TABLE IF NOT EXISTS schedule_notifications (
+      id TEXT PRIMARY KEY, owner_email TEXT NOT NULL, occurrence_key TEXT,
+      kind TEXT NOT NULL, title TEXT NOT NULL, message TEXT NOT NULL,
+      created_at TEXT NOT NULL, read_at TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_schedule_notifications_owner ON schedule_notifications(owner_email,created_at)",
+    """CREATE TABLE IF NOT EXISTS schedule_guardrails (
+      singleton INT PRIMARY KEY CHECK(singleton=1), allowed_sources TEXT NOT NULL,
+      min_frequency_minutes INT NOT NULL, max_concurrent_per_owner INT NOT NULL,
+      catch_up_ceiling INT NOT NULL, blackout_timezone TEXT NOT NULL,
+      blackout_start TEXT, blackout_end TEXT, updated_at TEXT NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS schedule_prewarm_requests (
+      owner_email TEXT NOT NULL, occurrence_key TEXT NOT NULL, planned_at TEXT NOT NULL,
+      requested_at TEXT NOT NULL, source TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+      PRIMARY KEY(owner_email, occurrence_key)
+    )""",
     # PRD Phase 3 (incremental connector sync). One row per source: the connector-native
     # cursor (Drive's changes.list page token today; a Graph delta link would be a future
     # row) that lets the scheduled sweep ask "what changed since last time" instead of
@@ -667,8 +696,18 @@ _SCHEMA = [
     """CREATE TABLE IF NOT EXISTS side_effect_receipts (
       effect_id TEXT PRIMARY KEY, execution_id TEXT NOT NULL, work_item_id TEXT,
       effect_type TEXT NOT NULL, destination TEXT NOT NULL, content_digest TEXT NOT NULL,
-      receipt TEXT, created_at TEXT NOT NULL
+      receipt TEXT, created_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'completed',
+      reservation_owner TEXT, reservation_token TEXT, lease_expires_at TEXT,
+      completed_at TEXT, failed_at TEXT, last_error TEXT
     )""",
+    "ALTER TABLE side_effect_receipts ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'completed'",
+    "ALTER TABLE side_effect_receipts ADD COLUMN IF NOT EXISTS reservation_owner TEXT",
+    "ALTER TABLE side_effect_receipts ADD COLUMN IF NOT EXISTS reservation_token TEXT",
+    "ALTER TABLE side_effect_receipts ADD COLUMN IF NOT EXISTS lease_expires_at TEXT",
+    "ALTER TABLE side_effect_receipts ADD COLUMN IF NOT EXISTS completed_at TEXT",
+    "ALTER TABLE side_effect_receipts ADD COLUMN IF NOT EXISTS failed_at TEXT",
+    "ALTER TABLE side_effect_receipts ADD COLUMN IF NOT EXISTS last_error TEXT",
+    "CREATE INDEX IF NOT EXISTS idx_side_effect_reservation ON side_effect_receipts(status,lease_expires_at)",
     # Sensitive-data (PII) findings per document (ADR 0006). A detection dimension
     # orthogonal to WCAG. samples holds JSON array of MASKED strings only — never
     # raw PII (the masking is enforced in api/pii.py).
@@ -780,6 +819,12 @@ _SCHEMA = [
       id TEXT PRIMARY KEY, model_call_id TEXT, scan_id TEXT, file TEXT, rule_id TEXT,
       item_id TEXT, outcome TEXT, detail TEXT, created_at TEXT
     )""",
+    # Which criteria the post-write re-scan found NEWLY failing: absent from the residual of the
+    # bytes BEFORE this write, present after it. A JSON list — empty when both re-scans ran and
+    # none appeared; NULL when there was no trustworthy baseline to compare against (a row written
+    # before this column, or a baseline re-scan that could not run), which is "unknown" and must
+    # never be read as "none". Additive; placed AFTER the CREATE above.
+    "ALTER TABLE ai_validation_outcomes ADD COLUMN IF NOT EXISTS regressions TEXT",
     # Configurable file disposition (ADR 0003, Phase 3). PREVIEW ONLY as of this
     # migration -- api/disposition.py's matches() tells you which documents a policy
     # would select; nothing executes a real move/rename/archive/delete yet. That
@@ -2319,8 +2364,14 @@ class _PgAdapter:
     # skipped and failed scheduled runs. Defaults preserve existing schedule rows and older
     # replicas ignore the additive columns during a rolling deploy.
     # v37 adds immutable post-write validation outcomes linked to exact accepted AI calls.
-    _SCHEMA_VERSION = 37
-    _SCHEMA_CHECKSUM_AT_VERSION = "e05e63425b0a87897a4dd4c044d7191b"
+    # v38 adds `regressions` to ai_validation_outcomes: the criteria a post-write re-scan
+    # found newly failing, so a draft's validation row can say what its write cost.
+    # v39 adds owner-scoped schedule operation policy, occurrence history and notifications,
+    # plus one deployment-wide set of administrator guardrails. All schedule columns are
+    # additive and carry safe defaults for rolling replicas.
+    # v40 adds fenced pre-write reservations and terminal evidence to provider-effect receipts.
+    _SCHEMA_VERSION = 40
+    _SCHEMA_CHECKSUM_AT_VERSION = "e16e8f397bd3079f3af52fea4f4bfe09"
     # Namespaced so it cannot collide with an advisory lock taken anywhere else. Session-scoped
     # (pg_advisory_lock, not _xact) because the migration spans several transactions.
     _MIGRATION_ADVISORY_KEY = 0x4143500001          # 'ACP' + slot 1
@@ -4583,7 +4634,11 @@ class Store:
                          # is a record about a run rather than the live configuration.
                          # archive_autofire_policy is deliberately NOT here: it is the rule, and
                          # rules survive a reset exactly as disposition_policy does.
-                         "archive_execution", "archive_policy_snapshot"]
+                         "archive_execution", "archive_policy_snapshot",
+                         # Scheduled occurrence/notification/prewarm rows are records of customer
+                         # work. The live schedule and administrator guardrails are configuration.
+                         "schedule_occurrences", "schedule_notifications",
+                         "schedule_prewarm_requests"]
 
     def reset_analytics(self) -> list[str]:
         """Clear all scan results / activity so the Grafana + in-app charts start
@@ -6476,7 +6531,7 @@ class Store:
             self._db.execute(cur,
                 "SELECT owner_email,enabled,timezone,local_time,days,source,updated_at,"
                 "last_enqueued_occurrence,metric_admitted,metric_delayed_catch_up,"
-                "metric_skipped,metric_failed "
+                "metric_skipped,metric_failed,source_scope,notification_policy,queue_policy "
                 "FROM user_scan_schedules WHERE owner_email=%s", (normalized,))
             rows = self._db.fetchall(cur)
         if not rows:
@@ -6485,10 +6540,16 @@ class Store:
                     "source": "drive", "updated_at": None,
                     "last_enqueued_occurrence": None,
                     "metrics": {"scheduled": 0, "delayed": 0,
-                                "skipped": 0, "failed": 0}}
+                                "skipped": 0, "failed": 0},
+                    "source_scope": {"include_ids": [], "exclude_ids": []},
+                    "notification_policy": "failures",
+                    "queue_policy": {"defer_when_interactive": True, "max_queue_depth": 100,
+                                     "prewarm": True, "prewarm_minutes": 10}}
         row = dict(rows[0])
         row["enabled"] = bool(row["enabled"])
         row["days"] = [int(day) for day in json.loads(row["days"])]
+        row["source_scope"] = json.loads(row.get("source_scope") or "{}")
+        row["queue_policy"] = json.loads(row.get("queue_policy") or "{}")
         row["metrics"] = {
             "scheduled": int(row.pop("metric_admitted") or 0),
             "delayed": int(row.pop("metric_delayed_catch_up") or 0),
@@ -6502,7 +6563,7 @@ class Store:
             self._db.execute(cur,
                 "SELECT owner_email,enabled,timezone,local_time,days,source,updated_at,"
                 "last_enqueued_occurrence,metric_admitted,metric_delayed_catch_up,"
-                "metric_skipped,metric_failed "
+                "metric_skipped,metric_failed,source_scope,notification_policy,queue_policy "
                 "FROM user_scan_schedules WHERE enabled=1 ORDER BY owner_email")
             rows = self._db.fetchall(cur)
         schedules = []
@@ -6511,6 +6572,8 @@ class Store:
                 row = dict(raw)
                 row["enabled"] = True
                 row["days"] = [int(day) for day in json.loads(row["days"])]
+                row["source_scope"] = json.loads(row.get("source_scope") or "{}")
+                row["queue_policy"] = json.loads(row.get("queue_policy") or "{}")
                 row["metrics"] = {
                     "scheduled": int(row.pop("metric_admitted") or 0),
                     "delayed": int(row.pop("metric_delayed_catch_up") or 0),
@@ -6524,7 +6587,10 @@ class Store:
         return schedules
 
     def save_user_scan_schedule(self, owner: str, enabled: bool, timezone: str,
-                                local_time: str, days, source: str = "drive") -> dict:
+                                local_time: str, days, source: str = "drive",
+                                source_scope: dict | None = None,
+                                notification_policy: str = "failures",
+                                queue_policy: dict | None = None) -> dict:
         import datetime as _dt
         import scan_schedule as _scan_schedule
         normalized = str(owner or "demo").strip().lower() or "demo"
@@ -6532,18 +6598,299 @@ class Store:
         _scan_schedule.zone(timezone)
         parsed_time = _scan_schedule.local_time(local_time).strftime("%H:%M")
         parsed_days = list(_scan_schedule.normalize_days(days))
+        normalized_source = str(source or "drive").strip().lower()
+        scope = self._normalize_schedule_scope(source_scope)
+        if notification_policy not in {"off", "failures", "changes_and_failures", "all"}:
+            raise ValueError("notification_policy must be off, failures, changes_and_failures, or all")
+        queue = self._normalize_queue_policy(queue_policy)
+        guardrails = self.get_schedule_guardrails()
+        if normalized_source not in guardrails["allowed_sources"]:
+            raise ValueError(f"source {normalized_source!r} is not allowed by schedule guardrails")
         now = _dt.datetime.now(_dt.timezone.utc).isoformat()
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "INSERT INTO user_scan_schedules(owner_email,enabled,timezone,local_time,days,"
-                "source,updated_at) VALUES(%s,%s,%s,%s,%s,%s,%s) "
+                "source,updated_at,source_scope,notification_policy,queue_policy) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                 "ON CONFLICT(owner_email) DO UPDATE SET enabled=EXCLUDED.enabled,"
                 "timezone=EXCLUDED.timezone,local_time=EXCLUDED.local_time,days=EXCLUDED.days,"
-                "source=EXCLUDED.source,updated_at=EXCLUDED.updated_at",
+                "source=EXCLUDED.source,updated_at=EXCLUDED.updated_at,"
+                "source_scope=EXCLUDED.source_scope,notification_policy=EXCLUDED.notification_policy,"
+                "queue_policy=EXCLUDED.queue_policy",
                 (normalized, int(bool(enabled)), str(timezone), parsed_time,
                  json.dumps(parsed_days, separators=(",", ":")),
-                 str(source or "drive").lower(), now))
+                 normalized_source, now, json.dumps(scope, separators=(",", ":")),
+                 notification_policy, json.dumps(queue, separators=(",", ":"))))
         return self.get_user_scan_schedule(normalized)
+
+    @staticmethod
+    def _normalize_schedule_scope(scope: dict | None) -> dict:
+        raw = scope or {}
+        out = {}
+        for key in ("include_ids", "exclude_ids"):
+            values = raw.get(key, [])
+            if not isinstance(values, list) or any(not isinstance(v, str) for v in values):
+                raise ValueError(f"source_scope.{key} must be a list of identifiers")
+            out[key] = sorted({v.strip() for v in values if v.strip()})
+        if set(out["include_ids"]) & set(out["exclude_ids"]):
+            raise ValueError("a source identifier cannot be both included and excluded")
+        return out
+
+    @staticmethod
+    def _normalize_queue_policy(policy: dict | None) -> dict:
+        raw = policy or {}
+        depth = int(raw.get("max_queue_depth", 100))
+        prewarm = bool(raw.get("prewarm", True))
+        prewarm_minutes = int(raw.get("prewarm_minutes", 10)) if prewarm else 0
+        if depth < 0:
+            raise ValueError("queue_policy.max_queue_depth must be non-negative")
+        if not 0 <= prewarm_minutes <= 60:
+            raise ValueError("queue_policy.prewarm_minutes must be between 0 and 60")
+        return {"defer_when_interactive": bool(raw.get("defer_when_interactive", True)),
+                "max_queue_depth": depth, "prewarm": prewarm,
+                "prewarm_minutes": prewarm_minutes}
+
+    def get_schedule_guardrails(self) -> dict:
+        defaults = {"allowed_sources": ["drive", "sharepoint"], "min_frequency_minutes": 60,
+                    "max_concurrent_per_owner": 1, "catch_up_ceiling": 1,
+                    "blackout_timezone": "UTC", "blackout_start": None, "blackout_end": None,
+                    "updated_at": None}
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT * FROM schedule_guardrails WHERE singleton=1")
+            row = self._db.fetchone(cur)
+        if not row:
+            return defaults
+        answer = dict(row)
+        answer.pop("singleton", None)
+        answer["allowed_sources"] = json.loads(answer["allowed_sources"])
+        return answer
+
+    def save_schedule_guardrails(self, *, allowed_sources: list[str], min_frequency_minutes: int,
+                                 max_concurrent_per_owner: int, catch_up_ceiling: int,
+                                 blackout_timezone: str = "UTC", blackout_start: str | None = None,
+                                 blackout_end: str | None = None) -> dict:
+        import datetime as _dt
+        import scan_schedule as _scan_schedule
+        sources = sorted({str(v).strip().lower() for v in allowed_sources if str(v).strip()})
+        if not sources:
+            raise ValueError("allowed_sources must not be empty")
+        if min_frequency_minutes < 1 or max_concurrent_per_owner < 1 or catch_up_ceiling < 0:
+            raise ValueError("frequency/concurrency must be positive and catch_up_ceiling non-negative")
+        _scan_schedule.zone(blackout_timezone)
+        if (blackout_start is None) != (blackout_end is None):
+            raise ValueError("blackout_start and blackout_end must be set together")
+        if blackout_start is not None:
+            blackout_start = _scan_schedule.local_time(blackout_start).strftime("%H:%M")
+            blackout_end = _scan_schedule.local_time(blackout_end).strftime("%H:%M")
+        now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO schedule_guardrails(singleton,allowed_sources,min_frequency_minutes,"
+                "max_concurrent_per_owner,catch_up_ceiling,blackout_timezone,blackout_start,"
+                "blackout_end,updated_at) VALUES(1,%s,%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT(singleton) DO UPDATE SET allowed_sources=EXCLUDED.allowed_sources,"
+                "min_frequency_minutes=EXCLUDED.min_frequency_minutes,"
+                "max_concurrent_per_owner=EXCLUDED.max_concurrent_per_owner,"
+                "catch_up_ceiling=EXCLUDED.catch_up_ceiling,blackout_timezone=EXCLUDED.blackout_timezone,"
+                "blackout_start=EXCLUDED.blackout_start,blackout_end=EXCLUDED.blackout_end,"
+                "updated_at=EXCLUDED.updated_at",
+                (json.dumps(sources), min_frequency_minutes, max_concurrent_per_owner,
+                 catch_up_ceiling, blackout_timezone, blackout_start, blackout_end, now))
+        return self.get_schedule_guardrails()
+
+    def schedule_queue_snapshot(self, owner: str) -> dict:
+        normalized = str(owner).strip().lower()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE status IN ('queued','running')", ())
+            total = int(self._db.fetchone(cur)["n"])
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE status IN ('queued','running') "
+                "AND scheduled_owner=%s", (normalized,))
+            owner_active = int(self._db.fetchone(cur)["n"])
+            self._db.execute(cur,
+                "SELECT COUNT(*) AS n FROM jobs WHERE status IN ('queued','running') "
+                "AND type<>'scheduled_sweep'", ())
+            interactive = int(self._db.fetchone(cur)["n"])
+        return {"queue_depth": total, "owner_active": owner_active,
+                "interactive_active": interactive}
+
+    def schedule_admission(self, owner: str, occurrence_key: str, planned_at: str, now: str) -> dict:
+        """Atomically observed admission facts plus a deterministic defer decision.
+
+        This method never enqueues work. The scheduler owns that transition and may use
+        ``run_after`` to defer the same durable occurrence rather than minting a duplicate.
+        """
+        import datetime as _dt
+        from zoneinfo import ZoneInfo
+        cfg = self.get_user_scan_schedule(owner)
+        limits = self.get_schedule_guardrails()
+        snapshot = self.schedule_queue_snapshot(owner)
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT deferral_count FROM schedule_occurrences "
+                "WHERE owner_email=%s AND occurrence_key=%s",
+                (str(owner).strip().lower(), occurrence_key))
+            row = self._db.fetchone(cur)
+        deferrals = int((row or {}).get("deferral_count") or 0)
+        reason = None
+        # The snapshot includes the scheduled job currently asking for admission. Reject only
+        # when active work EXCEEDS the allowed count; >= would make the default limit of one
+        # reject itself forever at handler start.
+        if snapshot["owner_active"] > int(limits["max_concurrent_per_owner"]):
+            reason = "owner_concurrency_limit"
+        elif snapshot["queue_depth"] > int(cfg["queue_policy"].get("max_queue_depth", 100)):
+            reason = "queue_depth_limit"
+        elif cfg["queue_policy"].get("defer_when_interactive", True) and snapshot["interactive_active"]:
+            reason = "interactive_work_active"
+        start, end = limits.get("blackout_start"), limits.get("blackout_end")
+        if start and end:
+            instant = _dt.datetime.fromisoformat(str(now).replace("Z", "+00:00"))
+            local_hm = instant.astimezone(ZoneInfo(limits["blackout_timezone"])).strftime("%H:%M")
+            in_blackout = (start <= local_hm < end if start < end
+                           else local_hm >= start or local_hm < end)
+            if in_blackout:
+                reason = "blackout_window"
+        terminal = bool(reason and deferrals >= int(limits["catch_up_ceiling"]))
+        run_after = None
+        if reason and not terminal:
+            instant = _dt.datetime.fromisoformat(str(now).replace("Z", "+00:00"))
+            run_after = (instant + _dt.timedelta(minutes=5)).isoformat()
+        return {"admit": reason is None, "reason": reason, "run_after": run_after,
+                "deferral_count": deferrals, "terminal": terminal, **snapshot}
+
+    def begin_schedule_occurrence(self, owner: str, occurrence_key: str, planned_at: str,
+                                  actual_started_at: str, delay_reason: str | None = None) -> bool:
+        normalized = str(owner).strip().lower()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO schedule_occurrences(owner_email,occurrence_key,planned_at,"
+                "actual_started_at,delay_reason,result) VALUES(%s,%s,%s,%s,%s,'running') "
+                "ON CONFLICT(owner_email,occurrence_key) DO UPDATE SET "
+                "actual_started_at=EXCLUDED.actual_started_at,delay_reason=EXCLUDED.delay_reason,"
+                "result='running' WHERE schedule_occurrences.result='deferred'",
+                (normalized, occurrence_key, planned_at, actual_started_at, delay_reason))
+            return cur.rowcount == 1
+
+    def defer_schedule_occurrence(self, owner: str, occurrence_key: str, run_after: str,
+                                  reason: str, planned_at: str | None = None) -> bool:
+        normalized = str(owner).strip().lower()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO schedule_occurrences(owner_email,occurrence_key,planned_at,delay_reason,"
+                "result,run_after,deferral_count) VALUES(%s,%s,%s,%s,'deferred',%s,1) "
+                "ON CONFLICT(owner_email,occurrence_key) DO UPDATE SET delay_reason=EXCLUDED.delay_reason,"
+                "result='deferred',run_after=EXCLUDED.run_after,"
+                "deferral_count=schedule_occurrences.deferral_count+1",
+                (normalized, occurrence_key, planned_at or run_after, reason, run_after))
+            return cur.rowcount == 1
+
+    def defer_scheduled_sweep(self, owner: str, occurrence_key: str, run_after: str,
+                              reason: str, planned_at: str | None = None) -> bool:
+        """Scheduler-facing name; retains one durable occurrence across deferrals."""
+        return self.defer_schedule_occurrence(owner, occurrence_key, run_after, reason, planned_at)
+
+    def complete_schedule_occurrence(self, owner: str, occurrence_key: str, *, result: str,
+                                     completed_at: str, changed: bool | None = None,
+                                     error: str | None = None) -> dict | None:
+        normalized = str(owner).strip().lower()
+        if result not in {"succeeded", "failed", "skipped"}:
+            raise ValueError("invalid schedule occurrence result")
+        duration_ms = None
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT actual_started_at FROM schedule_occurrences "
+                "WHERE owner_email=%s AND occurrence_key=%s", (normalized, occurrence_key))
+            existing = self._db.fetchone(cur)
+            if existing and existing.get("actual_started_at"):
+                import datetime as _dt
+                try:
+                    start = _dt.datetime.fromisoformat(str(existing["actual_started_at"]).replace("Z", "+00:00"))
+                    end = _dt.datetime.fromisoformat(str(completed_at).replace("Z", "+00:00"))
+                    duration_ms = max(0, int((end - start).total_seconds() * 1000))
+                except (TypeError, ValueError):
+                    pass
+            self._db.execute(cur,
+                "UPDATE schedule_occurrences SET completed_at=%s,result=%s,changed=%s,error=%s,"
+                "duration_ms=%s "
+                "WHERE owner_email=%s AND occurrence_key=%s",
+                (completed_at, result, None if changed is None else int(changed),
+                 (error or None) and str(error)[:400], duration_ms, normalized, occurrence_key))
+        rows = self.list_schedule_occurrences(normalized, limit=200)
+        return next((row for row in rows if row["occurrence_key"] == occurrence_key), None)
+
+    def list_schedule_occurrences(self, owner: str, limit: int = 20) -> list[dict]:
+        normalized = str(owner).strip().lower()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM schedule_occurrences WHERE owner_email=%s "
+                "ORDER BY planned_at DESC LIMIT %s", (normalized, max(1, min(int(limit), 200))))
+            rows = [dict(r) for r in self._db.fetchall(cur)]
+        for row in rows:
+            row["changed"] = None if row.get("changed") is None else bool(row["changed"])
+        return rows
+
+    def request_schedule_prewarm(self, owner: str, occurrence_key: str, planned_at: str,
+                                 requested_at: str, source: str) -> bool:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO schedule_prewarm_requests(owner_email,occurrence_key,planned_at,"
+                "requested_at,source) VALUES(%s,%s,%s,%s,%s) "
+                "ON CONFLICT(owner_email,occurrence_key) DO NOTHING",
+                (str(owner).strip().lower(), occurrence_key, planned_at, requested_at, source))
+            return cur.rowcount == 1
+
+    def create_schedule_notification(self, owner: str, occurrence_key: str | None, kind: str,
+                                     title: str, message: str) -> dict:
+        import datetime as _dt
+        import uuid as _uuid
+        normalized = str(owner).strip().lower()
+        notification_id = (str(_uuid.uuid5(_uuid.NAMESPACE_URL,
+                                           f"acp:schedule:{normalized}:{occurrence_key}:{kind}"))
+                           if occurrence_key else str(_uuid.uuid4()))
+        row = {"id": notification_id, "owner_email": normalized,
+               "occurrence_key": occurrence_key, "kind": kind, "title": title,
+               "message": message, "created_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+               "read_at": None}
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO schedule_notifications(id,owner_email,occurrence_key,kind,title,message,"
+                "created_at,read_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s) "
+                "ON CONFLICT(id) DO NOTHING", tuple(row.values()))
+            self._db.execute(cur, "SELECT * FROM schedule_notifications WHERE id=%s",
+                             (notification_id,))
+            return dict(self._db.fetchone(cur))
+
+    def emit_schedule_notification_for_occurrence(self, owner: str, occurrence_key: str,
+                                                  result: str, *, changed: bool = False,
+                                                  message: str | None = None) -> dict | None:
+        policy = self.get_user_scan_schedule(owner)["notification_policy"]
+        should_emit = (policy == "all" or
+                       policy in {"failures", "changes_and_failures"} and result == "failed" or
+                       policy == "changes_and_failures" and bool(changed))
+        if not should_emit:
+            return None
+        title = ("Scheduled scan failed" if result == "failed" else
+                 "Scheduled scan found changes" if changed else "Scheduled scan completed")
+        return self.create_schedule_notification(
+            owner, occurrence_key, result, title, message or title)
+
+    def list_schedule_notifications(self, owner: str, limit: int = 50) -> list[dict]:
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT * FROM schedule_notifications WHERE owner_email=%s "
+                "ORDER BY created_at DESC LIMIT %s",
+                (str(owner).strip().lower(), max(1, min(int(limit), 200))))
+            return [dict(r) for r in self._db.fetchall(cur)]
+
+    def mark_schedule_notification_read(self, owner: str, notification_id: str) -> bool:
+        import datetime as _dt
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE schedule_notifications SET read_at=%s WHERE id=%s AND owner_email=%s",
+                (_dt.datetime.now(_dt.timezone.utc).isoformat(), notification_id,
+                 str(owner).strip().lower()))
+            return cur.rowcount == 1
 
     def get_sync_cursor(self, source: str) -> dict | None:
         """The connector-native cursor (e.g. Drive's changes.list page token) the scheduled
@@ -6751,15 +7098,20 @@ class Store:
         bounds the window (1 = today-ish, 30 = month); None = all time. `scan_id` scopes the
         rollup to one scan — the per-scan provenance the certification report embeds (§4)."""
         from datetime import datetime, timedelta, timezone
-        clauses, params_l = [], []
+        clauses, jclauses, params_l = [], [], []
         if since_days is not None:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=since_days)).isoformat()
             clauses.append("ts >= %s")
+            jclauses.append("c.ts >= %s")
             params_l.append(cutoff)
         if scan_id is not None:
             clauses.append("scan_id = %s")
+            jclauses.append("c.scan_id = %s")
             params_l.append(scan_id)
         where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        # The same window, qualified for the joins below (hitl_events and ai_validation_outcomes
+        # both carry a scan_id of their own, so an unqualified clause would be ambiguous).
+        jwhere = (" WHERE " + " AND ".join(jclauses)) if jclauses else ""
         params = tuple(params_l)
         with self._db.cursor() as cur:
             self._db.execute(cur,
@@ -6810,6 +7162,19 @@ class Store:
                 "GROUP BY COALESCE(reason,'unrecorded') ORDER BY calls DESC", params)
             failure_reasons = [{"key": r["k"], "calls": r["calls"]} for r in self._db.fetchall(cur)]
 
+            # Reviewer decisions and post-write validation, at the SAME exact provider/model/zone
+            # grain, joined through the call id each decision and each validation row carries.
+            # This is the evidence a stronger-model rollout is actually judged on: not whether the
+            # call completed, but whether a human accepted the draft and whether the written value
+            # cleared the detector without breaking anything else. Nothing is inferred — a decision
+            # that recorded no model_call_id (human-authored work, or a card reviewed before the
+            # linkage existed) is absent from these counts rather than attributed by proximity.
+            linked = self._linked_outcomes_by_model(cur, jwhere, params)
+            for m in by_model:
+                key = (m["provider"], m["model"], m["zone"])
+                m["reviewed"] = linked["reviewed"].get(key, dict(self._EMPTY_REVIEWED))
+                m["validation"] = linked["validation"].get(key, dict(self._EMPTY_VALIDATION))
+
             calls = tot.get("calls", 0) or 0
             return {
                 "window_days": since_days,
@@ -6824,7 +7189,78 @@ class Store:
                 "by_zone": _group("zone"),
                 "by_surface": _group("surface"),
                 "failure_reasons": failure_reasons,
+                "reviewed": self._sum_buckets(linked["reviewed"].values(), self._EMPTY_REVIEWED),
+                "validation": self._sum_buckets(linked["validation"].values(),
+                                                self._EMPTY_VALIDATION),
             }
+
+    # Reviewer decisions linked to an exact model call. `approved` is an unedited acceptance,
+    # `edited` an acceptance the reviewer changed first, `rejected` a rejection; skips are not
+    # decisions and are not counted. `decisions` is the sum of the three.
+    _EMPTY_REVIEWED = {"decisions": 0, "approved": 0, "edited": 0, "rejected": 0}
+    # Post-write outcomes linked to an exact model call, one per (call, item) — the LATEST, so a
+    # could_not_verify that was later retried to verified_cleared counts once, as cleared. The
+    # five outcome counts partition `validated`; `newly_failing` cuts across them: rows of any
+    # outcome whose re-scan found a criterion failing that did not fail before the write.
+    _EMPTY_VALIDATION = {"validated": 0, "cleared": 0, "regressed": 0, "still_failing": 0,
+                         "could_not_verify": 0, "unresolved": 0, "newly_failing": 0}
+    _VALIDATION_BUCKET = {"verified_cleared": "cleared", "verified_regressed": "regressed",
+                          "verified_still_failing": "still_failing",
+                          "could_not_verify": "could_not_verify",
+                          "write_unresolved": "unresolved"}
+
+    @staticmethod
+    def _sum_buckets(buckets, empty: dict) -> dict:
+        total = dict(empty)
+        for b in buckets:
+            for k in total:
+                total[k] += int(b.get(k) or 0)
+        return total
+
+    def _linked_outcomes_by_model(self, cur, jwhere: str, params: tuple) -> dict:
+        """{'reviewed': {(provider, model, zone): bucket}, 'validation': {…}} for the calls in the
+        window — see ai_cost_rollup for what the buckets mean and why nothing here is inferred."""
+        reviewed: dict[tuple, dict] = {}
+        validation: dict[tuple, dict] = {}
+        self._db.execute(cur,
+            "SELECT c.provider AS provider, c.model AS model, c.zone AS zone, "
+            "e.model_call_id AS call_id, e.item_id AS item_id, e.action AS action, "
+            "e.created_at AS created_at "
+            "FROM hitl_events e JOIN ai_calls c ON c.id = e.model_call_id"
+            f"{jwhere} ORDER BY e.created_at", params)
+        latest: dict[tuple, dict] = {}
+        for r in self._db.fetchall(cur):
+            latest[(r["call_id"], r["item_id"])] = r        # ordered ascending: last wins
+        for r in latest.values():
+            action = {"approve": "approved", "edit": "edited", "reject": "rejected"}.get(
+                str(r.get("action") or ""))
+            if action is None:
+                continue
+            b = reviewed.setdefault((r["provider"], r["model"], r["zone"]),
+                                    dict(self._EMPTY_REVIEWED))
+            b[action] += 1
+            b["decisions"] += 1
+
+        self._db.execute(cur,
+            "SELECT c.provider AS provider, c.model AS model, c.zone AS zone, "
+            "v.model_call_id AS call_id, v.item_id AS item_id, v.outcome AS outcome, "
+            "v.regressions AS regressions, v.created_at AS created_at "
+            "FROM ai_validation_outcomes v JOIN ai_calls c ON c.id = v.model_call_id"
+            f"{jwhere} ORDER BY v.created_at", params)
+        latest = {}
+        for r in self._db.fetchall(cur):
+            latest[(r["call_id"], r["item_id"])] = r
+        for r in latest.values():
+            bucket = self._VALIDATION_BUCKET.get(str(r.get("outcome") or ""))
+            if bucket is None:
+                continue
+            b = validation.setdefault((r["provider"], r["model"], r["zone"]),
+                                      dict(self._EMPTY_VALIDATION))
+            b[bucket] += 1
+            b["validated"] += 1
+            if self._decode_regressions(r.get("regressions")):
+                b["newly_failing"] += 1
+        return {"reviewed": reviewed, "validation": validation}
 
     def ai_provider_health_stats(self, provider: str, *, window_hours: int = 24) -> dict:
         """Endpoint health snapshot for one cloud provider (ADR 0019/0016). All numbers come
@@ -7206,21 +7642,43 @@ class Store:
                  reviewer, datetime.now(timezone.utc).isoformat(), reject_reason or None,
                  model_call_id or None))
 
+    # Every outcome a post-write validation row may carry. Each names what the applier OBSERVED
+    # about ONE approved draft, never what it hoped:
+    #   write_unresolved        the value could not be written — the content it addressed no longer
+    #                           resolves in the document (nothing was verified, nothing changed)
+    #   could_not_verify        written, but the re-scan could not run to a trustworthy result;
+    #                           the bytes were discarded and the row stays unapplied
+    #   verified_still_failing  written and re-scanned; the target criterion still fails
+    #   verified_cleared        written; the target cleared; no criterion newly fails
+    #   verified_regressed      written; the target cleared; the re-scan found at least one
+    #                           criterion failing that did not fail before the write
+    # `regressions` on the row lists the newly-failing criteria for ANY outcome that re-scanned, so
+    # a still-failing write that also broke something is not hidden behind its primary outcome.
+    AI_VALIDATION_OUTCOMES = frozenset({
+        "write_unresolved", "could_not_verify", "verified_still_failing",
+        "verified_cleared", "verified_regressed"})
+
     def record_ai_validation_outcomes(self, scan_id: str, file: str, rule_id: str,
                                       item_ids: list[str], outcome: str, *,
-                                      detail: str | None = None) -> int:
+                                      detail: str | None = None,
+                                      regressions: list[str] | set[str] | None = None) -> int:
         """Append one post-write result for every exact model call accepted by these items.
 
         Replays of the same item/result are idempotent; a later retry may append a different
         outcome (for example could_not_verify followed by verified_cleared). Human-authored and
         historical items have no model_call_id and correctly produce no rows.
+
+        `regressions` is the set of criteria the re-scan found newly failing (see the column
+        comment in _SCHEMA): pass an empty collection when the comparison ran and found none, and
+        None when no baseline existed — the two are different facts and are stored differently.
         """
-        allowed = {"verified_cleared", "verified_still_failing", "could_not_verify"}
-        if outcome not in allowed:
+        if outcome not in self.AI_VALIDATION_OUTCOMES:
             raise ValueError(f"unsupported AI validation outcome: {outcome}")
         ids = [str(i) for i in dict.fromkeys(item_ids or []) if i]
         if not ids:
             return 0
+        reg_json = (None if regressions is None
+                    else json.dumps(sorted({str(r) for r in regressions if r})))
         marks = ",".join(["%s"] * len(ids))
         import hashlib
         from datetime import datetime, timezone
@@ -7238,16 +7696,63 @@ class Store:
                                   (str(row["model_call_id"]), str(row.get("rule_id") or rule_id)))
             for item_id, (call_id, event_rule_id) in latest.items():
                 event_id = hashlib.sha256(
-                    f"post-write:{call_id}:{scan_id}:{file}:{event_rule_id}:{item_id}:{outcome}".encode()
+                    f"post-write:{call_id}:{scan_id}:{file}:{event_rule_id}:{item_id}:{outcome}"
+                    f":{reg_json or ''}".encode()
                 ).hexdigest()[:32]
                 self._db.execute(cur,
                     "INSERT INTO ai_validation_outcomes(id,model_call_id,scan_id,file,rule_id,"
-                    "item_id,outcome,detail,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+                    "item_id,outcome,detail,created_at,regressions) "
+                    "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
                     "ON CONFLICT(id) DO NOTHING",
                     (event_id, call_id, scan_id, file, event_rule_id, item_id, outcome,
-                     (detail or None), now))
+                     (detail or None), now, reg_json))
                 inserted += max(0, int(cur.rowcount or 0))
         return inserted
+
+    def list_ai_validation_outcomes(self, scan_id: str | None = None, file: str | None = None,
+                                    limit: int = 500) -> list[dict]:
+        """The recorded post-write outcomes, oldest first, `regressions` decoded to a list (or
+        None when the row carries no baseline comparison)."""
+        clauses, params = [], []
+        if scan_id is not None:
+            clauses.append("scan_id=%s")
+            params.append(scan_id)
+        if file is not None:
+            clauses.append("file=%s")
+            params.append(file)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        with self._db.cursor() as cur:
+            self._db.execute(cur, "SELECT * FROM ai_validation_outcomes" + where
+                             + " ORDER BY created_at LIMIT %s", (*params, limit))
+            out = []
+            for r in self._db.fetchall(cur):
+                r = dict(r)
+                r["regressions"] = self._decode_regressions(r.get("regressions"))
+                out.append(r)
+            return out
+
+    @staticmethod
+    def _decode_regressions(raw) -> list[str] | None:
+        if raw is None:
+            return None
+        try:
+            v = json.loads(raw) if isinstance(raw, str) else raw
+        except Exception:
+            return None
+        return [str(x) for x in v] if isinstance(v, list) else None
+
+    def approved_unapplied_item_locators(self, scan_id: str, file: str,
+                                         rule_ids) -> dict[str, list[str]]:
+        """{item_id: [locator, …]} for the approved-but-unapplied rows of `rule_ids` — exactly
+        the locators the applier hands the writer for each row (_row_approved_values), so a
+        locator the writer could not resolve can be attributed back to the review item, and
+        through it to the model call, that approved it."""
+        wanted = {str(r).strip() for r in (rule_ids or ()) if r}
+        out: dict[str, list[str]] = {}
+        for row in self._approved_unapplied_rows(scan_id, file):
+            if str(row.get("rule_id") or "").strip() in wanted:
+                out[str(row["id"])] = list(self._row_approved_values(row).keys())
+        return out
 
     # ADR 0019 §8.5 — thresholds for surfacing a rule as ready to migrate
     # Human-Assisted → AI-Assisted. All three conditions must hold simultaneously.
@@ -9782,11 +10287,30 @@ class Store:
                 shadowed.update((sid, f) for f in self._shadowed_files(cur, sid))
             rows = [r for r in rows if (r["scan_id"], r["file"]) not in shadowed]
             superseded = self._superseded_items(cur, rows)
+            unverified = self._apply_unverified_decisions(cur, rows)
+        # An approved row whose write was attempted and refused credit gets `apply_outcome`, so
+        # the review card can say why nothing changed. Pending rows are untouched (no key).
+        from apply_outcome import annotate_apply_outcomes
+        annotate_apply_outcomes(rows, unverified)
         if include_superseded:
             for r in rows:
                 r["superseded"] = r["id"] in superseded
             return rows
         return [r for r in rows if r["id"] not in superseded]
+
+    def _apply_unverified_decisions(self, cur, rows: list[dict]) -> list[dict]:
+        """Every apply.unverified decision for the scans holding an approved-but-unapplied row —
+        the evidence that a write ran and was refused credit. Read here, interpreted in
+        apply_outcome.py; nothing is read when no row could carry an outcome."""
+        scans = sorted({r["scan_id"] for r in rows
+                        if str(r.get("status") or "") == "approved" and not r.get("applied")})
+        if not scans:
+            return []
+        marks = ",".join(["%s"] * len(scans))
+        self._db.execute(cur,
+            f"SELECT ts,action,scan_id,file,detail FROM decision_log "
+            f"WHERE action=%s AND scan_id IN ({marks})", ("apply.unverified", *scans))
+        return [dict(r) for r in self._db.fetchall(cur)]
 
     def _superseded_items(self, cur, rows: list[dict]) -> set[str]:
         """The ids of queue rows whose finding has stopped being work.
@@ -9924,6 +10448,24 @@ class Store:
                 "INSERT INTO app_settings(key,value) VALUES(%s,%s) "
                 "ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value",
                 (key, value))
+
+    def claim_maintenance_lease(self, name: str, *, lease_seconds: int = 3600,
+                                now: str | None = None) -> bool:
+        """Atomically elect one replica for recoverable, idempotent maintenance work."""
+        from datetime import datetime, timedelta, timezone
+        instant = datetime.fromisoformat(str(now).replace("Z", "+00:00")) if now else \
+            datetime.now(timezone.utc)
+        if instant.tzinfo is None:
+            instant = instant.replace(tzinfo=timezone.utc)
+        claimed_at = instant.isoformat()
+        expires_at = (instant + timedelta(seconds=max(1, int(lease_seconds)))).isoformat()
+        key = f"maintenance:{name}:lease"
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO app_settings(key,value) VALUES(%s,%s) "
+                "ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value "
+                "WHERE app_settings.value<=%s", (key, expires_at, claimed_at))
+            return (getattr(cur, "rowcount", 0) or 0) > 0
 
     # ── Per-user setting overrides (R7: owner default + per-user override) ─────────────────────
     # A per-user override is stored as an ordinary app_settings row under a namespaced key, so it
@@ -11347,11 +11889,19 @@ class Store:
             return []
 
     # ── Audit trail (maturity Phase 4) ────────────────────────────────────────
+    _VALIDATION_TITLES = {
+        "verified_cleared": "written and verified",
+        "verified_regressed": "written and verified, with a regression",
+        "verified_still_failing": "written but the criterion still fails",
+        "could_not_verify": "written but could not be verified",
+        "write_unresolved": "not written — content no longer found",
+    }
+
     def document_timeline(self, scan_id: str, file: str, limit: int = 300) -> list[dict]:
         """Chronological provenance for ONE document in ONE scan — the auditor's answer to
         "what happened to this file and who decided what". Assembled entirely from rows the
         pipeline already persists (scan_runs, file_records, ai_calls, hitl_queue,
-        hitl_events, applied_fixes, decision_log); nothing is inferred or fabricated
+        hitl_events, applied_fixes, ai_validation_outcomes, decision_log); nothing is inferred or fabricated
         (ADR 0016). Every event: {ts, kind, title, detail?, actor?, rule_id?}. Best-effort
         per source — a missing table (older DB) skips that source, never errors."""
         events: list[dict] = []
@@ -11402,6 +11952,21 @@ class Store:
                        (scan_id, file)):
             _add(r.get("created_at"), "fix", f"Fix written into document · {r.get('rule_id') or ''}".strip(" ·"),
                  detail=(r.get("value") or "")[:160] or None, rule_id=r.get("rule_id"))
+        # What happened to an approved AI draft AFTER the human said yes. A cleared (or regressed)
+        # write changed the document and is a `fix`; the other outcomes left the bytes untouched
+        # — the lane discards an unverified or still-failing write — and are recorded decisions.
+        for r in _rows("SELECT * FROM ai_validation_outcomes WHERE scan_id=%s AND file=%s "
+                       "ORDER BY created_at", (scan_id, file)):
+            outcome = str(r.get("outcome") or "")
+            label = self._VALIDATION_TITLES.get(outcome, outcome or "unrecorded outcome")
+            detail = (r.get("detail") or "").strip()
+            regs = self._decode_regressions(r.get("regressions"))
+            if regs:
+                detail = f"{detail + ' · ' if detail else ''}newly failing: {', '.join(regs)}"
+            _add(r.get("created_at"),
+                 "fix" if outcome in ("verified_cleared", "verified_regressed") else "decision",
+                 f"AI draft {label} · {r.get('rule_id') or ''}".strip(" ·"),
+                 detail=detail[:160] or None, rule_id=r.get("rule_id"))
         for r in _rows("SELECT * FROM decision_log WHERE scan_id=%s AND file=%s ORDER BY ts",
                        (scan_id, file)):
             action = r.get("action") or "decision"
@@ -11622,8 +12187,12 @@ class Store:
                 row["entries"] = None
         return row
 
-    def _validate_input_manifest(self, workflow_id: str, input_manifest_id: str | None,
-                                 snapshot_id: str) -> None:
+    _PIPELINE_PREDECESSOR = {
+        "assess": "discover", "remediate": "assess", "release": "remediate",
+    }
+
+    def _validate_input_manifest(self, workflow_id: str, stage: str,
+                                 input_manifest_id: str | None, snapshot_id: str) -> None:
         if not input_manifest_id:
             return
         manifest = self.get_stage_output_manifest(input_manifest_id)
@@ -11633,6 +12202,16 @@ class Store:
             raise ValueError("input manifest belongs to a different workflow")
         if snapshot_id != input_manifest_id:
             raise ValueError("input snapshot must identify the sealed upstream manifest")
+        expected_stage = self._PIPELINE_PREDECESSOR.get(stage)
+        if expected_stage and manifest.get("stage") != expected_stage:
+            raise ValueError(
+                f"{stage} input must be a sealed {expected_stage} output manifest")
+        if expected_stage:
+            current = self.current_stage_execution(workflow_id, expected_stage)
+            if not current or current.get("state") != "succeeded" or \
+                    current.get("output_manifest_id") != input_manifest_id:
+                raise ValueError(
+                    f"{stage} input manifest is not the current sealed {expected_stage} output")
 
     def current_stage_execution(self, workflow_id: str, stage: str, *,
                                 owner: str | None = None) -> dict | None:
@@ -11703,6 +12282,120 @@ class Store:
                 "ON CONFLICT(event_id) DO NOTHING",
                 (event_id, execution_id, work_item_id, payload_digest, payload, now, now))
         return self.get_stage_execution(execution_id) or {"execution_id": execution_id}
+
+    def ensure_synchronous_stage_execution(self, *, scan_id: str, stage: str,
+                                           input_ids: list[str], input_snapshot_id: str,
+                                           request_fingerprint: str,
+                                           input_manifest_id: str | None = None) -> dict:
+        """Create/reuse job-less canonical work for an immediate application stage.
+
+        Failed or process-interrupted items are returned to ``queued`` on an exact replay while
+        completed items remain immutable.  No queue or outbox rows are fabricated: the HTTP
+        caller owns execution, and its durable item identities are the same canonical rows a
+        worker uses.
+        """
+        workflow = self.workflow_for_scan(scan_id) or {}
+        workflow_id = workflow.get("id") or scan_id
+        workflow_revision = int(workflow.get("revision") or 1)
+        owner = workflow.get("owner_email") or self._stage_owner(scan_id)
+        ordered_inputs = sorted({str(value) for value in input_ids if str(value)})
+        execution_id = self._stage_identity(
+            workflow_id, stage, input_snapshot_id, request_fingerprint)[:24]
+        now = self._now()
+        with self._db.cursor() as cur:
+            if self._db.supports_skip_locked:
+                self._db.execute(cur, "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
+                                 (f"stage:{scan_id}:{stage}",))
+            self._validate_input_manifest(
+                workflow_id, stage, input_manifest_id, input_snapshot_id)
+            self._db.execute(cur, "SELECT * FROM stage_executions WHERE execution_id=%s",
+                             (execution_id,))
+            existing = self._db.fetchone(cur)
+            if existing:
+                self._db.execute(cur,
+                    "SELECT input_id,state FROM stage_work_items WHERE execution_id=%s ORDER BY input_id",
+                    (execution_id,))
+                items = self._db.fetchall(cur)
+                if [row["input_id"] for row in items] != ordered_inputs:
+                    raise ValueError("synchronous stage identity contains different work items")
+                if existing.get("state") != "succeeded":
+                    self._db.execute(cur,
+                        "UPDATE stage_work_items SET state='queued',revision=revision+1,"
+                        "result_digest=NULL,terminal_reason=NULL,updated_at=%s WHERE execution_id=%s "
+                        "AND state IN ('processing','failed','cancelled')",
+                        (now, execution_id))
+                    self._db.execute(cur,
+                        "SELECT COUNT(*) AS terminal FROM stage_work_items WHERE execution_id=%s "
+                        "AND state IN ('completed','skipped')", (execution_id,))
+                    terminal = int((self._db.fetchone(cur) or {}).get("terminal") or 0)
+                    self._db.execute(cur,
+                        "UPDATE stage_executions SET state=%s,terminal_items=%s,revision=revision+1,"
+                        "updated_at=%s WHERE execution_id=%s",
+                        ("processing_complete" if terminal == len(ordered_inputs) and terminal else
+                         "queued", terminal, now, execution_id))
+                return {"execution_id": execution_id, "reused": True,
+                        "items": {row["input_id"]: self._work_item_identity(
+                            execution_id, row["input_id"]) for row in items}}
+            self._db.execute(cur,
+                "SELECT execution_id FROM stage_executions WHERE workflow_id=%s AND stage=%s "
+                "AND is_current=1 AND state IN ('accepted','queued','processing','paused',"
+                "'processing_complete','reconciling') LIMIT 1", (workflow_id, stage))
+            active = self._db.fetchone(cur)
+            if active:
+                raise ActiveStageExecutionError(scan_id, stage, active["execution_id"])
+            self._db.execute(cur,
+                "UPDATE stage_executions SET is_current=0,revision=revision+1,updated_at=%s "
+                "WHERE workflow_id=%s AND stage=%s AND is_current=1",
+                (now, workflow_id, stage))
+            self._db.execute(cur,
+                "INSERT INTO stage_executions(execution_id,workflow_id,workflow_revision,scan_id,"
+                "owner_email,stage,input_snapshot_id,request_fingerprint,state,revision,is_current,"
+                "expected_items,terminal_items,input_manifest_id,created_at,updated_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,'queued',1,1,%s,0,%s,%s,%s)",
+                (execution_id, workflow_id, workflow_revision, scan_id, owner, stage,
+                 input_snapshot_id, request_fingerprint, len(ordered_inputs), input_manifest_id,
+                 now, now))
+            items = {}
+            for input_id in ordered_inputs:
+                work_item_id = self._work_item_identity(execution_id, input_id)
+                self._db.execute(cur,
+                    "INSERT INTO stage_work_items(work_item_id,execution_id,input_id,job_id,state,"
+                    "revision,attempt,created_at,updated_at) "
+                    "VALUES(%s,%s,%s,NULL,'queued',1,0,%s,%s)",
+                    (work_item_id, execution_id, input_id, now, now))
+                items[input_id] = work_item_id
+        self._record_stage_started(scan_id, stage, execution_id, "synchronous", len(ordered_inputs))
+        return {"execution_id": execution_id, "reused": False, "items": items}
+
+    def finish_synchronous_stage_item(self, execution_id: str, input_id: str, *,
+                                      outcome: str, result: dict) -> dict:
+        """Apply one retry-safe terminal result and seal the execution when fully successful."""
+        import hashlib as _hashlib
+        import json as _json
+        if outcome not in ("completed", "failed", "cancelled"):
+            raise ValueError("unsupported synchronous stage outcome")
+        work_item_id = self._work_item_identity(execution_id, str(input_id))
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT revision,state FROM stage_work_items WHERE execution_id=%s AND work_item_id=%s",
+                (execution_id, work_item_id))
+            item = self._db.fetchone(cur)
+        if not item:
+            raise KeyError(work_item_id)
+        if item.get("state") == "completed" and outcome == "completed":
+            self.seal_stage_if_ready(execution_id)
+            return {"duplicate": True, "work_item_id": work_item_id}
+        payload = dict(result)
+        payload["result_digest"] = _hashlib.sha256(_json.dumps(
+            result, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
+        event_type = f"work_item.{outcome}"
+        event_id = _hashlib.sha256(
+            f"sync-stage\0{work_item_id}\0{int(item['revision'])}\0{event_type}".encode()).hexdigest()
+        applied = self.apply_stage_event(
+            event_id=event_id, execution_id=execution_id, work_item_id=work_item_id,
+            event_type=event_type, expected_revision=int(item["revision"]), payload=payload)
+        self.seal_stage_if_ready(execution_id)
+        return {**applied, "work_item_id": work_item_id}
     def canonical_stage_lineage(self, scan_id: str, *, owner: str | None = None) -> dict:
         """Return the current sealed execution chain and one reconciliation authority per stage."""
         workflow = self.workflow_for_scan(scan_id, owner=owner)
@@ -11738,8 +12431,49 @@ class Store:
         for row in stages:
             upstream = row.get("input_manifest_id")
             source = self.get_stage_output_manifest(upstream, owner=owner) if upstream else None
-            if upstream and (not source or source.get("workflow_id") != workflow_id):
-                broken_links.append({"stage": row["stage"], "input_manifest_id": upstream})
+            expected_stage = self._PIPELINE_PREDECESSOR.get(row["stage"])
+            current_source = (self.current_stage_execution(workflow_id, expected_stage, owner=owner)
+                              if expected_stage else None)
+            link_problem = None
+            if expected_stage and not upstream:
+                link_problem = "unavailable"
+            elif upstream and (not source or source.get("workflow_id") != workflow_id):
+                link_problem = "missing_or_wrong_workflow"
+            elif expected_stage and source.get("stage") != expected_stage:
+                link_problem = "wrong_stage"
+            elif expected_stage and (not current_source or
+                    current_source.get("output_manifest_id") != upstream):
+                link_problem = "stale"
+            if link_problem:
+                broken_links.append({"stage": row["stage"], "input_manifest_id": upstream,
+                                     "expected_upstream_stage": expected_stage,
+                                     "reason": link_problem})
+
+            work_exact = row.get("reconciliation", {}).get("exact")
+            domain_exact = row.get("domain_reconciliation", {}).get("exact")
+            terminal_or_sealed = row.get("state") in {
+                "succeeded", "failed", "cancelled", "integrity_failed"
+            } or bool(row.get("sealed_output"))
+            if work_exact is False or domain_exact is False:
+                reconciliation_status = "inconsistent"
+            elif work_exact is None or domain_exact is None or link_problem == "unavailable":
+                reconciliation_status = "unavailable"
+            elif link_problem:
+                reconciliation_status = "inconsistent"
+            elif work_exact is not True or domain_exact is not True:
+                reconciliation_status = "unavailable" if (
+                    work_exact is None or domain_exact is None) else "inconsistent"
+            elif terminal_or_sealed:
+                reconciliation_status = "exact"
+            else:
+                reconciliation_status = "partial"
+            row["reconciliation_status"] = reconciliation_status
+            row["reconciliation_consistent"] = reconciliation_status == "exact"
+            if terminal_or_sealed and reconciliation_status != "exact":
+                row["integrity"]["ok"] = False
+                affected = set(row["integrity"].get("affected") or [])
+                affected.add("terminal_reconciliation_not_exact")
+                row["integrity"]["affected"] = sorted(affected)
         return {
             "schema_version": 1, "workflow_id": workflow_id,
             "workflow_revision": int((workflow or {}).get("revision") or 1),
@@ -11747,10 +12481,16 @@ class Store:
             "stages": stages,
             "integrity": {
                 "ok": bool(stages) and not broken_links and
-                      all(row["integrity"]["ok"] for row in stages),
+                      all(row["integrity"]["ok"] and row["reconciliation_consistent"]
+                          for row in stages),
                 "broken_manifest_links": broken_links,
                 "inconsistent_stages": [row["stage"] for row in stages
-                                        if not row["integrity"]["ok"]],
+                                        if not row["integrity"]["ok"] or
+                                        row["reconciliation_status"] == "inconsistent"],
+                "partial_stages": [row["stage"] for row in stages
+                                   if row["reconciliation_status"] == "partial"],
+                "unavailable_stages": [row["stage"] for row in stages
+                                       if row["reconciliation_status"] == "unavailable"],
             },
         }
 
@@ -11938,15 +12678,143 @@ class Store:
                 "status": "escalated" if escalated else "overdue" if overdue else
                           "stopping" if awaiting else "clear"}
 
+    @staticmethod
+    def _side_effect_identity(execution_id: str, work_item_id: str | None,
+                              effect_type: str, destination: str) -> str:
+        """Identify one intended external effect, independently of its proposed bytes.
+
+        Content is deliberately excluded. A replay which proposes different bytes for the same
+        stage item and destination is an integrity collision, not permission to perform a second
+        provider write.
+        """
+        import hashlib as _hashlib
+        material = "\0".join((execution_id, work_item_id or "", effect_type, destination))
+        return _hashlib.sha256(material.encode()).hexdigest()
+
+    @staticmethod
+    def _decode_side_effect_row(row: dict | None) -> dict | None:
+        import json as _json
+        if not row:
+            return None
+        result = dict(row)
+        if isinstance(result.get("receipt"), str):
+            try:
+                result["receipt"] = _json.loads(result["receipt"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError("side-effect receipt contains malformed JSON") from exc
+        return result
+
+    def reserve_side_effect(self, *, execution_id: str, work_item_id: str | None,
+                            effect_type: str, destination: str, content_digest: str,
+                            worker_id: str, lease_seconds: int = 300,
+                            now: str | None = None) -> dict:
+        """Elect one worker before an external write and return its fencing token.
+
+        ``acquired`` is true only for the caller allowed to write. A completed reservation is a
+        replay and carries its durable provider receipt. An unexpired reservation is busy. Failed
+        or expired reservations may be reclaimed with a new token. Identity fields and content
+        must match exactly on every replay; disagreement fails before provider I/O.
+        """
+        from datetime import datetime, timezone, timedelta
+        now = now or self._now()
+        instant = datetime.fromisoformat(str(now).replace("Z", "+00:00"))
+        if instant.tzinfo is None:
+            instant = instant.replace(tzinfo=timezone.utc)
+        expires = (instant + timedelta(seconds=max(1, int(lease_seconds)))).isoformat()
+        effect_id = self._side_effect_identity(
+            execution_id, work_item_id, effect_type, destination)
+        token = uuid.uuid4().hex
+        reclaimed = False
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "INSERT INTO side_effect_receipts(effect_id,execution_id,work_item_id,effect_type,"
+                "destination,content_digest,receipt,created_at,status,reservation_owner,"
+                "reservation_token,lease_expires_at) VALUES(%s,%s,%s,%s,%s,%s,NULL,%s,'reserved',"
+                "%s,%s,%s) ON CONFLICT(effect_id) DO NOTHING",
+                (effect_id, execution_id, work_item_id, effect_type, destination, content_digest,
+                 now, worker_id, token, expires))
+            inserted = (getattr(cur, "rowcount", 0) or 0) > 0
+            if not inserted:
+                self._db.execute(cur, "SELECT * FROM side_effect_receipts WHERE effect_id=%s",
+                                 (effect_id,))
+                existing = self._db.fetchone(cur)
+                if not existing:
+                    raise RuntimeError("side-effect reservation disappeared")
+                identity = (existing.get("execution_id"), existing.get("work_item_id"),
+                            existing.get("effect_type"), existing.get("destination"),
+                            existing.get("content_digest"))
+                proposed = (execution_id, work_item_id, effect_type, destination, content_digest)
+                if identity != proposed:
+                    raise ValueError("side-effect identity was replayed with different content")
+                if existing.get("status") == "completed":
+                    return {**self._decode_side_effect_row(existing), "acquired": False,
+                            "reused": True}
+                self._db.execute(cur,
+                    "UPDATE side_effect_receipts SET status='reserved',reservation_owner=%s,"
+                    "reservation_token=%s,lease_expires_at=%s,failed_at=NULL,last_error=NULL "
+                    "WHERE effect_id=%s AND (status='failed' OR "
+                    "(status='reserved' AND lease_expires_at<=%s))",
+                    (worker_id, token, expires, effect_id, now))
+                inserted = (getattr(cur, "rowcount", 0) or 0) > 0
+                reclaimed = inserted
+            self._db.execute(cur, "SELECT * FROM side_effect_receipts WHERE effect_id=%s",
+                             (effect_id,))
+            row = self._db.fetchone(cur)
+        return {**self._decode_side_effect_row(row), "acquired": inserted,
+                "reclaimed": reclaimed, "reused": False}
+
+    def finalize_side_effect(self, effect_id: str, reservation_token: str,
+                             receipt: dict, *, now: str | None = None) -> dict:
+        """Commit provider evidence only for the current reservation fencing token."""
+        import json as _json
+        now = now or self._now()
+        encoded = _json.dumps(receipt, sort_keys=True, separators=(",", ":"), default=str)
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE side_effect_receipts SET status='completed',receipt=%s,completed_at=%s,"
+                "lease_expires_at=NULL,last_error=NULL WHERE effect_id=%s AND status='reserved' "
+                "AND reservation_token=%s",
+                (encoded, now, effect_id, reservation_token))
+            if not (getattr(cur, "rowcount", 0) or 0):
+                self._db.execute(cur, "SELECT * FROM side_effect_receipts WHERE effect_id=%s",
+                                 (effect_id,))
+                existing = self._db.fetchone(cur)
+                if existing and existing.get("status") == "completed" \
+                        and existing.get("reservation_token") == reservation_token:
+                    return {**self._decode_side_effect_row(existing), "reused": True}
+                raise RuntimeError("side-effect reservation token is stale")
+            self._db.execute(cur, "SELECT * FROM side_effect_receipts WHERE effect_id=%s",
+                             (effect_id,))
+            row = self._db.fetchone(cur)
+        return {**self._decode_side_effect_row(row), "reused": False}
+
+    def fail_side_effect(self, effect_id: str, reservation_token: str, error: str,
+                         *, now: str | None = None) -> dict:
+        """Release after a definitive provider refusal so a later attempt may retry.
+
+        An ambiguous timeout must retain the reservation: after its lease expires the successor
+        uses ``reclaimed`` to verify the destination before deciding whether another write is safe.
+        """
+        now = now or self._now()
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "UPDATE side_effect_receipts SET status='failed',failed_at=%s,last_error=%s,"
+                "lease_expires_at=NULL WHERE effect_id=%s AND status='reserved' "
+                "AND reservation_token=%s",
+                (now, str(error)[:1000], effect_id, reservation_token))
+            if not (getattr(cur, "rowcount", 0) or 0):
+                raise RuntimeError("side-effect reservation token is stale")
+            self._db.execute(cur, "SELECT * FROM side_effect_receipts WHERE effect_id=%s",
+                             (effect_id,))
+            row = self._db.fetchone(cur)
+        return self._decode_side_effect_row(row)
+
     def record_side_effect_receipt(self, *, execution_id: str, work_item_id: str | None,
                                    effect_type: str, destination: str, content_digest: str,
                                    receipt: dict | None = None) -> dict:
-        """Persist/reuse the deterministic receipt that makes an external write exactly-once."""
-        import hashlib as _hashlib
+        """Compatibility helper for already-completed synchronous effects."""
         import json as _json
-        material = "\0".join((execution_id, work_item_id or "", effect_type,
-                              destination, content_digest))
-        effect_id = _hashlib.sha256(material.encode()).hexdigest()
+        effect_id = self._side_effect_identity(execution_id, work_item_id, effect_type, destination)
         encoded = _json.dumps(receipt, sort_keys=True, separators=(",", ":"), default=str) \
             if receipt is not None else None
         with self._db.cursor() as cur:
@@ -11954,16 +12822,54 @@ class Store:
                              (effect_id,))
             existing = self._db.fetchone(cur)
             if existing:
-                return {**existing, "reused": True}
+                if existing.get("content_digest") != content_digest:
+                    raise ValueError("side-effect identity was replayed with different content")
+                if existing.get("status") != "completed":
+                    raise RuntimeError("side-effect reservation has not completed")
+                return {**self._decode_side_effect_row(existing), "reused": True}
             self._db.execute(cur,
                 "INSERT INTO side_effect_receipts(effect_id,execution_id,work_item_id,effect_type,"
-                "destination,content_digest,receipt,created_at) VALUES(%s,%s,%s,%s,%s,%s,%s,%s)",
+                "destination,content_digest,receipt,created_at,status,completed_at) "
+                "VALUES(%s,%s,%s,%s,%s,%s,%s,%s,'completed',%s)",
                 (effect_id, execution_id, work_item_id, effect_type, destination,
-                 content_digest, encoded, self._now()))
+                 content_digest, encoded, self._now(), self._now()))
         return {"effect_id": effect_id, "execution_id": execution_id,
                 "work_item_id": work_item_id, "effect_type": effect_type,
                 "destination": destination, "content_digest": content_digest,
                 "receipt": receipt, "reused": False}
+
+    def release_finding_lineage(self, execution_id: str, filename: str) -> dict | None:
+        """Resolve one Release output to the immutable Remediate finding partition it publishes."""
+        execution = self.get_stage_execution(execution_id)
+        if not execution or execution.get("stage") != "release":
+            raise ValueError("finding lineage requires a Release execution")
+        manifest_id = execution.get("input_manifest_id")
+        # Historical executions created before sealed handoffs remain publishable.  They cannot
+        # honestly claim exact finding lineage, so omit it rather than inventing a mutable link.
+        if not manifest_id:
+            return None
+        upstream = self.get_stage_output_manifest(manifest_id)
+        if not upstream or upstream.get("stage") != "remediate" or \
+                upstream.get("workflow_id") != execution.get("workflow_id"):
+            raise ValueError("Release execution is not bound to a sealed Remediate manifest")
+        upstream_execution_id = upstream["execution_id"]
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT finding_id,disposition,revision,snapshot_id FROM finding_disposition "
+                "WHERE scan_id=%s AND batch_id=%s AND file=%s "
+                "ORDER BY finding_id",
+                (execution["scan_id"], upstream_execution_id, filename))
+            rows = self._db.fetchall(cur)
+        snapshot_ids = {row.get("snapshot_id") for row in rows if row.get("snapshot_id")}
+        if len(snapshot_ids) > 1:
+            raise ValueError("Release finding lineage spans multiple Assessment snapshots")
+        return {
+            "upstream_execution_id": upstream_execution_id,
+            "snapshot_id": next(iter(snapshot_ids), upstream.get("upstream_manifest_id")),
+            "findings": [{"finding_id": row["finding_id"],
+                          "disposition": row.get("disposition"),
+                          "revision": int(row.get("revision") or 0)} for row in rows],
+        }
 
     def seal_stage_output_manifest(self, execution_id: str, entries: list[dict], *,
                                    expected_revision: int, owner: str | None = None) -> dict:
@@ -11983,15 +12889,24 @@ class Store:
         digest = _hashlib.sha256(raw.encode()).hexdigest()
         manifest_id = _hashlib.sha256(f"{execution_id}\0{digest}".encode()).hexdigest()
         for entry in ordered:
-            effect_id = entry.get("effect_id")
-            if not effect_id:
-                continue
-            with self._db.cursor() as cur:
-                self._db.execute(cur,
-                    "SELECT effect_id FROM side_effect_receipts WHERE effect_id=%s AND execution_id=%s",
-                    (effect_id, execution_id))
-                if not self._db.fetchone(cur):
-                    raise ValueError(f"manifest references unknown side-effect receipt: {effect_id}")
+            raw_effect_ids = entry.get("effect_ids") or []
+            if not isinstance(raw_effect_ids, list) or any(
+                    not isinstance(value, str) or not value for value in raw_effect_ids):
+                raise ValueError("manifest effect_ids must be a list of non-empty strings")
+            effect_ids = list(raw_effect_ids)
+            if entry.get("effect_id"):
+                effect_ids.append(entry["effect_id"])
+            for effect_id in effect_ids:
+                with self._db.cursor() as cur:
+                    self._db.execute(cur,
+                        "SELECT effect_id FROM side_effect_receipts WHERE effect_id=%s "
+                        "AND execution_id=%s AND status='completed' "
+                        "AND (work_item_id=%s OR %s IS NULL)",
+                        (effect_id, execution_id, entry.get("work_item_id"),
+                         entry.get("work_item_id")))
+                    if not self._db.fetchone(cur):
+                        raise ValueError(
+                            f"manifest references unknown side-effect receipt: {effect_id}")
         now = self._now()
         with self._db.cursor() as cur:
             self._db.execute(cur,
@@ -12016,6 +12931,166 @@ class Store:
         return {"manifest_id": manifest_id, "execution_id": execution_id, "digest": digest,
                 "item_count": len(ordered), "entries": ordered, "sealed_at": now,
                 "upstream_manifest_id": execution.get("input_manifest_id"), "contract_version": 1}
+
+    def seal_stage_if_ready(self, execution_id: str) -> dict | None:
+        """Seal a successful worker stage once its canonical partition is complete.
+
+        Every worker finishing the tail of a batch may race here.  The execution revision and
+        the manifest's unique execution key elect one winner; followers return the winner's
+        immutable manifest instead of treating the race as a failure.
+        """
+        execution = self.get_stage_execution(execution_id)
+        if not execution:
+            return None
+        if execution.get("output_manifest_id"):
+            return self.get_stage_output_manifest(execution["output_manifest_id"])
+        if execution.get("state") != "processing_complete":
+            return None
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT work_item_id,input_id,state,result_digest FROM stage_work_items "
+                "WHERE execution_id=%s ORDER BY input_id,work_item_id", (execution_id,))
+            items = self._db.fetchall(cur)
+            self._db.execute(cur,
+                "SELECT effect_id,work_item_id FROM side_effect_receipts "
+                "WHERE execution_id=%s ORDER BY effect_id", (execution_id,))
+            effects = self._db.fetchall(cur)
+        expected = execution.get("expected_items")
+        if expected is None or len(items) != int(expected) or any(
+                row.get("state") not in ("completed", "skipped") for row in items):
+            return None
+        effects_by_item = {}
+        for effect in effects:
+            effects_by_item.setdefault(effect.get("work_item_id"), []).append(effect["effect_id"])
+        entries = [{"work_item_id": row["work_item_id"], "input_id": row["input_id"],
+                    "outcome": row["state"], "result_digest": row.get("result_digest"),
+                    **({"effect_ids": effects_by_item[row["work_item_id"]]}
+                       if effects_by_item.get(row["work_item_id"]) else {})}
+                   for row in items]
+        try:
+            return self.seal_stage_output_manifest(
+                execution_id, entries, expected_revision=int(execution["revision"]))
+        except RuntimeError:
+            winner = self.get_stage_execution(execution_id)
+            manifest_id = (winner or {}).get("output_manifest_id")
+            if manifest_id:
+                return self.get_stage_output_manifest(manifest_id)
+            raise
+
+    def current_stage_output_manifest(self, scan_id: str, stage: str) -> dict | None:
+        """Return only the sealed output of the current successful upstream stage."""
+        workflow = self.workflow_for_scan(scan_id) or {}
+        execution = self.current_stage_execution(workflow.get("id") or scan_id, stage)
+        if not execution or execution.get("state") != "succeeded" or not execution.get("output_manifest_id"):
+            return None
+        return self.get_stage_output_manifest(execution["output_manifest_id"])
+
+    def _stage_domain_reconciliation(self, execution: dict, partitions: dict[str, int]) -> dict:
+        """Reconcile one stage in the domain unit its operator actually recognizes.
+
+        The generic work-item partition remains the queue authority.  This companion view makes
+        the stage boundary explicit: Discover counts inventory, Assess counts eligible inputs,
+        Remediate counts findings and Release counts requested/published documents.  All reads are
+        from durable ledgers; no progress event or client-side counter is treated as evidence.
+        """
+        stage = execution["stage"]
+        scan_id = execution["scan_id"]
+        execution_id = execution["execution_id"]
+        queued = int(partitions.get("queued", 0))
+        processing = int(partitions.get("processing", 0))
+        failed = int(partitions.get("failed", 0))
+        cancelled = int(partitions.get("cancelled", 0))
+        skipped = int(partitions.get("skipped", 0))
+        completed = int(partitions.get("completed", 0))
+
+        if stage == "discover":
+            lifecycle = {str(key): int(value) for key, value in
+                         self.count_lifecycle_by_status(scan_id).items()}
+            inventory = int(self.count_inventory(scan_id))
+            partitioned = sum(lifecycle.values())
+            return {
+                "unit": "inventory documents", "scope": "discovered inventory",
+                "equation": "inventory = sum(lifecycle status buckets)",
+                "total": inventory, "partitioned": partitioned,
+                "unaccounted": inventory - partitioned,
+                "buckets": lifecycle, "exact": inventory == partitioned,
+            }
+
+        if stage == "assess":
+            eligible = execution.get("expected_items")
+            accounted = queued + processing + completed + failed + cancelled + skipped
+            return {
+                "unit": "eligible documents", "scope": "immutable Assess input",
+                "equation": ("eligible = waiting + processing + assessed + failed + cancelled "
+                             "+ skipped"),
+                "total": eligible, "accounted": accounted,
+                "unaccounted": None if eligible is None else int(eligible) - accounted,
+                "buckets": {"waiting": queued, "processing": processing,
+                            "assessed": completed, "failed": failed,
+                            "cancelled": cancelled, "skipped": skipped},
+                "exact": eligible is not None and int(eligible) == accounted,
+            }
+
+        if stage == "remediate":
+            findings = self.finding_reconciliation(scan_id, execution_id)
+            buckets = {
+                "resolved_verified": findings["resolved_verified"],
+                "awaiting_review": findings["awaiting_review"],
+                "approved_pending_verification": findings["approved_pending_verification"],
+                "unchanged_no_fix": findings["unchanged_no_fix"],
+                "failed": findings["failed"], "excluded": findings["excluded"],
+                "superseded": findings["superseded"],
+            }
+            return {
+                "unit": "assessed findings", "scope": "current Remediate execution",
+                "equation": "assessed findings = sum(current disposition buckets)",
+                "total": findings["assessed"], "accounted": findings["accounted"],
+                "unaccounted": findings["unaccounted"], "buckets": buckets,
+                "exact": findings["exact"], "violations": findings["violations"],
+            }
+
+        if stage == "release":
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "SELECT work_item_id,receipt FROM side_effect_receipts "
+                    "WHERE execution_id=%s AND status='completed'", (execution_id,))
+                receipts = self._db.fetchall(cur)
+            verified_items = set()
+            for receipt_row in receipts:
+                receipt = receipt_row.get("receipt")
+                if isinstance(receipt, str):
+                    try:
+                        receipt = json.loads(receipt)
+                    except (TypeError, ValueError):
+                        receipt = None
+                if isinstance(receipt, dict) and receipt.get("verified") is True \
+                        and receipt_row.get("work_item_id"):
+                    verified_items.add(receipt_row["work_item_id"])
+            with self._db.cursor() as cur:
+                self._db.execute(cur,
+                    "SELECT work_item_id FROM stage_work_items WHERE execution_id=%s "
+                    "AND state='completed'", (execution_id,))
+                completed_ids = {row["work_item_id"] for row in self._db.fetchall(cur)}
+            published = len(verified_items & completed_ids)
+            completed_unverified = max(0, completed - published)
+            requested = execution.get("expected_items")
+            accounted = (queued + processing + published + completed_unverified + failed +
+                         cancelled + skipped)
+            return {
+                "unit": "requested documents", "scope": "immutable Release request",
+                "equation": ("requested = waiting + processing + published + completed unverified "
+                             "+ failed + cancelled + skipped"),
+                "total": requested, "accounted": accounted,
+                "unaccounted": None if requested is None else int(requested) - accounted,
+                "buckets": {"waiting": queued, "processing": processing,
+                            "published": published,
+                            "completed_unverified": completed_unverified,
+                            "failed": failed, "cancelled": cancelled, "skipped": skipped},
+                "published_receipt_rule": "completed receipt with verified=true",
+                "exact": requested is not None and int(requested) == accounted,
+            }
+
+        return {"unit": "work items", "scope": "this execution", "available": False}
 
     def stage_execution_snapshot(self, execution_id: str, *, owner: str | None = None) -> dict | None:
         execution = self.get_stage_execution(execution_id, owner=owner)
@@ -12053,6 +13128,12 @@ class Store:
             "queued", "processing", "completed", "failed", "cancelled", "skipped"})
         if unknown_states:
             violations.append({"code": "unknown_work_item_state", "states": unknown_states})
+        domain_reconciliation = self._stage_domain_reconciliation(execution, partitions)
+        if domain_reconciliation.get("exact") is False:
+            violations.append({"code": f"{execution['stage']}_domain_partition",
+                               "total": domain_reconciliation.get("total"),
+                               "accounted": domain_reconciliation.get(
+                                   "accounted", domain_reconciliation.get("partitioned"))})
         return {
             "workflow_id": execution["workflow_id"],
             "workflow_revision": int(execution["workflow_revision"]),
@@ -12090,8 +13171,9 @@ class Store:
                 "unaccounted": None if expected is None else int(expected) - accounted,
                 "exact": expected is not None and int(expected) == accounted and not unknown_states,
             },
+            "domain_reconciliation": domain_reconciliation,
             "integrity": {"ok": not violations,
-                          "affected": ["work_item_partition"] if violations else [],
+                          "affected": sorted({violation["code"] for violation in violations}),
             "violations": violations},
         }
 
@@ -12158,6 +13240,7 @@ class Store:
                 "UPDATE stage_executions SET state=%s,terminal_items=%s,revision=revision+1,updated_at=%s "
                 "WHERE execution_id=%s AND (state<>%s OR terminal_items<>%s)",
                 (state, terminal, now, job["batch_id"], state, terminal))
+        self.seal_stage_if_ready(job["batch_id"])
 
     def _start_stage_attempt(self, job: dict) -> None:
         """Append the immutable identity of a worker claim; retries get distinct rows."""
@@ -12195,6 +13278,7 @@ class Store:
             "attempt.started": "processing", "attempt.heartbeat": "processing",
             "attempt.retrying": "queued", "attempt.completed": "completed",
             "attempt.failed": "failed", "attempt.cancelled": "cancelled",
+            "attempt.deployment_handoff": "queued",
         }
         if event_type not in state_for:
             raise ValueError(f"unsupported worker stage event: {event_type}")
@@ -12227,7 +13311,8 @@ class Store:
                     or row.get("work_owner") != worker_id)):
                 return {"applied": False, "duplicate": False, "stale": True}
             target = state_for[event_type]
-            terminal = event_type in ("attempt.completed", "attempt.failed", "attempt.cancelled")
+            terminal = event_type in ("attempt.completed", "attempt.failed", "attempt.cancelled",
+                                      "attempt.deployment_handoff")
             if terminal and row.get("state") == "terminal":
                 return {"applied": False, "duplicate": False, "stale": True}
             next_revision = int(row["work_revision"]) + (event_type != "attempt.heartbeat")
@@ -12491,7 +13576,6 @@ class Store:
         workflow_id = workflow.get("id") or scan_id
         workflow_revision = int(workflow.get("revision") or 1)
         owner = workflow.get("owner_email") or self._stage_owner(scan_id)
-        self._validate_input_manifest(workflow_id, input_manifest_id, snapshot_id)
         execution_hash = self._stage_identity(
             workflow_id, stage, snapshot_id, request_fingerprint)
         # Keep the historical 24-character batch shape for existing queue consumers while the
@@ -12503,6 +13587,7 @@ class Store:
                 self._db.execute(cur,
                     "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))",
                     (f"stage:{scan_id}:{stage}",))
+            self._validate_input_manifest(workflow_id, stage, input_manifest_id, snapshot_id)
             self._db.execute(cur,
                 "SELECT id,status,payload FROM jobs WHERE scan_id=%s AND batch_id=%s "
                 "ORDER BY created_at,id", (scan_id, batch_id))
@@ -13626,8 +14711,9 @@ class Store:
 
         The caller has already left its handler at a declared safe checkpoint.  The ownership
         fence is still essential: if a lease expired just before shutdown, the old process must
-        not clear a replacement worker's live claim.  Decrementing ``attempts`` refunds the claim
-        consumed by the rollout, so routine releases cannot exhaust a customer's retry budget.
+        not clear a replacement worker's live claim. ``attempts`` remains a monotonic claim
+        generation (canonical event identity depends on it); incrementing ``max_attempts`` refunds
+        the rollout claim without allowing the replacement to reuse an old attempt identity.
 
         Returns ``queued`` when this claim performed the handoff, ``missing`` if the row no
         longer exists, or ``stale`` when another claim/outcome already owns the row.
@@ -13638,8 +14724,8 @@ class Store:
         with self._db.cursor() as cur:
             self._db.execute(cur,
                 "UPDATE jobs SET status='queued', run_after=%s, locked_at=NULL, "
-                "locked_by=NULL, lease_expires_at=NULL, attempts=CASE WHEN attempts>0 "
-                "THEN attempts-1 ELSE 0 END, phase=%s, last_error=NULL, error_class=NULL, "
+                "locked_by=NULL, lease_expires_at=NULL, max_attempts=max_attempts+1, "
+                "phase=%s, last_error=NULL, error_class=NULL, "
                 "updated_at=%s WHERE id=%s" + self._CLAIM_OWNED,
                 (now, self.DEPLOYMENT_REQUEUE_PHASE, now, job_id, worker_id, attempt))
             won = (getattr(cur, "rowcount", 0) or 0) > 0
@@ -13647,6 +14733,12 @@ class Store:
             print(f"[acp] deployment handoff refused for job {job_id}: stale claim "
                   f"worker={worker_id} attempt={attempt}", flush=True)
             return "stale"
+        # The queue handoff and canonical stage narration are separate durable ledgers. Move the
+        # stage item back to waiting and close the old attempt immediately; otherwise a graceful
+        # rollout looks like live Processing work until the replacement happens to claim it.
+        self.publish_worker_stage_event(
+            job_id, worker_id, attempt, "attempt.deployment_handoff",
+            reason="planned deployment handoff")
         return "queued"
 
     # The phase a reclaimed job carries while it waits to be picked up again.

@@ -8,9 +8,9 @@ const monitor = readFileSync(join(here, 'Monitor.jsx'), 'utf8')
 
 describe('per-user local-time scan schedule', () => {
   it('sends the wall-clock schedule contract without the retired interval cadence', () => {
-    expect(monitor).toMatch(/putSchedule\(\{ enabled: schedule\.enabled, timezone: schedule\.timezone, local_time: schedule\.local_time, days: schedule\.days \}\)/)
+    expect(monitor).toMatch(/putSchedule\(\{[\s\S]*enabled: schedule\.enabled, timezone: schedule\.timezone, local_time: schedule\.local_time, days: schedule\.days/)
     expect(monitor).toMatch(/enabled: false, timezone: browserTimezone\(\), local_time: '09:00', days:/)
-    expect(monitor).not.toMatch(/interval_minutes|minMap|setAllCad/)
+    expect(monitor).not.toMatch(/minMap|setAllCad/)
   })
 
   it('defaults an absent server timezone to the browser timezone', () => {

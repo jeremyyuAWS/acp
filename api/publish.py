@@ -256,6 +256,12 @@ def _sp_content_matches(token: str, drive_id: str | None, item_id: str,
     return hashlib.sha256(response.content).hexdigest() == expected_sha256
 
 
+def remediated_content_digest(owner: str, scan_id: str, filename: str) -> str | None:
+    """Return the digest used to reserve a publication before any provider write."""
+    data = _blob.download_remediated(owner, scan_id, filename)
+    return hashlib.sha256(data).hexdigest() if data else None
+
+
 def archive_copy_publish_sharepoint(token: str, drive_id: str | None, folder_id: str,
                                     owner: str, release_id: str, scan_id: str,
                                     filename: str, relative_path: str | None,

@@ -68,6 +68,7 @@ _CONFIG_SURVIVORS = {
     # A user's chosen scan days, local time and timezone are durable preferences, not scan
     # output. Resetting assessment data must not unexpectedly turn their recurring scan off.
     "user_scan_schedules",
+    "schedule_guardrails",  # deployment-wide administrator-authored scheduling limits
 }
 
 

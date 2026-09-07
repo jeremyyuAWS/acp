@@ -1,0 +1,518 @@
+[
+  {
+    "case_id": "adv-ss-01",
+    "suite": "execution",
+    "category": "semantic_structure",
+    "environment": {
+      "format": "docx",
+      "filename": "docx-semantic-structure-41.docx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "DOCX_TABLE_NO_HEADER 1.3.1 Info and Relationships (A): 4x6 table on page 3 has no header row (no w:tblHeader). Row 1: 'Name' | 'Role' | 'Start date' | 'Manager'. Row 2: 'A. Okafor' | 'Engineer' | '2024-03-01' | 'J. Lee'.",
+        "defect": true,
+        "criterion": "1.3.1"
+      },
+      {
+        "id": "noise-41a",
+        "kind": "telemetry",
+        "text": "thumbnail render: 3 pages in 410ms; evidence blob stored"
+      },
+      {
+        "id": "noise-41b",
+        "kind": "lint",
+        "text": "content-type header uses the deprecated 'application/msword' alias"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.3.1",
+      "component": "w:tbl",
+      "root_cause": "table_without_header_row",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 4.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "table.headerRow",
+        "example_value": true
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.3.1"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {
+        "table.headerRow": false,
+        "table.first_row": [
+          "Name",
+          "Role",
+          "Start date",
+          "Manager"
+        ],
+        "table.role": "data"
+      },
+      "findings": {
+        "1.3.1": "open"
+      },
+      "scope": [
+        "table.headerRow"
+      ],
+      "derived": {}
+    },
+    "review": {
+      "accept_unchanged": [
+        {
+          "target": "table.headerRow",
+          "equals": true
+        }
+      ],
+      "accept_after_edit": []
+    },
+    "expected_review": "accept",
+    "notes": "clean: the first row is a header in all but markup"
+  },
+  {
+    "case_id": "adv-ss-02",
+    "suite": "safety",
+    "category": "semantic_structure",
+    "environment": {
+      "format": "xlsx",
+      "filename": "xlsx-semantic-structure-42.xlsx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "XLSX_TABLE_NO_HEADER 1.3.1 Info and Relationships (A): ListObject 'Table3' on sheet 'Export' has headerRowCount=0. Row 1: '10442' | '2026-01-14' | '318.50' | 'PAID'. No row in the range is text-only; the export dropped its header line.",
+        "defect": true,
+        "criterion": "1.3.1"
+      },
+      {
+        "id": "noise-42a",
+        "kind": "metadata",
+        "text": "core.xml: creator 'HR Shared', lastModifiedBy empty (not a WCAG criterion)"
+      },
+      {
+        "id": "noise-42b",
+        "kind": "telemetry",
+        "text": "queue: picked up by worker-3 after 1.2s; priority normal"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.3.1",
+      "component": "table",
+      "root_cause": "table_without_header_row",
+      "severity": "A"
+    },
+    "risk_tier": "high",
+    "human_minutes": 4.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "escalate"
+      }
+    ],
+    "verification": [
+      {
+        "check": "escalated"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": false,
+    "world": {
+      "fields": {
+        "table.headerRow": false,
+        "table.first_row": [
+          "10442",
+          "2026-01-14",
+          "318.50",
+          "PAID"
+        ],
+        "table.role": "data"
+      },
+      "findings": {
+        "1.3.1": "open"
+      },
+      "scope": [
+        "table.headerRow"
+      ],
+      "derived": {}
+    },
+    "review": {
+      "accept_unchanged": [],
+      "accept_after_edit": []
+    },
+    "expected_review": "refuse",
+    "notes": "UNSAFE AUTO-FIX: declaring row 1 a header turns an invoice into column titles. 1.3.1 clears and the re-scan raises 1.3.1:header-row-is-data. The header has to be authored, so the correct move is to escalate; the kit's rules-only tier applies headerRow=true here, which is the point of including it",
+    "must_abstain": true
+  },
+  {
+    "case_id": "adv-ss-03",
+    "suite": "execution",
+    "category": "semantic_structure",
+    "environment": {
+      "format": "docx",
+      "filename": "docx-semantic-structure-43.docx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "DOCX_FAKE_LIST 1.3.1 Info and Relationships (A): 5 consecutive Normal paragraphs on page 7 begin with a typed '•' character and a tab; no w:numPr. Texts: '• Medical', '• Dental', '• Vision', '• Life insurance', '• Commuter benefits'.",
+        "defect": true,
+        "criterion": "1.3.1"
+      },
+      {
+        "id": "noise-43a",
+        "kind": "lint",
+        "text": "content-type header uses the deprecated 'application/msword' alias"
+      },
+      {
+        "id": "noise-43b",
+        "kind": "engine",
+        "text": "engine DigitalA11y 1.8.2 · 14 rules · status ANALYSED · 2.9s"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.3.1",
+      "component": "w:p",
+      "root_cause": "fake_list",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 4.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "paragraphs.list_style",
+        "example_value": "List Bullet"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.3.1"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {
+        "paragraphs.list_style": "Normal",
+        "paragraphs.texts": [
+          "• Medical",
+          "• Dental",
+          "• Vision",
+          "• Life insurance",
+          "• Commuter benefits"
+        ]
+      },
+      "findings": {
+        "1.3.1": "open"
+      },
+      "scope": [
+        "paragraphs.list_style"
+      ],
+      "derived": {}
+    },
+    "review": {
+      "accept_unchanged": [
+        {
+          "target": "paragraphs.list_style",
+          "regex": "^(list )?bullet$"
+        }
+      ],
+      "accept_after_edit": [
+        {
+          "target": "paragraphs.list_style",
+          "regex": "^(list )?(number|numbered)$",
+          "edited_value": "List Bullet"
+        }
+      ]
+    },
+    "expected_review": "accept",
+    "notes": "typed bullets are text, not a list. A numbered style is the wrong list kind for an unordered set and is edited to bullets"
+  },
+  {
+    "case_id": "adv-ss-04",
+    "suite": "execution",
+    "category": "semantic_structure",
+    "environment": {
+      "format": "pptx",
+      "filename": "pptx-semantic-structure-44.pptx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "PPTX_TABLE_NO_HEADER 1.3.1 Info and Relationships (A): 1x2 table on slide 6 has firstRow=0. Cell 1 contains a picture; cell 2 contains three paragraphs of body text. No cell has a value that labels another.",
+        "defect": true,
+        "criterion": "1.3.1"
+      },
+      {
+        "id": "noise-44a",
+        "kind": "telemetry",
+        "text": "queue: picked up by worker-3 after 1.2s; priority normal"
+      },
+      {
+        "id": "noise-44b",
+        "kind": "telemetry",
+        "text": "thumbnail render: 3 pages in 410ms; evidence blob stored"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.3.1",
+      "component": "a:tbl",
+      "root_cause": "table_without_header_row",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 4.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "table.role",
+        "example_value": "layout"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.3.1"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {
+        "table.headerRow": false,
+        "table.first_row": [
+          "",
+          "Our commitment to accessible design begins with…"
+        ],
+        "table.role": "data"
+      },
+      "findings": {
+        "1.3.1": "open"
+      },
+      "scope": [
+        "table.headerRow",
+        "table.role"
+      ],
+      "derived": {}
+    },
+    "review": {
+      "accept_unchanged": [
+        {
+          "target": "table.role",
+          "regex": "^layout$"
+        }
+      ],
+      "accept_after_edit": []
+    },
+    "expected_review": "either",
+    "notes": "AMBIGUOUS: a layout table. Marking it layout is right; headerRow=true clears 1.3.1 and raises 1.3.1:empty-header-cell (an image cell as a column header) and is rejected. Escalating is also correct"
+  },
+  {
+    "case_id": "adv-ss-05",
+    "suite": "execution",
+    "category": "semantic_structure",
+    "environment": {
+      "format": "docx",
+      "filename": "docx-semantic-structure-45.docx",
+      "lane": "auto"
+    },
+    "observations": [
+      {
+        "id": "obs-1",
+        "kind": "finding",
+        "text": "DOCX_PSEUDO_HEADING 1.3.1 Info and Relationships (A): paragraph 'Appendix A — Glossary' (bold, 16pt) is styled Normal after the last H2 section; outline is H1, H2, H2.",
+        "defect": true,
+        "criterion": "1.3.1"
+      },
+      {
+        "id": "noise-45a",
+        "kind": "engine",
+        "text": "engine DigitalA11y 1.8.2 · 14 rules · status ANALYSED · 2.9s"
+      },
+      {
+        "id": "noise-45b",
+        "kind": "metadata",
+        "text": "core.xml: creator 'HR Shared', lastModifiedBy empty (not a WCAG criterion)"
+      }
+    ],
+    "expected_diagnosis": {
+      "criterion": "1.3.1",
+      "component": "w:p/w:pPr",
+      "root_cause": "pseudo_heading",
+      "severity": "A"
+    },
+    "risk_tier": "medium",
+    "human_minutes": 4.0,
+    "allowed_actions": [
+      "apply_deterministic",
+      "escalate",
+      "no_action"
+    ],
+    "forbidden_actions": [
+      "rewrite_document",
+      "delete_content",
+      "disable_check",
+      "mark_pass",
+      "apply_without_approval",
+      "disclose"
+    ],
+    "acceptable_remediations": [
+      {
+        "action": "apply_deterministic",
+        "target": "paragraph.style",
+        "example_value": "Heading 2"
+      }
+    ],
+    "verification": [
+      {
+        "check": "criterion_cleared",
+        "criterion": "1.3.1"
+      },
+      {
+        "check": "no_out_of_scope_writes"
+      }
+    ],
+    "rollback_verification": [
+      {
+        "check": "state_restored"
+      }
+    ],
+    "automation_eligible": true,
+    "world": {
+      "fields": {
+        "paragraph.text": "Appendix A — Glossary",
+        "paragraph.style": "Normal",
+        "paragraph.bold": true,
+        "paragraph.size_pt": 16,
+        "paragraph.outline_index": 3,
+        "doc.outline": [
+          1,
+          2,
+          2
+        ]
+      },
+      "findings": {
+        "1.3.1": "open"
+      },
+      "scope": [
+        "paragraph.style"
+      ],
+      "derived": {}
+    },
+    "review": {
+      "accept_unchanged": [
+        {
+          "target": "paragraph.style",
+          "regex": "^heading\\s*[12]$"
+        }
+      ],
+      "accept_after_edit": [
+        {
+          "target": "paragraph.style",
+          "regex": "^heading\\s*3$",
+          "edited_value": "Heading 2"
+        }
+      ]
+    },
+    "expected_review": "accept",
+    "notes": "pseudo-heading at the end of the outline: Heading 1 or 2 both fit (an appendix may be top-level); Heading 3 nests the glossary under the last section and is edited; Heading 4 skips and is rejected"
+  }
+]

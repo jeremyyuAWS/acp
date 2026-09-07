@@ -420,8 +420,8 @@ class JobWorker:
                     if self.on_retry:
                         self.on_retry(job["id"], {
                             "phase": "deployment_requeue",
-                            "attempt": max(0, int(job.get("attempts") or 0) - 1),
-                            "max_attempts": job.get("max_attempts"),
+                            "attempt": int(fresh.get("attempts") or 0),
+                            "max_attempts": fresh.get("max_attempts"),
                         })
                 except Exception:
                     swallowed("worker.run_once: announcing deployment handoff failed")

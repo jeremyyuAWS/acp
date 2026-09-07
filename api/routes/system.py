@@ -951,6 +951,20 @@ class ScheduleUpdate(BaseModel):
     timezone: str | None = None
     local_time: str | None = None
     days: list[int] | None = None
+    source: str | None = None
+    scope: dict | None = None
+    notifications: str | None = None
+    execution: dict | None = None
+
+
+class ScheduleGuardrailsUpdate(BaseModel):
+    allowed_sources: list[str]
+    min_frequency_minutes: int = 60
+    max_concurrent_per_owner: int = 1
+    catch_up_ceiling: int = 1
+    blackout_timezone: str = "UTC"
+    blackout_start: str | None = None
+    blackout_end: str | None = None
 
 
 def _schedule_owner(request: Request) -> str:
@@ -978,6 +992,22 @@ def _schedule_response(request: Request) -> dict:
             cfg["next_at"] = next_at.isoformat() if next_at else None
         except ValueError:
             cfg["next_at"] = None
+    history = core.store.list_schedule_occurrences(owner, limit=20)
+    metrics = cfg.get("metrics", {})
+    total = int(metrics.get("scheduled", 0))
+    cfg["source_config"] = {"kind": cfg.get("source", "drive"),
+                            "scope": cfg.get("source_scope", {})}
+    cfg["notifications"] = cfg.get("notification_policy", "failures")
+    cfg["execution"] = cfg.get("queue_policy", {})
+    cfg["guardrails"] = core.store.get_schedule_guardrails()
+    cfg["history"] = history
+    cfg["reliability"] = {
+        "scheduled": total, "delayed": int(metrics.get("delayed", 0)),
+        "skipped": int(metrics.get("skipped", 0)), "failed": int(metrics.get("failed", 0)),
+        "on_time_rate": (None if total == 0 else round(max(0, total - int(metrics.get("delayed", 0))) / total, 4)),
+    }
+    cfg["options"] = {"notification_policies": ["off", "failures", "changes_and_failures", "all"],
+                      "sources": cfg["guardrails"]["allowed_sources"]}
     return cfg
 
 
@@ -1012,7 +1042,9 @@ def update_schedule(body: ScheduleUpdate, request: Request):
     # Attribute scheduled sweeps to whoever set the schedule, so the resulting scans
     # show up in their (owner-scoped) scan list.
     owner = _schedule_owner(request)
-    if body.timezone is None and body.local_time is None and body.days is None:
+    if (body.timezone is None and body.local_time is None and body.days is None and
+            body.source is None and body.scope is None and body.notifications is None and
+            body.execution is None):
         if body.interval_minutes is None:
             raise HTTPException(422, "interval_minutes or a wall-clock schedule is required")
         if body.interval_minutes < 1:
@@ -1025,7 +1057,11 @@ def update_schedule(body: ScheduleUpdate, request: Request):
                 owner, body.enabled,
                 body.timezone if body.timezone is not None else current["timezone"],
                 body.local_time if body.local_time is not None else current["local_time"],
-                body.days if body.days is not None else current["days"], source="drive")
+                body.days if body.days is not None else current["days"],
+                source=body.source or current.get("source") or "drive",
+                source_scope=body.scope if body.scope is not None else current.get("source_scope"),
+                notification_policy=body.notifications or current.get("notification_policy", "failures"),
+                queue_policy=body.execution if body.execution is not None else current.get("queue_policy"))
             legacy = core.store.get_schedule()
             legacy_owner = (legacy.get("owner_email") or "demo").strip().lower()
             if legacy_owner == owner and legacy.get("enabled"):
@@ -1035,6 +1071,38 @@ def update_schedule(body: ScheduleUpdate, request: Request):
             raise HTTPException(422, str(exc)) from exc
     core.reload_scheduler()
     return schedule(request)
+
+
+@router.get("/schedule/history")
+def schedule_history(request: Request, limit: int = Query(20, ge=1, le=200)):
+    return {"items": core.store.list_schedule_occurrences(_schedule_owner(request), limit=limit)}
+
+
+@router.get("/schedule/notifications")
+def schedule_notifications(request: Request, limit: int = Query(50, ge=1, le=200)):
+    return {"items": core.store.list_schedule_notifications(_schedule_owner(request), limit=limit)}
+
+
+@router.post("/schedule/notifications/{notification_id}/read")
+def read_schedule_notification(notification_id: str, request: Request):
+    if not core.store.mark_schedule_notification_read(_schedule_owner(request), notification_id):
+        raise HTTPException(404, "notification not found")
+    return {"ok": True}
+
+
+@router.get("/admin/schedule-guardrails")
+def schedule_guardrails(request: Request):
+    _require_admin(request)
+    return core.store.get_schedule_guardrails()
+
+
+@router.put("/admin/schedule-guardrails")
+def update_schedule_guardrails(body: ScheduleGuardrailsUpdate, request: Request):
+    _require_admin(request)
+    try:
+        return core.store.save_schedule_guardrails(**body.model_dump())
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 @router.get("/hub", response_class=Response)
@@ -1978,6 +2046,35 @@ def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None,
             "total": int(detail.get("documents") or 0), "max_attempts_seen": completed.get("attempt"),
             "started_at": started.get("occurred_at"), "updated_at": completed.get("occurred_at"),
         })
+    # Canonical executions define the workflow's stage set. Queue rows and lifecycle events are
+    # intentionally lossy operational projections: synchronous stages have no job, and terminal
+    # jobs eventually age out of both projections. Seed any missing canonical stage before the
+    # telemetry pass so those durable facts cannot disappear from Live Operations.
+    represented = {(str(run.get("scan_id") or ""), str(run.get("stage") or "")) for run in runs}
+    run_by_scan = {}
+    for run in runs:
+        run_by_scan.setdefault(str(run.get("scan_id") or ""), run)
+    for scan_id, lineage in (canonical_lineages or {}).items():
+        exemplar = run_by_scan.get(str(scan_id)) or {}
+        for canonical in (lineage or {}).get("stages", []):
+            stage = str(canonical.get("stage") or "").strip()
+            key = (str(scan_id), stage)
+            if not stage or key in represented:
+                continue
+            runs.append({
+                "scan_id": str(scan_id), "stage": stage,
+                "workflow_id": canonical.get("workflow_id") or lineage.get("workflow_id"),
+                "workflow_revision": (canonical.get("workflow_revision") or
+                                      lineage.get("workflow_revision") or 1),
+                "owner": (lineage.get("owner_email") or lineage.get("owner") or
+                          exemplar.get("owner") or "unknown"),
+                "source": lineage.get("source") or exemplar.get("source") or "unknown",
+                "running": 0, "queued": 0, "failed": 0, "completed": 0, "total": 0,
+                "started_at": canonical.get("created_at"),
+                "updated_at": canonical.get("last_durable_update_at"),
+                "max_attempts_seen": 0,
+            })
+            represented.add(key)
     stage_order = {"discover": 0, "assess": 1, "remediate": 2, "release": 3}
     now = datetime.now(timezone.utc)
     for run in runs:
@@ -2090,6 +2187,9 @@ def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None,
                 stage["terminal_outcome"] = "completed"
             workflow["workflow_revision"] = int(
                 canonical.get("workflow_revision") or (lineage or {}).get("workflow_revision") or 1)
+            canonical_updated = canonical.get("last_durable_update_at")
+            if str(canonical_updated or "") > str(workflow.get("updated_at") or ""):
+                workflow["updated_at"] = canonical_updated
         workflow["stages"].sort(key=lambda row: (stage_order.get(row["stage"], 99), row["stage"]))
         active = [row for row in workflow["stages"] if row["status"] != "completed"]
         if active:

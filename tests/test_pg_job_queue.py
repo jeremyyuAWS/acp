@@ -87,6 +87,21 @@ def pg():
     return st
 
 
+def test_maintenance_lease_elects_one_backfill_owner_under_real_concurrency(pg):
+    workers = 8
+    barrier = threading.Barrier(workers)
+
+    def claim(_index):
+        barrier.wait()
+        return pg.claim_maintenance_lease(
+            "concurrent-stage-backfill", lease_seconds=60,
+            now="2026-09-07T00:00:00+00:00")
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        outcomes = list(pool.map(claim, range(workers)))
+    assert Counter(outcomes) == Counter({False: workers - 1, True: 1})
+
+
 def _enqueue_many(st, n, job_type="t_pg"):
     return [st.enqueue_job(job_type, {"i": i}) for i in range(n)]
 
@@ -368,3 +383,28 @@ def test_reserved_discovery_claim_bypasses_content_on_postgres(pg):
     assert pg.get_job(content)['status'] == 'queued'
     assert pg.claim_job('discovery', job_types=('scan_discover',)) is None
     assert pg.claim_job('general')['id'] == content
+
+
+def test_concurrent_side_effect_reservation_elects_exactly_one_provider_writer(pg):
+    """The production database, not process memory, elects the external-write owner."""
+    start = threading.Barrier(8)
+
+    def reserve(worker):
+        start.wait()
+        return pg.reserve_side_effect(
+            execution_id="pg-release-execution", work_item_id="pg-release-item",
+            effect_type="sharepoint.publish", destination="graph:drive:folder:a.docx",
+            content_digest="sha256:corrected", worker_id=f"worker-{worker}",
+            now="2026-09-06T10:00:00+00:00", lease_seconds=300)
+
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        results = list(ex.map(reserve, range(8)))
+
+    winners = [row for row in results if row["acquired"]]
+    assert len(winners) == 1
+    assert {row["effect_id"] for row in results} == {winners[0]["effect_id"]}
+    with pg._db.cursor() as cur:
+        pg._db.execute(cur,
+            "SELECT COUNT(*) AS n FROM side_effect_receipts WHERE effect_id=%s",
+            (winners[0]["effect_id"],))
+        assert pg._db.fetchone(cur)["n"] == 1

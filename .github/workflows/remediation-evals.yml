@@ -24,6 +24,14 @@ name: remediation-evals
 on:
   workflow_dispatch:
     inputs:
+      kit:
+        description: 'Which set to run: the 100-case remediation kit, or the 32-case adversarial review-loop set (docs/adversarial-claude-evals.md)'
+        type: choice
+        required: true
+        default: 'remediation'
+        options:
+          - remediation
+          - adversarial
       candidates:
         description: 'Space-separated candidate specs (e.g. "rules-only anthropic:claude-haiku-4-5")'
         required: true
@@ -37,11 +45,11 @@ on:
         required: true
         default: '2.00'
       limit:
-        description: 'Cap the number of cases (blank = all 100). Use for a cheap smoke run'
+        description: 'Cap the number of cases (blank = all: 100 remediation, 32 adversarial). Use for a cheap smoke run'
         required: false
         default: ''
       fail_on_gate:
-        description: 'Fail the job if any candidate fails any gate'
+        description: 'Fail the job if any candidate fails any gate (remediation kit only; the adversarial set has no gates, it reports)'
         type: boolean
         required: false
         default: false
@@ -116,17 +124,31 @@ jobs:
             *) echo "no anthropic: candidate — nothing to install (the kit itself is stdlib-only)" ;;
           esac
 
+      - name: Pick the runner for the requested kit
+        id: kit
+        env:
+          KIT: ${{ inputs.kit }}
+        run: |
+          set -euo pipefail
+          # Both runners take the same flags (-c, --repeats, --limit, --max-spend-usd, --json,
+          # --md, --estimate-only); only the remediation kit has gates to fail on.
+          case "$KIT" in
+            adversarial) echo "script=scripts/run_adversarial_claude_evals.py" >> "$GITHUB_OUTPUT" ;;
+            *)           echo "script=scripts/run_remediation_evals.py" >> "$GITHUB_OUTPUT" ;;
+          esac
+
       - name: Pre-flight — price the run before making a call
         env:
           CANDIDATES: ${{ inputs.candidates }}
           REPEATS: ${{ inputs.repeats }}
           LIMIT: ${{ inputs.limit }}
+          SCRIPT: ${{ steps.kit.outputs.script }}
         run: |
           set -euo pipefail
           args=""
           for spec in $CANDIDATES; do args="$args -c $spec"; done
           if [ -n "$LIMIT" ]; then args="$args --limit $LIMIT"; fi
-          python scripts/run_remediation_evals.py --estimate-only --repeats "$REPEATS" $args
+          python "$SCRIPT" --estimate-only --repeats "$REPEATS" $args
 
       - name: Run the evals
         id: run
@@ -136,6 +158,8 @@ jobs:
           LIMIT: ${{ inputs.limit }}
           MAX_SPEND: ${{ inputs.max_spend_usd }}
           FAIL_ON_GATE: ${{ inputs.fail_on_gate }}
+          KIT: ${{ inputs.kit }}
+          SCRIPT: ${{ steps.kit.outputs.script }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           EVALS_API_KEY: ${{ secrets.EVALS_API_KEY }}
         run: |
@@ -144,10 +168,10 @@ jobs:
           args=""
           for spec in $CANDIDATES; do args="$args -c $spec"; done
           if [ -n "$LIMIT" ]; then args="$args --limit $LIMIT"; fi
-          if [ "$FAIL_ON_GATE" = "true" ]; then args="$args --fail-on-gate"; fi
-          python scripts/run_remediation_evals.py \
+          if [ "$FAIL_ON_GATE" = "true" ] && [ "$KIT" != "adversarial" ]; then args="$args --fail-on-gate"; fi
+          python "$SCRIPT" \
             --repeats "$REPEATS" --max-spend-usd "$MAX_SPEND" $args \
-            --json "out/$(date +%F)-evals.json" --md "out/$(date +%F)-evals.md"
+            --json "out/$(date +%F)-${KIT}-evals.json" --md "out/$(date +%F)-${KIT}-evals.md"
 
       - name: Put the report on the run summary
         if: always()

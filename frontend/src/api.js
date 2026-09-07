@@ -1175,8 +1175,8 @@ export const getSourceStatus = (scanId) => (SIM
 // AI usage + cost governance rollup (ADR 0019 Phase 1) — today / month / all-time.
 const _emptyRoll = { calls: 0, ok: 0, failed: 0, cost_usd: 0, avg_latency_ms: 0, scans: 0, by_provider: [], by_model: [], by_zone: [], by_surface: [] }
 export const getAiCosts = () => (SIM
-  ? sim({ today: _emptyRoll, month: _emptyRoll, all_time: _emptyRoll })
-  : fetch(`${BASE}/ai/costs`, { headers: headers() }).then(j).catch(() => ({ today: _emptyRoll, month: _emptyRoll, all_time: _emptyRoll })))
+  ? sim({ today: _emptyRoll, month: _emptyRoll, all_time: _emptyRoll, shadow_rollout: null })
+  : fetch(`${BASE}/ai/costs`, { headers: headers() }).then(j).catch(() => ({ today: _emptyRoll, month: _emptyRoll, all_time: _emptyRoll, shadow_rollout: null })))
 // AI provider gateway config (ADR 0019 §6). The API returns only SAFE views — never a key value,
 // just whether the referenced secret is present. putAiProvider sends the secret's reference NAME,
 // never a key (the backend rejects a pasted key).
@@ -1732,7 +1732,9 @@ export const setScanLocations = (source, folders, exclude = []) => (SIM ? sim({ 
 
 export const listFolders = (parent = 'root') => (SIM ? sim({ parent, name: 'My Drive', folders: [] }) : fetch(`${BASE}/folders?parent=${encodeURIComponent(parent)}`, { headers: headers() }).then(j))
 export const getSchedule = () => (SIM
-  ? sim({ enabled: false, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', local_time: '09:00', days: [0, 1, 2, 3, 4], next_at: null, last_at: null })
+  ? sim({ enabled: false, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC', local_time: '09:00', days: [0, 1, 2, 3, 4], next_at: null, last_at: null,
+      source: null, scope: { include: [], exclude: [] }, notifications: { on_failure: true, on_delay: false, on_change: false, channel: 'in_app' },
+      execution: { defer_when_busy: true, queue_threshold: 20, prewarm: true, prewarm_minutes: 10 }, history: [], reliability: null })
   : fetch(`${BASE}/schedule`, { headers: headers() }).then(j))
 export const putSchedule = (body) => (SIM
   ? sim({ ...body, next_at: null, last_at: null })

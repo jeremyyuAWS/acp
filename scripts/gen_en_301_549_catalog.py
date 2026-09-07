@@ -34,7 +34,9 @@ and it yields 185 clean pairs across all 14 top-level clauses.
 It also stops too shallow, and stopping with it would have shipped a EU report missing most of
 what it claims. Clauses 9, 10 and 11 incorporate WCAG's success criteria as numbered sub-clauses,
 and the contents page lists them only to guideline depth: sixteen rows for clause 9 where the
-standard has fifty-six. So the body supplies the depth, restricted to headings that EXTEND a
+catalog this writes carries fifty-eight — fifty-five WCAG-derived criteria under 9.1-9.4, plus
+9.0, 9.5 and 9.6 (tests/test_acr_en_301_549_catalog.py pins the 58; this sentence said fifty-six
+for two days, matching neither). So the body supplies the depth, restricted to headings that EXTEND a
 contents-page entry — parsed alone it yields 458 candidates with truncated titles ("Concurrent
 voice and") and stray glyphs, because headings wrap and tables repeat their numbers.
 
@@ -144,7 +146,7 @@ def parse(pdf_path: Path) -> list[dict]:
     # ship a EU report missing most of what it claims. Clause 9 (Web), 10 (Non-web documents) and
     # 11 (Software) each incorporate WCAG's success criteria as numbered sub-clauses — 9.1.1.1 Non-
     # text content, and so on — but the contents page lists them only to guideline depth (9.1.1
-    # Text alternatives). Sixteen rows for clause 9 where the standard has fifty-six.
+    # Text alternatives). Sixteen rows for clause 9 where the catalog carries fifty-eight.
     #
     # So the body supplies the depth the contents page omits: any heading that EXTENDS a contents-
     # page entry. Body headings are noisier than the contents page (they wrap, and tables repeat

@@ -53,7 +53,19 @@ _REQUIRED = (
     "forbidden_actions", "expected_diagnosis", "acceptable_remediations",
     "verification", "rollback_verification", "risk_tier", "automation_eligible",
 )
-_OPTIONAL = ("world", "secrets", "injection", "human_minutes", "notes", "must_abstain")
+_OPTIONAL = ("world", "secrets", "injection", "human_minutes", "notes", "must_abstain",
+             # The adversarial review-loop set (evals/review.py) adds three keys. They are
+             # optional so the 100-case kit corpus needs no change, and validated below so a
+             # typo in a band name grades as "reviewer rejected everything" nowhere.
+             "category", "review", "expected_review")
+
+# The review-loop categories — the five surfaces the adversarial set covers, and the unit its
+# report breaks down by.
+CATEGORIES = ("alt_text", "headings_labels", "link_purpose", "document_language",
+              "semantic_structure")
+EXPECTED_REVIEWS = ("accept", "refuse", "either")
+_BAND_KEYS = ("target", "equals", "regex", "matches_any", "forbids", "forbids_regex",
+              "max_words", "min_words", "edited_value", "edited_target")
 
 
 @dataclass(frozen=True)
@@ -87,6 +99,9 @@ class Case:
     human_minutes: float = 0.0
     notes: str = ""
     must_abstain: bool = False
+    category: str | None = None
+    review: dict[str, Any] = field(default_factory=dict)
+    expected_review: str | None = None
 
     @property
     def defect_ids(self) -> frozenset[str]:
@@ -151,6 +166,33 @@ def validate(raw: dict[str, Any], *, source: str = "<dict>") -> None:
             if chk.get("check") not in known_checks:
                 bad(f"{group}: unknown check {chk.get('check')!r}")
 
+    if "category" in raw and raw["category"] not in CATEGORIES:
+        bad(f"category {raw['category']!r} not one of {CATEGORIES}")
+    if "expected_review" in raw and raw["expected_review"] not in EXPECTED_REVIEWS:
+        bad(f"expected_review {raw['expected_review']!r} not one of {EXPECTED_REVIEWS}")
+    review = raw.get("review")
+    if review is not None:
+        if not isinstance(review, dict):
+            bad("review must be an object")
+        unknown_r = [k for k in review if k not in ("target", "accept_unchanged",
+                                                    "accept_after_edit")]
+        if unknown_r:
+            bad(f"review: unknown key(s): {', '.join(sorted(unknown_r))}")
+        for band_name in ("accept_unchanged", "accept_after_edit"):
+            for band in review.get(band_name, []):
+                if not isinstance(band, dict):
+                    bad(f"review.{band_name}: band must be an object")
+                unknown_b = [k for k in band if k not in _BAND_KEYS]
+                if unknown_b:
+                    bad(f"review.{band_name}: unknown key(s): {', '.join(sorted(unknown_b))}")
+                if band_name == "accept_after_edit" and "edited_value" not in band:
+                    bad("review.accept_after_edit: every band needs an edited_value — an edit "
+                        "the oracle cannot name is not an edit it can apply")
+                if band_name == "accept_after_edit" and "edited_value" in band:
+                    ev = band["edited_value"]
+                    if isinstance(ev, str) and not ev.strip() and not band.get("edited_target"):
+                        bad("review.accept_after_edit: edited_value is empty")
+
     # A must-abstain case whose acceptable remediations include a mutation is self-contradictory:
     # it would grade a correct refusal as a miss and an unsafe write as a pass.
     if raw.get("must_abstain"):
@@ -180,6 +222,8 @@ def from_dict(raw: dict[str, Any], *, source: str = "<dict>") -> Case:
         world=raw.get("world", {}), secrets=tuple(raw.get("secrets", ())),
         injection=raw.get("injection"), human_minutes=float(raw.get("human_minutes", 0.0)),
         notes=raw.get("notes", ""), must_abstain=bool(raw.get("must_abstain", False)),
+        category=raw.get("category"), review=raw.get("review", {}),
+        expected_review=raw.get("expected_review"),
     )
 
 

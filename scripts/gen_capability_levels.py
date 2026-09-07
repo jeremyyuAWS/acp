@@ -231,6 +231,19 @@ REMEDIATION_VERIFIED: dict[tuple[str, str], str] = {
         "restored. The partial-write control uses THREE default tabs because the detector gates "
         "at two: renaming one of two would drop below the gate and clear the criterion, so that "
         "control would have proved nothing"),
+    ("2.4.6", "pptx"): (
+        "tests/test_remediation_verified_pptx_titles.py — approved titles for slides whose "
+        "layout has a title placeholder left empty go through handlers._apply_approved_values "
+        "with the re-scan UNPATCHED; python-pptx reads the titles back, the body text and the "
+        "already-titled slide survive, the first-party detector names no empty slide, and a "
+        "second real assessment no longer reports 2.4.6. THE LAST OF THE EIGHTEEN LANES TO GET "
+        "A PROOF: it was registered for months on a writer unit test alone, and writing the "
+        "round trip found that the writer matched only type=\"title\" while the detector also "
+        "counts ctrTitle (the Title Slide layout) — an approval aimed at a Title Slide was "
+        "refused as unresolved and never credited. The writer now accepts both and the proof "
+        "round-trips a Title Slide too. Controls: titling one of two empty slides is written "
+        "and never credited; a Blank slide (no title slot, not a finding) and a slide number "
+        "that does not exist are refused, never credited"),
     ("1.1.1", "pdf"): (
         "tests/test_remediation_verified_pdf_writeback.py — /Alt on a tagged figure's structure "
         "element, through handlers._apply_approved_values with the re-scan UNPATCHED. The "

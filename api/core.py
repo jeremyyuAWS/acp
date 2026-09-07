@@ -1411,6 +1411,59 @@ def _interactive_sp_sync_plan(owner: str, token: str, drive_id: str | None) -> d
     return {"prior_files": prior_files, "changed": changed, "removed_ids": removed_ids}
 
 
+def _schedule_lifecycle_complete(st, occurrence: dict | None, *, result: str,
+                                 changed=None, error=None, scan_id=None) -> None:
+    """Best-effort lifecycle + notification writes for new owner schedules.
+
+    Capability checks keep a mixed-version deployment compatible with the legacy singleton.
+    The scan result is authoritative even when telemetry or notification persistence is down.
+    """
+    if not occurrence or not occurrence.get("owner_email"):
+        return
+    import datetime as _dt
+    owner, key = occurrence["owner_email"], occurrence.get("occurrence_key")
+    if not key:
+        return
+    completed = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    begin = getattr(st, "begin_schedule_occurrence", None)
+    if callable(begin):
+        try:
+            # Ensures an admission-time skip/failure still has a history row. For a running
+            # occurrence this is an idempotent no-op at the Store boundary.
+            begin(owner, key, occurrence.get("scheduled_for") or completed, completed,
+                  delay_reason=error if result == "skipped" else None)
+        except Exception:
+            swallowed("core._schedule_lifecycle_complete: creating the occurrence record failed")
+    complete = getattr(st, "complete_schedule_occurrence", None)
+    if callable(complete):
+        try:
+            complete(owner, key, result=result, completed_at=completed,
+                     changed=changed, error=error)
+        except Exception:
+            swallowed("core._schedule_lifecycle_complete: completing the occurrence record failed")
+    emit = getattr(st, "emit_schedule_notification_for_occurrence", None)
+    if callable(emit):
+        try:
+            message = str(error) if error else (f"Scan {scan_id} completed" if scan_id else None)
+            emit(owner, key, result, changed=bool(changed), message=message)
+        except Exception:
+            swallowed("core._schedule_lifecycle_complete: emitting the schedule notification failed")
+
+
+def _scheduled_scan_admission(occurrence: dict, *, now=None) -> dict:
+    """Re-check queue/admin policy immediately before a scheduled job starts."""
+    import datetime as _dt
+    st = get_store()
+    check = getattr(st, "schedule_admission", None)
+    if not callable(check) or not occurrence.get("owner_email"):
+        return {"admit": True, "reason": None}
+    instant = now or _dt.datetime.now(_dt.timezone.utc)
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=_dt.timezone.utc)
+    return check(occurrence["owner_email"], occurrence["occurrence_key"],
+                 occurrence.get("scheduled_for") or instant.isoformat(), instant.isoformat())
+
+
 def _do_scheduled_scan(occurrence: dict | None = None):
     """A scheduled sweep. Re-scans the configured source (Drive via the service-account
     ADC identity — no user token is available in the background), stamps it with the
@@ -1450,11 +1503,21 @@ def _do_scheduled_scan(occurrence: dict | None = None):
             reload_scheduler()  # legacy singleton self-heal
         return
 
+    st = get_store()
     owner = cfg.get("owner_email")
     source = cfg.get("source") or "drive"
     ai = get_store().get_ai_enabled()
 
     now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    if occurrence:
+        begin = getattr(st, "begin_schedule_occurrence", None)
+        if callable(begin):
+            try:
+                begin(owner, occurrence["occurrence_key"],
+                      occurrence.get("scheduled_for") or now, now,
+                      delay_reason="catch_up" if occurrence.get("catch_up") else None)
+            except Exception:
+                swallowed("core._do_scheduled_scan: starting the occurrence record failed")
 
     drive_delta = None
     sp_delta = None
@@ -1462,11 +1525,14 @@ def _do_scheduled_scan(occurrence: dict | None = None):
     sp_folder = None
     if source == "drive":
         cursor_key = f"drive:scheduled:{str(owner).strip().lower()}" if occurrence else "drive"
-        skip, drive_delta = _drive_sync_plan(owner, cursor_key)
+        scope = cfg.get("source_scope") or {}
+        narrowed = bool(scope.get("include_ids") or scope.get("exclude_ids"))
+        skip, drive_delta = (False, None) if narrowed else _drive_sync_plan(owner, cursor_key)
         if skip:
             print("scheduled drive sweep skipped — no changes since the last sync", flush=True)
             get_store().record_sweep_outcome(ok=True, when=now, source=source, skipped=True,
                                              owner=owner if occurrence else None)
+            _schedule_lifecycle_complete(st, occurrence, result="skipped", changed=False)
             return
     elif source == "sharepoint":
         import sp_sync
@@ -1483,23 +1549,44 @@ def _do_scheduled_scan(occurrence: dict | None = None):
             # configured library with no folder narrowing and no site enumeration (an app-only
             # token has no "signed-in user" for the site-less OneDrive default to fall back to).
             sp_folder = f"{sp_sync.sync_drive_id()}/root"
-            skip, sp_delta = _sp_sync_plan(owner, sp_token)
+            scope = cfg.get("source_scope") or {}
+            narrowed = bool(scope.get("include_ids") or scope.get("exclude_ids"))
+            skip, sp_delta = (False, None) if narrowed else _sp_sync_plan(owner, sp_token)
             if skip:
                 print("scheduled sharepoint sweep skipped — no changes since the last sync",
                       flush=True)
                 get_store().record_sweep_outcome(ok=True, when=now, source=source, skipped=True,
                                                  owner=owner if occurrence else None)
+                _schedule_lifecycle_complete(st, occurrence, result="skipped", changed=False)
                 return
 
     try:
+        scope = cfg.get("source_scope") or {}
+        include_ids = list(scope.get("include_ids") or [])
+        exclude_ids = list(scope.get("exclude_ids") or [])
+        scan_scope = {}
+        if occurrence and (include_ids or exclude_ids):
+            scan_scope = {"folders": include_ids or None,
+                          "exclude_folders": exclude_ids or None}
         report = run_scan(source, drive_token=None, ai_enabled=ai, user=owner,   # ADC for drive
                           drive_delta=drive_delta, sp_delta=sp_delta,
-                          sp_token=sp_token, folder=sp_folder)
+                          sp_token=sp_token,
+                          folder=sp_folder if not include_ids else None,
+                          **scan_scope)
         sid = get_store().save_scan(report)
         finalize_scan(sid, ai, source)
         get_store().record_sweep_outcome(ok=True, when=now, source=source, scan_id=sid,
                                          files=report["summary"]["files"],
                                          owner=owner if occurrence else None)
+        # A connector delta is the only authoritative changed/no-change signal available here.
+        # A narrowed/full first scan has no comparable prior boundary, so do not turn an
+        # unknown into a noisy "changes found" notification.
+        changed = None
+        delta = drive_delta if drive_delta is not None else sp_delta
+        if delta is not None:
+            changed = bool(delta.get("changed") or delta.get("removed_ids"))
+        _schedule_lifecycle_complete(st, occurrence, result="succeeded", changed=changed,
+                                     scan_id=sid)
         print(f"scheduled {source} sweep complete: {report['summary']['files']} files "
               f"(owner={owner})", flush=True)
     except Exception as e:
@@ -1521,6 +1608,7 @@ def _do_scheduled_scan(occurrence: dict | None = None):
         # 403 insufficient-scopes loop ran unnoticed on 2026-07-29. /schedule reports it now.
         get_store().record_sweep_outcome(ok=False, when=now, source=source, error=str(e),
                                          owner=owner if occurrence else None)
+        _schedule_lifecycle_complete(st, occurrence, result="failed", error=str(e))
         print(f"scheduled {source} sweep FAILED — no scan was saved, the previous scan stands: {e}",
               flush=True)
 
@@ -1539,6 +1627,15 @@ def _enqueue_scheduled_scan(now=None) -> bool:
         instant = instant.replace(tzinfo=_dt.timezone.utc)
     schedules = (st.list_enabled_user_scan_schedules()
                  if hasattr(st, "list_enabled_user_scan_schedules") else [])
+    request_prewarm = getattr(st, "request_schedule_prewarm", None)
+    if callable(request_prewarm):
+        for forecast in _scan_schedule.prewarm_candidates(schedules, instant):
+            try:
+                request_prewarm(forecast["owner_email"], forecast["occurrence_key"],
+                                forecast["scheduled_for"], instant.isoformat(),
+                                forecast["source"])
+            except Exception:
+                continue
     admitted = False
     for cfg in schedules:
         due = _scan_schedule.due_or_most_recent_occurrence(cfg, instant)
@@ -1547,6 +1644,15 @@ def _enqueue_scheduled_scan(now=None) -> bool:
         payload = {**due, "owner_email": cfg["owner_email"],
                    "source": cfg.get("source") or "drive",
                    "timezone": cfg["timezone"], "local_time": cfg["local_time"]}
+        try:
+            if _scan_schedule.in_blackout(cfg, _dt.datetime.fromisoformat(due["scheduled_for"])):
+                _schedule_lifecycle_complete(st, payload, result="skipped",
+                                             error="user blackout window")
+                continue
+        except (_scan_schedule.ScheduleError, TypeError, ValueError):
+            _schedule_lifecycle_complete(st, payload, result="skipped",
+                                         error="invalid blackout window")
+            continue
         run_after = None
         if due.get("catch_up"):
             # A fleet restart can recover many tenants at once. Spread catch-up admissions over
@@ -1555,6 +1661,20 @@ def _enqueue_scheduled_scan(now=None) -> bool:
             digest = _hashlib.sha256(cfg["owner_email"].lower().encode()).hexdigest()
             delay = int(digest[:8], 16) % 300
             run_after = (instant + _dt.timedelta(seconds=delay)).isoformat()
+        admission = getattr(st, "schedule_admission", None)
+        if callable(admission):
+            decision = admission(cfg["owner_email"], due["occurrence_key"],
+                                 due["scheduled_for"], instant.isoformat())
+            if not decision.get("admit"):
+                if decision.get("terminal"):
+                    _schedule_lifecycle_complete(st, payload, result="skipped",
+                                                 error=decision.get("reason"))
+                    continue
+                run_after = decision.get("run_after") or run_after
+                deferred = getattr(st, "defer_scheduled_sweep", None)
+                if callable(deferred) and run_after:
+                    deferred(cfg["owner_email"], due["occurrence_key"], run_after,
+                             decision.get("reason") or "queue_policy", due["scheduled_for"])
         if run_after:
             accepted = st.enqueue_scheduled_sweep(
                 due["occurrence_key"], payload, run_after=run_after)
@@ -1641,6 +1761,21 @@ WORKERS = int(os.environ.get("ACP_WORKERS", _WORKER_DEFAULT) or _WORKER_DEFAULT)
 _worker_handles: list = []
 _worker_seq = 0          # monotonic id source so scaled-in workers get fresh ids
 _MAX_WORKERS = 16        # safety cap on live scaling
+_STAGE_BACKFILL_MARKER = "maintenance:stage-execution-backfill-v1:complete"
+
+
+def _run_stage_execution_backfill_once() -> dict | None:
+    """Backfill historical stage batches once per fleet, retrying after interrupted owners."""
+    st = get_store()
+    if st.get_setting(_STAGE_BACKFILL_MARKER):
+        return None
+    if not st.claim_maintenance_lease("stage-execution-backfill-v1", lease_seconds=3600):
+        return None
+    import json as _json
+    report = st.backfill_stage_executions()
+    st.set_setting(_STAGE_BACKFILL_MARKER, _json.dumps(report, sort_keys=True))
+    print(f"[sweeper] canonical stage backfill complete: {report}", flush=True)
+    return report
 
 
 def _discovery_reservation(pool_size):
@@ -2325,6 +2460,7 @@ def start_workers() -> int:
         import time as _t
         import sweeper as _sweeper
         import content_workspace_retention as _retention
+        import stage_outbox as _stage_outbox
         ticks = 0
         while True:
             try:
@@ -2339,6 +2475,12 @@ def start_workers() -> int:
                 # above this function) — a separate, untested-in-production thread is exactly
                 # how a capability sits fully built and never actually fires.
                 _retention.run_content_workspace_retention_sweep(get_store())
+                # The shared jobs table is ACP's production transport. Acknowledge canonical
+                # outbox messages only after their job/work-item identity is verified there;
+                # failures remain retryable and visible in Live Operations.
+                _stage_outbox.dispatch_database_jobs_once(
+                    get_store(), dispatcher_id=worker_process_instance_id("outbox"), limit=200)
+                _run_stage_execution_backfill_once()
                 ticks += 1
                 if ticks % 60 == 0:      # ~hourly: trim old completed jobs so the jobs
                     d = get_store().purge_done_jobs(older_than_hours=24)   # table + claim index don't bloat (audit P2)

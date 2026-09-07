@@ -3,7 +3,7 @@ import { aiProvenance, getCopilotGuidance, getFileGeometry, getFileRemediationDi
 import Thumbnail from './Thumbnail.jsx'
 import BeforeAfterEvidence from './BeforeAfterEvidence.jsx'
 import RiskChip from './RiskChip.jsx'
-import { authoringScaffold, buildEvidenceCard, describedImageType, evidenceOf, evidenceSignals, firstProposed, groupPages, guidanceSentence, houseStyleOf, imagesOfTextException, isValueFix, leadWithIsolatedImage, primaryActionLabel, proposalsOf, reviewIntent, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview, whyRecommendation, whySafeToApprove } from './reviewCard.js'
+import { applyOutcomeCopy, authoringScaffold, buildEvidenceCard, describedImageType, evidenceOf, evidenceSignals, firstProposed, groupPages, guidanceSentence, houseStyleOf, imagesOfTextException, isValueFix, leadWithIsolatedImage, primaryActionLabel, proposalsOf, reviewIntent, reviewTelemetry, thumbAlt, thumbSize, trustStates, validationChecklist, verificationLadder, whyHumanReview, whyRecommendation, whySafeToApprove } from './reviewCard.js'
 import ProposalThumb, { isSafeThumb } from './ProposalThumb.jsx'
 import ProposalEditors, { seedValues } from './ProposalEditors.jsx'
 import CaptionEditor from './CaptionEditor.jsx'
@@ -751,13 +751,25 @@ export default function EvidenceCard({ item, onAct, onResolved, traceUrl = null,
                 11px text requires. --muted is 5.68:1 and reads as the same de-emphasis.
                 This is still live, meaningful text — not an inactive control — so 1.4.3's
                 disabled-component exemption does not apply to it. */}
-            <span className={s.state === 'done' ? 'conf conf-high' : s.state === 'current' ? 'conf conf-medium' : 'conf'}
+            <span className={s.state === 'done' ? 'conf conf-high' : s.state === 'current' ? 'conf conf-medium' : s.state === 'failed' ? 'conf conf-low' : 'conf'}
                   style={s.state === 'todo' ? { color: 'var(--muted)' } : undefined}>
-              {s.state === 'done' ? '✓ ' : s.state === 'current' ? '● ' : ''}{s.label}
+              {s.state === 'done' ? '✓ ' : s.state === 'current' ? '● ' : s.state === 'failed' ? '✗ ' : ''}{s.label}
             </span>
           </span>
         ))}
       </div>
+
+      {/* Post-write outcome — the approved value was written to a working copy, the re-scan refused
+          to credit it, and the copy was discarded. Until this line existed the reviewer approved,
+          saw nothing change, and had no way to learn why: apply.unverified was only ever logged. */}
+      {(() => {
+        const o = applyOutcomeCopy(card)
+        return o && (
+          <p className="evcard-apply-outcome" role="status" style={{ margin: '0 0 12px' }}>
+            <b>{o.headline}</b> {o.body}
+          </p>
+        )
+      })()}
 
       {/* Before/after evidence — ONE pattern for every finding type (HITL vision, roadmap #2): the
           contrast swatch, the heading-outline correction, the language tag. Self-hides when a

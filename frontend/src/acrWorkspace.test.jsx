@@ -11,7 +11,8 @@ import { createTestRoot, unmountAll } from './testRoots.js'
  *   · no compliance score or percentage (PRD §4.4, and api/accessibility_status.py's house rule
  *     "counts only, never a percentage of an invented denominator"),
  *   · no internal workflow state rendered where a VPAT conformance level goes (PRD §9),
- *   · no suggestion that the draft export is a real VPAT (PRD §4.6 — the ITI template is Phase 5).
+ *   · no suggestion that the draft export is a real VPAT (PRD §4.6 — its structure is matched, the
+ *     file is not vendored, and whether it may be CALLED one is ADR 0053's open Q1).
  *
  * Each of those is a thing a reasonable person would add without noticing it was forbidden, which
  * is exactly why they are pinned rather than left to review.
@@ -147,7 +148,7 @@ describe('what the screen must not claim', () => {
   it('says the draft export is not a VPAT', async () => {
     api.getAcrPreview.mockResolvedValue({
       template: { is_official_iti_template: false,
-                  note: 'Structural preview only. The official ITI VPAT® template is integrated in Phase 5; this output mirrors the VPAT table shape and is not a VPAT.' },
+                  note: 'Structural preview only. This output follows the structure of the ITI VPAT® template — its sections, tables and headings — without being built on the template file, and it is not a VPAT.' },
       report: { wcag_version: '2.2' },
       criteria: [{ criterion_num: '1.4.3', criterion_name: 'Contrast (Minimum)', level: 'AA',
                    conformance_level: 'Supports', remarks: '' }],

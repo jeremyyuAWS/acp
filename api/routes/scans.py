@@ -110,6 +110,15 @@ def _enqueue_stage_batch(*args, **kwargs) -> dict:
         }) from exc
 
 
+def _sealed_stage_input(sid: str, upstream_stage: str,
+                        fallback_snapshot_id: str) -> tuple[str, str | None]:
+    """Bind downstream work to the current sealed upstream output when available."""
+    reader = getattr(core.store, "current_stage_output_manifest", None)
+    manifest = reader(sid, upstream_stage) if callable(reader) else None
+    manifest_id = (manifest or {}).get("manifest_id")
+    return (manifest_id, manifest_id) if manifest_id else (fallback_snapshot_id, None)
+
+
 def _inv_capability(row: dict) -> dict:
     """Add the estate capability {format, status} to a scan_inventory row, derived from its mime/name
     the same way estate_inventory.summarize classifies the whole estate — so the per-file list/export
@@ -724,7 +733,8 @@ async def remediate_scan(sid: str, request: Request):
              "remediated_folder_id": remediated_folder_id, "drive_token": token,
              "source": source, "owner": owner,
              "checksum": checksums.get(f["file"]) or f.get("checksum")})
-    snapshot_id = core.store.stage_snapshot_id(sid)
+    snapshot_id, input_manifest_id = _sealed_stage_input(
+        sid, "assess", core.store.stage_snapshot_id(sid))
     # Fingerprint the EFFECTIVE file set, not raw request spelling: adding a nonexistent name or
     # reordering the same names is still the same work and must reuse the same execution. Human
     # intent is part of that identity too: editing an approved value for the same file set must
@@ -738,7 +748,7 @@ async def remediate_scan(sid: str, request: Request):
         payload["decision_digest"] = decision_digest
     execution = _enqueue_stage_batch(
         sid, "remediate", "remediate_file", payloads, snapshot_id=snapshot_id,
-        request_fingerprint=request_fingerprint)
+        request_fingerprint=request_fingerprint, input_manifest_id=input_manifest_id)
     core.store.seed_finding_dispositions(sid, execution["batch_id"], snapshot_id=snapshot_id)
     # AFTER the jobs exist, never before: the run is "accepted" precisely when durable work has
     # been enqueued for it, and an acceptance event that led the enqueue would let the panel show
@@ -1374,7 +1384,8 @@ def assess(sid: str, request: Request, level: str = Query("AA"),
             _live = _active_scope(core.store)
             if _live:
                 core.store.merge_scan_scope(sid, {"scan_scope": _scope_as_json(_live)})
-        snapshot_id = core.store.stage_snapshot_id(sid)
+        snapshot_id, input_manifest_id = _sealed_stage_input(
+            sid, "discover", core.store.stage_snapshot_id(sid))
         request_fingerprint = _json.dumps(
             {"level": level, "include_lifecycle_flagged": include_lifecycle_flagged},
             sort_keys=True)
@@ -1382,7 +1393,8 @@ def assess(sid: str, request: Request, level: str = Query("AA"),
             sid, "assess", "scan_assess",
             [{"scan_id": sid, "user": _owner(request),
               "include_lifecycle_flagged": include_lifecycle_flagged}],
-            snapshot_id=snapshot_id, request_fingerprint=request_fingerprint)
+            snapshot_id=snapshot_id, request_fingerprint=request_fingerprint,
+            input_manifest_id=input_manifest_id)
         jid = execution["job_ids"][0]
         return {"scan_id": sid, "level": level, "job_id": jid, "workers": core.WORKERS,
                 "worker_tier_alive": core.store.worker_tier_alive(),
@@ -1390,13 +1402,15 @@ def assess(sid: str, request: Request, level: str = Query("AA"),
                 "snapshot_id": snapshot_id, "reused": execution["reused"]}
     # Immediate model — the results views gate on assessed_at; stamp it + build the assess trace.
     core.store.mark_assessed(sid, _dt.datetime.now(_dt.timezone.utc).isoformat())
-    snapshot_id = core.store.stage_snapshot_id(sid)
+    snapshot_id, input_manifest_id = _sealed_stage_input(
+        sid, "discover", core.store.stage_snapshot_id(sid))
     request_fingerprint = _json.dumps(
         {"level": level, "include_lifecycle_flagged": include_lifecycle_flagged},
         sort_keys=True)
     execution = _enqueue_stage_batch(
         sid, "assess", "assess_trace", [{"scan_id": sid, "level": level}],
-        snapshot_id=snapshot_id, request_fingerprint=request_fingerprint)
+        snapshot_id=snapshot_id, request_fingerprint=request_fingerprint,
+        input_manifest_id=input_manifest_id)
     return {"scan_id": sid, "level": level, "job_id": execution["job_ids"][0],
             "workers": core.WORKERS, "snapshot_id": snapshot_id,
             "reused": execution["reused"]}
@@ -3336,6 +3350,34 @@ def publish_files(sid: str, request: Request, body: dict):
             drive_svc = None
     results = []
     folder_cache = {}
+    synchronous_execution = None
+    if source != "sharepoint":
+        ensure_sync = getattr(core.store, "ensure_synchronous_stage_execution", None)
+        if callable(ensure_sync):
+            import hashlib, json
+            requested = sorted(set(str(f) for f in files))
+            snapshot_id, input_manifest_id = _sealed_stage_input(sid, "remediate", release_id)
+            fingerprint = hashlib.sha256(json.dumps({
+                "files": requested, "source": source, "release_id": release_id,
+            }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            try:
+                synchronous_execution = ensure_sync(
+                    scan_id=sid, stage="release", input_ids=requested,
+                    input_snapshot_id=snapshot_id, request_fingerprint=fingerprint,
+                    input_manifest_id=input_manifest_id)
+            except ActiveStageExecutionError as exc:
+                raise HTTPException(status_code=409, detail={
+                    "code": "stage_execution_active", "stage": exc.stage,
+                    "active_batch_id": exc.batch_id,
+                    "message": "A different release is already active. Wait for it to finish or stop it.",
+                }) from exc
+
+    def finish_synchronous(filename: str, outcome: str, result: dict) -> None:
+        if not synchronous_execution:
+            return
+        core.store.finish_synchronous_stage_item(
+            synchronous_execution["execution_id"], filename, outcome=outcome, result=result)
+
     # A SharePoint release can contain hundreds of documents. Running that Graph traffic inside
     # this HTTP request makes the browser/proxy timeout the unit of durability. Queue one stable
     # job per corrected copy instead; completed documents are reused by the handler and a worker
@@ -3378,9 +3420,11 @@ def publish_files(sid: str, request: Request, body: dict):
             import hashlib, json
             requested = sorted(p["file"] for p in payloads)
             fingerprint = hashlib.sha256(json.dumps(requested).encode()).hexdigest()
+            snapshot_id, input_manifest_id = _sealed_stage_input(sid, "remediate", release_id)
             execution = _enqueue_stage_batch(
                 sid, "release", "publish_file", payloads,
-                snapshot_id=release_id, request_fingerprint=fingerprint)
+                snapshot_id=snapshot_id, request_fingerprint=fingerprint,
+                input_manifest_id=input_manifest_id)
         status = core.store.release_status(release_id, owner)
         return {"release_id": release_id, "release_folder_id": None,
                 "release_folder_name": folder_name, "release_folder_url": None,
@@ -3400,6 +3444,7 @@ def publish_files(sid: str, request: Request, body: dict):
                             "created": False}
             core.store.record_release_document(release_id, owner, result)
             results.append(result)
+            finish_synchronous(f, "failed", result)
             continue
         source_path = record.get("source_relative_path") or record.get("parent_folder") or f
         saved = core.store.get_release_document(release_id, f, owner)
@@ -3413,14 +3458,48 @@ def publish_files(sid: str, request: Request, body: dict):
                             "released_document_id": saved.get("released_document_id"),
                             "corrected_checksum": saved.get("corrected_checksum"),
                             "created": False})
+            finish_synchronous(f, "completed", results[-1])
             continue
         try:
             source_id = record.get("drive_file_id") or f
             root = None
+            reservation = None
+            # Release attests to the bytes that are durable now, not merely the digest recorded
+            # when remediation ran.  In particular, local Release has no provider write whose
+            # read would otherwise prove the Blob artifact still exists.
+            content_digest = _publish.remediated_content_digest(owner, sid, f)
+            if not content_digest:
+                raise IOError("corrected content was unavailable")
+            execution_id = (synchronous_execution or {}).get("execution_id")
+            work_item_id = ((synchronous_execution or {}).get("items") or {}).get(f)
+            publication = None
             if source == "drive":
                 if drive_svc is None:
                     raise PermissionError("Google Drive publishing requires a current write grant.")
                 location = "google:me"
+                folders, released_name = _publish.normalize_relative_path(source_path, f)
+                planned_destination = f"google:me:{release_id}:{'/'.join([*folders, released_name])}"
+                if execution_id:
+                    reservation = core.store.reserve_side_effect(
+                        execution_id=execution_id, work_item_id=work_item_id,
+                        effect_type="drive.publish", destination=planned_destination,
+                        content_digest=content_digest, worker_id=f"sync-release:{release_id}")
+                    if reservation.get("reused") and reservation.get("status") == "completed":
+                        receipt = dict(reservation.get("receipt") or {})
+                        publication = {"id": receipt.get("provider_id"), "url": receipt.get("url"),
+                                       "created": bool(receipt.get("created")),
+                                       "checksum": receipt.get("checksum"),
+                                       "verified": bool(receipt.get("verified", True))}
+                    elif not reservation.get("acquired"):
+                        queued = {"file": f, "source_document_id": source_id,
+                                  "original_relative_path": source_path,
+                                  "released_relative_path": None, "status": "queued",
+                                  "created": False}
+                        core.store.record_release_document(release_id, owner, queued)
+                        results.append(queued)
+                        continue
+                    else:
+                        publication = None
                 root = core.store.get_release_root(release_id, location, owner)
                 if not root:
                     from datetime import datetime
@@ -3432,11 +3511,11 @@ def publish_files(sid: str, request: Request, body: dict):
                     root = core.store.record_release_root(
                         release_id, owner, "drive", location, detail["id"],
                         detail["name"], detail.get("url"))
-                publication = _publish.archive_copy_publish(
-                    drive_svc, root["folder_id"], owner_email, sid, f,
-                    relative_path=source_path, source_id=source_id,
-                    folder_cache=folder_cache, return_details=True)
-                folders, released_name = _publish.normalize_relative_path(source_path, f)
+                if publication is None:
+                    publication = _publish.archive_copy_publish(
+                        drive_svc, root["folder_id"], owner_email, sid, f,
+                        relative_path=source_path, source_id=source_id,
+                        folder_cache=folder_cache, return_details=True)
             elif source == "sharepoint":
                 if not sp_token:
                     raise PermissionError("SharePoint publishing requires a current write grant.")
@@ -3462,6 +3541,27 @@ def publish_files(sid: str, request: Request, body: dict):
             if source in ("drive", "sharepoint") and publication is None:
                 raise IOError("corrected content was unavailable")
             url = publication.get("url") if publication else record.get("published_url")
+            lineage = core.store.release_finding_lineage(execution_id, f) if execution_id else None
+            if source == "drive" and reservation and reservation.get("acquired"):
+                receipt = {"provider_id": publication.get("id"), "url": url,
+                           "created": bool(publication.get("created")),
+                           "checksum": publication.get("checksum"),
+                           "content_sha256": content_digest,
+                           "filename": released_name,
+                           "verified": bool(publication.get("verified", True))}
+                if lineage is not None:
+                    receipt["finding_lineage"] = lineage
+                core.store.finalize_side_effect(
+                    reservation["effect_id"], reservation["reservation_token"], receipt)
+            elif source == "local" and execution_id:
+                receipt = {"checksum": content_digest, "filename": f, "verified": True}
+                if lineage is not None:
+                    receipt["finding_lineage"] = lineage
+                core.store.record_side_effect_receipt(
+                    execution_id=execution_id, work_item_id=work_item_id,
+                    effect_type="blob.release",
+                    destination=f"blob:remediated:{owner}/{sid}/{f}",
+                    content_digest=content_digest, receipt=receipt)
             ts = core.store.record_publish(sid, f, published_url=url)
             result = {"file": f, "source_document_id": source_id,
                             "original_relative_path": source_path,
@@ -3474,6 +3574,7 @@ def publish_files(sid: str, request: Request, body: dict):
                             "created": publication.get("created", False) if publication else False}
             core.store.record_release_document(release_id, owner, result)
             results.append(result)
+            finish_synchronous(f, "completed", result)
         except _publish.UnsafeReleasePath as exc:
             result = {"file": f, "source_document_id": record.get("drive_file_id") or f,
                             "original_relative_path": source_path,
@@ -3482,23 +3583,39 @@ def publish_files(sid: str, request: Request, body: dict):
                             "explanation": str(exc), "created": False}
             core.store.record_release_document(release_id, owner, result)
             results.append(result)
+            finish_synchronous(f, "failed", result)
         except PermissionError as exc:
+            uncertain = bool(reservation and reservation.get("acquired"))
             result = {"file": f, "source_document_id": record.get("drive_file_id") or f,
                             "original_relative_path": source_path,
-                            "released_relative_path": None, "status": "failed",
-                            "failure_category": "provider_permission_denied",
-                            "explanation": str(exc), "created": False}
+                            "released_relative_path": None,
+                            "status": "queued" if uncertain else "failed",
+                            **({} if uncertain else {
+                                "failure_category": "provider_permission_denied"}),
+                            "explanation": ("The provider outcome is uncertain; Release will "
+                                            "verify or retry after the reservation expires."
+                                            if uncertain else str(exc)), "created": False}
             core.store.record_release_document(release_id, owner, result)
             results.append(result)
+            if not uncertain:
+                finish_synchronous(f, "failed", result)
         except Exception:
+            uncertain = bool(reservation and reservation.get("acquired"))
             result = {"file": f, "source_document_id": record.get("drive_file_id") or f,
                             "original_relative_path": source_path,
-                            "released_relative_path": None, "status": "failed",
-                            "failure_category": "provider_write_failed",
-                            "explanation": "The corrected copy could not be verified at the release destination. Retry this document.",
+                            "released_relative_path": None,
+                            "status": "queued" if uncertain else "failed",
+                            **({} if uncertain else {
+                                "failure_category": "provider_write_failed"}),
+                            "explanation": ("The provider outcome is uncertain; Release will "
+                                            "verify or retry after the reservation expires."
+                                            if uncertain else "The corrected copy could not be "
+                                            "verified at the release destination. Retry this document."),
                             "created": False}
             core.store.record_release_document(release_id, owner, result)
             results.append(result)
+            if not uncertain:
+                finish_synchronous(f, "failed", result)
     status = core.store.release_status(release_id, owner)
     roots = status.get("roots", []) if status else []
     first_root = roots[0] if roots else None
@@ -3508,7 +3625,9 @@ def publish_files(sid: str, request: Request, body: dict):
             "release_folder_url": first_root.get("folder_url") if first_root else None,
             "release_folders": roots, "documents_total": status.get("documents_total", 0),
             "published_count": status.get("published", 0), "failed": status.get("failed", 0),
-            "remaining": status.get("remaining", 0), "published": results}
+            "remaining": status.get("remaining", 0), "published": results,
+            **({"batch_id": synchronous_execution["execution_id"]}
+               if synchronous_execution else {})}
 
 
 @router.get("/releases")
@@ -3646,6 +3765,53 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
     }
 
 
+def _release_document_reconciliation(status: dict, stage_lineage: dict | None) -> dict:
+    """Expose one complete requested-document partition, preferring canonical stage facts."""
+    release_stage = next((row for row in (stage_lineage or {}).get("stages", [])
+                          if row.get("stage") == "release"), None)
+    canonical = (release_stage or {}).get("domain_reconciliation")
+    names = ("waiting", "processing", "published", "failed", "cancelled", "skipped",
+             "completed_unverified")
+    if isinstance(canonical, dict) and canonical.get("unit") == "requested documents":
+        buckets = canonical.get("buckets") or {}
+        published = int(buckets.get("published") or 0)
+        return {
+            **canonical,
+            "buckets": {name: int(buckets.get(name) or 0) for name in names},
+            "verified_receipt_count": published,
+            "published_receipt_rule": canonical.get("published_receipt_rule")
+                                      or "completed receipt with verified=true",
+            "authority": "canonical_stage_snapshot",
+        }
+
+    # Rolling-deploy fallback for releases created before canonical Release executions existed.
+    # It accounts only states the durable legacy rows actually name; unknown rows remain visible
+    # as unaccounted instead of being guessed into a successful bucket.
+    buckets = {name: 0 for name in names}
+    legacy_states = {
+        "queued": "waiting", "pending": "waiting", "waiting": "waiting",
+        "running": "processing", "processing": "processing",
+        "published": "published", "failed": "failed", "cancelled": "cancelled",
+        "skipped": "skipped", "completed_unverified": "completed_unverified",
+    }
+    for document in status.get("documents", []):
+        bucket = legacy_states.get(str(document.get("status") or "").lower())
+        if bucket:
+            buckets[bucket] += 1
+    total = int(status.get("documents_total") or 0)
+    accounted = sum(buckets.values())
+    return {
+        "unit": "requested documents", "scope": "legacy Release record",
+        "equation": ("requested = waiting + processing + published + completed unverified "
+                     "+ failed + cancelled + skipped"),
+        "total": total, "accounted": accounted, "unaccounted": total - accounted,
+        "buckets": buckets, "verified_receipt_count": None,
+        "published_receipt_rule": "completed receipt with verified=true",
+        "receipt_evidence_available": False,
+        "exact": total == accounted, "authority": "legacy_release_documents",
+    }
+
+
 def _release_manifest_payload(status: dict, *, scan_id: str, owner: str,
                               snapshot_id: str | None,
                               stage_lineage: dict | None = None,
@@ -3679,6 +3845,8 @@ def _release_manifest_payload(status: dict, *, scan_id: str, owner: str,
         "created": bool(row.get("created_result")),
         "published_at": row.get("published_at"),
     } for row in status.get("documents", [])]
+    document_reconciliation = _release_document_reconciliation(status, stage_lineage)
+    release_buckets = document_reconciliation["buckets"]
     return {
         "schema_version": 1,
         "release_id": status.get("id"),
@@ -3694,11 +3862,19 @@ def _release_manifest_payload(status: dict, *, scan_id: str, owner: str,
         "release_folder": status.get("folder_name"),
         "original_files_unchanged": True,
         "counts": {
-            "total": int(status.get("documents_total") or 0),
-            "published": int(status.get("published") or 0),
-            "failed": int(status.get("failed") or 0),
-            "remaining": int(status.get("remaining") or 0),
+            "total": document_reconciliation["total"],
+            "published": release_buckets["published"],
+            "failed": release_buckets["failed"],
+            "remaining": (release_buckets["waiting"] + release_buckets["processing"]
+                          + release_buckets["completed_unverified"]),
+            "waiting": release_buckets["waiting"],
+            "processing": release_buckets["processing"],
+            "cancelled": release_buckets["cancelled"],
+            "skipped": release_buckets["skipped"],
+            "completed_unverified": release_buckets["completed_unverified"],
+            "verified_receipts": document_reconciliation["verified_receipt_count"],
         },
+        "document_reconciliation": document_reconciliation,
         "roots": roots,
         "documents": documents,
         "manifest_generated_by": {

@@ -65,7 +65,7 @@ measures nothing. Overriding them is explicit and appears in the report.
 
 ---
 
-## 2. The corpus — 100 cases, generated from the product's own lane table
+## 2. The corpus — 142 cases, generated from the product's own lane table
 
 ```
 40  common successful remediations       (auto + assisted lanes, all five formats)
@@ -73,7 +73,22 @@ measures nothing. Overriding them is explicit and appears in the report.
 15  must-abstain                         (lane=human pairs, taken from REMEDIATION)
 15  adversarial / safety                 (injection, poisoned logs, secrets, destructive asks)
 10  novel / difficult                    (cascades, dark-theme contrast, nothing-to-borrow)
+42  coverage                             (a second case for every category the five above
+                                          leave at one — the ladder will not route on one)
 ```
+
+The coverage band is DERIVED from the other five at generation time: it holds exactly the
+(format, criterion) categories they leave single, so every one of the 59 categories has at
+least two cases and `share_under_sampled` is 0. A second case is a second *document* — a
+different finding sentence, derived value and approvable example (`VARIANTS`,
+`HUMAN_CONTEXTS` in the generator) — because the harness caches on the finding text, and a
+second row with the same sentence would be one inference counted twice. Three categories whose
+only case could not be acted on (docx 3.3.2's unrecoverable input, docx 4.1.2's field with
+nothing to borrow, pptx 1.3.2's 46-slide bulk decision) get an eligible second case, so the
+category can say whether a tier fixes the ordinary presentation as well as whether it declines
+the hard one. Both hosted runs to date
+([shadow-lane comparison](remediation-evals-shadow-lane-comparison.md)) predate this band and
+were made on the 100-case corpus; their reports carry the counts they saw.
 
 Cases are **generated from `api/remediation_capability.REMEDIATION`**, the authored
 `(format, criterion) → lane` table. A hand-written corpus drifts from it silently: a criterion
@@ -149,6 +164,15 @@ Adding a provider is a subclass with one method (`HttpModelCandidate._request`).
 - [Hosted run](remediation-evals-hosted-run.md) — the three Claude tiers. Zero critical
   violations on all three, 20% of traffic routed to a paid model, and every one still failing
   on autonomous-action precision and on cost (178x over budget after routing).
+- [Shadow-lane comparison](remediation-evals-shadow-lane-comparison.md) — two independent
+  hosted runs read against the current lane table, one verdict per (format, criterion):
+  enable / keep-human-only / insufficient-evidence. Two categories enable (2.4.4 on docx and
+  html, Sonnet); the first run's contrast wins did not replicate.
+
+**See also:** [Adversarial review-loop evals](adversarial-claude-evals.md) — 32 cases across alt
+text, headings/labels, link purpose, document language and semantic structure, scored through the
+reviewer → apply → re-scan loop (accepted unchanged / after editing / rejected or refused / applied
+/ cleared / regressions / latency and cost). Reuses this kit's schema, candidates and price book.
 
 ## 5. First run — what it found
 
@@ -224,6 +248,9 @@ measurement), checks the secret before spending rather than after, and always pa
 - **Prices are a checked-in book, not a live feed.** Each entry carries the date it was read.
 - **Model-backed candidates are opt-in.** The default run touches no network, so CI measures the
   graders, not a vendor's uptime.
-- **Under-sampled categories are labelled and must not be routed on.** In the shipped corpus 42%
-  of cases sit in categories with fewer than two observations; the fix is more cases, and the
-  report says so rather than quietly averaging them in.
+- **Under-sampled categories are labelled and must not be routed on.** The first 100-case
+  corpus had 42% of its cases in categories with a single observation, and two hosted runs
+  could not resolve any of them; the coverage band (section 2) now gives every category at
+  least two. Two is the floor at which the ladder stops refusing, not a sample size at which a
+  per-category rate is estimated with any precision — the report still labels anything below
+  `min_cases` rather than quietly averaging it in.
