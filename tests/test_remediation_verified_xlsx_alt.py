@@ -47,6 +47,12 @@ import pytest
 ACP = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ACP / "api"))
 
+# The (format, criterion) lanes this module PROVES end to end — read by
+# tests/test_capability_assisted_contract.py, which derives the applier registry from
+# these declarations instead of a hand-written list. A literal set, so it can be read
+# without importing this module.
+PROVES_LANES = {("xlsx", "1.1.1")}
+
 pytest.importorskip("openpyxl")
 
 FILE = "findings.xlsx"
