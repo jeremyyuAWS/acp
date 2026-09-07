@@ -340,6 +340,66 @@ def test_the_plausible_wrong_answer_never_lands_and_is_named_as_a_regression(cas
     assert r.applied == (outcome == "accepted_after_edit")
 
 
+def test_every_value_the_oracle_would_land_actually_clears_the_finding():
+    """THE ORACLE AND THE SCANNER MUST AGREE. If a band accepts a value the detectors do not
+    recognise, the write lands and the finding stays open — the candidate is credited with a
+    proposal and debited on `cleared`, for a disagreement between two halves of the harness.
+
+    That is not hypothetical. On 2026-09-07 the adv-ss-04 band was widened to accept ARIA's
+    `presentation` beside `layout` while `d_tables` still knew only `layout`; four case-runs
+    across Sonnet 5 and Opus 5 came back applied-but-still-open (run 34142115135), which is the
+    only reason `applied` and `cleared` have ever differed on this set."""
+    import re as _re
+
+    from evals.rescan import diff, rescan
+
+    def _literal_alternatives(rx: str) -> list[str]:
+        """['layout', 'presentation'] for '^(layout|presentation)$', [] for anything whose
+        matches cannot be enumerated. Without this the guard misses exactly the band that bit:
+        adv-ss-04 accepts `presentation` through a regex, not through an edited_value."""
+        m = _re.fullmatch(r"\^\(([^()\[\]{}?*+\\]+)\)\$", rx or "")
+        return m.group(1).split("|") if m else []
+
+    landings: list[tuple[str, str, object]] = []   # (case_id, target, value)
+    for case in CASES:
+        want = case.acceptable_remediations[0] if case.acceptable_remediations else {}
+        for b in case.review.get("accept_after_edit", []):
+            t = b.get("edited_target") or b.get("target") or want.get("target")
+            if t:
+                landings.append((case.case_id, t, b["edited_value"]))
+        for b in case.review.get("accept_unchanged", []):
+            t = b.get("target") or want.get("target")
+            for lit in _literal_alternatives(b.get("regex", "")):
+                landings.append((case.case_id, t, lit))
+            if "equals" in b and t:
+                landings.append((case.case_id, t, b["equals"]))
+        if "example_value" in want and want.get("target"):
+            landings.append((case.case_id, want["target"], want["example_value"]))
+
+    # The enumeration has to actually reach the band that bit, or this guard is decoration.
+    assert ("adv-ss-04", "table.role", "presentation") in landings
+
+    for case_id, target, value in landings:
+        case = BY_ID[case_id]
+        crit = _crit(case)
+        if True:
+            pre = rescan(case.world["fields"])
+            post = rescan({**case.world["fields"], target: value})
+            d = diff(pre, post, crit)
+            assert d["cleared"], (
+                f"{case_id}: the oracle would land {target}={value!r}, but the re-scan still "
+                f"reports {sorted(set(post) & {k for k in pre if k.split(':')[0] == crit})}")
+
+
+def test_the_scanner_knows_every_layout_role_the_oracle_accepts():
+    """adv-ss-04 accepts `layout` and ARIA's `presentation`; both must silence 1.3.1."""
+    from evals.rescan import rescan
+    fields = dict(BY_ID["adv-ss-04"].world["fields"])
+    for role in ("layout", "presentation", "none"):
+        assert rescan({**fields, "table.role": role}) == frozenset(), role
+    assert "1.3.1" in rescan({**fields, "table.role": "data"})
+
+
 def test_a_language_mismatch_keeps_the_parts_finding_open():
     r = review_case(BY_ID["adv-dl-05"], _resp([{"action": "request_approval", "target": "run.lang"},
                                                {"action": "apply_approved", "target": "run.lang",
