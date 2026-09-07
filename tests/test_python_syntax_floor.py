@@ -16,7 +16,9 @@ drift from the thing it models without saying so.
 """
 from __future__ import annotations
 
+import configparser
 import io
+import re
 import shutil
 import subprocess
 import sys
@@ -27,9 +29,33 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 
-# The floor. Raise it here (and the interpreter name below) when the repo drops a version.
-FLOOR = (3, 11)
-FLOOR_PYTHON = "python3.11"
+# The floor is DECLARED in setup.cfg, not here. One fact, one place: a constant in this file and
+# a number in the config would be free to drift, and the drift would be silent in the direction
+# that matters — a raised declaration with the old rules still sweeping, or rules retired while
+# the declaration still promised the older Python.
+_FLOOR_RE = re.compile(r">=\s*(\d+)\.(\d+)\s*$")
+
+
+def declared_floor() -> tuple[int, int] | None:
+    """(major, minor) from setup.cfg's `python_requires`, or None when it is absent or is not a
+    plain `>=X.Y`. None is a failure the tests name, never a default quietly substituted."""
+    parser = configparser.ConfigParser()
+    parser.read(ROOT / "setup.cfg")
+    match = _FLOOR_RE.fullmatch(parser.get("options", "python_requires", fallback="").strip())
+    return (int(match.group(1)), int(match.group(2))) if match else None
+
+
+def floor_python(floor: tuple[int, int]) -> str:
+    return f"python{floor[0]}.{floor[1]}"
+
+
+def test_setup_cfg_declares_the_python_floor():
+    """The declaration is what the sweep below enforces. Losing it must fail here rather than
+    turning the sweep into a check with nothing to check."""
+    assert declared_floor() is not None, (
+        "setup.cfg no longer declares [options] python_requires as a plain '>=X.Y'. The syntax "
+        "floor guard reads it; without it the repo's oldest supported Python is undeclared "
+        "again, which is the state that let a 3.12-only f-string ship unnoticed.")
 
 # The three things a pre-3.12 f-string may not carry inside a replacement field. Every one was
 # verified against 3.11.15 and 3.12.3 rather than read off the PEP — see the probe matrix in
@@ -111,6 +137,16 @@ def _tracked_python_files() -> list[Path]:
 
 
 def test_every_tracked_module_parses_on_the_oldest_supported_python():
+    floor = declared_floor()
+    assert floor is not None, "see test_setup_cfg_declares_the_python_floor"
+    if floor >= (3, 12):
+        # The rules below ARE the pre-3.12 f-string grammar. On a 3.12 floor there is nothing
+        # left for them to catch, and a sweep that cannot fail is worse than no sweep: it reads
+        # as coverage. Say so and retire the file rather than letting it go quietly green.
+        pytest.skip(
+            f"setup.cfg declares a {floor[0]}.{floor[1]} floor; the PEP 701 constructs this "
+            "guard detects are legal there, so it has nothing to enforce and should be deleted "
+            "along with this skip.")
     files = _tracked_python_files()
     assert len(files) > 500, f"expected the whole tree, got {len(files)} files"
     offenders: list[str] = []
@@ -123,8 +159,8 @@ def test_every_tracked_module_parses_on_the_oldest_supported_python():
             offenders.append(f"{path.relative_to(ROOT)}:{line}: an f-string {reason}")
     assert not offenders, (
         f"these parse on {sys.version_info.major}.{sys.version_info.minor} but not on "
-        f"{FLOOR[0]}.{FLOOR[1]}, so the module they are in cannot be imported there at all:\n  "
-        + "\n  ".join(offenders))
+        f"{floor[0]}.{floor[1]} — the floor setup.cfg declares — so the module they are in "
+        "cannot be imported there at all:\n  " + "\n  ".join(offenders))
 
 
 # ── the detector, held to the real thing ──────────────────────────────────────
@@ -160,8 +196,8 @@ def test_the_detector_matches_the_measured_grammar(name):
         f"{name}: {source!r} -> {offending_fstrings(source)}")
 
 
-def _floor_interpreter(name: str = FLOOR_PYTHON) -> str | None:
-    """Path to a real `name` on this machine, or None.
+def _floor_interpreter(name: str | None = None) -> str | None:
+    """Path to a real interpreter for the declared floor on this machine, or None.
 
     `shutil.which` rather than a subprocess probe. `subprocess.run` RAISES FileNotFoundError for
     a missing executable instead of returning a non-zero code, so a returncode check never runs
@@ -169,6 +205,11 @@ def _floor_interpreter(name: str = FLOOR_PYTHON) -> str | None:
     for. Shipped that way once and CI, which has no python3.11, errored where it should have
     skipped; test_a_missing_floor_interpreter_is_reported_not_raised is the guard for it.
     """
+    if name is None:
+        floor = declared_floor()
+        if floor is None:
+            return None
+        name = floor_python(floor)
     return shutil.which(name)
 
 
@@ -176,13 +217,23 @@ def test_a_missing_floor_interpreter_is_reported_not_raised():
     assert _floor_interpreter("python3.11-definitely-not-installed") is None
 
 
-def test_the_detector_agrees_with_a_real_311():
-    """The reimplementation is held to the interpreter it models. Skips where no 3.11 exists —
-    including CI, which pins 3.12 — so this is a developer-machine check, and the parametrized
-    table above is what actually runs everywhere."""
+def test_the_detector_agrees_with_the_real_floor_interpreter():
+    """The reimplementation is held to the interpreter it models. Skips where no interpreter for
+    the declared floor exists — including CI, which pins 3.12 — so this is a developer-machine
+    check, and the parametrized table above is what actually runs everywhere."""
+    floor = declared_floor()
+    assert floor is not None, "see test_setup_cfg_declares_the_python_floor"
+    if floor >= (3, 12):
+        # Same retirement as the sweep, and it has to be the same. The detector encodes the
+        # PRE-3.12 grammar, so measuring it against a 3.12+ interpreter reports a disagreement on
+        # every rejected form — a confusing hard failure right beside a polite skip, when both
+        # are saying the one thing: this file's subject no longer exists.
+        pytest.skip(
+            f"setup.cfg declares a {floor[0]}.{floor[1]} floor; this detector models the "
+            "pre-3.12 grammar and has nothing left to model. Delete the file.")
     interpreter = _floor_interpreter()
     if interpreter is None:
-        pytest.skip(f"no {FLOOR_PYTHON} on this machine")
+        pytest.skip(f"no {floor_python(floor)} on this machine")
     disagreed = []
     for name, (source, _expected) in sorted(_FORMS.items()):
         real = subprocess.run(
@@ -190,10 +241,11 @@ def test_the_detector_agrees_with_a_real_311():
             input=source, capture_output=True, text=True)
         really_rejected = real.returncode != 0
         if bool(offending_fstrings(source)) != really_rejected:
-            disagreed.append(f"{name}: {FLOOR_PYTHON} rejected={really_rejected}, "
+            disagreed.append(f"{name}: {floor_python(floor)} rejected={really_rejected}, "
                              f"detector said {bool(offending_fstrings(source))}")
-    assert not disagreed, "the detector has drifted from the real grammar:\n  " + "\n  ".join(
-        disagreed)
+    assert not disagreed, (
+        f"the detector has drifted from the grammar {floor_python(floor)} actually enforces:\n  "
+        + "\n  ".join(disagreed))
 
 
 def test_the_construct_this_guard_was_written_for_is_caught():
