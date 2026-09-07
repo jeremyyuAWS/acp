@@ -23,13 +23,37 @@ export default function CanonicalStageCard({ snapshot, onOpen = null }) {
         <p role="status" style={{ margin: '10px 0 0' }}>
           <b>Accounting temporarily inconsistent.</b> Progress claims are withheld until reconciliation completes.
         </p>
-      ) : (<>
+      ) : model.domain ? (<>
+        <p style={{ margin: '10px 0 0' }}>
+          <b>{shown(model.domain.accounted)} of {shown(model.domain.total)} {model.domain.unit} reconciled</b>
+          {model.domain.exact && ' · Exact'}
+        </p>
+        {model.domain.equation && <p className="muted" style={{ margin: '3px 0 0', fontSize: 12 }}>
+          Integrity check: {model.domain.equation}
+        </p>}
+        <dl aria-label={`${model.stageLabel} domain counts`}
+            style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 20px', margin: '10px 0 0' }}>
+          {model.domain.buckets.map(([label, value]) => (
+            <div key={label}>
+              <dt className="muted">{label}</dt>
+              <dd style={{ margin: 0, fontVariantNumeric: 'tabular-nums', fontWeight: 650 }}>
+                {shown(value)}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      </>) : (<>
         <p style={{ margin: '10px 0 0' }}>
           <b>Integrity check: {shown(model.accounted)} of {shown(model.total)} {model.unit} accounted for</b>
           {model.exact && ' · Reconciled'}
         </p>
+      </>
+      )}
+
+      {model.integrityOk && <details style={{ margin: '10px 0 0' }}>
+        <summary className="muted">Operational work-item progress</summary>
         <dl aria-label={`${model.stageLabel} work-item counts`}
-            style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 20px', margin: '10px 0 0' }}>
+            style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 20px', margin: '8px 0 0' }}>
           {model.workItems.map(([label, value]) => (
             <div key={label}>
               <dt className="muted">{label}</dt>
@@ -39,8 +63,7 @@ export default function CanonicalStageCard({ snapshot, onOpen = null }) {
             </div>
           ))}
         </dl>
-      </>
-      )}
+      </details>}
 
       <dl style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 20px', margin: '10px 0 0' }}>
         <div><dt className="muted">Execution</dt><dd style={{ margin: 0 }}>{model.executionId || 'Not reported'}</dd></div>
