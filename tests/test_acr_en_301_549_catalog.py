@@ -89,7 +89,8 @@ def test_no_row_is_a_heading():
 def test_clause_9_carries_the_success_criteria_not_just_the_guidelines():
     """The gap that nearly shipped. The contents page lists clause 9 to guideline depth — 9.1.1
     Text alternatives — and stopping there would have produced a EU report with sixteen rows where
-    the standard has fifty-six, while still calling itself the EU edition."""
+    the catalog carries fifty-eight (the per-clause table above pins it), while still calling
+    itself the EU edition."""
     nine = [r["num"] for r in acr_catalog.en_301_549_requirements() if r["clause"] == "9"]
     assert "9.1.1.1" in nine
     assert "9.1.1" not in nine, "the guideline is a heading; its criteria are the rows"
