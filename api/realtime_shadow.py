@@ -182,7 +182,13 @@ class ShadowPublisher:
         items = self._take_batch()
         started = time.monotonic()
         try:
-            results = self.transport.write_many([item.event for item in items])
+            events = [item.event for item in items]
+            batch_writer = getattr(self.transport, "write_many", None)
+            # The publisher contract predates Redis batching and intentionally supports small
+            # observing/in-process transports. Keep that boundary compatible; Redis still takes
+            # the one-round-trip write_many path while simple transports remain truthful.
+            results = (batch_writer(events) if callable(batch_writer)
+                       else [self.transport.write(event) for event in events])
         except Exception:
             for _item in items:
                 METRICS.record("drop")
