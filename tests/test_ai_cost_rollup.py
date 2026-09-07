@@ -48,6 +48,24 @@ def test_cloud_cost_sums_through_and_zones_split(isolated_store):
     assert by_zone["cloud"] == 0.02 and by_zone["local"] == 0.0
 
 
+def test_model_rollup_keeps_provider_model_and_zone_together(isolated_store):
+    s = isolated_store
+    _record(s, provider="openai", model="gpt-5", zone="cloud", ok=True,
+            latency_ms=400, cost_usd=0.01)
+    _record(s, provider="openai", model="gpt-5", zone="cloud", ok=False,
+            latency_ms=600, cost_usd=0.02)
+    _record(s, provider="ollama", model="qwen3:32b", zone="local", ok=True,
+            latency_ms=200, cost_usd=0.0)
+
+    rows = {(r["provider"], r["model"], r["zone"]): r
+            for r in s.ai_cost_rollup(since_days=None)["by_model"]}
+    cloud = rows[("openai", "gpt-5", "cloud")]
+    assert cloud == {"provider": "openai", "model": "gpt-5", "zone": "cloud",
+                     "calls": 2, "ok": 1, "failed": 1,
+                     "avg_latency_ms": 500, "cost_usd": 0.03}
+    assert rows[("ollama", "qwen3:32b", "local")]["failed"] == 0
+
+
 def test_window_excludes_older_calls(isolated_store):
     s = isolated_store
     # one fresh row + one row 40 days old (write ts directly for the age)

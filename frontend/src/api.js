@@ -1161,7 +1161,7 @@ export const getSourceStatus = (scanId) => (SIM
   ? sim({ scan_id: scanId, stale_count: 0, untracked_count: 0, unavailable_count: 0, files: [] })
   : fetch(`${BASE}/scans/${scanId}/source-status`, { headers: headers() }).then(j))
 // AI usage + cost governance rollup (ADR 0019 Phase 1) — today / month / all-time.
-const _emptyRoll = { calls: 0, ok: 0, failed: 0, cost_usd: 0, avg_latency_ms: 0, scans: 0, by_provider: [], by_zone: [], by_surface: [] }
+const _emptyRoll = { calls: 0, ok: 0, failed: 0, cost_usd: 0, avg_latency_ms: 0, scans: 0, by_provider: [], by_model: [], by_zone: [], by_surface: [] }
 export const getAiCosts = () => (SIM
   ? sim({ today: _emptyRoll, month: _emptyRoll, all_time: _emptyRoll })
   : fetch(`${BASE}/ai/costs`, { headers: headers() }).then(j).catch(() => ({ today: _emptyRoll, month: _emptyRoll, all_time: _emptyRoll })))
