@@ -677,6 +677,12 @@ thing the PRD does not mention.
   stays local-only by default; an environment credential must not silently override an explicit
   stored governance choice.
 
+  **First evidence slice implemented:** Settings reports the last 30 days at the exact
+  provider/model/processing-zone grain, with measured call count, call success/failure, mean
+  latency and spend. It explicitly does not infer reviewer acceptance, edit rate or post-write
+  validation from transport success. Remaining: link model-call IDs to those reviewer and
+  validation outcomes, then add criterion-level comparison and rollout gates.
+
 ### From the PRD, deliberately not scheduled
 
 - **North-star framing.** "Maximise AVRR while minimising HER" puts autonomy in the numerator and

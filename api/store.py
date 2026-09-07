@@ -6612,10 +6612,34 @@ class Store:
 
             def _group(col):
                 self._db.execute(cur,
-                    f"SELECT {col} AS k, COUNT(*) AS calls, COALESCE(SUM(cost_usd),0) AS cost "
+                    f"SELECT {col} AS k, COUNT(*) AS calls, COALESCE(SUM(ok),0) AS ok, "
+                    "COALESCE(ROUND(AVG(latency_ms)),0) AS avg_ms, "
+                    "COALESCE(SUM(cost_usd),0) AS cost "
                     f"FROM ai_calls{where} GROUP BY {col} ORDER BY calls DESC", params)
-                return [{"key": r["k"], "calls": r["calls"], "cost_usd": round(r["cost"] or 0, 4)}
+                return [{"key": r["k"], "calls": r["calls"], "ok": r["ok"] or 0,
+                         "failed": (r["calls"] or 0) - (r["ok"] or 0),
+                         "avg_latency_ms": int(r["avg_ms"] or 0),
+                         "cost_usd": round(r["cost"] or 0, 4)}
                         for r in self._db.fetchall(cur)]
+
+            # Model quality is not interchangeable with provider health: one provider can route
+            # several model revisions, and a stronger-model rollout must be evaluated at the
+            # exact provider/model/processing-zone grain. These are still operational outcomes
+            # only (success, latency and spend); reviewer acceptance/edit rates live in a
+            # different evidence stream and must not be inferred from a successful HTTP call.
+            self._db.execute(cur,
+                "SELECT provider,model,zone,COUNT(*) AS calls,COALESCE(SUM(ok),0) AS ok, "
+                "COALESCE(ROUND(AVG(latency_ms)),0) AS avg_ms, "
+                "COALESCE(SUM(cost_usd),0) AS cost "
+                f"FROM ai_calls{where} GROUP BY provider,model,zone ORDER BY calls DESC", params)
+            by_model = [
+                {"provider": r["provider"], "model": r["model"], "zone": r["zone"],
+                 "calls": r["calls"], "ok": r["ok"] or 0,
+                 "failed": (r["calls"] or 0) - (r["ok"] or 0),
+                 "avg_latency_ms": int(r["avg_ms"] or 0),
+                 "cost_usd": round(r["cost"] or 0, 4)}
+                for r in self._db.fetchall(cur)
+            ]
 
             # `failed` is a count with no diagnosis attached — the number that says something is
             # wrong and nothing about what. Break it down by the recorded reason so the rollup
@@ -6637,6 +6661,7 @@ class Store:
                 "avg_latency_ms": int(tot.get("avg_ms", 0) or 0),
                 "scans": tot.get("scans", 0) or 0,
                 "by_provider": _group("provider"),
+                "by_model": by_model,
                 "by_zone": _group("zone"),
                 "by_surface": _group("surface"),
                 "failure_reasons": failure_reasons,

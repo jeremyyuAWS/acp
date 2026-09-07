@@ -235,6 +235,7 @@ export function DriveMirror() {
       <div className="muted" style={{ fontSize: 12 }}>{(r?.calls ?? 0).toLocaleString()} AI call{(r?.calls === 1) ? '' : 's'}{r?.avg_latency_ms ? ` · ${r.avg_latency_ms}ms avg` : ''}</div>
     </div>
   )
+  const models = costs?.month?.by_model || []
   return (
     <div style={{ maxWidth: 560 }}>
       <h3 style={{ marginTop: 0 }}>AI usage &amp; cost <span className="muted" style={{ fontSize: 12, fontWeight: 400 }}>· governance</span></h3>
@@ -257,6 +258,35 @@ export function DriveMirror() {
               {costs.all_time.by_zone.every((z) => z.key === 'local') && ' — nothing left your network 🟢'}
             </div>
           )}
+          <section aria-labelledby="model-quality-title" style={{ marginTop: 16 }}>
+            <h4 id="model-quality-title" style={{ margin: '0 0 4px' }}>Remediation model evidence</h4>
+            <p className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>
+              Last 30 days · measured calls only. Success means the model call completed; it does
+              not mean a reviewer accepted the draft or the corrected file passed validation.
+            </p>
+            {models.length ? (
+              <div style={{ overflowX: 'auto' }}>
+                <table className="simple-table" style={{ width: '100%', fontSize: 12 }}>
+                  <thead><tr><th>Model</th><th>Location</th><th>Calls</th><th>Call success</th><th>Avg latency</th><th>Spend</th></tr></thead>
+                  <tbody>{models.map((m) => {
+                    const success = m.calls ? Math.round((Number(m.ok || 0) / Number(m.calls)) * 100) : null
+                    return <tr key={`${m.provider}:${m.model}:${m.zone}`}>
+                      <td><b>{m.model || 'Not reported'}</b><br /><span className="muted">{m.provider || 'Provider not reported'}</span></td>
+                      <td>{m.zone || 'Not reported'}</td>
+                      <td>{Number(m.calls || 0).toLocaleString()}</td>
+                      <td>{success == null ? 'Not measured' : `${success}%`}{m.failed ? ` · ${m.failed} failed` : ''}</td>
+                      <td>{m.avg_latency_ms ? `${Number(m.avg_latency_ms).toLocaleString()} ms` : 'Not measured'}</td>
+                      <td>${Number(m.cost_usd || 0).toFixed(4)}</td>
+                    </tr>
+                  })}</tbody>
+                </table>
+              </div>
+            ) : <p className="muted" style={{ fontSize: 12 }}>No model calls recorded in this window.</p>}
+            <p className="muted" style={{ fontSize: 11.5, margin: '8px 0 0' }}>
+              Reviewer acceptance, edit rate and post-write validation are not reported here yet;
+              those outcomes are not currently linked to a model call, so ACP does not estimate them.
+            </p>
+          </section>
         </>
       )}
       <hr style={{ border: 0, borderTop: '1px solid var(--line)', margin: '20px 0' }} />
