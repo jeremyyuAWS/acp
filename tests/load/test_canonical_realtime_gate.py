@@ -24,7 +24,7 @@ def test_staging_gate_is_shipped_and_uses_environment_secret():
     dockerfile = (ROOT / "deploy/public/Dockerfile").read_text()
     workflow = (ROOT / ".github/workflows/validate-staging-realtime.yml").read_text()
     assert "COPY performance/ /app/performance/" in dockerfile
-    assert "--redis-env REDIS_URL" in workflow
+    assert "python /app/scripts/staging_realtime_gate.py" in workflow
     assert "--redis-url" not in workflow
     assert "workflow_run:" in workflow and "deploy-staging" in workflow
     assert "acp-assess-staging" in workflow
