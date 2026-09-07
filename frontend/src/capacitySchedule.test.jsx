@@ -17,9 +17,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 
-const snapshot = vi.hoisted(() => ({ current: null }))
+const snapshot = vi.hoisted(() => ({ current: null, calls: 0 }))
 vi.mock('./api.js', () => ({
-  getCapacitySchedule: () => (snapshot.current instanceof Error
+  getCapacitySchedule: () => (++snapshot.calls && snapshot.current instanceof Error
     ? Promise.reject(snapshot.current)
     : Promise.resolve(snapshot.current)),
 }))
@@ -76,7 +76,7 @@ async function mount(data = PROPOSED) {
   return host
 }
 
-beforeEach(() => { document.body.innerHTML = '' })
+beforeEach(() => { document.body.innerHTML = ''; snapshot.calls = 0 })
 
 describe('Settings → Scheduling shows a proposal, not a live schedule', () => {
   it('says the schedule is not in force', async () => {
@@ -212,6 +212,14 @@ describe('the tab stays read-only and points elsewhere for the rest', () => {
     const c = await mount(new Error('boom'))
     expect(c.textContent).toMatch(/could not be read/)
     expect(c.textContent).toMatch(/nothing has been altered/i)
+  })
+
+  it('lets a failed read be retried without reopening Settings', async () => {
+    const c = await mount(new Error('slow Azure read'))
+    snapshot.current = PROPOSED
+    await act(async () => { c.querySelector('button').click(); await Promise.resolve() })
+    expect(snapshot.calls).toBe(2)
+    expect(c.textContent).toContain('Proposed schedule — not in force')
   })
 })
 

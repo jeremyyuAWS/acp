@@ -1639,7 +1639,7 @@ export const getCapacitySchedule = () => (SIM
           next_transition_at: null, next_transition_to: null, version: 0, applied: false,
           validation: null, scalers: {}, observed: {}, drift: [], drift_evaluated: false,
           azure_configured: false })
-  : fetch(`${BASE}/control/capacity-schedule`, { headers: headers() }).then(j))
+  : bootFetch(`${BASE}/control/capacity-schedule`, { headers: headers() }).then(j))
 // Phase 3's writes. All admin-only at the API (each handler runs _require_admin); the SPA hides
 // the controls too, which is convenience, not the gate.
 //
