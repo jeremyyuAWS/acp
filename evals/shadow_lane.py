@@ -121,13 +121,27 @@ def _obs(report: Mapping[str, Any], category: str, candidate: str) -> dict[str, 
 
 
 def decide(*, cases: int, eligible: int, lane: str, rules_safe: Sequence[bool],
-           claude: Mapping[str, Sequence[bool]], min_cases: int = MIN_CASES) -> tuple[str, str, str | None]:
+           claude: Mapping[str, Sequence[bool]], min_cases: int = MIN_CASES,
+           costs: Mapping[str, float | None] | None = None) -> tuple[str, str, str | None]:
     """The pre-declared rule. Returns (verdict, why, enabled_candidate_or_None).
 
     `rules_safe` and each `claude[name]` are one flag per run, in report order. A category is
     judged safe for a tier only when the flag is True in every run.
+
+    When more than one tier is safe, the one named is the CHEAPEST by measured $/case (`costs`),
+    the same rule and for the same reason as `report.build_ladder`: "cheapest that is safe" is
+    the whole claim, and cheapest is a measurement. This function previously named
+    `sorted(safe)[0]`, and on the 142-case run that picked `anthropic:claude-opus-5` for
+    `html:2.4.4` at $0.0124/case over an equally safe `anthropic:claude-sonnet-5` at $0.0028 —
+    a 4x more expensive recommendation produced purely by alphabetical order. Ties fall back to
+    the name so the choice stays deterministic.
     """
     runs = len(rules_safe)
+    costs = costs or {}
+
+    def cheapest(names: Sequence[str]) -> str:
+        return min(names, key=lambda n: (costs.get(n) if costs.get(n) is not None else float("inf"), n))
+
     if cases < min_cases:
         return INSUFFICIENT, (f"under-sampled: {cases} case(s) in the corpus; the ladder itself "
                               f"refuses to route on fewer than {min_cases}"), None
@@ -148,9 +162,15 @@ def decide(*, cases: int, eligible: int, lane: str, rules_safe: Sequence[bool],
         return NO_CHANGE, (f"rule code verified every eligible case ({eligible}) in all {runs} "
                            f"run(s), free{dominated}"), None
     if safe_all:
-        return ENABLE, (f"{safe_all[0] if len(safe_all) == 1 else ' and '.join(safe_all)} safe in "
-                        f"all {runs} run(s) over {cases} cases ({eligible} eligible); current lane "
-                        f"is {lane}"), safe_all[0]
+        pick = cheapest(safe_all)
+        if len(safe_all) == 1:
+            who = pick
+        else:
+            others = [n for n in safe_all if n != pick]
+            who = (f"{pick} (cheapest of {len(safe_all)} safe here, over "
+                   f"{', '.join(others)})")
+        return ENABLE, (f"{who} safe in all {runs} run(s) over {cases} cases ({eligible} "
+                        f"eligible); current lane is {lane}"), pick
     if safe_some:
         detail = ", ".join(f"{n} safe in {sum(claude[n])}/{runs}" for n in safe_some)
         return INSUFFICIENT, f"unstable across runs: {detail}; current lane is {lane}", None
@@ -166,6 +186,13 @@ def compare(reports: Sequence[Mapping[str, Any]], cases: Sequence[Case] | None,
     counts = report_counts(reports, cases)
     claude_names = shadow_candidates(reports, prefix)
     categories = sorted(set().union(*(set(r["ladder"]["routing"]) for r in reports)))
+
+    # Categories the CURRENT corpus has that these runs never saw. This is not
+    # insufficient-evidence — it is no evidence, and the difference matters on a panel: a lane
+    # the product actions with no row at all reads as "nothing to decide" rather than "not
+    # measured". It happens whenever the lane table moves after a run: pptx:1.4.5 went
+    # human -> assisted in #1715, entered the corpus, and the 142-case run predates it.
+    unmeasured = sorted(set(corpus_counts(cases) if cases is not None else {}) - set(categories))
 
     rows: list[dict[str, Any]] = []
     for cat in categories:
@@ -184,15 +211,17 @@ def compare(reports: Sequence[Mapping[str, Any]], cases: Sequence[Case] | None,
                 pc["varr"].append(o["varr"] if o else None)
                 pc["usd_per_case"].append(o["usd_per_case"] if o else None)
                 pc["critical"].append(o["critical"] if o else None)
-        verdict, why, enabled = decide(cases=counts[cat]["cases"], eligible=counts[cat]["eligible"],
-                                       lane=lane, rules_safe=rules_flags,
-                                       claude={n: v["safe"] for n, v in per_candidate.items()},
-                                       min_cases=min_cases)
         for v in per_candidate.values():
             usd = [u for u in v["usd_per_case"] if u is not None]
             v["mean_usd_per_case"] = statistics.fmean(usd) if usd else None
             varr = [x for x in v["varr"] if x is not None]
             v["mean_varr"] = statistics.fmean(varr) if varr else None
+        verdict, why, enabled = decide(cases=counts[cat]["cases"], eligible=counts[cat]["eligible"],
+                                       lane=lane, rules_safe=rules_flags,
+                                       claude={n: v["safe"] for n, v in per_candidate.items()},
+                                       min_cases=min_cases,
+                                       costs={n: v["mean_usd_per_case"]
+                                              for n, v in per_candidate.items()})
         rows.append({"category": cat, "format": fmt, "criterion": crit, "current_lane": lane,
                      "cases": counts[cat]["cases"], "eligible": counts[cat]["eligible"],
                      "must_abstain": counts[cat]["must_abstain"], "runs": len(reports),
@@ -207,6 +236,7 @@ def compare(reports: Sequence[Mapping[str, Any]], cases: Sequence[Case] | None,
     return {
         "reports": [r.get("_source", "<dict>") for r in reports],
         "corpus_cases": sum(v["cases"] for v in counts.values()),
+        "unmeasured_categories": unmeasured,
         "shadow_candidates": claude_names,
         "min_cases": min_cases,
         "rows": rows,
@@ -255,6 +285,11 @@ def render_markdown(cmp: Mapping[str, Any]) -> str:
              "runs and not others.")
     L.append("- **no-change-rule-code** — rule code safe in every run; a paid tier is dominated.\n")
 
+    if cmp.get("unmeasured_categories"):
+        L.append(f"**Not measured by these runs: {', '.join('`' + c + '`' for c in cmp['unmeasured_categories'])}.** "
+                 f"The lane table gained or changed these after the run, so the corpus covers them "
+                 f"and the report does not. They have no verdict here — which is not the same as "
+                 f"insufficient evidence, and is closed by a re-run, not by more cases.\n")
     L.append("### Summary\n")
     L.append("| verdict | categories | cases |")
     L.append("|---|---|---|")
