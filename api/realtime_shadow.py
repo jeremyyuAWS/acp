@@ -48,6 +48,8 @@ class Metrics:
             return {
                 "publish_success_total": successes,
                 "publish_drop_total": self._counts["drop"],
+                "warmup_success_total": self._counts["warmup_success"],
+                "warmup_failure_total": self._counts["warmup_failure"],
                 "publish_latency_ms_total": self._latency_ms_total,
                 "publish_latency_ms_average": (
                     self._latency_ms_total / successes if successes else 0.0
@@ -66,6 +68,10 @@ class RedisStreamTransport:
             url, decode_responses=True, socket_connect_timeout=timeout, socket_timeout=timeout
         )
         self.retention = retention
+
+    def warmup(self) -> bool:
+        """Establish the persistent Redis connection before the first observed event."""
+        return bool(self.redis.ping())
 
     def write(self, event: RealtimeEvent) -> str:
         return self.redis.xadd(
@@ -202,7 +208,20 @@ class ShadowPublisher:
             else:
                 METRICS.record("success", latency_ms)
 
+    def warmup(self) -> None:
+        """Warm only the shadow transport; failure must never affect durable worker work."""
+        warmup = getattr(self.transport, "warmup", None)
+        if not callable(warmup):
+            return
+        try:
+            warmup()
+            METRICS.record("warmup_success")
+        except Exception:
+            METRICS.record("warmup_failure")
+            swallowed("realtime_shadow.ShadowPublisher.warmup: Redis warm-up failed")
+
     def _run(self) -> None:
+        self.warmup()
         while True:
             self.publish_batch()
 
