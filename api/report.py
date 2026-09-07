@@ -897,6 +897,23 @@ def _provenance_section(run, facts, meta, diff, cert, total, h2, body, cell, mut
             f"<font name='Courier' size='7'>{_esc(str(lineage_digest))}</font>. "
             "Stage totals use sealed execution snapshots.", muted))
         el.append(Spacer(1, 6))
+    reconciliation = (meta or {}).get("finding_reconciliation") or {}
+    if reconciliation:
+        status = _esc(str(reconciliation.get("status") or "unavailable"))
+        digest = ((reconciliation.get("content_digest") or {}).get("value") or "not available")
+        outcomes = reconciliation.get("outcomes") or {}
+        if status == "reconciled":
+            detail = (f"<b>{int(outcomes.get('accounted') or 0)}</b> of "
+                      f"<b>{int(outcomes.get('assessed') or 0)}</b> assessed findings have one "
+                      "durable disposition.")
+        elif status == "inconsistent":
+            detail = "Accounting is inconsistent; no complete-resolution claim is made."
+        else:
+            detail = "Exact per-finding outcomes are not available for this snapshot."
+        el.append(Paragraph(
+            f"<b>Finding reconciliation.</b> {status} · SHA-256 "
+            f"<font name='Courier' size='7'>{_esc(str(digest))}</font>. {detail}", muted))
+        el.append(Spacer(1, 6))
     # R-D — actionable reproduce instructions: three steps, not a prose assertion.
     # The full hash is included (not truncated) because the auditor must verify it exactly.
     rubric = meta.get("hash") if meta else None

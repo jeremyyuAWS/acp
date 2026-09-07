@@ -1049,6 +1049,11 @@ export const getRemediationSnapshot = (scanId) => (SIM
   ? sim(null)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/snapshot`,
           { headers: headers(), cache: 'no-store' }).then(j))
+export const getFindingDispositions = (scanId, disposition = null) => (SIM
+  ? sim({ scan_id: scanId, batch_id: null, disposition, items: [], available: false })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/finding-dispositions${
+      disposition ? `?disposition=${encodeURIComponent(disposition)}` : ''}`,
+    { headers: headers(), cache: 'no-store' }).then(j))
 // ── Exceptions and scoped recovery (PRD §6E, §11) ─────────────────────────────
 //
 // SIM RETURNS AN EMPTY VIEW, deliberately, exactly as getRemediationSnapshot returns null. A
