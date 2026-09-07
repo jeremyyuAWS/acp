@@ -28,6 +28,17 @@ STATUS = {
                    "created_result": 1, "published_at": "2026-09-06T01:01:00+00:00"}],
 }
 
+FINDING_SNAPSHOT = {
+    "run_id": "remediation-run-1", "scan_id": "scan-1", "batch_id": "batch-1",
+    "revision": 17,
+    "finding_reconciliation": {
+        "assessed": 9, "resolved_verified": 4, "awaiting_review": 1,
+        "approved_pending_verification": 1, "unchanged_no_fix": 1, "failed": 1,
+        "excluded": 0, "superseded": 0, "accounted": 8, "unaccounted": 1,
+        "exact": False, "violations": [],
+    },
+}
+
 
 class _Store:
     def get_scan_head(self, sid, owner=None):
@@ -62,6 +73,7 @@ def _request(owner="owner@example.com"):
 
 def test_release_manifest_comes_from_persisted_server_evidence(monkeypatch):
     monkeypatch.setattr(scans.core, "store", _Store())
+    monkeypatch.setattr(scans, "_remediation_snapshot", lambda sid: FINDING_SNAPSHOT)
     first = scans.get_release_manifest("scan-1", _request())
     second = scans.get_release_manifest("scan-1", _request())
 
@@ -74,10 +86,37 @@ def test_release_manifest_comes_from_persisted_server_evidence(monkeypatch):
     assert manifest["documents"][0]["created"] is True
     assert manifest["manifest_generated_by"]["release_version"] == "2026.9.6.1"
     assert manifest["canonical_stage_lineage"]["stages"][0]["reconciliation"]["exact"] is True
+    finding = manifest["finding_reconciliation"]
+    assert finding["status"] == "pending"
+    assert finding["identifiers"] == {
+        "workflow_id": "scan-1", "workflow_revision": 1, "scan_id": "scan-1",
+        "snapshot_id": "snapshot-1", "run_id": "remediation-run-1", "batch_id": "batch-1",
+    }
+    assert finding["revision"] == 17
+    assert finding["outcomes"] is FINDING_SNAPSHOT["finding_reconciliation"]
+    assert finding["residual_outcomes"]["unaccounted"] == 1
+    assert len(finding["content_digest"]["value"]) == 64
     assert "generated_at" not in manifest["canonical_stage_lineage"]
     assert "generated_at" not in manifest["canonical_stage_lineage"]["stages"][0]
     assert len(first["content_digest"]["value"]) == 64
     assert "not a digital signature" in first["digest_note"]
+
+
+def test_release_manifest_preserves_legacy_unavailable_finding_account(monkeypatch):
+    monkeypatch.setattr(scans.core, "store", _Store())
+    legacy = {**FINDING_SNAPSHOT, "finding_reconciliation": {
+        "assessed": 9, "resolved_verified": None, "awaiting_review": 2,
+        "approved_pending_verification": None, "unchanged_no_fix": None,
+        "failed": None, "excluded": None, "superseded": None,
+        "accounted": None, "unaccounted": None, "exact": False,
+    }}
+    monkeypatch.setattr(scans, "_remediation_snapshot", lambda sid: legacy)
+
+    finding = scans.get_release_manifest("scan-1", _request())["manifest"]["finding_reconciliation"]
+
+    assert finding["status"] == "unavailable"
+    assert finding["outcomes"]["resolved_verified"] is None
+    assert finding["residual_outcomes"]["failed"] is None
 
 
 def test_release_manifest_is_owner_scoped(monkeypatch):
