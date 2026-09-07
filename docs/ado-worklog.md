@@ -3566,15 +3566,31 @@ to a customer yet and all of it is prerequisite to retiring the current polling 
   needed: whether the skill's discovery should drop `-type d`, and whether worktrees should be
   excluded from the standup entirely and folded into their source repo. The same shape applies to
   `acp-utsw` (a worktree of `acp-utsw-source`), which is currently harmless only because both are clean.
-- **An uncommitted change in the working tree strips `frontend/src/assessSummary.test.jsx` down to a
-  stub — 23 insertions against 356 deletions.** It removes the file's stated purpose header (the four
-  things the summary panel must never do: render zeros for a run that has not happened, say "No
-  findings" without the coverage caveat, print a percentage or an estimate of human effort, print a
-  partition that does not add up) along with the fixtures and most of the assertions, leaving a
-  single-criterion happy path. Nothing about it looks like a deliberate simplification, and it is not
-  on any branch. Whoever left it there should either finish it or discard it before it is committed by
-  a session that assumes it is intentional — a stripped test suite still passes, which is exactly why
-  this would not be caught later.
+- **`frontend/src/AssessSummary.test.jsx` and `frontend/src/assessSummary.test.jsx` are both tracked on
+  `worktree-feat-reconnecting-freshness` — a case-only duplicate that macOS cannot represent.** Only one
+  file can exist on a case-insensitive filesystem, so git diffs whichever content is on disk against the
+  *other* index entry and reports a large phantom modification. Restoring either variant dirties the
+  other; there is no clean state, and a `merge --ff-only` aborts on it indefinitely. `origin/main` tracks
+  only the lowercase path, so **the collision does not exist on `main`** — `767653c0` ("Merge the two
+  AssessSummary test files that differed only in case", #1114) resolved it there, and the parked branch
+  is ~810 commits behind that fix. Anything branched from that parked branch inherits the collision.
+  This has happened before: `stash@{1}` on this clone is named "preserve handoff AssessSummary
+  case-variant". Worth a guard, because the failure is invisible on macOS and silent on Linux CI, where
+  both files simply exist.
+
+  **This entry replaces a wrong one, recorded rather than deleted.** The 2026-09-07 standup filed this as
+  *"an uncommitted change in the working tree strips `assessSummary.test.jsx` down to a stub — 23
+  insertions against 356 deletions"*, and went on to say the stripped file removed the purpose header and
+  most assertions, that nothing about it looked deliberate, and that whoever left it should finish or
+  discard it. **There was no uncommitted change at all.** The on-disk content was byte-identical to
+  `HEAD:frontend/src/AssessSummary.test.jsx` — a committed blob, verifiable with
+  `git diff <disk> HEAD:frontend/src/AssessSummary.test.jsx` returning empty. The 23/356 figure was the
+  diff between the two committed case variants, which is exactly what `git status` reports in this
+  situation and exactly what a stripped-down working file would also look like. The two are
+  indistinguishable from the porcelain alone, which is why the wrong reading was plausible; telling them
+  apart needs `git ls-files` on the directory, and that was not run. The lesson is the general one: an
+  unexplained diff against a file that "is not on any branch" deserves a check that it is not on a branch
+  under another name.
 
 - **PR #1713 squashed five unrelated fixes into one commit spanning four Features.** A cached billing
   denial, CI concurrency on `main`, draining-replica capacity accounting, the Live Ops drawer, and the
@@ -4094,3 +4110,10 @@ to a customer yet and all of it is prerequisite to retiring the current polling 
   `origin/main` was re-checked immediately before marking and had not moved. Sync marker advanced from
   `03b85970` to `8c854d71` (#1724). Much of this work is the claude[bot] pipeline's and other
   sessions'; it is logged for ADO intake, not claimed as one person's.
+
+- **2026-09-07 (correction, no new commits documented)** — The second standup pass filed an Open item
+  claiming an uncommitted working-tree change had stripped `frontend/src/assessSummary.test.jsx` to a
+  stub. That was wrong, and the Open item has been rewritten in place to say what it actually was: a
+  case-only duplicate tracked on the parked branch, already fixed on `main` by #1114. The original
+  wording and the reason it was believable are recorded inside the replacement rather than deleted.
+  No Feature bullets and no sync marker changed — this pass documents no commits.
