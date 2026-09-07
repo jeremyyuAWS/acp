@@ -15,13 +15,32 @@ const PIPELINE_STAGE_ORDER = {
   discover: 0, assess: 1, remediate: 2, release: 3,
 }
 
+const DOMAIN_BUCKET_LABELS = {
+  waiting: 'Waiting', processing: 'Processing', assessed: 'Assessed',
+  published: 'Published · verified', completed_unverified: 'Completed · not verified',
+  resolved_verified: 'Resolved · verified', awaiting_review: 'Awaiting review',
+  approved_pending_verification: 'Approved · awaiting verification',
+  unchanged_no_fix: 'Unchanged · no fix', failed: 'Failed', excluded: 'Excluded',
+  superseded: 'Superseded', cancelled: 'Stopped manually', skipped: 'Skipped',
+}
+
+const domainBucketLabel = (key) => DOMAIN_BUCKET_LABELS[key]
+  || String(key).replaceAll('_', ' ').replace(/^./, (letter) => letter.toUpperCase())
+
 export function canonicalStageCardModel(snapshot) {
   if (!snapshot) return null
   const work = snapshot.counts?.work_items || {}
   const reconciliation = snapshot.reconciliation || {}
+  const domain = snapshot.domain_reconciliation || {}
+  const domainAvailable = domain.available !== false
+    && domain.buckets && typeof domain.buckets === 'object'
+  const domainTotal = domainAvailable ? number(domain.total) : null
+  const domainAccounted = domainAvailable
+    ? (number(domain.accounted) ?? number(domain.partitioned)) : null
   const total = number(reconciliation.total) ?? number(work.total)
   const accounted = number(reconciliation.accounted)
   const integrityOk = snapshot.integrity?.ok !== false && reconciliation.exact !== false
+    && (!domainAvailable || domain.exact !== false)
   const stopping = snapshot.control?.cancel_requested === true
     && !['cancelled', 'failed', 'succeeded'].includes(snapshot.state)
   const stateLabel = stopping ? 'Stopping safely' : (STATE_LABELS[snapshot.state] || 'Status unavailable')
@@ -41,6 +60,18 @@ export function canonicalStageCardModel(snapshot) {
     unaccounted: number(reconciliation.unaccounted),
     exact: reconciliation.exact === true,
     stopping,
+    domain: domainAvailable ? {
+      scope: domain.scope || null,
+      equation: domain.equation || null,
+      unit: domain.unit || 'items',
+      total: domainTotal,
+      accounted: domainAccounted,
+      unaccounted: number(domain.unaccounted),
+      exact: domain.exact === true,
+      buckets: Object.entries(domain.buckets).map(([key, value]) => [
+        domainBucketLabel(key), number(value),
+      ]),
+    } : null,
     workItems: [
       ['Completed', number(work.completed)],
       ['Failed', number(work.failed)],

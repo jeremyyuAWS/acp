@@ -83,6 +83,51 @@ describe('canonical stage card', () => {
     expect(html).toContain('does not mean every accessibility finding was resolved')
     expect(html).not.toContain('all findings resolved')
   })
+
+  it.each([
+    ['discover', {
+      unit: 'inventory documents', scope: 'discovered inventory',
+      equation: 'inventory = sum(lifecycle status buckets)', total: 24, partitioned: 24,
+      unaccounted: 0, exact: true, buckets: { Active: 20, 'Archive Candidate': 4 },
+    }, ['24 of 24 inventory documents reconciled', 'Active</dt><dd', '>20</dd>', 'Archive Candidate</dt><dd']],
+    ['assess', {
+      unit: 'eligible documents', scope: 'immutable Assess input',
+      equation: 'eligible = waiting + processing + assessed + failed + cancelled + skipped',
+      total: 10, accounted: 10, unaccounted: 0, exact: true,
+      buckets: { waiting: 1, processing: 2, assessed: 5, failed: 1, cancelled: 1, skipped: 0 },
+    }, ['10 of 10 eligible documents reconciled', 'Assessed</dt><dd', 'Stopped manually</dt><dd']],
+    ['remediate', {
+      unit: 'assessed findings', scope: 'current Remediate execution',
+      equation: 'assessed findings = sum(current disposition buckets)',
+      total: 9, accounted: 9, unaccounted: 0, exact: true,
+      buckets: { resolved_verified: 5, awaiting_review: 2, failed: 1, excluded: 1 },
+    }, ['9 of 9 assessed findings reconciled', 'Resolved · verified</dt><dd', 'Awaiting review</dt><dd']],
+    ['release', {
+      unit: 'requested documents', scope: 'immutable Release request',
+      equation: 'requested = waiting + processing + published + completed unverified + failed + cancelled + skipped',
+      total: 8, accounted: 8, unaccounted: 0, exact: true,
+      buckets: { waiting: 1, processing: 0, published: 5, completed_unverified: 1,
+        failed: 0, cancelled: 1, skipped: 0 },
+    }, ['8 of 8 requested documents reconciled', 'Published · verified</dt><dd',
+      'Completed · not verified</dt><dd', 'Stopped manually</dt><dd']],
+  ])('uses %s domain accounting as the primary stage story', (stage, domain, expected) => {
+    const html = render({ ...SNAPSHOT, stage, domain_reconciliation: domain })
+    expected.forEach((text) => expect(html).toContain(text))
+    expect(html).toContain(`Integrity check: ${domain.equation}`)
+    expect(html).toContain('Operational work-item progress')
+    expect(html).toContain(`aria-label="${stage[0].toUpperCase()}${stage.slice(1)} work-item counts"`)
+  })
+
+  it('withholds operational substitutions when domain accounting is incomplete', () => {
+    const html = render({ ...SNAPSHOT, domain_reconciliation: {
+      unit: 'requested documents', scope: 'immutable Release request',
+      equation: 'requested = sum(document outcomes)', total: null, accounted: null,
+      unaccounted: null, exact: false, buckets: { published: null, failed: null },
+    } })
+    expect(html).toContain('Accounting temporarily inconsistent.')
+    expect(html).not.toContain('10 of 10 requested documents')
+    expect(html).not.toContain('Operational work-item progress')
+  })
 })
 
 describe('current canonical stage selection', () => {
