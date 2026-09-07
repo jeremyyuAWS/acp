@@ -112,6 +112,10 @@ make it a lead worth routing on, because VARR is pooled over categories where So
   and 42% of cases are one observation each, and two runs made that constraint no smaller —
   repeats add confidence within a case, not cases within a category. Five adequately sampled
   categories flipped between runs; the single-case ones would flip invisibly.
+  *Done since:* the corpus now carries a sixth band, `06-coverage.json`, with a second case for
+  each of those 42 categories (142 cases, no category below two). The two runs above were made
+  on the 100-case corpus and their reports carry those counts; the next hosted run is the one
+  that can move a single-case category out of `insufficient-evidence`.
 
 ## Limits
 

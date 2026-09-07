@@ -40,7 +40,7 @@ import statistics
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from .report import category_of
+from .report import category_counts, category_of
 from .schema import Case
 
 ENABLE = "enable"
@@ -72,13 +72,40 @@ def shadow_candidates(reports: Sequence[Mapping[str, Any]], prefix: str = SHADOW
 
 
 def corpus_counts(cases: Iterable[Case]) -> dict[str, dict[str, int]]:
-    out: dict[str, dict[str, int]] = {}
-    for c in cases:
-        row = out.setdefault(category_of(c), {"cases": 0, "eligible": 0, "must_abstain": 0})
-        row["cases"] += 1
-        row["eligible"] += int(bool(c.automation_eligible))
-        row["must_abstain"] += int(bool(c.must_abstain))
-    return out
+    return category_counts(cases)
+
+
+def report_counts(reports: Sequence[Mapping[str, Any]],
+                  cases: Sequence[Case] | None) -> dict[str, dict[str, int]]:
+    """The per-category counts every report was run against.
+
+    A report written since `corpus.categories` was added carries its own; older ones need the
+    corpus passed in, and it must match their ladder rows exactly. Either way every report must
+    agree with every other — a verdict pooled over runs on different corpora is not a verdict.
+    """
+    carried = [r["corpus"]["categories"] for r in reports
+               if isinstance(r.get("corpus"), Mapping) and "categories" in r["corpus"]]
+    if carried:
+        counts = carried[0]
+        for r, c in zip([r for r in reports if "categories" in r.get("corpus", {})], carried):
+            if c != counts:
+                raise ValueError(f"{r.get('_source')}: was run on a different corpus than "
+                                 f"{reports[0].get('_source')} — pool only runs on one corpus")
+    elif cases is not None:
+        counts = corpus_counts(cases)
+    else:
+        raise ValueError("reports carry no corpus.categories and no corpus was passed")
+    for r in reports:
+        routing = r["ladder"]["routing"]
+        missing = sorted(c for c in routing if c not in counts)
+        if missing:
+            raise ValueError(f"{r.get('_source')}: report categories absent from the corpus: "
+                             f"{missing} — the report was run against a different corpus")
+        for cat, row in routing.items():
+            if row["cases"] != counts[cat]["cases"]:
+                raise ValueError(f"{r.get('_source')}: {cat} has {row['cases']} cases in the "
+                                 f"report and {counts[cat]['cases']} in the corpus")
+    return counts
 
 
 def _lane(lanes: Mapping[str, Mapping[str, str]], category: str) -> str:
@@ -131,23 +158,14 @@ def decide(*, cases: int, eligible: int, lane: str, rules_safe: Sequence[bool],
                         f"any of {runs} run(s); current lane is {lane}"), None
 
 
-def compare(reports: Sequence[Mapping[str, Any]], cases: Sequence[Case],
+def compare(reports: Sequence[Mapping[str, Any]], cases: Sequence[Case] | None,
             lanes: Mapping[str, Mapping[str, str]], *, prefix: str = SHADOW_PREFIX,
             min_cases: int = MIN_CASES) -> dict[str, Any]:
     if not reports:
         raise ValueError("at least one report is required")
-    counts = corpus_counts(cases)
+    counts = report_counts(reports, cases)
     claude_names = shadow_candidates(reports, prefix)
     categories = sorted(set().union(*(set(r["ladder"]["routing"]) for r in reports)))
-    missing = sorted(c for c in categories if c not in counts)
-    if missing:
-        raise ValueError(f"report categories absent from the corpus: {missing} — the reports were "
-                         f"run against a different corpus; regenerate or pass the matching cases")
-    for r in reports:
-        for cat, row in r["ladder"]["routing"].items():
-            if row["cases"] != counts[cat]["cases"]:
-                raise ValueError(f"{r.get('_source')}: {cat} has {row['cases']} cases in the "
-                                 f"report and {counts[cat]['cases']} in the corpus")
 
     rows: list[dict[str, Any]] = []
     for cat in categories:
@@ -188,6 +206,7 @@ def compare(reports: Sequence[Mapping[str, Any]], cases: Sequence[Case],
     summary_cases = {v: sum(r["cases"] for r in rows if r["verdict"] == v) for v in VERDICTS}
     return {
         "reports": [r.get("_source", "<dict>") for r in reports],
+        "corpus_cases": sum(v["cases"] for v in counts.values()),
         "shadow_candidates": claude_names,
         "min_cases": min_cases,
         "rows": rows,
@@ -216,7 +235,8 @@ def render_markdown(cmp: Mapping[str, Any]) -> str:
     L: list[str] = []
     n_runs = len(cmp["reports"])
     L.append("## Shadow-mode Claude vs. the current remediation lane\n")
-    L.append(f"Reports ({n_runs} independent shadow run(s), same corpus, same graders):\n")
+    L.append(f"Reports ({n_runs} independent shadow run(s), same {cmp['corpus_cases']}-case corpus, "
+             f"same graders):\n")
     for src in cmp["reports"]:
         L.append(f"- `{src}`")
     L.append("")

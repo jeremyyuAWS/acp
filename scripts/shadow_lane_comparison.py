@@ -37,6 +37,8 @@ def main() -> int:
     args = ap.parse_args()
 
     reports = [load_report(p) for p in args.report]
+    # Reports carry the per-category counts they were run against; the committed corpus is the
+    # fallback for reports written before they did, and must then match them exactly.
     cmp = compare(reports, load_cases(), REMEDIATION, prefix=args.prefix)
     md = render_markdown(cmp)
     print(md)

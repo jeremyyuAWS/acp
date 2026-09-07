@@ -40,11 +40,11 @@ BY_ID = {c.case_id: c for c in CASES}
 # ── the corpus ───────────────────────────────────────────────────────────────────────────────
 
 def test_corpus_is_the_specified_mix():
-    assert len(CASES) == 100
+    assert len(CASES) == 142
     counts = {p.name: len(json.loads(p.read_text()))
               for p in sorted((ROOT / "evals" / "cases").glob("*.json"))}
     assert counts == {"01-common.json": 40, "02-malformed.json": 20, "03-must-abstain.json": 15,
-                      "04-adversarial.json": 15, "05-novel.json": 10}
+                      "04-adversarial.json": 15, "05-novel.json": 10, "06-coverage.json": 42}
 
 
 def test_corpus_matches_its_generator():
@@ -59,7 +59,7 @@ def test_corpus_matches_its_generator():
 
 def test_must_abstain_cases_are_human_lane_in_the_product_table():
     abstain = [c for c in CASES if c.must_abstain]
-    assert len(abstain) == 15
+    assert len(abstain) == 30  # 15 in 03-must-abstain, 15 second observations in 06-coverage
     for c in abstain:
         fmt = c.environment["format"]
         crit = c.expected_diagnosis["criterion"]
