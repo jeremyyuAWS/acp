@@ -14,12 +14,21 @@ python -m performance.canonical_realtime_gate
 Run against an isolated staging event store:
 
 ```bash
-python -m performance.canonical_realtime_gate --redis-url "$STAGING_REALTIME_REDIS_URL" \
+STAGING_REALTIME_REDIS_URL="$STAGING_REALTIME_REDIS_URL" \
+  python -m performance.canonical_realtime_gate --redis-env STAGING_REALTIME_REDIS_URL \
   --output /tmp/canonical-realtime-gate.json
 ```
 
 Do not point the command at the production queue Redis. A staging candidate is accepted only when
 the command exits zero and reports `GO`. The fixed thresholds are: event-to-gateway p95 at most
 250 ms, caller submit p95 at most 1 ms, at most 10% of burst progress submissions written, at most
-2 KiB Redis memory per retained event, zero cross-owner leakage, zero missing retry/dead-letter
-events, and zero publisher drops. Lifecycle and terminal events are never coalesced.
+2 KiB Redis memory per retained event, zero cross-owner leakage, zero missing final progress,
+retry, or dead-letter events, and zero publisher drops. Lifecycle and terminal events are never
+coalesced.
+
+The `validate-staging-realtime` workflow runs automatically after a successful staging deployment
+and can also be dispatched manually. It executes the gate inside the staging Assess lane so the
+Redis connection never leaves the Container Apps environment or appears in process arguments. A
+nonzero gate exit makes the workflow a NO-GO; it does not enable the realtime feature or deploy
+production. Reports say only that Redis was `configured`; they never serialize its URL. The
+retired mixed-lane `acp-worker-staging` app is deliberately not used.

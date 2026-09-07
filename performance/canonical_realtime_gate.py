@@ -29,6 +29,7 @@ THRESHOLDS = {
     "tenant_leakage_max": 0,
     "missing_retry_events_max": 0,
     "missing_dead_letter_events_max": 0,
+    "missing_latest_progress_events_max": 0,
     "publisher_drops_max": 0,
 }
 
@@ -102,8 +103,22 @@ class GateConfig:
     timeout_seconds: float = 15.0
 
 
-async def _replay_all(store, scope):
-    return await store.replay(scope, "0-0", limit=500)
+def public_config(config: GateConfig) -> dict:
+    """Render configuration without copying credentials into reports or logs."""
+    rendered = asdict(config)
+    rendered["redis_url"] = "configured" if config.redis_url else None
+    return rendered
+
+
+async def _replay_all(reader, owners):
+    store = RedisEventStore(reader)
+    try:
+        return {
+            owner: await store.replay(owner_scope(owner), "0-0", limit=500)
+            for owner in owners
+        }
+    finally:
+        await store.close()
 
 
 def run(config: GateConfig) -> dict:
@@ -113,7 +128,8 @@ def run(config: GateConfig) -> dict:
     owners = [f"realtime-gate+{run_id}-{n}@example.invalid" for n in range(config.tenants)]
     keys = [stream_key(owner_scope(owner)) for owner in owners]
     memory = None
-    cleanup = None
+    reader = None
+    sync_redis = None
     if config.redis_url:
         import redis
         sync_redis = redis.Redis.from_url(config.redis_url, decode_responses=True)
@@ -122,7 +138,6 @@ def run(config: GateConfig) -> dict:
         )
         from redis import asyncio as async_redis
         reader = async_redis.Redis.from_url(config.redis_url, decode_responses=True)
-        cleanup = lambda: sync_redis.delete(*keys)
     else:
         memory = MemoryRedis(config.redis_delay_ms)
         transport = realtime_shadow.RedisStreamTransport.__new__(realtime_shadow.RedisStreamTransport)
@@ -135,6 +150,7 @@ def run(config: GateConfig) -> dict:
     submit_latencies = []
     progress_submitted = config.tenants * config.jobs_per_tenant * config.progress_per_job
     expected_lossless = config.tenants * (config.jobs_per_tenant * 2 + 3)
+    expected_progress = config.tenants * config.jobs_per_tenant
     previous = realtime_shadow._publisher
     previous_enabled = os.environ.get("ACP_REALTIME_SHADOW_ENABLED")
     try:
@@ -173,14 +189,14 @@ def run(config: GateConfig) -> dict:
                 int(transport.redis.xlen(key)) for key in keys)
             with publisher._cv:
                 pending = len(publisher._lifecycle) + len(publisher._progress)
-            if pending == 0 and written >= expected_lossless:
+            if pending == 0 and written >= expected_lossless + expected_progress:
                 break
             time.sleep(0.01)
         else:
             raise TimeoutError("publisher did not drain within the gate timeout")
 
-        store = RedisEventStore(reader)
-        per_owner = {owner: asyncio.run(_replay_all(store, owner_scope(owner))) for owner in owners}
+        reader_for_replay, reader = reader, None
+        per_owner = asyncio.run(_replay_all(reader_for_replay, owners))
         all_events = [event for rows in per_owner.values() for _row_id, event in rows]
         observed_ns = time.perf_counter_ns()
         gateway_latencies = [
@@ -199,6 +215,11 @@ def run(config: GateConfig) -> dict:
         else:
             redis_bytes = sum(int(transport.redis.memory_usage(key) or 0) for key in keys)
         progress_written = sum(event.kind == "assess.progressed" for event in all_events)
+        latest_progress_jobs = {
+            event.job_id for event in all_events
+            if event.kind == "assess.progressed"
+            and event.payload.get("progress") == config.progress_per_job - 1
+        }
         metrics = {
             "gateway_latency_p95_ms": percentile(gateway_latencies, .95),
             "submit_latency_p95_ms": percentile(submit_latencies, .95),
@@ -210,6 +231,7 @@ def run(config: GateConfig) -> dict:
             "tenant_leakage": leakage,
             "missing_retry_events": max(0, config.tenants - retry_events),
             "missing_dead_letter_events": max(0, config.tenants - dead_events),
+            "missing_latest_progress_events": max(0, expected_progress - len(latest_progress_jobs)),
             "missing_failed_events": max(0, config.tenants - failed_events),
             "publisher_drops": (
                 realtime_shadow.METRICS.snapshot()["publish_drop_total"] - drops_before
@@ -221,7 +243,7 @@ def run(config: GateConfig) -> dict:
         }
         checks["missing_failed_events"] = metrics["missing_failed_events"] == 0
         return {"schema_version": 1, "mode": "redis" if config.redis_url else "in-memory-ci",
-                "config": asdict(config), "thresholds": THRESHOLDS, "metrics": metrics,
+                "config": public_config(config), "thresholds": THRESHOLDS, "metrics": metrics,
                 "checks": checks, "decision": "GO" if all(checks.values()) else "NO-GO"}
     finally:
         realtime_shadow._publisher = previous
@@ -229,16 +251,22 @@ def run(config: GateConfig) -> dict:
             os.environ.pop("ACP_REALTIME_SHADOW_ENABLED", None)
         else:
             os.environ["ACP_REALTIME_SHADOW_ENABLED"] = previous_enabled
-        if cleanup:
-            cleanup()
+        if reader is not None:
+            asyncio.run(reader.aclose())
+        if sync_redis is not None:
+            sync_redis.delete(*keys)
+            sync_redis.close()
+        if memory is None and hasattr(transport.redis, "close"):
+            transport.redis.close()
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--redis-url", help="isolated staging Redis URL; generated streams are deleted")
+    parser.add_argument("--redis-env", default="ACP_REALTIME_GATE_REDIS_URL",
+                        help="name of the environment variable holding the isolated Redis URL")
     parser.add_argument("--output", default="-")
     args = parser.parse_args()
-    result = run(GateConfig(redis_url=args.redis_url))
+    result = run(GateConfig(redis_url=os.environ.get(args.redis_env)))
     rendered = json.dumps(result, indent=2, sort_keys=True)
     if args.output == "-":
         print(rendered)

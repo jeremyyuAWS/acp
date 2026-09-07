@@ -73,6 +73,7 @@ RUN if [ ! -f /app/.acp-base-ready ]; then \
 # app code + config + bundled sample corpus
 COPY api/ /app/api/
 COPY scripts/ /app/scripts/
+COPY performance/ /app/performance/
 COPY config/ /app/config/
 COPY hub/ /app/hub/
 COPY test-corpus/files/ /app/test-corpus/files/
