@@ -100,7 +100,7 @@ describe('canonical stage card', () => {
     expect(html).toContain('Integrity check: 10 of 10 work items accounted for')
   })
 
-  it('keeps retained history mounted while an earlier-stage card collapses and expands', async () => {
+  it('keeps retained history and completed content mounted while a prior stage toggles', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-07T01:02:03Z'))
     const { container, root } = createTestRoot()
@@ -110,10 +110,16 @@ describe('canonical stage card', () => {
       lineage, view: 'assess', receivedAt: Date.now(),
     })) })
     expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(1)
+    expect(container.querySelectorAll('.live-heartbeat-bars i')).toHaveLength(12)
+    const body = container.querySelector('.workflow-stage-stack__body')
+    const completedCard = container.querySelector('.discover-run-progress')
+    expect(body.hidden).toBe(true)
     const summary = container.querySelector('.workflow-stage-stack__summary')
     await act(async () => { summary.click() })
-    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(2)
+    expect(body.hidden).toBe(false)
+    expect(container.querySelector('.discover-run-progress')).toBe(completedCard)
     await act(async () => { summary.click() })
+    expect(body.hidden).toBe(true)
     expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(1)
     expect(container.textContent).toContain('Final · refreshed now')
     await act(async () => { vi.advanceTimersByTime(10_000) })
@@ -276,7 +282,7 @@ describe('app-level canonical ownership', () => {
 
   it('deduplicates the richer remediation card and the canonical Release fallback', () => {
     const app = readFileSync(join(here, 'App.jsx'), 'utf8')
-    expect(app).toContain("canonicalStage.stage !== 'remediate'")
+    expect(app).toContain("!['discover', 'assess', 'remediate'].includes(canonicalStage.stage)")
     expect(app).toContain("canonicalAvailable={canonicalStage?.stage === 'release'}")
     expect(app).toContain("{ release: 'publish', assess: 'assess', discover: 'discover' }")
   })

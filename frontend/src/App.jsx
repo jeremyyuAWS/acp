@@ -540,14 +540,11 @@ export default function App() {
   const canonicalRun = useCanonicalStageLineage(primaryWorkflow?.scan_id || scan?.run?.id || null,
     getStageLineage)
   const canonicalStage = currentCanonicalStage(canonicalRun.lineage)
-  // Discover and Assess retain their purpose-built live cards while workers are active; those
-  // expose domain progress the generic work-item ledger deliberately does not invent. Durable
-  // terminal, stopping, reconciliation, and integrity states come from the canonical contract.
-  // Remediation already has its richer canonical domain card, so never stack this one above it.
-  const showCanonicalStage = canonicalStage && canonicalStage.stage !== 'remediate'
-    && (!['discover', 'assess'].includes(canonicalStage.stage)
-      || ['processing_complete', 'reconciling', 'integrity_failed', 'failed', 'cancelled', 'succeeded']
-        .includes(canonicalStage.state))
+  // Discover and Assess retain their familiar stage-specific live cards as the sole owner of
+  // their current-stage presentation. The generic canonical fallback is only for stages that do
+  // not yet have an equivalent persistent card here.
+  const showCanonicalStage = canonicalStage
+    && !['discover', 'assess', 'remediate'].includes(canonicalStage.stage)
   // Durable (background queue) is the default (2026-08-21). The session-scoped path runs as a
   // bare in-process thread with no queue behind it — the code's own comment on it has always said
   // "lost if that replica restarts", and this app auto-deploys on every merge to main, so that was
@@ -2281,11 +2278,8 @@ export default function App() {
                             ? primaryWorkflow.scan_id
                             : (liveScanId || run?.id))} />
 
-      <WorkflowStageStack lineage={canonicalRun.lineage} view={view} receivedAt={canonicalRun.receivedAt}
-        onNavigate={(next) => {
-          setView(next)
-          window.scrollTo({ top: 0, behavior: 'smooth' })
-        }} />
+      <WorkflowStageStack lineage={canonicalRun.lineage} view={view}
+        receivedAt={canonicalRun.receivedAt} />
 
       {showCanonicalStage && (
         <CanonicalStageCard snapshot={canonicalStage} receivedAt={canonicalRun.receivedAt}
