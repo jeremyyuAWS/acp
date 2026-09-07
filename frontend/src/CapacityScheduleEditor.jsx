@@ -318,6 +318,11 @@ export default function CapacityScheduleEditor({
           )}
         </header>
         {error && <div role="alert">{error}</div>}
+        {(!snap.application_configured || !snap.applied) && !snap.override && (
+          <div role="note" className="muted">
+            Temporary overrides are unavailable until this schedule is applied and Azure capacity application is enabled.
+          </div>
+        )}
         {snap.override ? (
           <div>
             <p>
@@ -346,7 +351,7 @@ export default function CapacityScheduleEditor({
               End override
             </button>
           </div>
-        ) : (
+        ) : snap.application_configured && snap.applied ? (
           <>
             <label>
               <span style={lbl}>Capacity</span>
@@ -443,7 +448,7 @@ export default function CapacityScheduleEditor({
               Apply override
             </button>
           </>
-        )}
+        ) : null}
       </section>
     );
 
