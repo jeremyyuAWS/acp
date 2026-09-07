@@ -137,6 +137,23 @@ def test_cancelled_stage_is_distinct_from_failed(isolated_store):
     assert cancelled[0]["error_class"] == "cancelled"
 
 
+def test_dead_rows_created_by_manual_stop_emit_cancelled_not_failed(isolated_store):
+    _scan(isolated_store)
+    execution = _execution(isolated_store)
+    with isolated_store._db.cursor() as cur:
+        isolated_store._db.execute(cur,
+            "UPDATE jobs SET status='dead',cancel_requested_at=%s WHERE batch_id=%s",
+            (datetime.now(timezone.utc).isoformat(), execution["batch_id"]))
+    isolated_store._record_stage_terminal_if_ready(
+        isolated_store.get_job(execution["job_ids"][0]))
+    events = isolated_store.list_workflow_stage_events()
+    assert not [event for event in events if event.get("kind") == "job.stage_failed"]
+    stopped = [event for event in events if event.get("kind") == "job.stage_cancelled"]
+    assert len(stopped) == 1
+    assert stopped[0]["detail"]["failed"] == 0
+    assert stopped[0]["detail"]["cancelled"] == 2
+
+
 def test_operator_cancel_targets_only_the_newest_selected_stage_batch(isolated_store):
     _scan(isolated_store)
     assess = _execution(isolated_store)

@@ -262,7 +262,7 @@ describe('Admin live traffic graph', () => {
   // the header was the tile-kind constant rather than anything about the run.
   it('does not head a finished job card with ACTIVE', () => {
     expect(runTileLabel({ status: 'recent' })).toBe('COMPLETED JOB')
-    expect(runTileLabel({ status: 'cancelled' })).toBe('CANCELLED JOB')
+    expect(runTileLabel({ status: 'cancelled' })).toBe('STOPPED JOB')
     expect(runTileLabel({ status: 'failed' })).toBe('FAILED JOB')
     expect(runTileLabel({ status: 'active', cancel_requested: true })).toBe('STOPPING JOB')
     expect(runTileLabel({ status: 'active', stalled: true })).toBe('STALLED JOB')
@@ -287,6 +287,7 @@ describe('Admin live traffic graph', () => {
     expect(JOB_STATE_FILTERS.map((item) => item.key)).toEqual([
       'all', 'active', 'stopping', 'attention', 'stalled', 'paused', 'cancelled', 'recent',
     ])
+    expect(JOB_STATE_FILTERS.find((item) => item.key === 'stopping').label).toBe('Stopping')
     // Every chip except `all` must be reachable as a workflow state, or it is a control that can
     // never match anything.
     for (const { key } of JOB_STATE_FILTERS.filter((item) => item.key !== 'all')) {
@@ -300,11 +301,11 @@ describe('Admin live traffic graph', () => {
     expect(source).toContain('aria-label="Filter workflows by state"')
     expect(source).toContain('aria-label="Workflow map key"')
     expect(source).toContain('MOVING LINE</b> · work active or waiting')
-    expect(source).toContain("operationalState === 'stopping' ? 'requested' : 'last changed'")
+    expect(source).toContain("operationalState === 'stopping' ? 'stop requested' : 'last changed'")
     expect(source).toContain('RECOVERY · 24 HOURS')
     expect(source).toContain('recovery.cancel_success_pct')
     expect(source).toContain('recovery.median_cancel_seconds')
-    expect(drawer).toContain('Running work is draining at its next safe checkpoint')
+    expect(drawer).toContain('stoppingGuidance(stage)')
   })
 
   it('uses crisp non-scaling paths at every zoom', () => {

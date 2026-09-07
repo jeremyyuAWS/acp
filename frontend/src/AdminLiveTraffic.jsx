@@ -62,11 +62,11 @@ function until(iso) {
 export const JOB_STATE_FILTERS = [
   { key: 'all', label: 'All' },
   { key: 'active', label: 'Active' },
-  { key: 'stopping', label: 'Stop requested' },
+  { key: 'stopping', label: 'Stopping' },
   { key: 'attention', label: 'Needs attention' },
   { key: 'stalled', label: 'Stalled' },
   { key: 'paused', label: 'Paused' },
-  { key: 'cancelled', label: 'Cancelled' },
+  { key: 'cancelled', label: 'Stopped' },
   { key: 'recent', label: 'Recently completed' },
 ]
 
@@ -344,7 +344,7 @@ export const TILE_KINDS = {
 export function runTileLabel(run = {}) {
   const state = runOperationalState(run)
   if (state === 'recent') return 'COMPLETED JOB'
-  if (state === 'cancelled') return 'CANCELLED JOB'
+  if (state === 'cancelled') return 'STOPPED JOB'
   if (state === 'stopping') return 'STOPPING JOB'
   if (state === 'stalled') return 'STALLED JOB'
   if (state === 'paused') return 'PAUSED JOB'
@@ -382,10 +382,10 @@ function RunNode({ data }) {
   const operationalState = runOperationalState(data.run)
   const statusLabel = operationalState === 'recent' ? 'Complete'
     : operationalState === 'attention' ? 'Needs attention'
-      : operationalState === 'cancelled' ? 'Cancelled'
+      : operationalState === 'cancelled' ? 'Stopped'
         : operationalState === 'stalled' ? 'Stalled'
           : operationalState === 'paused' ? 'Paused'
-            : operationalState === 'stopping' ? 'Stop requested' : `${pct}%`
+            : operationalState === 'stopping' ? 'Stopping safely' : `${pct}%`
   return <div title="Select for live run details; double-click to open charts"
     style={{ width: 225, padding: 12,
       ...tileStyle('run', accent),
@@ -407,7 +407,9 @@ function RunNode({ data }) {
       <div style={{ width: `${pct}%`, height: '100%', background: cfg.color, borderRadius: 4 }} />
     </div>
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'end' }}>
-      <span style={{ fontSize: 12 }}>{data.run.status === 'recent' ? `Finished ${age(data.run.updated_at)} ago`
+      <span style={{ fontSize: 12 }}>{operationalState === 'stopping'
+        ? `${data.run.completed}/${data.run.total} complete · ${data.run.running || 0} draining`
+        : data.run.status === 'recent' ? `Finished ${age(data.run.updated_at)} ago`
         : data.run.status === 'failed' ? `${data.run.failed || 0} failed · updated ${age(data.run.updated_at)} ago`
           : `${data.run.completed}/${data.run.total} · ${data.run.running} active`}</span>
       <MiniTrend values={data.history} color={cfg.color} />
@@ -416,7 +418,7 @@ function RunNode({ data }) {
       {data.run.queued} waiting{data.run.queue_position ? ` · queue position ${data.run.queue_position}` : ''}
     </div>}
     {operationalState !== 'active' && data.run.updated_at && <div style={{ fontSize: 10.5, marginTop: 5, color: 'var(--muted)' }}>
-      {statusLabel} · {operationalState === 'stopping' ? 'requested' : 'last changed'} {age(
+      {statusLabel} · {operationalState === 'stopping' ? 'stop requested' : 'last changed'} {age(
         operationalState === 'stopping' ? data.run.cancel_requested_at : data.run.updated_at)} ago
     </div>}
     <Handle type="source" position={Position.Right} />
@@ -662,7 +664,9 @@ export function runFacts(run = {}, nowMs = Date.now()) {
     ['Progress', `${run.completed ?? 0} of ${run.total ?? 0}`],
     ['Queue', `${run.running ?? 0} active · ${run.queued ?? 0} waiting`],
     ['Status', run.status === 'recent' ? 'Recently completed'
-      : (run.queue_position ? `Queue position ${run.queue_position}` : 'Running now')],
+      : run.status === 'cancelled' ? 'Stopped manually'
+        : run.status === 'failed' ? 'Failed'
+          : (run.queue_position ? `Queue position ${run.queue_position}` : 'Running now')],
     ['Oldest wait', wait == null ? 'Not reported' : formatDuration(wait)],
     ['Job type', run.current_job_type?.replaceAll('_', ' ') || 'Not reported'],
     ['Last activity', updated == null ? 'Not reported' : `${formatDuration(updated)} ago`],

@@ -739,6 +739,7 @@ async def remediate_scan(sid: str, request: Request):
     execution = _enqueue_stage_batch(
         sid, "remediate", "remediate_file", payloads, snapshot_id=snapshot_id,
         request_fingerprint=request_fingerprint)
+    core.store.seed_finding_dispositions(sid, execution["batch_id"], snapshot_id=snapshot_id)
     # AFTER the jobs exist, never before: the run is "accepted" precisely when durable work has
     # been enqueued for it, and an acceptance event that led the enqueue would let the panel show
     # a run that nothing will ever claim. Emitted once per batch — the run-level transition PRD §7
@@ -3602,7 +3603,8 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
 
 def _release_manifest_payload(status: dict, *, scan_id: str, owner: str,
                               snapshot_id: str | None,
-                              stage_lineage: dict | None = None) -> dict:
+                              stage_lineage: dict | None = None,
+                              finding_reconciliation: dict | None = None) -> dict:
     """Build the authoritative, stable release record from persisted server evidence.
 
     This intentionally contains no request-time timestamp: downloading the same unchanged
@@ -3638,6 +3640,7 @@ def _release_manifest_payload(status: dict, *, scan_id: str, owner: str,
         "scan_id": scan_id,
         "snapshot_id": snapshot_id,
         "canonical_stage_lineage": stage_lineage,
+        "finding_reconciliation": finding_reconciliation,
         "actor": owner,
         "source": status.get("source"),
         "status": status.get("status"),
@@ -3660,6 +3663,55 @@ def _release_manifest_payload(status: dict, *, scan_id: str, owner: str,
     }
 
 
+def _release_finding_reconciliation(scan_id: str, snapshot_id: str | None,
+                                    stage_lineage: dict | None) -> dict:
+    """Freeze the canonical Remediation finding account for Release consumers.
+
+    Counts are copied from the revisioned Remediation snapshot, never reconstructed from
+    Release documents, fixes, or review cards.  The legacy snapshot deliberately carries null
+    outcome buckets; preserving them as ``unavailable`` is more truthful than turning unknowns
+    into zeroes.  Request-time freshness fields are excluded so unchanged evidence has one
+    reproducible digest in the JSON manifest, ZIP package, and later report renderers.
+    """
+    snapshot = _remediation_snapshot(scan_id)
+    outcomes = snapshot.get("finding_reconciliation")
+    residual_keys = ("awaiting_review", "approved_pending_verification", "unchanged_no_fix",
+                     "failed", "excluded", "superseded", "unaccounted")
+    if not isinstance(outcomes, dict):
+        status = "unavailable"
+    elif outcomes.get("exact") is True:
+        status = "reconciled"
+    elif outcomes.get("violations"):
+        status = "inconsistent"
+    elif all(outcomes.get(key) is None for key in
+             ("resolved_verified", "approved_pending_verification", "unchanged_no_fix",
+              "failed", "excluded", "superseded")):
+        status = "unavailable"
+    else:
+        status = "pending"
+    export = {
+        "schema_version": 1,
+        "status": status,
+        "identifiers": {
+            "workflow_id": (stage_lineage or {}).get("workflow_id"),
+            "workflow_revision": (stage_lineage or {}).get("workflow_revision"),
+            "scan_id": scan_id,
+            "snapshot_id": snapshot_id,
+            "run_id": snapshot.get("run_id"),
+            "batch_id": snapshot.get("batch_id"),
+        },
+        "revision": snapshot.get("revision"),
+        "outcomes": outcomes,
+        "residual_outcomes": ({key: outcomes.get(key) for key in residual_keys}
+                              if isinstance(outcomes, dict) else None),
+    }
+    encoded = _json.dumps(export, sort_keys=True, separators=(",", ":"),
+                          ensure_ascii=False, default=str).encode("utf-8")
+    export["content_digest"] = {
+        "algorithm": "SHA-256", "value": hashlib.sha256(encoded).hexdigest()}
+    return export
+
+
 @router.get("/scans/{sid}/release/manifest")
 def get_release_manifest(sid: str, request: Request):
     """Return an owner-scoped server manifest plus a reproducible SHA-256 content digest."""
@@ -3669,9 +3721,12 @@ def get_release_manifest(sid: str, request: Request):
     status = core.store.release_for_scan(sid, owner)
     if status is None:
         raise HTTPException(404, "release not found")
+    snapshot_id = core.store.stage_snapshot_id(sid)
+    lineage = _canonical_lineage_export(sid, owner)["lineage"]
+    finding_reconciliation = _release_finding_reconciliation(sid, snapshot_id, lineage)
     manifest = _release_manifest_payload(
-        status, scan_id=sid, owner=owner, snapshot_id=core.store.stage_snapshot_id(sid),
-        stage_lineage=_canonical_lineage_export(sid, owner)["lineage"])
+        status, scan_id=sid, owner=owner, snapshot_id=snapshot_id,
+        stage_lineage=lineage, finding_reconciliation=finding_reconciliation)
     canonical = _json.dumps(manifest, sort_keys=True, separators=(",", ":"),
                             ensure_ascii=False, default=str).encode("utf-8")
     return {
@@ -3754,19 +3809,24 @@ def download_release_package(sid: str, request: Request, body: ReleasePackageReq
                     "corrected_sha256": hashlib.sha256(data).hexdigest(),
                 })
             status = core.store.release_for_scan(sid, owner)
+            snapshot_id = core.store.stage_snapshot_id(sid)
+            lineage = _canonical_lineage_export(sid, owner)["lineage"]
+            finding_reconciliation = _release_finding_reconciliation(
+                sid, snapshot_id, lineage)
             release_manifest = (_release_manifest_payload(
-                status, scan_id=sid, owner=owner, snapshot_id=core.store.stage_snapshot_id(sid),
-                stage_lineage=_canonical_lineage_export(sid, owner)["lineage"])
+                status, scan_id=sid, owner=owner, snapshot_id=snapshot_id,
+                stage_lineage=lineage, finding_reconciliation=finding_reconciliation)
                 if status is not None else None)
             manifest = {
                 "schema_version": 1,
                 "package_type": "acp-corrected-files",
                 "scan_id": sid,
-                "snapshot_id": core.store.stage_snapshot_id(sid),
+                "snapshot_id": snapshot_id,
                 "actor": owner,
                 "package_name": package_name,
                 "original_files_unchanged": True,
                 "documents": documents,
+                "finding_reconciliation": finding_reconciliation,
                 "release": release_manifest,
             }
             archive.writestr("release-manifest.json", _json.dumps(

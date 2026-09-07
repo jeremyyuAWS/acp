@@ -30,9 +30,23 @@ class _Store:
     def stage_snapshot_id(self, sid):
         return "snapshot-1"
 
+    def canonical_stage_lineage(self, sid, owner=None):
+        return {"schema_version": 1, "workflow_id": "workflow-1", "workflow_revision": 3,
+                "scan_id": sid, "generated_at": "volatile", "available": True,
+                "stages": [], "integrity": {"ok": True, "broken_manifest_links": [],
+                                              "inconsistent_stages": []}}
+
 
 def _request(owner="owner@example.com"):
     return SimpleNamespace(state=SimpleNamespace(user_email=owner))
+
+
+@pytest.fixture(autouse=True)
+def _legacy_finding_snapshot(monkeypatch):
+    monkeypatch.setattr(scans, "_remediation_snapshot", lambda sid: {
+        "run_id": None, "batch_id": None, "revision": 0,
+        "finding_reconciliation": None,
+    })
 
 
 async def _response_body(response):
@@ -41,6 +55,14 @@ async def _response_body(response):
 
 def test_package_preserves_folders_and_includes_hash_manifest(monkeypatch):
     monkeypatch.setattr(scans.core, "store", _Store())
+    monkeypatch.setattr(scans, "_remediation_snapshot", lambda sid: {
+        "run_id": "run-1", "batch_id": "batch-1", "revision": 23,
+        "finding_reconciliation": {
+            "assessed": 3, "resolved_verified": 1, "awaiting_review": 1,
+            "approved_pending_verification": 0, "unchanged_no_fix": 1, "failed": 0,
+            "excluded": 0, "superseded": 0, "accounted": 3, "unaccounted": 0,
+            "exact": True, "violations": [],
+        }})
     payloads = {"report.pdf": b"corrected-pdf", "form.docx": b"corrected-docx"}
     monkeypatch.setattr(scans, "_remediated_bytes", lambda owner, sid, name: payloads[name])
 
@@ -62,6 +84,15 @@ def test_package_preserves_folders_and_includes_hash_manifest(monkeypatch):
     assert manifest["snapshot_id"] == "snapshot-1"
     assert manifest["original_files_unchanged"] is True
     assert manifest["documents"][0]["corrected_sha256"] == hashlib.sha256(b"corrected-pdf").hexdigest()
+    finding = manifest["finding_reconciliation"]
+    assert finding["status"] == "reconciled"
+    assert finding["revision"] == 23
+    assert finding["identifiers"]["workflow_id"] == "workflow-1"
+    assert finding["residual_outcomes"] == {
+        "awaiting_review": 1, "approved_pending_verification": 0,
+        "unchanged_no_fix": 1, "failed": 0, "excluded": 0, "superseded": 0,
+        "unaccounted": 0,
+    }
 
 
 def test_package_is_owner_scoped(monkeypatch):

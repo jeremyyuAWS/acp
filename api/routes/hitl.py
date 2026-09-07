@@ -151,6 +151,7 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
     # which really are appliable) writable as the image's alt text.
     updated = core.store.update_hitl_item(item_id, body.status, body.reviewer_note,
                                           body.approved_value, resolution=body.resolution)
+    core.store.sync_hitl_finding_dispositions(item_id, body.status)
     # Record the reviewer's final text per proposal, so the applier knows which image gets which
     # description. Only on approval: rejecting or skipping approves no content.
     if body.status == "approved" and body.approved_values is not None:

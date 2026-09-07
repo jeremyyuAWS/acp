@@ -161,16 +161,44 @@ function FindingReconciliation({ snapshot }) {
   const processedDocuments = ['completed', 'review', 'failed', 'skipped']
     .reduce((sum, key) => sum + (typeof documents[key] === 'number' ? documents[key] : 0), 0)
   const count = (value) => typeof value === 'number' ? value.toLocaleString() : 'Not yet available'
+  const inconsistent = snapshot.integrity?.affected?.includes('finding_reconciliation')
+    || (reconciliation.violations || []).length > 0
+  const exact = reconciliation.exact === true && !inconsistent
+  const outcomes = [
+    ['Verified resolved', reconciliation.resolved_verified],
+    ['Awaiting human review', reconciliation.awaiting_review],
+    ['Approved, awaiting verification', reconciliation.approved_pending_verification],
+    ['Unchanged — no eligible fix', reconciliation.unchanged_no_fix],
+    ['Failed remediation', reconciliation.failed],
+    ['Excluded by policy', reconciliation.excluded],
+    ['Superseded by reassessment', reconciliation.superseded],
+  ]
   return <section className="remops-reconciliation" aria-labelledby="remops-reconciliation-title">
     <div><h3 id="remops-reconciliation-title">Assessment → Remediation accounting</h3><p className="muted">The units stay separate so completed processing is not mistaken for resolved findings.</p></div>
-    <dl>
-      <div><dt>Assessment findings</dt><dd>{count(assessed)}{typeof assessed === 'number' && ' findings'}<span>Finding instances handed into this workflow</span></dd></div>
-      <div><dt>Documents processed</dt><dd>{processedDocuments.toLocaleString()} / {snapshot.total_documents.toLocaleString()} documents<span>Files that reached a terminal remediation outcome</span></dd></div>
-      <div><dt>Verified changes</dt><dd>{count(verifiedChanges)}{typeof verifiedChanges === 'number' && ' changes'}<span>Before/after changes that passed re-check</span></dd></div>
-      <div><dt>Pending human review</dt><dd>{count(reviewFindings)}{typeof reviewFindings === 'number' && ' findings'}<span>{typeof reviewItems === 'number' ? `Across ${reviewItems.toLocaleString()} review card${reviewItems === 1 ? '' : 's'}` : 'Review-card count not yet available'}</span></dd></div>
-      <div><dt>Exact finding disposition</dt><dd>{reconciliation.exact === true ? 'Available' : 'Not yet available'}<span>{reconciliation.exact === true ? 'Every assessed finding has a durable outcome' : 'A finding-disposition ledger is not yet available'}</span></dd></div>
-    </dl>
-    {reconciliation.exact !== true && <p className="remops-accounting-note">These values do not form a subtraction. One finding may require several verified changes, and one review item may group several findings. ACP does not yet track an exact disposition for every finding.</p>}
+    {inconsistent && <p className="remops-accounting-note" role="status"><b>Accounting temporarily inconsistent.</b> ACP is preserving the last durable finding totals while it reconciles this snapshot.</p>}
+    {exact ? <>
+      <div aria-labelledby="remops-finding-outcomes"><h4 id="remops-finding-outcomes">Finding outcomes</h4><dl>
+        <div><dt>Assessment findings</dt><dd>{count(assessed)} findings<span>Finding instances handed into this workflow</span></dd></div>
+        {outcomes.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{count(value)} findings</dd></div>)}
+        <div><dt>Findings accounted for</dt><dd>{count(reconciliation.accounted)} / {count(assessed)} findings<span>Every assessed finding has one current disposition</span></dd></div>
+      </dl></div>
+      <div aria-labelledby="remops-document-outcomes"><h4 id="remops-document-outcomes">Document outcomes</h4><dl>
+        <div><dt>Documents processed</dt><dd>{processedDocuments.toLocaleString()} / {typeof snapshot.total_documents === 'number' ? snapshot.total_documents.toLocaleString() : 'Not yet available'} documents<span>Files that reached a terminal remediation outcome</span></dd></div>
+        <div><dt>Pending human review</dt><dd>{count(reviewFindings)} findings<span>{typeof reviewItems === 'number' ? `Across ${reviewItems.toLocaleString()} review card${reviewItems === 1 ? '' : 's'}` : 'Review-card count not yet available'}</span></dd></div>
+      </dl></div>
+      <div aria-labelledby="remops-change-evidence"><h4 id="remops-change-evidence">Change evidence</h4><dl>
+        <div><dt>Verified changes</dt><dd>{count(verifiedChanges)} changes<span>Before/after changes that passed re-check</span></dd></div>
+      </dl></div>
+    </> : <>
+      <dl>
+        <div><dt>Assessment findings</dt><dd>{count(assessed)}{typeof assessed === 'number' && ' findings'}<span>Finding instances handed into this workflow</span></dd></div>
+        <div><dt>Documents processed</dt><dd>{processedDocuments.toLocaleString()} / {typeof snapshot.total_documents === 'number' ? snapshot.total_documents.toLocaleString() : 'Not yet available'} documents<span>Files that reached a terminal remediation outcome</span></dd></div>
+        <div><dt>Verified changes</dt><dd>{count(verifiedChanges)}{typeof verifiedChanges === 'number' && ' changes'}<span>Before/after changes that passed re-check</span></dd></div>
+        <div><dt>Pending human review</dt><dd>{count(reviewFindings)}{typeof reviewFindings === 'number' && ' findings'}<span>{typeof reviewItems === 'number' ? `Across ${reviewItems.toLocaleString()} review card${reviewItems === 1 ? '' : 's'}` : 'Review-card count not yet available'}</span></dd></div>
+        <div><dt>Exact finding disposition</dt><dd>Not yet available<span>A complete finding-disposition ledger is not yet available</span></dd></div>
+      </dl>
+      {!inconsistent && <p className="remops-accounting-note">These values do not form a subtraction. One finding may require several verified changes, and one review item may group several findings. ACP does not yet track an exact disposition for every finding.</p>}
+    </>}
   </section>
 }
 
