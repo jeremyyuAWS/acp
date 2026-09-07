@@ -12519,6 +12519,39 @@ class Store:
                 "destination": destination, "content_digest": content_digest,
                 "receipt": receipt, "reused": False}
 
+    def release_finding_lineage(self, execution_id: str, filename: str) -> dict | None:
+        """Resolve one Release output to the immutable Remediate finding partition it publishes."""
+        execution = self.get_stage_execution(execution_id)
+        if not execution or execution.get("stage") != "release":
+            raise ValueError("finding lineage requires a Release execution")
+        manifest_id = execution.get("input_manifest_id")
+        # Historical executions created before sealed handoffs remain publishable.  They cannot
+        # honestly claim exact finding lineage, so omit it rather than inventing a mutable link.
+        if not manifest_id:
+            return None
+        upstream = self.get_stage_output_manifest(manifest_id)
+        if not upstream or upstream.get("stage") != "remediate" or \
+                upstream.get("workflow_id") != execution.get("workflow_id"):
+            raise ValueError("Release execution is not bound to a sealed Remediate manifest")
+        upstream_execution_id = upstream["execution_id"]
+        with self._db.cursor() as cur:
+            self._db.execute(cur,
+                "SELECT finding_id,disposition,revision,snapshot_id FROM finding_disposition "
+                "WHERE scan_id=%s AND batch_id=%s AND file=%s "
+                "ORDER BY finding_id",
+                (execution["scan_id"], upstream_execution_id, filename))
+            rows = self._db.fetchall(cur)
+        snapshot_ids = {row.get("snapshot_id") for row in rows if row.get("snapshot_id")}
+        if len(snapshot_ids) > 1:
+            raise ValueError("Release finding lineage spans multiple Assessment snapshots")
+        return {
+            "upstream_execution_id": upstream_execution_id,
+            "snapshot_id": next(iter(snapshot_ids), upstream.get("upstream_manifest_id")),
+            "findings": [{"finding_id": row["finding_id"],
+                          "disposition": row.get("disposition"),
+                          "revision": int(row.get("revision") or 0)} for row in rows],
+        }
+
     def seal_stage_output_manifest(self, execution_id: str, entries: list[dict], *,
                                    expected_revision: int, owner: str | None = None) -> dict:
         """Seal immutable outputs after every work item has a terminal, reconciled outcome."""
@@ -12537,15 +12570,23 @@ class Store:
         digest = _hashlib.sha256(raw.encode()).hexdigest()
         manifest_id = _hashlib.sha256(f"{execution_id}\0{digest}".encode()).hexdigest()
         for entry in ordered:
-            effect_id = entry.get("effect_id")
-            if not effect_id:
-                continue
-            with self._db.cursor() as cur:
-                self._db.execute(cur,
-                    "SELECT effect_id FROM side_effect_receipts WHERE effect_id=%s AND execution_id=%s",
-                    (effect_id, execution_id))
-                if not self._db.fetchone(cur):
-                    raise ValueError(f"manifest references unknown side-effect receipt: {effect_id}")
+            raw_effect_ids = entry.get("effect_ids") or []
+            if not isinstance(raw_effect_ids, list) or any(
+                    not isinstance(value, str) or not value for value in raw_effect_ids):
+                raise ValueError("manifest effect_ids must be a list of non-empty strings")
+            effect_ids = list(raw_effect_ids)
+            if entry.get("effect_id"):
+                effect_ids.append(entry["effect_id"])
+            for effect_id in effect_ids:
+                with self._db.cursor() as cur:
+                    self._db.execute(cur,
+                        "SELECT effect_id FROM side_effect_receipts WHERE effect_id=%s "
+                        "AND execution_id=%s AND (work_item_id=%s OR %s IS NULL)",
+                        (effect_id, execution_id, entry.get("work_item_id"),
+                         entry.get("work_item_id")))
+                    if not self._db.fetchone(cur):
+                        raise ValueError(
+                            f"manifest references unknown side-effect receipt: {effect_id}")
         now = self._now()
         with self._db.cursor() as cur:
             self._db.execute(cur,
@@ -12590,12 +12631,21 @@ class Store:
                 "SELECT work_item_id,input_id,state,result_digest FROM stage_work_items "
                 "WHERE execution_id=%s ORDER BY input_id,work_item_id", (execution_id,))
             items = self._db.fetchall(cur)
+            self._db.execute(cur,
+                "SELECT effect_id,work_item_id FROM side_effect_receipts "
+                "WHERE execution_id=%s ORDER BY effect_id", (execution_id,))
+            effects = self._db.fetchall(cur)
         expected = execution.get("expected_items")
         if expected is None or len(items) != int(expected) or any(
                 row.get("state") not in ("completed", "skipped") for row in items):
             return None
+        effects_by_item = {}
+        for effect in effects:
+            effects_by_item.setdefault(effect.get("work_item_id"), []).append(effect["effect_id"])
         entries = [{"work_item_id": row["work_item_id"], "input_id": row["input_id"],
-                    "outcome": row["state"], "result_digest": row.get("result_digest")}
+                    "outcome": row["state"], "result_digest": row.get("result_digest"),
+                    **({"effect_ids": effects_by_item[row["work_item_id"]]}
+                       if effects_by_item.get(row["work_item_id"]) else {})}
                    for row in items]
         try:
             return self.seal_stage_output_manifest(
