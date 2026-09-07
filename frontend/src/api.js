@@ -1342,6 +1342,12 @@ export const putMyReleaseDestination = (releaseDestination) => (SIM
       method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ release_destination: releaseDestination }),
     }).then(j))
+export const putMyReleaseTemplates = (releaseTemplates) => (SIM
+  ? sim({ release_templates: releaseTemplates, simulated: true })
+  : fetch(`${BASE}/settings/mine`, {
+      method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ release_templates: releaseTemplates }),
+    }).then(j))
 // Download a remediated file's fixed bytes (ADR 0010) — Blob primary, Drive-mirror
 // fallback server-side. Authenticated fetch → blob → download, same pattern as
 // openReport (a bare <a href> would drop the Authorization header).

@@ -1251,6 +1251,18 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .release-preview__path code { overflow-wrap: anywhere; white-space: normal; }
 .release-preview p { margin: 3px 0 0; color: var(--muted); font-size: 12px; }
 .release-methods label span { grid-column: 2; color: var(--muted); font-size: 12.5px; line-height: 1.45; }
+.release-templates { margin-top: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel, #fff); }
+.release-templates > summary { cursor: pointer; padding: 12px 14px; font-size: 13px; font-weight: 700; }
+.release-templates > summary span { color: var(--muted); font-weight: 500; }
+.release-templates__body { border-top: 1px solid var(--line); padding: 12px 14px; }
+.release-templates__body > p { margin: 0 0 12px; font-size: 12.5px; }
+.release-templates ul { list-style: none; margin: 0 0 12px; padding: 0; }
+.release-templates li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.release-templates li > div { display: grid; gap: 2px; min-width: 0; }
+.release-templates li span { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.release-templates__save { display: grid; grid-template-columns: minmax(180px, 1fr) auto; gap: 7px 10px; align-items: end; }
+.release-templates__save label { grid-column: 1 / -1; font-size: 12px; font-weight: 700; }
+.release-templates__save input { width: 100%; }
 .release-includes { display: flex; flex-wrap: wrap; gap: 7px 18px; color: var(--success-fg); font-size: 12px; font-weight: 650; }
 .release-download-format { border: 0; padding: 0; margin: 2px 0; display: flex; flex-wrap: wrap; gap: 8px 18px; }
 .release-download-format legend { font-size: 12.5px; font-weight: 700; margin-bottom: 6px; }
@@ -1268,6 +1280,8 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
   .release-metrics { grid-template-columns: repeat(2, minmax(100px, 1fr)); }
   .release-methods { grid-template-columns: 1fr; }
   .release-destination-config__heading { align-items: flex-start; flex-direction: column; gap: 3px; }
+  .release-templates li, .release-templates__save { grid-template-columns: 1fr; align-items: stretch; }
+  .release-templates__save label { grid-column: auto; }
 }
 
 /* --- password-protected / could-not-open --- */
