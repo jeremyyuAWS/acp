@@ -72,6 +72,26 @@ def _configured_apps() -> tuple[str, ...]:
 
 _AZ_CONFIGURED = bool(_AZ_SUB and (_AZ_APP or _AZ_APP_NAMES))
 
+def _capacity_gateway_for_environment():
+    """Enable writes only for an explicitly opted-in, wholly staging-named fleet."""
+    enabled = os.environ.get("ACP_CAPACITY_APPLY_ENABLED") == "1"
+    # deploy/public/deploy.sh consumes ACP_DEPLOY_TARGET_ENV in the deployment process, then
+    # stamps the running container with ACP_DEPLOY_ENV. The API must gate on the value it
+    # actually receives, or staging can never opt in and a locally inherited deploy variable
+    # could be mistaken for runtime identity.
+    staging = os.environ.get("ACP_DEPLOY_ENV", "").strip().lower() == "staging"
+    apps = tuple(app for app in _configured_apps() if app)
+    if not (enabled and staging and _AZ_SUB and apps and
+            all(app.endswith("-staging") for app in apps)):
+        return None
+    from azure_capacity_gateway import default_gateway
+    return default_gateway(_AZ_SUB, _AZ_RG, allowed_apps=apps)
+
+
+# This is intentionally evaluated once at process start: changing the environment underneath a
+# running API must not turn a read-only process into an Azure writer.
+_capacity_apply_gateway = _capacity_gateway_for_environment()
+
 
 def _az_client():
     from azure.identity import DefaultAzureCredential
@@ -2149,6 +2169,11 @@ def get_capacity_schedule():
     override = store_mod.get_override(core.store, now)
     observed, configured = _observed_apps()
     payload = _schedule_payload(schedule, now)
+    application = store_mod.load_application(core.store)
+    applied = (application.get("state") == "applied"
+               and application.get("applied_version") == schedule.version)
+    payload["applied"] = applied
+    payload["application"] = application
     # An override outranks the schedule while it lasts, and says so in the mode rather than
     # borrowing the name of the mode it copied — nothing downstream may report an overridden
     # fleet as though the schedule produced it.
@@ -2176,9 +2201,17 @@ def get_capacity_schedule():
     # Drift compares INTENT to Azure, so it uses the mode the schedule is in, not an override's
     # name — an override is a deliberate, audited divergence and reporting it as drift would bury
     # the real thing among the expected ones.
-    payload["drift"] = (sched_mod.drift(schedule, sched_mod.effective_mode(schedule, now), observed)
-                        if schedule.applied else [])
-    payload["drift_evaluated"] = bool(schedule.applied)
+    if applied:
+        import capacity_apply as apply_mod
+        import capacity_policy as policy_mod
+        import queue_scaler
+        comparisons = [apply_mod.compare(p, observed.get(p.app))
+                       for p in policy_mod.policy_for(schedule, queue_scaler.lane_job_types())]
+        payload["drift"] = [difference for result in comparisons
+                            for difference in result["differences"]]
+        payload["drift_evaluated"] = all(r["state"] != "unreadable" for r in comparisons)
+    else:
+        payload["drift"], payload["drift_evaluated"] = [], False
     payload["azure_configured"] = configured
     # AC 14: whether capacity is where it is because of the schedule, the queue, an override or a
     # deployment. Derived from the same reading drift uses, so it costs no extra Azure call and
@@ -2261,6 +2294,13 @@ class OverrideRequest(BaseModel):
     floors: Optional[dict[str, int]] = None     # required for `custom`
 
 
+class ScheduleApply(BaseModel):
+    """Apply exactly the desired version the administrator reviewed."""
+
+    version: int
+    reason: str
+
+
 def _validate_schedule(schedule) -> dict:
     import capacity_schedule as sched_mod
     return sched_mod.validate(
@@ -2338,6 +2378,54 @@ def put_capacity_schedule(body: ScheduleWrite, request: Request):
     return payload
 
 
+@router.post("/control/capacity-schedule/apply")
+def apply_capacity_schedule(body: ScheduleApply, request: Request):
+    """Apply one validated desired version through an explicitly configured gateway.
+
+    There is deliberately no production gateway yet. Without one this endpoint stops before it
+    records an attempt or makes any external call; a test fake is the only current implementation.
+    """
+    import capacity_apply as apply_mod
+    import capacity_policy as policy_mod
+    import capacity_store as store_mod
+    import queue_scaler
+    from .system import _require_admin
+    _require_admin(request)
+
+    if _capacity_apply_gateway is None:
+        raise HTTPException(503, "capacity application is not configured")
+    if not body.reason.strip():
+        raise HTTPException(422, "a plain-language reason is required")
+    schedule = store_mod.load_schedule(core.store)
+    if body.version != schedule.version:
+        raise HTTPException(409, {"message": "schedule has moved on",
+                                  "your_version": body.version,
+                                  "current_version": schedule.version})
+    validation = _validate_schedule(schedule)
+    if validation["blocked"]:
+        raise HTTPException(422, {"message": "this schedule cannot be applied", **validation})
+    # The rendered cron policy cannot enforce date exceptions. Refuse rather than spend Azure
+    # money on a policy known to disagree with the saved schedule.
+    if schedule.holidays:
+        raise HTTPException(422, "holiday exceptions cannot yet be applied by Azure cron rules")
+
+    actor, correlation_id = _actor(request), uuid.uuid4().hex[:12]
+    attempt = store_mod.start_application(
+        core.store, version=schedule.version, actor=actor, reason=body.reason.strip(),
+        correlation_id=correlation_id)
+    policy = policy_mod.policy_for(schedule, queue_scaler.lane_job_types())
+    result = apply_mod.apply_policies(policy, _capacity_apply_gateway)
+    # A schedule edit that lands during Azure's long-running operation invalidates this success.
+    if store_mod.load_schedule(core.store).version != schedule.version:
+        result = {**result, "state": "stale", "applied_version": None}
+    application = store_mod.finish_application(core.store, attempt, result)
+    response = {"correlation_id": correlation_id, "schedule_version": schedule.version,
+                "application": application}
+    if result["state"] != "applied":
+        raise HTTPException(502, response)
+    return response
+
+
 @router.post("/control/capacity-schedule/override")
 def create_capacity_override(body: OverrideRequest, request: Request):
     """Temporarily override the schedule's warm floors. Expires by itself; never permanent.
@@ -2396,10 +2484,13 @@ def get_capacity_policy():
     import queue_scaler
 
     schedule = store_mod.load_schedule(core.store)
+    application = store_mod.load_application(core.store)
     policy = policy_mod.policy_for(schedule, queue_scaler.lane_job_types())
     return {
         "schedule_version": schedule.version,
-        "applied": schedule.applied,
+        "applied": (application.get("state") == "applied"
+                    and application.get("applied_version") == schedule.version),
+        "application": application,
         "apps": [p.as_dict() for p in policy],
         # Rendered as argv lists, and only when the subscription is actually configured — a
         # command naming a placeholder subscription is the kind of thing that gets pasted.

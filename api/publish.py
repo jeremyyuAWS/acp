@@ -5,12 +5,31 @@ import hashlib
 import io
 import re
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from urllib.parse import quote
 
 import blob as _blob
 import provenance
 
 RELEASE_ROOT = "Remediated"
+RELEASE_TIMEZONES = frozenset({
+    "UTC", "America/Los_Angeles", "America/Denver", "America/Chicago",
+    "America/New_York", "Asia/Kolkata",
+})
+
+
+def release_folder_name(at: datetime | None = None, timezone_name: str = "UTC") -> str:
+    """Human-facing release folder name; the underlying release instant remains UTC."""
+    if timezone_name not in RELEASE_TIMEZONES:
+        raise ValueError("unsupported release timezone")
+    try:
+        zone = ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError("unsupported release timezone") from exc
+    moment = at or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(zone).strftime("%Y-%m-%d %H-%M %Z")
 RELEASE_PROPERTY = "acpReleaseId"
 IDEMPOTENCY_PROPERTY = "acpPublishKey"
 _FOLDER_MIME = "application/vnd.google-apps.folder"
@@ -128,7 +147,7 @@ def ensure_published_folder(svc, release_id: str | None = None, *,
     root, _ = _ensure_folder(svc, None, RELEASE_ROOT)
     folder = _find_folder(svc, root["id"], release_id=release_id)
     at = (released_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    name = folder_name or at.strftime("%Y-%m-%d %H-%M UTC")
+    name = folder_name or release_folder_name(at)
     if not folder:
         created = svc.files().create(
             body={"name": name, "mimeType": _FOLDER_MIME, "parents": [root["id"]],

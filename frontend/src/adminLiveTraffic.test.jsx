@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { JOB_STATE_FILTERS, TILE_KINDS, azureBytes, azureLatest, buildTrafficGraph, capacityValue, flowEdge, infrastructureDetail, nodeGauge, queueConcentration, runFacts, jobStateCounts, runOperationalState, runTileLabel, sizeScopeNote, tileKind, tileStyle, trafficEdgeStyle, trafficGraphForTab, trendToggleLabel, workerServiceRows, workflowColor, workflowOperationalState } from './AdminLiveTraffic.jsx'
+import { JOB_STATE_FILTERS, TILE_KINDS, azureBytes, azureLatest, buildTrafficGraph, capacityValue, cancellationHealthModel, deliveryHealthModel, flowEdge, infrastructureDetail, nodeGauge, queueConcentration, runFacts, jobStateCounts, runOperationalState, runTileLabel, sizeScopeNote, tileKind, tileStyle, trafficEdgeStyle, trafficGraphForTab, trendToggleLabel, workerServiceRows, workflowColor, workflowOperationalState } from './AdminLiveTraffic.jsx'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const source = readFileSync(join(here, 'AdminLiveTraffic.jsx'), 'utf8')
@@ -18,6 +18,21 @@ const run = {
 }
 
 describe('Admin live traffic graph', () => {
+  it('distinguishes unavailable, delayed, and failed canonical delivery', () => {
+    expect(deliveryHealthModel(null).state).toBe('unknown')
+    expect(deliveryHealthModel({ pending: 2, claimed: 1, delivered: 7 }).headline).toBe('3 in transit')
+    expect(deliveryHealthModel({ retrying: 2, pending: 1 }).state).toBe('warning')
+    expect(deliveryHealthModel({ dead_lettered: 1, retrying: 2 }).state).toBe('critical')
+    expect(source).toContain('aria-label="Canonical event delivery"')
+  })
+
+  it('makes overdue and escalated stop acknowledgements explicit', () => {
+    expect(cancellationHealthModel(null).state).toBe('unknown')
+    expect(cancellationHealthModel({ awaiting_acknowledgement: 2 }).headline).toBe('2 stopping')
+    expect(cancellationHealthModel({ awaiting_acknowledgement: 2, overdue: 1 }).headline).toBe('1 overdue')
+    expect(cancellationHealthModel({ awaiting_acknowledgement: 2, overdue: 1, escalated: 1 }).headline).toBe('1 escalated')
+    expect(source).toContain('aria-label="Cancellation acknowledgements"')
+  })
   it('supplies mutating recovery handlers only for the server-confirmed platform admin', () => {
     expect(source).toMatch(/onCancelStage=\{me\?\.is_admin\s*\?/)
     expect(source).toMatch(/onResumeStage=\{me\?\.is_admin\s*\?/)
@@ -247,7 +262,7 @@ describe('Admin live traffic graph', () => {
   // the header was the tile-kind constant rather than anything about the run.
   it('does not head a finished job card with ACTIVE', () => {
     expect(runTileLabel({ status: 'recent' })).toBe('COMPLETED JOB')
-    expect(runTileLabel({ status: 'cancelled' })).toBe('CANCELLED JOB')
+    expect(runTileLabel({ status: 'cancelled' })).toBe('STOPPED JOB')
     expect(runTileLabel({ status: 'failed' })).toBe('FAILED JOB')
     expect(runTileLabel({ status: 'active', cancel_requested: true })).toBe('STOPPING JOB')
     expect(runTileLabel({ status: 'active', stalled: true })).toBe('STALLED JOB')
@@ -272,6 +287,7 @@ describe('Admin live traffic graph', () => {
     expect(JOB_STATE_FILTERS.map((item) => item.key)).toEqual([
       'all', 'active', 'stopping', 'attention', 'stalled', 'paused', 'cancelled', 'recent',
     ])
+    expect(JOB_STATE_FILTERS.find((item) => item.key === 'stopping').label).toBe('Stopping')
     // Every chip except `all` must be reachable as a workflow state, or it is a control that can
     // never match anything.
     for (const { key } of JOB_STATE_FILTERS.filter((item) => item.key !== 'all')) {
@@ -285,11 +301,11 @@ describe('Admin live traffic graph', () => {
     expect(source).toContain('aria-label="Filter workflows by state"')
     expect(source).toContain('aria-label="Workflow map key"')
     expect(source).toContain('MOVING LINE</b> · work active or waiting')
-    expect(source).toContain("operationalState === 'stopping' ? 'requested' : 'last changed'")
+    expect(source).toContain("operationalState === 'stopping' ? 'stop requested' : 'last changed'")
     expect(source).toContain('RECOVERY · 24 HOURS')
     expect(source).toContain('recovery.cancel_success_pct')
     expect(source).toContain('recovery.median_cancel_seconds')
-    expect(drawer).toContain('Running work is draining at its next safe checkpoint')
+    expect(drawer).toContain('stoppingGuidance(stage)')
   })
 
   it('uses crisp non-scaling paths at every zoom', () => {

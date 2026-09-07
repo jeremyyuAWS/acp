@@ -215,6 +215,30 @@ def _pdf_images(path: Path):
         return
 
 
+def _pdf_images_with_names(path: Path):
+    """Yield (page_1based, xobj_name, image_bytes) for every raster XObject in the PDF.
+
+    The (page, name) pair is what _pdf_struct_image_map in proposals.py uses to correlate an
+    embedded image with its /Figure struct element's pdf:fig:P:S locator.
+    """
+    try:
+        import pikepdf
+        with pikepdf.open(str(path)) as pdf:
+            for page_idx, page in enumerate(pdf.pages):
+                page_1 = page_idx + 1
+                images = getattr(page, "images", {}) or {}
+                for name, obj in images.items():
+                    try:
+                        pil = pikepdf.PdfImage(obj).as_pil_image()
+                        buf = io.BytesIO()
+                        pil.save(buf, format="PNG")
+                        yield page_1, str(name), buf.getvalue()
+                    except Exception:
+                        continue
+    except Exception:
+        return
+
+
 def _embedded_images_and_total(path: Path, ext: str) -> tuple[list[bytes], int]:
     """(images examined, images present). The second number is why this exists.
 

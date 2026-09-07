@@ -21,6 +21,8 @@ workers crash, are interrupted by deploys, or fail to finalise their scan runs:
                         so a row accumulated per process per replica per revision. Production
                         reported 1000 rows to Live Operations on 2026-09-06, all stale, all from
                         revisions retired the day before. See store.prune_worker_instances.
+  8. Stop deadlines   — escalate worker attempts that did not acknowledge a cancellation request
+                        by its durable deadline; escalation never claims the worker stopped.
 
 Typical use: call run_sweep(store) once per tick from a background thread or cron.
 The function is idempotent and safe to call concurrently — each sub-sweep uses
@@ -78,6 +80,8 @@ def run_sweep(store, *, lease_seconds: int | None = None,
     exhausted = store.sweep_exhausted_jobs()
     interrupted = store.sweep_orphaned_scans(grace_seconds=grace_s)
     rescued = store.rescue_unfinalized_scans()
+    overdue = getattr(store, "escalate_overdue_stage_cancellations", None)
+    cancellations_escalated = len(overdue()) if callable(overdue) else 0
 
     memory_proposed = 0
     now = time.monotonic()
@@ -130,6 +134,7 @@ def run_sweep(store, *, lease_seconds: int | None = None,
         "memory_proposed": memory_proposed,
         "events_pruned": events_pruned,
         "workers_pruned": workers_pruned,
+        "cancellations_escalated": cancellations_escalated,
     }
     total = sum(result.values())
     if total:

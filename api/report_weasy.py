@@ -261,6 +261,26 @@ dd { color: #2B2330; margin-left: 12px; }
   hash <strong>{{ rubric_hash }}</strong> — results are reproducible from the rubric hash.
   Scans run read-only; documents are never retained.
 </p>
+{% if stage_lineage_digest %}
+<p class="muted">
+  Canonical stage lineage <strong>{{ stage_lineage_status }}</strong> · SHA-256
+  <strong>{{ stage_lineage_digest }}</strong>. Stage totals use sealed execution snapshots.
+</p>
+{% endif %}
+{% if finding_reconciliation %}
+<p class="muted">
+  Finding reconciliation <strong>{{ finding_reconciliation.status }}</strong> · SHA-256
+  <strong>{{ finding_reconciliation.content_digest.value }}</strong>.
+  {% if finding_reconciliation.status == 'reconciled' %}
+    {{ finding_reconciliation.outcomes.accounted }} of
+    {{ finding_reconciliation.outcomes.assessed }} assessed findings have one durable disposition.
+  {% elif finding_reconciliation.status == 'inconsistent' %}
+    Accounting is inconsistent; no complete-resolution claim is made.
+  {% else %}
+    Exact per-finding outcomes are not available for this snapshot.
+  {% endif %}
+</p>
+{% endif %}
 
 <section>
 <h2>Certification Decision</h2>

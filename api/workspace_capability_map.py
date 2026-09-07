@@ -211,6 +211,29 @@ _map_many([
     ("POST", "/scans/{sid}/release/preview"),
     ("POST", "/scans/{sid}/release/package"),
 ], {"release.view"})
+
+# Canonical cross-stage execution contract. Reads serve both stage cards and Live Operations;
+# mutations retain the stage-specific route checks in their handlers and require an operating
+# capability here rather than becoming an unclassified route.
+_map_many([
+    ("GET", "/workflows/{workflow_id}/stages/{stage}/executions/current"),
+    ("GET", "/stage-executions/{execution_id}"),
+    ("GET", "/stage-executions/{execution_id}/snapshot"),
+    ("GET", "/stage-executions/{execution_id}/events"),
+], {"operations.view", "discover.view", "assess.view", "remediate.view", "release.view"})
+_map_many([("GET", "/scans/{sid}/stage-lineage")],
+          {"operations.view", "discover.view", "assess.view", "remediate.view", "release.view"})
+_map_many([
+    ("GET", "/scans/{sid}/finding-dispositions"),
+    ("GET", "/scans/{sid}/finding-dispositions/{finding_id}/events"),
+], {"remediate.view", "operations.view", "release.view"})
+_map_many([
+    ("POST", "/workflows/{workflow_id}/stages/{stage}/executions"),
+    ("POST", "/stage-executions/{execution_id}/pause"),
+    ("POST", "/stage-executions/{execution_id}/resume"),
+    ("POST", "/stage-executions/{execution_id}/cancel"),
+    ("POST", "/stage-executions/{execution_id}/supersede"),
+], {"discover.run", "assess.run", "assess.cancel", "remediate.run", "release.publish"})
 _map_many([("GET", "/scans/{sid}/report.pdf")], {"release.view", "reports.export"})
 
 # ── Monitor ───────────────────────────────────────────────────────────────────
@@ -254,6 +277,7 @@ _map_many([("POST", "/control/capacity-schedule/validate")],
 # capability that manages capacity — and each handler additionally enforces _require_admin, which
 # is the authoritative gate; this map narrows who may reach them.
 _map_many([("PUT", "/control/capacity-schedule"),
+           ("POST", "/control/capacity-schedule/apply"),
            ("POST", "/control/capacity-schedule/override"),
            ("DELETE", "/control/capacity-schedule/override")],
           {"settings.view", "workers.manage"})

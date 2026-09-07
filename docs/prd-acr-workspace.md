@@ -1,6 +1,6 @@
 # PRD — ACP Accessibility Conformance Report Workspace
 
-Status: Phases 1–4 delivered · Phases 5–6 planned
+Status: see *Delivery phases* below · no acceptance row is open · ADR 0053's Q1, the VPAT® name, is unanswered and gates nothing
 Design decisions: [ADR 0047](adr/0047-acr-workspace-data-model.md)
 
 ## Purpose
@@ -80,11 +80,12 @@ Stale records stay visible for audit history and cannot independently support pu
 | 2 | Evidence workspace — **rescoped**, see below | **delivered** |
 | 3 | Guided manual test plans, tester metadata, and the publish gate that consumes them | **delivered** |
 | 4 | Publication, reviewer sign-off, immutable snapshots, revision history | **delivered** |
-| 5 | ITI VPAT 2.5Rev template + accessible Word export + export accessibility gate | **part delivered** — see below |
+| 5 | ITI VPAT 2.5Rev structure + accessible Word export + export accessibility gate | **delivered** — see below |
 | 6 | Section 508, EU and International editions | **delivered** — see below |
 
-**Phase 5 is three deliverables and only one of them is blocked**, which is why its row can read
-neither `planned` nor `delivered`. The export and the gate ship today, across these surfaces:
+**Phase 5 is three deliverables and all three ship.** For most of its life this row read
+`part delivered`, because the third — the official VPAT structure — was treated as blocked on a
+licensing answer. It was, until 2026-09-07. The export and the gate ship across these surfaces:
 
 - `GET /acr/{id}/preview?format=docx` renders the Word document and **refuses to serve one that
   FAILs** ACP's own docx checks, naming the failing checks.
@@ -98,10 +99,31 @@ The gate is **"no FAIL"** rather than "all PASS", because no docx registration d
 `Coverage.FULL` and an all-PASS gate could never go green — the reasoning is under *Phase 5 note*
 below, and it is the same evidence rule the rest of this document runs on.
 
-What is held is the **template file**: no `.docx` or `.dotx` VPAT template exists in this
-repository, and whether one may be vendored is **ADR 0053**, which is a licensing question for
-counsel and not an engineering one. Acceptance row 13 tracks it; row 14 does not depend on it,
-because the gate runs over whatever document ACP generates.
+**The structure is matched without the template file, and that was the point.** ADR 0053 framed
+three questions and answered one of them with engineering: matching the shape never needed the
+`.docx`. On 2026-09-07 the owner answered a second — headings and table titles may be reproduced,
+the template's prose may not, and the file is not vendored — which is that ADR's **Option C**, and
+what acceptance row 13 now records as met:
+
+| | |
+|---|---|
+| the headings, as data | `config/vpat-2.5rev.json`, all four editions, with the revision it matched |
+| the WCAG report | one table per level under the template's own `Table 1/2/3` headings |
+| the section heading | per edition — the 508 edition says `WCAG 2.0 Report`, the other three `2.x` |
+| the template `.docx` | **not vendored**, deliberately |
+| ITI's instructional prose | not reproduced — `_meta.not_reproduced` names each section left out |
+
+**What is still open is the NAME, and it blocks nothing.** ADR 0053's Q1 — whether a document ACP
+generates may be *called* a VPAT® — is a service mark question, and the 2026-09-07 decision was
+about reproduction, which is copyright. A structure decision cannot promote itself into a naming
+one. So every format still states on its face that it is not a VPAT, nothing uses the ®, and
+`tests/test_acr_vpat_layout.py::test_no_format_claims_to_be_a_vpat` fails if that ever drifts.
+Answering Q1 needs counsel or ITI; until then the documents are correct and modestly labelled.
+
+One thing the layout does not yet match: the Section 508 and EN 301 549 sub-headings are ACP's own
+wording rather than the template's — `Chapter 3: Functional Performance Criteria` where the
+template writes `… (FPC)`. The catalog carries the template's text, so this is wiring, not a
+question.
 
 **All four editions ITI publishes are offerable.** Each obliges a report to carry a different
 requirement set, and `734fec29` made `vpat_edition` a checked claim rather than free text after
@@ -336,7 +358,7 @@ function, and both leave the criterion at `needs_review` rather than `decided`, 
 evidence-driven path to a decision at all. Phase 2's axe ingestion writes *evidence*, not
 judgement; a drafted `Supports` is a suggestion awaiting a person.
 
-## Acceptance criteria — status after Phase 4
+## Acceptance criteria
 
 Re-checked against the code on 2026-09-05, not carried forward from the previous revision. Three
 rows had gone stale: 11 and 12 still deferred to Phase 4 *after* Phase 4 shipped, and 16 still
@@ -348,6 +370,12 @@ is given, and the reason is this line's own history: its first draft said "373 t
 answered 381, so it was rewritten to give a file count instead — and by 2026-09-06 that had gone
 from 18 to 21 as the Word export landed. The lesson took two attempts. A number in a document is a
 claim that decays; the command is one that cannot.
+
+**The heading was the third instance.** It read *status after Phase 4* until 2026-09-06, by which
+point Phases 5 and 6 had landed and rows 13 and 14 already described Phase 5's export. The rows
+were current; only the heading lagged — which is the worse way round, because a heading is what a
+reader trusts *instead of* reading the rows. It no longer names a phase, and the status line at the
+top of this document no longer names one either, for the same reason this paragraph gives no count.
 
 Rows 4, 6–11 and the digest behind 12 were additionally confirmed by mutation on 2026-09-05: the
 rule enforcing each was broken in turn and the whole ACR suite run against it, and every one
@@ -371,7 +399,7 @@ already been read as evidence that the guard worked.
 | 10 | Reports with unevaluated applicable criteria cannot publish | ✅ |
 | 11 | Only an approver can publish | ✅ `POST /acr/{id}/publish`, gated on `acr_authz.may_publish` and never `core.is_admin` |
 | 12 | Publication creates an immutable snapshot | ✅ `acr_snapshot`, digest re-verified on every read |
-| 13 | Exported Word document follows the official VPAT structure | ⬜ **ADR 0053** — three separable questions, not one: may a generated document be CALLED a VPAT (counsel), may the template FILE be redistributed here (counsel), does the STRUCTURE need the file (no — already rendered). The renderer and table shape exist; the ITI template does not |
+| 13 | Exported Word document follows the official VPAT structure | ✅ per-level tables under the template's own headings, per-edition, from `config/vpat-2.5rev.json` — **ADR 0053 Option C**, matched without vendoring the file. Structure is what this row asks for; the separate question of whether output may be CALLED a VPAT is that ADR's Q1, still open and gating nothing |
 | 14 | Generated Word document passes ACP's accessibility checks | ✅ enforced at `GET /acr/{id}/preview?format=docx`, which refuses to serve a document that FAILs — it does NOT depend on 13 |
 | 15 | Report identifies version, methods, tools, environments, reviewers | ✅ required to publish |
 | 16 | Automated tests for authorization, decision rules, freshness, validation, snapshots, export | ✅ all six — `pytest tests/ -k acr` |

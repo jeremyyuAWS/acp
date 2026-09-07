@@ -21,6 +21,8 @@ database row.
 from __future__ import annotations
 import os
 import re
+import threading
+import time
 from swallowed import swallowed
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
@@ -65,10 +67,28 @@ OLLAMA_COLD_START_TIMEOUT = _envf("OLLAMA_COLD_START_TIMEOUT", 90.0)
 OLLAMA_PROBE_TTL = _envf("OLLAMA_PROBE_TTL", 300.0)
 _TAGS_CACHE: dict = {"at": 0.0, "tags": None}
 
+# Vision is optional enrichment: a broken model must route work to human review, not consume every
+# assessment slot until the outer per-file watchdog fires. Circuits are process-local on purpose;
+# each replica independently observes its provider and recovers after the cooldown without shared
+# state or a control-plane dependency.
+VISION_CIRCUIT_FAILURES = max(1, int(_envf("ACP_VISION_CIRCUIT_FAILURES", 1)))
+VISION_CIRCUIT_COOLDOWN = max(1.0, _envf("ACP_VISION_CIRCUIT_COOLDOWN", 120.0))
+_VISION_CIRCUITS: dict[tuple[str, str, str], dict] = {}
+_VISION_CIRCUIT_LOCK = threading.Lock()
+_MISSING_VISION_MODELS_WARNED: set[tuple[str, str]] = set()
+
+
+def reset_vision_circuits() -> None:
+    """Clear dependency failure state (tests and runtime endpoint/model changes)."""
+    with _VISION_CIRCUIT_LOCK:
+        _VISION_CIRCUITS.clear()
+        _MISSING_VISION_MODELS_WARNED.clear()
+
 
 def reset_probe_cache() -> None:
     """Drop the memoised probe (tests, and after an operator changes the Ollama config)."""
     _TAGS_CACHE.update(at=0.0, tags=None)
+    reset_vision_circuits()
 
 
 def provenance() -> dict:
@@ -624,6 +644,46 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
     # real cost and zone here without touching this function again. generate() never raises.
     import providers as _providers
     prov = _providers.active_vision_provider()
+    mdl = model or getattr(prov, "model", None) or OLLAMA_VISION_MODEL
+    endpoint = (getattr(prov, "base_url", None) or getattr(prov, "url", None)
+                or getattr(prov, "endpoint", None) or "")
+    circuit_key = (getattr(prov, "name", "unknown"), str(endpoint), str(mdl))
+    # Durable assessment/remediation calls carry scan_id. Keep the dependency circuit on that
+    # worker path; unscoped interactive calls and startup probes remain independent diagnostics.
+    circuit_enabled = bool(endpoint and scan_id)
+
+    # Ollama exposes installed models through /api/tags. The primary model used this gate, but
+    # per-call overrides (notably ACP_ALT_VALIDATOR_MODEL) did not, causing a guaranteed 404 for
+    # every image. If the tags probe itself is unavailable, allow the call: absence of evidence is
+    # not evidence that the model is absent.
+    if getattr(prov, "name", "") == "ollama" and model and model != getattr(prov, "model", None):
+        tags = _tags_cached()
+        if tags is not None and not _tags_have(tags, mdl):
+            missing_key = (str(endpoint), str(mdl))
+            if missing_key not in _MISSING_VISION_MODELS_WARNED:
+                _MISSING_VISION_MODELS_WARNED.add(missing_key)
+                print(f"[vision] ollama · model={mdl} · endpoint={endpoint} — "
+                      "skipped: model is not installed", flush=True)
+            _trace_ai("vision", prompt, None, _t0, ok=False, reason="model_not_installed",
+                      model=mdl, scan_id=scan_id, file=file, provider="ollama",
+                      zone=getattr(prov, "zone", None), prompt_version=prompt_version)
+            return None
+
+    now = time.monotonic()
+    with _VISION_CIRCUIT_LOCK:
+        circuit = _VISION_CIRCUITS.get(circuit_key) if circuit_enabled else None
+        if circuit and now - circuit["opened_at"] < VISION_CIRCUIT_COOLDOWN:
+            if not circuit.get("reported"):
+                circuit["reported"] = True
+                print(f"[vision] {circuit_key[0]} · model={mdl} · endpoint={endpoint} — "
+                      f"circuit open after {circuit['reason']}; optional vision skipped for "
+                      f"{VISION_CIRCUIT_COOLDOWN:g}s", flush=True)
+            _trace_ai("vision", prompt, None, _t0, ok=False, reason="circuit_open",
+                      model=mdl, scan_id=scan_id, file=file, provider=circuit_key[0],
+                      zone=getattr(prov, "zone", None), prompt_version=prompt_version)
+            return None
+        if circuit and now - circuit["opened_at"] >= VISION_CIRCUIT_COOLDOWN:
+            _VISION_CIRCUITS.pop(circuit_key, None)
     # A scale-to-zero GPU provider gets its own cold-start budget; the Ollama timeout is too short
     # for a RunPod VL-7B cold boot and would turn a healthy endpoint into a silent local fallback.
     _timeout = RUNPOD_VISION_TIMEOUT if getattr(prov, "name", "") == "runpod_serverless" else OLLAMA_VISION_TIMEOUT
@@ -647,7 +707,21 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
         fb = _providers.local_vision_provider()
         if getattr(fb, "name", "") == "ollama":
             res = fb.generate(prompt, image_bytes, model=None, timeout=OLLAMA_VISION_TIMEOUT)
-    mdl = res.get("model") or model or OLLAMA_VISION_MODEL
+    mdl = res.get("model") or mdl
+    reason = res.get("reason") or _providers.REASON_TRANSPORT
+    with _VISION_CIRCUIT_LOCK:
+        if res.get("ok"):
+            _VISION_CIRCUITS.pop(circuit_key, None)
+        elif circuit_enabled and reason not in (_providers.REASON_EMPTY, _providers.REASON_UNUSABLE):
+            previous = _VISION_CIRCUITS.get(circuit_key) or {"failures": 0}
+            failures = previous.get("failures", 0) + 1
+            if failures >= VISION_CIRCUIT_FAILURES:
+                _VISION_CIRCUITS[circuit_key] = {
+                    "failures": failures, "opened_at": time.monotonic(),
+                    "reason": reason, "reported": False,
+                }
+            else:
+                _VISION_CIRCUITS[circuit_key] = {**previous, "failures": failures}
     # Token usage the provider measured (Ollama's prompt_eval_count/eval_count, or a cloud
     # adapter's usage) rides onto every trace below so the Langfuse generation carries real
     # `usage` (N1) — counts only, never any prompt/completion text (docs/audit-langfuse-phi.md).
@@ -661,7 +735,7 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
         # The adapter already logged the distinguishing detail and named the mode; carry its
         # reason through so the ai_calls row says which one rather than only that it failed.
         _trace_ai("vision", prompt, None, _t0, ok=False,
-                  reason=res.get("reason") or _providers.REASON_TRANSPORT, **_tr)
+                  reason=reason, **_tr)
         return None
     if not clean:
         _trace_ai("vision", prompt, raw, _t0, ok=True, reason=_providers.REASON_OK, **_tr)

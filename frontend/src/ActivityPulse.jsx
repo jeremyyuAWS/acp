@@ -25,7 +25,7 @@ export default function ActivityPulse({ events, generatedAt, compact = false }) 
   if (!max) return null
   const total = buckets.reduce((sum, value) => sum + value, 0)
   return (
-    <div className={`remops-pulse-strip${compact ? ' remops-pulse-compact' : ''}`}
+    <div className={`remops-pulse-strip remops-pulse-remediate${compact ? ' remops-pulse-compact' : ''}`}
          aria-label={`Last 60 seconds: ${total} recorded events`}>
       <span>Last 60 seconds</span>
       {/* The bars are decoration for a value the label already states — a screen reader gets the

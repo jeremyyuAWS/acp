@@ -135,6 +135,12 @@ def project(report: dict, criteria: list[dict], *, evidence_by_criterion: dict[s
             "testing_period_end", "evaluators", "approver", "general_notes",
             "known_dependencies", "status", "published_at", "catalog_hash", "revision")},
         "criteria": rows,
+        # The same rows, grouped the way the template lays them out. `criteria` stays a flat list
+        # beside it: a published snapshot is immutable (PRD §17) and anything already rendered
+        # against that key must keep rendering. Renderers use `wcag`; the flat list is the
+        # compatibility surface.
+        "wcag": _wcag_section(rows, report.get("vpat_edition"),
+                              str(report.get("wcag_version") or "2.2")),
         # Present only when the report actually carries Section 508 rows, so a WCAG report's
         # projection is byte-identical to what it was before Phase 6 and a renderer written
         # against it cannot accidentally print an empty "Revised Section 508 Report" heading.
@@ -202,6 +208,67 @@ def _catalog_division_names(meta_fn, key: str) -> dict:
         return {}
 
 
+# The template splits WCAG by conformance level — one table per level, three columns each,
+# because the level is the table you are in rather than a column in it. ACP printed one four-column
+# table with a Level column instead, which carried the same information in a shape no reader of the
+# official template would recognise. Acceptance row 13 is that difference.
+_WCAG_LEVEL_TABLES = ("A", "AA", "AAA")
+
+
+def _wcag_section(rows: list[dict], edition: str | None, wcag_version: str) -> dict:
+    """The WCAG report, grouped into the template's per-level tables.
+
+    The heading comes from the catalog rather than from a format string, because it differs by
+    edition in a way that is easy to get wrong and impossible to notice: the 508 edition heads this
+    section `WCAG 2.0 Report` (that edition incorporates WCAG 2.0) where the other three say
+    `WCAG 2.x Report`. ACP built `f"WCAG {version} Report"`, which matched no edition at all — and
+    matched none of them identically, so no comparison between editions could reveal it.
+
+    A LEVEL THAT IS NOT A AND NOT AA STILL PRINTS. Anything outside the template's three tables is
+    collected into a final group rather than dropped, for the reason `_grouped_section` gives about
+    divisions: a requirement must never disappear from a conformance report because the layout had
+    nowhere to put it. Today ACP's catalog is A/AA and that group is always empty, which is exactly
+    when a guard is worth having.
+    """
+    sections = acr_catalog.vpat_report_sections(edition)
+    wcag = next((s for s in sections if s["requirement_set"] == REQ_WCAG), None)
+    subsections = wcag["subsections"] if wcag else []
+    # An unknown or unselected edition falls back to the WCAG edition's own wording rather than to
+    # the old format string. `2.x` is the template's way of spanning WCAG versions, so it stays
+    # true for a 2.1 report where `WCAG 2.2 Report` would not.
+    heading = wcag["heading"] if wcag else "WCAG 2.x Report"
+
+    by_level: dict[str, list[dict]] = {level: [] for level in _WCAG_LEVEL_TABLES}
+    other: list[dict] = []
+    for row in rows:
+        by_level.get(row.get("level"), other).append(row)
+
+    levels = []
+    for index, level in enumerate(_WCAG_LEVEL_TABLES):
+        default = f"Table {index + 1}: Success Criteria, Level {level}"
+        levels.append({
+            "level": level,
+            "heading": subsections[index] if index < len(subsections) else default,
+            "rows": by_level[level],
+            "totals": _totals(by_level[level]),
+            # Said rather than implied. An omitted table is a silent scope decision and reads as
+            # "nothing to report"; PRD §19 forbids a document implying a claim about a standard it
+            # did not evaluate, in either direction.
+            **({"not_evaluated": (
+                f"Level {level} success criteria were not evaluated for this report and no "
+                f"conformance to them is claimed.")} if not by_level[level] else {}),
+        })
+    if other:
+        levels.append({
+            "level": None,
+            "heading": "Success Criteria outside the template's levels",
+            "rows": other,
+            "totals": _totals(other),
+        })
+
+    return {"heading": heading, "wcag_version": wcag_version, "levels": levels}
+
+
 def _section_508(rows: list[dict]) -> dict | None:
     return _grouped_section(
         rows,
@@ -264,21 +331,7 @@ def to_html(projection: dict) -> str:
         f'<tr><th scope="row">{e(k.replace("_", " ").title())}</th><td>{e(str(v))}</td></tr>'
         for k, v in rep.items() if v)
 
-    body_rows = ""
-    for r in projection["criteria"]:
-        draft = ""
-        if not r["decided"] and r["draft_status"]:
-            draft = (f"<br><span class='draft'>ACP draft suggestion (not a decision): "
-                     f"{e(r['draft_status'])}</span>")
-        stale = ""
-        if r["evidence_stale"]:
-            stale = (f"<br><span class='stale'>{r['evidence_stale']} stale evidence record(s), "
-                     f"retained for audit history</span>")
-        body_rows += (
-            f'<tr><th scope="row">{e(r["criterion_num"])} {e(r["criterion_name"] or "")}</th>'
-            f"<td>{e(r['level'] or '')}</td>"
-            f"<td>{e(r['conformance_level'])}{draft}</td>"
-            f"<td>{e(r['remarks'])}{stale}</td></tr>")
+    wcag_html = _wcag_section_html(projection["wcag"], e)
 
     t = projection["totals"]
     totals = ", ".join(f"{e(k)}: {v}" for k, v in t.items())
@@ -308,17 +361,49 @@ def to_html(projection: dict) -> str:
   <caption>Report information</caption>
   <tbody>{meta_rows}</tbody>
 </table>
-<table>
-  <caption>WCAG {e(str(rep.get('wcag_version') or '2.2'))} Report — {e(totals)}</caption>
-  <thead>
-    <tr><th scope="col">Criteria</th><th scope="col">Level</th>
-        <th scope="col">Conformance Level</th><th scope="col">Remarks and Explanations</th></tr>
-  </thead>
-  <tbody>{body_rows}</tbody>
-</table>
-{section_508}{en_301_549}</body>
+<p>{e(totals)}</p>
+{wcag_html}{section_508}{en_301_549}</body>
 </html>
 """
+
+
+def _wcag_section_html(section: dict, e) -> str:
+    """The WCAG report as the template lays it out: one table per level, three columns each.
+
+    Three, not four. The Level column is gone because the level is now the heading of the table
+    the row is in — the same reasoning `_requirement_section_html` gives for Section 508 and EN
+    301 549, where a level column would have been empty. Nothing is lost: `h3` + `caption` carry
+    it where a screen reader reaches it by navigation rather than by reading a repeated cell.
+    """
+    out = [f'<h2>{e(section["heading"])}</h2>\n']
+    for level in section["levels"]:
+        out.append(f'<h3>{e(level["heading"])}</h3>\n')
+        if level.get("not_evaluated"):
+            # A stated absence, not an empty table. See `_wcag_section`.
+            out.append(f'<p>{e(level["not_evaluated"])}</p>\n')
+            continue
+        totals = ", ".join(f"{e(k)}: {v}" for k, v in level["totals"].items())
+        rows = ""
+        for r in level["rows"]:
+            draft = ""
+            if not r["decided"] and r["draft_status"]:
+                draft = (f"<br><span class='draft'>ACP draft suggestion (not a decision): "
+                         f"{e(r['draft_status'])}</span>")
+            stale = ""
+            if r["evidence_stale"]:
+                stale = (f"<br><span class='stale'>{r['evidence_stale']} stale evidence "
+                         f"record(s), retained for audit history</span>")
+            rows += (
+                f'<tr><th scope="row">{e(r["criterion_num"])} {e(r["criterion_name"] or "")}</th>'
+                f"<td>{e(r['conformance_level'])}{draft}</td>"
+                f"<td>{e(r['remarks'])}{stale}</td></tr>")
+        out.append(
+            f'<table>\n  <caption>{e(level["heading"])} — {totals}</caption>\n'
+            f'  <thead>\n    <tr><th scope="col">Criteria</th>'
+            f'<th scope="col">Conformance Level</th>'
+            f'<th scope="col">Remarks and Explanations</th></tr>\n  </thead>\n'
+            f"  <tbody>{rows}</tbody>\n</table>\n")
+    return "".join(out)
 
 
 def _section_508_html(projection: dict, e) -> str:

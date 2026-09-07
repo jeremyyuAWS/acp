@@ -200,6 +200,9 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                # to carve out of and applying them to a whole-estate scan would narrow it
                # invisibly.
                exclude_folders: list[str] | None = Query(None),
+               # True preserves every existing client and saved scope. The discovery wizard sends
+               # false explicitly when the operator chooses "This folder only".
+               include_subfolders: bool = Query(True),
                ai: bool = Query(True), queue: bool = Query(False),
                # PII (deep) scan is opt-in: it doubles scan time by extracting + regex-scanning
                # every file's text, so a scan is fast unless the caller explicitly asks for it.
@@ -356,6 +359,7 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                 "ai": ai, "pii": pii, "batch": batch,
                 "exclude_remediated": exclude_remediated,
                 "incremental": incremental, "fanout": fanout,
+                "include_subfolders": include_subfolders,
             },
             "actor": user,
             "connection_ref": _connection_ref,
@@ -396,7 +400,7 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
         scan_id, job_id = core.store.enqueue_scan(
             scan_id, source, user, jtype,
             {"source": source, "scan_id": scan_id, "folder": folder, "folders": folders,
-             "exclude_folders": exclude_folders, "ai": ai,
+             "exclude_folders": exclude_folders, "include_subfolders": include_subfolders, "ai": ai,
              "user": user, "pii": pii, "batch": batch,
              "exclude_remediated": exclude_remediated, "incremental": incremental,
              # Carry tokens in the payload so the worker container can authenticate
@@ -454,7 +458,8 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
             # drops a chosen scope silently: the card says "Scans: HR" and the scan covers the
             # whole Drive. Widening is the one direction nobody re-checks.
             _scan_discover({"source": source, "scan_id": scan_id, "folder": folder,
-                            "folders": folders, "exclude_folders": exclude_folders, "ai": ai,
+                            "folders": folders, "exclude_folders": exclude_folders,
+                            "include_subfolders": include_subfolders, "ai": ai,
                             "user": user, "pii": pii, "batch": batch,
                             "exclude_remediated": exclude_remediated, "incremental": incremental},
                            {"scan_id": scan_id})
@@ -469,6 +474,7 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
         report = run_scan(source, drive_token=token, folder=folder, sp_token=sp_token,
                           **({"folders": folders} if folders else {}),
                           **({"exclude_folders": exclude_folders} if exclude_folders else {}),
+                          include_subfolders=include_subfolders,
                           ai_enabled=effective_ai, user=user, detect_pii=pii,
                           exclude_remediated=exclude_remediated, inventory_out=inv)
         sid = core.store.save_scan(report)
@@ -532,7 +538,8 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                 # Same as the sync branch above: the chosen scope has to travel with the
                 # payload or the default scan silently widens to the whole source.
                 _scan_discover({"source": source, "scan_id": sid, "folder": folder,
-                                "folders": folders, "exclude_folders": exclude_folders, "ai": ai,
+                                "folders": folders, "exclude_folders": exclude_folders,
+                                "include_subfolders": include_subfolders, "ai": ai,
                                 "user": user, "pii": pii, "batch": batch,
                                 "exclude_remediated": exclude_remediated,
                                 "incremental": incremental}, {"scan_id": sid, "id": job_id})
@@ -548,6 +555,7 @@ def start_scan(request: Request, source: str = Query(..., pattern="^(local|drive
                               drive_token=token, folder=folder, sp_token=sp_token,
                               **({"folders": folders} if folders else {}),
                               **({"exclude_folders": exclude_folders} if exclude_folders else {}),
+                              include_subfolders=include_subfolders,
                               ai_enabled=effective_ai, user=user, detect_pii=pii,
                               exclude_remediated=exclude_remediated, inventory_out=inv)
             sid = core.store.save_scan(report)
@@ -731,6 +739,7 @@ async def remediate_scan(sid: str, request: Request):
     execution = _enqueue_stage_batch(
         sid, "remediate", "remediate_file", payloads, snapshot_id=snapshot_id,
         request_fingerprint=request_fingerprint)
+    core.store.seed_finding_dispositions(sid, execution["batch_id"], snapshot_id=snapshot_id)
     # AFTER the jobs exist, never before: the run is "accepted" precisely when durable work has
     # been enqueued for it, and an acceptance event that led the enqueue would let the panel show
     # a run that nothing will ever claim. Emitted once per batch — the run-level transition PRD §7
@@ -3059,6 +3068,68 @@ def scan_manifest(sid: str, request: Request):
     return core.store.get_scan_manifest(sid)
 
 
+def _canonical_lineage_export(scan_id: str, owner: str) -> dict:
+    """Stable export form: omit request-time timestamps while preserving durable evidence time."""
+    lineage = core.store.canonical_stage_lineage(scan_id, owner=owner)
+    lineage.pop("generated_at", None)
+    for stage in lineage.get("stages", []):
+        stage.pop("generated_at", None)
+    encoded = _json.dumps(lineage, sort_keys=True, separators=(",", ":"),
+                          ensure_ascii=False, default=str).encode("utf-8")
+    return {"lineage": lineage, "content_digest": {
+        "algorithm": "SHA-256", "value": hashlib.sha256(encoded).hexdigest()}}
+
+
+@router.get("/scans/{sid}/stage-lineage")
+def stage_lineage(sid: str, request: Request):
+    """Owner-scoped canonical stage totals, sealed handoffs, and integrity as one authority."""
+    owner = _owner(request)
+    if core.store.get_scan_head(sid, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    return _canonical_lineage_export(sid, owner)
+
+
+@router.get("/scans/{sid}/finding-dispositions")
+def finding_dispositions(sid: str, request: Request,
+                         disposition: str | None = Query(default=None)):
+    """Owner-scoped rows behind the current reconciliation buckets.
+
+    Counts still come from the canonical remediation snapshot.  This endpoint explains those
+    counts; it never reconstructs a second total and never includes historical batches.
+    """
+    owner = _owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    facts = core.store.remediation_run_facts(sid)
+    batch_id = facts.get("batch_id")
+    if not batch_id:
+        return {"scan_id": sid, "batch_id": None, "disposition": disposition,
+                "items": [], "available": False}
+    try:
+        items = core.store.finding_disposition_drilldown(
+            sid, batch_id, disposition=disposition)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return {"scan_id": sid, "batch_id": batch_id, "snapshot_id": sid,
+            "disposition": disposition, "items": items, "available": True}
+
+
+@router.get("/scans/{sid}/finding-dispositions/{finding_id}/events")
+def finding_disposition_events(sid: str, finding_id: str, request: Request):
+    """Owner-scoped transition history for a current-batch finding."""
+    owner = _owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
+        raise HTTPException(404, "scan not found")
+    batch_id = core.store.remediation_run_facts(sid).get("batch_id")
+    if not batch_id:
+        raise HTTPException(404, "finding not found")
+    current = core.store.finding_disposition_drilldown(sid, batch_id)
+    if not any(row["finding_id"] == finding_id for row in current):
+        raise HTTPException(404, "finding not found")
+    return {"scan_id": sid, "batch_id": batch_id, "finding_id": finding_id,
+            "events": core.store.finding_disposition_events(sid, batch_id, finding_id)}
+
+
 #: Which renderer serves /scans/{sid}/report.pdf. "weasy" (the default) is the PDF/UA-1
 #: conformant one; "tagged" restores the previous Chromium renderer WITHOUT a redeploy, which is
 #: the point of the switch existing at all — the cutover shipped before two of the gates ADR 0034
@@ -3107,9 +3178,18 @@ def report_pdf(sid: str, request: Request):
     res = core.store.get_scan(sid, owner=_owner(request))
     if res is None:
         raise HTTPException(404, "scan not found")
+    owner = _owner(request)
     rb = core.active_rubric()
+    lineage_export = _canonical_lineage_export(sid, owner)
+    finding_reconciliation = _release_finding_reconciliation(
+        sid, res["run"].get("id") or sid, lineage_export["lineage"])
     meta = {"target": rb.cfg.get("conformance_target"), "version": rb.version,
-            "hash": res["run"].get("rubric_hash") or rb.hash}
+            "hash": res["run"].get("rubric_hash") or rb.hash,
+            "stage_lineage_digest": lineage_export["content_digest"]["value"],
+            "finding_reconciliation": finding_reconciliation,
+            "stage_lineage_status": ("unavailable" if not
+                lineage_export["lineage"]["available"] else "consistent" if
+                lineage_export["lineage"]["integrity"]["ok"] else "inconsistent")}
     decisions = core.store.get_decisions(sid)
     evidence = core.store.get_remediation_evidence(sid)
     facts = core.store.get_certification_facts(sid, apply_document_selection=True)
@@ -3201,6 +3281,12 @@ def clear_scan_tokens(sid: str, request: Request):
     return {"scan_id": sid, "cleared": True}
 
 
+def _release_timezone(owner: str) -> str:
+    """Read the preference; minimal/older adapters use the product's US Central default."""
+    getter = getattr(core.store, "get_user_setting", None)
+    return (getter(owner, "release_timezone") if callable(getter) else None) or "America/Chicago"
+
+
 @router.post("/scans/{sid}/publish")
 def publish_files(sid: str, request: Request, body: dict):
     """Publish one or more re-validated files — ADR 0010 archive-copy, NON-destructive.
@@ -3225,6 +3311,9 @@ def publish_files(sid: str, request: Request, body: dict):
             body.get("release_folder_name"), field="Release folder name")
     except _publish.UnsafeReleasePath as exc:
         raise HTTPException(422, str(exc)) from exc
+    if not preferred_folder_name:
+        release_tz = _release_timezone(owner)
+        preferred_folder_name = _publish.release_folder_name(timezone_name=release_tz)
     release = core.store.ensure_release_execution(
         sid, owner, source, len(eligible),
         preferred_folder_name=preferred_folder_name)
@@ -3507,8 +3596,8 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
         if requested_name:
             folder_name = requested_name
         else:
-            from datetime import datetime, timezone
-            folder_name = datetime.now(timezone.utc).strftime("%Y-%m-%d %H-%M UTC")
+            release_tz = _release_timezone(owner)
+            folder_name = _publish.release_folder_name(timezone_name=release_tz)
         folder_state = "proposed"
     source = (scan.get("run") or {}).get("source") or "local"
     rows = {row.get("file"): row for row in scan.get("files", [])}
@@ -3557,7 +3646,9 @@ def preview_release_destination(sid: str, request: Request, body: ReleasePreview
 
 
 def _release_manifest_payload(status: dict, *, scan_id: str, owner: str,
-                              snapshot_id: str | None) -> dict:
+                              snapshot_id: str | None,
+                              stage_lineage: dict | None = None,
+                              finding_reconciliation: dict | None = None) -> dict:
     """Build the authoritative, stable release record from persisted server evidence.
 
     This intentionally contains no request-time timestamp: downloading the same unchanged
@@ -3592,6 +3683,8 @@ def _release_manifest_payload(status: dict, *, scan_id: str, owner: str,
         "release_id": status.get("id"),
         "scan_id": scan_id,
         "snapshot_id": snapshot_id,
+        "canonical_stage_lineage": stage_lineage,
+        "finding_reconciliation": finding_reconciliation,
         "actor": owner,
         "source": status.get("source"),
         "status": status.get("status"),
@@ -3614,6 +3707,55 @@ def _release_manifest_payload(status: dict, *, scan_id: str, owner: str,
     }
 
 
+def _release_finding_reconciliation(scan_id: str, snapshot_id: str | None,
+                                    stage_lineage: dict | None) -> dict:
+    """Freeze the canonical Remediation finding account for Release consumers.
+
+    Counts are copied from the revisioned Remediation snapshot, never reconstructed from
+    Release documents, fixes, or review cards.  The legacy snapshot deliberately carries null
+    outcome buckets; preserving them as ``unavailable`` is more truthful than turning unknowns
+    into zeroes.  Request-time freshness fields are excluded so unchanged evidence has one
+    reproducible digest in the JSON manifest, ZIP package, and later report renderers.
+    """
+    snapshot = _remediation_snapshot(scan_id)
+    outcomes = snapshot.get("finding_reconciliation")
+    residual_keys = ("awaiting_review", "approved_pending_verification", "unchanged_no_fix",
+                     "failed", "excluded", "superseded", "unaccounted")
+    if not isinstance(outcomes, dict):
+        status = "unavailable"
+    elif outcomes.get("exact") is True:
+        status = "reconciled"
+    elif outcomes.get("violations"):
+        status = "inconsistent"
+    elif all(outcomes.get(key) is None for key in
+             ("resolved_verified", "approved_pending_verification", "unchanged_no_fix",
+              "failed", "excluded", "superseded")):
+        status = "unavailable"
+    else:
+        status = "pending"
+    export = {
+        "schema_version": 1,
+        "status": status,
+        "identifiers": {
+            "workflow_id": (stage_lineage or {}).get("workflow_id"),
+            "workflow_revision": (stage_lineage or {}).get("workflow_revision"),
+            "scan_id": scan_id,
+            "snapshot_id": snapshot_id,
+            "run_id": snapshot.get("run_id"),
+            "batch_id": snapshot.get("batch_id"),
+        },
+        "revision": snapshot.get("revision"),
+        "outcomes": outcomes,
+        "residual_outcomes": ({key: outcomes.get(key) for key in residual_keys}
+                              if isinstance(outcomes, dict) else None),
+    }
+    encoded = _json.dumps(export, sort_keys=True, separators=(",", ":"),
+                          ensure_ascii=False, default=str).encode("utf-8")
+    export["content_digest"] = {
+        "algorithm": "SHA-256", "value": hashlib.sha256(encoded).hexdigest()}
+    return export
+
+
 @router.get("/scans/{sid}/release/manifest")
 def get_release_manifest(sid: str, request: Request):
     """Return an owner-scoped server manifest plus a reproducible SHA-256 content digest."""
@@ -3623,8 +3765,12 @@ def get_release_manifest(sid: str, request: Request):
     status = core.store.release_for_scan(sid, owner)
     if status is None:
         raise HTTPException(404, "release not found")
+    snapshot_id = core.store.stage_snapshot_id(sid)
+    lineage = _canonical_lineage_export(sid, owner)["lineage"]
+    finding_reconciliation = _release_finding_reconciliation(sid, snapshot_id, lineage)
     manifest = _release_manifest_payload(
-        status, scan_id=sid, owner=owner, snapshot_id=core.store.stage_snapshot_id(sid))
+        status, scan_id=sid, owner=owner, snapshot_id=snapshot_id,
+        stage_lineage=lineage, finding_reconciliation=finding_reconciliation)
     canonical = _json.dumps(manifest, sort_keys=True, separators=(",", ":"),
                             ensure_ascii=False, default=str).encode("utf-8")
     return {
@@ -3707,18 +3853,24 @@ def download_release_package(sid: str, request: Request, body: ReleasePackageReq
                     "corrected_sha256": hashlib.sha256(data).hexdigest(),
                 })
             status = core.store.release_for_scan(sid, owner)
+            snapshot_id = core.store.stage_snapshot_id(sid)
+            lineage = _canonical_lineage_export(sid, owner)["lineage"]
+            finding_reconciliation = _release_finding_reconciliation(
+                sid, snapshot_id, lineage)
             release_manifest = (_release_manifest_payload(
-                status, scan_id=sid, owner=owner, snapshot_id=core.store.stage_snapshot_id(sid))
+                status, scan_id=sid, owner=owner, snapshot_id=snapshot_id,
+                stage_lineage=lineage, finding_reconciliation=finding_reconciliation)
                 if status is not None else None)
             manifest = {
                 "schema_version": 1,
                 "package_type": "acp-corrected-files",
                 "scan_id": sid,
-                "snapshot_id": core.store.stage_snapshot_id(sid),
+                "snapshot_id": snapshot_id,
                 "actor": owner,
                 "package_name": package_name,
                 "original_files_unchanged": True,
                 "documents": documents,
+                "finding_reconciliation": finding_reconciliation,
                 "release": release_manifest,
             }
             archive.writestr("release-manifest.json", _json.dumps(

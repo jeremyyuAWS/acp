@@ -54,6 +54,22 @@ def test_cloud_escalation_splits_local_and_off_network_with_real_cost(isolated_s
     assert "escalated to a cloud provider" in t
     assert "$0.03" in t
     assert "1 openai" in t          # real per-provider breakdown
+    assert "ollama / llava:13b (local; 1 successful, 0 failed; 300 ms avg)" in t
+    assert "openai / gpt-4.1 (cloud; 1 successful, 0 failed; 900 ms avg)" in t
+    assert "does not claim reviewer acceptance or successful post-write validation" in t
+
+
+def test_model_provenance_escapes_display_values(isolated_store, monkeypatch):
+    import core
+    from report import build_report
+    monkeypatch.setattr(core, "store", isolated_store)
+    isolated_store.record_ai_call(surface="draft", provider="vendor&partner",
+                                   model="model<review>", zone="customer_cloud",
+                                   latency_ms=700, ok=False, cost_usd=0.01,
+                                   scan_id="scan-gov")
+    t = _flat(build_report(_RUN, _FILES, _META))
+    assert "vendor&partner / model<review>" in t
+    assert "0 successful, 1 failed" in t
 
 
 def test_scan_with_no_ai_states_nothing_was_sent(isolated_store, monkeypatch):

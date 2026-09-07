@@ -14,6 +14,13 @@ describe('rolling assessment heartbeat bars', () => {
     const html = renderToStaticMarkup(<LiveHeartbeatBars measuredAt={now} />)
     expect(html).toContain('Last 60 seconds: 1 successful live update')
     expect(html.match(/<i /g)).toHaveLength(12)
+    expect(html).toContain('data-stage="assess"')
+    expect(html).not.toContain('polyline')
+  })
+
+  it.each(['discover', 'assess', 'remediate', 'release'])('marks the %s stage for its palette', (stage) => {
+    const html = renderToStaticMarkup(<LiveHeartbeatBars measuredAt={Date.now()} stage={stage} />)
+    expect(html).toContain(`data-stage="${stage}"`)
   })
 
   it('drops updates outside the rolling minute', () => {

@@ -123,6 +123,12 @@ jobs:
           ACP_ASSESS_WORKER: ${{ vars.STAGING_ASSESS_WORKER || 'acp-assess-staging' }}
           ACP_REMEDIATE_WORKER: ${{ vars.STAGING_REMEDIATE_WORKER || 'acp-remediate-staging' }}
           ACP_DEPLOY_TARGET_ENV: staging
+          # Opt-in is staging-only. redeploy.sh validates all three measured ceilings and all
+          # target names before it permits this to become 1; production always stamps 0.
+          ACP_CAPACITY_APPLY_ENABLED: ${{ vars.STAGING_CAPACITY_APPLY_ENABLED || '0' }}
+          ACP_ACA_VCPU_QUOTA: ${{ vars.STAGING_ACA_VCPU_QUOTA }}
+          ACP_PG_MAX_CONNECTIONS: ${{ vars.STAGING_PG_MAX_CONNECTIONS }}
+          ACP_PG_RESERVED_CONNECTIONS: ${{ vars.STAGING_PG_RESERVED_CONNECTIONS }}
           # Only reachable via an explicit manual dispatch with the checkbox set — `inputs` is
           # empty on the auto (workflow_run) trigger, so this is unset there and the gate behaves
           # exactly as before. See the input's own description for when this is legitimate.

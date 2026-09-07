@@ -14,6 +14,7 @@ class FakeStore:
         self.published = None
         self.root = None
         self.preferred_folder_name = None
+        self.receipts = []
 
     def get_scan(self, scan_id, owner=None):
         return {"run": {"id": scan_id, "source": "sharepoint", "owner_email": OWNER},
@@ -60,6 +61,13 @@ class FakeStore:
     def record_publish(self, scan_id, filename, published_url=None):
         self.published = (scan_id, filename, published_url)
         return "2026-09-05T10:01:00+00:00"
+
+    def stage_work_item_for_job(self, job_id):
+        return {"work_item_id": "work-item-1"} if job_id else None
+
+    def record_side_effect_receipt(self, **receipt):
+        self.receipts.append(receipt)
+        return receipt
 
 
 def test_sharepoint_submission_queues_token_free_per_document_work(monkeypatch):
@@ -125,6 +133,33 @@ def test_sharepoint_worker_publishes_and_records_verified_copy(monkeypatch):
     assert result["released_relative_path"] == "HR/Policies/Leave.docx"
     assert result["verification"] == "content verified"
     assert store.published == (SID, FILE, "https://sp/copy")
+
+
+def test_sharepoint_worker_records_canonical_provider_receipt(monkeypatch):
+    import core
+    import handlers
+    import publish
+
+    store = FakeStore()
+    monkeypatch.setattr(core, "store", store)
+    monkeypatch.setattr(core, "get_scan_tokens", lambda scan_id: {"sp": "token"})
+    monkeypatch.setattr(publish, "ensure_sharepoint_release_folder",
+                        lambda *args: {"id": "root-1", "name": "release", "url": "https://sp/root"})
+    monkeypatch.setattr(publish, "archive_copy_publish_sharepoint",
+                        lambda *args, **kwargs: {"id": "copy-1", "url": "https://sp/copy",
+                                                "checksum": "sha256:copy", "created": True,
+                                                "filename": FILE})
+    handlers._publish_file({"scan_id": SID, "release_id": "release-1",
+                            "file": FILE, "owner": OWNER},
+                           {"id": "job-1", "batch_id": "execution-1",
+                            "attempts": 1, "max_attempts": 5})
+    assert store.receipts == [{
+        "execution_id": "execution-1", "work_item_id": "work-item-1",
+        "effect_type": "sharepoint.publish",
+        "destination": "graph:library-1:root-1:HR/Policies/Leave.docx",
+        "content_digest": "sha256:copy",
+        "receipt": {"provider_id": "copy-1", "url": "https://sp/copy", "created": True},
+    }]
 
 
 def test_sharepoint_worker_reuses_claim_after_crash_between_graph_and_database(monkeypatch):

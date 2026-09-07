@@ -64,6 +64,21 @@ def test_two_level_tree_all_files_found():
     assert ids == {"f1", "f2"}
 
 
+def test_folder_only_lists_direct_files_without_opening_children():
+    drive = FakeDrive({
+        "root": [_doc("direct", "direct.docx"), _folder("A")],
+        "A": [_doc("nested", "nested.docx")],
+    })
+    scope = {}
+
+    result = scanner._search_folder(
+        drive, "root", max_files=100, scope_out=scope, include_subfolders=False)
+
+    assert [row["id"] for row in result] == ["direct"]
+    assert scope["folders_walked"] == 1
+    assert scope["include_subfolders"] is False
+
+
 def test_three_level_tree_deeply_nested_file_found():
     """root → A → B → file; three hops deep must still be reached."""
     drive = FakeDrive({

@@ -848,7 +848,7 @@ const foldersQ = (folders) => ((folders || []).length
 const excludeQ = (exclude) => ((exclude || []).length
   ? (exclude || []).map((f) => `&exclude_folders=${encodeURIComponent(typeof f === 'string' ? f : f.id)}`).join('')
   : '')
-export const startScan = (source = 'local', folder = null, aiEnabled = true, pii = false, excludeRemediated = false, incremental = true, folders = null, exclude = null) => (SIM ? sim(simStartScan(source), 120) : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${foldersQ(folders)}${excludeQ(exclude)}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}`, { method: 'POST', headers: headers() }).then(j))
+export const startScan = (source = 'local', folder = null, aiEnabled = true, pii = false, excludeRemediated = false, incremental = true, folders = null, exclude = null, includeSubfolders = true) => (SIM ? sim(simStartScan(source), 120) : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${foldersQ(folders)}${excludeQ(exclude)}&include_subfolders=${includeSubfolders ? 'true' : 'false'}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}`, { method: 'POST', headers: headers() }).then(j))
 export const getJob = (id) => (SIM ? sim(simGetJob(id), 60) : fetch(`${BASE}/scans/jobs/${id}`, { headers: headers() }).then(j))
 
 // Authenticated stream for the pre-scan job path. Native EventSource cannot carry ACP's bearer
@@ -892,9 +892,9 @@ getJob.openStream = openJobStream
 // (scan_id, job_id) rather than inserting, so a response lost after the commit resolves to the
 // job that already exists instead of creating a second scan. Optional so every existing caller
 // and test keeps working unchanged; without it the server behaves exactly as before.
-export const startScanQueued = (source = 'local', folder = null, aiEnabled = true, pii = false, excludeRemediated = false, incremental = true, folders = null, exclude = null, idempotencyKey = null, replaceActive = false, preferRecent = false) => (SIM
+export const startScanQueued = (source = 'local', folder = null, aiEnabled = true, pii = false, excludeRemediated = false, incremental = true, folders = null, exclude = null, idempotencyKey = null, replaceActive = false, preferRecent = false, includeSubfolders = true) => (SIM
   ? sim({ scan_id: 'sim-scan', job_id: 'sim-job', queued: true, workers: 4 })
-  : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${foldersQ(folders)}${excludeQ(exclude)}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}&queue=true&fanout=true&replace_active=${replaceActive ? 'true' : 'false'}&prefer_recent=${preferRecent ? 'true' : 'false'}`, { method: 'POST', headers: headers(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}), signal: AbortSignal.timeout(SCAN_ENQUEUE_TIMEOUT_MS) }).then(j))
+  : fetch(`${BASE}/scans?source=${source}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${foldersQ(folders)}${excludeQ(exclude)}&include_subfolders=${includeSubfolders ? 'true' : 'false'}&ai=${aiEnabled}&pii=${pii}&exclude_remediated=${excludeRemediated}&incremental=${incremental}&queue=true&fanout=true&replace_active=${replaceActive ? 'true' : 'false'}&prefer_recent=${preferRecent ? 'true' : 'false'}`, { method: 'POST', headers: headers(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}), signal: AbortSignal.timeout(SCAN_ENQUEUE_TIMEOUT_MS) }).then(j))
 // Read-only check on the SPECIFIC source + folders about to be scanned — run right before
 // doScan actually starts one, so a bad credential, a deleted folder, or a dead worker tier is
 // caught before a scan row exists rather than surfacing as "0 documents" after the fact.
@@ -975,6 +975,18 @@ export const updateWorkspaceRole = (roleId, body) => (SIM
 export const deleteWorkspaceRole = (roleId) => (SIM
   ? sim({ deleted: roleId })
   : fetch(`${BASE}/admin/roles/${encodeURIComponent(roleId)}`, { method: 'DELETE', headers: headers() }).then(j))
+// Owner-only rollout controls. Preflight is read once on demand (never polled); bootstrap is dry
+// by default and writes only when the caller sends the literal boolean `true`.
+export const getWorkspaceRolePreflight = () => (SIM
+  ? sim({ rollout: { mode: 'off', next: 'observe' }, ready: false, blockers: 1, warnings: 0,
+      findings: [{ code: 'roles_not_seeded', severity: 'blocker', detail: 'Built-in roles are not seeded.' }] })
+  : fetch(`${BASE}/admin/workspace-roles/preflight`, { headers: headers() }).then(j))
+export const bootstrapWorkspaceRoles = (apply = false) => (SIM
+  ? sim({ dry_run: !apply, roles_created: [], assignments: [] })
+  : fetch(`${BASE}/admin/workspace-roles/bootstrap`, {
+      method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ apply: apply === true }),
+    }).then(j))
 export const assignWorkspaceRole = (email, roleId) => (SIM
   ? sim({ person: { email, workspace_role_id: roleId } })
   : fetch(`${BASE}/admin/people/${encodeURIComponent(email)}/role`, { method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }), body: JSON.stringify({ role_id: roleId }) }).then(j))
@@ -1037,6 +1049,11 @@ export const getRemediationSnapshot = (scanId) => (SIM
   ? sim(null)
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/snapshot`,
           { headers: headers(), cache: 'no-store' }).then(j))
+export const getFindingDispositions = (scanId, disposition = null) => (SIM
+  ? sim({ scan_id: scanId, batch_id: null, disposition, items: [], available: false })
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/finding-dispositions${
+      disposition ? `?disposition=${encodeURIComponent(disposition)}` : ''}`,
+    { headers: headers(), cache: 'no-store' }).then(j))
 // ── Exceptions and scoped recovery (PRD §6E, §11) ─────────────────────────────
 //
 // SIM RETURNS AN EMPTY VIEW, deliberately, exactly as getRemediationSnapshot returns null. A
@@ -1149,7 +1166,7 @@ export const getSourceStatus = (scanId) => (SIM
   ? sim({ scan_id: scanId, stale_count: 0, untracked_count: 0, unavailable_count: 0, files: [] })
   : fetch(`${BASE}/scans/${scanId}/source-status`, { headers: headers() }).then(j))
 // AI usage + cost governance rollup (ADR 0019 Phase 1) — today / month / all-time.
-const _emptyRoll = { calls: 0, ok: 0, failed: 0, cost_usd: 0, avg_latency_ms: 0, scans: 0, by_provider: [], by_zone: [], by_surface: [] }
+const _emptyRoll = { calls: 0, ok: 0, failed: 0, cost_usd: 0, avg_latency_ms: 0, scans: 0, by_provider: [], by_model: [], by_zone: [], by_surface: [] }
 export const getAiCosts = () => (SIM
   ? sim({ today: _emptyRoll, month: _emptyRoll, all_time: _emptyRoll })
   : fetch(`${BASE}/ai/costs`, { headers: headers() }).then(j).catch(() => ({ today: _emptyRoll, month: _emptyRoll, all_time: _emptyRoll })))
@@ -1286,6 +1303,12 @@ export const putMyScope = (payload) => (SIM
 export const clearMyScope = () => (SIM
   ? sim((() => { _simMyScope.scan_scope = ''; return { scan_scope: '', simulated: true } })())
   : fetch(`${BASE}/settings/mine`, { method: 'DELETE', headers: headers() }).then(j))
+export const putMyReleaseTimezone = (releaseTimezone) => (SIM
+  ? sim({ release_timezone: releaseTimezone, simulated: true })
+  : fetch(`${BASE}/settings/mine`, {
+      method: 'PUT', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ release_timezone: releaseTimezone }),
+    }).then(j))
 // Download a remediated file's fixed bytes (ADR 0010) — Blob primary, Drive-mirror
 // fallback server-side. Authenticated fetch → blob → download, same pattern as
 // openReport (a bare <a href> would drop the Authorization header).

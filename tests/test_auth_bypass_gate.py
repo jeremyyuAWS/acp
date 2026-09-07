@@ -159,8 +159,9 @@ def test_the_monitor_route_is_public_but_a_sibling_route_is_not(monkeypatch):
 
 
 def test_deploy_script_stamps_the_production_flag():
-    """deploy.sh only ever ships the public demo, so it must mark the app as production —
-    under ACP_DEPLOY_ENV, not ACP_ENV (that name is the ACA environment name in this script)."""
+    """Direct deploys default to production; an explicitly isolated staging call stays staging."""
     sh = (ACP / "deploy" / "public" / "deploy.sh").read_text()
-    assert 'DEPLOY_ENV_ENV="ACP_DEPLOY_ENV=production"' in sh
+    assert 'DEPLOY_TARGET_ENV="${ACP_DEPLOY_TARGET_ENV:-production}"' in sh
+    assert 'DEPLOY_ENV_ENV="ACP_DEPLOY_ENV=$DEPLOY_TARGET_ENV"' in sh
+    assert "staging:0)" in sh and "staging:1)" in sh
     assert sh.count("$DEPLOY_ENV_ENV") >= 2          # wired into both update and create

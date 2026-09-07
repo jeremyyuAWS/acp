@@ -14,7 +14,7 @@ import { armNotifyOnComplete, notifyScanComplete, notifyScanFailed, notification
 import { refreshDriveToken } from './driveAuth.js'
 import { refreshSPToken } from './spAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, getMe, getMyAccess, getCapability, listScans, getScan, NOT_MODIFIED, getActiveScan, getWorkspaceBootstrap, getActiveWorkflows, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, SCAN_UNAVAILABLE, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
+import { getSources, getRubric, getConfig, getMe, getMyAccess, getMyScope, getCapability, listScans, getScan, NOT_MODIFIED, getActiveScan, getWorkspaceBootstrap, getActiveWorkflows, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, SCAN_UNAVAILABLE, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
 import { beginOrResumeIntent, completeIntent, abandonIntent, outcomeIsUncertain } from './submitIntent'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
@@ -75,6 +75,7 @@ import { AdminInsights } from './AdminInsights.jsx'
 import AcrWorkspace from './AcrWorkspace.jsx'
 import AccessRestricted from './AccessRestricted.jsx'
 import { visibleTabs, isVisible, canOperate, firstPermittedTab, canOpenSettings } from './access.js'
+import { timezoneBadge } from './userTimezone.js'
 import { handleWorkflowTabKeyDown } from './workflowTabs.js'
 import { isHistoricalScan, narrowScanDefaultContext } from './defaultScan.js'
 
@@ -238,6 +239,7 @@ function clearActivityStorage() {
 
 export default function App() {
   const [me, setMe] = useState(null)
+  const [userTimezone, setUserTimezone] = useState('America/Chicago')
   // Why the user is looking at the sign-in screen. null on a first visit; set when a 401
   // bounced them out mid-session, so SignIn can say so rather than appear for no reason.
   const [signedOutReason, setSignedOutReason] = useState(null)
@@ -320,6 +322,17 @@ export default function App() {
     }).catch(() => { /* the fallbacks stand */ })
     return () => { on = false }
   }, [])
+  // The account card names the same per-user timezone that Release uses for destination folder
+  // names. Keep the documented Central default on a failed read; the browser timezone does not
+  // control this setting and would be a misleading fallback.
+  useEffect(() => {
+    if (!me) return
+    let alive = true
+    getMyScope().then((value) => {
+      if (alive) setUserTimezone(value?.release_timezone || 'America/Chicago')
+    }).catch(() => {})
+    return () => { alive = false }
+  }, [me])
   const [scanLoading, setScanLoading] = useState(false)
   const [busy, setBusy] = useState(false)
   const isStaging = window.location.hostname.includes('staging')
@@ -737,8 +750,18 @@ export default function App() {
       }).catch(() => {})
     }
     const id = setInterval(refresh, 15_000)
+    // Another browser tab can start, stop, or finish a stage while this one is in the
+    // background. Refresh as soon as the user returns so the durable compact card reconciles
+    // immediately instead of displaying the previous state for up to one polling interval.
+    // The server remains authoritative; this is the same owner-scoped read used by the timer.
+    window.addEventListener('focus', refresh)
     document.addEventListener('visibilitychange', refresh)
-    return () => { alive = false; clearInterval(id); document.removeEventListener('visibilitychange', refresh) }
+    return () => {
+      alive = false
+      clearInterval(id)
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', refresh)
+    }
   }, [me])
 
   // Publish writes back per file; refetching once per click would fire dozens of
@@ -1310,6 +1333,7 @@ export default function App() {
     // covered something else.
     let picked = null
     let excluded = null
+    const includeSubfolders = runScope?.includeSubfolders !== false
     if (runScope && Array.isArray(runScope.folders)) {
       picked = runScope.folders
       excluded = runScope.exclude || []
@@ -1357,7 +1381,7 @@ export default function App() {
         const submitKey = beginOrResumeIntent('scan')
         let accepted
         try {
-          accepted = await startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded, submitKey, replaceActive, true)
+          accepted = await startScanQueued(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded, submitKey, replaceActive, true, includeSubfolders)
         } catch (err) {
           // Hold the key when we cannot tell whether the scan was created; drop it when the
           // server proved it was not, so the user's next, corrected attempt is a fresh intent
@@ -1468,7 +1492,7 @@ export default function App() {
         }
         if (!fresh) throw new Error('scan still processing — watch it finish in the Monitor queue')
       } else {
-        const { job_id } = await startScan(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded)
+        const { job_id } = await startScan(apiSource, folder, aiEnabled, deepScan, excludeRemediated, incremental, picked, excluded, includeSubfolders)
         fresh = await pollScanJob(job_id)
       }
       setScan(fresh); setExplicitTimeTravel(false)
@@ -1775,7 +1799,15 @@ export default function App() {
             </summary>
             <div className="header-menu-panel account-panel">
               <div className="account-identity">
-                <b>{me.name || me.email}</b>
+                <b>{me.name || me.email}{' '}
+                  <span aria-label={`Timezone: ${timezoneBadge(userTimezone).name}`}
+                    title={`Release folder timezone: ${userTimezone}`}
+                    style={{ display: 'inline-block', padding: '1px 6px', borderRadius: 999,
+                      background: 'var(--bg)', border: '1px solid var(--line)', color: 'var(--muted)',
+                      fontSize: 10.5, lineHeight: 1.4, verticalAlign: '1px' }}>
+                    {timezoneBadge(userTimezone).short}
+                  </span>
+                </b>
                 <span>{me.email}</span>
               </div>
               {me.role && <div className="account-meta"><span>Role</span><b>{me.role}</b></div>}
@@ -2476,7 +2508,10 @@ export default function App() {
       {/* onOntologyChange / onPrivilegeChange are gone with the Business ontology and Permissions
           panels. The ontology DATA path below is untouched — App still annotates the corpus from
           whatever was last published; only its editor left Settings. */}
-      {settingsOpen && canOpenSettings(me, access) && <Settings files={files} onClose={() => setSettingsOpen(false)} onRubricSaved={() => getRubric().then(setRubric)} onDelegationChange={setDelegations} onFileTypeChange={(cfg) => setFileTypeConfig(cfg)} me={me} />}
+      {settingsOpen && canOpenSettings(me, access) && <Settings files={files} onClose={() => {
+        setSettingsOpen(false)
+        getMyScope().then((value) => setUserTimezone(value?.release_timezone || 'America/Chicago')).catch(() => {})
+      }} onRubricSaved={() => getRubric().then(setRubric)} onDelegationChange={setDelegations} onFileTypeChange={(cfg) => setFileTypeConfig(cfg)} me={me} />}
 
       {/* The universal scan gate. Opened by `requestScan` from every entry point; the wizard's
           "Start scan" confirm is the only thing that dispatches `doScan`. The behavior toggles are

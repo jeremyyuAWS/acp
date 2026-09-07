@@ -53,14 +53,20 @@ function age(iso) {
   return `${Math.floor(seconds / 3600)}h ${Math.floor((seconds % 3600) / 60)}m`
 }
 
+function until(iso) {
+  if (!iso) return '—'
+  const seconds = Math.max(0, Math.round((new Date(iso).getTime() - Date.now()) / 1000))
+  return formatDuration(seconds)
+}
+
 export const JOB_STATE_FILTERS = [
   { key: 'all', label: 'All' },
   { key: 'active', label: 'Active' },
-  { key: 'stopping', label: 'Stop requested' },
+  { key: 'stopping', label: 'Stopping' },
   { key: 'attention', label: 'Needs attention' },
   { key: 'stalled', label: 'Stalled' },
   { key: 'paused', label: 'Paused' },
-  { key: 'cancelled', label: 'Cancelled' },
+  { key: 'cancelled', label: 'Stopped' },
   { key: 'recent', label: 'Recently completed' },
 ]
 
@@ -211,6 +217,28 @@ export function capacityValue(value, suffix = '') {
   return value == null || value === '' ? 'Not reported' : `${value}${suffix}`
 }
 
+export function deliveryHealthModel(health) {
+  if (!health) return { state: 'unknown', headline: 'Not reported', detail: 'Delivery health is unavailable on this replica.' }
+  const dead = Number(health.dead_lettered || 0)
+  const retrying = Number(health.retrying || 0)
+  const pending = Number(health.pending || 0) + Number(health.claimed || 0)
+  if (dead) return { state: 'critical', headline: `${dead} dead-lettered`, detail: `${retrying} retrying · ${pending} awaiting delivery` }
+  if (retrying) return { state: 'warning', headline: `${retrying} retrying`, detail: `${pending} awaiting delivery` }
+  return { state: 'healthy', headline: pending ? `${pending} in transit` : 'Caught up',
+    detail: pending ? `Oldest waiting ${health.oldest_undelivered_age_s == null ? 'age unknown' : formatDuration(health.oldest_undelivered_age_s)}` : `${Number(health.delivered || 0)} delivered` }
+}
+
+export function cancellationHealthModel(health) {
+  if (!health) return { state: 'unknown', headline: 'Not reported', detail: 'Cancellation acknowledgement health is unavailable.' }
+  const awaiting = Number(health.awaiting_acknowledgement || 0)
+  const overdue = Number(health.overdue || 0)
+  const escalated = Number(health.escalated || 0)
+  if (escalated) return { state: 'critical', headline: `${escalated} escalated`, detail: `${overdue} overdue · ${awaiting} awaiting acknowledgement` }
+  if (overdue) return { state: 'critical', headline: `${overdue} overdue`, detail: `${awaiting} awaiting acknowledgement` }
+  if (awaiting) return { state: 'warning', headline: `${awaiting} stopping`, detail: health.next_deadline_at ? `Next deadline in ${until(health.next_deadline_at)}` : 'Acknowledgement deadline unavailable' }
+  return { state: 'healthy', headline: 'All clear', detail: `${Number(health.acknowledged || 0)} acknowledged historically` }
+}
+
 /** One Azure metric's newest one-minute sample, or "Not reported" — never a zero standing in for
  *  a metric Azure did not answer for. */
 export function azureLatest(capacity, key, suffix = '') {
@@ -316,7 +344,7 @@ export const TILE_KINDS = {
 export function runTileLabel(run = {}) {
   const state = runOperationalState(run)
   if (state === 'recent') return 'COMPLETED JOB'
-  if (state === 'cancelled') return 'CANCELLED JOB'
+  if (state === 'cancelled') return 'STOPPED JOB'
   if (state === 'stopping') return 'STOPPING JOB'
   if (state === 'stalled') return 'STALLED JOB'
   if (state === 'paused') return 'PAUSED JOB'
@@ -354,10 +382,10 @@ function RunNode({ data }) {
   const operationalState = runOperationalState(data.run)
   const statusLabel = operationalState === 'recent' ? 'Complete'
     : operationalState === 'attention' ? 'Needs attention'
-      : operationalState === 'cancelled' ? 'Cancelled'
+      : operationalState === 'cancelled' ? 'Stopped'
         : operationalState === 'stalled' ? 'Stalled'
           : operationalState === 'paused' ? 'Paused'
-            : operationalState === 'stopping' ? 'Stop requested' : `${pct}%`
+            : operationalState === 'stopping' ? 'Stopping safely' : `${pct}%`
   return <div title="Select for live run details; double-click to open charts"
     style={{ width: 225, padding: 12,
       ...tileStyle('run', accent),
@@ -379,7 +407,9 @@ function RunNode({ data }) {
       <div style={{ width: `${pct}%`, height: '100%', background: cfg.color, borderRadius: 4 }} />
     </div>
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'end' }}>
-      <span style={{ fontSize: 12 }}>{data.run.status === 'recent' ? `Finished ${age(data.run.updated_at)} ago`
+      <span style={{ fontSize: 12 }}>{operationalState === 'stopping'
+        ? `${data.run.completed}/${data.run.total} complete · ${data.run.running || 0} draining`
+        : data.run.status === 'recent' ? `Finished ${age(data.run.updated_at)} ago`
         : data.run.status === 'failed' ? `${data.run.failed || 0} failed · updated ${age(data.run.updated_at)} ago`
           : `${data.run.completed}/${data.run.total} · ${data.run.running} active`}</span>
       <MiniTrend values={data.history} color={cfg.color} />
@@ -388,7 +418,7 @@ function RunNode({ data }) {
       {data.run.queued} waiting{data.run.queue_position ? ` · queue position ${data.run.queue_position}` : ''}
     </div>}
     {operationalState !== 'active' && data.run.updated_at && <div style={{ fontSize: 10.5, marginTop: 5, color: 'var(--muted)' }}>
-      {statusLabel} · {operationalState === 'stopping' ? 'requested' : 'last changed'} {age(
+      {statusLabel} · {operationalState === 'stopping' ? 'stop requested' : 'last changed'} {age(
         operationalState === 'stopping' ? data.run.cancel_requested_at : data.run.updated_at)} ago
     </div>}
     <Handle type="source" position={Position.Right} />
@@ -634,7 +664,9 @@ export function runFacts(run = {}, nowMs = Date.now()) {
     ['Progress', `${run.completed ?? 0} of ${run.total ?? 0}`],
     ['Queue', `${run.running ?? 0} active · ${run.queued ?? 0} waiting`],
     ['Status', run.status === 'recent' ? 'Recently completed'
-      : (run.queue_position ? `Queue position ${run.queue_position}` : 'Running now')],
+      : run.status === 'cancelled' ? 'Stopped manually'
+        : run.status === 'failed' ? 'Failed'
+          : (run.queue_position ? `Queue position ${run.queue_position}` : 'Running now')],
     ['Oldest wait', wait == null ? 'Not reported' : formatDuration(wait)],
     ['Job type', run.current_job_type?.replaceAll('_', ' ') || 'Not reported'],
     ['Last activity', updated == null ? 'Not reported' : `${formatDuration(updated)} ago`],
@@ -978,6 +1010,8 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
   const services = workerServiceRows(summary)
   const recovery = summary.recovery || {}
   const correlation = summary.workflow_correlation || {}
+  const delivery = deliveryHealthModel(summary.canonical_delivery)
+  const cancellations = cancellationHealthModel(summary.cancellation_acknowledgements)
   return <section className="panel" style={{ padding: 16, marginBottom: 20 }} aria-label="Live Azure processing traffic">
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
       <div><b>Live Azure traffic</b><div className="muted" style={{ fontSize: 12 }}>Active worker flow plus the last 15 minutes</div></div>
@@ -1004,6 +1038,16 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
         {recovery.latest_action_at && <div className="muted" style={{ fontSize: 10.5, marginTop: 3 }}>
           Latest action {age(recovery.latest_action_at)} ago
         </div>}
+      </div>
+      <div className="panel" role={delivery.state === 'critical' ? 'alert' : 'status'} style={{ padding: 12 }} aria-label="Canonical event delivery">
+        <div className="muted" style={{ fontSize: 11 }}>CANONICAL DELIVERY</div>
+        <b style={{ fontSize: 20 }}>{delivery.headline}</b>
+        <div className="muted">{delivery.detail}</div>
+      </div>
+      <div className="panel" role={cancellations.state === 'critical' ? 'alert' : 'status'} style={{ padding: 12 }} aria-label="Cancellation acknowledgements">
+        <div className="muted" style={{ fontSize: 11 }}>STOP ACKNOWLEDGEMENTS</div>
+        <b style={{ fontSize: 20 }}>{cancellations.headline}</b>
+        <div className="muted">{cancellations.detail}</div>
       </div>
       <div className="panel" style={{ padding: 12 }} aria-label="Workflow data linkage">
         <div className="muted" style={{ fontSize: 11 }}>WORKFLOW WIRING</div>

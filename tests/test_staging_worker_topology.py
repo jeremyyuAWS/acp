@@ -97,6 +97,30 @@ def test_migration_overlap_stays_inside_one_cpu_until_legacy_retires():
     assert script.index('ACP_WORKER_CPU="') < script.index('[ "$ROLES_READY" = true ]')
 
 
+def test_staging_first_deploy_cannot_mutate_fixed_name_production_auxiliaries():
+    staging = (ROOT / "deploy/public/staging_up.sh").read_text()
+    deploy = (ROOT / "deploy/public/deploy.sh").read_text()
+    assert "ACP_DEPLOY_TARGET_ENV=staging" in staging
+    assert "ACP_DEPLOY_AUXILIARIES=0" in staging
+    assert 'staging:1) echo "refusing:' in deploy
+    grafana = deploy[deploy.index('GF_APP="acp-grafana"'):]
+    assert 'if [ "$DEPLOY_AUXILIARIES" = 1 ]' in grafana
+
+
+def test_staging_first_deploy_rejects_production_named_primary_targets(tmp_path):
+    az = tmp_path / "az"
+    az.write_text("#!/bin/sh\necho 'AZ MUST NOT RUN' >&2\nexit 99\n")
+    az.chmod(0o755)
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}",
+           "ACP_DEPLOY_TARGET_ENV": "staging", "ACP_DEPLOY_AUXILIARIES": "0",
+           "ACP_APP": "acp-app", "ACP_DEPLOY_WORKER": "1", "ACP_WORKER": "acp-assess-staging"}
+    result = subprocess.run(["bash", str(ROOT / "deploy/public/deploy.sh")], cwd=ROOT,
+                            env=env, text=True, capture_output=True)
+    assert result.returncode != 0
+    assert "staging app 'acp-app' must end in -staging" in result.stderr
+    assert "AZ MUST NOT RUN" not in result.stderr
+
+
 def test_manual_staging_start_targets_roles_not_retired_mixed_worker():
     workflow = (ROOT / ".github/workflows/start-staging-worker.yml").read_text()
     assert "acp-discovery-staging" in workflow

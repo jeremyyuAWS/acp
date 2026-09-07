@@ -67,7 +67,7 @@ describe('the settings panel includes access, worker and AI governance', () => {
     // capacity now, Scheduling says when ACP should hold more of it. It is READ-ONLY — the
     // writable capacity control stays where it is (queuePanelCapacity.test.jsx).
     expect(tabTexts(await render())).toEqual(
-      ['Owners', 'Users', 'Roles', 'My Data', 'My Scope', 'Worker Configuration', 'Scheduling', 'AI Governance', 'Review Memory'])
+      ['Owners', 'Users', 'Roles', 'My Data', 'My Scope', 'Worker Configuration', 'Scheduling', 'Release', 'AI Governance', 'Review Memory'])
   })
 
   it('no longer offers any of the removed ADMIN-ONLY tabs', async () => {

@@ -10,8 +10,12 @@ import UtilizationBar from './UtilizationBar.jsx'
 
 // Job-type → short human label for the recent-jobs cards.
 const JOBLABEL = {
-  scan_discover: 'discover', scan_file: 'scan file', scan_batch: 'scan batch',
-  scan_finalize: 'finalize', remediate_file: 'remediate', assess_trace: 'assess', scan: 'scan',
+  scheduled_sweep: 'scheduled scan', scan_discover: 'discover', scan_folder: 'discover folder',
+  scan_file: 'assess file', scan_batch: 'assess batch', scan_assess: 'assess',
+  scan_finalize: 'finalize', assess_trace: 'assess trace', scan: 'scan',
+  remediate_file: 'remediate', rescore_file: 'verify fix',
+  apply_approved_values: 'apply approval', deliver_corrected_copy: 'deliver copy',
+  publish_file: 'release file',
 }
 const fmtDur = (s) => (s == null ? '' : s < 1 ? '<1s' : s < 60 ? `${Math.round(s)}s` : `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`)
 const jobFile = (payload) => { try { return JSON.parse(payload || '{}').file || null } catch { return null } }
@@ -533,7 +537,7 @@ export default function QueuePanel({ focusScanId = null, onClearFocus = null }) 
               const focused = !!focusScanId && jb.scan_id === focusScanId
               return (
                 <div className={focused ? 'jobcard focused' : 'jobcard'} key={jb.id}>
-                  <span className="jobtype">{JOBLABEL[jb.type] || jb.type}</span>
+                  <span className="jobtype" title={jb.type || 'job'}>{JOBLABEL[jb.type] || String(jb.type || 'job').replaceAll('_', ' ')}</span>
                   <span className="jobfile" title={jb.scan_id ? `${desc} · scan ${jb.scan_id}` : desc}>
                     {desc}
                     {jb.__pushedOff && (

@@ -48,14 +48,36 @@ RESOLUTIONS = {
 }
 
 
+def _request_owner(request: Request | None) -> str | None:
+    """Authenticated owner stamped by the access gate; absent only in demo/direct calls."""
+    return getattr(getattr(request, "state", None), "user_email", None)
+
+
+def _owned_item(item_id: str, request: Request | None) -> dict:
+    """Resolve a queue row only when it belongs to the authenticated user's scan.
+
+    The list endpoint has always been owner-scoped, but the item endpoints historically looked
+    rows up by their opaque id alone. An opaque id is not authorization: assignment, decisions,
+    and companion downloads must enforce the same boundary as the inbox that links to them.
+    """
+    item = core.store.get_hitl_item(item_id)
+    owner = _request_owner(request)
+    # Direct in-process callers used by remediation tests pass a small request-shaped object and
+    # are not an HTTP authorization boundary. Real FastAPI requests always enforce ownership.
+    if item is None or (isinstance(request, Request) and owner
+                        and core.store.get_scan(item.get("scan_id"), owner=owner) is None):
+        raise HTTPException(404, "item not found")
+    return item
+
+
 @router.post("/hitl/queue/{scan_id}/auto")
-def hitl_auto_queue(scan_id: str):
+def hitl_auto_queue(scan_id: str, request: Request):
     """Auto-populate the HITL review queue from ai-assisted FAILs in an existing scan.
 
     Idempotent — safe to call multiple times. Returns the newly created items.
     Fires a webhook (HITL_WEBHOOK_URL) if configured.
     """
-    if core.store.get_scan(scan_id) is None:
+    if core.store.get_scan(scan_id, owner=_request_owner(request)) is None:
         raise HTTPException(404, "scan not found")
     created = core.store.queue_hitl_items(scan_id)
     core.fire_webhook(created)
@@ -63,13 +85,13 @@ def hitl_auto_queue(scan_id: str):
 
 
 @router.post("/hitl/queue/{scan_id}/verify")
-def hitl_verify_queue(scan_id: str, file: str = Query(...)):
+def hitl_verify_queue(scan_id: str, request: Request, file: str = Query(...)):
     """Queue a post-fix VERIFICATION item for one fully-automatic remediation
     (user decision 2026-07-02: automatic fixes also get human review). The
     ai-assisted pull above never sees auto-mode rules, so this is the only
     path that puts a fully-automatic fix in front of a person. Idempotent per
     (scan, file) — repeat clicks of remediate-now never duplicate the item."""
-    if core.store.get_scan(scan_id) is None:
+    if core.store.get_scan(scan_id, owner=_request_owner(request)) is None:
         raise HTTPException(404, "scan not found")
     item_id = core.store.queue_hitl_deferral(
         scan_id, file, "Automatic fix applied — verify the result", 1, rule_id="auto/verify")
@@ -108,9 +130,7 @@ def hitl_metrics(request: Request, scan_id: str | None = None):
 @router.put("/hitl/queue/{item_id}")
 def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
     """Update a HITL review item status (approve, reject, skip) with an optional reviewer note."""
-    item = core.store.get_hitl_item(item_id)
-    if item is None:
-        raise HTTPException(404, "item not found")
+    item = _owned_item(item_id, request)
     valid = {"pending", "approved", "rejected", "skipped", "in_review"}
     if body.status not in valid:
         raise HTTPException(422, f"status must be one of {sorted(valid)}")
@@ -131,6 +151,7 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
     # which really are appliable) writable as the image's alt text.
     updated = core.store.update_hitl_item(item_id, body.status, body.reviewer_note,
                                           body.approved_value, resolution=body.resolution)
+    core.store.sync_hitl_finding_dispositions(item_id, body.status)
     # Record the reviewer's final text per proposal, so the applier knows which image gets which
     # description. Only on approval: rejecting or skipping approves no content.
     if body.status == "approved" and body.approved_values is not None:
@@ -265,9 +286,7 @@ def hitl_companion_download(item_id: str, request: Request = None):
     indistinguishable from a caption track for a silent video, and a player handed one shows
     nothing rather than reporting a problem.
     """
-    item = core.store.get_hitl_item(item_id)
-    if item is None:
-        raise HTTPException(404, "item not found")
+    item = _owned_item(item_id, request)
     files = core.store._row_companion_files(item)
     if not files:
         raise HTTPException(404, "this review item carries no companion file")
@@ -290,12 +309,11 @@ def hitl_companion_download(item_id: str, request: Request = None):
 
 
 @router.patch("/hitl/queue/{item_id}/assign")
-def hitl_assign(item_id: str, body: HitlAssign):
+def hitl_assign(item_id: str, body: HitlAssign, request: Request):
     """Assign (or unassign) a reviewer to a HITL queue item. Persists to the DB so the
     assignment survives page reloads and is visible to other sessions.
     Fires hitl.assigned when an assignee is set (not on clear)."""
-    if core.store.get_hitl_item(item_id) is None:
-        raise HTTPException(404, "item not found")
+    _owned_item(item_id, request)
     result = core.store.assign_hitl_item(item_id, body.assignee)
     if body.assignee and result:
         core.fire_webhook([result], event="hitl.assigned")

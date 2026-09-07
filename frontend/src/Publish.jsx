@@ -7,6 +7,7 @@ import { releaseDestination, releaseDestinationPhrase, releaseConfirmLines } fro
 import { SET_STATUS, certificationUniverse, releaseSetStatus } from './graduation.js'
 import { mirrorState, MIRROR } from './deliveryPolicy.js'
 import ReleaseHistory from './ReleaseHistory.jsx'
+import ReleaseModelProvenance from './ReleaseModelProvenance.jsx'
 
 // Step 9 · Publish. Marks re-validated documents as published: the conformance status
 // is recorded in the audit trail and the fixed copy (already in Blob + the Drive
@@ -793,6 +794,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
                     <p>{releasePreview.collision_policy}</p>
                     {(releasePreview.blockers || []).map((item) => <div className="release-name-error" role="alert" key={item.file}>{item.file}: {item.reason}</div>)}
                   </div>}
+                  <ReleaseModelProvenance scanId={run?.id} selectedFiles={selectedReady.map((file) => file.file)} />
                 </div>
                 <div className="release-plan__actions">
                   <button className="ghost" onClick={() => setBuilderStep(2)}>Back to delivery</button>

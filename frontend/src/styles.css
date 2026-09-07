@@ -314,11 +314,6 @@ button.small { padding: 6px 12px; font-size: 13px; }
 .workflow-continuity-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .workflow-continuity-actions button { white-space: nowrap; }
 @media (max-width: 640px) { .workflow-continuity { align-items: stretch; flex-direction: column; } .workflow-continuity-actions { flex-wrap: wrap; } }
-.rem-card-throughput { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line); display: grid; grid-template-columns: minmax(150px, auto) minmax(180px, 1fr) auto; align-items: end; gap: 12px; color: var(--muted); font-size: 11.5px; }
-.rem-card-throughput b, .rem-card-throughput strong { color: var(--ink); font-size: 12px; }
-.rem-card-throughput__bars { height: 34px; display: flex; align-items: end; gap: 4px; overflow: hidden; }
-.rem-card-throughput__bars span { flex: 1 1 0; min-width: 3px; max-width: 28px; border-radius: 2px 2px 0 0; background: var(--info-fg, #1f5fa8); }
-@media (max-width: 640px) { .rem-card-throughput { grid-template-columns: 1fr; align-items: start; } .rem-card-throughput__bars { width: 100%; } }
 
 /* keyboard focus — this is an accessibility product; it should be accessible */
 button:focus-visible, a:focus-visible, .tab:focus-visible, .fchip:focus-visible,
@@ -537,13 +532,13 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .jobcards { display: flex; flex-direction: column; gap: 5px; }
 /* 7 tracks: type | file+phase | status | attempts? | stalled? | duration | trace.
    attempts and stalled are conditional; their `auto` tracks collapse when absent. */
-.jobcard { display: grid; grid-template-columns: 82px minmax(0, 1fr) auto auto auto auto auto; align-items: center; gap: 10px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 12.5px; animation: auditslide 0.4s ease; }
+.jobcard { display: grid; grid-template-columns: minmax(104px, 140px) minmax(0, 1fr) auto auto auto auto auto; align-items: center; gap: 10px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 12.5px; animation: auditslide 0.4s ease; }
 /* "View in Monitor" scan focus (Discover/Assess → Monitor, 2026-08-30): highlights rather than
    filters — every job stays in the list, the focused scan's own job(s) just stand out. */
 .jobcard.focused { border-color: var(--accent, #7C3AED); background: color-mix(in srgb, var(--accent, #7C3AED) 8%, transparent); }
 .queuefocusbanner { display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin-bottom: 8px; padding: 6px 10px; border-radius: 7px; color: var(--accent, #7C3AED); background: color-mix(in srgb, var(--accent, #7C3AED) 8%, transparent); }
 .queuefocusbanner button { font: inherit; color: inherit; font-weight: 600; text-decoration: underline; background: none; border: none; cursor: pointer; padding: 0; }
-.jobtype { font-weight: 600; color: var(--plum); }
+.jobtype { min-width: 0; font-weight: 600; color: var(--plum); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .jobfile { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
 .jobstatus { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 7px; white-space: nowrap; }
 .jobstatus.flash { animation: tickflash 0.6s ease; }
@@ -554,7 +549,10 @@ button.rc-trace { background: none; border: none; padding: 0; font: inherit; cur
 .workerdots { display: flex; gap: 3px; align-items: center; }
 .idledot { width: 7px; height: 7px; border-radius: 50%; background: #d8d3dc; display: inline-block; }
 .activedot { width: 7px; height: 7px; border-radius: 50%; background: #BF8C00; display: inline-block; animation: livepulse 1.1s ease-in-out infinite; }
-@media (max-width: 720px) { .jobcard { grid-template-columns: 1fr auto; } .jobfile { grid-column: 1 / -1; } }
+@media (max-width: 900px) {
+  .jobcard { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .jobfile { grid-column: 1 / -1; grid-row: 2; }
+}
 /* Regression radar (ADR 0009) — real drift between scans */
 .radarchips { display: flex; gap: 6px; flex-wrap: wrap; }
 .rchip { font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
@@ -3231,3 +3229,30 @@ html[data-wcag="on"] .wcag-toggle--on {
 .release-history__document code,.release-history__document a{grid-column:2}
 .release-history__document--failed{border-color:var(--error-border,#e9a8a8);background:var(--error-bg,#fdecf0)}
 @media(max-width:680px){.release-history__document{grid-template-columns:1fr}.release-history__document code,.release-history__document a{grid-column:1}.release-history__execution>summary{align-items:flex-start;flex-direction:column}.release-history__execution>summary span:last-child{text-align:left}}
+.release-model-evidence {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel, #fff);
+  font-size: 12px;
+}
+.release-model-evidence__heading,
+.release-model-evidence__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 14px;
+}
+.release-model-evidence__heading > span,
+.release-model-evidence__row > span:last-child,
+.release-model-evidence > p { color: var(--muted); }
+.release-model-evidence__rows { display: grid; gap: 6px; }
+.release-model-evidence__row { padding-top: 6px; border-top: 1px solid var(--line); }
+.release-model-evidence > p { margin: 0; line-height: 1.45; }
+@media (max-width: 680px) {
+  .release-model-evidence__heading,
+  .release-model-evidence__row { align-items: flex-start; flex-direction: column; gap: 2px; }
+}

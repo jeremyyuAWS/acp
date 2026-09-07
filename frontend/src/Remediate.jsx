@@ -33,6 +33,7 @@ import QueuePanel from './QueuePanel.jsx'
 import ProcessingStatusPanel from './ProcessingStatusPanel.jsx'
 import RemediationOpsPanel from './RemediationOpsPanel.jsx'
 import RemediationWorkspaceTabs from './RemediationWorkspaceTabs.jsx'
+import AutomationPolicyControl from './AutomationPolicyControl.jsx'
 import './remediation-prior-results.css'
 import { deriveRemediateProcessingState } from './remediateProcessingState.js'
 import { groupFixesByRule, summarizeImpact, totalFixes, scOf } from './fixSummary.js'
@@ -100,6 +101,8 @@ function dbItemToUi(it, files) {
     file: it.file,
     scanId: it.scan_id,
     ruleId: it.rule_id,
+    rule_id: it.rule_id,
+    validated: !!it.validated,
     aiDraftable: AI_DRAFTABLE_SCS.has(sc),
     source: fileRec.sourceName,
     rule: `WCAG ${sc}${it.rule_name ? ' — ' + it.rule_name : ITEM_NAME[sc] ? ' — ' + ITEM_NAME[sc] : ''}`,
@@ -842,7 +845,19 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const revalidatingCount = workflowCount('awaiting-validation')
   const blockedCount = workflowCount('blocked')
   // The deterministic batch, taken from the SAME partition RemediationWork's own button uses.
-  const autoBatch = batchScope(remediationWork(files, { cap, assessment }))
+  const workPartition = remediationWork(files, { cap, assessment })
+  const autoBatch = batchScope(workPartition)
+  // The policy preview must see the SAME deterministic findings that feed the primary action,
+  // plus proposal-backed review work. Passing only `reviewNeeds` made the slider claim there was
+  // nothing to preview while the header offered (for example) 13 automatic fixes. Deterministic
+  // rows gain the proposal-shaped fields automationPolicy expects; this changes preview routing
+  // only and does not broaden the server action's deterministic scope.
+  const automationPolicyFindings = [
+    ...(workPartition?.lanes?.automatic?.findings || []).map((finding) => ({
+      ...finding, rule_id: finding.rule_id || finding.sc, hasProposal: true,
+    })),
+    ...reviewNeeds,
+  ]
 
   const fixGroups = groupFixesByRule(fixSource)
   const impact = summarizeImpact(fixSource)
@@ -1611,13 +1626,11 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         primary={primary}
         readOnly={readOnly}
         onOpenRunDetails={() => setRunDetailsOpen((v) => !v)} />
+      <AutomationPolicyControl key={runId || 'current'} findings={automationPolicyFindings} runId={runId} />
       <RemediationWorkspaceTabs
         runId={runId}
         reviewCount={reviewCount}
         snapshot={runStream?.snapshot || null}
-        connected={!!runStream?.connected}
-        receivedAt={runStream?.receivedAt || null}
-        events={runStream?.events || []}
         review={reviewWorkspace}
         live={<>
           {/* The large panel consumes the App-owned controller. Mounting this view opens no

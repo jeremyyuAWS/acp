@@ -55,6 +55,10 @@ ALLOW_ACTIVE_JOBS="${ACP_DEPLOY_WITH_ACTIVE_JOBS:-0}"
 # minute for process shutdown before this platform deadline.
 WORKER_TERMINATION_GRACE_SECONDS="${ACP_WORKER_TERMINATION_GRACE_SECONDS:-600}"
 WORKER_DRAIN_SECONDS="${ACP_WORKER_DRAIN_SECONDS:-540}"
+CAPACITY_APPLY_REQUESTED="${ACP_CAPACITY_APPLY_ENABLED:-0}"
+ACA_VCPU_QUOTA="${ACP_ACA_VCPU_QUOTA:-}"
+PG_MAX_CONNECTIONS="${ACP_PG_MAX_CONNECTIONS:-}"
+PG_RESERVED_CONNECTIONS="${ACP_PG_RESERVED_CONNECTIONS:-}"
 
 # Keep the gate installer shared with the first-deploy path. This script is what deploy.yml
 # actually executes for production releases.
@@ -79,6 +83,42 @@ case "$DEPLOY_TARGET_ENV" in
 esac
 [ "$(printf '%s\n' "$APP" "${LANE_WORKERS[@]}" | sort -u | wc -l | tr -d ' ')" = 4 ] \
   || die "app and discovery/assess/remediate worker targets must be four distinct names"
+
+# Capacity application is an API control-plane capability, so these settings are stamped only
+# onto the API revision. Production is fail-closed regardless of a caller's environment. Staging
+# may opt in, but only with the exact role-worker names and measured resource ceilings the route
+# uses for its preflight arithmetic.
+CAPACITY_APPLY_ENABLED=0
+if [ "$DEPLOY_TARGET_ENV" = staging ]; then
+  case "$CAPACITY_APPLY_REQUESTED" in 0|1) ;; *) die "ACP_CAPACITY_APPLY_ENABLED must be 0 or 1" ;; esac
+fi
+if [ "$DEPLOY_TARGET_ENV" = staging ] && [ "$CAPACITY_APPLY_REQUESTED" = 1 ]; then
+  [[ "$ACA_VCPU_QUOTA" =~ ^[0-9]+([.][0-9]+)?$ ]] \
+    || die "ACP_ACA_VCPU_QUOTA must be a positive number when staging capacity apply is enabled"
+  [[ "$PG_MAX_CONNECTIONS" =~ ^[0-9]+$ ]] \
+    || die "ACP_PG_MAX_CONNECTIONS must be a positive integer when staging capacity apply is enabled"
+  [[ "$PG_RESERVED_CONNECTIONS" =~ ^[0-9]+$ ]] \
+    || die "ACP_PG_RESERVED_CONNECTIONS must be a non-negative integer when staging capacity apply is enabled"
+  awk -v n="$ACA_VCPU_QUOTA" 'BEGIN { exit !(n > 0) }' \
+    || die "ACP_ACA_VCPU_QUOTA must be greater than zero when staging capacity apply is enabled"
+  [ "$PG_MAX_CONNECTIONS" -gt 0 ] \
+    || die "ACP_PG_MAX_CONNECTIONS must be greater than zero when staging capacity apply is enabled"
+  [ "$PG_RESERVED_CONNECTIONS" -lt "$PG_MAX_CONNECTIONS" ] \
+    || die "ACP_PG_RESERVED_CONNECTIONS must be smaller than ACP_PG_MAX_CONNECTIONS"
+  CAPACITY_APPLY_ENABLED=1
+fi
+API_ENV_VARS=(
+  "ACP_DEPLOY_ENV=$DEPLOY_TARGET_ENV"
+  "ACP_CAPACITY_APPLY_ENABLED=$CAPACITY_APPLY_ENABLED"
+  "WORKER_APP_NAMES=$DISCOVERY_WORKER,$ASSESS_WORKER,$REMEDIATE_WORKER"
+)
+if [ "$DEPLOY_TARGET_ENV" = staging ]; then
+  API_ENV_VARS+=(
+    "ACP_ACA_VCPU_QUOTA=$ACA_VCPU_QUOTA"
+    "ACP_PG_MAX_CONNECTIONS=$PG_MAX_CONNECTIONS"
+    "ACP_PG_RESERVED_CONNECTIONS=$PG_RESERVED_CONNECTIONS"
+  )
+fi
 
 # ── subscription: resolved per-call, never via `az account set` ────────────────────────────
 # `az account set` writes a global choice another concurrent process can change mid-deploy.
@@ -456,7 +496,8 @@ if [ "$BG" = 1 ]; then
   SUFFIX="g$(printf '%s' "$BUILD_VERSION" | tr -cd '0-9')"
   GREEN="$APP--$SUFFIX"
   say "deploying green ($GREEN) at 0% traffic"
-  _aca_retry az containerapp update "${AZ[@]}" -g "$RG" -n "$APP" --image "$IMG" --revision-suffix "$SUFFIX" -o none
+  _aca_retry az containerapp update "${AZ[@]}" -g "$RG" -n "$APP" --image "$IMG" --revision-suffix "$SUFFIX" \
+    --set-env-vars "${API_ENV_VARS[@]}" -o none
 
   GREEN_FQDN="$GREEN.$ENV_DOMAIN"
   printf '  waiting for green '
@@ -556,7 +597,8 @@ fi
 # A refusal is a STATE, not a fault — the same command succeeds once the in-flight operation
 # settles — so `_aca_retry` waits it out and fails fast on anything else. See readiness_probe.sh.
 say "updating $APP + ${LANE_WORKERS[*]} concurrently"
-_aca_retry az containerapp update "${AZ[@]}" -g "$RG" -n "$APP" --image "$IMG" --no-wait -o none
+_aca_retry az containerapp update "${AZ[@]}" -g "$RG" -n "$APP" --image "$IMG" \
+  --set-env-vars "${API_ENV_VARS[@]}" --no-wait -o none
 for a in "${LANE_WORKERS[@]}"; do
   _aca_retry az containerapp update "${AZ[@]}" -g "$RG" -n "$a" --image "$IMG" \
     --termination-grace-period "$WORKER_TERMINATION_GRACE_SECONDS" \

@@ -218,6 +218,45 @@ While waiting, confirm the composition behaves as designed:
 The overnight burst is the row worth being careful about: if it does not rise, the cron rule is
 being read as a ceiling somewhere and AC 8 has regressed silently.
 
+### Staging gate before enabling the capacity gateway
+
+Run `.github/workflows/validate-staging-scale-test.yml` manually with
+`confirm_scale_test=true`. It targets `acp-discovery-staging`, `acp-assess-staging`, and
+`acp-remediate-staging`; a resolved app or resource group that is not unmistakably staging is
+rejected before Azure login. The workflow snapshots each app's complete `template.scale`, raises
+only its floor, proves the rule array is unchanged, and restores the complete original block on
+the failure path as well as the success path. Review all three seven-day artifacts before enabling
+an application gateway. Do not substitute the retired `acp-worker-staging` app.
+
+Configure these staging repository variables first:
+
+* `STAGING_ACA_VCPU_QUOTA` — the measured quota of the staging Container Apps environment;
+* `STAGING_PG_MAX_CONNECTIONS` — the separate staging database's actual server ceiling;
+* `STAGING_PG_RESERVED_CONNECTIONS` — the connections reserved from that ceiling;
+* the existing role-specific app variables when the default `*-staging` names are not used.
+
+The running **staging API's managed identity**, not merely GitHub's deployment identity, must have
+`Microsoft.App/containerApps/read` and `Microsoft.App/containerApps/write` on each of the three
+staging worker apps. Contributor or Container Apps Contributor at that narrow scope satisfies the
+check. Do not grant production scope and do not add a client secret: the API uses
+`DefaultAzureCredential`. Confirm `database-url` exists on Assess and Remediate before publishing
+their PostgreSQL rules.
+
+After the adapter is enabled in staging only, record the three full scale blocks and revision
+counts, apply the reviewed schedule through `POST /control/capacity-schedule/apply`, and reread all
+three blocks. Each must contain the business-hours cron rule and every pre-existing queue/CPU rule
+under its original name, with no duplicates and unchanged auth references. Cross both ends of a
+short test window: replicas should move between floors, while revision counts remain unchanged.
+
+For the soft scale-down proof, first confirm each worker reports
+`terminationGracePeriodSeconds: 600` and `ACP_SHUTDOWN_DRAIN_SECONDS=540`. Start a traceable job,
+cross the cron end, and retain evidence that the selected replica stops claiming new jobs, reports
+itself draining, completes the claimed job exactly once, and only then disappears. Repeat with a
+queue burst outside work hours to prove the queue rule can still rise above the off-hours floor.
+A job that can exceed 540 seconds is still a blocker: the bounded SIGTERM drain is not protected
+capacity, and such a job may be killed and lease-reclaimed. Do not describe scale-to-zero as fully
+soft until an active-job capacity signal or equivalent controller protects that case.
+
 ## What this runbook does not establish
 
 * **The environment's vCPU quota.** No artifact in this repository records it, so

@@ -34,6 +34,7 @@ the report's core honesty guarantee.
 """
 from __future__ import annotations
 import hashlib
+import html
 import io
 import logging
 import os
@@ -888,6 +889,31 @@ def _provenance_section(run, facts, meta, diff, cert, total, h2, body, cell, mut
               f"<b>{cert}</b>/<b>{total}</b> certifiable"]
     el.append(Paragraph("<b>Pipeline.</b> " + "  →  ".join(stages), cell))
     el.append(Spacer(1, 6))
+    lineage_digest = (meta or {}).get("stage_lineage_digest")
+    if lineage_digest:
+        lineage_status = _esc(str((meta or {}).get("stage_lineage_status") or "unknown"))
+        el.append(Paragraph(
+            f"<b>Canonical stage lineage.</b> {lineage_status} · SHA-256 "
+            f"<font name='Courier' size='7'>{_esc(str(lineage_digest))}</font>. "
+            "Stage totals use sealed execution snapshots.", muted))
+        el.append(Spacer(1, 6))
+    reconciliation = (meta or {}).get("finding_reconciliation") or {}
+    if reconciliation:
+        status = _esc(str(reconciliation.get("status") or "unavailable"))
+        digest = ((reconciliation.get("content_digest") or {}).get("value") or "not available")
+        outcomes = reconciliation.get("outcomes") or {}
+        if status == "reconciled":
+            detail = (f"<b>{int(outcomes.get('accounted') or 0)}</b> of "
+                      f"<b>{int(outcomes.get('assessed') or 0)}</b> assessed findings have one "
+                      "durable disposition.")
+        elif status == "inconsistent":
+            detail = "Accounting is inconsistent; no complete-resolution claim is made."
+        else:
+            detail = "Exact per-finding outcomes are not available for this snapshot."
+        el.append(Paragraph(
+            f"<b>Finding reconciliation.</b> {status} · SHA-256 "
+            f"<font name='Courier' size='7'>{_esc(str(digest))}</font>. {detail}", muted))
+        el.append(Spacer(1, 6))
     # R-D — actionable reproduce instructions: three steps, not a prose assertion.
     # The full hash is included (not truncated) because the auditor must verify it exactly.
     rubric = meta.get("hash") if meta else None
@@ -1424,6 +1450,21 @@ def _ai_governance_section(run, h2, body, cell, muted) -> list:
         el.append(Paragraph(
             f'<font color="#6c6470">By provider: {prov_str}. Every AI operation is recorded with its '
             "model, processing zone, latency and cost, and is auditable per finding.</font>", muted))
+    models = r.get("by_model") or []
+    if models:
+        def _safe(value):
+            return html.escape(str(value or "not reported"))
+
+        model_str = " · ".join(
+            f'{m["calls"]} × {_safe(m.get("provider"))} / {_safe(m.get("model"))} '
+            f'({_safe(m.get("zone"))}; {m.get("ok", 0)} successful, '
+            f'{m.get("failed", 0)} failed; {m.get("avg_latency_ms", 0)} ms avg)'
+            for m in models
+        )
+        el.append(Paragraph(
+            f'<font color="#6c6470">Exact model evidence: {model_str}. Call success means the '
+            "model operation completed; it does not claim reviewer acceptance or successful "
+            "post-write validation.</font>", muted))
     return el
 
 

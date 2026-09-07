@@ -28,8 +28,22 @@ STATUS = {
                    "created_result": 1, "published_at": "2026-09-06T01:01:00+00:00"}],
 }
 
+FINDING_SNAPSHOT = {
+    "run_id": "remediation-run-1", "scan_id": "scan-1", "batch_id": "batch-1",
+    "revision": 17,
+    "finding_reconciliation": {
+        "assessed": 9, "resolved_verified": 4, "awaiting_review": 1,
+        "approved_pending_verification": 1, "unchanged_no_fix": 1, "failed": 1,
+        "excluded": 0, "superseded": 0, "accounted": 8, "unaccounted": 1,
+        "exact": False, "violations": [],
+    },
+}
+
 
 class _Store:
+    def get_scan_head(self, sid, owner=None):
+        return {"id": sid} if sid == "scan-1" and owner == "owner@example.com" else None
+
     def get_scan(self, sid, owner=None):
         return {"run": {"id": sid}} if owner == "owner@example.com" else None
 
@@ -39,6 +53,19 @@ class _Store:
     def stage_snapshot_id(self, sid):
         return "snapshot-1"
 
+    def canonical_stage_lineage(self, sid, owner=None):
+        return {"schema_version": 1, "workflow_id": sid, "workflow_revision": 1,
+                "scan_id": sid, "generated_at": "changes-every-call", "available": True,
+                "stages": [{"stage": "release", "execution_id": "release-execution",
+                            "generated_at": "changes-every-call", "provenance": "observed",
+                            "reconciliation": {"unit": "work items", "scope": "this execution",
+                                               "total": 1, "accounted": 1,
+                                               "unaccounted": 0, "exact": True},
+                            "integrity": {"ok": True, "affected": [], "violations": []},
+                            "sealed_output": {"manifest_id": "sealed-release", "digest": "d" * 64}}],
+                "integrity": {"ok": True, "broken_manifest_links": [],
+                              "inconsistent_stages": []}}
+
 
 def _request(owner="owner@example.com"):
     return SimpleNamespace(state=SimpleNamespace(user_email=owner))
@@ -46,6 +73,7 @@ def _request(owner="owner@example.com"):
 
 def test_release_manifest_comes_from_persisted_server_evidence(monkeypatch):
     monkeypatch.setattr(scans.core, "store", _Store())
+    monkeypatch.setattr(scans, "_remediation_snapshot", lambda sid: FINDING_SNAPSHOT)
     first = scans.get_release_manifest("scan-1", _request())
     second = scans.get_release_manifest("scan-1", _request())
 
@@ -57,12 +85,55 @@ def test_release_manifest_comes_from_persisted_server_evidence(monkeypatch):
     assert manifest["documents"][0]["corrected_sha256"] == "a" * 64
     assert manifest["documents"][0]["created"] is True
     assert manifest["manifest_generated_by"]["release_version"] == "2026.9.6.1"
+    assert manifest["canonical_stage_lineage"]["stages"][0]["reconciliation"]["exact"] is True
+    finding = manifest["finding_reconciliation"]
+    assert finding["status"] == "pending"
+    assert finding["identifiers"] == {
+        "workflow_id": "scan-1", "workflow_revision": 1, "scan_id": "scan-1",
+        "snapshot_id": "snapshot-1", "run_id": "remediation-run-1", "batch_id": "batch-1",
+    }
+    assert finding["revision"] == 17
+    assert finding["outcomes"] is FINDING_SNAPSHOT["finding_reconciliation"]
+    assert finding["residual_outcomes"]["unaccounted"] == 1
+    assert len(finding["content_digest"]["value"]) == 64
+    assert "generated_at" not in manifest["canonical_stage_lineage"]
+    assert "generated_at" not in manifest["canonical_stage_lineage"]["stages"][0]
     assert len(first["content_digest"]["value"]) == 64
     assert "not a digital signature" in first["digest_note"]
+
+
+def test_release_manifest_preserves_legacy_unavailable_finding_account(monkeypatch):
+    monkeypatch.setattr(scans.core, "store", _Store())
+    legacy = {**FINDING_SNAPSHOT, "finding_reconciliation": {
+        "assessed": 9, "resolved_verified": None, "awaiting_review": 2,
+        "approved_pending_verification": None, "unchanged_no_fix": None,
+        "failed": None, "excluded": None, "superseded": None,
+        "accounted": None, "unaccounted": None, "exact": False,
+    }}
+    monkeypatch.setattr(scans, "_remediation_snapshot", lambda sid: legacy)
+
+    finding = scans.get_release_manifest("scan-1", _request())["manifest"]["finding_reconciliation"]
+
+    assert finding["status"] == "unavailable"
+    assert finding["outcomes"]["resolved_verified"] is None
+    assert finding["residual_outcomes"]["failed"] is None
 
 
 def test_release_manifest_is_owner_scoped(monkeypatch):
     monkeypatch.setattr(scans.core, "store", _Store())
     with pytest.raises(HTTPException) as exc:
         scans.get_release_manifest("scan-1", _request("someone@example.com"))
+    assert exc.value.status_code == 404
+
+
+def test_stage_lineage_route_is_stable_owner_scoped_and_canonical(monkeypatch):
+    monkeypatch.setattr(scans.core, "store", _Store())
+    first = scans.stage_lineage("scan-1", _request())
+    second = scans.stage_lineage("scan-1", _request())
+    assert first == second
+    assert first["lineage"]["stages"][0]["reconciliation"]["exact"] is True
+    assert first["lineage"]["integrity"]["ok"] is True
+    assert len(first["content_digest"]["value"]) == 64
+    with pytest.raises(HTTPException) as exc:
+        scans.stage_lineage("scan-1", _request("someone@example.com"))
     assert exc.value.status_code == 404

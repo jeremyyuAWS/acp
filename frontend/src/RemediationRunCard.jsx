@@ -64,28 +64,6 @@ function ProgressBar({ bar }) {
   )
 }
 
-function CompactThroughput({ snapshot }) {
-  if (snapshot?.terminal) return null
-  const throughput = snapshot?.throughput || {}
-  const bars = Array.isArray(throughput.buckets) ? throughput.buckets.slice(-10) : []
-  if (!bars.length && typeof throughput.documents_per_minute !== 'number') return null
-  const max = Math.max(1, ...bars.map((value) => Number(value) || 0))
-  return (
-    <section className="rem-card-throughput" aria-label="Live remediation throughput">
-      <div><b>Throughput</b><span> · last 5 minutes</span></div>
-      {bars.length > 0 && (
-        <div className="rem-card-throughput__bars" role="img"
-             aria-label={`${throughput.documents_per_minute ?? 0} documents per minute over the last 5 minutes`}>
-          {bars.map((value, index) => <span key={index} style={{ height: `${Math.max(8, (Number(value) || 0) / max * 100)}%` }} />)}
-        </div>
-      )}
-      <strong>{typeof throughput.documents_per_minute === 'number'
-        ? `${throughput.documents_per_minute.toLocaleString()} documents/min`
-        : 'Calibrating…'}</strong>
-    </section>
-  )
-}
-
 /**
  * @param snapshot    GET /scans/{id}/remediation/snapshot, or null.
  * @param receivedAt  epoch ms when it arrived.
@@ -107,6 +85,9 @@ export default function RemediationRunCard({ snapshot = null, receivedAt = null,
   const delivery = snapshot.delivery || {}
   const source = snapshot.source || {}
   const documents = snapshot.documents || {}
+  const findings = snapshot.finding_reconciliation
+  const findingIntegrityFailed = snapshot.integrity?.affected?.includes('finding_reconciliation')
+    || (findings?.violations || []).length > 0
   // Everything that is neither in flight nor queued: completed, review, failed, skipped. It is
   // queue progress, NOT success — and the word for it matters, because only one of those four
   // members is a document that came out fixed.
@@ -163,7 +144,22 @@ export default function RemediationRunCard({ snapshot = null, receivedAt = null,
         <ProgressBar bar={bar} />
       </div>
 
-      <CompactThroughput snapshot={snapshot} />
+      {findings && <section aria-label="Finding reconciliation" style={{ marginTop: 10,
+        paddingTop: 9, borderTop: '1px solid var(--line)', fontSize: 12.5 }}>
+        {findingIntegrityFailed ? <p role="status" style={{ margin: 0 }}>
+          <b>Accounting temporarily inconsistent.</b> Finding totals are being reconciled.
+        </p> : findings.exact === true ? <p style={{ margin: 0 }}>
+          <b>Findings: {typeof findings.accounted === 'number' ? findings.accounted.toLocaleString() : 'Not yet available'} / {typeof findings.assessed === 'number' ? findings.assessed.toLocaleString() : 'Not yet available'} accounted</b>
+          {typeof findings.awaiting_review === 'number' && <> · {findings.awaiting_review.toLocaleString()} awaiting human review</>}
+        </p> : <p style={{ margin: 0 }}>
+          <b>Finding reconciliation pending</b>
+          {typeof findings.assessed === 'number' && <> · {findings.assessed.toLocaleString()} assessed findings</>}
+          {typeof findings.awaiting_review === 'number' && <> · {findings.awaiting_review.toLocaleString()} represented by review items</>}
+        </p>}
+        {typeof fixes.verified === 'number' && <p className="muted" style={{ margin: '3px 0 0' }}>
+          Verified changes: <LiveCounter value={fixes.verified} /> changes
+        </p>}
+      </section>}
 
       {/* Secondary facts, each naming its unit. `Corrected copies` and `Documents verified` are
           deliberately separate numbers: a corrected copy that was stored but not delivered, or

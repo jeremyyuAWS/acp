@@ -18,7 +18,10 @@ Two separate bugs in one line of log.
    so a 1-file scan of the bundled corpus displaced a 258-document Drive estate — on the
    dashboard, in the report, and in the scan selector — every five minutes.
 """
+import json
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -91,6 +94,47 @@ def core_mod(monkeypatch):
 
 
 # ── 1. the setting is authoritative on every fire ─────────────────────────────────────
+
+def test_scheduler_replicas_converge_on_one_durable_occurrence(isolated_store):
+    """Many scheduler processes may fire, but their shared database admits one occurrence."""
+    occurrence = "5:5963328"
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        admitted = list(pool.map(isolated_store.enqueue_scheduled_sweep, [occurrence] * 24))
+
+    assert admitted.count(True) == 1
+    jobs = [j for j in isolated_store.list_jobs() if j["type"] == "scheduled_sweep"]
+    assert len(jobs) == 1
+    assert json.loads(jobs[0]["payload"])["occurrence_key"] == occurrence
+
+
+def test_scheduler_fires_enqueue_instead_of_running_the_sweep(core_mod, monkeypatch):
+    core, store, calls = core_mod
+    offered = []
+    store.enqueue_scheduled_sweep = lambda key: offered.append(key) or True
+
+    assert core._enqueue_scheduled_scan(datetime(2026, 9, 6, 12, 3, tzinfo=timezone.utc)) is True
+    assert offered == ["5:5962320"]
+    assert calls["scans"] == []
+
+
+def test_scheduler_replicas_align_to_the_same_wall_clock_boundary(core_mod):
+    core, _store, _calls = core_mod
+    first = core._next_scheduled_scan_fire(
+        5, datetime(2026, 9, 6, 12, 1, 2, tzinfo=timezone.utc))
+    later_replica = core._next_scheduled_scan_fire(
+        5, datetime(2026, 9, 6, 12, 4, 59, tzinfo=timezone.utc))
+
+    assert first == later_replica == datetime(2026, 9, 6, 12, 5, tzinfo=timezone.utc)
+
+
+def test_durable_sweep_job_runs_the_existing_sweep_handler(monkeypatch):
+    import handlers
+    calls = []
+    monkeypatch.setattr(handlers.core, "_do_scheduled_scan", lambda: calls.append("sweep"))
+
+    handlers._scheduled_sweep({"occurrence_key": "5:5963328"}, {"id": "sweep-1"})
+
+    assert calls == ["sweep"]
 
 def test_a_disabled_schedule_runs_nothing(core_mod):
     core, store, calls = core_mod

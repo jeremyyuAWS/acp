@@ -1136,6 +1136,7 @@ class MyScopeUpdate(BaseModel):
     # value here: the user opting into NO restriction (assess everything), which is distinct from
     # HAVING no override (to clear the override and fall back to the owner default, use DELETE).
     scan_scope: dict[str, list[str]] | str | None = None
+    release_timezone: str | None = None
 
 
 def _require_user(request: Request) -> str:
@@ -1158,6 +1159,7 @@ def get_my_settings(request: Request):
     return {
         "scan_scope": core.store.get_user_setting(user, "scan_scope") or "",
         "owner_default": core.store.get_setting("scan_scope", "") or "",
+        "release_timezone": core.store.get_user_setting(user, "release_timezone") or "America/Chicago",
     }
 
 
@@ -1167,6 +1169,17 @@ def update_my_settings(body: MyScopeUpdate, request: Request):
     and is never stored (same discipline as the admin PUT), because a stored-but-unparseable override
     is silently ignored at read time. `{}` and "" both store as "" (no restriction)."""
     user = _require_user(request)
+    if body.release_timezone is not None:
+        import publish as _publish
+        zone = body.release_timezone.strip() or "America/Chicago"
+        if zone not in _publish.RELEASE_TIMEZONES:
+            raise HTTPException(422, "release_timezone must be UTC, a US timezone, or Asia/Kolkata")
+        core.store.set_user_setting(user, "release_timezone", zone)
+        core.store.log_decision(user, "settings.mine.release_timezone",
+                                detail=f"release folder timezone set to {zone}")
+        if body.scan_scope is None:
+            return {"scan_scope": core.store.get_user_setting(user, "scan_scope") or "",
+                    "release_timezone": zone}
     if body.scan_scope is None:
         return {"scan_scope": core.store.get_user_setting(user, "scan_scope") or ""}
     from store import parse_scope_setting
@@ -1666,6 +1679,24 @@ def _admin_activity_snapshot() -> dict:
             composition = _qc()
         except Exception:
             composition = None
+    # Canonical delivery and stop-acknowledgement health. These are global operational facts on
+    # the admin surface, like worker capacity and the shared queue. Missing methods during a
+    # rolling deploy remain explicitly unavailable; an old replica must never manufacture a
+    # healthy zero for tables it cannot read.
+    outbox_health = None
+    _outbox_health = getattr(core.store, "stage_outbox_health", None)
+    if callable(_outbox_health):
+        try:
+            outbox_health = _outbox_health()
+        except Exception:
+            swallowed("routes.system._admin_activity_snapshot: reading stage outbox health failed")
+    cancellation_health = None
+    _cancel_health = getattr(core.store, "stage_cancellation_health", None)
+    if callable(_cancel_health):
+        try:
+            cancellation_health = _cancel_health()
+        except Exception:
+            swallowed("routes.system._admin_activity_snapshot: reading cancellation health failed")
     if queued and not wt.get("alive"):
         pressure = "stalled"
     elif queued and slots and (instance_busy if instances else running) >= slots:
@@ -1705,6 +1736,9 @@ def _admin_activity_snapshot() -> dict:
                 "complete": unlinked_active_jobs == 0 if unlinked_active_jobs is not None else None,
             },
             "recovery": recovery,
+            **({"canonical_delivery": outbox_health} if outbox_health is not None else {}),
+            **({"cancellation_acknowledgements": cancellation_health}
+               if cancellation_health is not None else {}),
             # During mixed-version rollout an empty registry is unavailable, not zero capacity.
             # Once any process has reported, worker_capacity_by_role contains the fresh/stale
             # split and every raw instance needed by the authorized operations drawer.
@@ -1834,7 +1868,8 @@ def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None)
         runs.append({
             "scan_id": key[0], "stage": key[1], "owner": completed.get("owner_email"),
             "source": completed.get("source") or "unknown",
-            "status": "recent" if completed.get("kind") == "job.stage_completed" else "failed",
+            "status": ("recent" if completed.get("kind") == "job.stage_completed" else
+                       "cancelled" if completed.get("kind") == "job.stage_cancelled" else "failed"),
             "running": 0, "queued": 0, "failed": 0,
             "completed": int(detail.get("documents") or 0),
             "total": int(detail.get("documents") or 0), "max_attempts_seen": completed.get("attempt"),
@@ -1925,8 +1960,10 @@ def _workflow_rows(runs: list[dict], lifecycle_events: list[dict] | None = None)
         active = [row for row in workflow["stages"] if row["status"] != "completed"]
         if active:
             workflow["current_stage"] = active[-1]["stage"]
-            workflow["status"] = ("running" if any(row["status"] == "running" for row in active) else
+            workflow["status"] = ("stopping" if any(row.get("cancel_requested") for row in active) else
+                                  "running" if any(row["status"] == "running" for row in active) else
                                   "waiting" if any(row["status"] == "waiting" for row in active) else
+                                  "stopped" if all(row["status"] == "cancelled" for row in active) else
                                   "failed")
         elif workflow["stages"]:
             workflow["current_stage"] = workflow["stages"][-1]["stage"]

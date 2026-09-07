@@ -28,6 +28,12 @@ from scanner import run_scan
 logger = logging.getLogger(__name__)
 
 
+@handler("scheduled_sweep")
+def _scheduled_sweep(payload: dict, job: dict) -> None:
+    """Execute the one durable occurrence elected from all scheduler replicas."""
+    core._do_scheduled_scan()
+
+
 # Longest-predicted work first reduces the tail of a parallel Assess run: without it, a large PDF
 # or presentation that happens to be late in inventory order can occupy the final worker while all
 # other slots sit idle. Size is the strongest metadata-only signal available before download. For
@@ -210,6 +216,10 @@ def _scan(payload: dict, job: dict) -> None:
         folder=payload.get("folder"),
         **({"folders": payload["folders"]} if payload.get("folders") else {}),
         **({"exclude_folders": payload["exclude_folders"]} if payload.get("exclude_folders") else {}),
+        # Omit the new keyword for legacy/default jobs so older test doubles and downstream
+        # wrappers retain the exact call shape they already support.
+        **({"include_subfolders": False}
+           if payload.get("include_subfolders", True) is False else {}),
         ai_enabled=effective_ai,
         scan_id=scan_id,
         user=payload.get("user"),
@@ -784,6 +794,21 @@ def _publish_file(payload: dict, job: dict) -> None:
             raise IOError("corrected content was unavailable")
         folders, _ = _publish.sharepoint_relative_path(source_path, source_name)
         released_name = publication.get("filename") or source_name
+        # The provider write is a canonical side effect, not merely a URL on file_records. The
+        # deterministic receipt survives retries and is what a sealed Release manifest cites.
+        receipt_writer = getattr(core.store, "record_side_effect_receipt", None)
+        execution_id = (job or {}).get("batch_id")
+        if callable(receipt_writer) and execution_id:
+            work_item = core.store.stage_work_item_for_job((job or {}).get("id"))
+            receipt_writer(
+                execution_id=execution_id,
+                work_item_id=(work_item or {}).get("work_item_id"),
+                effect_type="sharepoint.publish",
+                destination=f"graph:{drive_id or 'me'}:{root['folder_id']}:{'/'.join([*folders, released_name])}",
+                content_digest=(publication.get("checksum") or record.get("corrected_sha256")
+                                or f"provider-id:{publication.get('id') or released_name}"),
+                receipt={"provider_id": publication.get("id"), "url": publication.get("url"),
+                         "created": bool(publication.get("created"))})
         published_at = core.store.record_publish(
             scan_id, filename, published_url=publication.get("url"))
         core.store.record_release_document(release_id, owner, {
@@ -2355,6 +2380,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
     # whole estate in the deployment that matters.
     folders = payload.get("folders")
     exclude_folders = payload.get("exclude_folders")
+    include_subfolders = payload.get("include_subfolders", True)
     toks = core.get_scan_tokens(scan_id)
     # Prefer token from durable job payload — in-memory store is per-replica and invisible to a
     # worker container that does not share the API's memory (split topology without Redis).
@@ -2662,6 +2688,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
             items = _list(source, svc, folder=effective_folder, sp_token=sp_tok,
                           max_files=FANOUT_MAX_FILES, **({"folders": folders} if folders else {}),
                           **({"exclude_folders": exclude_folders} if exclude_folders else {}),
+                          include_subfolders=include_subfolders,
                           exclude_remediated=bool(payload.get("exclude_remediated", False)),
                           scope_out=scope, scope_files=_scope_for_listing(user), inventory_out=inventory,
                           progress_cb=_listing_progress, drive_delta=drive_delta, sp_delta=sp_delta,
@@ -2858,6 +2885,7 @@ def _scan_discover(payload: dict, job: dict) -> None:
                         max_files=FANOUT_MAX_FILES,
                         **({"folders": folders} if folders else {}),
                         **({"exclude_folders": exclude_folders} if exclude_folders else {}),
+                        include_subfolders=include_subfolders,
                         exclude_remediated=bool(payload.get("exclude_remediated", False)),
                         scope_out=_retry_scope, scope_files=_scope_for_listing(user),
                         inventory_out=_retry_inv, progress_cb=_listing_progress,
@@ -4569,6 +4597,8 @@ _FIELD_NAME_EXTS = ("pdf", "docx")
 # 1.4.5/1.4.9 image-of-text alt text: the approved OCR text is written as the picture's
 # <p:cNvPr descr="..."> by apply_pptx_image_of_text. Currently pptx-only; docx and xlsx carry
 # a broken chain at a different layer (no approved-value applier exists for those formats yet).
+# PDF: writing /Alt to the /Figure struct element satisfies 1.1.1 but NOT 1.4.5 — the raster
+# image persists and the OCR detector re-fires on re-scan, so the credit cannot be granted.
 _IMAGE_OF_TEXT_EXTS = ("pptx",)
 
 # Every format an approved value can actually be WRITTEN into — the format scope
