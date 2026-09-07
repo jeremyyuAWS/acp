@@ -3350,6 +3350,34 @@ def publish_files(sid: str, request: Request, body: dict):
             drive_svc = None
     results = []
     folder_cache = {}
+    synchronous_execution = None
+    if source != "sharepoint":
+        ensure_sync = getattr(core.store, "ensure_synchronous_stage_execution", None)
+        if callable(ensure_sync):
+            import hashlib, json
+            requested = sorted(set(str(f) for f in files))
+            snapshot_id, input_manifest_id = _sealed_stage_input(sid, "remediate", release_id)
+            fingerprint = hashlib.sha256(json.dumps({
+                "files": requested, "source": source, "release_id": release_id,
+            }, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+            try:
+                synchronous_execution = ensure_sync(
+                    scan_id=sid, stage="release", input_ids=requested,
+                    input_snapshot_id=snapshot_id, request_fingerprint=fingerprint,
+                    input_manifest_id=input_manifest_id)
+            except ActiveStageExecutionError as exc:
+                raise HTTPException(status_code=409, detail={
+                    "code": "stage_execution_active", "stage": exc.stage,
+                    "active_batch_id": exc.batch_id,
+                    "message": "A different release is already active. Wait for it to finish or stop it.",
+                }) from exc
+
+    def finish_synchronous(filename: str, outcome: str, result: dict) -> None:
+        if not synchronous_execution:
+            return
+        core.store.finish_synchronous_stage_item(
+            synchronous_execution["execution_id"], filename, outcome=outcome, result=result)
+
     # A SharePoint release can contain hundreds of documents. Running that Graph traffic inside
     # this HTTP request makes the browser/proxy timeout the unit of durability. Queue one stable
     # job per corrected copy instead; completed documents are reused by the handler and a worker
@@ -3416,6 +3444,7 @@ def publish_files(sid: str, request: Request, body: dict):
                             "created": False}
             core.store.record_release_document(release_id, owner, result)
             results.append(result)
+            finish_synchronous(f, "failed", result)
             continue
         source_path = record.get("source_relative_path") or record.get("parent_folder") or f
         saved = core.store.get_release_document(release_id, f, owner)
@@ -3429,14 +3458,48 @@ def publish_files(sid: str, request: Request, body: dict):
                             "released_document_id": saved.get("released_document_id"),
                             "corrected_checksum": saved.get("corrected_checksum"),
                             "created": False})
+            finish_synchronous(f, "completed", results[-1])
             continue
         try:
             source_id = record.get("drive_file_id") or f
             root = None
+            reservation = None
+            # Release attests to the bytes that are durable now, not merely the digest recorded
+            # when remediation ran.  In particular, local Release has no provider write whose
+            # read would otherwise prove the Blob artifact still exists.
+            content_digest = _publish.remediated_content_digest(owner, sid, f)
+            if not content_digest:
+                raise IOError("corrected content was unavailable")
+            execution_id = (synchronous_execution or {}).get("execution_id")
+            work_item_id = ((synchronous_execution or {}).get("items") or {}).get(f)
+            publication = None
             if source == "drive":
                 if drive_svc is None:
                     raise PermissionError("Google Drive publishing requires a current write grant.")
                 location = "google:me"
+                folders, released_name = _publish.normalize_relative_path(source_path, f)
+                planned_destination = f"google:me:{release_id}:{'/'.join([*folders, released_name])}"
+                if execution_id:
+                    reservation = core.store.reserve_side_effect(
+                        execution_id=execution_id, work_item_id=work_item_id,
+                        effect_type="drive.publish", destination=planned_destination,
+                        content_digest=content_digest, worker_id=f"sync-release:{release_id}")
+                    if reservation.get("reused") and reservation.get("status") == "completed":
+                        receipt = dict(reservation.get("receipt") or {})
+                        publication = {"id": receipt.get("provider_id"), "url": receipt.get("url"),
+                                       "created": bool(receipt.get("created")),
+                                       "checksum": receipt.get("checksum"),
+                                       "verified": bool(receipt.get("verified", True))}
+                    elif not reservation.get("acquired"):
+                        queued = {"file": f, "source_document_id": source_id,
+                                  "original_relative_path": source_path,
+                                  "released_relative_path": None, "status": "queued",
+                                  "created": False}
+                        core.store.record_release_document(release_id, owner, queued)
+                        results.append(queued)
+                        continue
+                    else:
+                        publication = None
                 root = core.store.get_release_root(release_id, location, owner)
                 if not root:
                     from datetime import datetime
@@ -3448,11 +3511,11 @@ def publish_files(sid: str, request: Request, body: dict):
                     root = core.store.record_release_root(
                         release_id, owner, "drive", location, detail["id"],
                         detail["name"], detail.get("url"))
-                publication = _publish.archive_copy_publish(
-                    drive_svc, root["folder_id"], owner_email, sid, f,
-                    relative_path=source_path, source_id=source_id,
-                    folder_cache=folder_cache, return_details=True)
-                folders, released_name = _publish.normalize_relative_path(source_path, f)
+                if publication is None:
+                    publication = _publish.archive_copy_publish(
+                        drive_svc, root["folder_id"], owner_email, sid, f,
+                        relative_path=source_path, source_id=source_id,
+                        folder_cache=folder_cache, return_details=True)
             elif source == "sharepoint":
                 if not sp_token:
                     raise PermissionError("SharePoint publishing requires a current write grant.")
@@ -3478,6 +3541,27 @@ def publish_files(sid: str, request: Request, body: dict):
             if source in ("drive", "sharepoint") and publication is None:
                 raise IOError("corrected content was unavailable")
             url = publication.get("url") if publication else record.get("published_url")
+            lineage = core.store.release_finding_lineage(execution_id, f) if execution_id else None
+            if source == "drive" and reservation and reservation.get("acquired"):
+                receipt = {"provider_id": publication.get("id"), "url": url,
+                           "created": bool(publication.get("created")),
+                           "checksum": publication.get("checksum"),
+                           "content_sha256": content_digest,
+                           "filename": released_name,
+                           "verified": bool(publication.get("verified", True))}
+                if lineage is not None:
+                    receipt["finding_lineage"] = lineage
+                core.store.finalize_side_effect(
+                    reservation["effect_id"], reservation["reservation_token"], receipt)
+            elif source == "local" and execution_id:
+                receipt = {"checksum": content_digest, "filename": f, "verified": True}
+                if lineage is not None:
+                    receipt["finding_lineage"] = lineage
+                core.store.record_side_effect_receipt(
+                    execution_id=execution_id, work_item_id=work_item_id,
+                    effect_type="blob.release",
+                    destination=f"blob:remediated:{owner}/{sid}/{f}",
+                    content_digest=content_digest, receipt=receipt)
             ts = core.store.record_publish(sid, f, published_url=url)
             result = {"file": f, "source_document_id": source_id,
                             "original_relative_path": source_path,
@@ -3490,6 +3574,7 @@ def publish_files(sid: str, request: Request, body: dict):
                             "created": publication.get("created", False) if publication else False}
             core.store.record_release_document(release_id, owner, result)
             results.append(result)
+            finish_synchronous(f, "completed", result)
         except _publish.UnsafeReleasePath as exc:
             result = {"file": f, "source_document_id": record.get("drive_file_id") or f,
                             "original_relative_path": source_path,
@@ -3498,23 +3583,39 @@ def publish_files(sid: str, request: Request, body: dict):
                             "explanation": str(exc), "created": False}
             core.store.record_release_document(release_id, owner, result)
             results.append(result)
+            finish_synchronous(f, "failed", result)
         except PermissionError as exc:
+            uncertain = bool(reservation and reservation.get("acquired"))
             result = {"file": f, "source_document_id": record.get("drive_file_id") or f,
                             "original_relative_path": source_path,
-                            "released_relative_path": None, "status": "failed",
-                            "failure_category": "provider_permission_denied",
-                            "explanation": str(exc), "created": False}
+                            "released_relative_path": None,
+                            "status": "queued" if uncertain else "failed",
+                            **({} if uncertain else {
+                                "failure_category": "provider_permission_denied"}),
+                            "explanation": ("The provider outcome is uncertain; Release will "
+                                            "verify or retry after the reservation expires."
+                                            if uncertain else str(exc)), "created": False}
             core.store.record_release_document(release_id, owner, result)
             results.append(result)
+            if not uncertain:
+                finish_synchronous(f, "failed", result)
         except Exception:
+            uncertain = bool(reservation and reservation.get("acquired"))
             result = {"file": f, "source_document_id": record.get("drive_file_id") or f,
                             "original_relative_path": source_path,
-                            "released_relative_path": None, "status": "failed",
-                            "failure_category": "provider_write_failed",
-                            "explanation": "The corrected copy could not be verified at the release destination. Retry this document.",
+                            "released_relative_path": None,
+                            "status": "queued" if uncertain else "failed",
+                            **({} if uncertain else {
+                                "failure_category": "provider_write_failed"}),
+                            "explanation": ("The provider outcome is uncertain; Release will "
+                                            "verify or retry after the reservation expires."
+                                            if uncertain else "The corrected copy could not be "
+                                            "verified at the release destination. Retry this document."),
                             "created": False}
             core.store.record_release_document(release_id, owner, result)
             results.append(result)
+            if not uncertain:
+                finish_synchronous(f, "failed", result)
     status = core.store.release_status(release_id, owner)
     roots = status.get("roots", []) if status else []
     first_root = roots[0] if roots else None
@@ -3524,7 +3625,9 @@ def publish_files(sid: str, request: Request, body: dict):
             "release_folder_url": first_root.get("folder_url") if first_root else None,
             "release_folders": roots, "documents_total": status.get("documents_total", 0),
             "published_count": status.get("published", 0), "failed": status.get("failed", 0),
-            "remaining": status.get("remaining", 0), "published": results}
+            "remaining": status.get("remaining", 0), "published": results,
+            **({"batch_id": synchronous_execution["execution_id"]}
+               if synchronous_execution else {})}
 
 
 @router.get("/releases")
