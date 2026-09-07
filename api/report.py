@@ -34,6 +34,7 @@ the report's core honesty guarantee.
 """
 from __future__ import annotations
 import hashlib
+import html
 import io
 import logging
 import os
@@ -1432,6 +1433,21 @@ def _ai_governance_section(run, h2, body, cell, muted) -> list:
         el.append(Paragraph(
             f'<font color="#6c6470">By provider: {prov_str}. Every AI operation is recorded with its '
             "model, processing zone, latency and cost, and is auditable per finding.</font>", muted))
+    models = r.get("by_model") or []
+    if models:
+        def _safe(value):
+            return html.escape(str(value or "not reported"))
+
+        model_str = " · ".join(
+            f'{m["calls"]} × {_safe(m.get("provider"))} / {_safe(m.get("model"))} '
+            f'({_safe(m.get("zone"))}; {m.get("ok", 0)} successful, '
+            f'{m.get("failed", 0)} failed; {m.get("avg_latency_ms", 0)} ms avg)'
+            for m in models
+        )
+        el.append(Paragraph(
+            f'<font color="#6c6470">Exact model evidence: {model_str}. Call success means the '
+            "model operation completed; it does not claim reviewer acceptance or successful "
+            "post-write validation.</font>", muted))
     return el
 
 
