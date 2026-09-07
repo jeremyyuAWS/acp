@@ -340,6 +340,8 @@ describe('Admin live traffic graph', () => {
     expect(runOperationalState({ stalled: true, status: 'active' })).toBe('stalled')
     expect(runOperationalState({ status: 'active', failed: 1 })).toBe('attention')
     expect(runOperationalState({ status: 'cancelled' })).toBe('cancelled')
+    expect(runOperationalState({ status: 'cancelled', cancel_requested: true })).toBe('cancelled')
+    expect(runTileLabel({ status: 'cancelled', cancel_requested: true })).toBe('STOPPED JOB')
     expect(runOperationalState({ status: 'recent' })).toBe('recent')
     expect(runOperationalState({ status: 'active' })).toBe('active')
     expect(JOB_STATE_FILTERS.map((item) => item.key)).toEqual([

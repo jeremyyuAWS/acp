@@ -1435,7 +1435,7 @@ function RunRecovery({ run, onCancel, onResume, onRecover }) {
   const [confirming, setConfirming] = useState(null)
   const [state, setState] = useState({ kind: 'idle', message: '' })
   const stage = String(run?.stage || '').toLowerCase()
-  const stopping = run?.cancel_requested === true
+  const stopping = run?.cancel_requested === true && run?.status === 'active'
   const active = run?.status === 'active' && (Number(run?.queued || 0) + Number(run?.running || 0) > 0)
   const canCancel = active && !stopping && ['discover', 'assess', 'remediate', 'release'].includes(stage) && onCancel
   const canResume = stage === 'remediate' && run?.paused === true && onResume
