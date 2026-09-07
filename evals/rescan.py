@@ -283,11 +283,20 @@ def d_form_fields(f: dict[str, Any]) -> set[str]:
     return out
 
 
+_LAYOUT_ROLES = frozenset({"layout", "presentation", "none"})
+
+
 def d_tables(f: dict[str, Any]) -> set[str]:
     out: set[str] = set()
     if "table.headerRow" not in f and "table.role" not in f:
         return out
-    if str(f.get("table.role") or "").lower() == "layout":
+    # The vocabulary for "this is not a data table", all of it. ARIA spells it `presentation`
+    # or `none`; `layout` is this world's shorthand. The oracle accepts all three (adv-ss-04),
+    # so the scanner must recognise all three — on 2026-09-07 it knew only `layout`, and a
+    # candidate proposing the ARIA spelling had its value land while 1.3.1 stayed open. That
+    # split is the failure api/remediate_office.py warns about: a value one side counts as a
+    # fix and the other does not either blocks certification forever or certifies a bad file.
+    if str(f.get("table.role") or "").lower() in _LAYOUT_ROLES:
         return out
     first = [str(c or "").strip() for c in (f.get("table.first_row") or [])]
     if not _truthy(f.get("table.headerRow")):
