@@ -1,0 +1,72 @@
+/* Release's step boundary is both the keyboard landing point and the reflow boundary. */
+.release-step-panel {
+  min-width: 0;
+}
+
+.release-step-panel__heading {
+  margin: 0 0 12px;
+  font-size: 15px;
+}
+
+.release-step-panel:focus {
+  outline: 3px solid color-mix(in srgb, var(--focus-ring) 38%, transparent);
+  outline-offset: 5px;
+  border-radius: 6px;
+}
+
+/* At 200% zoom a desktop viewport commonly enters this width. Keep every action reachable
+   without horizontal scrolling, and let long provider paths break inside the viewport. */
+@media (max-width: 900px) {
+  .release-step-panel :where(.release-builder__continue, .release-plan, .release-outcome) {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .release-step-panel :where(.release-overview__actions, .release-plan__actions) {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .release-step-panel .release-methods {
+    grid-template-columns: 1fr;
+  }
+
+  .release-step-panel :where(.release-destination-path, .release-preview__path code, dd) {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+}
+
+@media (max-width: 480px) {
+  .release-step-panel :where(.release-builder__continue, .release-plan__actions) > button {
+    min-height: 44px;
+    width: 100%;
+  }
+
+  .release-step-panel .release-preview__path {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .release-step-panel,
+  .release-step-panel * {
+    scroll-behavior: auto !important;
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+@media (forced-colors: active) {
+  .release-step-panel:focus {
+    outline: 3px solid Highlight;
+  }
+
+  .release-step-panel .release-methods label.selected {
+    border: 3px solid Highlight;
+  }
+
+  .release-step-panel :where(.release-destination-config, .release-plan, .release-preview) {
+    border: 1px solid CanvasText;
+  }
+}
