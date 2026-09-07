@@ -1,9 +1,10 @@
-import { createElement } from 'react'
+import { createElement, act } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createTestRoot } from './testRoots.js'
 import CanonicalStageCard from './CanonicalStageCard.jsx'
 import { canonicalStageCardModel, currentCanonicalStage, priorCanonicalStages,
   stageNeedsAttention } from './canonicalStageCard.js'
@@ -40,6 +41,42 @@ describe('canonical stage card', () => {
     expect(html).toContain('Workflow revision 3 · snapshot revision 12')
     expect(html).toContain('execution-1')
     expect(html).toContain('Not yet sealed')
+    expect(html).toContain('<details>')
+    expect(html).not.toContain('<details open=""')
+    expect(html).toContain('View accounting')
+    expect(html).toContain('canonical-stage-card__progress')
+    expect(html).toContain('width:100%')
+  })
+
+  it('announces a live reconciliation delta without carrying it into another execution', async () => {
+    const { container, root } = createTestRoot()
+    await act(async () => { root.render(createElement(CanonicalStageCard, { snapshot: {
+      ...SNAPSHOT, state: 'processing_complete', domain_reconciliation: {
+        unit: 'inventory documents', total: 10, accounted: 4, exact: true, buckets: { Active: 4 },
+      },
+    } })) })
+    await act(async () => { root.render(createElement(CanonicalStageCard, { snapshot: {
+      ...SNAPSHOT, revision: 13, state: 'processing_complete', domain_reconciliation: {
+        unit: 'inventory documents', total: 10, accounted: 7, exact: true, buckets: { Active: 7 },
+      },
+    } })) })
+    expect(container.querySelector('.canonical-stage-card__delta').textContent).toBe('+3')
+    expect(container.querySelector('.canonical-stage-card__delta').getAttribute('aria-label')).toBe('3 newly reconciled')
+
+    await act(async () => { root.render(createElement(CanonicalStageCard, { snapshot: {
+      ...SNAPSHOT, execution_id: 'execution-2', revision: 1, domain_reconciliation: {
+        unit: 'inventory documents', total: 5, accounted: 1, exact: true, buckets: { Active: 1 },
+      },
+    } })) })
+    expect(container.querySelector('.canonical-stage-card__delta')).toBeNull()
+    await act(async () => { root.unmount() })
+  })
+
+  it('keeps embedded cards expanded because their parent disclosure owns the collapsed state', () => {
+    const html = renderToStaticMarkup(createElement(CanonicalStageCard, { snapshot: SNAPSHOT, embedded: true }))
+    expect(html).not.toContain('canonical-stage-card__summary')
+    expect(html).toContain('Release · Processing')
+    expect(html).toContain('Workflow revision 3 · snapshot revision 12')
   })
 
   it('never turns unknown totals into zero', () => {
@@ -69,7 +106,7 @@ describe('canonical stage card', () => {
 
   it('keeps the canonical partition visible while leased work drains after a stop request', () => {
     const html = render({ ...SNAPSHOT, control: { cancel_requested: true } })
-    expect(html).toContain('Release · Stopping safely')
+    expect(html).toContain('Stopping safely')
     expect(html).toContain('Processing</dt><dd')
     expect(html).toContain('>1</dd>')
     expect(html).toContain('Waiting</dt><dd')
@@ -79,7 +116,7 @@ describe('canonical stage card', () => {
   it('does not equate completed work items with resolved findings', () => {
     const html = render({ ...SNAPSHOT, state: 'succeeded',
       sealed_output: { manifest_id: 'manifest-1' } })
-    expect(html).toContain('Release · Complete')
+    expect(html).toContain('canonical-stage-card__state is-complete">Complete')
     expect(html).toContain('manifest-1')
     expect(html).toContain('does not mean every accessibility finding was resolved')
     expect(html).not.toContain('all findings resolved')
