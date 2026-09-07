@@ -10,11 +10,14 @@ import { scanFailureDetail, hasFallbackInventory } from './scanFailureMessage.js
 import LiveAssessmentLive from './LiveAssessmentLive.jsx'
 import RemediationRunCard from './RemediationRunCard.jsx'
 import { useRemediationRun } from './useRemediationRun.js'
+import CanonicalStageCard from './CanonicalStageCard.jsx'
+import { currentCanonicalStage } from './canonicalStageCard.js'
+import { useCanonicalStageLineage } from './useCanonicalStageLineage.js'
 import { armNotifyOnComplete, notifyScanComplete, notifyScanFailed, notificationsSupported, notifyPermission } from './scanNotify.js'
 import { refreshDriveToken } from './driveAuth.js'
 import { refreshSPToken } from './spAuth.js'
 import PrivateAiBadge from './PrivateAiBadge.jsx'
-import { getSources, getRubric, getConfig, getMe, getMyAccess, getMyScope, getCapability, listScans, getScan, NOT_MODIFIED, getActiveScan, getWorkspaceBootstrap, getActiveWorkflows, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, SCAN_UNAVAILABLE, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
+import { getSources, getRubric, getConfig, getMe, getMyAccess, getMyScope, getCapability, listScans, getScan, getStageLineage, NOT_MODIFIED, getActiveScan, getWorkspaceBootstrap, getActiveWorkflows, startScan, startScanQueued, cancelScan, getJob, setDriveToken, setSPToken, setGoogleToken, setMsToken, clearAllTokens, getDecisions, saveDecisionsBatch, refreshScanDriveToken, refreshScanSPToken, clearScanTokens, getScanLocations, remediateScan, SESSION_EXPIRED, SCAN_UNAVAILABLE, checkHealth, openDiscoverStream, checkDiscoveryPreflight } from './api'
 import { beginOrResumeIntent, completeIntent, abandonIntent, outcomeIsUncertain } from './submitIntent'
 import { SIM } from './sim.js'
 import { setPersona, recommendFor } from './sim.js'
@@ -529,6 +532,17 @@ export default function App() {
   const activeRemediationScanId = primaryWorkflow?.stage === 'remediate'
     ? primaryWorkflow.scan_id : null
   const remRun = useRemediationRun(activeRemediationScanId || scan?.run?.id || null)
+  const canonicalRun = useCanonicalStageLineage(primaryWorkflow?.scan_id || scan?.run?.id || null,
+    getStageLineage)
+  const canonicalStage = currentCanonicalStage(canonicalRun.lineage)
+  // Discover and Assess retain their purpose-built live cards while workers are active; those
+  // expose domain progress the generic work-item ledger deliberately does not invent. Durable
+  // terminal, stopping, reconciliation, and integrity states come from the canonical contract.
+  // Remediation already has its richer canonical domain card, so never stack this one above it.
+  const showCanonicalStage = canonicalStage && canonicalStage.stage !== 'remediate'
+    && (!['discover', 'assess'].includes(canonicalStage.stage)
+      || ['processing_complete', 'reconciling', 'integrity_failed', 'failed', 'cancelled', 'succeeded']
+        .includes(canonicalStage.state))
   // Durable (background queue) is the default (2026-08-21). The session-scoped path runs as a
   // bare in-process thread with no queue behind it — the code's own comment on it has always said
   // "lost if that replica restarts", and this app auto-deploys on every merge to main, so that was
@@ -2189,6 +2203,7 @@ export default function App() {
       <WorkflowContinuityBanner
         workflow={primaryWorkflow?.stage === 'assess'
           ? null : primaryWorkflow}
+        canonicalAvailable={canonicalStage?.stage === 'release'}
         currentView={view}
         onReturn={(stage) => { goToView(stage); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
         onViewPrevious={(scanId) => { switchScan(scanId); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
@@ -2241,6 +2256,15 @@ export default function App() {
                           onStop={() => stopScan(primaryWorkflow?.stage === 'assess'
                             ? primaryWorkflow.scan_id
                             : (liveScanId || run?.id))} />
+
+      {showCanonicalStage && (
+        <CanonicalStageCard snapshot={canonicalStage}
+          onOpen={canonicalStage.stage === 'conformance' ? null : () => {
+            setView({ release: 'publish', assess: 'assess', discover: 'discover' }[canonicalStage.stage]
+              || canonicalStage.stage)
+            window.scrollTo({ top: 0, behavior: 'smooth' })
+          }} />
+      )}
 
       {/* THE PERSISTENT REMEDIATION CARD. Outside the tabpanel on purpose: `<Remediate/>` below
           is mounted only while `view === 'remediate'`, so a card rendered inside it — and the

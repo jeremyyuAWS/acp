@@ -86,6 +86,13 @@ describe('workflow continuity', () => {
     expect(container.querySelector('button').textContent).toContain('Release')
   })
 
+  it('uses the queue banner only as a rolling-deploy fallback when Release has canonical state', () => {
+    const props = { currentView: 'overview', onReturn: () => {}, onLiveOps: () => {},
+      workflow: { stage: 'publish', source: 'sharepoint', running: 1, queued: 8 } }
+    expect(render(props).textContent).toContain('Release is still running')
+    expect(render({ ...props, canonicalAvailable: true }).innerHTML).toBe('')
+  })
+
   it('draws twelve purple heartbeat bars without a trend line for Release', () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-06T12:00:00Z'))
