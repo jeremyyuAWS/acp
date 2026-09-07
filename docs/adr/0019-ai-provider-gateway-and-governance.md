@@ -1,18 +1,35 @@
 # ADR 0019 — AI provider gateway + governance (local-first, quality-verified, fully auditable)
 
-Status: Accepted (2026-07-11). **Phase 0 shipped** (model name + 🟢/🟡 zone badge + `ai_calls` provenance row + #129 audit-trail panel). **§3a + §3b shipped** (2026-07-11): the three verifiable trust axes — Grounding / Validation / Review-requirement, each an evidence-based enum with the §3a vocabulary — now render on the review card in place of a confidence label (`reviewCard.trustStates`/`reviewRequirement`), and `ai.build_envelope()` assembles the normalized `{result, provenance, trust}` shape (pure, non-breaking — callers keep reading `result`). **§4 + §7 governance surfacing shipped** (2026-07-11): `store.ai_cost_rollup` (optionally scoped to a `scan_id`) drives a per-window governance panel in Settings (`GET /ai/costs`) and a per-scan **AI governance & provenance** block embedded in the certification report (`report._ai_governance_section`) — real counts / network-boundary / measured cost, $0 for the keyless local build, no fabricated score (ADR 0016). **Phase 1 shipped** (2026-07-12): the `VisionProvider` Protocol + `OllamaVisionProvider` (`api/providers.py`) behind `active_vision_provider()`; the **Azure OpenAI vision adapter** + `cloud_vision_provider()` selector + acceptance-gated **escalation** in `describe_image_structured` (local-first: an ungrounded result escalates only when a cloud provider is enabled + its secret present, attaching the transparent numbered path + real token cost); **secret-ref config storage** (`ai_provider_config` table + admin-gated `GET/PUT /ai/providers`) using the **environment/secret-ref design** the customer chose — the DB stores only non-secret config + the NAME of an ops-provisioned secret, the key value never enters the DB/request/log/browser, and the route rejects a pasted key; and the **Settings → AI Providers** page. `ai.py` stays vendor-agnostic; the default keyless build is byte-for-byte unchanged (no cloud configured → no external call). The assistant never handled a key — the admin/ops provisions it. **§8 added (2026-07-13 governance reframe):** the enterprise packaging over the shipped mechanism — three deployment modes (Local-Only / Customer-Cloud BYOAI / ACP-Managed), per-*capability* routing, data-residency (US/EU/customer-managed), the Settings → **AI Governance** surface + budget UX, and the BYOAI-as-procurement positioning; consensus (qwen2.5-vl + minicpm-v) proven live 2026-07-12/13. REMAINING (Phase 2): remaining adapters (OpenAI, Anthropic, Gemini, Bedrock), the 3-mode selector, per-capability + per-rule routing, drag-and-drop priority, residency policy, budget ceiling UX, model-agreement.
+Status: Accepted (2026-07-11), implementation reconciled 2026-09-07. **Phases 0–2
+shipped:** model/zone/cost provenance, evidence-based trust states, the append-only
+`ai_calls` ledger, secret-reference configuration, owner-governed routing and budgets, and
+Settings → **AI Governance**. `api/providers.py` now implements the local Ollama vision
+floor plus six governed cloud vision adapters — Azure OpenAI, OpenAI, Anthropic, Gemini,
+Bedrock and Hugging Face — and a separate RunPod Serverless GPU adapter. The text path can
+use Claude through Anthropic's Messages API for governed remediation pilots. Cloud use remains
+opt-in: without an enabled provider and a resolved secret, ACP uses the keyless local floor;
+an explicit stored administrator choice overrides the deployment environment. Offline/local-only
+policy remains the hard boundary described below. **Still prospective:** the complete Phase 3
+packaging (all three modes as one first-class selector, full capability-routing editor and
+model-agreement controls). The sections below retain the original decision language; the Phasing
+section distinguishes shipped implementation from that remaining product surface.
 Date: 2026-07-11
 Related: [ADR 0016](0016-evidence-based-confidence.md) (no fabricated numbers — the routing must obey it), [ADR 0102 prompt-version identity](../../docs) (prompt_hash provenance), [ADR 0006](0006-pii-detection-dimension.md) (data-leaving-network is a governance concern), [ADR 0018](0018-slide-page-rasterization-and-shape-geometry.md) (a sibling seam), movate-cli `BaseLLMProvider` (the adapter-behind-Protocol precedent this mirrors)
 
 ## Context
 
-ACP's entire AI surface is a **single module, `api/ai.py`** — every caller (remediators, HITL suggest, digest) goes through `ai.describe_image_structured` / `ai.suggest_fix` / `ai.explain_finding` / `ai.compliance_digest`; nothing else touches a model. Today that module is **Ollama-only, keyless, local-only by design** ("No commercial-LLM SDK or API key is used anywhere"), and it already:
+ACP's callers still enter through the **single gateway module, `api/ai.py`** — remediators,
+HITL suggestions and digests do not choose vendors themselves. Transport adapters live behind
+that gateway in `api/providers.py`. The original implementation was Ollama-only; the shipped
+implementation also supports the six governed cloud vision adapters named in the status above,
+RunPod Serverless vision, and opt-in Claude text generation. The default configuration remains
+keyless and local-only, and it:
 
 - **returns the model name** on every result (`{"alt", "model": OLLAMA_VISION_MODEL}`),
 - **traces every call** through Langfuse with model + latency + ok (`_trace_ai`),
 - **routes on a deterministic quality signal, not a confidence number** — `describe_image_structured` returns `grounded` (OCR read real text from the image): grounded → auto-apply; not grounded → a human proposal. That is already "validate the result, don't trust a self-reported score."
 
-Enterprise buyers (legal, healthcare, government, finance) increasingly ask a governance checklist ACP is well-placed to answer and most competitors dodge: *What model generated this? Did my document leave my network? Can I force local-only? Which provider was used, and can I audit it? How much did it cost? Can I bring my own key?* ACP's local-first, honesty-first DNA is the right foundation to answer all of them — but the current module is single-provider and surfaces none of the provenance it already collects.
+Enterprise buyers (legal, healthcare, government, finance) increasingly ask a governance checklist ACP is well-placed to answer and most competitors dodge: *What model generated this? Did my document leave my network? Can I force local-only? Which provider was used, and can I audit it? How much did it cost? Can I bring my own key?* ACP's local-first, honesty-first DNA is the foundation for the now-shipped multi-provider gateway and its recorded provenance.
 
 Constraints carried in:
 
@@ -163,8 +180,16 @@ provenance.*
 
 - **Phase 0 (no new deps, shippable now):** persist + surface what `ai.py` already returns — model name, latency, prompt version — as an `ai_calls` provenance row and a card line "Generated by {model} · 🟢 Local only". Immediately answers "don't hide the model" and "did it leave my network" (no, it's local) for the current all-local product.
 - **Phase 1:** the `VisionProvider` Protocol + one cloud adapter (Azure OpenAI — the enterprise-safe first choice, `privacy_zone=tenant`) behind the acceptance policy + the Settings page + secret storage + the escalation trace. Proves the governance loop end-to-end.
-- **Phase 2:** remaining adapters (OpenAI, Anthropic, Gemini, Bedrock), per-rule preference, drag-and-drop priority, the cost dashboard, optional model-agreement for high-value docs.
-- **Phase 3 (§8 enterprise packaging):** the three-mode selector (Local-Only / Customer-Cloud BYOAI / ACP-Managed) as a first-class choice over the §2 policies; per-*capability* routing (OCR/Vision/Reasoning/Writing) with §2 per-rule as the finer override; data-residency policy (US/EU/customer-managed) recorded in provenance; rename Settings → **AI Governance** (Providers · Policies · Privacy · Escalation · Routing · Budgets · Audit) with the live-spend Budget panel; feed HITL edit-rate back as the signal for criterion automation-mode migration.
+- **Phase 2 — shipped:** OpenAI, Anthropic, Gemini, Bedrock and Hugging Face joined Azure
+  OpenAI behind the governed vision selector; RunPod Serverless is the separately configured GPU
+  route. The cost dashboard, provider/model/zone evidence, per-rule governance and guarded Claude
+  text pilots are also live. An administrator's stored provider choice takes precedence over an
+  environment default, so a credential alone cannot opt the tenant into cloud processing.
+- **Phase 3 (§8 enterprise packaging) — partial:** Settings is now **AI Governance**, with
+  owner-only providers, policy, privacy/region, routing, budget, audit and measured-quality
+  controls. The complete three-mode selector, general capability-routing editor and optional
+  model-agreement controls remain prospective; do not read their detailed design above as a claim
+  that every control is already mounted.
 
 ## Non-goals
 
