@@ -37,7 +37,7 @@
 .automation-policy__routes .is-automatic { border-color: var(--success-fg); }
 .automation-policy__routes .is-review { border-color: #b57a16; }
 .automation-policy__routes .is-protected { border-color: var(--focus-ring); }
-.automation-policy__routes b { min-width: 0; justify-self: stretch; text-align: left; font-size: 14px; font-variant-numeric: tabular-nums; }
+.automation-policy__routes .automation-policy__route-impact { width: 100%; min-width: 0; justify-self: start; text-align: left; font-size: 14px; font-variant-numeric: tabular-nums; }
 .automation-policy__delta { padding: 2px 7px; border-radius: 999px; background: var(--success-bg); color: var(--success-fg); font-size: 11px; font-style: normal; font-variant-numeric: tabular-nums; animation: automation-delta-pop .35s ease both; }
 .automation-policy__breakdown { margin-top: 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface); }
 .automation-policy__breakdown > summary { padding: 11px 13px; cursor: pointer; font-weight: 700; }
