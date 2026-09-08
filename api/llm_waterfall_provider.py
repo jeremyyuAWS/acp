@@ -6,7 +6,8 @@ aliases the selected model, or falls back to another provider.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, ROUND_CEILING
+import hashlib
 import json
 import os
 import time
@@ -14,6 +15,10 @@ from uuid import uuid4
 from typing import Callable
 
 from llm_remediation_waterfall import Generation, Model, Request, _money
+
+
+class PreDispatchRejected(ValueError):
+    """Transport was never invoked; this attempt cannot incur a provider charge."""
 
 
 @dataclass(frozen=True)
@@ -97,26 +102,29 @@ class StrictTextGenerator:
         return Generation(patch, result['cost_usd'], result['call_id'])
 
     def generate_text(self, model: str, prompt: str) -> dict:
-        spec = self.specs[model]
-        spec.validate(self.clock())
-        if self.providers.active_text_provider() != spec.provider:
-            raise ValueError('provider governance changed; dispatch blocked')
-        # A conservative payload bound prevents unbounded prompt construction
-        # reaching transport. Reservation still uses the full context ceiling.
-        if len(prompt.encode('utf-8')) + 1024 > spec.context_token_limit:
-            raise ValueError('source exceeds bounded text request size')
-        key = self.providers._text_key_for(spec.provider)
-        if not key:
-            raise ValueError('selected provider credential unavailable')
-        payload = {'model': spec.model, 'messages': [{'role': 'user', 'content': prompt}]}
-        if spec.provider == 'openai':
-            endpoint = self.providers._OPENAI_TEXT_BASE_URL.rstrip('/') + '/chat/completions'
-            payload['max_completion_tokens'] = spec.output_token_limit
-            headers = {'Authorization': f'Bearer {key}'}
-        else:
-            endpoint = self.providers._ANTHROPIC_MESSAGES_URL
-            payload['max_tokens'] = spec.output_token_limit
-            headers = {'x-api-key': key, 'anthropic-version': self.providers._ANTHROPIC_API_VERSION}
+        try:
+            spec = self.specs[model]
+            spec.validate(self.clock())
+            if self.providers.active_text_provider() != spec.provider:
+                raise ValueError('provider governance changed; dispatch blocked')
+            # A conservative payload bound prevents unbounded prompt construction
+            # reaching transport. Reservation still uses the full context ceiling.
+            if len(prompt.encode('utf-8')) + 1024 > spec.context_token_limit:
+                raise ValueError('source exceeds bounded text request size')
+            key = self.providers._text_key_for(spec.provider)
+            if not key:
+                raise ValueError('selected provider credential unavailable')
+            payload = {'model': spec.model, 'messages': [{'role': 'user', 'content': prompt}]}
+            if spec.provider == 'openai':
+                endpoint = self.providers._OPENAI_TEXT_BASE_URL.rstrip('/') + '/chat/completions'
+                payload['max_completion_tokens'] = spec.output_token_limit
+                headers = {'Authorization': f'Bearer {key}'}
+            else:
+                endpoint = self.providers._ANTHROPIC_MESSAGES_URL
+                payload['max_tokens'] = spec.output_token_limit
+                headers = {'x-api-key': key, 'anthropic-version': self.providers._ANTHROPIC_API_VERSION}
+        except Exception as exc:
+            raise PreDispatchRejected(str(exc) if isinstance(exc, ValueError) else "request rejected before transport") from exc
         # One request, redirects off, no SDK retry. Never log headers/body/errors.
         response = self.post(endpoint, json=payload, headers=headers,
                              timeout=spec.timeout_seconds, follow_redirects=False)
@@ -203,21 +211,43 @@ def managed_text_generate(prompt: str) -> dict:
     except Exception:
         return defer_managed('verified_model_pricing_unavailable')
     attempts = []
-    operation = uuid4().hex
+    # Durable run scope + prompt identity prevents a worker retry from buying the
+    # same draft again after a later upload failure. A completed attempt without
+    # a reusable result requires reconciliation, not an automatic new purchase.
+    operation = hashlib.sha256(prompt.encode('utf-8')).hexdigest()
     for index, model in enumerate(generator.models, 1):
-        attempt_id = f'text:{operation}:{index}'
+        attempt_id = f'text:{operation}:{index}:0'
         attempt = {'attempt_id': attempt_id, 'model': model.name,
                    'max_cost_usd': model.max_cost_usd, 'status': 'reserving'}
         attempts.append(attempt)
         try:
-            token = budget.reserve(attempt_id, model.name, model.max_cost_usd)
+            maximum = int((_money(model.max_cost_usd) * 1_000_000).to_integral_value(rounding=ROUND_CEILING))
+            for retry in range(16):
+                attempt_id = f'text:{operation}:{index}:{retry}'
+                row = ctx.ledger.reserve(ctx.owner_id, ctx.run_id, attempt_id, maximum,
+                                         generator.pricing_refs[model.name])
+                if row['state'] != 'released':
+                    break
+            else:
+                raise ValueError('pre-dispatch retry limit reached')
+            token = attempt_id
+            attempt['attempt_id'] = attempt_id
             if budget.claim_dispatch(token) is not True:
-                raise ValueError('dispatch denied')
+                attempt['status'] = 'existing_attempt_requires_reconciliation'
+                return defer_managed('existing_draft_attempt_requires_reconciliation', attempts=attempts)
         except Exception:
             attempt['status'] = 'reservation_or_dispatch_denied'
             return defer_managed('budget_admission_denied', attempts=attempts)
         try:
             result = generator.generate_text(model.name, prompt)
+        except PreDispatchRejected:
+            attempt['status'] = 'rejected_before_dispatch'
+            try:
+                ctx.ledger.release(ctx.owner_id, ctx.run_id, token, confirmed_not_charged=True)
+            except Exception:
+                attempt['reconciliation_required'] = True
+                return defer_managed('budget_release_failed', attempts=attempts)
+            return defer_managed('request_rejected_before_dispatch', attempts=attempts)
         except Exception:
             attempt['status'] = 'usage_unknown'
             try:

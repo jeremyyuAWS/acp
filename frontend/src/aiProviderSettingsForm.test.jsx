@@ -31,7 +31,7 @@ beforeEach(() => {
 })
 afterEach(unmountAll)
 
-it('uses Anthropic examples and explains that a reference must exist in the running app', async () => {
+it('uses provider-specific examples and explains that a reference must exist in the running app', async () => {
   const c = await mount()
   expect(field(c, 'Endpoint').placeholder).toBe('https://api.anthropic.com/v1')
   expect(field(c, 'Model').placeholder).toBe('claude-sonnet-5')

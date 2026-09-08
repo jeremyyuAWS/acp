@@ -78,7 +78,8 @@ def claude_text_generate(prompt: str, *, temperature: float = 0.4,
     from llm_waterfall_provider import managed_context, defer_managed
     if managed_context() is not None:
         return defer_managed('direct_legacy_transport_blocked')
-    if not _ANTHROPIC_KEY:
+    key = _anthropic_text_key()
+    if not key:
         return None
     import httpx
     requested_model = model or CLAUDE_TEXT_MODEL
@@ -91,7 +92,7 @@ def claude_text_generate(prompt: str, *, temperature: float = 0.4,
                 "temperature": temperature,
                 "messages": [{"role": "user", "content": prompt}],
             },
-            headers={"x-api-key": _ANTHROPIC_KEY, "anthropic-version": _ANTHROPIC_API_VERSION},
+            headers={"x-api-key": key, "anthropic-version": _ANTHROPIC_API_VERSION},
             timeout=timeout,
         )
         r.raise_for_status()
@@ -117,6 +118,23 @@ def claude_text_generate(prompt: str, *, temperature: float = 0.4,
         }
     except Exception:
         return None
+
+
+def _anthropic_text_key() -> str:
+    """Resolve an enabled governed reference, retaining the deployed env fallback.
+
+    A saved reference alone does not select Anthropic for text: active_text_provider
+    still requires explicit text selection unless the legacy env key is present.
+    """
+    try:
+        cfg = _config_for("anthropic")
+        if cfg.get("enabled"):
+            key = _resolve_key(cfg)
+            if key:
+                return key
+    except Exception:
+        swallowed("providers._anthropic_text_key: resolving the governed Anthropic key reference failed")
+    return _ANTHROPIC_KEY
 
 
 def _openai_text_key() -> str:
@@ -208,7 +226,7 @@ def _text_key_for(provider: str) -> str:
     """One text provider's resolved key, or "" — internal, and the value never leaves this
     module: `active_text_provider` uses it only to decide whether the provider is usable."""
     if provider == "anthropic":
-        return _ANTHROPIC_KEY
+        return _anthropic_text_key()
     if provider == "openai":
         return _openai_text_key()
     return ""

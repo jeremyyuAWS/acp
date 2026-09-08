@@ -285,3 +285,41 @@ def test_verified_facade_rejects_subjective_family_before_request(managed, specs
     with pytest.raises(ValueError, match='verifier'):
         ai.run_verified_remediation(req, persist=lambda s: None, model_specs=specs)
     assert managed.ledger.snapshot('owner', 'run')['held_units'] == 0
+
+
+@pytest.mark.parametrize('failure', ['oversized', 'key_removed', 'expired'])
+def test_predispatch_rejection_releases_hold_and_allows_next_draft(managed, monkeypatch, specs, failure):
+    import httpx
+    import providers
+    calls = []
+    monkeypatch.setattr(httpx, 'post', lambda *a, **kw: calls.append(1) or Response(result(text='Draft')))
+    generator = StrictTextGenerator(specs, provider_module=providers)
+    monkeypatch.setattr(bounded, 'configured_generator', lambda: generator)
+    prompt = 'x' * 9000 if failure == 'oversized' else 'prompt'
+    if failure == 'key_removed':
+        monkeypatch.setattr(providers, '_text_key_for', lambda provider: '')
+    elif failure == 'expired':
+        generator.clock = lambda: specs[0].verified_until + 1
+    draft = providers.text_generate(prompt)
+    assert draft['reason'] == 'request_rejected_before_dispatch'
+    assert calls == []
+    snapshot = managed.ledger.snapshot('owner', 'run')
+    assert snapshot['held_units'] == 0
+    assert snapshot['spent_units'] == 0
+    assert not snapshot['blocked']
+    monkeypatch.setattr(providers, '_text_key_for', FakeProviders._text_key_for)
+    generator.clock = time.time
+    assert providers.text_generate('prompt')['text'] == 'Draft'
+    assert calls == [1]
+
+
+def test_retry_does_not_purchase_same_draft_twice(managed, monkeypatch):
+    import httpx
+    import providers
+    calls = []
+    monkeypatch.setattr(httpx, 'post', lambda *a, **kw: calls.append(1) or Response(result(text='Draft')))
+    assert providers.text_generate('same durable work')['text'] == 'Draft'
+    again = providers.text_generate('same durable work')
+    assert again['reason'] == 'existing_draft_attempt_requires_reconciliation'
+    assert calls == [1]
+    assert managed.ledger.snapshot('owner', 'run')['spent_units'] == 120

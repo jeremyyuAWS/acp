@@ -183,3 +183,57 @@ def test_provenance_reports_ollama_when_no_key(monkeypatch):
     p = ai.provenance()
     assert p["provider"] == "ollama"
     assert p["model"] == ai.OLLAMA_MODEL
+
+
+
+def test_governed_anthropic_vault_key_serves_selected_text_without_env(monkeypatch, caplog):
+    import core
+    import httpx
+    import secret_store
+    monkeypatch.setattr(providers, '_ANTHROPIC_KEY', '')
+    monkeypatch.setattr(providers, '_config_for', lambda name: {
+        'enabled': True, 'key_secret_ref': 'keyvault:fixture-anthropic'} if name == 'anthropic' else {})
+    monkeypatch.setattr(core.store, 'get_setting', lambda name: 'anthropic' if name == 'ai_text_provider' else None)
+    sentinel = 'fixture-private-vault-value'
+    monkeypatch.setattr(secret_store, 'read_ref', lambda ref: sentinel)
+    calls = []
+    class Resp:
+        def raise_for_status(self): pass
+        def json(self):
+            return {'content': [{'type': 'text', 'text': 'A useful draft'}],
+                    'usage': {'input_tokens': 10, 'output_tokens': 4}}
+    def post(*args, **kwargs):
+        calls.append(kwargs)
+        return Resp()
+    monkeypatch.setattr(httpx, 'post', post)
+    assert providers.active_text_provider() == 'anthropic'
+    assert providers._text_key_for('anthropic') == sentinel
+    draft = providers.text_generate('draft')
+    assert draft['text'] == 'A useful draft'
+    assert calls[0]['headers']['x-api-key'] == sentinel
+    assert sentinel not in repr(draft)
+    assert sentinel not in caplog.text
+
+
+def test_anthropic_vision_reference_alone_does_not_activate_text(monkeypatch):
+    import core
+    monkeypatch.setattr(providers, '_ANTHROPIC_KEY', '')
+    monkeypatch.delenv('ACP_TEXT_PROVIDER', raising=False)
+    monkeypatch.setattr(core.store, 'get_setting', lambda name: None)
+    monkeypatch.setattr(providers, '_config_for', lambda name: {'enabled': True, 'key_secret_ref': 'fixture'})
+    monkeypatch.setattr(providers, '_resolve_key', lambda cfg: 'fixture-key')
+    assert providers.active_text_provider() is None
+
+
+def test_disabled_anthropic_reference_is_not_resolved(monkeypatch):
+    monkeypatch.setattr(providers, '_ANTHROPIC_KEY', '')
+    monkeypatch.setattr(providers, '_config_for', lambda name: {'enabled': False, 'key_secret_ref': 'fixture'})
+    monkeypatch.setattr(providers, '_resolve_key', lambda cfg: (_ for _ in ()).throw(AssertionError('disabled reference resolved')))
+    assert providers._text_key_for('anthropic') == ''
+
+
+def test_anthropic_reference_failure_retains_env_fallback(monkeypatch):
+    monkeypatch.setattr(providers, '_ANTHROPIC_KEY', 'fixture-env-key')
+    monkeypatch.setattr(providers, '_config_for', lambda name: {'enabled': True, 'key_secret_ref': 'fixture'})
+    monkeypatch.setattr(providers, '_resolve_key', lambda cfg: None)
+    assert providers._text_key_for('anthropic') == 'fixture-env-key'
