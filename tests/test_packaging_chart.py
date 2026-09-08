@@ -501,6 +501,67 @@ def test_private_workers_render_a_policy_that_admits_nothing():
 
 
 @needs_helm
+def test_the_worker_drains_for_as_long_as_kubernetes_waits_for_it():
+    """A GRACE PERIOD IS NOT A DRAIN. Kubernetes waits `terminationGracePeriodSeconds` before
+    SIGKILL; how long the worker keeps working is `ACP_SHUTDOWN_DRAIN_SECONDS`, which
+    `api/core.py:1943` defaults to 20 and this chart never set.
+
+    So the template asked for 300 seconds and the pod used 20 of them — less than the 30 the
+    template's own comment calls too short — then idled for 280 while the document it abandoned
+    went back on the queue to be retried from the top. Nothing failed; a rolling upgrade just cost
+    more than it looked like it did.
+
+    Asserted as a RELATIONSHIP rather than two numbers, because the defect was never a wrong
+    value: it was two values that were not connected to each other.
+    """
+    for deployment in [d for d in app_workloads(render(load_example("standard-production")))
+                       if d["metadata"]["labels"]["app.kubernetes.io/component"] == "worker"]:
+        pod = deployment["spec"]["template"]["spec"]
+        env = {e["name"]: e.get("value") for e in pod["containers"][0]["env"]}
+        assert "ACP_SHUTDOWN_DRAIN_SECONDS" in env, deployment["metadata"]["name"]
+        drain = int(env["ACP_SHUTDOWN_DRAIN_SECONDS"])
+        grace = int(pod["terminationGracePeriodSeconds"])
+        assert 0 < drain < grace, (deployment["metadata"]["name"], drain, grace)
+        assert drain > 30, "less than the platform default the template calls too short"
+
+
+@needs_helm
+def test_a_shorter_grace_period_shortens_the_drain_with_it():
+    """The relationship holds when the operator moves the grace period, which is the point of
+    deriving one from the other. A chart that hardcoded 240 would pass the test above and go back
+    to abandoning work the moment anybody tuned the grace period down."""
+    manifests = render(load_example("standard-production"),
+                       extra=["--set", "workerTerminationGracePeriodSeconds=120"])
+    worker = named(manifests, "Deployment", "-worker-assess")
+    pod = worker["spec"]["template"]["spec"]
+    env = {e["name"]: e.get("value") for e in pod["containers"][0]["env"]}
+    assert pod["terminationGracePeriodSeconds"] == 120
+    assert int(env["ACP_SHUTDOWN_DRAIN_SECONDS"]) == 60
+
+
+@needs_helm
+def test_a_grace_period_shorter_than_the_headroom_still_drains_for_something():
+    """The floor. Without it the arithmetic goes negative, and `float()` in api/core.py accepts a
+    negative deadline happily — a worker that stops the instant it is asked to, arrived at by
+    arithmetic nobody reads."""
+    manifests = render(load_example("standard-production"),
+                       extra=["--set", "workerTerminationGracePeriodSeconds=30"])
+    worker = named(manifests, "Deployment", "-worker-assess")
+    env = {e["name"]: e.get("value")
+           for e in worker["spec"]["template"]["spec"]["containers"][0]["env"]}
+    assert int(env["ACP_SHUTDOWN_DRAIN_SECONDS"]) == 10
+
+
+@needs_helm
+def test_the_api_tier_gets_no_drain_window_because_it_drains_nothing():
+    """The API runs at ACP_WORKERS=0 and has no in-process pool, so a drain window there would be
+    a number describing nothing."""
+    api = named(render(load_example("standard-production")), "Deployment", "-api")
+    names = {e["name"] for e in api["spec"]["template"]["spec"]["containers"][0]["env"]}
+    assert "ACP_SHUTDOWN_DRAIN_SECONDS" not in names
+
+
+@needs_helm
 def test_the_access_gate_variable_actually_reaches_the_api():
     """The end of the chain for `network.unauthenticated-ingress`, asserted on the render.
 

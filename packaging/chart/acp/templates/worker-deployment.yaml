@@ -7,6 +7,14 @@ resource bump applied to the one somebody was looking at. Ranging over the map a
 a fourth role is a key in a deployment document rather than a chart change — which is the
 difference between an operator being able to size their own installation and filing a request.
 */}}
+{{- $grace := int .Values.workerTerminationGracePeriodSeconds }}
+{{- /*
+  Floored rather than allowed to go negative. A grace period shorter than the headroom would
+  otherwise compute a negative drain, which `float()` in api/core.py accepts and turns into a
+  deadline already in the past — a worker that stops the instant it is asked to, which is the
+  behaviour this whole block exists to prevent, arrived at by arithmetic nobody reads.
+*/}}
+{{- $drain := .Values.workerDrainSeconds | default (max 10 (sub $grace .Values.workerDrainHeadroomSeconds)) }}
 {{- range $role, $cfg := .Values.workers }}
 ---
 apiVersion: apps/v1
@@ -51,8 +59,20 @@ spec:
         than a large PDF's remediation pass, so a rolling upgrade would kill work mid-write and
         leave the job to be retried from the top — which for an already-slow document is the
         difference between a deploy nobody notices and one that shows up as a queue backlog.
+
+        AND UNTIL 2026-09-08 IT DID NOT GET THAT TIME. Kubernetes waits this long before SIGKILL;
+        how long the worker actually keeps draining is `ACP_SHUTDOWN_DRAIN_SECONDS`, which
+        api/core.py defaults to 20 and this chart never set. So the paragraph above described an
+        intent and the pod implemented 20 seconds of it — LESS than the 30s that paragraph calls
+        too short — then sat idle for the remaining 280 while the document it abandoned went back
+        on the queue to be retried from the top.
+
+        The two numbers are one decision and are now derived from each other. Production makes the
+        same pairing by hand: 540 seconds of draining inside a 600-second grace
+        (deploy/public/redeploy.sh), which is where the 60-second headroom below comes from — it
+        is what a worker needs to finish its write and exit after it stops claiming.
       */}}
-      terminationGracePeriodSeconds: 300
+      terminationGracePeriodSeconds: {{ $grace }}
       containers:
         - name: worker
           image: {{ include "acp.image" (dict "root" $ "component" "worker") | quote }}
@@ -81,6 +101,12 @@ spec:
             {{- toYaml $.Values.securityContext | nindent 12 }}
           env:
             {{- include "acp.commonEnv" $ | nindent 12 }}
+            {{- /*
+              Rendered on the worker only. The API tier runs at ACP_WORKERS=0 and has no in-process
+              pool to drain, so setting it there would be a number that describes nothing.
+            */}}
+            - name: ACP_SHUTDOWN_DRAIN_SECONDS
+              value: {{ $drain | quote }}
             {{- range $k, $v := $cfg.env }}
             - name: {{ $k }}
               value: {{ $v | quote }}

@@ -329,18 +329,20 @@ parser for that would be a second implementation of bash that goes wrong quietly
 is checked against the three facts that make it a gap, so it cannot carry a false claim, and
 closing a gap fails until the entry is deleted.
 
-Ten gaps are recorded there now. The two worth reading:
+Nine gaps are recorded there now, and the guard has already closed one of its own entries.
 
-- **The worker stops draining after 20 seconds inside a 300-second grace period.**
-  `api/core.py:1943` defaults `ACP_SHUTDOWN_DRAIN_SECONDS` to 20 and the chart never sets it, while
-  `worker-deployment.yaml` asks Kubernetes for 300 — so a rolling upgrade abandons a document
-  mid-remediation and the pod then idles for the remaining 280 seconds. The template's own comment
-  says a worker "gets time to finish it" and calls the platform default of 30 too short; it gets
-  20. Production pins 540 against a 600s grace.
-- **Langfuse tracing can never start.** `api/lf.py` enables it only with host, public key AND
-  secret key. The chart projects the secret key alone — so the `langfuse-secret-key` reference the
-  contract *requires* buys one of three, and an operator who provisioned Langfuse sees no traces
-  and no error.
+**The drain window, fixed.** `api/core.py:1943` defaults `ACP_SHUTDOWN_DRAIN_SECONDS` to 20 and the
+chart never set it, while `worker-deployment.yaml` asked Kubernetes for 300 — so a rolling upgrade
+abandoned a document mid-remediation and the pod then idled for the remaining 280 seconds. The
+template's own comment said a worker "gets time to finish it" and called the platform default of 30
+too short; it got 20. The two numbers are one decision and are now derived from each other, with
+production's own 60-second headroom (540 inside a 600s grace) as the constant. Leaving the entry in
+the guard failed the guard, which is the loop working.
+
+**Langfuse tracing can never start**, and is next. `api/lf.py` enables it only with host, public key
+AND secret key. The chart projects the secret key alone — so the `langfuse-secret-key` reference the
+contract *requires* buys one of three, and an operator who provisioned Langfuse sees no traces and
+no error.
 
 **What is missing.** No `topologySpreadConstraints` anywhere in the chart. No `seccompProfile`, so
 the rendered pods do not meet the restricted Pod Security Standard as written, and
