@@ -32,7 +32,9 @@ describe('automation policy presentation contract', () => {
   })
 
   it('aligns every routing outcome to the same text column', () => {
-    expect(css).toMatch(/automation-policy__routes > div[^}]*grid-template-columns: minmax\(150px, \.7fr\) minmax\(0, 1fr\) auto/)
+    // A percentage label track is identical in every independently gridded row. A fractional
+    // first track sizes from each label's content and makes the findings values appear staggered.
+    expect(css).toMatch(/automation-policy__routes > div[^}]*grid-template-columns: minmax\(190px, 26%\) minmax\(0, 1fr\) auto/)
     expect(css).toMatch(/automation-policy__route-impact[^}]*width: 100%[^}]*justify-self: start[^}]*text-align: left/)
   })
 })

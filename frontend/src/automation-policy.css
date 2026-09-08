@@ -33,7 +33,7 @@
 .automation-policy__source b { font-size: 28px; font-variant-numeric: tabular-nums; }
 .automation-policy__flow-arrow { align-self: center; text-align: center; color: var(--muted); font-size: 20px; }
 .automation-policy__routes { display: grid; gap: 6px; }
-.automation-policy__routes > div { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(0, 1fr) auto; align-items: center; gap: 8px 18px; padding: 9px 12px; border-left: 4px solid; border-radius: 7px; background: var(--surface); }
+.automation-policy__routes > div { display: grid; grid-template-columns: minmax(190px, 26%) minmax(0, 1fr) auto; align-items: center; gap: 8px 18px; padding: 9px 12px; border-left: 4px solid; border-radius: 7px; background: var(--surface); }
 .automation-policy__routes .is-automatic { border-color: var(--success-fg); }
 .automation-policy__routes .is-review { border-color: #b57a16; }
 .automation-policy__routes .is-protected { border-color: var(--focus-ring); }
