@@ -7,6 +7,7 @@ Langfuse remediation span. The route modules import from this module; this modul
 imports no route module (no cycles).
 """
 from __future__ import annotations
+import json
 import os
 import sys
 import threading
@@ -535,8 +536,78 @@ def __getattr__(name: str):
 JOBS: dict[str, dict] = {}
 
 
-def active_rubric() -> Rubric:
+# ── The active rubric ─────────────────────────────────────────────────────────
+# IT LIVES IN THE DATABASE, AND IT USED TO LIVE IN THE CONTAINER. `PUT /rubric` wrote
+# `config/rubric.active.json` inside whichever API replica served the request, and this function
+# read that same path. Nothing mounts a volume there, so it was one container's ephemeral layer:
+#
+#   - other API replicas kept the previous rubric (standard-production's floor is two);
+#   - EVERY WORKER CONTAINER kept it too, and workers are where scoring happens — the handlers
+#     stamp `rubric_hash` per file (handlers.py) and no worker ever receives the PUT, so a change
+#     was invisible to the tier that applies it even with a single API replica;
+#   - it was lost on restart or redeploy.
+#
+# `rubric_hash` is recorded against every scanned file, so replicas under different policies also
+# recorded different hashes for the same configuration. The endpoint calls this "the GLOBAL
+# scoring policy" and is owner-only precisely because it decides how every tenant is scored, so
+# none of that was defensible. It affected Compose and Container Apps as much as Kubernetes —
+# every deployment runs the worker as a separate container.
+_RUBRIC_SETTING = "rubric_active"
+
+# CACHED, BECAUSE THE CALLERS ARE PER-FILE. `_scan_file` and `_workspace_scan_file` are job
+# handlers — one job per document — so a 986-file scan called this ~1000 times. Reading a file
+# ~1000 times was free; a database round trip ~1000 times is not. The TTL bounds how stale a
+# worker's copy can be after a PUT: seconds, against the "never, until redeploy" this replaces.
+#
+# No lock. Two threads may both load and one assignment wins; the loser did redundant work and
+# neither can observe a torn value, because the tuple is replaced wholesale.
+_RUBRIC_CACHE_S = float(os.environ.get("ACP_RUBRIC_CACHE_S") or 5)
+_rubric_cache: tuple[Rubric, float] | None = None
+
+
+def _load_rubric() -> Rubric:
+    """The setting if there is one, else the files — which is also the upgrade path.
+
+    An installation that has a `rubric.active.json` from before this change keeps being scored by
+    it until someone PUTs, rather than silently reverting to the defaults on deploy. Nothing is
+    migrated into the database from it: that file is per-container and ephemeral, so there is no
+    single copy to promote and picking one replica's would be arbitrary.
+    """
+    raw = None
+    try:
+        raw = get_store().get_setting(_RUBRIC_SETTING)
+    except Exception:
+        # The store is unreachable, or the schema predates app_settings. Scoring must not stop
+        # because a setting could not be read; the files below are what it did before.
+        raw = None
+    if raw:
+        try:
+            return Rubric(json.loads(raw))
+        except Exception:
+            # A corrupt setting must not 500 every scan in the fleet. Fall back, loudly.
+            print(f"[rubric] {_RUBRIC_SETTING} is not valid rubric JSON; using the file rubric",
+                  file=sys.stderr, flush=True)
     return Rubric.load_active(ACP / "config")
+
+
+def active_rubric(*, fresh: bool = False) -> Rubric:
+    """The rubric in force. `fresh=True` skips the cache — for writers, and for anything that
+    reports what is in force rather than scoring with it."""
+    global _rubric_cache
+    if not fresh:
+        cached = _rubric_cache
+        if cached is not None and _time.monotonic() < cached[1]:
+            return cached[0]
+    rubric = _load_rubric()
+    _rubric_cache = (rubric, _time.monotonic() + _RUBRIC_CACHE_S)
+    return rubric
+
+
+def invalidate_rubric_cache() -> None:
+    """Called by the writer so the replica that served the PUT answers from the new rubric. The
+    others catch up within the TTL; nothing has to be broadcast."""
+    global _rubric_cache
+    _rubric_cache = None
 
 
 # ── GIS token verification (cached) ───────────────────────────────────────────

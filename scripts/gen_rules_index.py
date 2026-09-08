@@ -449,7 +449,9 @@ def render_sc(sc: str, name: str, level: str, cat_rules: list[dict],
             "the partner DigitalA11y engine (see `source` paths above). You own the "
             "*mapping and parameters* here, not the .NET source. To change a threshold "
             "or disable a rule, edit `config/rule-catalog.json` and/or the active rubric "
-            "(`config/rubric.active.json` → `disabled_rules`).")
+            "(`PUT /rubric` → `disabled_rules`). The rubric is stored in the database, not "
+            "in a file: editing `config/rubric.active.json` changes one container and leaves "
+            "every other replica and every worker scoring by the old policy.")
     if fe:
         lines.append(
             f"- **HTML:** edit [`{fe['file']}`](../../{fe['file']}). Change `check()` "

@@ -1068,21 +1068,43 @@ def test_ollamas_root_stays_writable_whatever_the_shared_value_says():
 def test_the_shared_root_filesystem_is_writable_and_that_is_deliberate():
     """The other half, and the one that makes the gap report's entry checkable.
 
-    `PUT /rubric` writes `<repo>/config/rubric.active.json` INTO THE IMAGE (api/routes/rubric.py),
-    so a read-only root turns an owner-only admin endpoint into a 500. Every other runtime write
-    the application makes goes to `$TMPDIR`, which an emptyDir would cover — that one does not,
-    and moving it is an application change rather than a packaging one.
+    THIS TEST DID ITS JOB AND THE ANSWER CHANGED. It used to assert that `PUT /rubric` still wrote
+    `config/rubric.active.json` into the image, because that was the one runtime write not going
+    to `$TMPDIR` and therefore the reason a read-only root would have turned an owner-only admin
+    endpoint into a 500. Its docstring said "when the rubric write moves, this is the test that
+    fails and says where to look" — the write moved to the database, and it did.
 
-    This test exists so the default is a recorded decision instead of an oversight. When the
-    rubric write moves, this is the test that fails and says where to look.
+    WHAT BLOCKS THE FLIP NOW IS PACKAGING WORK, NOT AN APPLICATION CHANGE, which is the whole
+    reason to keep the guard rather than delete it. Every remaining runtime write goes to
+    `$TMPDIR`, plus caches under `HOME`, `XDG_CACHE_HOME` and `DOTNET_CLI_HOME`. Turning
+    `readOnlyRootFilesystem` on therefore needs an `emptyDir` at `/tmp` and those three variables
+    pointed into it — and the chart renders NO volumes at all today, which is what the second
+    assertion pins. When someone adds that volume, this fails and asks whether the flag can flip
+    with it.
+
+    The failure mode if it were flipped without the volume is why this is not left to a reviewer's
+    memory: an unwritable scratch directory crashes nothing. `render_page_png` and `_office_to_pdf`
+    return None on any exception and `_analyse_office` turns OSError into an engine-error bucket
+    that scores as `uncertain`, so Office documents would degrade silently with no startup signal.
     """
     values = yaml.safe_load((CHART / "values.yaml").read_text(encoding="utf-8"))
     assert values["securityContext"]["readOnlyRootFilesystem"] is False, (
-        "if this is now true, PUT /rubric must no longer write into the image; see "
+        "if this is now true, the chart must mount a writable /tmp and point HOME, "
+        "XDG_CACHE_HOME and DOTNET_CLI_HOME into it; see "
         "packaging/docs/kubernetes-mvp-gap-report.md")
+
+    # The rubric write is gone, and stays gone: putting it back would restore the application-side
+    # blocker this default used to exist for.
     rubric = (ROOT / "api" / "routes" / "rubric.py").read_text(encoding="utf-8")
-    assert 'config/rubric.active.json").write_text' in rubric, (
-        "the write this default exists for has moved; re-check whether the default can flip")
+    assert "write_text" not in rubric, (
+        "PUT /rubric writes to the container again; that is the defect fixed alongside this test")
+
+    # No workload mounts anything yet, so there is nowhere for a read-only root's scratch to go.
+    for workload in render(load_example("standard-production")):
+        if workload["kind"] in ("Deployment", "Job"):
+            assert not workload["spec"]["template"]["spec"].get("volumes"), (
+                f"{workload['metadata']['name']} mounts a volume — if that is a writable /tmp, "
+                f"re-check whether readOnlyRootFilesystem can now be turned on")
 
 
 @needs_helm
