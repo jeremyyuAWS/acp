@@ -209,6 +209,34 @@ ESO syncs asynchronously and Helm cannot wait on a CRD it does not understand. T
 cluster uses `provider: kubernetes` with an operator-supplied Secret, so it cannot exercise this
 path and a fix shipped from here would be untested. Recorded rather than guessed at.
 
+**They were all the same defect, and it now has a test.** Seven findings in one day — the worker
+command, the readiness probe, the pre-install hook ordering, the egress policy, `ACP_BLOB_ACCOUNT`,
+`ai.ollama.gpu`, the access gate — are one shape: the chart deploys a workload that reads something
+the chart never set, or sets something nothing reads. Every one was silent, every one was green
+under a rendered-manifest test, and every one was found by hand. Finding the eighth by hand is not
+a plan.
+
+`tests/test_packaging_seams.py` pins both directions. The chart-sets-but-nothing-reads set is
+DERIVED from the render and compared against a table with a reason per entry, so a new one fails in
+seconds and a stale entry fails too. The application-reads-but-the-chart-omits list is curated —
+resolving what `deploy.sh` sets means resolving shell variables through their defaults, and a
+parser for that would be a second implementation of bash that goes wrong quietly — but every entry
+is checked against the three facts that make it a gap, so it cannot carry a false claim, and
+closing a gap fails until the entry is deleted.
+
+Ten gaps are recorded there now. The two worth reading:
+
+- **The worker stops draining after 20 seconds inside a 300-second grace period.**
+  `api/core.py:1943` defaults `ACP_SHUTDOWN_DRAIN_SECONDS` to 20 and the chart never sets it, while
+  `worker-deployment.yaml` asks Kubernetes for 300 — so a rolling upgrade abandons a document
+  mid-remediation and the pod then idles for the remaining 280 seconds. The template's own comment
+  says a worker "gets time to finish it" and calls the platform default of 30 too short; it gets
+  20. Production pins 540 against a 600s grace.
+- **Langfuse tracing can never start.** `api/lf.py` enables it only with host, public key AND
+  secret key. The chart projects the secret key alone — so the `langfuse-secret-key` reference the
+  contract *requires* buys one of three, and an operator who provisioned Langfuse sees no traces
+  and no error.
+
 **What is missing.** No `topologySpreadConstraints` anywhere in the chart. No `seccompProfile`, so
 the rendered pods do not meet the restricted Pod Security Standard as written, and
 `readOnlyRootFilesystem` is `false` by default. No PersistentVolumeClaim and no volumes at all —
