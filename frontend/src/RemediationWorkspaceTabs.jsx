@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-const MODES = ['review', 'live']
+const MODES = ['plan', 'live', 'review']
 
 function modeFromLocation() {
   try {
@@ -16,13 +16,13 @@ function storedMode(runId) {
 }
 
 export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snapshot = null,
-  review, live }) {
+  plan, review, live, workspaceRequest = null }) {
   // Null means the user has not chosen: the live server facts may still select the best default.
   const [chosen, setChosen] = useState(() => modeFromLocation() || storedMode(runId))
-  const liveHeading = useRef(null)
   const tabs = useRef([])
+  const lastWorkspaceRequest = useRef(workspaceRequest)
   const activeWork = !!snapshot && !snapshot.terminal && snapshot.state !== 'draft'
-  const mode = chosen || (reviewCount > 0 ? 'review' : activeWork ? 'live' : 'review')
+  const mode = chosen || (reviewCount > 0 ? 'review' : activeWork ? 'live' : 'plan')
 
   useEffect(() => {
     setChosen(modeFromLocation() || storedMode(runId))
@@ -43,8 +43,19 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
       url.searchParams.set('mode', next)
       history.pushState({}, '', url)
     } catch { /* navigation state is progressive enhancement */ }
-    if (focusPanel && next === 'live') requestAnimationFrame(() => liveHeading.current?.focus())
+    if (focusPanel) requestAnimationFrame(() => {
+      const panel = document.getElementById(`rem-panel-${next}`)
+      panel?.focus()
+    })
   }
+
+  // Accepted launches and explicit header actions reveal their destination. Background
+  // snapshots never interrupt a chosen panel or discard in-progress selections.
+  useEffect(() => {
+    if (lastWorkspaceRequest.current === workspaceRequest) return
+    lastWorkspaceRequest.current = workspaceRequest
+    if (MODES.includes(workspaceRequest?.mode)) select(workspaceRequest.mode, { focusPanel: true })
+  }, [workspaceRequest])
 
   const onKeyDown = (event, index) => {
     if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
@@ -57,24 +68,23 @@ export default function RemediationWorkspaceTabs({ runId, reviewCount = 0, snaps
 
   return <>
     <div className="rem-workspace-tabs" role="tablist" aria-label="Remediation workspace">
-      <button ref={(node) => { tabs.current[0] = node }} type="button" role="tab"
-        id="rem-mode-review" aria-controls="rem-panel-review" aria-selected={mode === 'review'}
-        tabIndex={mode === 'review' ? 0 : -1} onKeyDown={(event) => onKeyDown(event, 0)}
-        onClick={() => select('review')}>
-        Review &amp; Approve <span>{reviewCount.toLocaleString()}</span>
-      </button>
-      <button ref={(node) => { tabs.current[1] = node }} type="button" role="tab"
-        id="rem-mode-live" aria-controls="rem-panel-live" aria-selected={mode === 'live'}
-        tabIndex={mode === 'live' ? 0 : -1} onKeyDown={(event) => onKeyDown(event, 1)}
-        onClick={() => select('live')}>
-        Live Processing {activeWork && <span className="rem-mode-live-dot" aria-label="active">●</span>}
-      </button>
+      {MODES.map((value, index) => <button key={value}
+        ref={(node) => { tabs.current[index] = node }} type="button" role="tab"
+        id={`rem-mode-${value}`} aria-controls={`rem-panel-${value}`} aria-selected={mode === value}
+        tabIndex={mode === value ? 0 : -1} onKeyDown={(event) => onKeyDown(event, index)}
+        onClick={() => select(value)}>
+        {value === 'plan' ? 'Plan' : value === 'live' ? 'Live' : 'Review'}
+        {value === 'review' && <span>{reviewCount.toLocaleString()}</span>}
+        {value === 'live' && activeWork && <span className="rem-mode-live-dot" aria-label="active">●</span>}
+      </button>)}
     </div>
-    <div id="rem-panel-review" role="tabpanel" aria-labelledby="rem-mode-review"
+    <div id="rem-panel-plan" role="tabpanel" tabIndex={-1} aria-labelledby="rem-mode-plan"
+      hidden={mode !== 'plan'}>{plan}</div>
+    <div id="rem-panel-review" role="tabpanel" tabIndex={-1} aria-labelledby="rem-mode-review"
       hidden={mode !== 'review'}>{review}</div>
-    <div id="rem-panel-live" role="tabpanel" aria-labelledby="rem-mode-live"
+    <div id="rem-panel-live" role="tabpanel" tabIndex={-1} aria-labelledby="rem-mode-live"
       hidden={mode !== 'live'}>
-      <h2 ref={liveHeading} tabIndex={-1} className="sr-only">Live Processing</h2>
+      <h2 className="sr-only">Live Processing</h2>
       {live}
     </div>
   </>

@@ -163,9 +163,25 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
       <h2 id={titleId}>Choose your remediation plan</h2>
       <p>{ready ? <><strong>{number(data.open?.findings)} unresolved findings</strong> across <strong>{number(data.open?.files)} files</strong>.</> : 'Preview the current assessment before applying changes.'}</p>
     </div><div className="remediation-impact__active"><span>Active settings</span><strong>{policyName(data?.active_policy)}</strong></div></header>
+
+    <div className="remediation-impact__startbar">
+      <div className="remediation-impact__start-summary">
+        <strong>{ready ? `${number(data.open?.findings)} findings · ${number(data.open?.files)} files` : 'Preview not ready'}</strong>
+        <span>{ready ? `${number(data.lanes?.automatic?.findings)} automatic · ${number(data.lanes?.review?.findings)} to approve · ${number(data.lanes?.manual?.findings)} manual · ${number(data.lanes?.blocked?.findings)} blocked` : 'Review the current preview before starting.'}</span>
+        <span>{selected.ai > 0 ? `AI drafts need approval${data?.capabilities?.ai_budget === true ? ` · AI limit $${selected.ai_budget_usd}` : ' · Spending cap unavailable'}` : 'Rules only · No new AI suggestions'}</span>
+      </div>
+      <button type="button" className="remediation-impact__run" disabled={readOnly || !ready || !onRun || data?.capabilities?.execute !== true || runBusy || saving}
+      onClick={() => onRun(selected, data)}>{runBusy ? 'Remediation is running…' : 'Approve plan and start'}</button>
+    </div>
     <div className="remediation-impact__split"><div className="remediation-impact__settings">
     <RemediationPlanChoices policy={selected} providers={data?.providers}
       disabled={!runId || runBusy} onChange={change} budgetSupported={data?.capabilities?.ai_budget === true} />
+    {ready && data?.capabilities?.execute !== true && <p>Execution unavailable: {data?.capabilities?.execute_reason || data?.capabilities?.reason || 'This preview cannot currently be executed.'}</p>}
+
+    <div className="remediation-impact__actions">
+      <button type="button" disabled={!validPolicy(data?.active_policy) || runBusy} onClick={() => { setPolicy({ ...data.active_policy }); setFilter(null); setImpactDetails(null) }}>Reset to active</button>
+      <button type="button" disabled={readOnly || !ready || data?.capabilities?.save_future !== true || saving || runBusy} onClick={save}>{saving ? 'Saving…' : 'Save as default for future runs'}</button>
+    </div>
     <details className="remediation-impact__advanced"><summary>Advanced: individual fix permissions</summary>
     <div className="remediation-impact__controls">
       <PolicySlider title="Rule-based fixes" question="What rule-based fixes may ACP apply without approval?" stops={RULE_STOPS}
@@ -203,25 +219,11 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
         <span key={key}>{label}: {Number.isSafeInteger(data.ai_spending[key]) ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 6 }).format(data.ai_spending[key] / 1000000) : 'Unavailable'}{' · '}</span>)}</p>
       <p>{data.ai_spending.blocked ? 'AI is paused while an uncertain charge or spending overrun is reconciled.' : 'Reservations cover requests that may still be charged. Infrastructure costs are separate.'}</p>
     </section>}
-    {ready && <>
+    {ready && <details className="remediation-impact__details"><summary>Plan details <span>AI impact, finding routes, and document outlook</span></summary>
       <RemediationWaterfallImpact data={data}
         onInspectAI={rows => setImpactDetails({ key: 'ai', rows, filterToRows: true })}
         onInspectRoute={(key, rows) => setImpactDetails({ key, rows })} />
       <button type="button" onClick={() => setImpactDetails({ key: 'ai', rows: (data.findings || []).filter(row => row.origin === 'ai') })}>View AI suggestions</button>
-      {impactDetails && <Drawer title={impactDetails.key === 'ai' ? 'AI suggestions and model details' : 'Findings in this part of your plan'}
-        subtitle={impactDetails.key === 'ai' ? `${impactDetails.filterToRows ? 'Saved outputs for these chart findings.' : 'Saved outputs in the selected files.'} Viewing does not generate or approve changes.` : 'Preview only — these findings are not fixed yet.'}
-        onClose={closeImpactDetails}>
-        {impactDetails.key === 'ai' ? <RemediationAISuggestions runId={runId}
-          scopeFiles={scopeKey === null ? undefined : JSON.parse(scopeKey)} rows={impactDetails.rows} providers={data.providers} filterToRows={impactDetails.filterToRows === true} />
-          : <div className="remediation-impact__drilldown">
-            <p>{number(impactDetails.rows.reduce((sum, row) => sum + row.finding_count, 0))} findings in this part of the plan.</p>
-            <ul>{impactDetails.rows.map((row, index) => <li key={row.id || index}>
-              <strong>{row.file}</strong> — {row.plain_name || row.rule_name || row.rule_id || 'Accessibility finding'}
-              {' · '}{number(row.finding_count)} findings
-              <p>{reasonText(row.primary_reason)}</p>
-            </li>)}</ul>
-          </div>}
-      </Drawer>}
       <h3>How the findings will be handled</h3>
       <div className="remediation-impact__routes">{LANES.map(([key, label]) => <button type="button" key={key}
         className={`remediation-impact__route--${key}`} onClick={() => setFilter({ type: 'lane', key, label })}>
@@ -246,6 +248,23 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
         <p>Review proposals, edit source content, resolve accessibility judgments, or investigate blockers. Assignment does not resolve findings.</p>
       </details>
       <button type="button" onClick={() => setFilter({ type: 'all', label: 'All affected files' })}>Inspect affected files</button>
+    </details>}
+    </div></div>
+    {ready && <>
+      {impactDetails && <Drawer title={impactDetails.key === 'ai' ? 'AI suggestions and model details' : 'Findings in this part of your plan'}
+        subtitle={impactDetails.key === 'ai' ? `${impactDetails.filterToRows ? 'Saved outputs for these chart findings.' : 'Saved outputs in the selected files.'} Viewing does not generate or approve changes.` : 'Preview only — these findings are not fixed yet.'}
+        onClose={closeImpactDetails}>
+        {impactDetails.key === 'ai' ? <RemediationAISuggestions runId={runId}
+          scopeFiles={scopeKey === null ? undefined : JSON.parse(scopeKey)} rows={impactDetails.rows} providers={data.providers} filterToRows={impactDetails.filterToRows === true} />
+          : <div className="remediation-impact__drilldown">
+            <p>{number(impactDetails.rows.reduce((sum, row) => sum + row.finding_count, 0))} findings in this part of the plan.</p>
+            <ul>{impactDetails.rows.map((row, index) => <li key={row.id || index}>
+              <strong>{row.file}</strong> — {row.plain_name || row.rule_name || row.rule_id || 'Accessibility finding'}
+              {' · '}{number(row.finding_count)} findings
+              <p>{reasonText(row.primary_reason)}</p>
+            </li>)}</ul>
+          </div>}
+      </Drawer>}
       {filter && <Drawer title={selectedFile || filter.label} subtitle="Projected work for the selected scope and settings" onClose={closeDetails}>
         <div className="remediation-impact__drilldown">
         <div hidden={!!selectedFile}>
@@ -300,12 +319,5 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
           onBack={() => setSelectedFile(null)} />}
       </div></Drawer>}
     </>}
-    </div></div>
-    {ready && data?.capabilities?.execute !== true && <p>Execution unavailable: {data?.capabilities?.execute_reason || data?.capabilities?.reason || 'This preview cannot currently be executed.'}</p>}
-    <footer className="remediation-impact__actions"><button type="button" className="remediation-impact__run" disabled={readOnly || !ready || !onRun || data?.capabilities?.execute !== true || runBusy || saving}
-      onClick={() => onRun(selected, data)}>{runBusy ? 'Remediation is running…' : 'Approve plan and start'}</button>
-      <button type="button" disabled={!validPolicy(data?.active_policy) || runBusy} onClick={() => { setPolicy({ ...data.active_policy }); setFilter(null); setImpactDetails(null) }}>Reset to active</button>
-      <button type="button" disabled={readOnly || !ready || data?.capabilities?.save_future !== true || saving || runBusy} onClick={save}>{saving ? 'Saving…' : 'Save as default for future runs'}</button>
-    </footer>
   </section>
 }

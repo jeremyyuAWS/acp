@@ -1,6 +1,8 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { act, createElement } from 'react'
-import { createRoot } from 'react-dom/client'
+import { createTestRoot, unmountAll } from './testRoots.js'
+globalThis.IS_REACT_ACT_ENVIRONMENT = true
+afterEach(unmountAll)
 import RemediationWorkspaceTabs from './RemediationWorkspaceTabs.jsx'
 
 const snapshot = {
@@ -11,29 +13,31 @@ const snapshot = {
   integrity: { ok: true, affected: [] },
 }
 
-describe('the two-mode remediation workspace', () => {
+describe('the three-mode remediation workspace', () => {
   beforeEach(() => {
-    document.body.innerHTML = '<div id="root"></div>'
     sessionStorage.clear()
     history.replaceState({}, '', '/?tab=remediate')
   })
 
   async function mount(props = {}) {
-    const root = createRoot(document.getElementById('root'))
+    const { root, container: host } = createTestRoot()
     await act(async () => root.render(createElement(RemediationWorkspaceTabs, {
       runId: 'scan-1', reviewCount: 2, snapshot, connected: true,
+      plan: createElement('input', { 'data-testid': 'plan-state', defaultValue: 'saved selection' }),
       review: createElement('div', { 'data-testid': 'review-state' }, 'review body'),
       live: createElement('div', { 'data-testid': 'live-state' }, 'live body'),
       ...props,
     })))
-    return { root, host: document.getElementById('root') }
+    return { root, host }
   }
 
-  it('defaults to review when decisions exist and keeps both panels mounted', async () => {
+  it('defaults to review when decisions exist and keeps all panels mounted', async () => {
     const { host } = await mount()
     const tabs = host.querySelectorAll('[role="tab"]')
-    expect(tabs).toHaveLength(2)
-    expect(tabs[0].getAttribute('aria-selected')).toBe('true')
+    expect(tabs).toHaveLength(3)
+    expect(tabs[2].getAttribute('aria-selected')).toBe('true')
+    expect(Array.from(tabs, tab => tab.textContent.trim())).toEqual(['Plan', 'Live●', 'Review2'])
+    expect(host.querySelector('#rem-panel-plan').hidden).toBe(true)
     expect(host.querySelector('[data-testid="review-state"]')).toBeTruthy()
     expect(host.querySelector('[data-testid="live-state"]')).toBeTruthy()
     expect(host.querySelector('#rem-panel-live').hidden).toBe(true)
@@ -60,11 +64,67 @@ describe('the two-mode remediation workspace', () => {
     const reviewTab = host.querySelector('#rem-mode-review')
     reviewTab.focus()
     await act(async () => reviewTab.dispatchEvent(new KeyboardEvent('keydown', {
-      key: 'ArrowRight', bubbles: true,
+      key: 'ArrowLeft', bubbles: true,
     })))
     expect(host.querySelector('#rem-mode-live').getAttribute('aria-selected')).toBe('true')
     expect(document.activeElement).toBe(host.querySelector('#rem-mode-live'))
     expect(new URLSearchParams(location.search).get('mode')).toBe('live')
+  })
+
+  it('defaults to Plan before any work and preserves its input across switches', async () => {
+    const { host } = await mount({ reviewCount: 0, snapshot: null })
+    expect(host.querySelector('#rem-mode-plan').getAttribute('aria-selected')).toBe('true')
+    const input = host.querySelector('[data-testid="plan-state"]')
+    input.value = 'changed selection'
+    await act(async () => host.querySelector('#rem-mode-live').click())
+    await act(async () => host.querySelector('#rem-mode-plan').click())
+    expect(host.querySelector('[data-testid="plan-state"]')).toBe(input)
+    expect(input.value).toBe('changed selection')
+  })
+
+  it.each(['plan', 'review', 'live'])('preserves the %s deep link', async mode => {
+    history.replaceState({}, '', `/?tab=remediate&mode=${mode}`)
+    const { host } = await mount()
+    expect(host.querySelector(`#rem-panel-${mode}`).hidden).toBe(false)
+  })
+
+  it('moves to Live after an accepted launch, and allows returning to Plan', async () => {
+    history.replaceState({}, '', '/?tab=remediate&mode=plan')
+    const { root, host } = await mount()
+    await act(async () => root.render(createElement(RemediationWorkspaceTabs, {
+      runId: 'scan-1', workspaceRequest: { mode: 'live' }, snapshot,
+    })))
+    expect(host.querySelector('#rem-panel-live').hidden).toBe(false)
+    expect(new URLSearchParams(location.search).get('mode')).toBe('live')
+    await act(async () => host.querySelector('#rem-mode-plan').click())
+    expect(host.querySelector('#rem-panel-plan').hidden).toBe(false)
+  })
+
+  it.each(['plan', 'review'])('reveals %s from a header action', async mode => {
+    history.replaceState({}, '', '/?tab=remediate&mode=live')
+    const { root, host } = await mount()
+    await act(async () => root.render(createElement(RemediationWorkspaceTabs, {
+      runId: 'scan-1', workspaceRequest: { mode }, snapshot,
+    })))
+    expect(host.querySelector(`#rem-panel-${mode}`).hidden).toBe(false)
+  })
+
+  it('supports Home, End, wraparound, and browser history', async () => {
+    const { host } = await mount()
+    async function press(id, key) {
+      await act(async () => host.querySelector(id).dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true })))
+    }
+    await press('#rem-mode-review', 'Home')
+    expect(document.activeElement.id).toBe('rem-mode-plan')
+    await press('#rem-mode-plan', 'ArrowLeft')
+    expect(document.activeElement.id).toBe('rem-mode-review')
+    await press('#rem-mode-review', 'ArrowRight')
+    expect(document.activeElement.id).toBe('rem-mode-plan')
+    await press('#rem-mode-plan', 'End')
+    expect(document.activeElement.id).toBe('rem-mode-review')
+    history.replaceState({}, '', '/?tab=remediate&mode=plan')
+    await act(async () => window.dispatchEvent(new PopStateEvent('popstate')))
+    expect(host.querySelector('#rem-panel-plan').hidden).toBe(false)
   })
 
   it('restores an explicit choice for the run', async () => {

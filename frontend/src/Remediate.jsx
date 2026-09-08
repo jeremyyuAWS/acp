@@ -467,6 +467,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   const [seg, setSeg] = useState(null)
   const [remBusy, setRemBusy] = useState(false)
   const [remMsg, setRemMsg] = useState('')
+  const [workspaceRequest, setWorkspaceRequest] = useState(null)
   const [remProg, setRemProg] = useState(null)   // authoritative SSE status + client-known batch total
   const [remUpdates, setRemUpdates] = useState('idle') // live | polling | idle
   // The server-owned run snapshot (api/remediation_run.py). Held separately from `remProg`
@@ -698,6 +699,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                   + `remediated elsewhere; re-scan to refresh.`)
         setRemBusy(false); return
       }
+      setWorkspaceRequest({ mode: 'live' })
       // In-process pool OR the standalone worker container's heartbeat (#113) counts as manned.
       if (!r.workers && !r.worker_tier_alive) { setRemMsg(`Enqueued ${r.enqueued}, but no workers are available — the worker service looks down; check Monitor.`); setRemBusy(false); return }
       setRemMsg(stageExecutionNotice('Remediation', r))
@@ -1056,18 +1058,14 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
   // ORIGINAL document (see RemediationVerify's own footnote), which is not a re-run over the
   // corrected copy. A button claiming otherwise would claim an action ACP cannot perform, so the
   // awaiting-revalidation count is reported as state in the summary line instead.
-  const openRemediationPlan = () => {
-    const plan = document.getElementById('remediation-plan')
-    plan?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    plan?.focus({ preventScroll: true })
-  }
+  const openRemediationPlan = () => setWorkspaceRequest({ mode: 'plan' })
   const primary = readOnly ? null
     : remRunning ? { label: 'Applying fixes…', disabled: true }
     : autoBatch && autoBatch.count > 0
       ? { label: 'Review remediation plan', onClick: openRemediationPlan, disabled: !runId }
     : reviewCount > 0
       ? { label: 'Review next finding',
-          onClick: () => document.getElementById('rem-review')?.scrollIntoView({ behavior: 'smooth', block: 'start' }) }
+          onClick: () => setWorkspaceRequest({ mode: 'review' }) }
     : verifyState === 'running' ? { label: 'Revalidating…', disabled: true }
     : (verifyState === 'complete' || revalidated.length > 0)
       ? { label: 'Publish certified copies', onClick: () => onNavigate?.('publish') }
@@ -1694,14 +1692,6 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
         </div>
       )}
 
-      <RemediationImpactCard key={runId || 'current'} runId={runId}
-        runBusy={remBusy} readOnly={readOnly} myEmail={myEmail}
-        scopeFiles={impactScope.map(file => file.file)}
-        refreshKey={`${fixedCount}:${reviewCount}:${remBusy}`}
-        renderAssessment={forecast => <AssessSummary files={files} cap={cap} assessment={assessment}
-          assessedAt={assessedAt} run={run} notStarted={run?.not_assessed?.count}
-          remediationForecast={forecast} />}
-        onRun={readOnly ? undefined : (policy) => runServerRemediation(impactScope, policy)} />
       {/* The automation-first run header (PRD §5.1/§5.2): what ACP already did, what is left for a
           person, and the ONE action this state of the run calls for. Counts come from the same
           derivations the panels under Run details use, and a lane with no data passes nothing rather
@@ -1713,9 +1703,21 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
                   manual: manualCount, revalidating: revalidatingCount, blocked: blockedCount }}
         primary={primary}
         readOnly={readOnly}
-        onOpenRunDetails={() => setRunDetailsOpen((v) => !v)} />
+        onOpenRunDetails={() => { setRunDetailsOpen((v) => !v); setWorkspaceRequest({ mode: 'live' }) }} />
       <RemediationWorkspaceTabs
         runId={runId}
+        workspaceRequest={workspaceRequest}
+        plan={<>
+          <RemediationImpactCard key={runId || 'current'} runId={runId}
+            runBusy={remBusy} readOnly={readOnly} myEmail={myEmail}
+            scopeFiles={impactScope.map(file => file.file)}
+            refreshKey={`${fixedCount}:${reviewCount}:${remBusy}`}
+            renderAssessment={forecast => <AssessSummary files={files} cap={cap} assessment={assessment}
+              assessedAt={assessedAt} run={run} notStarted={run?.not_assessed?.count}
+              remediationForecast={forecast} />}
+            onRun={readOnly ? undefined : (policy) => runServerRemediation(impactScope, policy)} />
+          {remMsg && <div role="status">{remMsg}</div>}
+        </>}
         reviewCount={reviewCount}
         snapshot={runStream?.snapshot || null}
         review={reviewWorkspace}
