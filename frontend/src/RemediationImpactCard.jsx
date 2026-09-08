@@ -1,3 +1,4 @@
+import useForecastDeltas from './useForecastDeltas.js'
 import Drawer from './Drawer.jsx'
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { getRemediationImpact, saveRemediationImpactPolicy, assignRemediationImpact } from './api.js'
@@ -89,6 +90,13 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
 
   const selected = policy || (validPolicy(data?.policy) ? data.policy : { rule_based: 0, ai: 0 })
   const ready = !!data && !loading && !error && data.integrity?.complete === true
+  const countDeltas = useForecastDeltas({
+    identity: JSON.stringify([runId, scopeKey]), ready,
+    policyKey: `${data?.policy?.rule_based}:${data?.policy?.ai}`,
+    automatic: data?.lanes?.automatic?.findings,
+    human: Number.isFinite(data?.lanes?.review?.findings) && Number.isFinite(data?.lanes?.manual?.findings)
+      ? data.lanes.review.findings + data.lanes.manual.findings : undefined,
+  })
   const change = (key, value) => { setNotice(''); setFilter(null); setPolicy(current => ({ ...(current || selected), [key]: value })) }
   const categoryFiles = (data?.files || []).filter(file => !filter || filter.type === 'all' || (filter.type === 'human' ? file.review > 0 || file.manual > 0 : filter.type === 'outlook' ? file.outlook === filter.key : file[filter.key] > 0))
   const fileTypes = [...new Set(categoryFiles.map(file => fileType(file.file)))].sort()
@@ -159,6 +167,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     </details>
     </div><div className="remediation-impact__results">
     {renderAssessment?.({
+      automaticDelta: countDeltas?.automatic, humanDelta: countDeltas?.human,
       automatic: ready ? number(data.lanes?.automatic?.findings) : 'Not yet available',
       human: ready && Number.isFinite(data.lanes?.review?.findings) && Number.isFinite(data.lanes?.manual?.findings)
         ? number(data.lanes.review.findings + data.lanes.manual.findings) : 'Not yet available',

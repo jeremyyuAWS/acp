@@ -219,6 +219,7 @@ describe('RemediationImpactCard', () => {
     await act(async () => button(container, 'Close details').click())
     await act(async () => button(container, 'Review first').click())
     expect(tile('Auto-fix available').textContent).toContain('0')
+    expect(tile('Auto-fix available').querySelector('.remediation-forecast-delta').textContent).toBe('−4')
     expect(historicTotal()).toBe(before)
   })
   it('has no automated accessibility violations', async () => {

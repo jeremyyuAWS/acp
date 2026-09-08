@@ -426,3 +426,18 @@ describe('lifecycle exclusion count in the header', () => {
     expect(c.textContent).not.toMatch(/excluded by lifecycle policy/)
   })
 })
+
+
+describe('remediation forecast change badges', () => {
+  it('shows signed changes next to the forecast counts with an accessible comparison label', async () => {
+    const c = await mount({ files: ESTATE, remediationForecast: {
+      automatic: 40, human: 60, automaticDelta: 8, humanDelta: -8,
+      onAutomatic: vi.fn(), onHuman: vi.fn(),
+    } })
+    const badges = [...c.querySelectorAll('.remediation-forecast-delta')]
+    expect(badges.map(node => node.textContent)).toEqual(['+8', '−8'])
+    expect(badges[0].getAttribute('aria-label')).toBe('Increase of 8 findings from previous selection')
+    expect(badges[1].getAttribute('aria-label')).toBe('Decrease of 8 findings from previous selection')
+    expect(badges[0].parentElement.textContent).toBe('40+8')
+  })
+})
