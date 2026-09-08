@@ -171,24 +171,24 @@ describe('RemediationImpactCard', () => {
     const onRun = vi.fn()
     const { container } = await mount({ onRun })
     const choose = async label => act(async () => [...container.querySelectorAll('.remediation-plan-choices label')].find(node => node.textContent.includes(label)).querySelector('input').click())
-    await choose('Review every change')
+    await choose('Human review (HITL)')
     expect(getRemediationImpact).toHaveBeenLastCalledWith('run-1', { rule_based: 0, ai: 1 }, undefined)
-    await choose('No AI')
-    await choose('Maximize automation')
+    await choose('Off')
+    await choose('Full automation')
     expect(getRemediationImpact).toHaveBeenLastCalledWith('run-1', { rule_based: 2, ai: 0 }, undefined)
     expect(container.textContent).not.toContain('3. AI providers & budget')
     expect(onRun).not.toHaveBeenCalled()
     await act(async () => button(container, 'Start remediation with this plan').click())
     expect(onRun).toHaveBeenCalledWith({ rule_based: 2, ai: 0 }, expect.anything())
   })
-  it('discloses cloud destinations and unavailable budget enforcement without inventing private approval', async () => {
+  it('keeps budget enforcement limits visible while hiding provider detail', async () => {
     getRemediationImpact.mockImplementation(async () => ({ ...result(), providers: { text: { provider: 'anthropic', model: 'configured-model', zone: 'cloud' } } }))
     const { container } = await mount()
-    expect(container.textContent).toContain('Cloud destination')
-    expect(container.textContent).toContain('Processing location not reported')
-    expect(container.textContent).toContain('Run spending limit: unavailable')
-    expect(container.textContent).toContain('cannot enforce a spending cap')
-    expect(container.textContent).toContain('do not certify a provider as approved')
+    const choices = container.querySelector('.remediation-plan-choices')
+    expect(choices.textContent).not.toContain('configured-model')
+    expect(choices.textContent).toContain('Spending limits are not enforced yet')
+    expect(choices.querySelector('input[type="number"]').disabled).toBe(true)
+
   })
   it('keeps assessment totals fixed beside live tiles and opens the matching right drawer', async () => {
     const renderAssessment = forecast => createElement(AssessSummary, {

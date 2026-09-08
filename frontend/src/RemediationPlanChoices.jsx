@@ -1,3 +1,4 @@
+import './simple-remediation-questions.css'
 import { useId } from 'react'
 
 const MODES = [
@@ -6,7 +7,7 @@ const MODES = [
   ['Maximize automation', 'Apply all supported, eligible rule-based fixes, then verify. Human judgment and AI suggestions still need review.'],
 ]
 
-export default function RemediationPlanChoices({ policy, providers, disabled, onChange }) {
+export function RetiredRemediationPlanChoices({ policy, providers, disabled, onChange }) {
   const id = useId()
   return <div className="remediation-plan-choices">
     <fieldset disabled={disabled}>
@@ -49,5 +50,43 @@ export default function RemediationPlanChoices({ policy, providers, disabled, on
       <p>{MODES[policy.rule_based][1]} {policy.ai === 0 ? 'No new AI drafts will be generated.' : 'Use the configured AI providers to prepare suggestions. No per-run spending cap is enforced.'}</p>
       <p>Changing this plan previews the work. Start remediation to apply it.</p>
     </section>
+  </div>
+}
+
+// The previous detailed panel is retained above for restoration, but is no longer mounted.
+export default function RemediationPlanChoices({ policy, disabled, onChange }) {
+  const id = useId()
+  return <div className="remediation-plan-choices">
+    <fieldset disabled={disabled}>
+      <legend>1. How much automation?</legend>
+      <div className="remediation-plan-choices__grid remediation-plan-choices__grid--two">
+        <label className={policy.rule_based === 0 ? 'is-selected' : ''}>
+          <input type="radio" name={`${id}-automation`} checked={policy.rule_based === 0} onChange={() => onChange('rule_based', 0)} />
+          <span><strong>Human review (HITL)</strong><span>Approve proposed changes before they are applied.</span></span>
+        </label>
+        <label className={policy.rule_based === 2 ? 'is-selected' : ''}>
+          <input type="radio" name={`${id}-automation`} checked={policy.rule_based === 2} onChange={() => onChange('rule_based', 2)} />
+          <span><strong>Full automation</strong><span>Apply supported fixes and verify results. AI suggestions and exceptions still need review.</span></span>
+        </label>
+      </div>
+    </fieldset>
+    <fieldset disabled={disabled}>
+      <legend>2. Use AI?</legend>
+      <div className="remediation-plan-choices__grid remediation-plan-choices__grid--two">
+        <label className={policy.ai === 0 ? 'is-selected' : ''}>
+          <input type="radio" name={`${id}-ai`} checked={policy.ai === 0} onChange={() => onChange('ai', 0)} />
+          <span><strong>Off</strong><span>Use rule-based fixes only.</span></span>
+        </label>
+        <label className={policy.ai > 0 ? 'is-selected' : ''}>
+          <input type="radio" name={`${id}-ai`} checked={policy.ai > 0} onChange={() => onChange('ai', 1)} />
+          <span><strong>On</strong><span>Prepare AI suggestions for review.</span></span>
+        </label>
+      </div>
+      {policy.ai > 0 && <div className="simple-remediation-budget">
+        <label htmlFor={`${id}-budget`}>Maximum AI budget for this run (USD)</label>
+        <input id={`${id}-budget`} type="number" min="0" step="0.01" disabled placeholder="Unavailable" aria-describedby={`${id}-budget-note`} />
+        <p id={`${id}-budget-note`}>Spending limits are not enforced yet. Choose Off if you need a firm cap.</p>
+      </div>}
+    </fieldset>
   </div>
 }

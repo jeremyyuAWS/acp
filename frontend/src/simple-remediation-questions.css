@@ -1,0 +1,8 @@
+/* Retain retired controls for restoration, but remove them from the visible and accessible flow. */
+.remediation-impact__settings > .remediation-impact__advanced,
+.remediation-impact__settings > .remediation-impact__guard,
+.remediation-impact__settings > .remediation-impact__providers { display: none; }
+.simple-remediation-budget { margin-top: 16px; font-size: 12.5px; }
+.simple-remediation-budget > label { display: block; font-weight: 600; margin-bottom: 6px; }
+.simple-remediation-budget input { box-sizing: border-box; width: 100%; padding: 9px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.simple-remediation-budget p { color: var(--muted); line-height: 1.4; }
