@@ -2211,17 +2211,18 @@ def db_max_conn(env: dict | None = None) -> int:
 #     formula fix should make unilaterally — use ACP_DB_MAX_CONN for that, once made.
 _API_HEADROOM_CONN = 16
 
-# HTTP middleware marks safe requests as reads. The default is deliberately priority: workers,
-# migrations, and mutating requests must not be classified as disposable dashboard traffic merely
-# because they run outside an HTTP request context.
-DB_READ_REQUEST: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "acp_db_read_request", default=False)
+# HTTP middleware marks mutating requests as critical. The default is deliberately ordinary:
+# background readers, workers, migrations, and any caller that forgot to classify itself must not
+# silently consume the physical connection reserved for a user decision.
+DB_MUTATION_REQUEST: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "acp_db_mutation_request", default=False)
 _MUTATION_RESERVE_CONN = 1
 
 
 class _PgAdapter:
     _MIN_CONN = 1
     _MAX_CONN = db_max_conn()
+    _ADMISSION_INIT_LOCK = threading.Lock()
 
     def __init__(self, url: str):
         # Strip query params that confuse psycopg2 (e.g. ?sslmode=require can
@@ -2584,40 +2585,42 @@ class _PgAdapter:
             conn.autocommit = True
 
     def _ensure_read_gate(self):
-        """Lazily build the per-process GET admission gate (also supports test adapters)."""
+        """Lazily build admission gates whose combined capacity equals the physical pool."""
         capacity = max(1, int(self._MAX_CONN) - min(_MUTATION_RESERVE_CONN,
                                                    int(self._MAX_CONN) - 1))
-        if getattr(self, "_read_gate_capacity", None) != capacity:
-            self._read_gate = threading.BoundedSemaphore(capacity)
-            self._read_gate_capacity = capacity
-            self._read_connections = set()
-            self._read_connections_lock = threading.Lock()
+        with self._ADMISSION_INIT_LOCK:
+            if getattr(self, "_read_gate_capacity", None) != capacity:
+                self._read_gate = threading.BoundedSemaphore(capacity)
+                self._mutation_gate = threading.BoundedSemaphore(int(self._MAX_CONN) - capacity)
+                self._read_gate_capacity = capacity
+                self._connection_gates = {}
+                self._read_connections_lock = threading.Lock()
         return self._read_gate
 
     def _getconn(self, timeout: float = 5.0, read_only: bool | None = None):
         """psycopg2's ThreadedConnectionPool.getconn raises PoolError the moment the pool is
         empty — it never waits. A request arriving during a burst should queue for a moment,
-        not fail. Safe HTTP reads are admitted through a pool-minus-one gate so a PUT such as a
-        human approval always has a physical slot available. Background workers and callers with
-        no request context retain priority."""
+        not fail. Ordinary work is admitted through a pool-minus-reserve gate. Critical HTTP
+        mutations use only the reserved gate, so neither unclassified background work nor a burst
+        of concurrent mutations can steal or overbook that capacity."""
         import psycopg2.pool
         pool = self._get_pool()
         deadline = time.monotonic() + timeout
-        is_read = DB_READ_REQUEST.get() if read_only is None else bool(read_only)
-        gate = self._ensure_read_gate() if is_read else None
-        if gate is not None and not gate.acquire(timeout=max(0.0, timeout)):
-            raise psycopg2.pool.PoolError("database read admission limit reached")
+        critical = DB_MUTATION_REQUEST.get() if read_only is None else not bool(read_only)
+        ordinary_gate = self._ensure_read_gate()
+        gate = self._mutation_gate if critical else ordinary_gate
+        if not gate.acquire(timeout=max(0.0, timeout)):
+            kind = "critical mutation" if critical else "ordinary database work"
+            raise psycopg2.pool.PoolError(f"{kind} admission limit reached")
         while True:
             try:
                 conn = pool.getconn()
-                if gate is not None:
-                    with self._read_connections_lock:
-                        self._read_connections.add(id(conn))
+                with self._read_connections_lock:
+                    self._connection_gates[id(conn)] = gate
                 return conn
             except psycopg2.pool.PoolError:
                 if time.monotonic() >= deadline:
-                    if gate is not None:
-                        gate.release()
+                    gate.release()
                     raise
                 time.sleep(0.05)
 
@@ -2628,15 +2631,13 @@ class _PgAdapter:
         # self._pool up again here can therefore return a different pool, which rejects the
         # connection as unkeyed. Callers that already captured the issuing pool pass it through.
         (pool or self._get_pool()).putconn(conn)
-        gate = getattr(self, "_read_gate", None)
+        gate = None
         lock = getattr(self, "_read_connections_lock", None)
-        if gate is None or lock is None:
+        if lock is None:
             return
         with lock:
-            was_read = id(conn) in self._read_connections
-            if was_read:
-                self._read_connections.remove(id(conn))
-        if was_read:
+            gate = self._connection_gates.pop(id(conn), None)
+        if gate is not None:
             gate.release()
 
     @contextlib.contextmanager
