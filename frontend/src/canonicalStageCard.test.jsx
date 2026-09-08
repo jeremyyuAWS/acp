@@ -158,12 +158,14 @@ describe('canonical stage card', () => {
     vi.useRealTimers()
   })
 
-  it('gives locked-stage status copy a quieter typographic treatment', () => {
+  it('omits future stages until the workflow creates them', () => {
     const html = renderToStaticMarkup(createElement(WorkflowStageStack, {
       lineage: { workflow_id: 'workflow-locked', stages: [{ ...SNAPSHOT, stage: 'discover' }] },
     }))
-    expect(html).toContain('workflow-stage-stack__locked-state')
-    expect(html).toContain('Not started')
+    expect(html).not.toContain('Locked')
+    expect(html).not.toContain('data-stage="assess"')
+    expect(html).not.toContain('data-stage="remediate"')
+    expect(html).not.toContain('data-stage="release"')
   })
 
   it('never turns unknown totals into zero', () => {
@@ -334,7 +336,7 @@ describe('unified idempotent workflow integration', () => {
     execution_id: `${name}-${revision}`, ...extra,
   })
 
-  it('restores exactly one current Assess card with completed Discover above and future stages locked', async () => {
+  it('restores exactly one current Assess card with completed Discover above and omits future stages', async () => {
     const { container, root } = createTestRoot()
     const lineage = { workflow_id: 'restore', workflow_revision: 7, stages: [
       stage('discover', 'succeeded', 3), stage('assess', 'processing', 4),
@@ -344,8 +346,8 @@ describe('unified idempotent workflow integration', () => {
     expect(container.querySelector('[data-current="true"]').dataset.stage).toBe('assess')
     expect(container.querySelector('[data-stage="discover"] .workflow-stage-stack__body').hidden).toBe(true)
     expect(container.querySelector('[data-stage="assess"] .workflow-stage-stack__body').hidden).toBe(false)
-    expect([...container.querySelectorAll('.is-locked')].map((node) => node.dataset.stage))
-      .toEqual(['remediate', 'release'])
+    expect(container.querySelector('[data-stage="remediate"]')).toBeNull()
+    expect(container.querySelector('[data-stage="release"]')).toBeNull()
     expect(container.textContent).not.toContain('Discovering documents')
     expect([...container.querySelectorAll('button')].some((button) => /^Stop\b/.test(button.textContent))).toBe(false)
     await act(async () => { root.unmount() })
