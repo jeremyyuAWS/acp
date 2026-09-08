@@ -12928,6 +12928,23 @@ class Store:
         return _hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
     @staticmethod
+    def _index_safe_request_fingerprint(fingerprint: str) -> str:
+        """Keep caller fingerprints small enough for the stage identity B-tree.
+
+        Some older routes pass canonical JSON rather than the fixed-width digest returned by
+        ``canonical_request_fingerprint``.  A document-scoped request can therefore be several
+        kilobytes long, and PostgreSQL refuses the composite UNIQUE index row before any work is
+        queued.  Preserve existing compact values so historical execution identities remain
+        stable; collapse only oversized values to an explicit, deterministic digest.
+        """
+        import hashlib as _hashlib
+        value = str(fingerprint)
+        encoded = value.encode("utf-8")
+        if len(encoded) <= 512:
+            return value
+        return f"sha256:{_hashlib.sha256(encoded).hexdigest()}"
+
+    @staticmethod
     def _stage_identity(workflow_id: str, stage: str, snapshot_id: str,
                         request_fingerprint: str) -> str:
         import hashlib as _hashlib
@@ -14362,6 +14379,7 @@ class Store:
         """
         import hashlib as _hashlib
         import json as _json
+        request_fingerprint = self._index_safe_request_fingerprint(request_fingerprint)
         workflow = self.workflow_for_scan(scan_id) or {}
         workflow_id = workflow.get("id") or scan_id
         workflow_revision = int(workflow.get("revision") or 1)

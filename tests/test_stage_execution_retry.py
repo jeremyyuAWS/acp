@@ -125,6 +125,32 @@ def test_in_flight_work_is_never_disturbed(store):
     assert sorted(r["status"] for r in _rows(store)) == ["running", "running"]
 
 
+def test_large_document_scope_uses_an_index_safe_fingerprint(store):
+    """A 147-document Remediate submission must reach the queue on PostgreSQL.
+
+    Production reproduced this with a 3,816-byte composite B-tree entry: the route's JSON
+    fingerprint contained every selected filename, so PostgreSQL rejected the stage execution
+    before inserting any jobs.  The store is the trust boundary for all stage callers and must
+    deterministically bound oversized fingerprints while preserving replay identity.
+    """
+    files = tuple(f"department/records/{i:03d}-{'long-name-' * 4}.docx" for i in range(147))
+    payloads = [{"scan_id": SID, "file": name, "source": "sharepoint"} for name in files]
+    fingerprint = '{"files":' + repr(sorted(files)) + "}"
+
+    first = store.enqueue_stage_batch(
+        SID, "remediate", "remediate_file", payloads,
+        snapshot_id=SNAP, request_fingerprint=fingerprint)
+    replay = store.enqueue_stage_batch(
+        SID, "remediate", "remediate_file", payloads,
+        snapshot_id=SNAP, request_fingerprint=fingerprint)
+
+    execution = store.get_stage_execution(first["batch_id"])
+    assert len(execution["request_fingerprint"].encode("utf-8")) == 71
+    assert execution["request_fingerprint"].startswith("sha256:")
+    assert replay["batch_id"] == first["batch_id"]
+    assert replay["reused"] is True
+
+
 def test_changed_work_cannot_start_beside_an_active_stage_execution(store):
     """A new fingerprint is new intent, but it must not become a concurrent generation."""
     import store as store_mod
