@@ -549,31 +549,39 @@ four image references under different names.
 
 ## What blocks a disposable-cluster acceptance run today
 
-Ordered, smallest first dependency at the top.
+**Four of the seven items this list opened with are done**, and the list is kept with them struck
+through rather than deleted, because the shape of the dependency chain is the useful part and a
+list that only ever grows shorter hides what was actually hard.
 
-1. **The chart and the plan must agree on the artifact set.** Four rendered image references against
-   eight planned ones, with two names in common, and `acp-migrations`/`acp-preflight` not existing as
-   chart components at all. This is the smallest first dependency: it is a decision plus one test,
-   needs no cluster, no registry and no CI change, and every item below is ambiguous until it is
-   made.
-2. **Something must build the images the chart names.** Today `deploy/public/deploy.sh` builds
-   `acp-app` and `acp-grafana`; the chart pulls `acp`, `acp-worker`, `acp-ollama-gateway` and
-   `acp-grafana`. Three of those four references resolve to nothing in any registry, so
-   `helm install` of the shipped example cannot pull.
-3. **A registry the acceptance run can pull from**, and a tag or digest convention for it. The
-   example's `runtime.imageRegistry` is a production ACR; an acceptance run needs a target that a CI
-   job can push to and a throwaway cluster can read.
-4. **A disposable cluster in CI.** No `kind`, `k3d` or `minikube` reference exists anywhere in the
-   repository. `helm` is installed only to render.
-5. **`acpctl install`.** Exits 2 today. Everything from scenario 3 onward — queue processing, restart
-   mid-job, scale-down, upgrade, restore — presupposes it.
+1. ~~**The chart and the plan must agree on the artifact set.**~~ Done. The `ACPRelease` contract
+   reconciles the plan's eight names, the chart's four image references and the one artifact this
+   repository builds, with `serves` and `chartImages` naming which is which
+   (`packaging/schema/acp-release.schema.json`, `tests/test_packaging_release.py`).
+2. ~~**Something must build the images the chart names.**~~ Done for a TEST, not for a release. The
+   reference job builds the application image from the checkout and `kind load`s it, which is why
+   item 3 turned out not to be a prerequisite at all. Nothing yet builds, signs or SBOMs a
+   RELEASED artifact — that is workstream A's remaining half and is what item 7 depends on.
+3. ~~**A registry the acceptance run can pull from.**~~ Not needed, and finding that out was worth
+   more than solving it. `kind load docker-image` with `pullPolicy: Never` puts the image on the
+   node without any registry, so a disposable-cluster run needs no push target and no credentials.
+   A registry is still required for a release, which is item 7's problem rather than this one's.
+4. ~~**A disposable cluster in CI.**~~ Done. `packaging/reference/kind/` and
+   `.github/workflows/packaging-kind.yml` install the chart on `kindest/node:v1.31.4` on every
+   packaging pull request, and the Summary above says exactly what that does and does not
+   establish.
+5. **`acpctl install`.** Still the gate on everything from scenario 3 onward — queue processing,
+   restart mid-job, scale-down, upgrade, restore. An open pull request is building it together
+   with the acceptance suite; nothing here should be read as its being done.
 6. **The acceptance report format**, without which ten passing scenarios produce ten passing
-   scenarios and no artifact anybody can compare across runs.
+   scenarios and no artifact anybody can compare across runs. Same pull request as item 5.
 7. **Digest resolution and signature verification**, which is the point at which the run stops
-   being a smoke test and starts being evidence about a specific release.
+   being a smoke test and starts being evidence about a specific release. Unchanged, and now the
+   only item with no work in flight: it needs a build that produces a signed manifest, which needs
+   a registry, which is an owner decision rather than a task.
 
-Items 1-3 are prerequisites for a manual `helm install`. Items 4-7 are what turn that into a
-repeatable acceptance run.
+What the remaining three have in common is that none of them is about the CHART any more. Items 5
+and 6 are the lifecycle command and its output; item 7 is the supply chain. Workstream B's
+questions are answerable on the cluster that now exists.
 
 ## Not in scope for the MVP
 
