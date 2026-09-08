@@ -325,6 +325,27 @@ forced on. The comment beside it claimed the shared context "sets it true", whic
 so — a reader deciding whether this chart hardens its root filesystems would have concluded it
 does.
 
+**The upgrade step found a defect on its first run, and it was not an upgrade defect.**
+`toYaml` preserves YAML's types, and both `annotations` and `nodeSelector` are `map[string]string`
+in the Kubernetes API. A value that parses as a number or a boolean renders unquoted, passes
+`helm template` and `helm lint`, and is rejected by the API SERVER:
+
+    cannot patch "acp-api" with kind Deployment: "" is invalid: patch: Invalid value: "{…}":
+    json: cannot unmarshal number into Go struct field
+    ObjectMeta.spec.template.metadata.annotations of type string
+
+It surfaced on an upgrade only because that is where the probe annotation is set, to
+`$GITHUB_RUN_ID`, which is all digits; an install carrying the same value fails identically.
+`--set-string` is not the fix, because the operator most likely to hit this is writing a values
+FILE — `build-number: 1234` is an int before helm sees it, and there is no per-key string flag for
+a file. So `acp.stringMap` quotes every value at all six render sites, and the CI step keeps using
+plain `--set` so it goes on exercising the numeric path.
+
+Worth noting what this says about the render tests. They parse the rendered YAML and assert on the
+result, so an annotation rendered as an integer arrives as a Python `int` and every assertion about
+it still passes — the defect is in the TYPE, which is exactly what a round-trip through a parser
+erases. Only something that submits the manifest can find it.
+
 **`acpctl doctor` evaluates the DOCUMENT, and the job installs something else.** On the
 reference cluster doctor reports `capacity.floor` as a blocker — five `small` pods need 5 CPU and
 the runner has 4 — and the install then succeeds, because the job layers
