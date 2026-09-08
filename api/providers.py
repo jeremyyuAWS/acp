@@ -330,6 +330,7 @@ def zone_for_url(base_url: str) -> str:
 # ai._trace_ai carries onto the ai_calls row — triage without shelling into a container.
 REASON_OK = "ok"
 REASON_TRANSPORT = "transport_error"       # case 1 — no HTTP response exists
+REASON_TIMEOUT = "timeout"                 # case 1a — bounded call exceeded its budget
 REASON_EMPTY = "empty_response"            # case 3 — 200, and the model said nothing
 # case 2 is `http_<status>` (e.g. 'http_502'), so `reason LIKE 'http_%'` groups them.
 
@@ -373,6 +374,8 @@ def _classify(exc: Exception) -> tuple[str, str]:
     status = getattr(resp, "status_code", None)
     if isinstance(status, int):
         return _http_reason(status), f"HTTP {status} · body={_body_slice(resp)!r}"
+    if isinstance(exc, TimeoutError) or "timeout" in type(exc).__name__.lower():
+        return REASON_TIMEOUT, f"{type(exc).__name__}: {exc}"
     return REASON_TRANSPORT, f"{type(exc).__name__}: {exc}"
 
 

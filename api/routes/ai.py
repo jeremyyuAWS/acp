@@ -312,6 +312,7 @@ def ai_status():
             "backend": os.environ.get("ACP_AI_BACKEND", "auto").lower(),
             "vision_available": vision, "vision_model": _ai.OLLAMA_VISION_MODEL,
             "vision_unavailable_reason": None if vision else _ai.vision_unavailable_reason(),
+            "vision_runtime": _ai.vision_runtime_health(),
             # available=true only means Ollama answered. Whether the configured models are
             # actually pulled is a separate question, and the one that decides if a generate
             # call 404s — report it rather than leaving 'available' to imply it.
