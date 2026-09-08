@@ -1,10 +1,11 @@
 import { useState, useEffect, useMemo, useRef, Fragment } from 'react'
 import { getSettings, updateSettings, getScanLocations, setScanLocations,
-         listFolders, listSpFolders, listDispositionPolicies } from './api.js'
+         listFolders, listDispositionPolicies } from './api.js'
 import { scopeFooterPart, blockedReason } from './wizardScopeReady.js'
 import { METADATA_ONLY_TITLE, METADATA_ONLY_BODY, lifecycleRuleSummary,
          WHAT_HAPPENS_NEXT, RULE_SET_PROVENANCE } from './discoveryPromise.js'
 import FolderPicker from './FolderPicker.jsx'
+import SitePicker from './SitePicker.jsx'
 import DispositionRules from './DispositionRules.jsx'
 import { WIZARD_STEPS, FIRST_STEP, LAST_STEP, stepInfo, stepBlockedReason,
          nextStep, prevStep, forwardLabel, railState } from './discoveryWizardSteps.js'
@@ -746,12 +747,17 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
             </div>
           ) : (
             <div style={{ marginBottom: 8 }}>
-              <FolderPicker
+              {locKey === 'sharepoint' ? (
+                <SitePicker
+                  layout="inline"
+                  initial={folders}
+                  onChange={(sites) => { setFolders(sites); setExcluded([]) }} />
+              ) : <FolderPicker
                 layout="inline"
                 key={`${locKey}:${pickerSeed}`}
-                rootName={locKey === 'drive' ? 'My Drive' : 'OneDrive'}
-                sourceName={locKey === 'drive' ? 'Google Drive' : 'SharePoint'}
-                lister={locKey === 'drive' ? listFolders : (parent) => listSpFolders(parent)}
+                rootName="My Drive"
+                sourceName="Google Drive"
+                lister={listFolders}
                 initial={folders}
                 initialExclude={excluded}
                 // "Specific folders" IS the claim to narrow, so an empty list here is unfinished,
@@ -761,7 +767,7 @@ export default function ScanScopeWizard({ onStartScan, showStartButton = false,
                 // It has no Save of its own: the wizard footer is the only footer on this screen,
                 // and a second commit button next to it would make "saved" ambiguous. So the
                 // picker reports as you tick.
-                onChange={(inc, exc) => { setFolders(inc); setExcluded(exc || []) }} />
+                onChange={(inc, exc) => { setFolders(inc); setExcluded(exc || []) }} />}
               {folders.length > 0 && (
                 <fieldset style={{ border: 0, padding: 0, margin: '10px 0 0' }}>
                   <legend style={{ fontSize: 12, fontWeight: 700, marginBottom: 6 }}>FOLDER DEPTH</legend>

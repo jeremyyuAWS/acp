@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { listSharePointSites, listSharePointDrives, getConfig } from './api.js'
 
 // Choose the SharePoint site(s) to scan. The counterpart of FolderPicker, and deliberately the
@@ -25,12 +25,12 @@ import { listSharePointSites, listSharePointDrives, getConfig } from './api.js'
 // tenants, so "no sites" is far more often a missing grant than an empty tenant — the route
 // already translates that into a message naming the permission, and this surfaces it verbatim
 // rather than flattening it to "could not load".
-export default function SitePicker({ onScan, onClose }) {
+export default function SitePicker({ onScan, onClose, onChange, initial = [], layout = 'modal' }) {
   const [q, setQ] = useState('')
   const [sites, setSites] = useState([])
   const [drives, setDrives] = useState({})       // site id -> libraries, loaded on expand
   const [open, setOpen] = useState(null)
-  const [picked, setPicked] = useState([])       // site ids, in the order they were chosen
+  const [picked, setPicked] = useState(() => initial.map((site) => typeof site === 'string' ? site : site.id))
   const [loading, setLoading] = useState(true)
   const [err, setErr] = useState('')
   // The DEPLOYMENT's cap, not this file's idea of it. The server refuses a larger selection
@@ -39,6 +39,9 @@ export default function SitePicker({ onScan, onClose }) {
   // selection the server would accept, or waving through one it will refuse after the operator
   // has finished choosing. 30 is the fallback only until /config answers.
   const [maxSites, setMaxSites] = useState(30)
+  const inline = layout === 'inline'
+  const changeRef = useRef(onChange)
+  changeRef.current = onChange
 
   useEffect(() => {
     let live = true
@@ -74,9 +77,18 @@ export default function SitePicker({ onScan, onClose }) {
   const toggle = (id) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]))
   const atCap = picked.length >= maxSites
 
-  return (
-    <div className="setoverlay" role="dialog" aria-modal="true" aria-label="Choose SharePoint sites">
-      <div className="setpanel" style={{ maxWidth: 620 }}>
+  useEffect(() => {
+    if (!inline || typeof changeRef.current !== 'function') return
+    const known = new Map([
+      ...initial.map((site) => [typeof site === 'string' ? site : site.id,
+        typeof site === 'string' ? { id: site, name: site } : site]),
+      ...sites.map((site) => [site.id, { id: site.id, name: site.name }]),
+    ])
+    changeRef.current(picked.map((id) => known.get(id) || { id, name: id }))
+  }, [inline, picked, sites])
+
+  const content = (
+      <div className={inline ? undefined : 'setpanel'} style={{ maxWidth: inline ? undefined : 620 }}>
         <h3 style={{ marginTop: 0 }}>Scan SharePoint sites</h3>
         <p className="muted" style={{ fontSize: 12.5 }}>
           Select one or more sites — every document library on each is scanned. Expand one to see
@@ -149,7 +161,7 @@ export default function SitePicker({ onScan, onClose }) {
           </p>
         )}
 
-        <div style={{ display: 'flex', gap: 8, marginTop: 12, alignItems: 'center' }}>
+        {!inline && <div style={{ display: 'flex', gap: 8, marginTop: 12, alignItems: 'center' }}>
           <button className="primary small" disabled={picked.length === 0}
                   onClick={() => onScan(picked)}>
             {picked.length > 1 ? `Scan ${picked.length} sites` : 'Scan selected site'}
@@ -158,8 +170,17 @@ export default function SitePicker({ onScan, onClose }) {
           <span className="muted" style={{ fontSize: 12 }}>
             {picked.length} of {maxSites} selected
           </span>
-        </div>
+        </div>}
+        {inline && (
+          <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+            {picked.length ? `${picked.length} SharePoint site${picked.length === 1 ? '' : 's'} selected` : 'Select at least one SharePoint site'}
+          </div>
+        )}
       </div>
+  )
+  return inline ? content : (
+    <div className="setoverlay" role="dialog" aria-modal="true" aria-label="Choose SharePoint sites">
+      {content}
     </div>
   )
 }
