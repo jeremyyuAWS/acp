@@ -75,7 +75,7 @@ export const CANONICAL_EXECUTION_STATES = Object.freeze([
 
 export const STATE_LABELS = Object.freeze({
   accepted: 'Accepted', queued: 'Waiting', processing: 'Processing', paused: 'Paused',
-  processing_complete: 'Processing complete', reconciling: 'Reconciling', succeeded: 'Complete',
+  processing_complete: 'Complete', reconciling: 'Reconciling', succeeded: 'Complete',
   failed: 'Failed', cancelled: 'Stopped manually', integrity_failed: 'Needs attention',
   superseded: 'Superseded',
 })

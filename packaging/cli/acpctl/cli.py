@@ -158,6 +158,74 @@ def cmd_validate(args) -> int:
     return 1
 
 
+def _load_release(path: str | None, document: dict | None):
+    """A validated release for `--release`, or None when none was asked for.
+
+    Returns (release, exit_code). A NON-NONE EXIT CODE MEANS STOP: an invalid release manifest
+    must not degrade to the unpinned path, because the caller asked to pin and would get an
+    unpinned plan or values file that reads exactly like a pinned one.
+    """
+    if path is None:
+        return None, None
+    from . import release as release_mod
+
+    result = release_mod.validate(release_mod.load_manifest(path))
+    _print_findings("Warnings", result.warnings, sys.stderr)
+    if not result.ok:
+        _print_findings("Errors", result.errors, sys.stderr)
+        print(f"\nrefusing to use {path}: it is not a valid release manifest", file=sys.stderr)
+        return None, 1
+    if document is not None:
+        mismatches = release_mod.check_against_document(result.release, document)
+        if mismatches:
+            _print_findings("Errors", mismatches, sys.stderr)
+            print(f"\nrefusing to use {path} with this document", file=sys.stderr)
+            return None, 1
+    return result.release, None
+
+
+def cmd_release(args) -> int:
+    """`acpctl release verify` — is this a release something can be installed from?
+
+    CHECKS THE DECLARATION, NOT THE REGISTRY, and the distinction is the whole exit code. This
+    command reaches nothing, so a pass means the release says it is signed, has an SBOM per
+    artifact, was built from one revision, and covers every image the plan names and the chart
+    pulls. It does NOT mean a signature verifies — that needs the registry and the trust root,
+    and is `acpctl install`'s job.
+    """
+    from . import release as release_mod
+
+    result = release_mod.validate(release_mod.load_manifest(args.manifest))
+    _print_findings("Warnings", result.warnings, sys.stderr)
+    if not result.ok:
+        _print_findings("Errors", result.errors, sys.stderr)
+        print(f"\n{args.manifest}: not a usable release", file=sys.stderr)
+        return 1
+    rel = result.release
+    if args.json:
+        print(json.dumps({
+            "version": rel.version,
+            "sourceRevision": rel.source_revision,
+            "registry": rel.registry,
+            "components": [
+                {"name": c["name"], "repository": c["repository"], "digest": c["digest"],
+                 "architectures": c["architectures"], "serves": c["serves"],
+                 "chartImages": c.get("chartImages", [])}
+                for c in rel.components],
+            "chartDigests": rel.chart_digests(),
+        }, indent=2))
+        return 0
+    print(f"{args.manifest}: release {rel.version} from {rel.source_revision[:12]}, "
+          f"{len(rel.components)} artifact(s)")
+    for component in rel.components:
+        print(f"  {component['repository']:<24} {component['digest']}")
+        print(f"{'':>4}serves {', '.join(component['serves'])}"
+              f"  arch {', '.join(component['architectures'])}")
+    print("\n  Signatures and SBOMs are DECLARED, not verified — verifying them needs the")
+    print("  registry, and is `acpctl install`'s job.")
+    return 0
+
+
 def cmd_plan(args) -> int:
     document, result = _load_and_validate(args.spec)
     if not result.ok:
@@ -165,7 +233,10 @@ def cmd_plan(args) -> int:
         _print_findings("Errors", result.errors, sys.stderr)
         print(f"\nrefusing to plan: {args.spec} is invalid", file=sys.stderr)
         return 1
-    print(render_plan(document, result.warnings))
+    release, code = _load_release(getattr(args, "release", None), document)
+    if code is not None:
+        return code
+    print(render_plan(document, result.warnings, release))
     return 0
 
 
@@ -198,7 +269,10 @@ def cmd_values(args) -> int:
         _print_findings("Errors", result.errors, sys.stderr)
         print(f"\nrefusing to render values: {args.spec} is invalid", file=sys.stderr)
         return 1
-    print(render_values_yaml(document))
+    release, code = _load_release(getattr(args, "release", None), document)
+    if code is not None:
+        return code
+    print(render_values_yaml(document, release))
     return 0
 
 
@@ -472,7 +546,20 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("plan", help="render the reviewable deployment plan (creates nothing)")
     p.add_argument("spec")
+    p.add_argument("--release", default=None, metavar="MANIFEST",
+                   help="pin the plan to a release manifest, so images print digests instead "
+                        "of <unresolved>")
     p.set_defaults(func=cmd_plan)
+
+    p = sub.add_parser(
+        "release",
+        help="check a release manifest describes something installable (reads only)")
+    release_sub = p.add_subparsers(dest="release_command", required=True)
+    q = release_sub.add_parser(
+        "verify", help="one source revision, signed, SBOM'd, and covering every image")
+    q.add_argument("manifest")
+    q.add_argument("--json", action="store_true", help="machine-readable output")
+    q.set_defaults(func=cmd_release)
 
     p = sub.add_parser("inventory", help="the normalized service inventory for a document")
     p.add_argument("spec")
@@ -482,6 +569,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser(
         "values", help="render Helm values for the shared ACP release (writes nothing)")
     p.add_argument("spec")
+    p.add_argument("--release", default=None, metavar="MANIFEST",
+                   help="pin image.digests from a release manifest instead of leaving them "
+                        "unresolved")
     p.set_defaults(func=cmd_values)
 
     p = sub.add_parser(

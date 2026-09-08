@@ -104,8 +104,24 @@ def _tier_values(tier: dict, *, role: str | None, threads: int) -> dict[str, Any
     return values
 
 
-def build_values(doc: dict[str, Any]) -> dict[str, Any]:
-    """The Helm values for this document. A pure function of the document."""
+def build_values(doc: dict[str, Any], release: Any = None) -> dict[str, Any]:
+    """The Helm values for this document, optionally pinned to a release.
+
+    A pure function of its inputs. `release` is an `acpctl.release.Release` when the caller has
+    one; typed loosely so that values.py does not import release.py, which imports inventory and
+    spec — the dependency would be circular for no gain, since the only thing needed here is two
+    small mappings off the object.
+
+    WITHOUT A RELEASE THIS IS UNCHANGED, and deliberately so: `digests` stays empty and the
+    repository keys the chart defaults are left absent. An empty digest map is an honest
+    "not resolved"; a default that pinned something would be a claim about bytes nobody
+    looked up.
+    """
+    digests: dict[str, str] = {}
+    repositories: dict[str, str] = {}
+    if release is not None:
+        digests = release.chart_digests()
+        repositories = release.chart_repositories()
     rt, data, ai, obs, net = (
         doc["runtime"], doc["data"], doc["ai"], doc["observability"], doc["network"])
     platform = rt["platform"]
@@ -122,18 +138,27 @@ def build_values(doc: dict[str, Any]) -> dict[str, Any]:
             "supportStatus": presets.SUPPORT_STATUS[platform],
         },
         "image": {
+            # THE REGISTRY COMES FROM THE DOCUMENT, NOT THE RELEASE, even when a release is
+            # given. A digest names the same bytes in any registry, so an installation that
+            # mirrored the release into its own (an air-gapped one, PRD S17) pulls from its own
+            # host with the release's digests unchanged. The manifest's registry records where
+            # the build pushed; this is where this installation pulls.
             "registry": rt.get("imageRegistry", ""),
             "tag": rt["version"],
             # Named here rather than defaulted in the chart, so `acpctl plan` and `helm template`
             # cannot disagree about which artifact runs the models. inventory.IMAGES is the one
             # list of release images; taking it from there means adding an image to that table is
             # the whole change.
-            "ollamaRepository": IMAGES["ollama"],
-            "grafanaRepository": IMAGES["grafana"],
-            # PRD S5.1: templates reference digests, not mutable tags. `acpctl install` resolves
-            # and verifies signatures; an empty map here is an honest "not yet resolved", not a
-            # default that would deploy a tag.
-            "digests": {},
+            #
+            # A RELEASE OVERRIDES THESE, and that is the point of passing one. The chart's own
+            # defaults are `acp` and `acp-worker`, which nothing in this repository builds; the
+            # manifest names the artifact that was actually produced.
+            "ollamaRepository": repositories.get("ollama", IMAGES["ollama"]),
+            "grafanaRepository": repositories.get("grafana", IMAGES["grafana"]),
+            # PRD S5.1: templates reference digests, not mutable tags. Empty until a release
+            # manifest supplies them — an honest "not yet resolved", not a default that would
+            # deploy a tag while reading as a pin.
+            "digests": digests,
             "pullPolicy": "IfNotPresent",
         },
         "api": _tier_values(doc["api"], role=None, threads=0),
@@ -204,6 +229,15 @@ def build_values(doc: dict[str, Any]) -> dict[str, Any]:
     values["postgresql"]["maxConnections"] = budget["serverMaxConnections"]
     values["postgresql"]["expectedWorstCaseConnections"] = budget["worstCaseConnections"]
     values["postgresql"]["connectionsPerReplicaHeadroom"] = API_HEADROOM_CONN
+
+    # The chart's own `image.repository` and `image.workerRepository` defaults are `acp` and
+    # `acp-worker` — names nothing in this repository builds. A release manifest names the
+    # artifact that WAS built, so it overrides them. With no release these keys stay ABSENT
+    # rather than guessed: an emitted default here would be a second place for the chart's
+    # defaults to live, and the two would drift without anything failing.
+    for chart_component, key in (("api", "repository"), ("worker", "workerRepository")):
+        if chart_component in repositories:
+            values["image"][key] = repositories[chart_component]
     return values
 
 
@@ -250,16 +284,17 @@ def _secret_values(doc: dict) -> dict[str, Any]:
     }
 
 
-def render_values_yaml(doc: dict[str, Any]) -> str:
+def render_values_yaml(doc: dict[str, Any], release: Any = None) -> str:
     """`build_values` as a YAML document, with a header saying where it came from."""
     try:
         import yaml
     except ImportError:  # pragma: no cover - environment-dependent
         import json
-        body = json.dumps(build_values(doc), indent=2)
+        body = json.dumps(build_values(doc, release), indent=2)
         note = "# PyYAML is not installed; emitting JSON, which Helm accepts as valid YAML.\n"
     else:
-        body = yaml.safe_dump(build_values(doc), sort_keys=False, default_flow_style=False)
+        body = yaml.safe_dump(build_values(doc, release), sort_keys=False,
+                              default_flow_style=False)
         note = ""
     header = (
         "# GENERATED by `acpctl values` from an acp-deployment document. Do not hand-edit:\n"
@@ -267,6 +302,15 @@ def render_values_yaml(doc: dict[str, Any]) -> str:
         "# stops being the record of what was installed.\n"
         f"# release {doc['runtime']['version']}  profile {doc['runtime']['profile']}  "
         f"platform {doc['runtime']['platform']}\n"
-        "# Image digests are UNRESOLVED here — `acpctl install` resolves and verifies them.\n"
     )
+    if release is None:
+        header += (
+            "# Image digests are UNRESOLVED here — supply a release manifest with\n"
+            "# `acpctl values <doc> --release <manifest>` to pin them.\n")
+    else:
+        header += (
+            f"# Pinned to release {release.version} built from "
+            f"{release.source_revision[:12]}; images are referenced by digest.\n"
+            "# Signatures are NOT verified by this command — that needs the registry, and is\n"
+            "# `acpctl install`'s job.\n")
     return header + note + body

@@ -33,6 +33,6 @@ describe('automation policy presentation contract', () => {
 
   it('aligns every routing outcome to the same text column', () => {
     expect(css).toMatch(/automation-policy__routes > div[^}]*grid-template-columns: minmax\(150px, \.7fr\) minmax\(0, 1fr\) auto/)
-    expect(css).toMatch(/automation-policy__routes b[^}]*justify-self: stretch[^}]*text-align: left/)
+    expect(css).toMatch(/automation-policy__route-impact[^}]*width: 100%[^}]*justify-self: start[^}]*text-align: left/)
   })
 })

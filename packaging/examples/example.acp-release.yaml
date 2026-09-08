@@ -1,0 +1,86 @@
+# ILLUSTRATIVE. This manifest cannot install anything and is not meant to.
+#
+# Its registry is in a reserved TLD that can never resolve (RFC 2606), so a copy of this file
+# fails at pull time instead of quietly installing somebody else's digests — and
+# `acpctl release verify` says so, as the `release.illustrative` warning. The digests below are
+# hashes of the strings "illustrative-acp-release-<name>"; no such images exist.
+#
+# What it IS for: showing the shape a real release manifest has, and recording — checkably —
+# which artifacts ACP actually builds today. That last part is the interesting one. PRD S5.1
+# names eight images and `acpctl plan` prints all eight; the Helm chart pulls four; and
+# `deploy/public/deploy.sh` builds ONE application image that serves the API and every worker
+# role, plus the Grafana and Ollama images. This file is where those three counts are reconciled,
+# and packaging/cli/acpctl/release.py refuses a manifest where they do not add up.
+apiVersion: packaging.acp.mova.io/v1alpha1
+kind: ACPRelease
+
+metadata:
+  version: "2026.9"
+  # A real manifest carries the commit its build ran from. This one is the all-zero tree hash,
+  # which is a valid shape and cannot be mistaken for a commit in this repository.
+  sourceRevision: "0000000000000000000000000000000000000000"
+  builtAt: "2026-09-08T00:00:00Z"
+  registry: registry.invalid/acp
+  notes: >-
+    Illustrative release manifest. Digests are fabricated and the registry cannot resolve.
+
+components:
+  # ── the application image ───────────────────────────────────────────────────
+  # ONE ARTIFACT, SIX LOGICAL IMAGES. The API and the three worker tiers differ by command and by
+  # ACP_WORKER_ROLE, not by image (docs/worker-split.md, ADR 0048 Decision 1), and the chart runs
+  # its migration and preflight Jobs from this same image. Building six byte-identical artifacts
+  # so that each of PRD S5.1's names had its own digest would multiply the scan, sign and SBOM
+  # cost of a release by six and pin nothing extra.
+  - name: app
+    repository: acp-app
+    digest: "sha256:347d6d81f88df62d4a909d122924649de1b6ae3bd5dfa97ceddf3b59ea7306b1"
+    tag: "2026.9"
+    sourceRevision: "0000000000000000000000000000000000000000"
+    architectures: [amd64]
+    serves: [api, discover, assess, remediate, migrations, preflight]
+    chartImages: [api, worker]
+    sbom:
+      format: spdx-json
+      uri: registry.invalid/acp/acp-app:sha256-347d6d81f88df62d4a909d122924649de1b6ae3bd5dfa97ceddf3b59ea7306b1.sbom
+      digest: "sha256:83b639a4ce749f543744d9d003de678d4286fe3c149c28745024b0a0bb96568a"
+    signature:
+      type: cosign
+      uri: registry.invalid/acp/acp-app:sha256-347d6d81f88df62d4a909d122924649de1b6ae3bd5dfa97ceddf3b59ea7306b1.sig
+
+  # ── the model image ─────────────────────────────────────────────────────────
+  # A genuinely different artifact on a different cadence: deploy/ollama/Dockerfile bakes the
+  # model pair into the layer, so this is multi-GB and cannot be a tag on the application image.
+  - name: ollama-gateway
+    repository: acp-ollama-gateway
+    digest: "sha256:0874ee0df3c8b6f73cabf89f89d49b5f5b7be02a6e1dc2015acce34b9bb2ba8f"
+    tag: "2026.9"
+    sourceRevision: "0000000000000000000000000000000000000000"
+    architectures: [amd64]
+    serves: [ollama]
+    chartImages: [ollama]
+    sbom:
+      format: spdx-json
+      uri: registry.invalid/acp/acp-ollama-gateway:sha256-0874ee0df3c8b6f73cabf89f89d49b5f5b7be02a6e1dc2015acce34b9bb2ba8f.sbom
+      digest: "sha256:725526f7d50b2d09bb7f96ac0cff6806de94d89765248866193d4099fb2c0000"
+    signature:
+      type: cosign
+      uri: registry.invalid/acp/acp-ollama-gateway:sha256-0874ee0df3c8b6f73cabf89f89d49b5f5b7be02a6e1dc2015acce34b9bb2ba8f.sig
+
+  # ── the dashboards image ────────────────────────────────────────────────────
+  # Also first-party, not stock Grafana: deploy/grafana/Dockerfile bakes ACP's dashboards, alert
+  # rules and datasource provisioning in, so the deployable artifact is ours.
+  - name: grafana
+    repository: acp-grafana
+    digest: "sha256:008f8861a676cbd21f70b40a3a675de8c952ae0a9ec823ddb1136d6add0784f6"
+    tag: "2026.9"
+    sourceRevision: "0000000000000000000000000000000000000000"
+    architectures: [amd64]
+    serves: [grafana]
+    chartImages: [grafana]
+    sbom:
+      format: spdx-json
+      uri: registry.invalid/acp/acp-grafana:sha256-008f8861a676cbd21f70b40a3a675de8c952ae0a9ec823ddb1136d6add0784f6.sbom
+      digest: "sha256:101b6332568beff480c805824fe5e103a11c0849d11ed7efa042b4b19a2e8d40"
+    signature:
+      type: cosign
+      uri: registry.invalid/acp/acp-grafana:sha256-008f8861a676cbd21f70b40a3a675de8c952ae0a9ec823ddb1136d6add0784f6.sig

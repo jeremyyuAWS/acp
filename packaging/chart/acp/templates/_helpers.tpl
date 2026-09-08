@@ -185,14 +185,33 @@ ACP_WORKER_ROLE) are added by the caller; everything below is identical by const
 Probes. The API serves both; workers have no HTTP listener and get neither, which is why this
 takes the component rather than being pasted into each Deployment.
 
-/readyz is the readiness probe and /healthz the liveness one, and they are NOT interchangeable:
-readyz reports on dependencies (the database, the renderer) and a failing dependency should take
-a pod out of the load balancer, while restarting it would only move the outage around.
+THE READINESS PATH IS /probe/readyz, AND THE TWO OBVIOUS-LOOKING ALTERNATIVES ARE BOTH WRONG.
+The application has three health routes and its own source (api/routes/system.py, the block
+comment above `probe_readyz`) says which one a platform probe may point at — this one, and only
+this one:
+
+  /healthz       build provenance. Touches NO dependency, so it answers 200 from a replica that
+                 cannot reach the database — exactly the replica a readiness gate exists to hold
+                 traffic away from. Correct for LIVENESS, which is what it is used for below.
+  /readyz        "can this DEPLOYMENT do work" — the worker tier, the PDF engine, the renderer.
+                 Two problems as a readiness target. It never sets a status code, so it returns
+                 200 unconditionally and the gate can never close. And if it ever did fail it
+                 would fail for a worker-tier outage, which evicts the API container — a restart
+                 that cannot fix a worker tier and loses the API too.
+  /probe/readyz  this container, its database, one round-trip, 503 when that fails. Deliberately
+                 narrow: nothing about the worker tier, the vision model or any source adapter,
+                 all of which are legitimately absent on a replica that serves perfectly well.
+
+This chart pointed readiness at /readyz until 2026-09-08. Nothing failed, because nothing could:
+a probe that cannot return non-200 is indistinguishable from a healthy deployment, and the window
+it left open — traffic to a replica whose database reads have not started answering — is the one
+`/probe/readyz` was added to close (sampled live during #1151: /healthz 200 in 0.39s while every
+database-backed route hung for 25s on the same replica).
 */}}
 {{- define "acp.apiProbes" -}}
 readinessProbe:
   httpGet:
-    path: /readyz
+    path: /probe/readyz
     port: http
   initialDelaySeconds: 10
   periodSeconds: 10

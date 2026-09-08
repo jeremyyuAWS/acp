@@ -25,11 +25,13 @@ requires an acceptance run against a real cluster, which has not happened.
 ```
 packaging/
   schema/acp-deployment.schema.json   the published contract
-  cli/acpctl/                         validate · plan · inventory · values · doctor · status
-                                      · install · uninstall · support-bundle
+  schema/acp-release.schema.json      what one release consists of, and how to pin it
+  cli/acpctl/                         validate · plan · inventory · values · release · doctor
+                                      · status · install · uninstall · support-bundle
   chart/acp/                          the Helm chart the values install
-  examples/                           one document per deployment profile
+  examples/                           one document per deployment profile, plus one release
   docs/service-inventory.md           GENERATED — scripts/gen_service_inventory.py
+  docs/kubernetes-mvp-gap-report.md   what still blocks a real cluster install
 ```
 
 ## The chart
@@ -227,6 +229,58 @@ Two more comparisons that look obvious and are wrong:
   platform are on the labels, so that case is detectable — and when it fires, the comparison
   stops rather than continuing in colour. Health is still reported, because health does not depend
   on the document at all.
+
+## `release verify` — is this a release something can be installed from?
+
+A deployment document says what an installation should be. A **release manifest** says what one
+ACP release consists of: one entry per built artifact, with its digest, the commit it was built
+from, its architectures, its SBOM and its signature.
+
+```bash
+python -m acpctl release verify packaging/examples/example.acp-release.yaml
+python -m acpctl values <spec> --release <manifest>   # image.digests, pinned
+python -m acpctl plan   <spec> --release <manifest>   # digests instead of <unresolved>
+```
+
+The shipped example is published under a registry in a reserved TLD that can never resolve, so a
+copy of it fails at pull time rather than installing digests nobody chose — and `release verify`
+says so as the `release.illustrative` warning.
+
+### It reconciles three counts that disagreed
+
+PRD §5.1 names **eight** images. The chart pulls **four**. `deploy/public/deploy.sh` builds **one**
+application image that serves the API and all three worker roles, plus Grafana and the model image.
+All three are correct about different things, and before this contract they disagreed silently:
+`acpctl plan` named `acp-web-api` and `acp-discovery-worker` while `helm template` deployed `acp`
+and `acp-worker`, and nothing built any of those four. Two names out of eight overlapped.
+
+So a component here is an **artifact that was actually built**, and it declares what it provides:
+
+```yaml
+- name: app
+  repository: acp-app
+  digest: "sha256:…"
+  serves: [api, discover, assess, remediate, migrations, preflight]   # PRD S5.1 images
+  chartImages: [api, worker]                                          # what the chart pulls
+```
+
+Two rules make the old state un-representable. Every image `acpctl plan` names must be served by
+exactly one artifact — otherwise a reviewer signs off a list of things nobody built. Every image
+the chart pulls must be backed by exactly one artifact — and that one matters more, because it
+fails **silently**: `acp.image` falls back to the tag when `image.digests` has no entry, so the
+install succeeds and is simply not pinned.
+
+### What it does not do
+
+It reaches no registry. So it cannot prove a digest exists, cannot verify a signature, and cannot
+confirm an SBOM is at the URI it names. What it establishes is that the release **declares** those
+things and that the declarations are consistent — one source revision across every artifact
+(PRD §5.1), a signature and an SBOM per artifact, amd64 everywhere, and arm64 recorded per image
+rather than claimed for the release. Verifying a signature needs the registry and the trust root
+and is `acpctl install`'s job; leaving that gap explicit is the point.
+
+`--release` never degrades. A caller who passes a broken manifest gets exit 1 and no output, not
+an unpinned values file that reads exactly like a pinned one.
 
 ## The four profiles
 

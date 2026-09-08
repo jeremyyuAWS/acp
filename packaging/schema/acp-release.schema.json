@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://packaging.acp.mova.io/v1alpha1/acp-release.schema.json",
+  "title": "ACPRelease",
+  "description": "The release manifest: what one ACP release actually consists of, and how to pin it. One document per release, produced by the build and consumed by acpctl and the Helm chart. It names every BUILT ARTIFACT — not every logical image — because several of the images PRD S5.1 names are roles of one artifact, and a manifest that pretended otherwise would list digests nobody built. Structural validation lives here; the cross-field rules (one source revision across the release, full coverage of the logical images and of the chart's image components, signatures, SBOMs) are in packaging/cli/acpctl/release.py and are what `acpctl release verify` runs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "metadata", "components"],
+  "properties": {
+    "apiVersion": {
+      "description": "Contract version. Only v1alpha1 exists; a breaking change gets a new version, never a redefined field.",
+      "const": "packaging.acp.mova.io/v1alpha1"
+    },
+    "kind": {
+      "const": "ACPRelease"
+    },
+    "metadata": {
+      "$ref": "#/$defs/metadata"
+    },
+    "components": {
+      "description": "One entry per built artifact. NOT one per logical image: acp-web-api and the three worker images of PRD S5.1 are the same artifact under different commands and ACP_WORKER_ROLE values, and each component says which logical images it serves.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/component"
+      }
+    }
+  },
+  "$defs": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "sourceRevision", "builtAt", "registry"],
+      "properties": {
+        "version": {
+          "description": "The ACP release this manifest describes, in the same form as an acp-deployment document's runtime.version. `acpctl values --release` refuses a manifest whose version is not the one the document asks for.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "sourceRevision": {
+          "description": "The full git commit every component was built from. PRD S5.1 requires one source revision per release; a component built from another is a mixed release and `acpctl release verify` rejects it.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "builtAt": {
+          "description": "RFC 3339 UTC timestamp of the build, for the installation manifest (PRD S20.12).",
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+        },
+        "registry": {
+          "description": "The registry these digests were pushed to. Recorded, not used for pulling: a digest identifies the same bytes in any registry, so an installation that mirrored the release pulls from its own registry (the deployment document's runtime.imageRegistry) with these digests unchanged.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253
+        },
+        "notes": {
+          "description": "Free text for the humans reading the manifest. Never parsed.",
+          "type": "string",
+          "maxLength": 2000
+        }
+      }
+    },
+    "component": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "repository", "digest", "sourceRevision", "architectures", "serves"],
+      "properties": {
+        "name": {
+          "description": "Stable key for this artifact within the release. Unique across components.",
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{1,40}$"
+        },
+        "repository": {
+          "description": "Repository path within the registry, with no host and no tag (for example 'acp-app').",
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9._/-]{0,120}$"
+        },
+        "digest": {
+          "description": "The immutable content digest. PRD S5.1: templates reference digests, not mutable tags.",
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "tag": {
+          "description": "The human-readable tag this digest was also pushed under. Recorded for operators; never used to pull, because a tag moves and a digest does not.",
+          "type": "string",
+          "maxLength": 128
+        },
+        "sourceRevision": {
+          "description": "The git commit this artifact was built from. Must equal metadata.sourceRevision.",
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "architectures": {
+          "description": "Architectures this artifact was built for. PER COMPONENT, and deliberately with no release-wide equivalent: PRD S5.1 supports AMD64 everywhere and ARM64 only where every analysis engine in that image permits it, so a release-level claim would be true of some artifacts and false of others.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": ["amd64", "arm64"]
+          }
+        },
+        "serves": {
+          "description": "The logical release images of PRD S5.1 this artifact provides. The keys are acpctl's inventory.IMAGES keys. Every one of them must be served by exactly one component in a release, which is what stops `acpctl plan` from naming an image the build never produced.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": ["api", "discover", "assess", "remediate", "ollama", "grafana", "migrations", "preflight"]
+          }
+        },
+        "chartImages": {
+          "description": "The Helm chart image components this artifact backs — the keys the chart's acp.image helper looks up in image.digests. Absent or empty means the chart never pulls this artifact directly (it is a role of another one). Every chart image component must be backed by exactly one artifact, or the install cannot be fully digest-pinned.",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": ["api", "worker", "ollama", "grafana"]
+          }
+        },
+        "sbom": {
+          "$ref": "#/$defs/attestation"
+        },
+        "signature": {
+          "$ref": "#/$defs/signature"
+        }
+      }
+    },
+    "attestation": {
+      "description": "Where the SBOM for this artifact lives, and what it hashes to. The manifest carries a reference, not the document: an SBOM is megabytes and this file is meant to be read.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "uri", "digest"],
+      "properties": {
+        "format": {
+          "type": "string",
+          "enum": ["spdx-json", "cyclonedx-json"]
+        },
+        "uri": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "signature": {
+      "description": "How this artifact is signed. A REFERENCE, and this file cannot establish that it verifies: proving a signature needs the registry and the trust root, which is `acpctl install`'s job. What the manifest establishes is that a signature was produced and where to find it, so an unsigned component is refused before an install is attempted rather than during one.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "uri"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["cosign"]
+        },
+        "uri": {
+          "description": "Where the signature is stored — for cosign, the .sig tag alongside the image.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "identity": {
+          "description": "The keyless-signing identity that must match at verification time, when keyless signing is used.",
+          "type": "string",
+          "maxLength": 512
+        }
+      }
+    }
+  }
+}
