@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Background, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import './operations-typography.css'
+import './liveops-typography.css'
 import { cancelLiveOpsStage, getAdminActivity, getWorkerCapacity, openAdminActivityStream,
   resumeLiveOpsRemediation } from './api.js'
 import { ensureResizeObserver } from './resizeObserverFallback.js'
@@ -205,7 +206,7 @@ export function MetricChart({ values = [], field, label, color }) {
     : ''
   return <div className="panel" style={{ padding: 10 }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}><b style={{ fontSize: 12 }}>{label}</b>
-      <span style={{ color, fontWeight: 700 }}>{points.at(-1) ?? 0}</span></div>
+      <span style={{ color, fontWeight: 400 }}>{points.at(-1) ?? 0}</span></div>
     {points.length > 1 ? <svg role="img" aria-label={`${label} over recent live updates`} viewBox="0 0 282 116" style={{ width: '100%', height: 116 }}>
       <line x1="24" y1="12" x2="24" y2="94" stroke="var(--line)" />
       <line x1="24" y1="94" x2="270" y2="94" stroke="var(--line)" />
@@ -417,11 +418,11 @@ export function RunNode({ data }) {
       borderLeft: `5px solid ${accent}`,
       boxShadow: `0 4px 12px color-mix(in srgb, ${accent} 18%, transparent)` }}>
     <Handle type="target" position={Position.Left} />
-    <div style={{ color: cfg.color, fontSize: 9.5, fontWeight: 800, letterSpacing: '.09em',
+    <div style={{ color: cfg.color, fontSize: 9.5, fontWeight: 400, letterSpacing: '.09em',
       marginBottom: 4 }}>{runTileLabel(data.run)}</div>
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
       <b>{cfg.label}</b><span style={{ color: ['attention', 'stalled'].includes(operationalState) ? 'var(--error-fg)' : cfg.color,
-        fontWeight: 700 }}>{statusLabel}</span>
+        fontWeight: 400 }}>{statusLabel}</span>
     </div>
     <div className="muted" style={{ fontSize: 10, marginTop: 2 }}>
       Workflow revision {Math.max(1, Number(data.run.workflow_revision || 1))}
@@ -456,12 +457,12 @@ function WorkflowNode({ data }) {
   return <div style={{ width: 225, minHeight: 112, padding: 12, borderRadius: 9,
     border: `2px solid ${data.color}`, borderLeft: `7px solid ${data.color}`,
     background: 'var(--surface)', boxShadow: '0 2px 8px rgba(24,20,28,.07)' }}>
-    <div style={{ color: data.color, fontSize: 9.5, fontWeight: 800, letterSpacing: '.09em' }}>WORKFLOW</div>
+    <div style={{ color: data.color, fontSize: 9.5, fontWeight: 400, letterSpacing: '.09em' }}>WORKFLOW</div>
     <b style={{ display: 'block', marginTop: 4, overflowWrap: 'anywhere' }}>{data.owner}</b>
     <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>
       Revision {data.workflowRevision} · {data.source}
     </div>
-    <div style={{ fontSize: 11, marginTop: 9, fontWeight: 700 }}>{data.status}</div>
+    <div style={{ fontSize: 11, marginTop: 9, fontWeight: 400 }}>{data.status}</div>
     <div className="muted" style={{ fontSize: 10, marginTop: 3 }}>{data.workflowId}</div>
     <Handle type="source" position={Position.Right} />
   </div>
@@ -545,15 +546,15 @@ function InfraNode({ data }) {
       ? data.inputPorts.map(({ id, top }) => <Handle key={id} id={id} type="target"
           position={Position.Left} style={{ top }} />)
       : data.hasInput !== false && <Handle type="target" position={Position.Left} />}
-    <div style={{ color, fontSize: 9.5, fontWeight: 800, letterSpacing: '.09em',
+    <div style={{ color, fontSize: 9.5, fontWeight: 400, letterSpacing: '.09em',
       marginBottom: 4 }}>{tileStyle(data.kind, color).label}</div>
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 7, alignItems: 'start' }}>
       <b style={{ overflowWrap: 'anywhere' }}>{data.label}</b>
-      <span style={{ color, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap' }}>{data.status}</span>
+      <span style={{ color, fontSize: 11, fontWeight: 400, whiteSpace: 'nowrap' }}>{data.status}</span>
     </div>
     <div className="muted" style={{ fontSize: 11, marginTop: 4, lineHeight: 1.3, overflowWrap: 'anywhere' }}>{data.detail}</div>
     {data.gauge && <NodeGauge {...data.gauge} color={color} />}
-    {data.metric && <div style={{ fontSize: 11, marginTop: 5, fontWeight: 700, overflowWrap: 'anywhere' }}>{data.metric}</div>}
+    {data.metric && <div style={{ fontSize: 11, marginTop: 5, fontWeight: 400, overflowWrap: 'anywhere' }}>{data.metric}</div>}
     {data.outputPorts?.length
       ? data.outputPorts.map(({ id, top }) => <Handle key={id} id={id} type="source"
           position={Position.Right} style={{ top }} />)
@@ -1095,7 +1096,7 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
   const correlation = summary.workflow_correlation || {}
   const delivery = deliveryHealthModel(summary.canonical_delivery)
   const cancellations = cancellationHealthModel(summary.cancellation_acknowledgements)
-  return <section className="panel" style={{ padding: 16, marginBottom: 20 }} aria-label="Live Azure processing traffic">
+  return <section className="panel liveops-theme" style={{ padding: 16, marginBottom: 20 }} aria-label="Live Azure processing traffic">
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 10 }}>
       <div><b>Live Azure traffic</b><div className="muted" style={{ fontSize: 12 }}>Active worker flow plus the last 15 minutes</div></div>
       <span className="chip" style={{ marginLeft: 'auto' }}>● {connection}</span>

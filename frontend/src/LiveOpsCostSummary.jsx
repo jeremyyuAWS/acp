@@ -110,9 +110,9 @@ export default function LiveOpsCostSummary() {
       <SetupSignal label="Rate card" state={setup.rate_card} />
       <SetupSignal label="Billing actuals" state={setup.billing_actuals} />
     </div>
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 10, marginTop: 10 }}>
-      <div><span className="muted" style={{ fontSize: 11 }}>CURRENT CAPACITY / HOUR</span><br /><b style={{ fontSize: 20 }}>{money(costs.estimated_hourly_usd, 4)}</b></div>
-      <div><span className="muted" style={{ fontSize: 11 }}>PROJECTED / DAY</span><br /><b style={{ fontSize: 20 }}>{money(costs.estimated_daily_usd)}</b></div>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 20, marginTop: 16 }}>
+      <div><span className="muted" style={{ fontSize: 11 }}>CURRENT CAPACITY / HOUR</span><br /><b className="liveops-money">{money(costs.estimated_hourly_usd, 4)}</b></div>
+      <div><span className="muted" style={{ fontSize: 11 }}>PROJECTED / DAY</span><br /><b className="liveops-money">{money(costs.estimated_daily_usd)}</b></div>
       <div><span className="muted" style={{ fontSize: 11 }}>RATE SOURCE</span><br /><b>{costs.rate_source || 'Not configured'}</b></div>
       {/* ACTUALS, NOT AN ESTIMATE — and never labelled live. Cost Management refreshes roughly
           every four hours, so this is a real measurement of a stale window: the figure gets the
@@ -124,7 +124,7 @@ export default function LiveOpsCostSummary() {
         {billed == null
           ? <b>{costs.billing?.freshness_label || 'Not reported'}</b>
           : <>
-            <b style={{ fontSize: 20 }}>{money(billed)}{currency && currency !== 'USD' ? ` ${currency}` : ''}</b>
+            <b className="liveops-money">{money(billed)}{currency && currency !== 'USD' ? ` ${currency}` : ''}</b>
             <span className="muted" style={{ display: 'block', fontSize: 11 }}>
               {costs.billing?.freshness_label || 'Azure billing data last updated'} {age(costs.billing?.updated_at)}
             </span>
@@ -136,7 +136,7 @@ export default function LiveOpsCostSummary() {
           ? <b>{costs.billing?.forecast_unavailable_reason === 'permission'
             ? 'Cost Management Reader role needed'
             : costs.billing?.configured ? 'Forecast not returned' : 'Not reported'}</b>
-          : <b style={{ fontSize: 20 }}>{money(forecast)}</b>}
+          : <b className="liveops-money">{money(forecast)}</b>}
       </div>
     </div>
     {!!costs.billing?.refresh_note && <p className="muted" style={{ fontSize: 11, margin: '9px 0 0' }}>

@@ -1,0 +1,70 @@
+/* Scoped to Live Operations; shared analytics cards keep their own hierarchy. */
+.liveops-theme {
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.liveops-theme :is(b, strong, h2, h3, h4, summary, button, th) {
+  font-weight: 400;
+}
+
+.liveops-theme :is(h2, h3, h4) {
+  line-height: 1.4;
+}
+
+.liveops-theme .ops-kpi-grid {
+  gap: 12px;
+  margin-top: 16px;
+  margin-bottom: 20px;
+}
+
+.liveops-theme .ops-kpi {
+  padding: 14px 16px;
+  border-radius: 12px;
+  box-shadow: none;
+}
+
+.liveops-theme .ops-kpi__label {
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.45;
+  letter-spacing: .025em;
+  margin-top: 0;
+  margin-bottom: 7px;
+}
+
+.liveops-theme .ops-kpi__value {
+  font-size: 18px;
+  font-weight: 400;
+  line-height: 1.35;
+  letter-spacing: 0;
+}
+
+.liveops-theme .ops-kpi:nth-child(-n + 4) .ops-kpi__value,
+.liveops-theme .liveops-money {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-variant-numeric: tabular-nums;
+}
+
+.liveops-theme .liveops-money {
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+
+.liveops-theme .ops-kpi__meta {
+  font-size: 12px;
+  line-height: 1.5;
+  margin-top: 5px;
+}
+
+.liveops-theme details > summary {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.liveops-theme :is(code, .liveops-tabs, .liveops-tabbody),
+.liveops-theme .liveops-tabs [role="tab"] {
+  font-weight: 400;
+}
