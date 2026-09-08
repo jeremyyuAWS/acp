@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createElement, act } from 'react'
 import axe from 'axe-core'
 import RemediationImpactCard from './RemediationImpactCard.jsx'
+import AssessSummary from './AssessSummary.jsx'
 import { createTestRoot, unmountAll } from './testRoots.js'
 import { getRemediationImpact, saveRemediationImpactPolicy, assignRemediationImpact } from './api.js'
 vi.mock('./api.js', () => ({ getRemediationImpact: vi.fn(), saveRemediationImpactPolicy: vi.fn(), assignRemediationImpact: vi.fn() }))
@@ -37,7 +38,7 @@ describe('RemediationImpactCard', () => {
     await act(async () => button(container, 'Save as default for future runs').click())
     expect(saveRemediationImpactPolicy).toHaveBeenCalledWith('run-1', { rule_based: 2, ai: 1 }, 4)
     expect(onRun).not.toHaveBeenCalled()
-    await act(async () => button(container, 'Run remediation with these settings').click())
+    await act(async () => button(container, 'Start remediation with this plan').click())
     expect(onRun).toHaveBeenCalledWith({ rule_based: 2, ai: 1 }, expect.objectContaining({ open: { findings: 7, files: 3 } }))
     await act(async () => button(container, 'Reset to active').click())
     expect(container.querySelector('input[type=range]').value).toBe('0')
@@ -104,7 +105,7 @@ describe('RemediationImpactCard', () => {
     const { container } = await mount({ onRun: vi.fn() })
     expect(container.textContent).toContain('could not be reconciled')
     expect(container.querySelector('table')).toBeNull()
-    expect(button(container, 'Run remediation with these settings').disabled).toBe(true)
+    expect(button(container, 'Start remediation with this plan').disabled).toBe(true)
   })
   it('shows unavailable instead of zero for missing projections', async () => {
     getRemediationImpact.mockResolvedValue({ ...result(), file_outlook: {} })
@@ -121,7 +122,7 @@ describe('RemediationImpactCard', () => {
   it('lets read-only users preview without running or saving', async () => {
     const { container } = await mount({ readOnly: true, onRun: vi.fn() })
     expect(button(container, 'Save as default for future runs').disabled).toBe(true)
-    expect(button(container, 'Run remediation with these settings').disabled).toBe(true)
+    expect(button(container, 'Start remediation with this plan').disabled).toBe(true)
     expect(button(container, 'Review first').disabled).toBe(false)
   })
   it('handles an absent preview without inventing counts', async () => {
@@ -165,6 +166,60 @@ describe('RemediationImpactCard', () => {
     await act(async () => container.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })))
     expect(container.querySelector('[role=alert]').textContent).toContain('Permission denied')
     expect(container.textContent).toContain('7 unresolved findings across 3 files')
+  })
+  it('previews guided choices without starting a run or changing AI permission implicitly', async () => {
+    const onRun = vi.fn()
+    const { container } = await mount({ onRun })
+    const choose = async label => act(async () => [...container.querySelectorAll('.remediation-plan-choices label')].find(node => node.textContent.includes(label)).querySelector('input').click())
+    await choose('Review every change')
+    expect(getRemediationImpact).toHaveBeenLastCalledWith('run-1', { rule_based: 0, ai: 1 }, undefined)
+    await choose('No AI')
+    await choose('Maximize automation')
+    expect(getRemediationImpact).toHaveBeenLastCalledWith('run-1', { rule_based: 2, ai: 0 }, undefined)
+    expect(container.textContent).not.toContain('3. AI providers & budget')
+    expect(onRun).not.toHaveBeenCalled()
+    await act(async () => button(container, 'Start remediation with this plan').click())
+    expect(onRun).toHaveBeenCalledWith({ rule_based: 2, ai: 0 }, expect.anything())
+  })
+  it('discloses cloud destinations and unavailable budget enforcement without inventing private approval', async () => {
+    getRemediationImpact.mockImplementation(async () => ({ ...result(), providers: { text: { provider: 'anthropic', model: 'configured-model', zone: 'cloud' } } }))
+    const { container } = await mount()
+    expect(container.textContent).toContain('Cloud destination')
+    expect(container.textContent).toContain('Processing location not reported')
+    expect(container.textContent).toContain('Run spending limit: unavailable')
+    expect(container.textContent).toContain('cannot enforce a spending cap')
+    expect(container.textContent).toContain('do not certify a provider as approved')
+  })
+  it('keeps assessment totals fixed beside live tiles and opens the matching right drawer', async () => {
+    const renderAssessment = forecast => createElement(AssessSummary, {
+      files: [{ file: 'A.docx', status: 'analysed', issues: [{ wcag: 'SC_1_3_1', severity: 'SERIOUS' }] }],
+      criteria: new Set(['1.3.1']), cap: { docx: { '1.3.1': 'auto' } },
+      assessment: { docx: { '1.3.1': 'auto' } }, remediationForecast: forecast,
+    })
+    const { container } = await mount({ renderAssessment })
+    const tile = name => [...container.querySelectorAll('.assesssummary button')].find(node => node.textContent.startsWith(name))
+    const historicTotal = () => [...container.querySelectorAll('.assesssummary div')].find(node => node.firstElementChild?.textContent === 'Total findings')?.textContent
+    const before = historicTotal()
+    expect(before).toContain('1')
+    expect(container.querySelector('.remediation-impact__settings .remediation-plan-choices')).not.toBeNull()
+    expect(container.querySelector('.remediation-impact__results .assesssummary')).not.toBeNull()
+    expect(tile('Auto-fix available').textContent).toContain('4')
+    tile('Auto-fix available').focus()
+    await act(async () => tile('Auto-fix available').click())
+    expect(container.querySelector('[role=dialog]').getAttribute('aria-label')).toBe('Auto-fix available')
+    expect(container.querySelector('[role=dialog]').textContent).toContain('A.docx')
+    await act(async () => window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })))
+    expect(container.querySelector('[role=dialog]')).toBeNull()
+    expect(document.activeElement).toBe(tile('Auto-fix available'))
+    await act(async () => tile('Human review required').click())
+    expect(container.querySelector('[role=dialog]').textContent).toContain('C.docx')
+    expect(container.querySelector('[role=dialog]').textContent).not.toContain('A.docx')
+    await act(async () => button(container, 'C.docx').click())
+    expect(container.querySelector('[role=dialog]').textContent).toContain('human judgment')
+    await act(async () => button(container, 'Close details').click())
+    await act(async () => button(container, 'Review first').click())
+    expect(tile('Auto-fix available').textContent).toContain('0')
+    expect(historicTotal()).toBe(before)
   })
   it('has no automated accessibility violations', async () => {
     const { container } = await mount()

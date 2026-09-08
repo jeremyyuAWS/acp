@@ -7,3 +7,37 @@
 .remediation-impact__assignment{margin-top:16px;padding:16px;background:#faf8fc;border:1px solid #e7dfec;border-radius:8px}.remediation-impact__assignment fieldset{border:1px solid #d8ccdf;margin:12px 0;padding:12px}.remediation-impact__assignment fieldset label{display:block;margin:6px 0}.remediation-impact__assignment>label{display:block;font-weight:600;margin-bottom:6px}.remediation-impact__assignment input[type=email]{box-sizing:border-box;width:min(100%,380px);padding:9px;border:1px solid #a18cae;border-radius:5px;font:inherit}.remediation-impact__assignment button{margin-right:8px}
 .remediation-impact__file-filters{display:flex;align-items:end;gap:10px;flex-wrap:wrap;margin:2px 0 12px;padding:10px 0}.remediation-impact__file-filters label{display:grid;gap:5px;font-size:11.5px;font-weight:650;color:#65576d}.remediation-impact__file-filters input,.remediation-impact__file-filters select{box-sizing:border-box;min-width:190px;padding:8px 10px;border:1px solid #d8ccdf;border-radius:7px;background:#fff;color:#2f2635;font:inherit;font-size:13px}.remediation-impact__file-filters select{min-width:145px}.remediation-impact__file-count{align-self:center;color:#65576d;font-size:12px;font-variant-numeric:tabular-nums}
 @media(max-width:760px){.remediation-impact__file-filters label,.remediation-impact__file-filters input,.remediation-impact__file-filters select{width:100%}.remediation-impact__file-filters label{flex:1 1 100%}}
+
+/* Keep decisions alongside their live consequences, then stack on smaller screens. */
+.remediation-impact__split{display:grid;grid-template-columns:minmax(300px,.85fr) minmax(0,1.4fr);gap:24px;margin-top:20px;align-items:start}
+.remediation-impact__settings,.remediation-impact__results{min-width:0}
+.remediation-impact__results .assesssummary{margin:0 0 16px;padding:18px}
+.remediation-impact__settings .remediation-impact__controls{grid-template-columns:1fr}
+.remediation-plan-choices fieldset{min-width:0;margin:0 0 22px;padding:0;border:0}
+.remediation-plan-choices legend{font-size:16px;font-weight:700;margin-bottom:12px}
+.remediation-plan-choices__grid{display:grid;gap:10px}
+.remediation-plan-choices__grid label{display:flex;gap:10px;padding:14px;border:1px solid #d8ccdf;border-radius:9px;cursor:pointer;background:#fff;align-items:flex-start}
+.remediation-plan-choices__grid label.is-selected{border-color:#76518c;background:#f5eff9;box-shadow:inset 3px 0 #76518c}
+.remediation-plan-choices__grid input{flex:none;margin:3px 0 0;accent-color:#76518c;width:17px;height:17px}
+.remediation-plan-choices__grid strong,.remediation-plan-choices__grid span span{display:block;font-size:13px;line-height:1.5}
+.remediation-plan-choices__grid span span{margin-top:5px;color:#65576d}
+.remediation-plan-choices fieldset:disabled label{cursor:not-allowed;opacity:.65}
+.remediation-plan-choices__providers,.remediation-plan-choices__summary{padding:16px;border:1px solid #e7dfec;border-radius:10px;margin-bottom:18px;background:#faf8fc}
+.remediation-plan-choices__providers h3,.remediation-plan-choices__summary h3{margin-top:0}
+.remediation-plan-choices dl{font-size:13px;margin:12px 0}
+.remediation-plan-choices dl>div{padding:10px 0;border-bottom:1px solid #e7dfec}
+.remediation-plan-choices dt{font-weight:600;margin-bottom:5px}
+.remediation-plan-choices dd{margin:0;overflow-wrap:anywhere;line-height:1.5}
+.remediation-plan-choices dd span{display:block;color:#65576d}
+.remediation-plan-choices__budget{border-top:1px solid #d8ccdf;margin-top:16px;padding-top:14px;font-size:13px}
+.remediation-impact__routes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin:12px 0}
+.remediation-impact__routes button{display:flex;flex-direction:column;text-align:left;padding:16px;gap:8px}
+.remediation-impact__routes strong{font-size:28px;font-variant-numeric:tabular-nums}
+.remediation-impact__routes .remediation-impact__route--automatic strong{color:#287337}
+.remediation-impact__route-link{text-decoration:underline;text-underline-offset:3px;font-weight:600}
+.remediation-impact__comparison,.remediation-impact__advanced{margin:14px 0;font-size:13px}
+.remediation-impact__results .remediation-impact__outlooks{grid-template-columns:repeat(2,minmax(0,1fr))}
+.remediation-impact .drawer{width:min(780px,95vw);max-width:95vw}
+.remediation-impact__drilldown{border:0;margin:0;padding:16px 0}
+@media(max-width:1050px){.remediation-impact__split{grid-template-columns:1fr}.remediation-plan-choices__grid{grid-template-columns:repeat(3,minmax(0,1fr))}.remediation-plan-choices__grid--two{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){.remediation-plan-choices__grid{grid-template-columns:1fr}.remediation-impact__routes{grid-template-columns:1fr}.remediation-impact__results .assesssummary{padding:12px}}
