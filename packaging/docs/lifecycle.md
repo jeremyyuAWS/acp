@@ -77,8 +77,10 @@ python -m acpctl install packaging/examples/standard-production.acp-deployment.y
 It runs, in this order, and stops at the first refusal:
 
 1. **Validate the document.** An invalid document is refused before anything is contacted.
-2. **Resolve digests** (below). Refused unless every enabled image component has one, or
-   `--allow-unpinned` is passed.
+2. **Load and validate the release manifest** (below), then **resolve digests**. A manifest that
+   fails `acpctl release verify`'s own rules is refused — not read partially, not installed and
+   reported afterwards. With no manifest at all, refused unless every enabled image component has
+   a digest, or `--allow-unpinned` is passed.
 3. **Preflight** — the `acpctl doctor` checks, *imported* rather than reimplemented, so a check
    added there gates installs from that moment. Any blocker refuses; so does a blocking check that
    could not be run, because the checks that cannot run are the ones guarding failures that are
@@ -115,38 +117,54 @@ switches pinning off for the components that do matter.
 `release.pinned: false` in the install state — so the next reader can tell an audited release from a
 hopeful one.
 
-### The release manifest — acpctl is a consumer, not the owner
+### The release manifest — one contract, one reader
 
-`--release-manifest <path>` reads YAML or JSON. **The format is owned by the release pipeline (PRD
-workstream A), not by acpctl.** What is documented here is only what this consumer requires, and it
-is deliberately the narrowest thing that can still be checked:
+`--release-manifest <path>` takes an **`ACPRelease`** document — the release-manifest contract
+defined by `packaging/schema/acp-release.schema.json` and `packaging/cli/acpctl/release.py`, with
+`packaging/examples/example.acp-release.yaml` as the worked example. YAML or JSON; the JSON path
+needs no PyYAML, for the air-gapped bundle (PRD §17).
 
-- either a top-level `components:` mapping, or a bare top-level mapping of component name to entry;
-- every entry carries `digest`, `repository`, `revision` and `version`;
-- `digest` matches `^sha256:[0-9a-f]{64}$`;
-- **all components agree on `revision` and on `version`.** A mixed-revision release is refused —
-  "CI fails on a mixed-revision release" is the property the format exists to have, and a consumer
-  that installs one anyway makes that guarantee decorative. The result would be an API and a worker
-  from different commits, which is a class of bug nobody can reproduce afterwards.
+**`install` does not parse it.** It calls `release.load_manifest` and `release.validate` — the same
+code `acpctl release verify`, `acpctl plan --release` and `acpctl values --release` run — and reads
+three things off the result: the chart digests, the chart repositories, and the version. PRD §6
+says not to let parallel work create multiple release-manifest formats, and this is that rule
+applied to the reader as well as the writer: `install.py` used to carry a narrow reader of its own,
+written before the contract existed, and two readers of one format drift *silently* — the copy
+nothing else runs is the one that goes wrong, and the install is where the wrong digest lands.
 
-Component names are matched tolerantly, because the pipeline names artifacts (`acp-web-api`,
-`acp-discovery-worker`) and the chart names roles (`api`, `worker`). Unrecognised keys are ignored.
-The three worker artifacts map to the chart's single `worker` image and must agree on one digest;
-if they do not, there is no correct choice to make and the install refuses.
+A manifest that fails validation is **refused (exit 1) with the findings printed**, and nothing is
+contacted. What that now covers, beyond the digest shape and revision agreement the old reader
+checked:
 
-There is no schema file for this, on purpose. A second definition of somebody else's format is one
-that drifts.
+- one **source revision** across the whole release (`release.mixed-revision`) — an API and a worker
+  from different commits is a class of bug nobody can reproduce afterwards;
+- a **signature** declared for every artifact (`release.unsigned`, PRD §5.1/§13) and an **SBOM**
+  for every artifact (`release.no-sbom`);
+- **amd64** on every artifact, with arm64 recorded per image rather than claimed release-wide;
+- **unique component names**, every logical image `acpctl plan` names served by exactly one
+  artifact, and every image the **chart** pulls backed by exactly one artifact — a chart image
+  nothing backs is the silent case, because the chart falls back to the tag and the install
+  succeeds *unpinned*;
+- the release's `metadata.version` **matches the document's `runtime.version`**
+  (`release.version-mismatch`), because the installation record states one version and it is the
+  document's.
 
-```json
-{
-  "components": {
-    "acp-web-api":        {"digest": "sha256:…", "repository": "acp-web-api",       "revision": "9f3c…", "version": "2026.9"},
-    "acp-discovery-worker":{"digest": "sha256:…", "repository": "acp-worker",       "revision": "9f3c…", "version": "2026.9"},
-    "acp-ollama-gateway": {"digest": "sha256:…", "repository": "acp-ollama-gateway","revision": "9f3c…", "version": "2026.9"},
-    "acp-grafana":        {"digest": "sha256:…", "repository": "acp-grafana",       "revision": "9f3c…", "version": "2026.9"}
-  }
-}
-```
+Warnings (a partial-arm64 release, a registry in a reserved TLD) are printed and do **not** refuse.
+
+Two consequences worth stating:
+
+- **One artifact can back several chart images.** `deploy/public/deploy.sh` builds a single
+  application image that runs the API and every worker role, so `api` and `worker` are pinned to
+  the same digest by the same component. The old reader's alias table — `acp-web-api`,
+  `acp-discovery-worker`, … mapped onto chart roles — is gone; the manifest states the mapping
+  outright in `chartImages`.
+- **The manifest's `repository` beats the chart's default.** The chart's `image.repository` and
+  `image.workerRepository` default to `acp` and `acp-worker`, names this repository's build does
+  not produce; the manifest names what was built (`acp-app`). The chart-derived names remain the
+  fallback for an install given no manifest — where the alternative is not a better name but none.
+
+Nothing here contacts a registry, so a *declared* signature is not a *verified* one and a digest is
+not proven to exist. Verifying against the registry is still future work (PRD §13).
 
 ---
 
@@ -175,8 +193,10 @@ release:
   version: "2026.9"
   pinned: true                  # false when --allow-unpinned was used
   components:
-    api:     {repository: acp-web-api, digest: "sha256:…"}
-    worker:  {repository: acp-worker,  digest: "sha256:…"}
+    # The repositories and digests come from the release manifest (above), so `api` and `worker`
+    # share one digest here: one built artifact backs both of the chart's images.
+    api:     {repository: acp-app, digest: "sha256:…"}
+    worker:  {repository: acp-app, digest: "sha256:…"}
   manifestSha256: sha256:…      # null when no release manifest was given
 chart:
   name: acp
