@@ -34,6 +34,8 @@ fake target, and against no real deployment.
 """
 from __future__ import annotations
 
+import json
+
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 
@@ -217,12 +219,40 @@ def _json(resp: HttpResponse) -> Any | None:
     return resp.json()
 
 
+def _detail(resp: HttpResponse) -> str:
+    """A bounded, printable slice of a response body, for evidence.
+
+    THE SECOND REFERENCE-CLUSTER RUN COST A WHOLE CYCLE FOR WANT OF THIS. `fixture-workflow`
+    reported "starting assessment answered 503" and nothing else, so the run established that
+    something returned 503 and gave no way to tell `DB_CAPACITY_BUSY` from a dozen other 503s in
+    this application. A status code alone is not a diagnosis, and the next run is fifteen minutes
+    away.
+    """
+    body = resp.json()
+    if isinstance(body, dict):
+        named = {k: body[k] for k in ("code", "detail", "message", "changes") if k in body}
+        if named:
+            return json.dumps(named)[:400]
+    return (resp.body or "")[:400]
+
+
 def _unavailable(resp: HttpResponse, path: str) -> Outcome | None:
-    """The two answers that mean "nothing was established", as an Outcome or None.
+    """The answers that mean "nothing was established", as an Outcome or None.
 
     A transport error and a 404 are both `unknown`, and neither is a fail: the first says the
     suite could not reach the target, the second says this build does not serve the surface. Both
     leave the underlying question — do workers register, do artifacts persist — completely open.
+
+    SO IS A 503, AND THAT ONE IS NOT OBVIOUS. `app.py`'s capacity guard answers 503 with
+    `Retry-After`, `code: DB_CAPACITY_BUSY` and `changes: "unknown"` — it is the application
+    stating that it could not even determine whether the request took effect. Reporting that as a
+    target FAILURE says "this installation cannot assess documents" about one that was busy, which
+    is the same false-accusation shape as the restart scenario's lost-work finding. The caller
+    retries first (see `_post_with_retry`); this maps a 503 that SURVIVES the retries, and it maps
+    it to `unknown` because a target that stayed at capacity established nothing either way.
+
+    Every other non-2xx stays a failure. A 500, a 409 or a 422 is the target answering
+    definitively, and a suite that treated those as inconclusive could not fail at all.
     """
     if resp.error:
         return Outcome.unknown(f"could not reach {path}: {resp.error}", path=path)
@@ -230,7 +260,30 @@ def _unavailable(resp: HttpResponse, path: str) -> Outcome | None:
         return Outcome.unknown(
             f"this build does not serve {path}, so the question could not be answered here",
             path=path, status=404)
+    if resp.status == 503:
+        return Outcome.unknown(
+            f"{path} answered 503 after retries — the target was unable to accept the request and "
+            f"says so: {_detail(resp)}. Nothing about its behaviour was established.",
+            path=path, status=503, body=_detail(resp))
     return None
+
+
+def _post_with_retry(ctx: ScenarioContext, path: str, *, attempts: int = 4
+                     ) -> HttpResponse:
+    """POST, retrying only a 503 and only as many times as the application asks.
+
+    RETRY IS SCOPED TO 503 DELIBERATELY. `app.py` answers it with `Retry-After` and
+    `changes: "none"` for safe methods — an explicit "temporarily at capacity, ask again". Nothing
+    else is retried: retrying a 500 turns one defect into four identical ones in the log, and
+    retrying a 409 fights the application's own single-flight fence.
+    """
+    resp = ctx.post(path)
+    for _ in range(max(0, attempts - 1)):
+        if resp.status != 503:
+            return resp
+        ctx.backend.sleep(POLL_SECONDS)
+        resp = ctx.post(path)
+    return resp
 
 
 def _start_scan(ctx: ScenarioContext, fixtures: Iterable[str] = FIXTURES
@@ -606,12 +659,14 @@ def fixture_workflow(ctx: ScenarioContext) -> Outcome:
     # remediates every eligible file, which is exactly what this scenario wants. The old
     # `{"scope": "all"}` was a string where a list belongs.
     for path, label in ((PATH_SCAN_ASSESS, "assessment"), (PATH_SCAN_REMEDIATE, "remediation")):
-        resp = ctx.post(path.format(sid=sid))
+        resp = _post_with_retry(ctx, path.format(sid=sid))
         bad = _unavailable(resp, path.format(sid=sid))
         if bad is not None:
             return bad
         if not resp.ok:
-            return Outcome.failed(f"starting {label} answered {resp.status}", status=resp.status)
+            return Outcome.failed(
+                f"starting {label} answered {resp.status}: {_detail(resp)}",
+                status=resp.status, body=_detail(resp))
         job_id = (_json(resp) or {}).get("job_id")
         if job_id:
             job_path = PATH_JOB.format(jid=job_id)

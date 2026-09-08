@@ -957,3 +957,57 @@ def test_the_fixture_workflow_sends_no_body_to_assess_or_remediate():
     assert all(b.get("detail") for b in bodies), (
         "the fake accepted a `{'scope': 'all'}` body on assess/remediate; the application either "
         "ignores it or would iterate the string character by character")
+
+
+def test_a_persistent_503_is_unknown_rather_than_a_defect_in_the_target():
+    """`app.py`'s capacity guard answers 503 with `Retry-After` and `changes: "unknown"` — the
+    application saying it could not determine whether the request took effect. Calling that a
+    target FAILURE says "this installation cannot assess documents" about one that was busy."""
+    world = fake.world(faults={"POST /scans/{sid}/assess": {
+        "status": 503, "json": {"detail": "database_busy", "code": "DB_CAPACITY_BUSY",
+                                "changes": "unknown"}}})
+    run, _ = run_fake(world=world, scenario_ids=["fixture-workflow"])
+    entry = entry_for(run.report, "fixture-workflow")
+    assert entry["state"] == UNKNOWN, f"a 503 was reported as {entry['state']}: {entry['detail']}"
+    assert "DB_CAPACITY_BUSY" in entry["detail"], (
+        "the outcome does not name WHICH 503 it was. A status code alone is not a diagnosis, and "
+        f"the next reference-cluster run is fifteen minutes away: {entry['detail']}")
+
+
+def test_a_503_is_retried_before_it_is_believed():
+    world = fake.world(faults={"POST /scans/{sid}/assess": {"status": 503, "json": {}}})
+    run, backend = run_fake(world=world, scenario_ids=["fixture-workflow"])
+    attempts = [e for e in backend.log
+                if e["kind"] == "http" and e["method"] == "POST" and "/assess" in e["path"]]
+    assert len(attempts) > 1, (
+        f"the suite believed a single 503 without retrying; the application asks for a retry with "
+        f"Retry-After ({len(attempts)} attempt)")
+
+
+def test_a_500_is_still_a_failure_and_not_swallowed_as_busy():
+    """The 503 rule must not become "any error is inconclusive". A 500 is the target answering
+    definitively, and a suite that treats those as unknown cannot fail at all."""
+    world = fake.world(faults={"POST /scans/{sid}/assess": {"status": 500, "json": {}}})
+    run, _ = run_fake(world=world, scenario_ids=["fixture-workflow"])
+    assert state_of(run.report, "fixture-workflow") == FAIL
+
+
+def test_only_a_503_is_retried_and_a_500_is_attempted_once():
+    """Retry is scoped to the one status the application asks us to retry. Retrying a 500 turns
+    one defect into four identical entries in the log and delays the report by three sleeps; the
+    claim was untested until a bite check failed to bite."""
+    world = fake.world(faults={"POST /scans/{sid}/assess": {"status": 500, "json": {}}})
+    run, backend = run_fake(world=world, scenario_ids=["fixture-workflow"])
+    attempts = [e for e in backend.log
+                if e["kind"] == "http" and e["method"] == "POST" and "/assess" in e["path"]]
+    assert len(attempts) == 1, (
+        f"a 500 was retried {len(attempts)} times; only 503 carries the application's "
+        f"Retry-After contract")
+
+
+def test_a_failed_request_names_what_the_target_said():
+    world = fake.world(faults={"POST /scans/{sid}/assess": {
+        "status": 500, "json": {"detail": "boom", "code": "WIDGET_EXPLODED"}}})
+    run, _ = run_fake(world=world, scenario_ids=["fixture-workflow"])
+    detail = entry_for(run.report, "fixture-workflow")["detail"]
+    assert "WIDGET_EXPLODED" in detail, detail
