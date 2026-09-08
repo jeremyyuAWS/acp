@@ -149,7 +149,7 @@ describe('RemediationInbox — workflow-status queue', () => {
     await render({ queue: QUEUE, decisions: {},
       onDecide: (f, d) => { seen.push([f.id, d.state]); return Promise.reject(new Error('The server rejected it.')) } })
     expect(detailHeading()).toBe('Heading contrast is too low')     // id1
-    await click(btnByText('Approve & next \u2192'))
+    await click(btnByText('Save and continue \u2192'))
     expect(seen).toEqual([[1, 'accepted']])
     // Still on the SAME finding — the queue did not move on.
     expect(detailHeading()).toBe('Heading contrast is too low')
@@ -160,19 +160,19 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(alert.textContent).toContain('The server rejected it.')
     expect(alert.textContent).toContain('still waiting for your decision')
     // The decision controls are live again so the reviewer can retry.
-    expect(btnByText('Approve & next \u2192').disabled).toBe(false)
+    expect(btnByText('Save and continue \u2192').disabled).toBe(false)
   })
 
   it('advances and shows no error when the decision saves', async () => {
     await render({ queue: QUEUE, decisions: {}, onDecide: () => Promise.resolve() })
-    await click(btnByText('Approve & next \u2192'))
+    await click(btnByText('Save and continue \u2192'))
     expect(detailHeading()).toBe('Image needs alt text')            // moved to id2
     expect(container.querySelector('[role=alert]')).toBeNull()
   })
 
   it('clears a failed decision\u2019s error when the reviewer moves to another finding', async () => {
     await render({ queue: QUEUE, decisions: {}, onDecide: () => Promise.reject(new Error('nope')) })
-    await click(btnByText('Approve & next \u2192'))
+    await click(btnByText('Save and continue \u2192'))
     expect(container.querySelector('[role=alert]')).toBeTruthy()
     await click(btnByText('Image needs alt text'))
     // The message belonged to that decision, not to the page.
@@ -312,7 +312,7 @@ describe('RemediationInbox — workflow-status queue', () => {
     await render({ queue: QUEUE, decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })
     await click(btnByText('Image needs alt text'))                   // id2, apply lane
     expect(detailHeading()).toBe('Image needs alt text')
-    await click(btnByText('Apply fix & next \u2192'))
+    await click(btnByText('Save and continue \u2192'))
     expect(calls).toEqual([[2, 'accepted']])
     // auto-advance moved the workspace to the next unresolved needs-review finding without a click
     expect(detailHeading()).toBe('Heading contrast is too low')      // id1, the remaining auto-fix
@@ -342,7 +342,7 @@ describe('RemediationInbox — workflow-status queue', () => {
     expect(calls[0].state).toBe('not_applicable')
   })
 
-  it('lets the reviewer edit the AI draft and applies their version (Apply edited fix)', async () => {
+  it('lets the reviewer edit the AI draft and save their version before continuing', async () => {
     const calls = []
     await render({ queue: QUEUE, decisions: {}, onDecide: (f, d) => calls.push(d) })
     await click(btnByText('Image needs alt text'))               // id2, apply lane, carries `after`
@@ -352,8 +352,8 @@ describe('RemediationInbox — workflow-status queue', () => {
     // Edit through the native setter so React's controlled onChange fires.
     const setValue = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
     await act(async () => { setValue.call(ta, 'A revenue bar chart, 2021–2025'); ta.dispatchEvent(new Event('input', { bubbles: true })) })
-    // Editing flips the primary action to "Apply edited fix" and carries the edited value.
-    await click(btnByText('Apply edited fix'))
+    // The guided action carries the edited value and advances only after it is saved.
+    await click(btnByText('Save and continue'))
     expect(calls[0].state).toBe('accepted')
     expect(calls[0].value).toBe('A revenue bar chart, 2021–2025')
   })

@@ -562,7 +562,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
                see PR body), so it is labelled as a flag, not a "reject & revert". */
             <>
               <button className="primary" disabled={saving} onClick={() => onDecide?.(f, { state: 'accepted' })}>
-                {saving ? 'Saving…' : 'Approve & next →'}
+                {saving ? 'Saving…' : 'Save and continue →'}
               </button>
               <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>This looks wrong</button>
               {onOpenWord && <button className="ghost" disabled={saving} onClick={() => onOpenWord(f)}>Open source document</button>}
@@ -572,7 +572,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
             <>
               <button className="primary" disabled={saving}
                       onClick={() => onDecide?.(f, { state: 'accepted', value: canEdit ? draftValue : undefined })}>
-                {saving ? 'Applying…' : edited ? 'Apply edited fix & next →' : 'Apply fix & next →'}
+                {saving ? 'Saving…' : 'Save and continue →'}
               </button>
               {canEdit && <button className="ghost" disabled={saving} onClick={() => draftRef.current?.focus()}>Edit proposed fix</button>}
               {/* A specific action, not a bare "Reject": declining an AI fix hands the finding to a
