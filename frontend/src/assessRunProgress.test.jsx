@@ -54,6 +54,19 @@ describe('the assessment running screen focuses on the document in flight', () =
     expect(html).toContain('overflow-y:auto')
   })
 
+  it('formats internal SC rule ids as readable monospace criterion tags', () => {
+    const html = render({ ...SNAP, documents: {
+      completed: 1, displayed: 1, truncated: false, items: [
+        { file: 'Clinical/Procedure.pdf', score: 81,
+          criteria: ['SC_2_4_2', 'SC_1_1_1', '1.4.5 Images of Text'] },
+      ],
+    } })
+    expect(html).toContain('title="SC_2_4_2">2.4.2</b>')
+    expect(html).toContain('title="SC_1_1_1">1.1.1</b>')
+    expect(html).toContain('>1.4.5 Images of Text</b>')
+    expect(html).not.toContain('>SC_2_4_2</b>')
+  })
+
   it('renders nothing until the live snapshot is available', () => {
     expect(render(null)).toBe('')
     expect(render({ available: false })).toBe('')

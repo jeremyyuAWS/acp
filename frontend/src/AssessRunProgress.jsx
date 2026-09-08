@@ -47,6 +47,12 @@ function activityLines(cur, completed, total, processing) {
   return [...new Set(lines)]
 }
 
+export function criterionTag(criterion) {
+  const value = String(criterion || '')
+  const internalSc = value.match(/^SC_(\d+)_(\d+)_(\d+)$/i)
+  return internalSc ? internalSc.slice(1).join('.') : value
+}
+
 function fmtElapsedSecs(s) {
   if (s < 60) return `${s}s`
   const m = Math.floor(s / 60)
@@ -315,7 +321,9 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
                       <span className="alname" title={row.file}>{row.file}</span>
                       <span className="alscore">{row.score == null ? '—' : `${row.score}/100`}</span>
                       {row.criteria.length
-                        ? <span className="alscs">{row.criteria.map((criterion) => <b key={criterion}>{criterion}</b>)}</span>
+                        ? <span className="alscs">{row.criteria.map((criterion) => (
+                            <b key={criterion} title={criterion}>{criterionTag(criterion)}</b>
+                          ))}</span>
                         : <span className="alclean">no failures</span>}
                     </li>
                   ))}
