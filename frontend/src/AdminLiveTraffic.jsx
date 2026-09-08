@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Background, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
+import './operations-typography.css'
 import { cancelLiveOpsStage, getAdminActivity, getWorkerCapacity, openAdminActivityStream,
   resumeLiveOpsRemediation } from './api.js'
 import { ensureResizeObserver } from './resizeObserverFallback.js'
@@ -1101,17 +1102,17 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
       <span className="chip">{summary.active_runs || 0} active · {summary.recent_runs || 0} recent</span>
       <span className="chip" style={{ color: pressure.color }}>● {pressure.label}</span>
     </div>
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(180px,1fr))', gap: 10, marginBottom: 12 }}>
-      <div className="panel" style={{ padding: 12 }}><div className="muted" style={{ fontSize: 11 }}>WORKER CAPACITY</div>
-        <b style={{ fontSize: 20 }}>{summary.running || 0} active</b><div className="muted">{summary.available_slots ?? '—'} available of {summary.worker_slots ?? '—'}</div></div>
-      <div className="panel" style={{ padding: 12 }}><div className="muted" style={{ fontSize: 11 }}>SHARED QUEUE</div>
-        <b style={{ fontSize: 20 }}>{summary.queued || 0} jobs</b><div className="muted">{summary.waiting_users || 0} users waiting · tenant-fair</div></div>
-      <div className="panel" style={{ padding: 12 }}><div className="muted" style={{ fontSize: 11 }}>UTILIZATION</div>
-        <b style={{ fontSize: 20 }}>{summary.utilization_pct ?? '—'}%</b><div className="muted">{summary.worker_tier_alive ? 'Worker tier online' : 'Worker tier unavailable'}</div></div>
-      <div className="panel" style={{ padding: 12 }} aria-label="Recovery activity in the last 24 hours">
-        <div className="muted" style={{ fontSize: 11 }}>RECOVERY · 24 HOURS</div>
-        <b style={{ fontSize: 20 }}>{recovery.cancel_resolved ?? 0} resolved</b>
-        <div className="muted">{recovery.cancel_pending ?? 0} stopping · {recovery.resumes ?? 0} resumed</div>
+    <div className="ops-kpi-grid">
+      <div className="panel ops-kpi"><div className="ops-kpi__label">WORKER CAPACITY</div>
+        <b className="ops-kpi__value">{summary.running || 0} active</b><div className="ops-kpi__meta">{summary.available_slots ?? '—'} available of {summary.worker_slots ?? '—'}</div></div>
+      <div className="panel ops-kpi"><div className="ops-kpi__label">SHARED QUEUE</div>
+        <b className="ops-kpi__value">{summary.queued || 0} jobs</b><div className="ops-kpi__meta">{summary.waiting_users || 0} users waiting · tenant-fair</div></div>
+      <div className="panel ops-kpi"><div className="ops-kpi__label">UTILIZATION</div>
+        <b className="ops-kpi__value">{summary.utilization_pct ?? '—'}%</b><div className="ops-kpi__meta">{summary.worker_tier_alive ? 'Worker tier online' : 'Worker tier unavailable'}</div></div>
+      <div className="panel ops-kpi" aria-label="Recovery activity in the last 24 hours">
+        <div className="ops-kpi__label">RECOVERY · 24 HOURS</div>
+        <b className="ops-kpi__value">{recovery.cancel_resolved ?? 0} resolved</b>
+        <div className="ops-kpi__meta">{recovery.cancel_pending ?? 0} stopping · {recovery.resumes ?? 0} resumed</div>
         <div className="muted" style={{ fontSize: 10.5, marginTop: 3 }}>
           {recovery.cancel_success_pct == null ? 'No stop requests in window'
             : `${recovery.cancel_success_pct}% completed`
@@ -1121,23 +1122,23 @@ export default function AdminLiveTraffic({ me = null, currentScanId = null, onNa
           Latest action {age(recovery.latest_action_at)} ago
         </div>}
       </div>
-      <div className="panel" role={delivery.state === 'critical' ? 'alert' : 'status'} style={{ padding: 12 }} aria-label="Canonical event delivery">
-        <div className="muted" style={{ fontSize: 11 }}>CANONICAL DELIVERY</div>
-        <b style={{ fontSize: 20 }}>{delivery.headline}</b>
-        <div className="muted">{delivery.detail}</div>
+      <div className="panel ops-kpi" role={delivery.state === 'critical' ? 'alert' : 'status'} aria-label="Canonical event delivery">
+        <div className="ops-kpi__label">CANONICAL DELIVERY</div>
+        <b className="ops-kpi__value">{delivery.headline}</b>
+        <div className="ops-kpi__meta">{delivery.detail}</div>
       </div>
-      <div className="panel" role={cancellations.state === 'critical' ? 'alert' : 'status'} style={{ padding: 12 }} aria-label="Cancellation acknowledgements">
-        <div className="muted" style={{ fontSize: 11 }}>STOP ACKNOWLEDGEMENTS</div>
-        <b style={{ fontSize: 20 }}>{cancellations.headline}</b>
-        <div className="muted">{cancellations.detail}</div>
+      <div className="panel ops-kpi" role={cancellations.state === 'critical' ? 'alert' : 'status'} aria-label="Cancellation acknowledgements">
+        <div className="ops-kpi__label">STOP ACKNOWLEDGEMENTS</div>
+        <b className="ops-kpi__value">{cancellations.headline}</b>
+        <div className="ops-kpi__meta">{cancellations.detail}</div>
       </div>
-      <div className="panel" style={{ padding: 12 }} aria-label="Workflow data linkage">
-        <div className="muted" style={{ fontSize: 11 }}>WORKFLOW WIRING</div>
-        <b style={{ fontSize: 20 }}>
+      <div className="panel ops-kpi" aria-label="Workflow data linkage">
+        <div className="ops-kpi__label">WORKFLOW WIRING</div>
+        <b className="ops-kpi__value">
           {correlation.complete == null ? 'Not reported'
             : correlation.complete ? 'Complete' : `${correlation.unlinked_active_jobs || 0} unlinked`}
         </b>
-        <div className="muted">
+        <div className="ops-kpi__meta">
           {correlation.attributed_stage_runs == null ? 'Stage-run linkage unavailable'
             : `${correlation.attributed_stage_runs} stage run${correlation.attributed_stage_runs === 1 ? '' : 's'} linked`}
         </div>
