@@ -16,7 +16,21 @@
 // because a implementation that hid things when not told would pass every test written about
 // hiding, and take the app down for every signed-out visitor.
 import { describe, it, expect } from 'vitest'
-import { levelFor, isVisible, canOperate, isViewOnly, hasCapability, visibleTabs, firstPermittedTab, ctaFor, restrictionReason, UNGOVERNED, canOpenSettings } from './access.js'
+import { levelFor, isVisible, canOperate, isViewOnly, hasCapability, visibleTabs, firstPermittedTab, ctaFor, restrictionReason, UNGOVERNED, canOpenSettings, mergeBootstrapIdentity } from './access.js'
+
+describe('provider-neutral bootstrap identity', () => {
+  it('carries administrator authority into the SPA session', () => {
+    const current = { email: 'admin@hosp.org', name: 'Admin', allow: ['settings'] }
+    expect(mergeBootstrapIdentity(current, {
+      email: 'admin@hosp.org', is_admin: true, is_scope_owner: false,
+    })).toEqual({ ...current, is_admin: true, is_scope_owner: false })
+  })
+
+  it('returns the same object once the authoritative flags already match', () => {
+    const current = { email: 'admin@hosp.org', is_admin: true, is_scope_owner: false }
+    expect(mergeBootstrapIdentity(current, current)).toBe(current)
+  })
+})
 
 // The shape App.jsx's TABS has: [key, label, rubric-gloss, workflow step].
 const TABS = [

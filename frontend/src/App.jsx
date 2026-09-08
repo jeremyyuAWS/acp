@@ -79,7 +79,7 @@ import ConfirmDialog from './ConfirmDialog.jsx'
 import { AdminInsights } from './AdminInsights.jsx'
 import AcrWorkspace from './AcrWorkspace.jsx'
 import AccessRestricted from './AccessRestricted.jsx'
-import { visibleTabs, isVisible, canOperate, firstPermittedTab, canOpenSettings } from './access.js'
+import { visibleTabs, isVisible, canOperate, firstPermittedTab, canOpenSettings, mergeBootstrapIdentity } from './access.js'
 import { timezoneBadge } from './userTimezone.js'
 import { handleWorkflowTabKeyDown } from './workflowTabs.js'
 import { isHistoricalScan, narrowScanDefaultContext } from './defaultScan.js'
@@ -815,6 +815,10 @@ export default function App() {
         // would render every tab and then remove some — a visible flicker that also briefly
         // advertises surfaces the user may not have.
         setAccess(b.me?.access || null)
+        // Bootstrap is the cross-provider identity authority. GET /me reads a Google Drive
+        // profile and may be unavailable in a Microsoft-only session; retain these server-made
+        // authorization flags so an administrator does not lose Settings controls in the SPA.
+        if (b.me) setMe((current) => mergeBootstrapIdentity(current, b.me))
         setActiveWorkflows(b.active_workflows || [])
         const active = primaryActiveWorkflow(b.active_workflows || [])
         if (active && !viewWasChosen.current && isVisible(b.me?.access || null, active.stage)) {
@@ -879,7 +883,7 @@ export default function App() {
         markLoad('load-complete')
         logLoadSummary({ hadPreview: hadPreviewForPerf, hadScan: hadScanForPerf })
       })
-  }, [me, bootAttempt])
+  }, [!!me, bootAttempt]) // identity details hydrate inside this effect; only sign-in/out reruns it
 
   // Annotate the corpus with the published business ontology (adds `.ont`: label,
   // priority, matched rule, weighted score) so the live workflow is ontology-aware.
