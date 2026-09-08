@@ -1,0 +1,258 @@
+# The packaging reference cluster: install the chart on a throwaway Kubernetes and see it run.
+#
+# WHY THIS EXISTS AS A JOB AND NOT AS MORE TESTS. tests/test_packaging_chart.py renders the chart
+# and asserts on the manifests, which is the right way to check what a template produces — and it
+# compares the chart against itself, so a chart that renders the wrong thing consistently passes.
+# Two defects found on 2026-09-08 were both green under tests that named them: worker Deployments
+# inherited the image's CMD and ran the API server, and the API readiness probe pointed at a route
+# that never sets a status code and therefore could never fail. Neither was reachable by rendering.
+# Both would have died at the first `helm install`.
+#
+# So this job installs. It builds the application image from this checkout, loads it into a kind
+# cluster WITHOUT a registry, supplies the data services the chart deliberately does not own, and
+# then asks the running installation the questions `acpctl` was written to ask.
+#
+# NOT ON EVERY PUSH. It builds a LibreOffice-and-.NET image, so it runs on packaging changes, on
+# the Dockerfile that produces the image, and on demand. Everything else keeps using the render
+# tests, which are seconds rather than minutes.
+name: packaging reference cluster
+
+on:
+  pull_request:
+    paths:
+      - 'packaging/**'
+      - 'scripts/install_kind.sh'
+      - 'scripts/install_helm.sh'
+      - '.github/workflows/packaging-kind.yml'
+      - 'deploy/public/Dockerfile'
+      - 'deploy/public/worker-entry.sh'
+  workflow_dispatch:
+
+concurrency:
+  group: packaging-kind-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: Install the chart on a disposable cluster
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # The document under test, the namespace it installs into (acpctl defaults the namespace to
+      # metadata.name, and this keeps the two from drifting), and the local image tag. The tag is
+      # not a version: nothing is published, and `pullPolicy: Never` below is what guarantees the
+      # cluster uses the image we loaded rather than reaching for a registry that has no such tag.
+      SPEC: packaging/reference/kind/acp-deployment.yaml
+      NAMESPACE: acp-kind
+      IMAGE: acp-app:ci
+      KIND_CLUSTER: acp-reference
+      PYTHONPATH: packaging/cli
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: acpctl's own dependency
+        # acpctl reads JSON with the standard library alone (PRD S17's air-gapped bundle needs
+        # that); the documents here are YAML, so this is the one thing it needs.
+        run: python -m pip install --disable-pip-version-check PyYAML
+
+      # ── the image ──────────────────────────────────────────────────────────
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Cache .NET (NuGet) packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-${{ runner.os }}-${{ hashFiles('spike/dotnet/**/*.csproj') }}
+          restore-keys: nuget-${{ runner.os }}-
+
+      - name: Build the Office analyser CLI
+        # THE ONE THING A PLAIN CHECKOUT DOES NOT ALREADY HAVE. deploy/public/Dockerfile COPYs
+        # spike/dotnet/AcpScan.Cli/bin/Release/net10.0/, and bin/ is gitignored — every other COPY
+        # source is tracked (ADR 0029 vendored the PDF engine, which is what made a CI build
+        # possible at all). Docker COPY of a missing directory is a hard failure, not a degraded
+        # image, so this step is a prerequisite and not an optimisation. Same command as CI's.
+        run: dotnet build spike/dotnet/AcpScan.Cli/AcpScan.Cli.csproj -c Release --nologo
+
+      - name: Build the application image
+        # From-scratch bases (mirror.gcr.io node:20-slim and python:3.12-slim, the Dockerfile's own
+        # defaults) — no private registry is involved anywhere in this job. redeploy.sh's prebuilt
+        # acp-base-* images are an ACR cache optimisation and deliberately not used here.
+        run: docker build -f deploy/public/Dockerfile -t "$IMAGE" .
+
+      # ── the cluster ────────────────────────────────────────────────────────
+      - name: Install helm and kind
+        run: |
+          bash scripts/install_helm.sh
+          bash scripts/install_kind.sh
+
+      - name: Create the disposable cluster
+        run: |
+          kind create cluster --config packaging/reference/kind/cluster.yaml --wait 120s
+          kubectl cluster-info
+          kubectl get nodes -o wide
+
+      - name: Load the image into the cluster
+        # NO REGISTRY. This is what makes the whole job self-contained: kind copies the local image
+        # into the node's containerd, and `image.pullPolicy: Never` below makes Kubernetes use it.
+        # An install that reached a registry would be testing the registry as much as the chart.
+        run: kind load docker-image "$IMAGE" --name "$KIND_CLUSTER"
+
+      # ── the prerequisites the chart does not own ───────────────────────────
+      - name: Data services
+        # The chart REFUSES to render in-cluster Postgres, Redis or object storage (ADR 0048), so
+        # they are supplied here exactly as an infrastructure adapter would supply them on a cloud:
+        # as endpoints in a Secret. Credentials are generated per run and never leave the cluster.
+        run: |
+          set -euo pipefail
+          kubectl create namespace "$NAMESPACE"
+          PGUSER=acp
+          PGPASSWORD="$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
+          kubectl -n "$NAMESPACE" create secret generic acp-reference-data \
+            --from-literal=postgres-user="$PGUSER" \
+            --from-literal=postgres-password="$PGPASSWORD"
+          kubectl -n "$NAMESPACE" apply -f packaging/reference/kind/data-services.yaml
+          kubectl -n "$NAMESPACE" rollout status deployment/acp-postgres --timeout=180s
+          kubectl -n "$NAMESPACE" rollout status deployment/acp-redis --timeout=120s
+          # The keys are the deployment document's `secrets.refs` names; the chart projects each
+          # one as an uppercase env var (database-url -> DATABASE_URL), so the names here and in
+          # the document are the same fact and must not be edited apart.
+          kubectl -n "$NAMESPACE" create secret generic acp-secrets \
+            --from-literal=database-url="postgresql://${PGUSER}:${PGPASSWORD}@acp-postgres:5432/acpdb?sslmode=disable" \
+            --from-literal=redis-url="redis://acp-redis:6379/0" \
+            --from-literal=object-storage="none"
+
+      # ── the install ────────────────────────────────────────────────────────
+      - name: Can this cluster run the document?
+        # `acpctl doctor` before installing, which is what it is for. It is expected to report the
+        # NetworkPolicy check as a blocker here: kind's default CNI accepts policies and enforces
+        # nothing, and doctor treating that as a blocker rather than a pass is correct behaviour,
+        # not a failure of this cluster. `|| true` records the finding without failing the job, and
+        # the next step is the one that has to pass.
+        run: python -m acpctl doctor "$SPEC" -n "$NAMESPACE" || true
+
+      - name: Install
+        run: |
+          set -euo pipefail
+          python -m acpctl values "$SPEC" > /tmp/values.yaml
+          helm install acp packaging/chart/acp \
+            --namespace "$NAMESPACE" \
+            -f /tmp/values.yaml \
+            -f packaging/reference/kind/runner-resources.yaml \
+            --set image.repository="${IMAGE%%:*}" \
+            --set image.workerRepository="${IMAGE%%:*}" \
+            --set image.tag="${IMAGE##*:}" \
+            --set image.pullPolicy=Never \
+            --set secrets.existingSecret=acp-secrets \
+            --wait --timeout 10m
+
+      - name: Every tier rolled out
+        run: |
+          set -euo pipefail
+          kubectl -n "$NAMESPACE" rollout status deployment/acp-api --timeout=300s
+          for role in discover assess remediate; do
+            kubectl -n "$NAMESPACE" rollout status "deployment/acp-worker-$role" --timeout=300s
+          done
+
+      - name: The workers registered and are heartbeating
+        # THE ASSERTION THAT WOULD HAVE CAUGHT THE COMMAND DEFECT. A worker Deployment running the
+        # API rolls out perfectly and never writes a heartbeat, so `rollout status` above passes
+        # and this does not. /readyz reports `workers.roles.<role>.alive` and is unauthenticated.
+        run: |
+          set -euo pipefail
+          kubectl -n "$NAMESPACE" port-forward svc/acp-api 8077:80 &
+          PF=$!
+          trap 'kill $PF 2>/dev/null || true' EXIT
+          python - <<'PY'
+          import json, time, urllib.request, sys
+
+          ROLES = ("discovery", "assess", "remediate")
+          deadline = time.time() + 300
+          last = None
+          while time.time() < deadline:
+              try:
+                  with urllib.request.urlopen("http://127.0.0.1:8077/readyz", timeout=10) as r:
+                      last = json.load(r)
+              except Exception as exc:                       # the forward may not be up yet
+                  last = {"error": str(exc)}
+                  time.sleep(5)
+                  continue
+              roles = (last.get("workers") or {}).get("roles") or {}
+              if all(roles.get(role, {}).get("alive") for role in ROLES):
+                  print("every worker tier is registered and heartbeating:")
+                  print(json.dumps(roles, indent=2))
+                  sys.exit(0)
+              time.sleep(5)
+
+          print("worker tiers never reported alive within 300s", file=sys.stderr)
+          print(json.dumps(last, indent=2)[:4000], file=sys.stderr)
+          sys.exit(1)
+          PY
+
+      - name: Is what is running still what the document says?
+        # ONE DRIFT IS EXPECTED HERE, AND EXACTLY ONE. The image is built from this checkout and
+        # loaded under a local tag, so `release.version` correctly reports that the cluster runs
+        # `ci` while the document names a release. That is `acpctl status` being right, not a
+        # problem to paper over — and tagging the local build with the document's version to
+        # silence it would be the same false pin PRD S5.1 exists to prevent.
+        #
+        # So the expected drift is named and everything else must pass. A second drift, or a
+        # different one, fails the job.
+        run: |
+          set -euo pipefail
+          python -m acpctl status "$SPEC" -n "$NAMESPACE" || true
+          python -m acpctl status "$SPEC" -n "$NAMESPACE" --json > /tmp/status.json || true
+          python - <<'PY'
+          import json, sys
+
+          report = json.load(open("/tmp/status.json"))
+          expected = "release.version"
+          assert report["reachable"] and report["installed"], report
+          bad = [c for c in report["checks"]
+                 if c["status"] != "pass" and c["id"] != expected]
+          if bad:
+              print("unexpected drift or failure:", file=sys.stderr)
+              print(json.dumps(bad, indent=2), file=sys.stderr)
+              sys.exit(1)
+          drift = [c for c in report["checks"] if c["id"] == expected]
+          if not drift:
+              print(f"{expected} was not reported at all — this check would pass vacuously",
+                    file=sys.stderr)
+              sys.exit(1)
+          if drift[0]["status"] == "pass":
+              print(f"{expected} passed, but this job installs a locally-tagged image and the "
+                    f"document names a release; something is comparing the wrong thing",
+                    file=sys.stderr)
+              sys.exit(1)
+          print("every check passes except the expected release-tag drift:")
+          print(json.dumps(drift[0], indent=2))
+          PY
+
+      # ── evidence, and then nothing survives ────────────────────────────────
+      - name: What the cluster looked like
+        if: always()
+        # EVENTS AND JOBS, NOT ONLY PODS. The first run of this job failed with a pre-install hook
+        # stuck at 0/1 and NO POD AT ALL — the ServiceAccount admission plugin had rejected the
+        # pod, so `describe pods` printed the two data services and nothing else, and the reason
+        # was in the Job's events, which nothing printed. A diagnostic step that cannot name the
+        # failure it is there for costs a whole run.
+        run: |
+          kubectl -n "$NAMESPACE" get all -o wide || true
+          kubectl -n "$NAMESPACE" describe jobs || true
+          kubectl -n "$NAMESPACE" describe pods || true
+          kubectl -n "$NAMESPACE" get events --sort-by=.lastTimestamp || true
+          kubectl -n "$NAMESPACE" logs -l app.kubernetes.io/part-of=acp --all-containers --tail=200 --prefix || true
+          kubectl -n "$NAMESPACE" logs -l batch.kubernetes.io/job-name --all-containers --tail=200 --prefix || true
+
+      - name: Delete the cluster
+        if: always()
+        run: kind delete cluster --name "$KIND_CLUSTER" || true
