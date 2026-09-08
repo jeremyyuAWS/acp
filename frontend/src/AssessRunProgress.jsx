@@ -192,6 +192,53 @@ function PrepChecklist({ m, total, completed, processing, elapsed }) {
   )
 }
 
+function CompletedAssessmentResults({ m, total, completed }) {
+  const kpis = new Map(m.kpiCards.map((item) => [item.key, item]))
+  const findings = kpis.get('findings_so_far')
+  const unable = kpis.get('unable_to_assess')
+  const outcomes = new Map(m.outcomeChips.map((item) => [item.key, item]))
+  const facts = [
+    findings && !findings.pending && { label: 'Findings recorded', value: findings.value },
+    outcomes.get('passed') && { label: 'Documents passed', value: outcomes.get('passed').count },
+    outcomes.get('review') && { label: 'Need review', value: outcomes.get('review').count },
+    outcomes.get('failed') && { label: 'Could not complete', value: outcomes.get('failed').count },
+    outcomes.get('skipped') && { label: 'Skipped', value: outcomes.get('skipped').count },
+  ].filter(Boolean)
+
+  return (
+    <section aria-label="Completed assessment results"
+             style={{ margin: '2px 0 14px', border: '1px solid var(--line,#e4e8ec)',
+                      borderRadius: 9, padding: '10px 12px' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12,
+                    alignItems: 'baseline', flexWrap: 'wrap' }}>
+        <strong style={{ fontSize: 13 }}>Assessment results</strong>
+        <span className="muted" style={{ fontSize: 11.5 }}>
+          {completed.toLocaleString()} of {total.toLocaleString()} eligible documents finalized
+        </span>
+      </div>
+      {facts.length > 0 && (
+        <dl className="stage-live-accounting" aria-label="Final assessment accounting"
+            style={{ marginTop: 9 }}>
+          {facts.map((fact) => (
+            <div key={fact.label}><dt>{fact.label}</dt><dd>{fact.value.toLocaleString()}</dd></div>
+          ))}
+        </dl>
+      )}
+      <ul style={{ margin: '9px 0 0', paddingLeft: 18, color: 'var(--muted)',
+                   fontSize: 12.5, lineHeight: 1.55 }}>
+        <li>Conformance results were saved for {completed.toLocaleString()} document{completed === 1 ? '' : 's'}.</li>
+        {findings && !findings.pending && (
+          <li>{findings.value.toLocaleString()} accessibility finding{findings.value === 1 ? '' : 's'} recorded across the completed assessment.</li>
+        )}
+        {unable && !unable.pending && unable.value > 0 && (
+          <li>{unable.value.toLocaleString()} document{unable.value === 1 ? '' : 's'} could not be assessed and require{unable.value === 1 ? 's' : ''} follow-up.</li>
+        )}
+        <li>Remediation recommendations are ready for supported findings.</li>
+      </ul>
+    </section>
+  )
+}
+
 export default function AssessRunProgress({ snapshot, throughput, onStop }) {
   const m = normalizeLive(snapshot)
 
@@ -285,6 +332,8 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
                       aria-label={`Assessment: ${completed.toLocaleString()} of ${total.toLocaleString()} documents complete`}
                       aria-valuetext={`${completed.toLocaleString()} of ${total.toLocaleString()} documents complete`}
                       style={{ width: '100%', height: 7, display: 'block', marginBottom: 12 }} />
+
+            {isFinished && <CompletedAssessmentResults m={m} total={total} completed={completed} />}
 
             <div role="list" aria-live="polite" aria-atomic="false"
                  style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
