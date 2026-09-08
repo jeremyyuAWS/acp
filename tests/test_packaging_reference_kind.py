@@ -273,6 +273,60 @@ def test_the_office_analyser_is_built_before_the_image():
     assert "spike/dotnet/AcpScan.Cli/AcpScan.Cli.csproj" in run_steps()
 
 
+def test_the_reference_namespace_enforces_restricted_pod_security():
+    """The job labels the namespace so the API SERVER decides whether the chart meets the
+    restricted Pod Security Standard, rather than a test reading the YAML the chart produced. A
+    pod that does not meet it is rejected at admission and the install fails — which is the whole
+    difference between this job and `tests/test_packaging_chart.py`."""
+    script = run_steps()
+    assert "pod-security.kubernetes.io/enforce=restricted" in script
+    assert "pod-security.kubernetes.io/enforce-version=latest" in script, (
+        "without pinning the version the standard moves under the run")
+    # Admission runs on the POD, so a violating Deployment is CREATED and merely never produces
+    # one: the run dies three minutes later on a rollout timeout with nothing to describe, while
+    # the message naming the missing fields went past as a warning on the apply. Promoting it is
+    # what makes the standard fail where it is violated rather than where it is noticed.
+    assert "--warnings-as-errors" in script, (
+        "a PodSecurity violation arrives as a warning; unpromoted it becomes a rollout timeout")
+    steps = [s.get("name", "") for s in workflow()["jobs"]["install"]["steps"]]
+    assert steps.index("Data services") < steps.index("Install"), (
+        "the namespace must carry the label before anything is installed into it")
+
+
+def test_the_data_services_meet_the_standard_the_namespace_enforces():
+    """THE LABEL APPLIES TO EVERYTHING IN THE NAMESPACE, INCLUDING THE SCAFFOLDING.
+
+    Labelling the namespace `restricted` was added to prove the CHART meets the standard, and it
+    rejected Postgres and Redis first — both images default to running as root, both were written
+    before the label existed, and the deployments were accepted while their pods never appeared.
+    The failure surfaces as a `rollout status` timeout with no pod to describe, twenty minutes
+    before the install the label was added to check.
+
+    The alternative was to exempt them, which would have made the enforcement selective and the
+    claim it supports meaningless. So they meet the standard too, and this test says so in the
+    same terms `tests/test_packaging_chart.py` uses for the chart's own pods.
+    """
+    services = [d for d in yaml.safe_load_all(DATA_SERVICES.read_text(encoding="utf-8"))
+                if d and d["kind"] == "Deployment"]
+    assert len(services) == 2, [d["metadata"]["name"] for d in services]
+    for deployment in services:
+        spec = deployment["spec"]["template"]["spec"]
+        name = deployment["metadata"]["name"]
+        pod_security = spec.get("securityContext", {})
+        assert pod_security.get("runAsNonRoot") is True, name
+        assert pod_security.get("runAsUser"), f"{name} must name a UID; the images default to root"
+        assert pod_security.get("seccompProfile", {}).get("type") == "RuntimeDefault", name
+        for container in spec["containers"]:
+            container_security = container.get("securityContext", {})
+            assert container_security.get("allowPrivilegeEscalation") is False, name
+            assert container_security.get("capabilities", {}).get("drop") == ["ALL"], name
+        # A non-root process cannot write to an emptyDir the kubelet has not handed it. Postgres
+        # is the one with a volume and the one this bites: initdb creates PGDATA inside the mount.
+        if spec.get("volumes"):
+            assert pod_security.get("fsGroup") == pod_security.get("runAsGroup"), (
+                f"{name} mounts a volume it will not be able to write to")
+
+
 def test_the_cluster_is_deleted_even_when_the_job_fails():
     steps = workflow()["jobs"]["install"]["steps"]
     teardown = [s for s in steps if s.get("name") == "Delete the cluster"]

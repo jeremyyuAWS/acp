@@ -39,6 +39,10 @@ did. That is what this cluster is for.
   rolls out perfectly and never writes a heartbeat, so `kubectl rollout status` passes and this
   assertion does not — which is precisely the defect it was written for.
 - `acpctl status` finds the installation and agrees it matches the document.
+- **Every pod meets the restricted Pod Security Standard** — the namespace is labelled
+  `pod-security.kubernetes.io/enforce=restricted`, so this is the API server's decision at
+  admission rather than a test reading the chart's own YAML. A pod that does not meet it is
+  rejected and the install fails.
 
 ## What it cannot establish, and must not be read as
 

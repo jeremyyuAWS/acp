@@ -221,6 +221,17 @@ podSecurityContext:
   runAsNonRoot: true
   runAsUser: 10001
   fsGroup: 10001
+  # THE FOURTH THING THE RESTRICTED POD SECURITY STANDARD REQUIRES, and the one this chart was
+  # missing. runAsNonRoot, allowPrivilegeEscalation: false and capabilities.drop: [ALL] were all
+  # here; without a seccomp profile the pods still fail admission in a namespace enforcing
+  # `restricted`, so "restricted pod security where technically possible" (PRD S5.B) was a claim
+  # about three quarters of a standard.
+  #
+  # RuntimeDefault is the container runtime's own profile, which is what `restricted` asks for;
+  # `Unconfined` is what the absence of this field means, and it is what the standard exists to
+  # refuse.
+  seccompProfile:
+    type: RuntimeDefault
 securityContext:
   allowPrivilegeEscalation: false
   readOnlyRootFilesystem: false
