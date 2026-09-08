@@ -1436,9 +1436,23 @@ def active_vision_provider() -> VisionProvider:
         except Exception:
             swallowed("providers.active_vision_provider: resolving the vision provider's adapter "
                       "config failed")
-    # Auto-select Anthropic vision when ANTHROPIC_API_KEY is set and no explicit vision
-    # provider was configured via ACP_VISION_PROVIDER or the admin store. The key rides only
-    # in the x-api-key header — same contract as AnthropicVisionProvider.generate().
-    if not choice and _ANTHROPIC_KEY:
-        return AnthropicVisionProvider(_ANTHROPIC_KEY, model=CLAUDE_TEXT_MODEL)
+    # NO KEY-PRESENCE AUTO-SELECT, and the absence is the policy rather than an omission.
+    #
+    # There was a branch here returning AnthropicVisionProvider when ANTHROPIC_API_KEY was set and
+    # no provider had been chosen. It had been unreachable since `choice = choice or "ollama"` was
+    # introduced above — `not choice` can no longer be true — so it never selected anything, and
+    # removing it changes no behaviour. Measured, not read: with the key set and no selection, the
+    # selector returned the Ollama floor.
+    #
+    # It is deleted rather than revived because reviving it would be the bug. Cloud egress is
+    # OPT-IN (ADR 0019 constraint 2), and every other cloud adapter earns its place two ways —
+    # an explicit selection AND an `enabled` governed row with a resolved secret, the gate
+    # immediately above. Key presence is neither: ANTHROPIC_API_KEY is set wherever the evals kit
+    # or the text lane runs, so auto-selecting on it would start sending CUSTOMER DOCUMENT IMAGES
+    # to a third party nobody chose. #1756 settled the same question for the text lane and
+    # settled it this way, for the same reason.
+    #
+    # No capability is lost: Anthropic vision is reachable today by the governed path, which also
+    # honours the row's own model. The dead branch pinned `CLAUDE_TEXT_MODEL` — a TEXT model id —
+    # onto a vision adapter, so it would have been wrong about the model as well as the consent.
     return OllamaVisionProvider(base_url, model)
