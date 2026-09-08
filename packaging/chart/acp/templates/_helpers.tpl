@@ -107,7 +107,27 @@ ACP_WORKER_ROLE) are added by the caller; everything below is identical by const
 {{- define "acp.commonEnv" -}}
 - name: ACP_RELEASE
   value: {{ .Values.image.tag | default .Chart.AppVersion | quote }}
-- name: ACP_ENVIRONMENT
+{{- /*
+  ACP_DEPLOY_ENV, NOT ACP_ENVIRONMENT, AND THE DIFFERENCE IS A SECURITY CONTROL.
+
+  This rendered `ACP_ENVIRONMENT` until 2026-09-08 — a name nothing in api/ reads, sitting one
+  underscore away from two that it does. `api/core.py` computes IS_PROD from ACP_DEPLOY_ENV (or
+  the legacy ACP_ENV), and IS_PROD is what forces TEST_BYPASS_ENABLED off: the X-E2E-Key and
+  X-Demo-Key gate bypasses are refused in production REGARDLESS of the opt-in that enables them.
+
+  That file records this exact failure happening once already, in its own words: "IS_PROD stayed
+  False on the public demo, and the X-E2E-Key bypass stayed live", because the variable operators
+  were told to set never reached the container. The bypass is fail-closed now — it needs an
+  explicit ACP_ENABLE_TEST_BYPASS as well — so nothing was open here. What was true is that an
+  installation which enabled the bypass for staging and promoted the same values to production
+  kept it, because the chart gave the application no way to know which it was.
+
+  The value space already matches: the document's `metadata.environment` is development, staging
+  or production, and IS_PROD tests for production. Renaming rather than adding a second variable,
+  because a workload carrying both would leave a reader to guess which one is live — and the old
+  name was read by nothing, which tests/test_packaging_seams.py had established.
+*/}}
+- name: ACP_DEPLOY_ENV
   value: {{ .Values.acpDeployment.environment | quote }}
 - name: ACP_DEPLOY_PROFILE
   value: {{ .Values.acpDeployment.profile | quote }}
