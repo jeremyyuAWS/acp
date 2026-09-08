@@ -53,6 +53,32 @@ spec:
     - ports:
         - port: {{ .Values.api.port }}
           protocol: TCP
+      {{- /*
+        WHO MAY REACH THE API, which this rule did not say until 2026-09-08. It carried `ports`
+        and no `from`, and a rule with no `from` admits EVERY pod in EVERY namespace. Under
+        kindnet that was invisible; under a CNI that enforces, it is the posture the release ships
+        with.
+
+        The chart can only narrow the half it can reason about. With a public ingress the
+        controller lives in a namespace this chart cannot name — ingress-nginx, traefik, an AKS
+        application gateway — so guessing a selector would break the installation for everyone
+        whose controller is somewhere else. That case stays open unless the operator names its
+        peers, and `networkPolicy.apiIngressFrom` is where they do.
+
+        With NO public ingress there is nothing outside the release that legitimately calls the
+        API, so it is restricted to the release's own pods. That is not a render-only claim: the
+        preflight hook carries these labels and must still reach the API, so the install itself
+        tests the allowing half — the same failure this policy caused once already.
+      */}}
+      {{- if .Values.networkPolicy.apiIngressFrom }}
+      from:
+        {{- toYaml .Values.networkPolicy.apiIngressFrom | nindent 8 }}
+      {{- else if not .Values.ingress.enabled }}
+      from:
+        - podSelector:
+            matchLabels:
+              {{- include "acp.selectorLabels" . | nindent 14 }}
+      {{- end }}
 {{- if not .Values.networkPolicy.workerIngress }}
 ---
 {{/*

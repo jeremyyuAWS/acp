@@ -567,6 +567,62 @@ def test_the_egress_policy_lets_acp_reach_its_own_api():
 
 
 @needs_helm
+def test_the_api_admits_only_the_release_when_nothing_outside_it_should_call():
+    """A NETWORKPOLICY INGRESS RULE WITH NO `from` ADMITS EVERY POD IN EVERY NAMESPACE.
+
+    This rule carried `ports` and nothing else. Under a CNI that does not enforce, that is
+    invisible; under one that does, it is the posture the release ships with.
+
+    The chart narrows only the half it can reason about. With a public ingress the controller
+    lives in a namespace this chart cannot name — ingress-nginx, traefik, an application gateway —
+    so a guessed selector would break every installation whose controller is elsewhere. With no
+    public ingress there is nothing outside the release that legitimately calls the API.
+
+    Both directions are asserted, because the failure that matters is a rule that reads as
+    tightened and is not.
+    """
+    private = load_example("standard-production")
+    private["network"]["publicIngress"] = False
+    private["runtime"].pop("publicUrl", None)
+    rule = named(render(private), "NetworkPolicy", "-api")["spec"]["ingress"][0]
+    assert "from" in rule, "no `from` admits every pod in every namespace"
+    selector = rule["from"][0]["podSelector"]["matchLabels"]
+    assert selector, "an empty podSelector is every pod in the namespace, which tightens nothing"
+
+    # The pods that must still get through, named from the render rather than assumed. The
+    # preflight hook is the one that failed when this policy's egress half was wrong.
+    manifests = render(private)
+    for kind, suffix in (("Deployment", "-api"), ("Job", "-preflight")):
+        labels = named(manifests, kind, suffix)["spec"]["template"]["metadata"]["labels"]
+        assert selector.items() <= labels.items(), f"{suffix} can no longer reach the API"
+
+    public = load_example("standard-production")
+    assert public["network"]["publicIngress"] is True, "this test would prove nothing"
+    open_rule = named(render(public), "NetworkPolicy", "-api")["spec"]["ingress"][0]
+    assert "from" not in open_rule, (
+        "with a public ingress the controller's namespace is not knowable here; guessing one "
+        "breaks every installation whose controller lives somewhere else")
+
+
+@needs_helm
+def test_naming_api_ingress_peers_replaces_the_default_either_way():
+    """The escape hatch, asserted on BOTH branches. An operator with a scraper or a controller
+    outside the release names its peers, and that must win whether or not a public ingress is
+    rendered — otherwise the knob silently does nothing in exactly the configuration that needs
+    it."""
+    peer = ["--set", "networkPolicy.apiIngressFrom[0].namespaceSelector."
+                     "matchLabels.kubernetes\\.io/metadata\\.name=ingress-nginx"]
+    for public in (True, False):
+        doc = load_example("standard-production")
+        doc["network"]["publicIngress"] = public
+        if not public:
+            doc["runtime"].pop("publicUrl", None)
+        rule = named(render(doc, extra=peer), "NetworkPolicy", "-api")["spec"]["ingress"][0]
+        assert rule["from"] == [{"namespaceSelector": {
+            "matchLabels": {"kubernetes.io/metadata.name": "ingress-nginx"}}}], (public, rule)
+
+
+@needs_helm
 def test_private_workers_render_a_policy_that_admits_nothing():
     doc = load_example("standard-production")
     assert doc["network"]["privateWorkers"] is True

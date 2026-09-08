@@ -365,6 +365,35 @@ jobs:
               sys.exit(f"12345 came back {denied!r}; expected a timeout from a dropped packet")
           print("12345 timed out, so the egress policy is dropping what it does not allow")
           PROBE
+          # THE INGRESS HALF, PROBED FROM OUTSIDE THE RELEASE. The document sets
+          # `publicIngress: false`, so the `-api` policy admits only pods carrying this chart's
+          # selector labels. The install already tests the ALLOWING half — the preflight hook
+          # carries those labels and reached the API — but an over-broad selector (every pod in
+          # the namespace, say) would pass that and tighten nothing.
+          #
+          # Postgres is the probe: it is in this namespace, it carries none of the chart's labels,
+          # and no egress policy applies to it, so the API's ingress rule is the only thing that
+          # can stop it.
+          #
+          # THE POSITIVE CONTROL IS THE POINT. "Did not connect" is also what a broken probe looks
+          # like — no bash /dev/tcp, no DNS, no `timeout` — and each would read as a policy that
+          # works. So it opens a socket to itself FIRST, and reports a broken mechanism rather
+          # than a passing check when that fails.
+          kubectl -n "$NAMESPACE" exec deploy/acp-postgres -- bash -c '
+            set -u
+            if ! timeout 5 bash -c "exec 3<>/dev/tcp/acp-postgres/5432" 2>/dev/null; then
+              echo "this pod cannot open a socket to itself, so the probe below would be" >&2
+              echo "meaningless: bash /dev/tcp, DNS or timeout is unavailable here." >&2
+              exit 1
+            fi
+            echo "control: a socket from this pod works, so a refusal below means the policy"
+            if timeout 8 bash -c "exec 3<>/dev/tcp/acp-api/80" 2>/dev/null; then
+              echo "acp-api:80 ACCEPTED a connection from a pod carrying none of the release" >&2
+              echo "labels; the ingress rule is not restricting anything." >&2
+              exit 1
+            fi
+            echo "acp-api refused a pod outside the release, as the ingress policy says it should"
+          '
 
       - name: Is what is running still what the document says?
         # ONE DRIFT IS EXPECTED HERE, AND EXACTLY ONE. The image is built from this checkout and
