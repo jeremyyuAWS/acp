@@ -382,8 +382,14 @@ def install(document_path: str, *, namespace: str, release_name: str | None = No
 
     values = build_values(document, pinned_release)
     wanted = required_components(values)
+    # THE FALLBACK REPOSITORIES ARE DERIVED FROM RELEASE-FREE VALUES, ON PURPOSE. `values` above
+    # already carries the manifest's repository names, so handing those to chart_repositories
+    # would make it return the release's answer and the precedence rule in resolve_components
+    # would be unreachable — a rule that cannot be wrong is one nothing can test. Built without
+    # the release, this is genuinely "what the chart would have used", the precedence lives in
+    # exactly one place, and breaking it turns a test red.
     components, unpinned = resolve_components(
-        pinned_release, wanted, chart_repositories(values, chart_dir))
+        pinned_release, wanted, chart_repositories(build_values(document), chart_dir))
 
     if unpinned and not allow_unpinned:
         return Outcome(EXIT_REFUSED, reason=(
