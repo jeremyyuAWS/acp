@@ -159,6 +159,7 @@ export default function RemediationImpactCard({ runId, onRun, runBusy = false, m
     </details>
     </div><div className="remediation-impact__results">
     {renderAssessment?.({
+      updating: loading,
       deltaContext: JSON.stringify([runId, scopeKey]),
       deltaSetting: ready ? JSON.stringify(data.policy) : null,
       automaticCount: ready ? data.lanes?.automatic?.findings : null,

@@ -240,6 +240,27 @@ describe('RemediationImpactCard', () => {
     const outlook = [...container.querySelectorAll('.remediation-impact__outlooks button strong')].map(n => n.textContent)
     expect(outlook).toEqual(['0', '3', '0', '0'])
   })
+  it('shows an updating indicator during recalculation and unavailable only after a failure', async () => {
+    const renderAssessment = forecast => createElement(AssessSummary, {
+      files: [{ file: 'A.docx', status: 'analysed', issues: [{ wcag: 'SC_1_3_1', severity: 'SERIOUS' }] }],
+      criteria: new Set(['1.3.1']), cap: { docx: { '1.3.1': 'auto' } },
+      assessment: { docx: { '1.3.1': 'auto' } }, remediationForecast: forecast,
+    })
+    const { container } = await mount({ renderAssessment })
+    let finish
+    getRemediationImpact.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+    await act(async () => button(container, 'Review first').click())
+    expect(container.querySelectorAll('.assesssummary [aria-busy="true"]')).toHaveLength(2)
+    expect(container.querySelectorAll('.forecast-updating')).toHaveLength(2)
+    expect(container.querySelector('.assesssummary').textContent).not.toContain('Not yet available')
+    await act(async () => finish(result({ rule_based: 0, ai: 1 })))
+    expect(container.querySelector('.forecast-updating')).toBeNull()
+    expect(container.querySelector('.forecast-delta').textContent).toBe('−4')
+    getRemediationImpact.mockRejectedValueOnce(new Error('Preview failed'))
+    await act(async () => button(container, 'Eligible fixes').click())
+    expect(container.querySelector('.forecast-updating')).toBeNull()
+    expect(container.querySelector('.assesssummary').textContent).toContain('Not yet available')
+  })
   it('has no automated accessibility violations', async () => {
     const { container } = await mount()
     const report = await axe.run(container, { rules: { region: { enabled: false } } })
