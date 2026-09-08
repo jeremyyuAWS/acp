@@ -45,6 +45,14 @@ describe('queuedProgress — no live job state (job is null/undefined)', () => {
   it('tolerates a missed getScan poll (g is null) the same as no job', () => {
     expect(queuedProgress(null, 1, null)).toEqual({ phase: 'discovering', elapsed: 1 })
   })
+
+  it('carries the active run context so the card cannot borrow an older selected run', () => {
+    const run = { id: 'new-scan', status: 'running', files: 0, source: 'sharepoint',
+      scope: { locations: [{ name: 'Clinical' }] }, started_at: '2026-09-08T14:18:32Z' }
+    const p = queuedProgress({ run }, 4, { phase: 'listing', files_found: 1 })
+    expect(p).toMatchObject({ scan_id: 'new-scan', source: 'sharepoint', scope: run.scope,
+      started_at: '2026-09-08T14:18:32Z' })
+  })
 })
 
 describe('queuedProgress — live job state available', () => {

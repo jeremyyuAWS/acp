@@ -2234,12 +2234,13 @@ export default function App() {
           discover: canonicalStage?.stage === 'discover' && busy && progress
             && (!canonicalScanId || liveScanId === canonicalScanId) ? (
             <DiscoverRunProgress progress={progress} busy={busy} sources={sources}
-              source={run?.source ?? null} scope={run?.scope ?? null}
-              inv={inventorySnapshot({ run, inventory: run?.scope?.inventory ?? null })}
+              source={progress?.source ?? null} scope={progress?.scope ?? null}
+              inv={inventorySnapshot({ run: liveScanId === run?.id ? run : null,
+                inventory: progress?.inventory ?? progress?.scope?.inventory ?? null })}
               onStop={canonicalScanId ? () => stopScan(canonicalScanId) : undefined}
               onReview={() => { setView('discover'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
               onContinue={() => { setView('assess'); window.scrollTo({ top: 0, behavior: 'smooth' }) }}
-              preflightDegraded={preflightDegraded} runStartedAt={run?.started_at ?? null} />
+              preflightDegraded={preflightDegraded} runStartedAt={progress?.started_at ?? null} />
           ) : null,
           assess: canonicalStage?.stage === 'assess' ? (
             <LiveAssessmentLive scanId={canonicalScanId}
