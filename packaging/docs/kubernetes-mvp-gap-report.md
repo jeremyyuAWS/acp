@@ -301,6 +301,32 @@ not a packaging one, so the default stays `false` and
 `test_the_shared_root_filesystem_is_writable_and_that_is_deliberate` pins both halves: the value,
 and the write it exists for.
 
+**THAT WRITE IS ALREADY BROKEN, INDEPENDENTLY OF ANY OF THIS, AND IT IS NOT A KUBERNETES
+PROBLEM.** Tracing it far enough to judge the read-only question turned up something larger.
+`PUT /rubric` writes to the container filesystem of whichever API replica served the request, and
+`core.active_rubric()` reads that same path at request time (`api/core.py:538`). The chart renders
+no volumes, so the path is that one container's ephemeral layer. Three consequences follow, and
+the endpoint's own docstring rules all three out — it calls the rubric "the GLOBAL scoring policy"
+and gates the route on owner-only precisely because it decides "how every tenant is scored":
+
+  - Other API replicas keep the previous rubric. standard-production's floor is TWO.
+  - EVERY WORKER CONTAINER keeps it too, and workers are where scoring happens: `worker_main`
+    calls `core.start_workers()`, the handlers call `core.active_rubric().hash`
+    (`api/handlers.py:2379,4171,4236,4468`), and no worker ever receives the PUT. So the change is
+    invisible to the tier that applies it even on a single-replica API.
+  - It is lost on restart or redeploy, because nothing persists it.
+
+`rubric_hash` is recorded against scans, so pods scoring under different policies also record
+different hashes for the same configuration. This affects Compose and Container Apps as much as
+Kubernetes — anything running the worker as a separate container, which is all three — so it is
+pre-existing rather than something the packaging work introduced.
+
+The fix is the mechanism the application already has for exactly this: `core.store.set_setting`
+/ `get_setting`, which is how `ai_vision_provider` is stored and read. That is an application
+change and an owner decision, not a packaging one, and it is recorded here because it is the
+blocker under the blocker: with the rubric in the database, `readOnlyRootFilesystem: true` costs
+nothing but an `emptyDir` at `/tmp` and three environment variables.
+
 Turning it on later also needs `HOME`, `XDG_CACHE_HOME` and `DOTNET_CLI_HOME` pointed inside the
 writable mount. UID 10001 has no passwd entry — none of the Dockerfiles contains `USER`, `useradd`
 or `HOME`, and the UID comes only from `values.yaml` — so `expanduser("~/.dotnet")`
