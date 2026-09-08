@@ -853,6 +853,25 @@ jobs:
           # Turn the backup on. Everything the upgrade step passes, plus the two decisions the
           # chart refuses to make: a schedule (that will not fire inside this run — the job below
           # is created from the CronJob by hand) and a retention.
+          #
+          # NO `--wait` ON THIS ONE, AND THE REASON IS A REAL PROPERTY OF THE CHART RATHER THAN A
+          # CI quirk. `helm --wait` waits for PersistentVolumeClaims to reach Bound. This upgrade
+          # adds `<release>-backups`, and on a StorageClass whose volumeBindingMode is
+          # WaitForFirstConsumer — kind's local-path, AWS gp3, and Azure's managed-csi default —
+          # a claim stays Pending until a POD MOUNTS IT. The only pod that ever mounts this one is
+          # the backup Job, which does not exist until the CronJob fires or `acpctl backup`
+          # creates one. So `--wait` blocks for its whole timeout and then fails:
+          #
+          #   Error: UPGRADE FAILED: context deadline exceeded
+          #   persistentvolumeclaim/acp-backups  waiting for first consumer to be created before binding
+          #
+          # measured on run 34241201489, ten minutes of it. Nothing here needs the wait anyway:
+          # the pod template is unchanged from the previous step, so no rollout happens, and the
+          # next command talks to Postgres rather than to anything this upgrade touched.
+          #
+          # THE SAME TRAP IS LIVE FOR OPERATORS and is written up in values.yaml beside
+          # `backup.storage` and in docs/lifecycle.md — `acpctl install` passes `--wait --atomic`,
+          # so on such a cluster enabling the backup would roll the whole release back.
           helm upgrade acp packaging/chart/acp \
             --namespace "$NAMESPACE" \
             -f /tmp/values.yaml \
@@ -867,7 +886,10 @@ jobs:
             --set backup.schedule='0 2 * * *' \
             --set backup.retentionDays=7 \
             --set backup.storage.size=1Gi \
-            --wait --timeout 10m
+            --timeout 10m
+          # The CronJob is what the next commands need, so assert it exists rather than inferring
+          # it from an exit status that no longer waits for anything.
+          kubectl -n "$NAMESPACE" get cronjob acp-backup -o name
 
           # The row the backup must carry and the restore must bring back. A table of its own
           # rather than an application row, because what is being tested is that the dump/restore

@@ -241,9 +241,29 @@ backup:
   # by this chart with `helm.sh/resource-policy: keep`, so `helm uninstall` leaves the backups
   # behind rather than deleting them at the exact moment somebody wants them.
   mountPath: /backups
+  # READ THIS BEFORE ENABLING THE BACKUP ON A CLUSTER YOU CARE ABOUT.
+  #
+  # `helm --wait` waits for every PersistentVolumeClaim in the release to reach Bound. The claim
+  # below is mounted by exactly one pod — the backup Job — which does not exist until the CronJob
+  # fires. On a StorageClass whose `volumeBindingMode` is WaitForFirstConsumer, and that is the
+  # DEFAULT on kind (local-path), on AWS gp3 and on Azure's managed-csi, the claim therefore stays
+  # Pending and `helm install --wait` / `helm upgrade --wait` blocks for its entire timeout:
+  #
+  #   Error: UPGRADE FAILED: context deadline exceeded
+  #   persistentvolumeclaim/acp-backups  waiting for first consumer to be created before binding
+  #
+  # Measured on the reference cluster, 2026-09-08, run 34241201489. `acpctl install` passes
+  # `--wait --atomic`, so on such a cluster this does not merely hang — the whole release ROLLS
+  # BACK, and the reported cause is a timeout rather than anything naming the backup.
+  #
+  # Three ways out, and the chart cannot pick one for you: point `existingClaim` at a claim that
+  # is already Bound; give `storageClassName` a class with `volumeBindingMode: Immediate`; or
+  # install without `--wait`. This is a property of Kubernetes volume binding, not something the
+  # chart can render its way around — a claim with no consumer has nowhere to bind.
   storage:
     # Point this at a claim backed by storage that outlives the cluster, and the recovery story
-    # stops ending at the cluster boundary. Set, nothing below is used and no claim is created.
+    # stops ending at the cluster boundary. Set, nothing below is used and no claim is created —
+    # and an already-Bound claim also side-steps the `--wait` trap described above.
     existingClaim: ""
     # Sized for retentionDays × the compressed dump, with room for the one being written. A
     # default rather than a refusal because a volume that is too small fails loudly and
