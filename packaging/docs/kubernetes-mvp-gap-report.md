@@ -507,21 +507,39 @@ backup or restore Job, which PRD S5.2 lists as part of the Kubernetes package. L
 ungated by Compose and rendered by nothing in the chart — asserted, deliberately, by
 `test_packaging_chart.py::test_compose_deploys_what_the_chart_omits`.
 
-**The blocking gap: there is no reference Kubernetes version, and no cluster to render against.**
-The only version fact in the repository is `doctor.MINIMUM_KUBERNETES = (1, 23)`
-(`packaging/cli/acpctl/doctor.py:42`), a floor derived from when `policy/v1` and `autoscaling/v2`
-went stable — not a version anything has been validated on. There is no `kind`, `k3d` or `minikube`
-reference anywhere in the repository; CI installs helm (`ci.yml:210`, `scripts/install_helm.sh`)
-solely so `helm template` and `helm lint` can run. Every hardening claim above is therefore a claim
-about text. "No authoritative output lives only on ephemeral storage" is the sharpest example: the
-inventory records scratch as a disposable volume and
-`tests/test_packaging_inventory.py::test_worker_scratch_is_declared_and_disposable` asserts the
-declaration, but nothing has ever observed where a remediated file lands.
+**The blocking gap this section used to describe is closed, and saying so precisely matters more
+than saying so.** It read: "there is no reference Kubernetes version, and no cluster to render
+against… There is no `kind`, `k3d` or `minikube` reference anywhere in the repository; CI installs
+helm solely so `helm template` and `helm lint` can run. Every hardening claim above is therefore a
+claim about text." Every sentence of that is now false. `packaging/reference/kind/` installs this
+chart on `kindest/node:v1.31.4`, pinned to the digest a run recorded, on every packaging pull
+request, and the hardening claims above are decided by an API server rather than asserted about
+YAML.
 
-**Next step.** Name a reference Kubernetes version and stand up a disposable cluster in CI. Until
-one exists, hardening work cannot be distinguished from hardening-shaped YAML — and the two
-prerequisites `doctor` was built for (KEDA, an enforcing CNI) have themselves only been tested
-against `tests/packaging_kubectl_fake.py`.
+`doctor.MINIMUM_KUBERNETES = (1, 23)` is still a floor derived from when `policy/v1` and
+`autoscaling/v2` went stable rather than a version anything is supported on, and 1.31.4 is a
+version the chart RUNS on rather than one anybody has certified. Naming a supported distribution
+is PRD §4 and an owner decision, not a task.
+
+Two of `doctor`'s three silent prerequisites are no longer tested only against
+`tests/packaging_kubectl_fake.py`. An enforcing CNI is real — Calico, which is why the egress
+defect above surfaced at all — and KEDA's and External Secrets' CRDs are installed so their
+custom resources are validated by the API server rather than skipped. What is still fake is the
+OPERATORS: nothing has watched a `ScaledObject` scale a tier or an `ExternalSecret` materialise a
+Secret, and installing them would test their behaviour rather than this chart's manifests.
+
+**What remains a claim about text, and it is the sharpest one left.** "No authoritative output
+lives only on ephemeral storage" (PRD §12) is asserted by
+`tests/test_packaging_inventory.py::test_worker_scratch_is_declared_and_disposable` against the
+inventory's declaration. Nothing has observed where a remediated file actually lands, because no
+document has ever been scanned or remediated on this cluster — that is workstream C, and the
+`ACP_BLOB_ACCOUNT` defect (an installation that produced remediated documents and dropped them)
+is the reminder of what that gap can hide.
+
+**Next step.** Not another cluster capability. The remaining workstream B items are each blocked
+on a decision rather than on work: `readOnlyRootFilesystem` on moving the rubric write out of the
+container, a backup/restore Job on RTO/RPO and retention, and a supported-distribution claim on
+PRD §4.
 
 ---
 
