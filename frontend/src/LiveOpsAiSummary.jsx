@@ -28,10 +28,10 @@ export default function LiveOpsAiSummary() {
   const errors = providers.reduce((n, p) => n + Number(p.errors || 0), 0)
   return <CollapsibleSection id="ai" label="Live AI operations"
     summary={<span><b>AI operations</b><span className="muted" style={{ display: 'block', fontSize: 12 }}>Measured provider activity from the shared AI call ledger</span></span>}>
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 10, marginTop: 10 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 20, marginTop: 16 }}>
       <div><span className="muted" style={{ fontSize: 11 }}>TODAY</span><br /><b>{today.calls || 0} calls</b></div>
       <div><span className="muted" style={{ fontSize: 11 }}>SECOND OPINIONS</span><br /><b>{second?.calls || 0} calls</b></div>
-      <div><span className="muted" style={{ fontSize: 11 }}>MEASURED AI COST</span><br /><b>${Number(today.cost_usd || 0).toFixed(4)}</b></div>
+      <div><span className="muted" style={{ fontSize: 11 }}>MEASURED AI COST</span><br /><b className="liveops-money">${Number(today.cost_usd || 0).toFixed(4)}</b></div>
       <div><span className="muted" style={{ fontSize: 11 }}>PROVIDER HEALTH</span><br /><b>{providers.length ? `${errors} errors / 24h` : 'Not reported'}</b></div>
     </div>
   </CollapsibleSection>

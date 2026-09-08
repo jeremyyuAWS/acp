@@ -108,7 +108,7 @@ function Tile({ label, value, detail, source, sourceDetail, at, nowMs }) {
 }
 
 function StateChip({ state }) {
-  return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700,
+  return <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 400,
     color: TONE[state.tone], border: `1px solid ${TONE[state.tone]}`, borderRadius: 8, padding: '3px 9px' }}>
     <span aria-hidden="true">{state.icon}</span>{state.label}
   </span>
@@ -127,7 +127,7 @@ function LiveHeader({ name, kind, state, connection, generatedAt, revision, nowM
     margin: '0 -20px', padding: '18px 20px 12px', background: 'var(--card, #fff)',
     borderBottom: '1px solid var(--line)' }}>
     <div style={{ minWidth: 0 }}>
-      <h2 style={{ margin: 0, fontSize: 18, overflowWrap: 'anywhere' }}>{name}</h2>
+      <h2 style={{ margin: 0, fontSize: 16, overflowWrap: 'anywhere' }}>{name}</h2>
       <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>{nodeTypeLabel(kind)}</div>
       <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 8 }}>
         <StateChip state={state} />
@@ -135,7 +135,7 @@ function LiveHeader({ name, kind, state, connection, generatedAt, revision, nowM
           <span aria-hidden="true" className={connected && !still ? 'liveops-pulse' : undefined}
             style={{ width: 8, height: 8, borderRadius: '50%', display: 'inline-block',
               background: TONE[stream.tone] || 'var(--muted)' }} />
-          <span aria-hidden="true" style={{ fontWeight: 700 }}>{stream.icon}</span>
+          <span aria-hidden="true" style={{ fontWeight: 400 }}>{stream.icon}</span>
           {stream.label}
         </span>
         <span className="muted" style={{ fontSize: 12 }}>{updatedAgo(generatedAt, nowMs)}</span>
@@ -185,7 +185,7 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queu
         <path d={arcPath(100, 100, 78, 1)} fill="none" stroke="var(--line)" strokeWidth="16" strokeLinecap="round" />
         {gauge.fraction > 0 && <path d={arcPath(100, 100, 78, gauge.fraction)} fill="none" stroke={color}
           strokeWidth="16" strokeLinecap="round" />}
-        <text x="100" y="86" textAnchor="middle" fontSize="30" fontWeight="700" fill="var(--ink)">
+        <text x="100" y="86" textAnchor="middle" fontSize="24" fontWeight="400" fill="var(--ink)">
           {gauge.pct == null ? '—' : `${gauge.pct}%`}
         </text>
         {/* "N of M slots busy" — the busy count is clamped to the slots that exist, so the arc,
@@ -197,7 +197,7 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queu
         <text x="176" y="114" fontSize="10" fill="var(--muted)">{gauge.slots}</text>
       </svg>
       <div style={{ minWidth: 160, flex: 1 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontWeight: 700, color }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontWeight: 400, color }}>
           <span aria-hidden="true">{{ available: '●', approaching: '▲', saturated: '■', idle: '○', unclaimed: '◐', unavailable: '—' }[gauge.state]}</span>
           {gauge.stateLabel}
         </div>
@@ -205,7 +205,7 @@ function WorkerGauge({ gauge, service, capacity, nowMs, saturation, health, queu
         {/* Oversubscription, as its own figure. Deliberately not called a backlog: a backlog is
             work waiting in the queue, this is work reported RUNNING beyond the slot count. */}
         {gauge.oversubscribed != null && <p style={{ margin: '6px 0 0', fontSize: 13,
-          fontWeight: 700, color: TONE.bad }}>
+          fontWeight: 400, color: TONE.bad }}>
           <span aria-hidden="true">■ </span>
           {gauge.oversubscribed} more {gauge.oversubscribed === 1 ? 'job' : 'jobs'} running than slots
         </p>}
@@ -283,7 +283,7 @@ function WorkerReplicaTable({ replicas, nowMs }) {
         return <li key={replica.replica_id || replica.worker_id} style={{ ...PANEL, padding: 9 }}>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'baseline' }}>
             <b style={{ overflowWrap: 'anywhere' }}>{replica.replica_id || 'Replica identity unavailable'}</b>
-            <span style={{ fontSize: 11, fontWeight: 700, color: replica.healthy ? TONE.ok : TONE.warn }}>
+            <span style={{ fontSize: 11, fontWeight: 400, color: replica.healthy ? TONE.ok : TONE.warn }}>
               {replica.healthy ? 'Healthy' : replica.fresh ? 'Not ready' : 'Stale'}
             </span>
             <span className="muted" style={{ marginLeft: 'auto', fontSize: 11 }}>
@@ -384,7 +384,7 @@ function ReplicaLifecycle({ lifecycle, nowMs, measuredAt }) {
           <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
             <span aria-hidden="true" style={{ color: TONE[state.tone] }}>{state.icon}</span>
             <b style={{ overflowWrap: 'anywhere' }}>{replica.name || 'unnamed replica'}</b>
-            <span style={{ color: TONE[state.tone], fontWeight: 700 }}>{state.label}</span>
+            <span style={{ color: TONE[state.tone], fontWeight: 400 }}>{state.label}</span>
             <span className="muted" style={{ marginLeft: 'auto' }}>
               {replica.age_s == null ? NOT_REPORTED : `up ${formatDuration(replica.age_s)}`}
             </span>
@@ -425,7 +425,7 @@ function Tracing({ tracing }) {
   return <section aria-label="Distributed tracing" style={{ ...PANEL, padding: 14 }}>
     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
       <b>Traces</b>
-      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 700,
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12, fontWeight: 400,
         color: tracing.enabled ? TONE.ok : 'var(--muted)' }}>
         <span aria-hidden="true">{tracing.enabled ? '●' : '○'}</span>
         {tracing.enabled ? 'Collecting' : 'Off'}
@@ -461,7 +461,7 @@ function ActiveAlerts({ alerts, measuredAt, nowMs }) {
     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
       <b>Alerts</b>
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12,
-        fontWeight: 700, color: TONE[alerts.tone] || 'var(--muted)' }}>
+        fontWeight: 400, color: TONE[alerts.tone] || 'var(--muted)' }}>
         <span aria-hidden="true">{alerts.icon}</span>{alerts.text}
       </span>
       {alerts.rulesEnabled != null && alerts.rulesTotal ? <span className="muted" style={{ fontSize: 11 }}>
@@ -474,8 +474,8 @@ function ActiveAlerts({ alerts, measuredAt, nowMs }) {
       {alerts.rules.map((rule) => <li key={rule.name}
         style={{ display: 'grid', gap: 2, borderTop: '1px solid var(--line,#eee)', paddingTop: 6 }}>
         <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 12, fontWeight: 700 }}>{rule.name}</span>
-          <span style={{ fontSize: 11, fontWeight: 700, color: TONE[alertRuleTone(rule)] || 'var(--muted)' }}>
+          <span style={{ fontSize: 12, fontWeight: 400 }}>{rule.name}</span>
+          <span style={{ fontSize: 11, fontWeight: 400, color: TONE[alertRuleTone(rule)] || 'var(--muted)' }}>
             {alertRuleState(rule)}
           </span>
           {rule.severity_label && <span className="muted" style={{ fontSize: 11 }}>
@@ -509,7 +509,7 @@ function ResourceHealth({ health, nowMs }) {
     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
       <b>Azure health</b>
       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12,
-        fontWeight: 700, color: TONE[health.tone] || 'var(--muted)' }}>
+        fontWeight: 400, color: TONE[health.tone] || 'var(--muted)' }}>
         <span aria-hidden="true">{health.icon}</span>{health.text}
       </span>
     </div>
@@ -543,7 +543,7 @@ function ServiceHealth({ platform }) {
     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
       <b>Azure platform</b>
       {!!platform.active.length && <span style={{ display: 'inline-flex', alignItems: 'center',
-        gap: 6, fontSize: 12, fontWeight: 700, color: TONE.bad }}>
+        gap: 6, fontSize: 12, fontWeight: 400, color: TONE.bad }}>
         <span aria-hidden="true">■</span>
         {platform.active.length} active {platform.active.length === 1 ? 'incident' : 'incidents'}
       </span>}
@@ -555,8 +555,8 @@ function ServiceHealth({ platform }) {
         return <li key={incident.tracking_id || i}
           style={{ display: 'grid', gap: 2, borderTop: '1px solid var(--line,#eee)', paddingTop: 6 }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: 12, fontWeight: 700 }}>{incident.title || NOT_REPORTED}</span>
-            <span style={{ fontSize: 11, fontWeight: 700,
+            <span style={{ fontSize: 12, fontWeight: 400 }}>{incident.title || NOT_REPORTED}</span>
+            <span style={{ fontSize: 11, fontWeight: 400,
               color: incident.resolved ? TONE.ok : TONE.bad }}>
               {incident.resolved ? 'Resolved' : incident.stage || 'Active'}
             </span>
@@ -591,11 +591,11 @@ function Deployments({ deploy, comparison }) {
     <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
       <b>Deployments</b>
       {deploy.failedCount > 0 && <span style={{ display: 'inline-flex', alignItems: 'center',
-        gap: 6, fontSize: 12, fontWeight: 700, color: TONE.bad }}>
+        gap: 6, fontSize: 12, fontWeight: 400, color: TONE.bad }}>
         <span aria-hidden="true">{DEPLOY_ICONS.failed}</span>
         {deploy.failedCount} failed
       </span>}
-      {deploy.partial && <span className="muted" style={{ fontSize: 11, fontWeight: 700 }}>
+      {deploy.partial && <span className="muted" style={{ fontSize: 11, fontWeight: 400 }}>
         Partial
       </span>}
     </div>
@@ -613,7 +613,7 @@ function Deployments({ deploy, comparison }) {
             {eventClock(event.at)}
           </span>
           <span style={{ fontSize: 12 }}>{event.label}</span>
-          {event.status && <span style={{ fontSize: 11, fontWeight: 700,
+          {event.status && <span style={{ fontSize: 11, fontWeight: 400,
             color: event.failed ? TONE.bad : 'var(--muted)' }}>{event.status}</span>}
         </div>
         {event.detail && <span className="muted" style={{ fontSize: 11, paddingLeft: 18,
@@ -646,7 +646,7 @@ function Deployments({ deploy, comparison }) {
     {/* The gaps, last and explicit. Each says where the step actually lives, so the absence is
         a pointer rather than a blank. */}
     {(!!deploy.notReported.length || deploy.systemLogs) && <details style={{ marginTop: 10 }}>
-      <summary style={{ cursor: 'pointer', fontSize: 11, fontWeight: 700 }}>
+      <summary style={{ cursor: 'pointer', fontSize: 11, fontWeight: 400 }}>
         What Azure cannot report here
       </summary>
       <ul style={{ listStyle: 'none', margin: '6px 0 0', padding: 0, display: 'grid', gap: 4 }}>
@@ -671,7 +671,7 @@ function Deployments({ deploy, comparison }) {
  */
 function Section({ n, title, children }) {
   return <section aria-label={`${n}. ${title}`} style={{ display: 'grid', gap: 10 }}>
-    <h3 style={{ margin: 0, fontSize: 11, fontWeight: 800, letterSpacing: '.08em',
+    <h3 style={{ margin: 0, fontSize: 11, fontWeight: 400, letterSpacing: '.08em',
       textTransform: 'uppercase', color: 'var(--muted)' }}>
       <span aria-hidden="true" style={{ opacity: .6 }}>{n}. </span>{title}
     </h3>
@@ -703,7 +703,7 @@ function Configuration({ config }) {
       {config.rows.map((row) => <div key={row.label} style={{ ...PANEL, padding: 11,
         overflowWrap: 'anywhere' }}>
         <span style={LABEL}>{row.label.toUpperCase()}</span>
-        <div style={{ fontSize: 13, fontWeight: 700, marginTop: 3 }}>{row.value}</div>
+        <div style={{ fontSize: 13, fontWeight: 400, marginTop: 3 }}>{row.value}</div>
         {row.detail && <div className="muted" style={{ fontSize: 10.5, marginTop: 2 }}>{row.detail}</div>}
       </div>)}
     </div>}
@@ -735,7 +735,7 @@ function CostPanel({ cost, nowMs }) {
       gap: 8, marginTop: 10 }}>
       <div style={{ ...PANEL, padding: 11 }}>
         <span style={LABEL}>PROVISIONED NOW</span>
-        <div style={{ fontSize: 13, fontWeight: 700, marginTop: 3 }}>
+        <div style={{ fontSize: 13, fontWeight: 400, marginTop: 3 }}>
           {cost.totalVcpuHours == null ? NOT_REPORTED : `${cost.totalVcpuHours} vCPU-h/h`}
         </div>
         <div className="muted" style={{ fontSize: 10.5, marginTop: 2 }}>
@@ -744,7 +744,7 @@ function CostPanel({ cost, nowMs }) {
       </div>
       <div style={{ ...PANEL, padding: 11 }}>
         <span style={LABEL}>ALWAYS-ON FLOOR</span>
-        <div style={{ fontSize: 13, fontWeight: 700, marginTop: 3 }}>
+        <div style={{ fontSize: 13, fontWeight: 400, marginTop: 3 }}>
           {cost.floorVcpuHours == null ? NOT_REPORTED : `${cost.floorVcpuHours} vCPU-h/h`}
         </div>
         <div className="muted" style={{ fontSize: 10.5, marginTop: 2 }}>
@@ -753,7 +753,7 @@ function CostPanel({ cost, nowMs }) {
       </div>
       {cost.rateConfigured && <div style={{ ...PANEL, padding: 11 }}>
         <span style={LABEL}>ESTIMATED PER DAY</span>
-        <div style={{ fontSize: 13, fontWeight: 700, marginTop: 3 }}>
+        <div style={{ fontSize: 13, fontWeight: 400, marginTop: 3 }}>
           {costText(cost.estimatedDaily, cost.currency)}
         </div>
         <div className="muted" style={{ fontSize: 10.5, marginTop: 2 }}>
@@ -803,7 +803,7 @@ function ProvisioningTimeline({ timeline }) {
         const here = timeline.current === stage.key
         return <li key={stage.key} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11,
-            fontWeight: here ? 700 : 400,
+            fontWeight: 400,
             color: stage.reached ? 'var(--ink)' : 'var(--muted)' }}>
             {/* Shape, not colour: a reached stage is filled, an unreached one is not, and the
                 stage the fleet is waiting on is the only one in bold. */}
@@ -998,7 +998,7 @@ function JobHealth({ health }) {
             <code style={{ overflowWrap: 'anywhere', flex: '1 1 auto' }}>
               {job.file || (job.fileRedacted ? 'Document name withheld' : 'file not reported')}
             </code>
-            {job.phase && <span style={{ fontSize: 11, fontWeight: 700, color: TONE.info,
+            {job.phase && <span style={{ fontSize: 11, fontWeight: 400, color: TONE.info,
               whiteSpace: 'nowrap' }}>{job.phase}</span>}
           </div>
           <div className="muted" style={{ fontSize: 11, marginTop: 3, overflowWrap: 'anywhere' }}>
@@ -1182,7 +1182,7 @@ function QueueBar({ queue, concentration, generatedAt, nowMs }) {
       {total > 0 ? queue.segments.filter((s) => s.count > 0).map((segment) => <div key={segment.key}
         title={`${segment.label}: ${segment.count}`}
         style={{ width: `${(segment.count / total) * 100}%`, background: TONE[segment.tone],
-          display: 'grid', placeItems: 'center', color: '#fff', fontSize: 11, fontWeight: 700 }}>
+          display: 'grid', placeItems: 'center', color: '#fff', fontSize: 11, fontWeight: 400 }}>
         {(segment.count / total) > 0.12 ? segment.count : ''}
       </div>) : <div className="muted" style={{ display: 'grid', placeItems: 'center', width: '100%', fontSize: 11 }}>
         Nothing queued, running, retrying or failed
@@ -1356,7 +1356,7 @@ function RunPipeline({ pipeline }) {
       {pipeline.stages.map((stage, i) => <li key={stage.key}
         style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11,
-          fontWeight: stage.state === 'active' ? 700 : 400,
+          fontWeight: 400,
           color: stage.present ? 'var(--ink)' : 'var(--muted)' }}>
           {/* Shape carries the state, not colour (1.4.1): done, working, unreported. */}
           <span aria-hidden="true">
@@ -1388,7 +1388,7 @@ function RunFlow({ flow }) {
       {flow.total > 0 && flow.segments.map((segment) => <div key={segment.key}
         title={`${segment.label}: ${segment.count}`}
         style={{ width: `${(segment.count / flow.total) * 100}%`, background: TONE[segment.tone],
-          display: 'grid', placeItems: 'center', color: '#fff', fontSize: 10, fontWeight: 700 }}>
+          display: 'grid', placeItems: 'center', color: '#fff', fontSize: 10, fontWeight: 400 }}>
         {(segment.count / flow.total) > 0.14 ? segment.count : ''}
       </div>)}
     </div>
@@ -1566,7 +1566,7 @@ function RunRadial({ model, run, accent, pipeline, flow, timing, trouble, covera
         {dash > 0 && <circle cx="60" cy="60" r={radius} fill="none" stroke={accent} strokeWidth="12"
           strokeLinecap="round" strokeDasharray={`${dash.toFixed(1)} ${(circumference - dash).toFixed(1)}`}
           transform="rotate(-90 60 60)" />}
-        <text x="60" y="58" textAnchor="middle" fontSize="24" fontWeight="700" fill="var(--ink)">
+        <text x="60" y="58" textAnchor="middle" fontSize="24" fontWeight="400" fill="var(--ink)">
           {model.pct == null ? '—' : `${model.pct}%`}
         </text>
         <text x="60" y="76" textAnchor="middle" fontSize="10" fill="var(--muted)">
@@ -1859,7 +1859,7 @@ function TrendStrip({ groups, metricKey, onMetric, chart, markers, paused, sourc
   return <section aria-label="Fifteen minute trend" style={{ ...PANEL, padding: 14 }}>
     <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap' }}>
       <b>Last 15 minutes</b>
-      <span style={{ fontSize: 18, fontWeight: 700 }}>{chart.currentLabel}</span>
+      <span style={{ fontSize: 16, fontWeight: 400 }}>{chart.currentLabel}</span>
     </div>
     {groups.map((group) => <div key={group.source} role="group" aria-label={`${group.label} metrics`}
       style={{ margin: '9px 0' }}>
@@ -1867,7 +1867,7 @@ function TrendStrip({ groups, metricKey, onMetric, chart, markers, paused, sourc
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
         {group.metrics.map((metric) => <button key={metric.key} type="button" className="ghost small"
           aria-pressed={metric.key === metricKey} onClick={() => { setActive(null); onMetric(metric.key) }}
-          style={metric.key === metricKey ? { borderColor: 'var(--plum)', fontWeight: 700 } : undefined}>
+          style={metric.key === metricKey ? { borderColor: 'var(--plum)', fontWeight: 400 } : undefined}>
           {metric.label}
         </button>)}
       </div>
@@ -1925,7 +1925,7 @@ function EventTimeline({ events, filter, onFilter, paused, onPause, showAll, onS
     <div role="group" aria-label="Filter events" style={{ display: 'flex', flexWrap: 'wrap', gap: 6, margin: '9px 0' }}>
       {EVENT_FILTERS.map((option) => <button key={option.key} type="button" className="ghost small"
         aria-pressed={option.key === filter} onClick={() => onFilter(option.key)}
-        style={option.key === filter ? { borderColor: 'var(--plum)', fontWeight: 700 } : undefined}>
+        style={option.key === filter ? { borderColor: 'var(--plum)', fontWeight: 400 } : undefined}>
         {option.label}
       </button>)}
     </div>
@@ -1946,7 +1946,7 @@ function EventTimeline({ events, filter, onFilter, paused, onPause, showAll, onS
             {EVENT_ICONS[event.kind] || '·'}
           </span>
           <span style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
-            <b style={{ fontWeight: 600 }}>{event.text}</b>
+            <b style={{ fontWeight: 400 }}>{event.text}</b>
             <span className="muted"> · {event.stage ? `${event.stage} · ` : ''}{event.kind}
               {event.outcome ? ` · ${event.outcome}` : ''}
               {event.durationS == null ? '' : ` · ${formatDuration(event.durationS)}`}</span>
@@ -1995,7 +1995,7 @@ function OperationalFacts({ groups }) {
           <button type="button" onClick={() => toggle(group.key)} aria-expanded={expanded}
             aria-controls={`facts-${group.key}`}
             style={{ width: '100%', display: 'flex', justifyContent: 'space-between', gap: 8,
-              alignItems: 'center', padding: '8px 10px', fontSize: 12, fontWeight: 700,
+              alignItems: 'center', padding: '8px 10px', fontSize: 12, fontWeight: 400,
               border: '1px solid var(--line)', borderRadius: 8, background: 'var(--bg)',
               color: 'var(--ink)', cursor: 'pointer' }}>
             <span>{group.title}</span>

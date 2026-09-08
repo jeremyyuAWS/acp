@@ -58,7 +58,7 @@ export default function CapacityModeStrip() {
       {/* Drift is stated here rather than only in Settings because this is where somebody is
           looking when the replica counts do not match what they expected. */}
       {drifted && (
-        <span style={{ color: 'var(--warn-fg, #8a5a00)', fontWeight: 600 }}>
+        <span style={{ color: 'var(--warn-fg, #8a5a00)', fontWeight: 400 }}>
           · configuration drift on {snap.drift.length} setting{snap.drift.length === 1 ? '' : 's'}
         </span>
       )}
