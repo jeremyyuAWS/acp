@@ -122,6 +122,27 @@ function summary(d) {
   return `${weekdays ? "Monday–Friday" : chosen.join(", ") || "No active days"}, ${time(d.start)}–${time(d.end)}${d.start > d.end ? " (overnight)" : ""} in ${d.timezone}. Off-hours capacity applies at all other times.`;
 }
 
+function WeeklyPreview({ draft }) {
+  return (
+    <section className="capacity-week" aria-labelledby="capacity-week-title">
+      <div className="capacity-week__heading">
+        <div><b id="capacity-week-title">Weekly preview</b><span>{draft.timezone}</span></div>
+        <span className="capacity-week__legend"><i /> Warm window</span>
+      </div>
+      <div className="capacity-week__days" role="list" aria-label="Weekly warm-capacity windows">
+        {DAYS.map(([key, name]) => {
+          const active = draft.enabled && draft.days.includes(key)
+          return <div key={key} role="listitem" className={active ? 'capacity-week__day capacity-week__day--active' : 'capacity-week__day'}>
+            <b>{name.slice(0, 3)}</b>
+            <span aria-hidden="true">{active ? <i /> : null}</span>
+            <small>{active ? `${time(draft.start)}–${time(draft.end)}` : 'Off hours'}</small>
+          </div>
+        })}
+      </div>
+    </section>
+  )
+}
+
 export default function CapacityScheduleEditor({
   snap,
   onSaved,
@@ -310,7 +331,7 @@ export default function CapacityScheduleEditor({
         role="dialog"
         aria-modal="false"
         tabIndex={-1}
-        className="panel"
+        className="panel capacity-editor capacity-editor--override"
         aria-labelledby="override-title"
         style={{ padding: 16, display: "grid", gap: 14 }}
       >
@@ -477,7 +498,7 @@ export default function CapacityScheduleEditor({
       role="dialog"
       aria-modal="false"
       tabIndex={-1}
-      className="panel"
+      className="panel capacity-editor"
       aria-labelledby="editor-title"
       style={{ padding: 16, display: "grid", gap: 16 }}
     >
@@ -499,6 +520,7 @@ export default function CapacityScheduleEditor({
         )}
       </header>
       <nav
+        className="capacity-steps"
         aria-label="Schedule editing steps"
         style={{
           display: "grid",
@@ -510,6 +532,7 @@ export default function CapacityScheduleEditor({
           <button
             key={n}
             className={step === i ? "" : "ghost"}
+            data-complete={step > i ? "true" : undefined}
             aria-current={step === i ? "step" : undefined}
             onClick={() => setStep(i)}
           >
@@ -530,13 +553,14 @@ export default function CapacityScheduleEditor({
       )}
       {busy && <div role="status" aria-live="polite">Saving or checking the schedule…</div>}
       {step === 0 && (
-        <div style={{ display: "grid", gap: 14 }}>
+        <div className="capacity-editor__body" style={{ display: "grid", gap: 14 }}>
           <div>
             <h4 style={{ margin: 0 }}>When should warm capacity run?</h4>
             <p className="muted" style={{ fontSize: 12 }}>
               {summary(draft)}
             </p>
           </div>
+          <WeeklyPreview draft={draft} />
           <label>
             <input
               type="checkbox"
@@ -694,7 +718,7 @@ export default function CapacityScheduleEditor({
         </div>
       )}
       {step === 1 && (
-        <div>
+        <div className="capacity-editor__body">
           <h4 style={{ margin: 0 }}>Choose capacity for each service</h4>
           <p className="muted" style={{ fontSize: 12 }}>
             Warm is the normal count. Maximum is the queue-driven ceiling.
@@ -763,7 +787,7 @@ export default function CapacityScheduleEditor({
         </div>
       )}
       {step === 2 && (
-        <div style={{ display: "grid", gap: 12 }}>
+        <div className="capacity-editor__body" style={{ display: "grid", gap: 12 }}>
           <h4 style={{ margin: 0 }}>Review &amp; apply</h4>
           <p>{summary(draft)}</p>
           <div className="panel" style={{ padding: 10 }}>
@@ -868,6 +892,7 @@ export default function CapacityScheduleEditor({
         </div>
       )}
       <footer
+        className="capacity-editor__footer"
         style={{
           display: "flex",
           justifyContent: "space-between",
