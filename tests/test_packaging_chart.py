@@ -501,6 +501,55 @@ def test_private_workers_render_a_policy_that_admits_nothing():
 
 
 @needs_helm
+def test_every_pod_meets_the_restricted_pod_security_standard():
+    """THREE QUARTERS OF A STANDARD IS NOT THE STANDARD.
+
+    `runAsNonRoot`, `allowPrivilegeEscalation: false` and `capabilities.drop: [ALL]` were all here.
+    Without a seccomp profile the pods still fail admission in a namespace enforcing `restricted`,
+    so PRD S5.B's "restricted pod security where technically possible" described three of the four
+    things it needs — and the absence of the field means `Unconfined`, which is precisely what the
+    standard exists to refuse.
+
+    Asserted on EVERY pod the chart renders, hook Jobs and dependencies included, because
+    admission does not exempt the ones that are inconvenient. The reference cluster now enforces
+    the label, so this assertion and the API server agree or the install fails.
+    """
+    manifests = render(load_example("standard-production"))
+    pods = [d for d in manifests if d["kind"] in ("Deployment", "Job")]
+    assert pods, "nothing rendered; this test would prove nothing"
+    for workload in pods:
+        spec = workload["spec"]["template"]["spec"]
+        name = workload["metadata"]["name"]
+        pod_security = spec.get("securityContext", {})
+        assert pod_security.get("seccompProfile", {}).get("type") == "RuntimeDefault", name
+        assert pod_security.get("runAsNonRoot") is True, name
+        for container in spec["containers"]:
+            container_security = container.get("securityContext", {})
+            assert container_security.get("allowPrivilegeEscalation") is False, name
+            assert container_security.get("capabilities", {}).get("drop") == ["ALL"], name
+        # `restricted` also constrains volume types. The chart renders none, which is the easiest
+        # way to satisfy that and worth asserting so a future volume has to be a deliberate choice
+        # against a named list rather than an addition nobody weighed.
+        assert not spec.get("volumes"), (
+            f"{name} gained a volume; the restricted standard allows only configMap, secret, "
+            f"emptyDir, projected, downwardAPI, PVC and ephemeral")
+
+
+@needs_helm
+def test_grafana_differs_from_the_other_pods_in_exactly_one_field():
+    """Grafana's image runs as 472 and owns its data directory as 472, so that UID cannot be
+    shared. Everything else must be — and writing the three fields out by hand is how this pod
+    would have become the only one without a seccomp profile, failing admission in a restricted
+    namespace while every other workload passed."""
+    manifests = render(load_example("standard-production"))
+    grafana = named(manifests, "Deployment", "-grafana")["spec"]["template"]["spec"]
+    api = named(manifests, "Deployment", "-api")["spec"]["template"]["spec"]
+    differing = {k for k in set(grafana["securityContext"]) | set(api["securityContext"])
+                 if grafana["securityContext"].get(k) != api["securityContext"].get(k)}
+    assert differing == {"runAsUser", "fsGroup"}, differing
+
+
+@needs_helm
 def test_tracing_gets_all_three_of_the_variables_it_needs():
     """`api/lf.py` is `_ENABLED = bool(_HOST and _PK and _SK)`.
 
@@ -699,6 +748,50 @@ def test_the_gpu_count_is_a_values_knob():
     ollama = named(manifests, "Deployment", "-ollama")
     limits = ollama["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"]
     assert limits["nvidia.com/gpu"] == 4
+
+
+@needs_helm
+def test_ollamas_root_stays_writable_whatever_the_shared_value_says():
+    """A COMMENT THAT DESCRIBED A SETTING NOBODY HAD SET.
+
+    `templates/ollama.yaml` said the shared securityContext "sets it true, which is right for the
+    API and the workers" — and `values.yaml` has `readOnlyRootFilesystem: false`, so it had never
+    been true for anything. The override was a guard reading as an exception in force, and a
+    reader deciding whether the chart hardens its root filesystems would have concluded it does.
+
+    So this asserts the guard rather than the comment: turn the shared value on and ollama alone
+    must stay writable, because it writes its runtime state under the model root while serving.
+    That is a property of `merge`'s precedence, which is what the override actually relies on, and
+    it holds no matter what the default becomes.
+    """
+    manifests = render(load_example("standard-production"),
+                       extra=["--set", "securityContext.readOnlyRootFilesystem=true"])
+    ollama = named(manifests, "Deployment", "-ollama")["spec"]["template"]["spec"]
+    assert ollama["containers"][0]["securityContext"]["readOnlyRootFilesystem"] is False
+    for suffix in ("-api", "-worker-remediate"):
+        other = named(manifests, "Deployment", suffix)["spec"]["template"]["spec"]
+        assert other["containers"][0]["securityContext"]["readOnlyRootFilesystem"] is True, suffix
+
+
+@needs_helm
+def test_the_shared_root_filesystem_is_writable_and_that_is_deliberate():
+    """The other half, and the one that makes the gap report's entry checkable.
+
+    `PUT /rubric` writes `<repo>/config/rubric.active.json` INTO THE IMAGE (api/routes/rubric.py),
+    so a read-only root turns an owner-only admin endpoint into a 500. Every other runtime write
+    the application makes goes to `$TMPDIR`, which an emptyDir would cover — that one does not,
+    and moving it is an application change rather than a packaging one.
+
+    This test exists so the default is a recorded decision instead of an oversight. When the
+    rubric write moves, this is the test that fails and says where to look.
+    """
+    values = yaml.safe_load((CHART / "values.yaml").read_text(encoding="utf-8"))
+    assert values["securityContext"]["readOnlyRootFilesystem"] is False, (
+        "if this is now true, PUT /rubric must no longer write into the image; see "
+        "packaging/docs/kubernetes-mvp-gap-report.md")
+    rubric = (ROOT / "api" / "routes" / "rubric.py").read_text(encoding="utf-8")
+    assert 'config/rubric.active.json").write_text' in rubric, (
+        "the write this default exists for has moved; re-check whether the default can flip")
 
 
 @needs_helm

@@ -270,9 +270,63 @@ honest options were to say something false or to say nothing, and it says nothin
 external` in v1alpha2 is the fix; inventing one here would have been a contract change smuggled in
 under a wiring fix.
 
-**What is missing.** No `topologySpreadConstraints` anywhere in the chart. No `seccompProfile`, so
-the rendered pods do not meet the restricted Pod Security Standard as written, and
-`readOnlyRootFilesystem` is `false` by default. No PersistentVolumeClaim and no volumes at all —
+**Restricted pod security, now enforced rather than described.** `runAsNonRoot`,
+`allowPrivilegeEscalation: false` and `capabilities.drop: [ALL]` were all present and the
+`seccompProfile` was not — and its absence means `Unconfined`, which is what the standard exists to
+refuse. Three quarters of a standard is not the standard. It is set now, and more usefully the
+reference cluster labels its namespace `pod-security.kubernetes.io/enforce=restricted`, so the API
+SERVER decides: a pod that does not meet it is rejected at admission and the install fails. That is
+the difference between this and a rendered-manifest test, and it is the second claim (after
+NetworkPolicy, which kind cannot enforce) that the disposable cluster turns from text into a
+decision something else makes.
+
+Enforcing it found its first pod immediately, and not one of the chart's: the reference
+Postgres and Redis were written before the label existed, default to running as root, and were
+rejected outright. Their Deployments were created and never produced a pod, so the run died three
+minutes later on a `rollout status` timeout with nothing to describe — while the API server had
+named all four missing fields as a WARNING on the apply. They carry restricted contexts now, and
+the apply runs `--warnings-as-errors` so the message that names the fields is the message that
+fails.
+
+**`readOnlyRootFilesystem` is `false`, and that is now a recorded decision rather than an
+oversight.** Every runtime write the application makes goes to `$TMPDIR` — per-document scratch in
+`api/scanner.py`, `api/handlers.py`, `api/proposals.py` and the PDF engine, the LibreOffice user
+profile (`api/render.py:106`), the .NET analyser's `_o.json`, `remediated-<name>` beside its input,
+tesseract's scratch images — all of which an `emptyDir` at `/tmp` would cover. One write does not:
+`PUT /rubric` writes `<repo>/config/rubric.active.json` INTO THE IMAGE
+(`api/routes/rubric.py:63`), so a read-only root turns an owner-only admin endpoint into a 500.
+Masking `/app/config` with an `emptyDir` is not a way round it — that hides `rubric.default.json`
+and `rule-catalog.json`. Moving the write to the database or to `$TMPDIR` is an application change,
+not a packaging one, so the default stays `false` and
+`test_the_shared_root_filesystem_is_writable_and_that_is_deliberate` pins both halves: the value,
+and the write it exists for.
+
+Turning it on later also needs `HOME`, `XDG_CACHE_HOME` and `DOTNET_CLI_HOME` pointed inside the
+writable mount. UID 10001 has no passwd entry — none of the Dockerfiles contains `USER`, `useradd`
+or `HOME`, and the UID comes only from `values.yaml` — so `expanduser("~/.dotnet")`
+(`api/scanner.py:59`) and fontconfig both resolve somewhere unverified today.
+
+**The failure mode is why this is worth writing down rather than trying.** An unwritable scratch
+directory does not crash anything. `render_page_png` returns `None` on any exception
+(`api/render.py:78`), `_office_to_pdf` returns `None` (`api/render.py:112`), and `_analyse_office`
+turns `OSError` into an engine-error bucket that scores as `uncertain` (`api/scanner.py:4360`).
+Office documents would quietly degrade to `uncertain` with no startup signal and no error anybody
+sees. The one loud failure is the sqlite bootstrap at `/app/acp.db`, which the chart cannot reach
+because `DATABASE_URL` is a required reference.
+
+The override that was supposed to protect Ollama from all this did not work. `ollama.yaml` pinned
+`readOnlyRootFilesystem: false` with `merge (dict "readOnlyRootFilesystem" false)
+.Values.securityContext` — and `merge` is mergo underneath, which overwrites a destination value
+that is its type's ZERO. `false` is. So the override was discarded exactly when the shared value
+was `true`, which is the only case it exists for; it read as working because both were `false` and
+agreed. It is `deepCopy` + `set` now, and
+`test_ollamas_root_stays_writable_whatever_the_shared_value_says` renders with the shared value
+forced on. The comment beside it claimed the shared context "sets it true", which had never been
+so — a reader deciding whether this chart hardens its root filesystems would have concluded it
+does.
+
+**What is missing.** No `topologySpreadConstraints` anywhere in the chart. No PersistentVolumeClaim
+and no volumes at all —
 worker scratch is the node's ephemeral storage, bounded only by the limit above. The PDB renders
 only for the `high-availability` profile and only for the API tier
 (`values.py`: `"enabled": rt["profile"] == "high-availability"`; `templates/pdb.yaml`), which is a
@@ -426,6 +480,6 @@ is `verified`.
 | Workstream | State | Evidence | Blocker | Next action |
 |---|---|---|---|---|
 | **A. Release artifacts and supply chain** | in progress | The `ACPRelease` contract, `acpctl release verify`, and `--release` on `values`/`plan` (`tests/test_packaging_release.py`), which reconcile the plan's eight names, the chart's four references and the one application artifact — and render every image by digest | Nothing builds, signs, SBOMs or scans an artifact, so no real manifest exists and CI has no release to fail on | Build the release images in CI and emit a signed manifest from that build |
-| **B. Helm production hardening** | in progress | Requests/limits with `ephemeral-storage` on every workload; non-root pod security; `terminationGracePeriodSeconds: 300`; no worker Service; `doctor` blocks on KEDA, CNI and ESO (`tests/test_packaging_doctor.py`) | No reference Kubernetes version (only `MINIMUM_KUBERNETES = (1, 23)`); no disposable cluster; no topology spread, no seccomp profile, no backup/restore Job | Name a reference version and stand up a throwaway cluster in CI |
+| **B. Helm production hardening** | in progress | Requests/limits with `ephemeral-storage` on every workload; restricted pod security ENFORCED by the API server on a disposable cluster, not merely rendered; `terminationGracePeriodSeconds: 300` with a matching drain window; no worker Service; `doctor` blocks on KEDA, CNI and ESO (`tests/test_packaging_doctor.py`) | The cluster it installs on is `kindest/node:v1.31.4`, which is a version it RUNS on, not one anything is supported on — naming a supported distribution is PRD S4 and an owner decision; no topology spread, no `readOnlyRootFilesystem` (blocked on `PUT /rubric` writing into the image), no backup/restore Job | Topology spread, then a backup/restore Job |
 | **C. Portable acceptance suite** | not started | None — no `packaging/tests/`; the preflight hook is advisory (`backoffLimit: 0`, post-install) | Eight of ten scenarios need `acpctl install`, which exits 2; the first two need only a cluster and images | Define the structured report format and emit it from the two readiness scenarios |
 | **D. `acpctl` lifecycle** | in progress | Eight read-only commands with documented exit codes; write-refusal and kubectl-verb allow-list both tested; the seven lifecycle commands refuse rather than no-op (`cli.py:27-35`) | `install` has nothing to pin to: the release contract exists but no build produces a manifest, so there are no real digests and no signature to verify | Hold `install` until a build emits a manifest; `support-bundle` is the one command with no upstream dependency |

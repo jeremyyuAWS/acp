@@ -68,12 +68,25 @@ spec:
           image: {{ include "acp.image" (dict "root" $ "component" "ollama") | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           {{- /*
-            readOnlyRootFilesystem is dropped for this container alone. Ollama writes its runtime
-            state under the model root while serving; the shared securityContext sets it true,
-            which is right for the API and the workers and would make this pod crash-loop.
+            readOnlyRootFilesystem is pinned false for this container alone, whatever the shared
+            securityContext says. Ollama writes its runtime state under the model root while
+            serving, so a read-only root makes this pod crash-loop.
+
+            WRITTEN AS deepCopy + set BECAUSE `merge` COULD NOT EXPRESS IT. `merge dst src` is
+            mergo underneath, and mergo overwrites a destination value that is its type's ZERO —
+            which `false` is. So `merge (dict "readOnlyRootFilesystem" false) .Values.securityContext`
+            yielded true the moment the shared value was true: precisely the case the override
+            exists for, and the only case in which it does anything at all.
+
+            It read as working because the shared value is also false, so the two agreed and the
+            render was correct for the wrong reason. The comment here claimed the shared context
+            "set it true", which was never so — see packaging/docs/kubernetes-mvp-gap-report.md
+            for what turning it on would take and the one feature it would break.
           */}}
+          {{- $ollamaSecurity := deepCopy .Values.securityContext }}
+          {{- $_ := set $ollamaSecurity "readOnlyRootFilesystem" false }}
           securityContext:
-            {{- toYaml (merge (dict "readOnlyRootFilesystem" false) .Values.securityContext) | nindent 12 }}
+            {{- toYaml $ollamaSecurity | nindent 12 }}
           ports:
             - name: http
               containerPort: {{ .Values.ai.ollama.port }}
