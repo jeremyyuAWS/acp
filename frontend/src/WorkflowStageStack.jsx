@@ -28,13 +28,13 @@ function primaryOutcome(model) {
 /** The sole outer shell for all four workflow stages. Detail nodes stay mounted under `hidden`
  * so disclosure changes do not end live subscriptions or reset rolling heartbeat history. */
 export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = null,
-  stageDetails = {} }) {
+  stageDetails = {}, activeStage = null }) {
   const snapshots = useMemo(() => canonicalWorkflowStages(lineage), [lineage])
   const current = useMemo(() => currentCanonicalStage(lineage), [lineage])
   const key = storageKey(lineage)
   const [overrides, setOverrides] = useState({})
 
-  useEffect(() => { setOverrides({}) }, [key])
+  useEffect(() => { setOverrides({}) }, [key, activeStage])
 
   if (!snapshots.length) return null
   const byStage = new Map(snapshots.map((snapshot) => [snapshot.stage, snapshot]))
@@ -48,7 +48,8 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
           && snapshot.execution_id === current?.execution_id)
         const model = snapshot ? canonicalStageCardModel(snapshot, { isCurrent }) : null
         const attention = Boolean(snapshot && stageNeedsAttention(snapshot))
-        const defaultOpen = attention || isCurrent
+        const isCompleted = completed(snapshot.state)
+        const defaultOpen = attention || (isCompleted ? stage === activeStage : isCurrent)
         const open = attention || (overrides[stage] ?? defaultOpen)
         const detail = isCurrent ? stageDetails[stage] : null
         const bodyId = `workflow-stage-${stage}`

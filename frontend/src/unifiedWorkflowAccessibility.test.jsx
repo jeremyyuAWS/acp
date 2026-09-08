@@ -77,7 +77,7 @@ describe('unified canonical workflow experience', () => {
       lineage: { workflow_id: 'workflow-1', workflow_revision: 4, stages: [
         canonical({ stage: 'discover', state: 'succeeded', execution_id: 'discover-4' }),
       ] },
-      view: 'assess',
+      activeStage: 'discover',
     }))
     const toggle = history.querySelector('.workflow-stage-stack__summary')
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
@@ -95,7 +95,7 @@ describe('unified canonical workflow experience', () => {
       lineage: { workflow_id: 'workflow-1', workflow_revision: 4, stages: [
         canonical({ stage: 'discover', state: 'succeeded', execution_id: 'discover-4' }),
       ] },
-      view: 'assess',
+      activeStage: 'assess',
     }))
     const toggle = history.querySelector('.workflow-stage-stack__summary')
     act(() => { toggle.click() })
