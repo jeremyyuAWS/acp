@@ -144,8 +144,8 @@ def chart_repositories(values: dict, chart_dir: str | Path) -> dict[str, str]:
             for component, key in keys.items()}
 
 
-def resolve_components(release: Any | None, wanted: list[str],
-                       chart_defaults: dict[str, str]) -> tuple[dict[str, dict[str, str]], list[str]]:
+def resolve_components(release: Any | None, wanted: list[str], chart_defaults: dict[str, str]
+                       ) -> tuple[dict[str, dict[str, str]], list[str]]:
     """The `release.components` map for the state, and the components with no digest.
 
     The second half of the return is the point: a caller that only took the map would install an
@@ -189,11 +189,13 @@ def render_values(document: dict, release: Any | None) -> str:
     that assembled its own pinned values would be a third opinion about what a pinned values file
     looks like, and the one nobody can print.
 
-    A RELEASE PINS ALL FOUR CHART COMPONENTS, INCLUDING ONES THIS RENDER DISABLES. That is not an
-    oversight: `image.digests` is a lookup table the chart consults only for the images it
-    actually renders, so an entry for a Deployment that does not exist installs nothing — and
-    hashing the whole release into `chart.valuesSha256` means switching Ollama on later is
-    correctly seen as a change rather than as the same installation.
+    A RELEASE PINS ALL FOUR CHART COMPONENTS, INCLUDING ONES THIS RENDER DISABLES — a change from
+    the digest map this function used to be handed, which held the enabled components only.
+    `image.digests` is a lookup table the chart consults for the images it actually renders, so an
+    entry for a Deployment that does not exist pins nothing and deploys nothing. What it does do
+    is put the WHOLE release into `chart.valuesSha256`, so re-running the same document against a
+    re-pinned release counts as a change even in the components this render does not deploy. That
+    is the honest answer: a different release is a different installation.
 
     THE DIGESTS GO IN THE VALUES FILE, NOT ON `--set`. Two reasons, and the second is the one that
     bites: the values file is what gets hashed into the state as `chart.valuesSha256`, so a
@@ -303,8 +305,10 @@ def load_release(path: str | Path, document: dict, *, echo: Callable[[str], None
     for finding in result.warnings:
         echo(f"  release manifest: {finding.render()}")
     if not result.ok:
-        for finding in result.errors:
-            echo(f"  {finding.render()}")
+        # THE FINDINGS GO IN THE REASON, NOT THROUGH `echo`. `echo` is stdout (or stderr under
+        # --json) and the reason is what the CLI prints when it fails; putting the errors in both
+        # prints each one twice, and a refusal whose text differs from the findings above it is
+        # the one an operator reads as two separate problems.
         return None, None, Outcome(EXIT_REFUSED, reason=(
             f"refusing to install: {path} is not a valid release manifest "
             f"({len(result.errors)} error(s)):\n"
@@ -322,8 +326,6 @@ def load_release(path: str | Path, document: dict, *, echo: Callable[[str], None
     # disagreement left to catch is this one, between the release and the document installing it.
     mismatches = release_mod.check_against_document(result.release, document)
     if mismatches:
-        for finding in mismatches:
-            echo(f"  {finding.render()}")
         return None, None, Outcome(EXIT_REFUSED, reason=(
             f"refusing to install: {path} cannot be used with this document:\n"
             + "\n".join(f"  {finding.render()}" for finding in mismatches)))

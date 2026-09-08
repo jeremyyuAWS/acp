@@ -641,7 +641,8 @@ def test_the_release_names_the_repositories_and_beats_the_charts_defaults(tmp_pa
 
     doc = load_example("standard-production")
     defaults = chart_repositories(build_values(doc), CHART)
-    assert defaults["api"] != "acp-app", "the chart default and the release now agree — retire this"
+    assert defaults["api"] != "acp-app", \
+        "the chart default and the release now name the same artifact — retire this test"
 
     outcome = run_install(tmp_path, FakeRunner())
     assert outcome.code == 0, outcome.reason
