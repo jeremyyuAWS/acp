@@ -2,7 +2,8 @@
 .remediation-plan-choices__grid .remediation-plan-option > label { height: 100%; box-sizing: border-box; padding-right: 48px; }
 .remediation-option-help { position: absolute; top: 8px; right: 8px; z-index: 1; }
 .remediation-option-help:focus-within, .remediation-option-help:hover { z-index: 3; }
-.remediation-option-help > button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 1px solid #76518c; border-radius: 50%; color: #57396a; background: #fff; font: 700 15px Georgia, serif; cursor: help; }
+.remediation-option-help > button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 50%; color: #57396a; background: transparent; cursor: help; }
+.remediation-option-help > button > span { display: grid; place-items: center; box-sizing: border-box; width: 16px; height: 16px; border: 1px solid #76518c; border-radius: 50%; background: #fff; font: 700 11px/1 Georgia, serif; }
 .remediation-option-help > button:focus-visible { outline: 3px solid #76518c; outline-offset: 3px; }
 .remediation-option-help__text { position: absolute; top: 100%; right: 0; width: 270px; max-width: calc(100vw - 80px); padding: 12px; box-sizing: border-box; border: 1px solid #bca7cb; border-radius: 8px; background: #fff; color: #332a3b; box-shadow: 0 4px 16px #30213b26; font-size: 13px; line-height: 1.5; font-weight: 400; }
 .remediation-waterfall-plan { margin-top: 20px; padding: 16px; border: 1px solid #d8ccdf; border-radius: 10px; background: #faf7fc; color: #332a3b; }
