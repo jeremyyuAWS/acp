@@ -447,6 +447,12 @@
                 "cloud",
                 "disabled"
               ]
+            },
+            "host": {
+              "description": "The Langfuse endpoint traces are written to. WITHOUT IT NOTHING IS TRACED: api/lf.py enables itself only when LANGFUSE_HOST, LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY are all present, so a deployment naming a mode but no host declares a feature it does not get. Not a credential — it is an endpoint, and the two keys beside it are secrets.refs entries — so it belongs here rather than there. Required whenever mode is not 'disabled', including 'cloud', where it selects the region.",
+              "type": "string",
+              "pattern": "^https://[a-zA-Z0-9.-]+(:[0-9]+)?(/.*)?$",
+              "maxLength": 512
             }
           }
         }
