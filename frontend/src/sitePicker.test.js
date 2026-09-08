@@ -70,6 +70,15 @@ describe('SitePicker', () => {
     const s = read('SitePicker.jsx')
     expect(s).toMatch(/sharepoint_max_sites/)
   })
+
+  it('supports the scan wizard inline without wrapping it in another modal', () => {
+    const s = read('SitePicker.jsx')
+    expect(s).toMatch(/layout = 'modal'/)
+    expect(s).toMatch(/inline \? content/)
+    const wizard = read('ScanScopeWizard.jsx')
+    expect(wizard).toContain('<SitePicker')
+    expect(wizard).toContain('layout="inline"')
+  })
 })
 
 describe('Discover wires it', () => {
