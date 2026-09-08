@@ -108,7 +108,7 @@ export default function CanonicalStageCard({ snapshot, onOpen = null, embedded =
   </>
 
   if (embedded) {
-    return <div aria-label={`${model.stageLabel} canonical stage status`}
+    return <div className="canonical-stage-card__embedded" aria-label={`${model.stageLabel} canonical stage status`}
       data-testid="canonical-stage-card">{content}</div>
   }
 
