@@ -246,6 +246,19 @@ def _execute_once(store, owner: str, actor: str, *, action: str, level: int,
         current_view = current or {"level": DEFAULT_LEVEL, "revision": 0,
                                    "updated_at": None, "updated_by": None}
         if int(current_view["revision"]) != expected_revision:
+            # A concurrent identical request can commit between the receipt lookup above and
+            # this policy read (SQLite defers its transaction until the first write; PostgreSQL
+            # can reach the same window at READ COMMITTED). Reconcile the receipt once more
+            # before calling the retry stale. Otherwise an exact retry nondeterministically
+            # becomes PolicyConflict even though its first copy completed successfully.
+            store._db.execute(cur, "SELECT request_digest,result_json FROM remediation_policy_action "
+                              "WHERE owner_email=%s AND idempotency_key=%s",
+                              (owner, idempotency_key))
+            concurrent = store._db.fetchone(cur)
+            if concurrent:
+                if concurrent["request_digest"] != request_digest:
+                    raise IdempotencyConflict()
+                return {**json.loads(concurrent["result_json"]), "duplicate": True}
             raise PolicyConflict(current_view)
         next_revision = expected_revision + 1
         if current:
