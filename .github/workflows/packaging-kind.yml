@@ -51,6 +51,10 @@ jobs:
       # Pinned for the same reason every other version here is: a CNI that moves under the run
       # makes a green job unattributable. Bump deliberately, with a run behind it.
       CALICO_VERSION: v3.28.2
+      # CRDs ONLY, not the operators. See the dry-run step for why that is the right
+      # amount of KEDA and External Secrets to install here.
+      KEDA_CRDS_VERSION: v2.16.0
+      ESO_CRDS_VERSION: v0.10.5
       KIND_CLUSTER: acp-reference
       PYTHONPATH: packaging/cli
 
@@ -428,6 +432,27 @@ jobs:
           kubectl label namespace acp-dryrun \
             pod-security.kubernetes.io/enforce=restricted \
             pod-security.kubernetes.io/enforce-version=latest
+          # THE CRDs, AND ONLY THE CRDs. `--dry-run=server` validates a custom resource against
+          # its CustomResourceDefinition's schema, which needs the definition present and nothing
+          # else — no controller, no webhook, no reconciliation. Installing the KEDA and External
+          # Secrets OPERATORS would test their behaviour rather than this chart's manifests, take
+          # minutes rather than seconds, and give `acpctl doctor` two fewer blockers to report,
+          # which is the opposite of useful: doctor blocking on their absence is correct.
+          #
+          # Their apiVersions match what these bundles serve — keda.sh/v1alpha1 for ScaledObject
+          # and TriggerAuthentication, external-secrets.io/v1beta1 for ExternalSecret — so a
+          # rejection here is about the manifests, not about a version skew.
+          kubectl apply --server-side -f \
+            "https://github.com/kedacore/keda/releases/download/${KEDA_CRDS_VERSION}/keda-${KEDA_CRDS_VERSION#v}-crds.yaml"
+          kubectl apply --server-side -f \
+            "https://raw.githubusercontent.com/external-secrets/external-secrets/${ESO_CRDS_VERSION}/deploy/crds/bundle.yaml"
+          # A CRD is not servable the instant it is created; applying a custom resource against
+          # one that is not established yet fails with "no matches for kind", which reads as a
+          # broken manifest and is not.
+          for crd in scaledobjects.keda.sh triggerauthentications.keda.sh \
+                     externalsecrets.external-secrets.io; do
+            kubectl wait --for=condition=established --timeout=60s "crd/$crd"
+          done
           python -m acpctl values packaging/examples/standard-production.acp-deployment.yaml \
             > /tmp/full-values.yaml
           helm template acp packaging/chart/acp \
@@ -437,21 +462,22 @@ jobs:
           python - <<'PY'
           import sys, yaml
 
-          NEEDS_CRD = {"ExternalSecret", "ScaledObject", "TriggerAuthentication"}
+          # NOTHING IS SKIPPED NOW, and these three are the reason the CRDs are installed above.
+          # Named rather than counted, because a render that stopped producing them would leave
+          # this step passing over a smaller set and reporting nothing about it.
+          NEEDED_CRDS = {"ExternalSecret", "ScaledObject", "TriggerAuthentication"}
           docs = [d for d in yaml.safe_load_all(open("/tmp/full.yaml")) if d]
-          skipped = sorted({d["kind"] for d in docs if d["kind"] in NEEDS_CRD})
-          if skipped != sorted(NEEDS_CRD):
-              print(f"expected to skip {sorted(NEEDS_CRD)}, actually skipping {skipped} — the "
-                    f"render changed and this step is no longer covering what it claims",
-                    file=sys.stderr)
+          kinds = {d["kind"] for d in docs}
+          missing = sorted(NEEDED_CRDS - kinds)
+          if missing:
+              print(f"the render no longer produces {missing}, so this step covers less than it "
+                    f"claims. Either the chart changed or the example did; do not simply drop "
+                    f"them from this list.", file=sys.stderr)
               sys.exit(1)
-          keep = [d for d in docs if d["kind"] not in NEEDS_CRD]
-          kinds = sorted({d["kind"] for d in keep})
-          print(f"dry-running {len(keep)} manifests: {kinds}")
-          yaml.safe_dump_all(keep, open("/tmp/dryrun.yaml", "w"))
+          print(f"dry-running all {len(docs)} manifests: {sorted(kinds)}")
           PY
           kubectl apply --dry-run=server --warnings-as-errors \
-            -n acp-dryrun -f /tmp/dryrun.yaml
+            -n acp-dryrun -f /tmp/full.yaml
           kubectl delete namespace acp-dryrun --wait=false
 
       - name: Can it be upgraded, or only installed?

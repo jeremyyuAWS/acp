@@ -452,10 +452,24 @@ def test_the_dry_run_covers_the_kinds_the_reference_install_never_creates():
     script = run_steps()
     assert "--dry-run=server" in script and "--warnings-as-errors" in script, (
         "a dry run that does not run admission proves less than the install beside it")
+
+    # THE THREE THAT USED TO BE SKIPPED. Their CRDs are installed now — the definitions only, not
+    # the operators, because `--dry-run=server` validates a custom resource against its schema and
+    # needs nothing else. The step must still NAME them: a render that stopped producing them
+    # would otherwise leave it passing over a smaller set and reporting nothing about it.
     for kind in ("ExternalSecret", "ScaledObject", "TriggerAuthentication"):
         assert kind in script, (
-            f"{kind} needs a CRD this cluster does not have; the step must name what it skips or "
-            f"a new CRD-dependent kind is skipped silently")
+            f"{kind} is one of the kinds the CRDs are installed for; the step must name it or a "
+            f"render that stops producing it goes unnoticed")
+    assert "keda" in script and "external-secrets" in script, (
+        "without the CRDs those three kinds cannot be validated at all")
+    for pin in ("KEDA_CRDS_VERSION", "ESO_CRDS_VERSION"):
+        assert pin in job_env(), f"{pin} unpinned moves the schema under the run"
+    assert "condition=established" in script, (
+        "a CRD is not servable the instant it is created, and 'no matches for kind' reads as a "
+        "broken manifest when it is a race")
+    assert "-f /tmp/full.yaml" in script, (
+        "the dry run must submit the whole render now that nothing needs skipping")
 
 
 def test_the_reference_cluster_upgrades_as_well_as_installs():

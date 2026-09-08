@@ -388,10 +388,14 @@ so the same bug in `ollama.yaml` or `grafana.yaml` would have shipped past a gre
 A server-side dry run of the full-featured render closes that, costs seconds, and is the same kind
 of evidence as the install: the API server validates the schema and runs admission, so the dry-run
 namespace carries the restricted label for the same reason the real one does. Nothing is
-persisted. ExternalSecret, ScaledObject and TriggerAuthentication need CRDs this cluster does not
-have — `doctor` reports both operators as blockers on a real cluster, which is its job — so those
-three are skipped BY NAME, and a kind that starts depending on a CRD fails the step rather than
-being skipped quietly.
+persisted. ExternalSecret, ScaledObject and TriggerAuthentication were skipped at first, needing CRDs the
+cluster did not have. THE CRDs ARE INSTALLED NOW — the definitions only, not the operators, which
+is the right amount: `--dry-run=server` validates a custom resource against its
+CustomResourceDefinition's schema and needs nothing else. Installing KEDA and External Secrets
+themselves would test their behaviour rather than these manifests, take minutes rather than
+seconds, and remove two blockers `acpctl doctor` is correct to report on a real cluster. So
+nothing is skipped, and the three are still NAMED — a render that stopped producing them would
+otherwise leave the step passing over a smaller set and saying nothing about it.
 
 What it still does not establish: that these objects DO anything. An Ingress that validates has
 not routed a request, and an HPA that validates has not scaled a tier. Schema and admission are
