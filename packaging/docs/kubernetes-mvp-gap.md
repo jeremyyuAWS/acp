@@ -32,7 +32,7 @@ A rendered chart is not that evidence. Anything in this change that reads as pro
 | External Postgres | The chart refuses to render against in-cluster data services (`_dataservices.tpl:33-51`); `standard-production` needs `max_connections ≥ 418` (ADR 0048 amendment, `packaging/docs/service-inventory.md`) | one instance, reachable from the cluster |
 | External Redis and S3-compatible object storage | Same refusal; and the remediated-copy store is the PRD §20.5 acceptance criterion | one each |
 | A registry the cluster can pull from, holding images built from this repo | The chart pulls repositories nothing here builds — gap A1 | any OCI registry + pull secret |
-| A throwaway DNS name and TLS secret, or an ingress controller with a default class | Rendered Ingress names no class and a TLS secret nothing creates — gap B7 | one hostname |
+| A throwaway DNS name and TLS secret, or an ingress controller with a default class | Rendered Ingress names no class and a TLS secret nothing creates — see the Ingress row below | one hostname |
 
 Cost and blast radius are the reason this is an ask rather than a task: it is a billable
 environment, and nothing in this tree provisions anything by design (`packaging/README.md:9-14`),
@@ -65,14 +65,6 @@ $ helm template acp packaging/chart/acp -f values.yaml
 Not checkable here, and not claimed anywhere below: admission behaviour, KEDA/ESO reconciliation,
 NetworkPolicy enforcement, image pulls, scheduling, and anything `acpctl doctor`/`status` reads.
 
-## Workstream letters as used here
-
-| | Scope in this report |
-|---|---|
-| **A** | Lifecycle — turning a rendered release into an installed, upgradable, removable one |
-| **B** | Hardening — the production posture of what the chart renders |
-| **C** | Acceptance — the suite a target must pass before a support claim |
-| **D** | Support status and evidence — what `supported` may be made to mean, and for which target |
 
 ## What the chart RENDERS versus what the cluster must already provide
 
@@ -105,15 +97,19 @@ Row 4 is the customer-Kubernetes default. `acpctl init --platform kubernetes` wr
 kind — verified by rendering it. So the one prerequisite the operator will hit first on the MVP
 path is the one `doctor` does not ask about.
 
+
 ---
 
-## A — Lifecycle
+## A — Release artifacts and supply chain
 
-**Exists.** `validate`, `plan`, `inventory`, `values`, `init`, `doctor`, `status` (README:66-78);
-all read-only, with `doctor`/`status` restricted to a `kubectl` verb allow-list. `helm template`
-of a real `acpctl values` output is asserted in CI by 42 tests. The lifecycle commands
-(`install`, `uninstall` and their state handling) are **being written in this same change** and
-are not assessed here.
+**Owned elsewhere.** Workstream A belongs to the session on
+`claude/acp-portable-packaging-l3krqe`. This section states the gap as the Kubernetes MVP hits it
+and deliberately proposes no implementation.
+
+**Exists.** Three images are built from this tree, all by `az acr build` from the Azure deploy
+scripts: the application image (`deploy/public/deploy.sh:264`, from `deploy/public/Dockerfile`),
+the first-party Grafana (`deploy.sh:644`) and the Ollama gateway
+(`deploy/ollama/gpu-runbook.sh:45`). Each is tagged with a CalVer `TAG`.
 
 **Missing for the acceptance run.**
 
@@ -141,25 +137,33 @@ three worker Deployments running the API.
 
 *Smallest next dependency:* decide whether the MVP builds two image names or seven (PRD §5.1 wants
 seven, separately signed), then make one build produce them. Until an image exists, every later
-step in A, B and C is untestable.
+step in B, C and D is untestable.
 
-**A2 — `secrets.workloadIdentity` is accepted by the validator and rendered by nothing.**
-`spec.py:_rule_required_secrets` treats a name under `workloadIdentity` as satisfying a required
-reference, deliberately, because production reaches Blob through a managed identity and holds no
-storage credential (`schema/acp-deployment.schema.json:507-514`). The derived production document
-uses it (`packaging/docs/azure-current.acp-deployment.yaml:86-87`). But `grep -rn workloadIdentity
-packaging/chart/acp/ packaging/cli/acpctl/values.py` → **exit 1, 0 hits**, and the rendered
-ServiceAccount carries no annotations at all. `serviceaccount.yaml:9-16` calls itself "the ONE
-place the platform reaches into the workloads"; `acpctl values` emits no `serviceAccount` key, so
-that place is always empty. A document that validates on the strength of workload identity
-installs a release with neither a credential nor an identity.
+**A2 — the rest of PRD §5.1 has no artifact to attach to.** Once an image exists, §5.1 asks for
+eight more properties of it, and none is produced anywhere in this tree today: one source revision
+and one ACP CalVer stamped per image; a published immutable digest per image; an SBOM;
+vulnerability scanning; a cryptographic signature; **verification of that signature before
+install**; and AMD64/ARM64 support recorded *per analysis engine* rather than claimed for the
+release. Two of these are already visible from the Kubernetes side as behaviour rather than as
+policy:
 
-*Smallest next dependency:* `acpctl values` must emit `serviceAccount.annotations` from the
-adapter, and a test must fail when a `workloadIdentity` entry produces no annotation.
+- `acpctl values` emits `image.digests: {}` (`values.py:136`) and stamps every file it renders
+  with *"Image digests are UNRESOLVED here"* (`values.py:270`). The chart honours a digest over a
+  tag whenever one is supplied (`_helpers.tpl:49-52,75-80`), so the mechanism exists and the input
+  does not. PRD §5.1 requires templates to reference digests, not mutable tags; every render
+  produced for this report referenced a tag.
+- `image.pullSecrets` is never emitted by `acpctl values`, so `imagePullSecrets` appears in no
+  rendered manifest — verified: `grep -n imagePullSecrets` over both renders returns **0 hits,
+  exit 1**, against a control of 8 `serviceAccountName` hits in the same file. A private registry
+  is the normal case for a customer cluster.
+
+Signature verification before install is the one with an ordering consequence for workstream D:
+it has to happen in the install path, so it cannot be retrofitted after that path is written
+without changing it.
 
 ---
 
-## B — Hardening
+## B — Helm production hardening
 
 The workstream-B hardening checklist, run against the **rendered** output of
 `standard-production` and `high-availability` rather than against template text. The requirements
@@ -172,7 +176,7 @@ are the Kubernetes half of PRD §5.2 plus §8 (profiles), §12 (storage) and §1
 | 3 | Temporary storage | **partial** | `ephemeral-storage` request and limit on every ACP tier from `presets.PRESETS` (`values.py:72,77`), and the floor is computed and enforced (`presets.minimum_ephemeral_gib`). But `presets.py:115-122` says the ×4/×1/×1.5 factors are "DECLARED PLANNING CONSTANTS, NOT MEASUREMENTS", and nothing renders an `emptyDir` with a `sizeLimit` — scratch lands on the node's writable layer |
 | 4 | Topology spreading | **weak** | `grep topologySpreadConstraints` → **exit 1**. One `affinity` block in the whole HA render (line 355): the API's *preferred* anti-affinity, `topologyKey: kubernetes.io/hostname` (`api-deployment.yaml:82-91`), and only when `replicaCount > 1`. Worker tiers running 2–4 replicas in the HA profile get nothing, so all four remediate pods may share one node. PRD §8 asks HA for *multi-zone*; hostname is not zone |
 | 5 | Disruption protection | **partial** | `podDisruptionBudget.enabled` is true only for `high-availability` (`values.py:163`) — so a `standard` API tier running 2–4 replicas has no PDB and a node drain can take both. PDB is API-only, argued in `pdb.yaml:11-14`. `minAvailable` is hardcoded 1 (`values.py:164`), so a 3-replica HA API may be drained to 1 |
-| 6 | Service accounts | **weak** | One SA for api, workers, ollama, grafana and both hook Jobs (`serviceaccount.yaml`). No `automountServiceAccountToken: false` anywhere (`grep` → **exit 1**), no Role/RoleBinding rendered, no annotations (gap A2). Nothing here needs the API server, so the token is mounted for no reason |
+| 6 | Service accounts | **weak** | One SA for api, workers, ollama, grafana and both hook Jobs (`serviceaccount.yaml`). No `automountServiceAccountToken: false` anywhere (`grep` → **exit 1**), no Role/RoleBinding rendered, no annotations (gap D1). Nothing here needs the API server, so the token is mounted for no reason |
 | 7 | Probes | **satisfied, with one hole** | API gets `/readyz` readiness and `/healthz` liveness, deliberately different endpoints (`_helpers.tpl:192-208`). Workers get none, argued (`worker-deployment.yaml:68-74`). ollama gets startup+readiness, grafana readiness — **neither gets a liveness probe**, so a wedged model runtime is never restarted |
 | 8 | Graceful worker shutdown | **satisfied on both sides, untested** | `terminationGracePeriodSeconds: 300` (`worker-deployment.yaml:55`); the process half is real — `api/worker_main.py:31-38,55-57` installs SIGTERM/SIGINT handlers and drains. Untestable here: no image, no cluster |
 | 9 | GPU only where required | **NOT rendered** | `standard-production` sets `ai.ollama.gpu: true`; `grep nvidia <rendered>` → **exit 1, 0 hits**. `ollama.yaml:108-113` carries a comment explaining why "only the limit is set" for `nvidia.com/gpu` — **no line in the template sets it**, and the `if .Values.ai.ollama.gpu` block guards only `nodeSelector` and `tolerations`, which `acpctl values` never emits (`values.py:180-184`). So `gpu: true` renders nothing whatsoever, the pod schedules on a CPU node, and the vision lane silently runs on CPU |
@@ -213,7 +217,7 @@ row here is a chart edit that can follow it.
 
 ---
 
-## C — Acceptance
+## C — Portable acceptance suite
 
 **Exists.** 11 packaging test files, 215 test functions, run in CI. They assert on *rendered
 manifests* rather than template text (`README.md:228-235`), pin the KEDA queue lanes against
@@ -252,7 +256,39 @@ the pod is deleted. That last clause is the only thing that tests B11.
 
 ---
 
-## D — Support status and evidence
+## D — `acpctl` lifecycle
+
+**Exists.** `validate`, `plan`, `inventory`, `values`, `init`, `doctor`, `status` (README:66-78);
+all read-only, with `doctor`/`status` restricted to a `kubectl` verb allow-list. `helm template`
+of a real `acpctl values` output is asserted in CI by 42 tests. The lifecycle commands
+(`install`, `uninstall` and their state handling) are **being written in this same change** and
+are not assessed here.
+
+**Missing for the acceptance run.**
+
+**D1 — `secrets.workloadIdentity` is accepted by the validator and rendered by nothing.**
+`spec.py:_rule_required_secrets` treats a name under `workloadIdentity` as satisfying a required
+reference, deliberately, because production reaches Blob through a managed identity and holds no
+storage credential (`schema/acp-deployment.schema.json:507-514`). The derived production document
+uses it (`packaging/docs/azure-current.acp-deployment.yaml:86-87`). But `grep -rn workloadIdentity
+packaging/chart/acp/ packaging/cli/acpctl/values.py` → **exit 1, 0 hits**, and the rendered
+ServiceAccount carries no annotations at all. `serviceaccount.yaml:9-16` calls itself "the ONE
+place the platform reaches into the workloads"; `acpctl values` emits no `serviceAccount` key, so
+that place is always empty. A document that validates on the strength of workload identity
+installs a release with neither a credential nor an identity.
+
+*Smallest next dependency:* `acpctl values` must emit `serviceAccount.annotations` from the
+adapter, and a test must fail when a `workloadIdentity` entry produces no annotation.
+
+**D2 — nothing in the lifecycle path can be exercised here.** `doctor` and `status` both
+exit 2 with *"NOTHING WAS CHECKED"* without a cluster (run at the top of this report), and the
+install path has no image to pull (workstream A). So the lifecycle work landing in this change is
+reviewable as code and not yet as behaviour — which is the same sentence as workstream C's, and
+for the same missing pieces.
+
+---
+
+## Support status, and what would justify changing it
 
 **Exists.** The status table is machine-readable and deliberately pessimistic
 (`presets.py:60-75`), the chart's `NOTES.txt:3-8` prints a `PLATFORM STATUS: PLANNED` banner on
@@ -260,42 +296,41 @@ every non-supported install, and `acpctl validate` warns on it (observed in the 
 
 **Missing.**
 
-**D1 — `compose: supported` is itself unevidenced by the definition beside it.** The comment
+**1 — `compose: supported` is itself unevidenced by the definition beside it.** The comment
 defines `supported` as "a reference deployment in THIS repository runs the contract suite against
 it"; per C1 no suite runs against anything. Compose is the working, shipped path and the claim is
 probably *true*; it is not *evidenced*, and it is the row a reader will point at when asking why
 Kubernetes cannot have the same word.
 
-**D2 — the observability requirement has no implementation off Azure.** `acpctl validate` on a
+**2 — the observability requirement has no implementation off Azure.** `acpctl validate` on a
 `kubernetes` document warns: *"'local' has no implementation in this application —
 api/telemetry.py configures the Azure Monitor distribution only, so telemetry will be declared and
 off"*. Confirmed in `api/telemetry.py` (Azure Monitor distro, `configure_azure_monitor`, no OTLP
 exporter anywhere). PRD §14 requires regulated installations to support fully local collection.
 A customer-Kubernetes install therefore collects nothing, by design, today.
 
-**D3 — no backup, restore or DR surface exists in the contract.** `grep -n "rto\|rpo\|restoreTest"
+**3 — no backup, restore or DR surface exists in the contract.** `grep -n "rto\|rpo\|restoreTest"
 packaging/schema/acp-deployment.schema.json` → **exit 1**; the only backup field is
 `backupRetentionDays` (schema:296). PRD §8 makes RTO/RPO a defining property of the HA profile and
 §16 says a backup is not healthy until a restore test has succeeded. Neither is expressible, so
 neither is checkable, and `high-availability` currently means replica counts plus HA data services.
 
-*Smallest next dependency for D:* pick the one target that will be certified first (below), and
-write down what evidence its certification requires. Everything else in D is scoped by that choice.
+*Smallest next dependency:* pick the one target that will be certified first (below), and
+write down what evidence its certification requires. Everything else here is scoped by that choice.
 
 ## Progress table (PRD §9 shape)
 
-`verified` is used for nothing: no target has acceptance evidence.
+`verified` is used for nothing: no target has acceptance evidence, so nothing has met the bar the
+word describes.
 
 | Workstream | State | Evidence | Blocker | Next action |
 |---|---|---|---|---|
-| A — Lifecycle | in progress | `install`/`uninstall` and their state handling are **in flight in this same change**; not assessed here. Read-only commands ship today (`README.md:66-78`) | A1: the chart pulls `acp` / `acp-worker`, which nothing builds | Decide two images or seven; make one build produce them under the names the chart pulls |
-| A — Workload identity | not started | `grep workloadIdentity` over chart + `values.py` → 0 hits; rendered SA has no annotations | Contract has no adapter→SA annotation path | Emit `serviceAccount.annotations` from `acpctl values`; test that a `workloadIdentity` entry produces one |
-| B — Hardening | in progress | Checklist above: 3 satisfied, 5 partial, 2 not rendered, 1 not satisfied | B11 (object storage) is a correctness bug, not a posture gap | Add the projected-env-name test; then seccompProfile, ollama/grafana resources, worker spreading |
-| C — Acceptance suite | in progress | `packaging/acceptance/**` is **in flight in this same change**; not assessed here. Today: 215 tests, none of which start anything (C1) | No cluster; no image to install | Stand up one disposable cluster and run one end-to-end assertion including artifact persistence |
-| C — Autoscaling signals | not started | `acp_concurrent_requests` exists only in the chart and doctor's advice; no `/metrics` in `api/` | Application exports no metrics | Either export it or drop the trigger; do not ship an HPA metric nothing can serve |
-| D — Support status | not started | `SUPPORT_STATUS` all `planned` except compose; compose's claim is unevidenced (D1) | No suite, no cluster | Choose the first target to certify; define its evidence |
-| D — Observability | not started | `acpctl validate` warns; `api/telemetry.py` is Azure Monitor only | PRD §14 local collection unimplemented | Decide whether the MVP ships an OTLP path or documents the limitation |
-| D — Backup / DR | not started | No RTO/RPO/restore-test fields in the schema | Policy, not code (see stop-and-ask) | Get the owner's retention and recovery objectives, then model them |
+| Release artifacts | not started | The chart pulls `acp` / `acp-worker`; the repo builds `acp-app` / `acp-grafana` / `acp-ollama`; `acpctl plan` names a third set. 0-hit grep with a passing control (A1). No digests, SBOMs, provenance, scanning or signing anywhere (A2) | Owned by the session on `claude/acp-portable-packaging-l3krqe` | Decide two image names or seven, then build them under the names the chart pulls |
+| Helm hardening | in progress | Checklist above against rendered output: 3 satisfied, 5 partial, 2 not rendered, 1 not satisfied | B11 (object storage) is a correctness bug, not a posture gap | Add the projected-env-name test; then `seccompProfile`, ollama/grafana resources, worker spreading |
+| Acceptance suite | in progress | `packaging/acceptance/**` is **in flight in this same change** and is not assessed here. Today: 215 packaging tests, none of which start a container, stack or cluster (C1) | No cluster; no image to install | One disposable cluster, one end-to-end assertion including artifact persistence after a pod delete |
+| Lifecycle | in progress | `install`/`uninstall` and their state handling are **in flight in this same change** and are not assessed here. Read-only commands ship today (`packaging/README.md:66-78`); `workloadIdentity` renders nothing (D1) | No image, no cluster: `doctor`/`status` exit 2 here | Emit `serviceAccount.annotations`; then exercise install against the first real cluster |
+| AKS | not started | `SUPPORT_STATUS["azure"] = "planned"` (`presets.py:68-75`). `deploy/public/` deploys Container Apps, a different topology (ADR 0048) | Everything above, plus a billable environment | Run the acceptance suite against AKS once one exists; do not rename the status before that |
+| On-premises | not started | `SUPPORT_STATUS["onprem"] = "planned"`; `onprem` is `self-hosted`-only (`presets.py:78-88`), which is the mode the chart refuses to render without an override | Which distribution gets certified first is a customer decision (see stop-and-ask) | Pick the distribution, then treat it as a second acceptance target |
 
 ## Stop-and-ask conditions this work touches
 
@@ -305,7 +340,7 @@ These are human decisions. Each is left open deliberately; none is blocked on en
 |---|---|---|
 | Which on-premises Kubernetes distribution is certified first | PRD §4 excludes "arbitrary Kubernetes distributions without passing certification tests", so the first one is a commitment to a customer's cluster shape — it needs a customer signal, not a preference | **outstanding** |
 | Provisioning a billable cloud environment for the acceptance run | Cost and blast radius; see the ask at the top | **outstanding** |
-| RTO, RPO and backup retention | PRD §8/§16 make these customer-defined; the schema cannot invent them (D3) | **outstanding** |
+| RTO, RPO and backup retention | PRD §8/§16 make these customer-defined; the schema cannot invent them (support-status item 3) | **outstanding** |
 | What `self-hosted` means — operator-provisioned or chart-provisioned data services | ADR 0048's addendum raises it and explicitly does not decide it; today it means the `regulated` example does not render without an override | **outstanding** |
 | Whether `acp-langfuse` belongs in the contract at all | Compose runs it, production has never had it (C3); which side moves is a product decision | **outstanding** |
 | Whether worker tiers get PDBs | `pdb.yaml:11-14` argues API-only because a drain that cannot complete is its own incident. Defensible; it is a policy choice an HA customer may disagree with | decided, revisit with a customer |

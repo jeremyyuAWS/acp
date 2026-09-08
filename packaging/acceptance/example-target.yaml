@@ -1,0 +1,84 @@
+# An acceptance TARGET descriptor: one file per cluster the suite is run against.
+#
+#   export PYTHONPATH=packaging/acceptance
+#   python -m acp_acceptance.run --target packaging/acceptance/example-target.yaml --out report.json
+#
+# THIS FILE IS NOT A DEPLOYMENT DOCUMENT. `packaging/examples/*.acp-deployment.yaml` describes what
+# to install; this describes what to run the acceptance suite AGAINST, and what the suite is
+# permitted to do there. The two are separate on purpose: a deployment document is reviewed and
+# kept as the record of an installation, while this one is written for a certification run and
+# grants the suite permission to restart workers and take dependencies away.
+kind: ACPAcceptanceTarget
+
+# Names ONE cluster, because this string lands in the certification matrix. "aks" would be a claim
+# about every AKS cluster in the world made by measuring one of them.
+name: acp-cert-aks-eastus2
+platform: kubernetes           # azure | aws | gcp | kubernetes | onprem | compose
+distribution: aks              # aks | eks | gke | k3s | rke2 | openshift | kind
+kubernetesVersion: "1.29.4"
+namespace: acp-certification
+releaseName: acp
+
+# The kubeconfig context. NOT a secret in the cryptographic sense, and still never written to the
+# report: it routinely names a customer's cluster and subscription, and the report is a document
+# that leaves the customer's control.
+kubeconfigContext: acp-cert-aks
+
+baseUrl: https://acp-cert.example.org
+
+release:
+  version: "2026.9.8.1"
+  revision: 7
+  # The previous SUPPORTED release. Without it, `upgrade-from-previous` skips — which is honest
+  # (there was nothing to upgrade from) and costs the `supported` claim, which is the point.
+  previousVersion: "2026.8.30.2"
+  # PRD §5.1: digests, not tags. `pinned` in the report is DERIVED from these — every component
+  # must carry a sha256 digest or the release is reported unpinned, whatever anybody declares.
+  components:
+    acp-web-api:
+      repository: acr.example.org/acp/acp-web-api
+      digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    acp-discovery-worker:
+      repository: acr.example.org/acp/acp-discovery-worker
+      digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    acp-assess-worker:
+      repository: acr.example.org/acp/acp-assess-worker
+      digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    acp-remediate-worker:
+      repository: acr.example.org/acp/acp-remediate-worker
+      digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    acp-migrations:
+      repository: acr.example.org/acp/acp-migrations
+      digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+    acp-preflight:
+      repository: acr.example.org/acp/acp-preflight
+      digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+# WHAT THE SUITE MAY DO HERE. This is a GRANT, not a description: the execution backend is
+# constructed with exactly this set, and a scenario that reaches for an effect not listed raises
+# rather than performing it. A scenario whose capabilities are missing is SKIPPED with a reason —
+# and a skipped mandatory scenario costs the claim, because a skip is not a pass.
+#
+# The bottom five are DESTRUCTIVE. Grant them on a certification cluster, never on production:
+# they restart workers mid-job, scale tiers with work in flight, take Redis and Postgres away, and
+# restore a backup over the running installation.
+capabilities:
+  - api
+  - kubectl
+  - helm
+  - workload-restart
+  - scale-control
+  - fault-injection
+  - previous-release
+  - backup-restore
+
+# Credentials the suite needs to reach the target. `${VAR}` resolves from the environment, and an
+# unset variable is an ERROR rather than an empty string: a run that silently authenticates as
+# nobody produces a page of `unknown` results whose real cause is one missing export.
+#
+# None of these values ever reaches the report. The target block is an allow-list of five fields,
+# and the assembled report is then grepped for every value here — a run that would emit one fails
+# instead of writing the file.
+credentials:
+  bearerToken: ${ACP_ACCEPTANCE_TOKEN}
+  monitorKey: ${ACP_MONITOR_KEY}

@@ -173,11 +173,16 @@ _SHAPES: tuple[tuple[str, re.Pattern[str]], ...] = (
         r"\b[a-z][a-z0-9+.\-]*://[^\s/@'\"<>]+:[^\s/@'\"<>]+@[^\s'\"<>,;)\]}]+", re.I)),
     ("aws-access-key-id", re.compile(
         r"\b(?:AKIA|ASIA|ABIA|ACCA|AGPA|AIDA|AIPA|ANPA|ANVA|AROA)[0-9A-Z]{16}\b")),
+    # An Authorization header is redacted TO THE END OF ITS VALUE rather than to the next space.
+    # `Authorization: Basic dXNlcjpwYXNz` is the case that decides it: stopping at whitespace
+    # would redact the word "Basic" and publish the credential after it. The quoted form is tried
+    # first so a JSON line keeps its structure; the bare form then overlaps it and is dropped.
+    ("authorization-header", re.compile(
+        r"(?i)\b(?:proxy-)?authorization\"?[ \t]*[:=][ \t]*\"(?P<secret>[^\"\r\n]+)\"")),
+    ("authorization-header", re.compile(
+        r"(?i)\b(?:proxy-)?authorization[ \t]*[:=][ \t]*(?P<secret>[^\r\n]+)")),
     ("bearer-token", re.compile(
         r"(?i)\bbearer[ \t]+(?P<secret>[A-Za-z0-9\-._~+/]{8,}={0,2})")),
-    ("authorization-header", re.compile(
-        r"(?i)\b(?:proxy-)?authorization[ \t]*[:=][ \t]*\"?(?P<secret>[^\"\r\n]{4,}?)\"?"
-        r"(?=[\r\n\"]|$)")),
     ("secret-assignment", re.compile(
         r"(?i)\b" + _SECRET_NAME_TEXT + r"\"?[ \t]*[:=][ \t]*\"(?P<secret>[^\"\r\n]+)\"")),
     ("secret-assignment", re.compile(
@@ -371,16 +376,24 @@ class Redactor:
         document and, by construction, not a secret. A raw value pasted into that block is still
         caught, by shape.
         """
-        exempt = any(path[:len(p)] == p for p in key_exempt_paths)
         if isinstance(value, dict):
             out: dict[Any, Any] = {}
             for key, item in value.items():
+                child = path + (str(key),)
+                # Two ways the key rule must stand down. `under_exempt` is the subtree itself.
+                # `on_the_way` is its ANCESTORS, and forgetting it is a bug that hides as a
+                # success: `secrets` contains the word "secret", so the key rule fires on the
+                # whole block before the walk ever reaches `secrets.refs`, and the document in
+                # the bundle loses its provider, its refs and every name in them — replaced by
+                # one placeholder that looks like the filter working.
+                under_exempt = any(child[:len(p)] == p for p in key_exempt_paths)
+                on_the_way = any(p[:len(child)] == child for p in key_exempt_paths)
                 new_key = self.text(key) if isinstance(key, str) else key
-                if not exempt and self.is_secret_key(key):
+                if not (under_exempt or on_the_way) and self.is_secret_key(key):
                     out[new_key] = self.placeholder(item, str(key))
                 else:
                     out[new_key] = self.tree(
-                        item, path=path + (str(key),), key_exempt_paths=key_exempt_paths)
+                        item, path=child, key_exempt_paths=key_exempt_paths)
             return out
         if isinstance(value, list):
             return [self.tree(item, path=path, key_exempt_paths=key_exempt_paths)
@@ -465,11 +478,14 @@ def verify_bundle(directory: str | Path) -> list[Leak]:
             line = max(i for i, start in enumerate(line_starts, 1) if start <= finding.start)
             leaks.append(Leak(relative, finding.category, line))
         # Defence in depth against the one API object that is a secret by definition. A Secret's
-        # `data` is base64, not text, so no shape rule above would ever fire on it — the reducer
-        # is supposed to have kept only names and keys, and this is what says so on disk.
-        for line_number, line_text in enumerate(text.splitlines(), 1):
-            if re.search(r'"(?:data|stringData)"\s*:', line_text) and '"Secret"' in text:
-                leaks.append(Leak(relative, "secret-data", line_number))
+        # `data` is base64, not text, so NO shape rule above would ever fire on it — a leak there
+        # would be invisible to every other check in this function. `_reduce_secret` is supposed
+        # to have kept names and keys only, and this is what says so on disk: the day somebody
+        # "simplifies" that reducer into a pass-through, this fails.
+        if path.name == "secrets.json" or '"kind": "Secret"' in text:
+            for line_number, line_text in enumerate(text.splitlines(), 1):
+                if re.search(r'"(?:data|stringData)"\s*:', line_text):
+                    leaks.append(Leak(relative, "secret-data", line_number))
     return leaks
 
 

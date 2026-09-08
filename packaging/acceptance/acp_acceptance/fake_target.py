@@ -296,7 +296,7 @@ class FakeBackend(ExecutionBackend):
         if verb == "get" and rest and rest[0].startswith("job"):
             return CommandResult(0, json.dumps({"items": [self._job_object()]}))
         if verb == "rollout":
-            target = rest[-1] if rest else ""
+            target = _workload_arg(rest)
             self._restarts[target] = self._restarts.get(target, 0) + 1
             for scan in self._scans.values():
                 scan.restarts += 1
@@ -317,8 +317,7 @@ class FakeBackend(ExecutionBackend):
 
     def _scale(self, args: list[str], rest: list[str]) -> CommandResult:
         replicas = next((int(a.split("=")[-1]) for a in args if a.startswith("--replicas=")), None)
-        target = rest[-1] if rest else ""
-        name = target.split("/")[-1]
+        name = _workload_arg(rest).split("/")[-1]
         for dep, workload in WORKLOADS.items():
             if workload == name and dep in self._deps and replicas is not None:
                 self._deps[dep] = replicas
@@ -393,6 +392,21 @@ class FakeBackend(ExecutionBackend):
 
     def restored(self) -> bool:
         return self._restored
+
+
+def _workload_arg(rest: list[str]) -> str:
+    """The `deployment/<name>` argument, wherever it sits among the others.
+
+    NOT `rest[-1]`, which is what this looked like at first and was wrong in a way that still
+    reported success: `kubectl scale deployment/acp-worker-assess --replicas=4 -n acp` leaves the
+    NAMESPACE as the last non-flag argument, so the fake scaled a workload called `acp` — found
+    nothing, said so, and the scenario reported `unknown` for a target that had answered
+    perfectly. A fake that mis-parses its own command line invents findings about the suite.
+    """
+    for item in rest:
+        if "/" in item:
+            return item
+    return rest[0] if rest else ""
 
 
 # ── routing ───────────────────────────────────────────────────────────────────
