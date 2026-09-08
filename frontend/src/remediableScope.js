@@ -65,6 +65,16 @@ export function documentSelection(files, triage = {}) {
   return { marked, total: list.length, excluded: list.length - marked }
 }
 
+// The actual document cohort downstream stages may act on. A scope banner without this gate is
+// only a disclaimer: Release would still offer every verified document even after Remediate was
+// deliberately narrowed. Keep this beside documentSelection so the words and executable set use
+// the same predicate.
+export function documentsInSelection(files, triage = {}) {
+  const list = files || []
+  if (!hasDocumentSelection(triage)) return list
+  return list.filter((f) => triage[f.file] === 'inscope')
+}
+
 // The sentence, so Remediate and Publish cannot word the same fact differently.
 export function documentScopeSentence(sel) {
   if (!sel) return null

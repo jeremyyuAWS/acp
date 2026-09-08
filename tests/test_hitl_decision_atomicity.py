@@ -74,6 +74,41 @@ def test_exact_retry_is_idempotent_for_audit_job_and_telemetry(decision, monkeyp
     assert len(telemetry) == 1
 
 
+def test_request_id_replay_is_idempotent_and_stale_retry_cannot_overwrite(decision):
+    st, item_id, hitl_update, HitlUpdate, request = decision
+    first = HitlUpdate(status="approved", approved_values=["First description"],
+                       request_id="request-1", expected_version=0)
+    hitl_update(item_id, first, request)
+
+    # The exact transport retry succeeds even though its expected version is now old.
+    replay = hitl_update(item_id, first, request)
+    assert replay["decision_version"] == 1
+
+    # A different request based on the old card is rejected and cannot overwrite the value.
+    with pytest.raises(Exception) as exc:
+        hitl_update(item_id, HitlUpdate(
+            status="rejected", request_id="request-2", expected_version=0), request)
+    assert getattr(exc.value, "status_code", None) == 409
+    row = st.get_hitl_item(item_id)
+    assert row["status"] == "approved"
+    assert row["proposals"][0]["approved_value"] == "First description"
+    assert len(st.list_decisions("s1")) == 1
+
+
+def test_reusing_request_id_with_different_payload_is_conflict(decision):
+    st, item_id, hitl_update, HitlUpdate, request = decision
+    hitl_update(item_id, HitlUpdate(
+        status="approved", approved_values=["First description"],
+        request_id="request-1", expected_version=0), request)
+
+    with pytest.raises(Exception) as exc:
+        hitl_update(item_id, HitlUpdate(
+            status="approved", approved_values=["Changed description"],
+            request_id="request-1", expected_version=0), request)
+    assert getattr(exc.value, "status_code", None) == 409
+    assert st.get_hitl_item(item_id)["proposals"][0]["approved_value"] == "First description"
+
+
 def test_telemetry_runs_only_after_the_decision_commit(decision, monkeypatch):
     st, item_id, hitl_update, HitlUpdate, request = decision
 

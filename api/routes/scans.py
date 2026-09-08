@@ -3451,6 +3451,19 @@ def publish_files(sid: str, request: Request, body: dict):
     if not files:
         raise HTTPException(422, "provide 'file' or 'files' in body")
     owner = _owner(request)
+    # Remediate's per-document selection is durable scan intent, not merely a frontend filter.
+    # Enforce it again at the external-write boundary so a stale browser, crafted request, or
+    # retry cannot release a document the operator excluded. With no explicit selection this is
+    # intentionally unrestricted, matching the frontend contract.
+    from assessment_policy import selected_documents
+    document_selection = selected_documents(core.store.get_decisions(sid, owner=owner))
+    outside_selection = sorted(set(files) - document_selection) if document_selection is not None else []
+    if outside_selection:
+        raise HTTPException(status_code=409, detail={
+            "code": "document_out_of_scope",
+            "message": "One or more documents are outside the Remediate selection.",
+            "files": outside_selection,
+        })
     owner_email = scan.get("run", {}).get("owner_email") or owner
     import publish as _publish
     source = scan.get("run", {}).get("source") or "local"
@@ -3461,7 +3474,8 @@ def publish_files(sid: str, request: Request, body: dict):
             raise HTTPException(409, detail={"code": "release_destination_not_ready",
                                             "preflight": destination_check})
     eligible = [row for row in scan.get("files", [])
-                if row.get("compliant") and row.get("remediated_at")]
+                if row.get("compliant") and row.get("remediated_at")
+                and (document_selection is None or row.get("file") in document_selection)]
     try:
         preferred_folder_name = _publish.normalize_release_name(
             body.get("release_folder_name"), field="Release folder name")

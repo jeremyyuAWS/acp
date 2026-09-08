@@ -32,7 +32,11 @@ vi.mock('./SearchFilterBar.jsx', () => ({
   useSearchFilter: () => ({ active: false, clear: () => {} }),
   matchesFilters: () => () => true,
 }))
-vi.mock('./remediableScope.js', () => ({ documentSelection: () => ({}), documentScopeSentence: () => '' }))
+vi.mock('./remediableScope.js', () => ({
+  documentSelection: () => ({}),
+  documentScopeSentence: () => '',
+  documentsInSelection: (files) => files || [],
+}))
 
 const { default: Publish } = await import('./Publish.jsx')
 

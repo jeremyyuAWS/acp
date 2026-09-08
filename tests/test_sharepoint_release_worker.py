@@ -23,6 +23,9 @@ class FakeStore:
         return {"run": {"id": scan_id, "source": "sharepoint", "owner_email": OWNER},
                 "files": [{"file": FILE, "compliant": 1, "remediated_at": "now"}]}
 
+    def get_decisions(self, scan_id, owner=None):
+        return {}
+
     def get_file_record(self, scan_id, filename):
         return {"file": filename, "compliant": 1, "remediated_at": "now",
                 "drive_file_id": "source-item", "drive_id": "library-1",

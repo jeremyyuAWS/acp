@@ -582,7 +582,10 @@ export default function FileDrawer({ file, onClose, context = 'full', overrideOw
   // Same contract as the inbox's act(): the card carries the note/value/telemetry; a
   // success removes the item locally and tells the bell to reconcile.
   const drawerAct = (itemId, status, note = null, approvedValue = null, telemetry = {}) =>
-    updateHitlItem(itemId, status, note, approvedValue, telemetry)
+    updateHitlItem(itemId, status, note, approvedValue, {
+      ...telemetry,
+      expectedVersion: hitlItems.find((item) => item.id === itemId)?.decision_version ?? 0,
+    })
       .then(() => {
         setHitlItems((cur) => cur.filter((h) => h.id !== itemId))
         window.dispatchEvent(new Event('acp:hitl-changed'))

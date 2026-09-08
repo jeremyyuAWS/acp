@@ -39,6 +39,8 @@ class HitlUpdate(BaseModel):
     # resolved, so the certification report never implies a written fix that never happened.
     # 'described_not_replaced' (ADR 0055) is the exception that DOES carry text: see RESOLUTIONS.
     resolution: str | None = None       # decorative | essential_exception | described_not_replaced | out_of_scope
+    request_id: str | None = None       # stable across transport retries of one decision
+    expected_version: int | None = None # row version the reviewer actually saw
 
 
 REJECT_REASONS = {"incorrect_object", "too_vague", "hallucinated", "missed_text", "org_preference", "other", "unspecified"}
@@ -265,8 +267,12 @@ def hitl_update(item_id: str, body: HitlUpdate, request: Request = None):
         updated, replayed = core.store.complete_hitl_decision(
             item_id, body.status, body.reviewer_note, body.approved_value,
             resolution=body.resolution, approved_values=body.approved_values,
-            actor=actor, detail=_detail)
+            actor=actor, detail=_detail, request_id=body.request_id,
+            expected_version=body.expected_version)
     except ValueError as exc:
+        if str(exc) in {"stale decision version",
+                        "decision request id was reused with a different payload"}:
+            raise HTTPException(409, str(exc))
         if str(exc) != "described decision produced no alt-text obligation":
             raise
         raise HTTPException(500, "the descriptions could not be recorded as alt text; "

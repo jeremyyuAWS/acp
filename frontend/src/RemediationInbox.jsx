@@ -562,7 +562,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
                see PR body), so it is labelled as a flag, not a "reject & revert". */
             <>
               <button className="primary" disabled={saving} onClick={() => onDecide?.(f, { state: 'accepted' })}>
-                {saving ? 'Saving…' : 'Approve & next →'}
+                {saving ? 'Saving…' : 'Save and continue →'}
               </button>
               <button className="ghost" disabled={saving} onClick={() => onDecide?.(f, { state: 'rejected' })}>This looks wrong</button>
               {onOpenWord && <button className="ghost" disabled={saving} onClick={() => onOpenWord(f)}>Open source document</button>}
@@ -572,7 +572,7 @@ function DetailPane({ f, decisions, onDecide, onOpenWord, onRecheck, matchingFin
             <>
               <button className="primary" disabled={saving}
                       onClick={() => onDecide?.(f, { state: 'accepted', value: canEdit ? draftValue : undefined })}>
-                {saving ? 'Applying…' : edited ? 'Apply edited fix & next →' : 'Apply fix & next →'}
+                {saving ? 'Saving…' : 'Save and continue →'}
               </button>
               {canEdit && <button className="ghost" disabled={saving} onClick={() => draftRef.current?.focus()}>Edit proposed fix</button>}
               {/* A specific action, not a bare "Reject": declining an AI fix hands the finding to a
@@ -643,7 +643,7 @@ function Divider({ orientation, label, value, min, max, onDrag, onNudge }) {
 
 export default function RemediationInbox({
   queue = [], decisions = {}, onDecide, onOpenWord, onRecheck,
-  initialSort = 'priority', initialTab = 'needs-review', scanId = null,
+  initialSort = 'priority', initialTab = 'needs-review', initialGroup = 'document', scanId = null,
   assignees = {}, myEmail = null, onAssign,
   // The per-ITEM board components (R4 fix preview, R7 per-document progress, R10 audit trail)
   // belong beside the selected finding, but this component must not import them: it already owns
@@ -668,11 +668,13 @@ export default function RemediationInbox({
   const [collapsed, setCollapsed] = useState({}) // file -> true when a document group is collapsed
   const [drafts, setDrafts] = useState({}) // finding id -> reviewer-edited proposed value (null until edited)
   const [assignedOnly, setAssignedOnly] = useState(false) // "Assigned to me" filter — files whose assignee is myEmail
-  // How the queue groups its rows. BY ISSUE is the default: like findings collapse into one cluster
-  // row a reviewer inspects once and decides once, which is the whole point — a flat list of 265
-  // findings is a rubber-stamping machine no matter how good each row looks. BY DOCUMENT is the
-  // older lens, kept because "what is wrong with THIS file" is a real question too.
-  const [group, setGroup] = useState(() => (readLS('group', 'issue') === 'document' ? 'document' : 'issue'))
+  // A corrected copy is written and verified per document, so document is the predictable default.
+  // Reviewers can still switch to the issue lens for safe pattern/batch work; an explicit saved
+  // preference wins over the default.
+  const [group, setGroup] = useState(() => {
+    const fallback = initialGroup === 'issue' ? 'issue' : 'document'
+    return readLS('group', fallback) === 'issue' ? 'issue' : 'document'
+  })
   useEffect(() => { writeLS('group', group) }, [group])
   const [expandedClusters, setExpandedClusters] = useState({})  // cluster key -> true
   const toggleCluster = (key) => setExpandedClusters((e) => ({ ...e, [key]: !e[key] }))
@@ -1006,7 +1008,7 @@ export default function RemediationInbox({
            style={{ ...(narrow ? { flex: '1 1 auto', maxWidth: 'none' } : { flex: `0 0 ${leftW}%`, maxWidth: `${leftW}%` }),
                     display: narrow && narrowPane !== 'queue' ? 'none' : 'flex', flexDirection: 'column', minHeight: 480 }}>
         <div style={{ flex: '0 0 auto', padding: '10px 12px', borderBottom: '1px solid var(--line,#e2dce4)' }}>
-          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Remediation Inbox</div>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Review queue</div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <input type="search" value={search} onChange={(e) => setSearch(e.target.value)}
                    placeholder="Search documents" aria-label="Search documents"

@@ -59,6 +59,9 @@ class _RouteStore:
         return {"run": {"id": sid, "source": self.source, "owner_email": OWNER},
                 "files": [{"file": "one.pdf", "compliant": 1, "remediated_at": "now"}]}
 
+    def get_decisions(self, sid, owner=None):
+        return {}
+
     def get_file_record(self, sid, filename):
         return {"file": filename, "compliant": 1, "remediated_at": "now",
                 "drive_file_id": "source-1", "source_relative_path": "Policies/one.pdf",
@@ -125,6 +128,27 @@ def test_local_release_verifies_blob_and_records_receipt_before_publication(monk
     assert receipt["work_item_id"] == "work-1"
     assert receipt["content_digest"] == "sha256-content"
     assert receipt["receipt"]["finding_lineage"]["findings"][0]["finding_id"] == "finding-1"
+
+
+def test_release_refuses_a_document_outside_the_durable_remediate_selection(monkeypatch):
+    import core
+    from fastapi import HTTPException
+    from routes import scans
+
+    store = _RouteStore("local")
+    store.get_decisions = lambda *args, **kwargs: {
+        "one.pdf": {"triage": "inscope"},
+        "excluded.pdf": {"triage": "defer"},
+    }
+    monkeypatch.setattr(core, "store", store)
+
+    try:
+        scans.publish_files("scan-1", _request(), {"files": ["excluded.pdf"]})
+        assert False, "out-of-scope release should be refused"
+    except HTTPException as exc:
+        assert exc.status_code == 409
+        assert exc.detail["code"] == "document_out_of_scope"
+        assert exc.detail["files"] == ["excluded.pdf"]
 
 
 def test_local_release_does_not_publish_a_missing_blob(monkeypatch):

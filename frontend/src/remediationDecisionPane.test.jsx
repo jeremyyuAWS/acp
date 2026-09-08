@@ -110,14 +110,14 @@ describe('Guided pane — decision-first ordering + grounded evidence', () => {
 })
 
 describe('Guided pane — preserves the #412/#415 behaviours', () => {
-  it('keeps the editable draft (Apply edited fix) on an AI-drafted fix', async () => {
+  it('keeps the editable draft in the guided save-and-continue flow', async () => {
     const calls = []
     await renderInbox({ queue: [CONTRAST_APPLY], decisions: {}, onDecide: (f, d) => calls.push(d) })
     const ta = container.querySelector('textarea[aria-label="Edit the proposed fix"]')
     expect(ta).toBeTruthy()
     const setValue = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set
     await act(async () => { setValue.call(ta, '#595959'); ta.dispatchEvent(new Event('input', { bubbles: true })) })
-    await click(btnByText('Apply edited fix'))
+    await click(btnByText('Save and continue'))
     expect(calls[0].state).toBe('accepted')
     expect(calls[0].value).toBe('#595959')
   })
@@ -127,7 +127,7 @@ describe('Guided pane — preserves the #412/#415 behaviours', () => {
     await renderInbox({ queue: [CONTRAST_APPLY], decisions: {}, onDecide: () => {} })
     const actions = container.querySelector('[role="group"][aria-label^="Decision actions for"]')
     expect(actions).toBeTruthy()
-    for (const label of ['Apply fix', 'Edit proposed fix', 'Reject to manual', 'Defer']) {
+    for (const label of ['Save and continue', 'Edit proposed fix', 'Reject to manual', 'Defer']) {
       expect([...actions.querySelectorAll('button')].some((button) => button.textContent.includes(label))).toBe(true)
     }
     await click(btnByText('Edit proposed fix'))
@@ -165,16 +165,16 @@ describe('Guided pane — preserves the #412/#415 behaviours', () => {
 })
 
 describe('Guided pane — auto-fix rows get an obvious, honestly-labelled decision', () => {
-  it('offers "Approve & next" and a "This looks wrong" flag (no editable draft)', async () => {
+  it('offers guided save-and-continue and a "This looks wrong" flag (no editable draft)', async () => {
     const calls = []
     // An UNacknowledged auto-fix awaits the reviewer's confirmation, so it sits in Needs review (the
     // default tab) — not Awaiting validation — and is selected on open.
     await renderInbox({ queue: [CONTRAST_AUTO], decisions: {}, onDecide: (f, d) => calls.push([f.id, d.state]) })
-    expect(btnByText('Approve & next \u2192')).toBeTruthy()
+    expect(btnByText('Save and continue \u2192')).toBeTruthy()
     expect(btnByText('This looks wrong')).toBeTruthy()
     // The change is already applied — there is no edit-and-apply draft for it.
     expect(container.querySelector('textarea[aria-label="Edit the proposed fix"]')).toBeNull()
-    await click(btnByText('Approve & next \u2192'))
+    await click(btnByText('Save and continue \u2192'))
     expect(calls).toContainEqual([2, 'accepted'])
   })
 
