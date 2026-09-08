@@ -53,13 +53,21 @@ def update_rubric(body: RubricUpdate, request: Request):
     # rules + compliant threshold), so any allow-listed user could otherwise rewrite how every
     # tenant is scored with a direct call. No-op when no owner is configured (local dev).
     _require_admin(request)
-    base = core.ACP / "config" / ("rubric.active.json" if (core.ACP / "config/rubric.active.json").exists()
-                                  else "rubric.default.json")
-    cfg = json.loads(base.read_text())
+    # WRITES TO THE DATABASE, NOT TO THIS CONTAINER. It used to write
+    # `config/rubric.active.json` into the replica that served the request, which no deployment
+    # mounts a volume for — so the other API replicas and every worker container kept the old
+    # policy, and it was lost on the next restart. Workers are where scoring happens, so the
+    # change was invisible to the tier that applies it. See `core.active_rubric`.
+    #
+    # Starts from what is IN FORCE rather than from a file, so an edit composes with whatever the
+    # last one left, wherever it came from. `fresh=True` because a writer must not build on a
+    # cached copy that is up to five seconds old.
+    cfg = dict(core.active_rubric(fresh=True).cfg)
     if body.disabled_rules is not None:
         cfg["disabled_rules"] = sorted(set(body.disabled_rules))
     if body.compliant_threshold is not None:
         cfg["compliant_threshold"] = int(body.compliant_threshold)
-    (core.ACP / "config/rubric.active.json").write_text(json.dumps(cfg, indent=2))
-    rb = core.active_rubric()
+    core.store.set_setting(core._RUBRIC_SETTING, json.dumps(cfg, indent=2, sort_keys=True))
+    core.invalidate_rubric_cache()
+    rb = core.active_rubric(fresh=True)
     return {"hash": rb.hash, "disabled_rules": sorted(rb.disabled), "threshold": rb.threshold}
