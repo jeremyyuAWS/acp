@@ -199,7 +199,43 @@ jobs:
           PY
 
       - name: Is what is running still what the document says?
-        run: python -m acpctl status "$SPEC" -n "$NAMESPACE"
+        # ONE DRIFT IS EXPECTED HERE, AND EXACTLY ONE. The image is built from this checkout and
+        # loaded under a local tag, so `release.version` correctly reports that the cluster runs
+        # `ci` while the document names a release. That is `acpctl status` being right, not a
+        # problem to paper over — and tagging the local build with the document's version to
+        # silence it would be the same false pin PRD S5.1 exists to prevent.
+        #
+        # So the expected drift is named and everything else must pass. A second drift, or a
+        # different one, fails the job.
+        run: |
+          set -euo pipefail
+          python -m acpctl status "$SPEC" -n "$NAMESPACE" || true
+          python -m acpctl status "$SPEC" -n "$NAMESPACE" --json > /tmp/status.json || true
+          python - <<'PY'
+          import json, sys
+
+          report = json.load(open("/tmp/status.json"))
+          expected = "release.version"
+          assert report["reachable"] and report["installed"], report
+          bad = [c for c in report["checks"]
+                 if c["status"] != "pass" and c["id"] != expected]
+          if bad:
+              print("unexpected drift or failure:", file=sys.stderr)
+              print(json.dumps(bad, indent=2), file=sys.stderr)
+              sys.exit(1)
+          drift = [c for c in report["checks"] if c["id"] == expected]
+          if not drift:
+              print(f"{expected} was not reported at all — this check would pass vacuously",
+                    file=sys.stderr)
+              sys.exit(1)
+          if drift[0]["status"] == "pass":
+              print(f"{expected} passed, but this job installs a locally-tagged image and the "
+                    f"document names a release; something is comparing the wrong thing",
+                    file=sys.stderr)
+              sys.exit(1)
+          print("every check passes except the expected release-tag drift:")
+          print(json.dumps(drift[0], indent=2))
+          PY
 
       # ── evidence, and then nothing survives ────────────────────────────────
       - name: What the cluster looked like
