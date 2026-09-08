@@ -96,6 +96,7 @@ observability:
   grafana: true
   langfuse:
     mode: self-hosted
+    host: https://langfuse.example.org
 network:
   privateWorkers: true
   publicIngress: true
@@ -116,6 +117,9 @@ secrets:
     redis-url: { name: acp-kv, key: redis-url }
     object-storage: { name: acp-kv, key: blob-account }
     langfuse-secret-key: { name: acp-kv, key: langfuse-secret-key }
+    # THE SECOND OF THE TWO KEYS api/lf.py NEEDS. The secret key alone leaves tracing disabled:
+    # `_ENABLED = bool(_HOST and _PK and _SK)`, and the host is named above under observability.
+    langfuse-public-key: { name: acp-kv, key: langfuse-public-key }
     # What actually turns telemetry on. api/telemetry.py configures the Azure Monitor
     # OpenTelemetry distribution and starts nothing without it, so a document declaring
     # `openTelemetry: true` without this is asking for telemetry it will not get.

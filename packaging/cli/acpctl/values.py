@@ -213,7 +213,13 @@ def build_values(doc: dict[str, Any], release: Any = None) -> dict[str, Any]:
             "openTelemetry": {"enabled": obs.get("openTelemetry", False),
                               "exporter": obs.get("exporter", "local")},
             "grafana": {"enabled": obs.get("grafana", False), "port": GRAFANA_PORT},
-            "langfuse": {"mode": obs.get("langfuse", {}).get("mode", "disabled")},
+            # THE HOST TRAVELS WITH THE MODE. api/lf.py enables tracing only with the host and
+            # both keys; the keys arrive through secrets.refs, and until the host arrived too a
+            # document could name a mode and get nothing.
+            "langfuse": {
+                "mode": obs.get("langfuse", {}).get("mode", "disabled"),
+                "host": obs.get("langfuse", {}).get("host", ""),
+            },
         },
         "migrations": {
             # A Helm pre-install/pre-upgrade hook: it must complete before any application pod

@@ -501,6 +501,43 @@ def test_private_workers_render_a_policy_that_admits_nothing():
 
 
 @needs_helm
+def test_tracing_gets_all_three_of_the_variables_it_needs():
+    """`api/lf.py` is `_ENABLED = bool(_HOST and _PK and _SK)`.
+
+    The chart projected the secret key alone, so a document that declared a Langfuse mode,
+    satisfied the reference the contract demanded and provisioned a Langfuse got one third of what
+    the module needs. It reports itself disabled and raises nothing — the quietest way a feature
+    can be absent.
+
+    Asserted as all three together, because that is the condition the application evaluates. Two
+    of three is the same as none.
+    """
+    api = named(render(load_example("standard-production")), "Deployment", "-api")
+    env = {e["name"]: e for e in api["spec"]["template"]["spec"]["containers"][0]["env"]}
+    for name in ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):
+        assert name in env, f"{name} missing; api/lf.py needs all three: {sorted(env)}"
+    assert env["LANGFUSE_HOST"]["value"].startswith("https://")
+    # The keys are references, the host is not. A host in a Secret would be a value nobody needs
+    # to protect sitting where the things that do are kept.
+    for key in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):
+        assert "secretKeyRef" in env[key]["valueFrom"], key
+    assert "value" in env["LANGFUSE_HOST"]
+
+
+@needs_helm
+def test_tracing_switched_off_renders_no_host():
+    """The control. A chart that always rendered the host would carry an empty variable on every
+    installation with tracing disabled, which reads as configured and is not."""
+    doc = load_example("standard-production")
+    doc["observability"]["langfuse"] = {"mode": "disabled"}
+    del doc["secrets"]["refs"]["langfuse-secret-key"]
+    del doc["secrets"]["refs"]["langfuse-public-key"]
+    api = named(render(doc), "Deployment", "-api")
+    names = {e["name"] for e in api["spec"]["template"]["spec"]["containers"][0]["env"]}
+    assert not any(n.startswith("LANGFUSE_") for n in names), sorted(names)
+
+
+@needs_helm
 def test_the_application_is_told_which_environment_it_is_in():
     """ONE UNDERSCORE FROM A SECURITY CONTROL.
 
@@ -1036,10 +1073,13 @@ NOT_RENDERED = {
     "acp-langfuse": (
         "Self-hosted LLM tracing, and the same shape as the OTel collector rather than the same "
         "shape as grafana — which is a distinction the first draft of these tests got wrong. No "
-        "template reads `observability.langfuse.mode`, but the chart DOES project the "
-        "`langfuse-secret-key` secret into the API container, so the application is configured "
-        "to talk to a Langfuse the release does not deploy. Expected from outside, then, and the "
-        "inventory calling it `in-cluster` is the half that looks wrong."),
+        "template reads `observability.langfuse.mode`; the chart projects the two key references "
+        "and, since 2026-09-08, `observability.langfuse.host` — all three of the variables "
+        "api/lf.py needs — so the application is fully configured to talk to a Langfuse the "
+        "release does not deploy. Expected from outside, then, and the inventory calling it "
+        "`in-cluster` is the half that looks wrong: production runs Langfuse as its own Azure "
+        "Container App, and v1alpha1 has no mode that says 'self-hosted, but not by this "
+        "release'. That gap is why the derived Azure document does not declare a langfuse block."),
 }
 
 
@@ -1183,7 +1223,6 @@ def test_the_derived_production_document_plans_nothing_it_would_not_install():
 # it faithfully, `helm install` accepts it without complaint, and an operator reading either sees
 # a configured feature. Listed with what is known, same as NOT_RENDERED.
 INERT_VALUES = {
-    "observability.langfuse": "no template reads it; see NOT_RENDERED['acp-langfuse']",
     "ai.externalProviders": (
         "FOUND BY FIXING THE GUARD ABOVE, not by looking. `acpctl values` emits the provider "
         "list and no template reads it. The credential does arrive — `ai.mode != local-only` "

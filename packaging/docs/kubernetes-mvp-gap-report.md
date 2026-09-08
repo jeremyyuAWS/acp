@@ -356,10 +356,24 @@ That is the third naming near-miss of the day, after `GOOGLE_OAUTH_CLIENT_SECRET
 naming: a chart that invents its own variable names produces workloads that look configured and
 are not, and the resemblance is what stops anybody looking twice.
 
-**Langfuse tracing can never start**, and is next. `api/lf.py` enables it only with host, public key
-AND secret key. The chart projects the secret key alone — so the `langfuse-secret-key` reference the
-contract *requires* buys one of three, and an operator who provisioned Langfuse sees no traces and
-no error.
+**Langfuse tracing could never start, fixed.** `api/lf.py:23` is
+`_ENABLED = bool(_HOST and _PK and _SK)` and the chart projected the secret key alone — so the
+`langfuse-secret-key` reference the contract *requires* bought one of three, and an operator who
+provisioned Langfuse saw no traces and no error. The contract now carries
+`observability.langfuse.host` (an endpoint, so a document field rather than a reference) and
+requires both keys, because requiring one of three is not a weaker version of requiring three: it
+is a rule that cannot do the thing it was written for.
+
+**And it surfaced a v1alpha1 gap worth recording rather than working around.** `self-hosted` means
+"in-cluster" everywhere else in this contract — for Postgres and Redis the chart *fails the render*
+rather than provisioning one — so `acpctl inventory` plans `acp-langfuse` as an in-cluster service
+while the chart renders nothing for it, and `test_the_derived_production_document_plans_nothing_it_would_not_install`
+enforces the difference. Production's Langfuse is neither: it is a Langfuse the customer runs, as
+its own Azure Container App, outside the release. There is no mode that says *self-hosted, but not
+by this release*, which is why the derived Azure document declares no langfuse block at all — the
+honest options were to say something false or to say nothing, and it says nothing. A `mode:
+external` in v1alpha2 is the fix; inventing one here would have been a contract change smuggled in
+under a wiring fix.
 
 **What is missing.** No `topologySpreadConstraints` anywhere in the chart. No `seccompProfile`, so
 the rendered pods do not meet the restricted Pod Security Standard as written, and

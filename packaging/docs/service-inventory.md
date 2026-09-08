@@ -48,11 +48,11 @@ Platform `compose` · release `2026.9` · VALID
 | `redis` | service | in-cluster | internal | — | — | — | — |
 | `object-storage` | service | in-cluster | internal | — | — | — | — |
 | `acp-migrations` | job | in-cluster | none | — | — | — | `database-url` |
-| `acp-preflight` | job | in-cluster | none | — | — | — | `database-url`, `langfuse-secret-key` |
-| `acp-web-api` | service | in-cluster | public | 1–1 | 1/2Gi | — | `database-url`, `langfuse-secret-key` |
-| `acp-discovery` | service | in-cluster | none | 1–1 | 1/2Gi | discovery | `database-url`, `langfuse-secret-key` |
-| `acp-assess` | service | in-cluster | none | 1–1 | 1/2Gi | assess | `database-url`, `langfuse-secret-key` |
-| `acp-remediate` | service | in-cluster | none | 1–1 | 1/2Gi | remediate | `database-url`, `langfuse-secret-key` |
+| `acp-preflight` | job | in-cluster | none | — | — | — | `database-url`, `langfuse-secret-key`, `langfuse-public-key` |
+| `acp-web-api` | service | in-cluster | public | 1–1 | 1/2Gi | — | `database-url`, `langfuse-secret-key`, `langfuse-public-key` |
+| `acp-discovery` | service | in-cluster | none | 1–1 | 1/2Gi | discovery | `database-url`, `langfuse-secret-key`, `langfuse-public-key` |
+| `acp-assess` | service | in-cluster | none | 1–1 | 1/2Gi | assess | `database-url`, `langfuse-secret-key`, `langfuse-public-key` |
+| `acp-remediate` | service | in-cluster | none | 1–1 | 1/2Gi | remediate | `database-url`, `langfuse-secret-key`, `langfuse-public-key` |
 | `acp-ollama-gateway` | service | in-cluster | internal | 1–1 | 4/8Gi | — | — |
 | `acp-grafana` | service | in-cluster | internal | — | — | — | — |
 | `acp-langfuse` | service | in-cluster | internal | — | — | — | `langfuse-secret-key` |
@@ -73,11 +73,11 @@ Platform `aws` · release `2026.9` · VALID
 | `redis` | dependency | managed | internal | — | — | — | — |
 | `object-storage` | dependency | managed | internal | — | — | — | — |
 | `acp-migrations` | job | in-cluster | none | — | — | — | `database-url` |
-| `acp-preflight` | job | in-cluster | none | — | — | — | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
-| `acp-web-api` | service | in-cluster | public | 3–12 | 2/4Gi | — | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
-| `acp-discovery` | service | in-cluster | none | 2–6 | 2/4Gi | discovery | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
-| `acp-assess` | service | in-cluster | none | 4–20 | 4/8Gi | assess | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
-| `acp-remediate` | service | in-cluster | none | 4–20 | 4/8Gi | remediate | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
+| `acp-preflight` | job | in-cluster | none | — | — | — | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `langfuse-public-key`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
+| `acp-web-api` | service | in-cluster | public | 3–12 | 2/4Gi | — | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `langfuse-public-key`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
+| `acp-discovery` | service | in-cluster | none | 2–6 | 2/4Gi | discovery | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `langfuse-public-key`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
+| `acp-assess` | service | in-cluster | none | 4–20 | 4/8Gi | assess | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `langfuse-public-key`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
+| `acp-remediate` | service | in-cluster | none | 4–20 | 4/8Gi | remediate | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `langfuse-public-key`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
 | `acp-ollama-gateway` | service | in-cluster | internal | 1–1 | 4/8Gi | — | — |
 | `acp-grafana` | service | in-cluster | internal | — | — | — | — |
 | `acp-langfuse` | service | in-cluster | internal | — | — | — | `langfuse-secret-key` |
@@ -98,11 +98,11 @@ Platform `kubernetes` · release `2026.9` · VALID
 | `redis` | service | in-cluster | internal | — | — | — | — |
 | `object-storage` | service | in-cluster | internal | — | — | — | — |
 | `acp-migrations` | job | in-cluster | none | — | — | — | `database-url` |
-| `acp-preflight` | job | in-cluster | none | — | — | — | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `microsoft-oauth-client-secret`, `smb-credentials` |
-| `acp-web-api` | service | in-cluster | public | 2–4 | 2/4Gi | — | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `microsoft-oauth-client-secret` |
-| `acp-discovery` | service | in-cluster | none | 1–3 | 2/4Gi | discovery | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `microsoft-oauth-client-secret`, `smb-credentials` |
-| `acp-assess` | service | in-cluster | none | 3–10 | 4/8Gi | assess | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `microsoft-oauth-client-secret`, `smb-credentials` |
-| `acp-remediate` | service | in-cluster | none | 3–10 | 4/8Gi | remediate | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `microsoft-oauth-client-secret`, `smb-credentials` |
+| `acp-preflight` | job | in-cluster | none | — | — | — | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `langfuse-public-key`, `microsoft-oauth-client-secret`, `smb-credentials` |
+| `acp-web-api` | service | in-cluster | public | 2–4 | 2/4Gi | — | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `langfuse-public-key`, `microsoft-oauth-client-secret` |
+| `acp-discovery` | service | in-cluster | none | 1–3 | 2/4Gi | discovery | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `langfuse-public-key`, `microsoft-oauth-client-secret`, `smb-credentials` |
+| `acp-assess` | service | in-cluster | none | 3–10 | 4/8Gi | assess | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `langfuse-public-key`, `microsoft-oauth-client-secret`, `smb-credentials` |
+| `acp-remediate` | service | in-cluster | none | 3–10 | 4/8Gi | remediate | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `langfuse-public-key`, `microsoft-oauth-client-secret`, `smb-credentials` |
 | `acp-ollama-gateway` | service | in-cluster | internal | 1–1 | 4/8Gi | — | — |
 | `acp-grafana` | service | in-cluster | internal | — | — | — | — |
 | `acp-langfuse` | service | in-cluster | internal | — | — | — | `langfuse-secret-key` |
@@ -123,11 +123,11 @@ Platform `azure` · release `2026.9` · VALID
 | `redis` | dependency | managed | internal | — | — | — | — |
 | `object-storage` | dependency | managed | internal | — | — | — | — |
 | `acp-migrations` | job | in-cluster | none | — | — | — | `database-url` |
-| `acp-preflight` | job | in-cluster | none | — | — | — | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `applicationinsights-connection-string`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
-| `acp-web-api` | service | in-cluster | public | 2–4 | 1/2Gi | — | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `applicationinsights-connection-string`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
-| `acp-discovery` | service | in-cluster | none | 1–3 | 1/2Gi | discovery | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `applicationinsights-connection-string`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
-| `acp-assess` | service | in-cluster | none | 5–5 | 2/4Gi | assess | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `applicationinsights-connection-string`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
-| `acp-remediate` | service | in-cluster | none | 5–10 | 2/4Gi | remediate | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `applicationinsights-connection-string`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
+| `acp-preflight` | job | in-cluster | none | — | — | — | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `langfuse-public-key`, `applicationinsights-connection-string`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
+| `acp-web-api` | service | in-cluster | public | 2–4 | 1/2Gi | — | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `langfuse-public-key`, `applicationinsights-connection-string`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
+| `acp-discovery` | service | in-cluster | none | 1–3 | 1/2Gi | discovery | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `langfuse-public-key`, `applicationinsights-connection-string`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
+| `acp-assess` | service | in-cluster | none | 5–5 | 2/4Gi | assess | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `langfuse-public-key`, `applicationinsights-connection-string`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
+| `acp-remediate` | service | in-cluster | none | 5–10 | 2/4Gi | remediate | `database-url`, `redis-url`, `object-storage`, `langfuse-secret-key`, `langfuse-public-key`, `applicationinsights-connection-string`, `google-oauth-client-secret`, `microsoft-oauth-client-secret` |
 | `acp-ollama-gateway` | service | in-cluster | internal | 1–1 | 4/8Gi | — | — |
 | `acp-grafana` | service | in-cluster | internal | — | — | — | — |
 | `acp-langfuse` | service | in-cluster | internal | — | — | — | `langfuse-secret-key` |

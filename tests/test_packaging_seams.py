@@ -140,14 +140,6 @@ def test_the_dead_wiring_is_named_as_dead():
 # is what the absence COSTS, because that is the judgement a reader needs and the thing a grep
 # cannot supply.
 NOT_WIRED_BY_THE_CHART = {
-    "LANGFUSE_HOST":
-        "api/lf.py enables tracing only with host, public key AND secret key; the chart projects "
-        "the secret key alone, so the langfuse-secret-key reference the contract REQUIRES buys "
-        "one of three and tracing stays off",
-    "LANGFUSE_PUBLIC_KEY":
-        "the second of the three api/lf.py requires; with two of three present the module reports "
-        "itself disabled rather than failing, so an operator who provisioned Langfuse sees no "
-        "traces and no error",
     "ACP_ALLOWED_EMAILS":
         "the sign-in allow-list is empty, which is fail-closed and therefore harmless until the "
         "access gate is armed — it becomes load-bearing the moment it is",

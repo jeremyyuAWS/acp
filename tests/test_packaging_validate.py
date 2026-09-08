@@ -433,3 +433,39 @@ def test_the_reference_cluster_document_is_private_and_therefore_exempt():
     doc = load_document(PACKAGING / "reference" / "kind" / "acp-deployment.yaml")
     assert doc["network"]["publicIngress"] is False
     assert "network.unauthenticated-ingress" not in errors_for(doc)
+
+
+# ── langfuse: three variables, or none ────────────────────────────────────────
+def test_a_langfuse_mode_without_a_host_is_refused():
+    """`api/lf.py` is `_ENABLED = bool(_HOST and _PK and _SK)` and reports itself disabled rather
+    than failing, so a document naming a mode with no host writes no traces and raises nothing
+    about it. The contract has always demanded the secret key for exactly this reason; demanding
+    one of three made the rule unable to do the thing it was written for."""
+    doc = load_example("standard-production")
+    del doc["observability"]["langfuse"]["host"]
+    assert "langfuse.no-host" in errors_for(doc)
+
+
+def test_disabled_tracing_needs_no_host():
+    """THE CONTROL. `disabled` is a legitimate choice and must not be made to look like a
+    misconfiguration."""
+    doc = load_example("standard-production")
+    doc["observability"]["langfuse"] = {"mode": "disabled"}
+    for ref in ("langfuse-secret-key", "langfuse-public-key"):
+        doc["secrets"]["refs"].pop(ref, None)
+    assert "langfuse.no-host" not in errors_for(doc)
+    assert "secrets.required" not in errors_for(doc)
+
+
+def test_cloud_langfuse_needs_a_host_too():
+    """Langfuse Cloud is regional — cloud.langfuse.com is not us.cloud.langfuse.com — so a default
+    would send someone's traces to the wrong continent quietly."""
+    doc = load_example("standard-production")
+    doc["observability"]["langfuse"] = {"mode": "cloud"}
+    assert "langfuse.no-host" in errors_for(doc)
+
+
+def test_both_langfuse_keys_are_required_not_just_the_secret():
+    doc = load_example("standard-production")
+    del doc["secrets"]["refs"]["langfuse-public-key"]
+    assert "secrets.required" in errors_for(doc)

@@ -209,6 +209,20 @@ ACP_WORKER_ROLE) are added by the caller; everything below is identical by const
 - name: ACP_BLOB_ACCOUNT
   value: {{ .Values.objectStorage.account | quote }}
 {{- end }}
+{{- if .Values.observability.langfuse.host }}
+{{- /*
+  THE THIRD OF THREE, AND THE OTHER TWO WERE ALREADY HERE.
+
+  `api/lf.py` is `_ENABLED = bool(_HOST and _PK and _SK)`. The two keys arrive through the
+  `secrets.refs` projection below — the contract requires both — and the host is an endpoint
+  rather than a credential, so it comes from the document. Until 2026-09-08 the chart projected
+  the secret key alone, so a document that declared a Langfuse mode, satisfied the reference the
+  contract demanded and provisioned a Langfuse got one third of what the module needs. It reports
+  itself disabled and raises nothing, which is the quietest way for a feature to be absent.
+*/}}
+- name: LANGFUSE_HOST
+  value: {{ .Values.observability.langfuse.host | quote }}
+{{- end }}
 {{- if eq .Values.ai.mode "local-only" }}
 {{- /*
   The regulated profile's central promise: no document content leaves the cluster for a model.
