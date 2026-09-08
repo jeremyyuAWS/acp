@@ -286,3 +286,55 @@ livenessProbe:
   timeoutSeconds: 5
   failureThreshold: 6
 {{- end -}}
+
+{{/*
+Zone spreading for a tier that runs more than one pod.
+
+WHAT THIS ADDS OVER THE ANTI-AFFINITY ALREADY ON THE API. That rule is
+`preferredDuringScheduling` across `kubernetes.io/hostname`: it asks for different NODES and says
+nothing about zones, so three replicas can land on three nodes in one availability zone and
+satisfy it completely. The failure a multi-replica API tier is bought to survive is losing a zone,
+and nothing in the chart addressed it.
+
+WHY `ScheduleAnyway` IS THE DEFAULT, AND WHY THAT IS NOT TIMIDITY. `DoNotSchedule` on this
+constraint is a claim about the cluster, and two of its failure modes are outages:
+
+  - Nodes without the `topologyKey` LABEL are not eligible at all under `DoNotSchedule`. A cluster
+    whose nodes carry no `topology.kubernetes.io/zone` — every kind and k3d cluster, and any
+    single-zone install — has no eligible node, and every replica stays Pending forever. The
+    reference cluster this chart is installed on is exactly that cluster.
+  - Without `matchLabelKeys` (Kubernetes 1.27+, and `doctor.MINIMUM_KUBERNETES` is 1.23) the
+    constraint counts the OUTGOING ReplicaSet's pods during a rolling update, so an update can
+    wedge itself against its own predecessors.
+
+`ScheduleAnyway` makes the scheduler actively BALANCE across zones and fall back rather than
+refuse, which is a real improvement over ignoring zones and cannot strand a pod. Hardening it is
+one value, for an operator who knows their nodes are labelled and their version is high enough —
+and PRD S4 is explicit that a target is not supported because Helm renders for it, so the chart
+does not assert multi-zone survival it has never demonstrated.
+
+NOT RENDERED FOR A SINGLE-REPLICA TIER, where the constraint is arithmetic on one pod, nor for
+Ollama and Grafana, which are one pod by construction.
+*/}}
+{{- define "acp.topologySpread" -}}
+{{- $root := .root -}}
+{{- $spread := $root.Values.topologySpread -}}
+{{- if $spread.enabled }}
+topologySpreadConstraints:
+  - maxSkew: {{ $spread.maxSkew }}
+    topologyKey: {{ $spread.topologyKey }}
+    whenUnsatisfiable: {{ $spread.whenUnsatisfiable }}
+    {{- /*
+      THE SELECTOR IS PASSED IN, NOT DERIVED FROM A COMPONENT NAME, because the three worker
+      Deployments all carry `app.kubernetes.io/component: worker` and differ only by
+      `acp.mova.io/worker-role`. A constraint built from a component name alone would have
+      selected zero pods on the workers — and a topology constraint whose selector matches
+      nothing is not an error: it is satisfied vacuously, renders correctly, and spreads nothing.
+      Callers pass the SAME labels their Deployment selects on, so the two cannot drift.
+    */}}
+    labelSelector:
+      matchLabels:
+        {{- include "acp.selectorLabels" $root | nindent 8 }}
+        {{- toYaml .selector | nindent 8 }}
+{{- end }}
+{{- end -}}

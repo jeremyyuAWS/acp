@@ -124,6 +124,10 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      {{- if or (gt (int $cfg.replicaCount) 1) $cfg.autoscaling.enabled }}
+      {{- include "acp.topologySpread" (dict "root" $ "selector"
+            (dict "app.kubernetes.io/component" "worker" "acp.mova.io/worker-role" $role)) | nindent 6 }}
+      {{- end }}
       {{- with $.Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

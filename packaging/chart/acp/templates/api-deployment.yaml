@@ -61,6 +61,9 @@ spec:
           resources:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+      {{- if or (gt (int .Values.api.replicaCount) 1) .Values.api.autoscaling.enabled }}
+      {{- include "acp.topologySpread" (dict "root" $ "selector" (dict "app.kubernetes.io/component" "api")) | nindent 6 }}
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

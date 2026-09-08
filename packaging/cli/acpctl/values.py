@@ -185,7 +185,18 @@ def build_values(doc: dict[str, Any], release: Any = None) -> dict[str, Any]:
         "podDisruptionBudget": {
             # A PDB whose minAvailable equals the replica count blocks every drain. Only tiers
             # that actually run more than one replica get one.
-            "enabled": rt["profile"] == "high-availability",
+            #
+            # THAT RULE IS THE REPLICA FLOOR, NOT THE PROFILE, and the two disagreed. This read
+            # `profile == "high-availability"` while the comment above it described replica
+            # count — so standard-production, which runs a floor of TWO API replicas, got no
+            # budget at all. `kubectl drain` on the node holding both evicts both, and the
+            # cluster autoscaler does exactly that during a routine node upgrade: the failure a
+            # second replica is bought to prevent, on the profile most installations will use.
+            #
+            # The floor is what matters rather than the maximum, because an autoscaled tier
+            # sitting at its minimum is the state a drain is most likely to find. A floor of one
+            # still gets nothing, which is the case the comment was always right about.
+            "enabled": doc["api"]["replicas"]["min"] > 1,
             "minAvailable": 1,
         },
         "postgresql": _data_values(data["postgres"], in_cluster_chart="bitnami/postgresql"),

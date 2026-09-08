@@ -327,6 +327,32 @@ def test_the_data_services_meet_the_standard_the_namespace_enforces():
                 f"{name} mounts a volume it will not be able to write to")
 
 
+def test_the_reference_cluster_upgrades_as_well_as_installs():
+    """AN INSTALL THAT CANNOT BE UPGRADED IS A DEMO, and every way this chart could fail to
+    upgrade is invisible to `helm template` and to a first install:
+
+      - `spec.selector` is immutable, so a selector label that moves with the release installs
+        perfectly and makes the first upgrade fail on a running installation.
+      - A hook Job is a named object; without `before-hook-creation` the second release finds the
+        first one's Job still there.
+      - The migration hook is `pre-install,pre-upgrade`, so an upgrade runs it against a schema it
+        has already applied.
+
+    The step must change the POD TEMPLATE. `helm upgrade --wait` reports success for a release
+    that replaced nothing, so an upgrade with identical values proves only that Helm accepted it —
+    which is why the step sets an annotation and then looks for it on the running pods.
+    """
+    steps = [s.get("name", "") for s in workflow()["jobs"]["install"]["steps"]]
+    assert "Can it be upgraded, or only installed?" in steps, steps
+    assert steps.index("Install") < steps.index("Can it be upgraded, or only installed?")
+    script = run_steps()
+    assert "helm upgrade acp" in script
+    assert "upgrade-probe" in script, (
+        "an upgrade that does not change the pod template replaces nothing and passes vacuously")
+    assert "helm -n \"$NAMESPACE\" status acp" in script and "REVISION" in script, (
+        "`helm upgrade --wait` exits 0 for a release whose revision did not advance")
+
+
 def test_the_cluster_is_deleted_even_when_the_job_fails():
     steps = workflow()["jobs"]["install"]["steps"]
     teardown = [s for s in steps if s.get("name") == "Delete the cluster"]
