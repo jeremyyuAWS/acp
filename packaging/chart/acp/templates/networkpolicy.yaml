@@ -69,21 +69,37 @@ spec:
     - Ingress
   ingress: []
 {{- end }}
-{{- if and .Values.networkPolicy.defaultDeny .Values.networkPolicy.allowedEgress }}
+{{- if .Values.networkPolicy.defaultDeny }}
 ---
 {{/*
-The egress allow-list, and the honest limit of it.
+What default-deny lets back out, and why this is NOT conditional on `allowedEgress`.
 
-NetworkPolicy MATCHES ON IP, NOT ON HOSTNAME. `allowedEgress: [googleapis.com]` cannot become an
-`ipBlock` here — the addresses behind that name change, and pinning today's would break the
-connector on a day nobody deployed anything. What this renders is DNS egress plus a documented
-annotation naming the intended destinations, so the object records the intent and an operator can
-see what still needs enforcing.
+THE POLICY ABOVE DENIES ALL EGRESS. Adding `Egress` to a policyType with no egress rule denies
+every outbound packet from every ACP pod — DNS included. Until 2026-09-08 this companion policy
+rendered only `if allowedEgress` was non-empty, and even then opened only 53 and 443, so on any
+cluster that ENFORCES policy:
 
-Real hostname egress control needs a policy engine that understands names — Cilium's
-CiliumNetworkPolicy `toFQDNs`, or an egress proxy. That is an adapter concern (the cluster either
-has one or does not), and naming it here is better than rendering an `ipBlock` that looks like
+  a document with no external sources  got no egress at all, not even DNS, and no pod resolved
+                                       its own database hostname
+  a document with external sources     got DNS and 443, and still could not reach Postgres on
+                                       5432 or Redis on 6379
+
+Either way the installation cannot start. It was invisible because no cluster anybody had tested
+on enforces policy — and `acpctl doctor` treats a CNI that does NOT enforce as a BLOCKER, so the
+chart required exactly the environment in which it could not run. kind's default CNI does not
+enforce either, which is why the reference cluster cannot catch this and says so in its README.
+
+WHAT THIS OPENS IS PORTS, NOT DESTINATIONS, and that limit is the same one the annotations below
+have always stated. NetworkPolicy matches on IP, never on hostname: `allowedEgress:
+[googleapis.com]` cannot become an `ipBlock` here, because the addresses behind that name change
+and pinning today's would break the connector on a day nobody deployed anything. Real hostname
+control needs a policy engine that understands names — Cilium's `toFQDNs`, or an egress proxy —
+which is an adapter concern, and naming it is better than rendering an `ipBlock` that looks like
 enforcement and is a snapshot of yesterday's DNS.
+
+So the ports are the enforceable half and they are values-driven: an installation whose Postgres
+listens somewhere else edits `networkPolicy.egressPorts` rather than discovering at rollout that
+its database is unreachable.
 */}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -104,12 +120,9 @@ spec:
     - Egress
   egress:
     - ports:
-        - port: 53
-          protocol: UDP
-        - port: 53
-          protocol: TCP
-    - ports:
-        - port: 443
-          protocol: TCP
+        {{- range .Values.networkPolicy.egressPorts }}
+        - port: {{ .port }}
+          protocol: {{ .protocol }}
+        {{- end }}
 {{- end }}
 {{- end }}

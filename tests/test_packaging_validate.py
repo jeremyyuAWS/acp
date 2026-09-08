@@ -306,3 +306,71 @@ def test_the_regulated_profiles_local_exporter_is_the_case_that_warns():
     doc = load_example("regulated")
     assert doc["observability"]["exporter"] == "local"
     assert "observability.exporter-unimplemented" in _warnings_for(doc)
+
+
+# ── object storage: the store the installation keeps its output in ────────────
+def test_an_installation_that_names_no_storage_account_is_warned_that_it_keeps_nothing():
+    """PRD S20.5 says no authoritative artifact may depend on ephemeral storage. The state this
+    warns about is worse: the artifact reaches no storage at all.
+
+    `api/blob.py` is the PRIMARY store for a remediated file's fixed copy (ADR 0010) and decides
+    whether it exists from ACP_BLOB_ACCOUNT alone. Unset, every function returns None — so the
+    installation remediates a document, logs that the corrected copy was stored, and keeps the
+    digest and the byte count while dropping the bytes. There is no BYTEA column (ADR 0010 rejected
+    one) and no filesystem fallback.
+    """
+    doc = load_example("standard-production")
+    assert "account" not in doc["data"]["objectStorage"]
+    assert "objectstorage.unwired" in _warnings_for(doc)
+
+
+def test_naming_the_account_clears_the_warning():
+    """THE CONTROL. A warning that cannot be satisfied is one people learn to scroll past."""
+    doc = load_example("standard-production")
+    doc["data"]["objectStorage"]["account"] = "acpremediatedstore"
+    assert "objectstorage.unwired" not in _warnings_for(doc)
+
+
+def test_embedded_object_storage_is_not_warned_about():
+    """The evaluation profile's object storage is embedded, which is a different arrangement and
+    not the failure this rule is about."""
+    doc = load_example("evaluation")
+    assert doc["data"]["objectStorage"]["mode"] == "embedded"
+    assert "objectstorage.unwired" not in _warnings_for(doc)
+
+
+def test_a_non_azure_platform_is_told_the_only_implementation_is_azure():
+    """PRD S7 maps object storage to S3 and Cloud Storage on the other platforms. Nothing
+    implements them: `api/blob.py` builds `https://<account>.blob.core.windows.net` and
+    authenticates with DefaultAzureCredential, with no endpoint override and no key-based path.
+    So a customer-Kubernetes installation naming an account is asking that cluster to reach Azure
+    — legitimate, and worth being told once rather than discovering from an egress denial."""
+    doc = load_example("regulated")
+    assert doc["runtime"]["platform"] != "azure"
+    doc["data"]["objectStorage"]["account"] = "acpremediatedstore"
+    assert "objectstorage.azure-only" in _warnings_for(doc)
+
+
+def test_azure_is_not_told_it_is_reaching_azure():
+    """The control for the rule above."""
+    doc = load_example("standard-production")
+    assert doc["runtime"]["platform"] == "azure"
+    doc["data"]["objectStorage"]["account"] = "acpremediatedstore"
+    assert "objectstorage.azure-only" not in _warnings_for(doc)
+
+
+def test_the_derived_azure_document_wires_the_account_production_actually_uses():
+    """DERIVED FROM deploy.sh, NOT DECLARED. `azure_baseline.blob_account` reads the script's own
+    `BLOB_ACCOUNT="${ACP_BLOB_ACCOUNT:-...}"` default, which deploy.sh projects as
+    ACP_BLOB_ACCOUNT onto both the API and the worker apps. Pinning the derivation to the original
+    is what stops the contract describing a production that keeps nothing while production keeps
+    everything — the gap this whole rule exists to make visible."""
+    import re
+
+    from acpctl.azure_baseline import DEPLOY_SH, blob_account
+    derived = blob_account()
+    assert derived, "no BLOB_ACCOUNT default was found in deploy.sh"
+    match = re.search(r'^\s*BLOB_ACCOUNT="\$\{ACP_BLOB_ACCOUNT:-([\w.-]+)\}"',
+                      DEPLOY_SH.read_text(encoding="utf-8"), re.MULTILINE)
+    assert match, "deploy.sh no longer sets BLOB_ACCOUNT the way blob_account() parses"
+    assert derived == match.group(1)

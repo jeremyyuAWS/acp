@@ -338,6 +338,13 @@
             "mode": {
               "$ref": "#/$defs/serviceMode"
             },
+            "account": {
+              "description": "The storage account holding remediated output. WITHOUT IT THE INSTALLATION KEEPS NOTHING: api/blob.py is the primary store for a remediated file's fixed copy (ADR 0010) and is a no-op returning None everywhere when ACP_BLOB_ACCOUNT is unset, so a deployment that omits this produces corrected documents and drops them, recording their digest and length but never their bytes. Not a credential — the account name is configuration and authentication is workload identity — so it belongs here rather than in secrets.refs. The only implementation is Azure Blob over Entra ID; setting this on a non-azure platform is asking that cluster to reach Azure.",
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 63,
+              "pattern": "^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$"
+            },
             "encryption": {
               "enum": [
                 "provider-managed",

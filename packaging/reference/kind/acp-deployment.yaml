@@ -1,0 +1,87 @@
+# The deployment document the disposable reference cluster installs.
+#
+# WHY THIS IS NOT ONE OF packaging/examples/. Those are one per PROFILE — they answer "what does a
+# regulated installation look like" and are written to be read. This one answers "what is the
+# smallest true ACP installation a throwaway cluster can actually run", and every value in it is
+# chosen so that a `kind` node can serve it:
+#
+#   no autoscale blocks   -> no ScaledObject, so the cluster needs no KEDA
+#   publicIngress: false  -> no Ingress, so the cluster needs no ingress controller
+#   ollama.enabled: false -> no multi-GB model image to pull onto a node with no registry
+#   grafana: false        -> same
+#   one replica per tier  -> three worker pods, not thirty
+#
+# It is a REAL document, not a fixture: `acpctl validate` accepts it, and
+# tests/test_packaging_reference_kind.py runs the real validator over it so it cannot drift away
+# from the contract while the workflow that installs it goes on passing.
+#
+# It validates with two warnings, and both are true. `kubernetes` is a `planned` platform — which
+# is the claim this reference cluster exists to start changing, and it stays `planned` until the
+# full acceptance suite passes here. And with Ollama off there is no AI lane: assessment runs,
+# AI-drafted remediation content does not. Neither is worth suppressing.
+#
+# WHAT AN INSTALL HERE CANNOT ESTABLISH, stated so a green run is not over-read:
+#
+#   NetworkPolicy enforcement  kind's default CNI does not implement it, so the three policies
+#                              this renders are accepted and enforce nothing. `acpctl doctor`
+#                              reports exactly that, and is right to.
+#   zone spreading, PDBs       one node, so disruption budgets and topology spread have nothing
+#                              to act on.
+#   managed data services      Postgres and Redis are plain in-cluster Deployments here. They are
+#                              declared `managed` because that is what makes the chart treat them
+#                              as endpoints it does not own, which is the honest shape — but a
+#                              managed service's failover and backup behaviour is not tested by
+#                              running a container.
+
+apiVersion: packaging.acp.mova.io/v1alpha1
+kind: ACPDeployment
+metadata:
+  name: acp-kind
+  environment: development
+runtime:
+  version: '2026.9'
+  profile: standard
+  platform: kubernetes
+api:
+  replicas: {min: 2, max: 2}
+  resources: {preset: small}
+workers:
+  discover:
+    replicas: {min: 1, max: 1}
+    resources: {preset: small}
+  assess:
+    replicas: {min: 1, max: 1}
+    resources: {preset: small}
+  remediate:
+    replicas: {min: 1, max: 1}
+    resources: {preset: small}
+data:
+  postgres:
+    mode: managed
+    backupRetentionDays: 7
+    storage: 8Gi
+    maxConnections: 200
+  redis: {mode: managed}
+  objectStorage: {mode: managed, retentionDays: 7}
+ai:
+  mode: local-only
+  ollama: {enabled: false}
+observability:
+  openTelemetry: false
+  exporter: local
+  grafana: false
+  langfuse: {mode: disabled}
+network:
+  privateWorkers: true
+  publicIngress: false
+secrets:
+  provider: kubernetes
+  refs:
+    database-url: {name: acp-secrets, key: database-url}
+    redis-url: {name: acp-secrets, key: redis-url}
+    object-storage: {name: acp-secrets, key: object-storage}
+sources: [local-upload]
+capacity:
+  maxSourceFileSizeMb: 25
+  concurrentFilesPerWorker: 1
+  expectedDocumentsPerDay: 100

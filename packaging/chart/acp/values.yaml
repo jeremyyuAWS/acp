@@ -83,6 +83,18 @@ networkPolicy:
   defaultDeny: false
   workerIngress: true
   allowedEgress: []
+  # What default-deny lets back out. NOT A HARDENING KNOB — with `defaultDeny` on and this list
+  # empty, no ACP pod can resolve a hostname or reach its own database, and the installation does
+  # not start. NetworkPolicy matches on IP and never on hostname, so ports are the enforceable
+  # half; `allowedEgress` records the intended destinations for a FQDN-aware policy engine to act
+  # on. Edit this when a data service listens somewhere else.
+  egressPorts:
+    - {port: 53, protocol: UDP}       # DNS. Without it nothing resolves, including Postgres.
+    - {port: 53, protocol: TCP}
+    - {port: 443, protocol: TCP}      # Object storage, OAuth, external AI, telemetry.
+    - {port: 5432, protocol: TCP}     # PostgreSQL.
+    - {port: 6379, protocol: TCP}     # Redis/Valkey.
+    - {port: 6380, protocol: TCP}     # Redis over TLS — Azure Managed Redis' default port.
 
 podDisruptionBudget:
   enabled: false
@@ -106,6 +118,13 @@ objectStorage:
   enabled: false
   external: true
   chart: null
+  # The storage account holding remediated output. NO DEFAULT ON PURPOSE, and the consequence of
+  # leaving it empty is worth stating: `api/blob.py` is the primary store for a remediated file's
+  # fixed copy and is a no-op without it, so the installation produces corrected documents and
+  # drops them — recording the digest and the length, never the bytes. `acpctl values` fills this
+  # from the deployment document's `data.objectStorage.account`, and `acpctl validate` warns when
+  # the document omits it. A guess here would be a storage account somebody else owns.
+  account: ""
 
 secrets:
   provider: kubernetes
@@ -127,6 +146,9 @@ ai:
   ollama:
     enabled: false
     gpu: false
+    # How many GPUs the ollama container requests when `gpu` is true. One is what a single
+    # model-serving pod uses; more only helps a runtime configured to shard across devices.
+    gpuCount: 1
     port: 11434
     # NO modelVolume. deploy/ollama/Dockerfile bakes llama3.1:8b and moondream into the image and
     # serves them from /models specifically so a mounted volume cannot shadow them — see the

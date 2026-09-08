@@ -1,0 +1,104 @@
+# Postgres and Redis for the reference cluster — the services the chart deliberately does not own.
+#
+# THE CHART REFUSES TO RENDER IN-CLUSTER DATA SERVICES (ADR 0048's phase-2 addendum), and this
+# file is the other half of that decision rather than a way around it. The application package is
+# what is identical across platforms; data services are what the infrastructure adapter supplies.
+# On AKS that adapter is Azure Database for PostgreSQL; here it is these two Deployments. Both
+# arrive at the chart the same way — as an endpoint in a Secret — which is exactly the property
+# that makes one acceptance suite meaningful across both.
+#
+# NOT PRODUCTION SHAPES, AND NOT PRETENDING TO BE. `emptyDir` storage, one replica, no backups, no
+# TLS. A restart loses the database, which is correct for a cluster that is deleted at the end of
+# every run and would be indefensible anywhere else. The credentials are created by the workflow
+# at install time, never committed here.
+apiVersion: v1
+kind: Service
+metadata:
+  name: acp-postgres
+  labels: {app: acp-postgres, acp.mova.io/reference: "kind"}
+spec:
+  selector: {app: acp-postgres}
+  ports:
+    - port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: acp-postgres
+  labels: {app: acp-postgres, acp.mova.io/reference: "kind"}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: acp-postgres}
+  template:
+    metadata:
+      labels: {app: acp-postgres}
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16
+          env:
+            - name: POSTGRES_DB
+              value: acpdb
+            - name: POSTGRES_USER
+              valueFrom: {secretKeyRef: {name: acp-reference-data, key: postgres-user}}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: acp-reference-data, key: postgres-password}}
+            # The default data directory is the mount point itself, and initdb refuses a
+            # non-empty one. A subdirectory is the documented way round it and costs nothing.
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+            # The document declares maxConnections: 200 and acpctl checks the fleet's worst-case
+            # demand against it. Serving a smaller number here would make that check a fiction.
+            - name: POSTGRES_INITDB_ARGS
+              value: "--auth-host=scram-sha-256"
+          args: ["postgres", "-c", "max_connections=200"]
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U \"$POSTGRES_USER\" -d acpdb"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: acp-redis
+  labels: {app: acp-redis, acp.mova.io/reference: "kind"}
+spec:
+  selector: {app: acp-redis}
+  ports:
+    - port: 6379
+      targetPort: 6379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: acp-redis
+  labels: {app: acp-redis, acp.mova.io/reference: "kind"}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: acp-redis}
+  template:
+    metadata:
+      labels: {app: acp-redis}
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            initialDelaySeconds: 3
+            periodSeconds: 5

@@ -223,28 +223,86 @@ than template text. Requirements are the Kubernetes half of PRD §5.2 plus §8 (
 | 10 | No public ingress on any worker | **satisfied** | Rendered Services are `acp-api`, `acp-ollama`, `acp-grafana` only; no worker Service exists. `acp-worker-no-ingress` NetworkPolicy with `ingress: []` renders in all profiles, pinned by `test_packaging_chart.py::test_private_workers_render_a_policy_that_admits_nothing` |
 | 11 | No authoritative output on ephemeral storage only | **NOT satisfied** | See below |
 
-**B11 — the object-storage seam does not meet, and it fails silently.** `_helpers.tpl:175-178`
-projects each `secrets.refs` key as an uppercased env var, so `object-storage` arrives as
-`OBJECT_STORAGE` in six containers (rendered lines 305, 575, 694, 813, 1166, 1287 — the API, all
-three worker tiers, and both hook Jobs).
+**Four defects the rendered-manifest tests were green on**, found on 2026-09-08, and fixed. The
+first three by reading the application against the chart rather than the chart against itself; the
+fourth by installing it:
 
-```
-$ grep -rn OBJECT_STORAGE api/ engine/ deploy/ realtime_gateway/ hub/          exit=1  (0 hits)
-$ grep -rln ACP_BLOB_ACCOUNT api/ engine/ deploy/                             exit=0
-api/blob.py
-deploy/public/deploy.sh                                       # the control: the search works
-$ grep -c ACP_BLOB <rendered>
-0                                                                             exit=1
-```
+- **Default-deny denied DNS, and the egress policy did not open the database.** The
+  `-default-deny` policy adds `Egress` to its policyTypes with no egress rule, which denies every
+  outbound packet from every ACP pod. The companion `-egress` policy that lets anything back out
+  rendered only `if allowedEgress` was non-empty — and even then opened 53 and 443 only, never
+  5432 or 6379. So on a cluster that ENFORCES policy, a document with no external sources resolved
+  nothing at all, and one with external sources still could not reach Postgres or Redis. The
+  installation cannot start either way. Nothing caught it because no cluster anybody had tested on
+  enforces NetworkPolicy — and `acpctl doctor` treats a CNI that does **not** enforce as a
+  blocker, so the chart required exactly the environment in which it could not run. The reference
+  cluster below cannot catch it either (kind's CNI does not enforce), which is why its README
+  lists NetworkPolicy enforcement as untested.
 
-`api/blob.py:19,26` reads `ACP_BLOB_ACCOUNT` and sets `_ENABLED = bool(_ACCOUNT)`; with it unset
-the module is "a no-op (returns None everywhere)" by its own docstring. `blob.py` is the
-**primary** store for a remediated file (ADR 0010) — Drive write-back is a best-effort mirror. So a
-Helm-installed ACP writes remediated output to no durable store and reports nothing: PRD §12 and
-acceptance criterion §20.5 fail, quietly, while `acpctl plan` prints "object-storage …
-Authoritative output lives here". This is the same class of defect the chart already fixed once for
-telemetry (`test_the_workloads_get_the_telemetry_credential_the_application_reads`), and nothing
-generalises that test.
+- **Every `helm install` of this chart failed, and had always failed.** Helm runs `pre-install`
+  hooks BEFORE it creates the release's own resources. Both hook Jobs named the chart's
+  ServiceAccount, which is one of those resources — so the ServiceAccount admission plugin
+  rejected the Job's pod, the Job controller created none, and Helm gave up after ten minutes on a
+  Job at `0/1` with **no pod at all**:
+
+  ```
+  Error: INSTALLATION FAILED: failed pre-install: 1 error occurred:
+          * timed out waiting for the condition
+  ```
+
+  This is the one no amount of reading would have found, and the reason the reference cluster
+  below exists: a rendered manifest has no ordering, so `helm template` was clean throughout. It
+  was the FIRST thing the first install hit. The hooks now run as `default` and drop the token
+  they never used; neither touches the Kubernetes API.
+
+All four are a line or two of template each. What is worth keeping from them is the shape: a
+rendered-manifest test compares the chart against itself, so a chart that renders the wrong thing
+consistently passes. None was reachable without reading the application the chart deploys, or the
+CNI semantics it depends on — and the fourth was not reachable by reading at all.
+
+**The seam that loses the product's output, found and half-fixed.** `api/blob.py` is the PRIMARY
+store for a remediated file's fixed copy (ADR 0010) and decides whether it exists from one
+variable, `ACP_BLOB_ACCOUNT`. Unset, `_ENABLED` is false and every function returns `None`.
+`deploy/public/deploy.sh:51,411` has always set it on both the API and the worker apps; **this
+chart set nothing**. So a Helm install came up healthy, remediated documents, logged that the
+corrected copy was stored, and kept each one's digest and byte count while dropping the bytes —
+`store.record_remediation` takes the `blob_url is None` branch, there is no BYTEA column (ADR 0010
+rejected one deliberately), and there is no filesystem fallback. That is PRD S20.5's acceptance
+criterion failing in a way worse than the criterion describes: the artifact does not depend on
+ephemeral storage, it reaches no storage at all.
+
+Half-fixed, and the half that is missing is not a packaging problem. The contract now carries
+`data.objectStorage.account`, the chart projects it to every workload that writes, and
+`acpctl validate` warns — naming the consequence rather than a missing field — when a document
+omits it. What no packaging change can supply is an implementation for anywhere but Azure:
+`api/blob.py` builds `https://<account>.blob.core.windows.net` and authenticates with
+`DefaultAzureCredential`, with no endpoint override, no key-based path and no S3 client anywhere in
+`api/`. PRD S7's cloud mapping lists S3 and Cloud Storage for the other platforms; nothing
+implements them, and `boto3` is not in `api/requirements.txt`. So **acceptance scenario 4's
+"artifact persistence" cannot pass on a non-Azure target today**, and the second warning
+(`objectstorage.azure-only`) says so to any document that names an account off Azure. Adding an
+S3-compatible backend is an application change and an owner decision, not one to take from here.
+
+**One more of the same family, analysed and NOT fixed**, because the fix cannot be tested here.
+With `secrets.provider: key-vault` the chart renders an `ExternalSecret`, which is a normal
+resource, and the pre-install hook Jobs mount the Secret the External Secrets Operator syncs from
+it. Same phase ordering, same result: on the ESO path the migration Job starts before the Secret
+exists and, with `backoffLimit: 0`, fails immediately rather than waiting. Making the
+`ExternalSecret` a pre-install hook would order the OBJECT correctly and still lose the race, since
+ESO syncs asynchronously and Helm cannot wait on a CRD it does not understand. The reference
+cluster uses `provider: kubernetes` with an operator-supplied Secret, so it cannot exercise this
+path and a fix shipped from here would be untested. Recorded rather than guessed at.
+
+**What is missing.** No `topologySpreadConstraints` anywhere in the chart. No `seccompProfile`, so
+the rendered pods do not meet the restricted Pod Security Standard as written, and
+`readOnlyRootFilesystem` is `false` by default. No PersistentVolumeClaim and no volumes at all —
+worker scratch is the node's ephemeral storage, bounded only by the limit above. The PDB renders
+only for the `high-availability` profile and only for the API tier
+(`values.py`: `"enabled": rt["profile"] == "high-availability"`; `templates/pdb.yaml`), which is a
+recorded decision but means a standard-production install has no disruption budget on any tier. No
+backup or restore Job, which PRD S5.2 lists as part of the Kubernetes package. Langfuse is deployed
+ungated by Compose and rendered by nothing in the chart — asserted, deliberately, by
+`test_packaging_chart.py::test_compose_deploys_what_the_chart_omits`.
 
 **The blocking gap: there is no reference Kubernetes version, and no cluster to render against.**
 The only version fact in the repository is `doctor.MINIMUM_KUBERNETES = (1, 23)`

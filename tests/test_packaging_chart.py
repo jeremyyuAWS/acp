@@ -15,6 +15,7 @@ to the pipeline.
 from __future__ import annotations
 
 import copy
+import json
 import os
 import re
 import shutil
@@ -497,6 +498,202 @@ def test_private_workers_render_a_policy_that_admits_nothing():
     manifests = render(doc)
     policy = named(manifests, "NetworkPolicy", "-worker-no-ingress")
     assert policy["spec"]["ingress"] == [], "worker ingress policy is not empty"
+
+
+@needs_helm
+def test_asking_for_a_gpu_renders_a_gpu_request():
+    """`ai.ollama.gpu: true` RENDERED NOTHING AT ALL until 2026-09-08.
+
+    The flag gated a pod-level block containing only `nodeSelector` and `tolerations`, both
+    `with`-guarded on values nothing sets — while the comment beside it described an
+    `nvidia.com/gpu` limit that was not written anywhere and could not have been at that level: an
+    extended resource is a CONTAINER resource. The standard-production example asks for a GPU,
+    `grep nvidia` over the render returned nothing, and the pod scheduled onto whatever node had
+    room and ran CPU inference. The document said GPU, the cluster did CPU, and nothing disagreed.
+
+    Only the limit is asserted. Kubernetes fills an extended resource's request in from its limit
+    and rejects the pod if the two are written and differ.
+    """
+    doc = load_example("standard-production")
+    assert doc["ai"]["ollama"]["gpu"] is True, "this test would prove nothing"
+    ollama = named(render(doc), "Deployment", "-ollama")
+    resources = ollama["spec"]["template"]["spec"]["containers"][0]["resources"]
+    assert resources["limits"]["nvidia.com/gpu"] == 1
+    assert "requests" not in resources or "nvidia.com/gpu" not in resources["requests"]
+
+
+@needs_helm
+def test_no_gpu_asked_for_means_no_gpu_requested():
+    """The control. A chart that requested a GPU unconditionally would satisfy the assertion above
+    and make every CPU-only installation unschedulable."""
+    doc = load_example("standard-production")
+    doc["ai"]["ollama"]["gpu"] = False
+    ollama = named(render(doc), "Deployment", "-ollama")
+    resources = ollama["spec"]["template"]["spec"]["containers"][0].get("resources", {})
+    assert "nvidia.com/gpu" not in json.dumps(resources)
+
+
+@needs_helm
+def test_the_gpu_count_is_a_values_knob():
+    manifests = render(load_example("standard-production"),
+                       extra=["--set", "ai.ollama.gpuCount=4"])
+    ollama = named(manifests, "Deployment", "-ollama")
+    limits = ollama["spec"]["template"]["spec"]["containers"][0]["resources"]["limits"]
+    assert limits["nvidia.com/gpu"] == 4
+
+
+@needs_helm
+def test_the_remediated_output_store_reaches_every_workload_that_writes_to_it():
+    """THE SEAM THAT DID NOT MEET UNTIL 2026-09-08, asserted on the render.
+
+    `api/blob.py` is the primary store for a remediated file's fixed copy (ADR 0010) and reads one
+    variable to decide whether it exists: ACP_BLOB_ACCOUNT. This chart set none, while
+    `deploy/public/deploy.sh` has always set it on both the API and the worker apps — so the
+    Container Apps deployment persisted output and every Helm install silently did not, remediating
+    documents and dropping them.
+
+    Asserted on the WORKERS as well as the API, because the remediate tier is what writes: an
+    env var that reached only the API would look wired and lose every corrected file.
+    """
+    doc = load_example("standard-production")
+    doc["data"]["objectStorage"]["account"] = "acpremediatedstore"
+    workloads = app_workloads(render(doc))
+    assert workloads, "nothing rendered; this test would prove nothing"
+    for workload in workloads:
+        env = {e["name"]: e.get("value")
+               for e in workload["spec"]["template"]["spec"]["containers"][0]["env"]}
+        assert env.get("ACP_BLOB_ACCOUNT") == "acpremediatedstore", workload["metadata"]["name"]
+
+
+@needs_helm
+def test_no_account_renders_no_variable_rather_than_an_empty_one():
+    """An empty ACP_BLOB_ACCOUNT and an absent one behave the same in `api/blob.py` — `_ENABLED`
+    is `bool(_ACCOUNT)` either way — but they do not READ the same. An operator seeing the
+    variable set to "" on a running Deployment has been told the store is configured."""
+    doc = load_example("standard-production")
+    assert "account" not in doc["data"]["objectStorage"]
+    for workload in app_workloads(render(doc)):
+        names = {e["name"] for e in workload["spec"]["template"]["spec"]["containers"][0]["env"]}
+        assert "ACP_BLOB_ACCOUNT" not in names, workload["metadata"]["name"]
+
+
+@needs_helm
+def test_no_pre_install_hook_needs_a_resource_the_release_creates_after_it():
+    """THE ORDERING RENDERING CANNOT SEE, AND THE ONE THAT MADE THIS CHART UNINSTALLABLE.
+
+    Helm runs `pre-install` hooks BEFORE it creates the release's own resources. Until 2026-09-08
+    both hook Jobs named the chart's ServiceAccount, which is one of those resources — so the
+    admission plugin rejected the Job's pod, the Job controller created none, and Helm timed out
+    after ten minutes on a Job at 0/1 with no pod at all:
+
+        Error: INSTALLATION FAILED: failed pre-install: 1 error occurred:
+                * timed out waiting for the condition
+
+    Every `helm install` of this chart failed that way, and `helm template` was clean throughout,
+    because a rendered manifest has no ordering. The first run of the reference cluster is what
+    surfaced it.
+
+    Written as a general rule rather than an assertion about those two Jobs: any future
+    pre-install hook that references a chart-created ServiceAccount fails here instead of after
+    fifteen minutes of image build.
+    """
+    manifests = render(load_example("standard-production"))
+    created_later = {d["metadata"]["name"] for d in manifests
+                     if d["kind"] == "ServiceAccount"
+                     and "helm.sh/hook" not in (d["metadata"].get("annotations") or {})}
+    assert created_later, "the chart creates no ServiceAccount; this test would prove nothing"
+    checked = 0
+    for d in manifests:
+        annotations = d["metadata"].get("annotations") or {}
+        phases = set(annotations.get("helm.sh/hook", "").split(","))
+        if not phases & {"pre-install", "pre-upgrade"}:
+            continue
+        checked += 1
+        pod = d["spec"]["template"]["spec"]
+        name = pod.get("serviceAccountName")
+        assert name not in created_later, (
+            f"{d['metadata']['name']} is a pre-install hook naming ServiceAccount {name!r}, "
+            f"which Helm does not create until after the hooks have run")
+    assert checked, "no pre-install hook was rendered; this test would prove nothing"
+
+
+@needs_helm
+def test_the_hook_jobs_drop_the_service_account_token_they_do_not_use():
+    """The companion to the rule above: running as `default` is only safe because neither hook
+    touches the Kubernetes API. Asserted rather than assumed, so a hook that grows an API call
+    has to say so."""
+    for name in ("-migrate", "-preflight"):
+        job = named(render(load_example("standard-production")), "Job", name)
+        assert job["spec"]["template"]["spec"]["automountServiceAccountToken"] is False, name
+
+
+@needs_helm
+def test_default_deny_always_lets_the_pods_reach_their_own_data_services():
+    """DEFAULT-DENY WITH NO EGRESS RULE DENIES DNS.
+
+    Adding `Egress` to a policyType with no egress rule denies every outbound packet from every
+    ACP pod. Until 2026-09-08 the companion policy that lets anything back out rendered only when
+    `allowedEgress` was non-empty, and even then opened 53 and 443 only — so on a cluster that
+    ENFORCES policy, a document with no external sources resolved nothing at all, and one with
+    external sources still could not reach Postgres on 5432 or Redis on 6379. The installation
+    cannot start either way.
+
+    Nothing caught it because no cluster anybody tested on enforces NetworkPolicy — and
+    `acpctl doctor` treats a CNI that does not enforce as a BLOCKER, so the chart required exactly
+    the environment in which it could not run.
+
+    Asserted for BOTH shapes of document, because the empty-`allowedEgress` case is the one that
+    rendered nothing and the one a regulated installation is most likely to have.
+    """
+    for profile in RENDERABLE:
+        doc = load_example(profile)
+        for allowed in ([], ["googleapis.com"]):
+            doc["network"]["allowedEgress"] = allowed
+            manifests = render(doc)
+            deny = named(manifests, "NetworkPolicy", "-default-deny")
+            assert "Egress" in deny["spec"]["policyTypes"], "this test would prove nothing"
+            policy = named(manifests, "NetworkPolicy", "-egress")
+            ports = {(p["port"], p["protocol"])
+                     for rule in policy["spec"]["egress"] for p in rule["ports"]}
+            assert (53, "UDP") in ports, f"{profile}/{allowed}: no DNS, so nothing resolves"
+            assert (5432, "TCP") in ports, f"{profile}/{allowed}: Postgres unreachable"
+            assert (6379, "TCP") in ports or (6380, "TCP") in ports, (
+                f"{profile}/{allowed}: Redis unreachable")
+
+
+@needs_helm
+def test_the_egress_ports_are_a_values_knob_and_not_a_hardcoded_list():
+    """An installation whose Postgres listens somewhere else edits values rather than discovering
+    at rollout that its database is unreachable."""
+    manifests = render(load_example("standard-production"),
+                       extra=["--set", "networkPolicy.egressPorts[0].port=15432",
+                              "--set", "networkPolicy.egressPorts[0].protocol=TCP"])
+    policy = named(manifests, "NetworkPolicy", "-egress")
+    ports = {p["port"] for rule in policy["spec"]["egress"] for p in rule["ports"]}
+    assert ports == {15432}
+
+
+@needs_helm
+def test_the_egress_policy_still_records_the_destinations_it_cannot_enforce():
+    """NetworkPolicy matches on IP, never on hostname, so the allow-list survives as an annotation
+    for a FQDN-aware policy engine to act on. Opening the ports must not have quietly dropped the
+    statement of intent, which is the only record of what the ports are FOR."""
+    doc = load_example("standard-production")
+    policy = named(render(doc), "NetworkPolicy", "-egress")
+    annotations = policy["metadata"]["annotations"]
+    assert annotations["acp.mova.io/intended-egress"] == ",".join(doc["network"]["allowedEgress"])
+    assert "FQDN-aware" in annotations["acp.mova.io/egress-enforcement"]
+
+
+@needs_helm
+def test_no_default_deny_renders_no_egress_policy():
+    """The companion, so the assertions above cannot pass for an unrelated reason: a chart that
+    rendered the egress policy unconditionally would satisfy them while saying nothing about
+    default-deny."""
+    manifests = render(load_example("standard-production"),
+                       extra=["--set", "networkPolicy.defaultDeny=false"])
+    assert not [d for d in manifests
+                if d["kind"] == "NetworkPolicy" and d["metadata"]["name"].endswith("-egress")]
 
 
 @needs_helm

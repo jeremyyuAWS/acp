@@ -660,6 +660,57 @@ def _warn_no_backups(doc: dict, out: Result) -> None:
             "is 0 — this installation keeps no database backups", "backup.none"))
 
 
+def _warn_object_storage_unwired(doc: dict, out: Result) -> None:
+    """PRD S20.5: no authoritative document or remediation artifact may depend on ephemeral
+    storage. Today the failure is worse than that — the artifact reaches no storage at all.
+
+    `api/blob.py` is the PRIMARY store for a remediated file's fixed copy (ADR 0010) and decides
+    whether it exists from one variable: ACP_BLOB_ACCOUNT. Unset, every function returns None. So
+    an installation that declares object storage and names no account remediates documents, logs
+    that the corrected copy was stored, and keeps the digest and the byte count while dropping the
+    bytes — there is no BYTEA column, which ADR 0010 rejected deliberately, and no filesystem
+    fallback.
+
+    A WARNING RATHER THAN AN ERROR, and the choice is uncomfortable enough to state. Every
+    installation this repository can currently produce on a non-Azure platform is in exactly this
+    state, so failing them would block the Kubernetes MVP on an application capability no
+    packaging change can supply. What the warning must not do is be quiet about the consequence,
+    so it names it rather than saying a field is missing.
+    """
+    cfg = doc["data"]["objectStorage"]
+    if cfg["mode"] == "embedded":
+        return
+    if not cfg.get("account"):
+        out.warnings.append(Finding(
+            "data.objectStorage.account",
+            "no storage account is named, so ACP_BLOB_ACCOUNT is unset and api/blob.py is a "
+            "no-op: this installation will produce remediated documents and DROP them, "
+            "recording each one's digest and length but never its bytes (PRD S20.5, ADR 0010)",
+            "objectstorage.unwired"))
+
+
+def _warn_object_storage_is_azure_only(doc: dict, out: Result) -> None:
+    """The application has one object-storage implementation and it is Azure Blob.
+
+    `api/blob.py` builds `https://<account>.blob.core.windows.net` and authenticates with
+    DefaultAzureCredential — no endpoint override, no key-based path, no S3 client anywhere in the
+    application. PRD S7's cloud mapping lists S3 and Cloud Storage for the other platforms; no
+    code implements them. So a non-azure platform naming an account is asking that cluster to
+    reach Azure, which is a legitimate choice and worth being told once.
+    """
+    cfg = doc["data"]["objectStorage"]
+    if not cfg.get("account") or doc["runtime"]["platform"] == "azure":
+        return
+    out.warnings.append(Finding(
+        "data.objectStorage.account",
+        f"platform '{doc['runtime']['platform']}' will reach Azure Blob for remediated output: "
+        f"api/blob.py is the only implementation, and it is bound to "
+        f"*.blob.core.windows.net with Entra ID credentials. This cluster needs egress to it and "
+        f"a federated identity; there is no S3-compatible path in the application (PRD S7 lists "
+        f"one, nothing implements it)",
+        "objectstorage.azure-only"))
+
+
 _SEMANTIC_RULES = (
     _rule_replica_bounds,
     _rule_profile_replica_floor,
@@ -688,4 +739,6 @@ _SEMANTIC_RULES = (
     _warn_exporter_unimplemented,
     _warn_capacity_defaults,
     _warn_no_backups,
+    _warn_object_storage_unwired,
+    _warn_object_storage_is_azure_only,
 )
