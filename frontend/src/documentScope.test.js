@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { hasDocumentSelection, documentSelection, documentScopeSentence, ineligibleReason }
+import { hasDocumentSelection, documentSelection, documentScopeSentence, documentsInSelection, ineligibleReason }
   from './remediableScope.js'
 
 // The product has TWO filters, and only one of them carried.
@@ -59,6 +59,12 @@ describe('the per-document filter, as data', () => {
     const f = { file: 'doc0.docx', rec: { action: 'auto' } }
     expect(ineligibleReason(f, opts)).toBe('outOfScope')
   })
+
+  it('returns the exact cohort Remediate and Release may act on', () => {
+    const triage = { 'doc0.docx': 'inscope', 'doc1.docx': 'inscope', 'doc2.docx': 'defer' }
+    expect(documentsInSelection(FILES, triage).map((f) => f.file)).toEqual(['doc0.docx', 'doc1.docx'])
+    expect(documentsInSelection(FILES, {})).toBe(FILES)
+  })
 })
 
 describe('both downstream screens state it', () => {
@@ -67,6 +73,9 @@ describe('both downstream screens state it', () => {
     const s = code('Publish.jsx')
     expect(s).toMatch(/triage = \{\}/)
     expect(s).toMatch(/docScope=\{documentScopeSentence\(documentSelection\(files, triage\)\)\}/)
+    expect(s).toMatch(/const releaseFiles = documentsInSelection\(files, triage\)/)
+    expect(s).toMatch(/const ready = releaseFiles\.filter/)
+    expect(s).toMatch(/certificationUniverse\(releaseFiles\)/)
     expect(s).toContain("from './remediableScope.js'")
   })
 

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import ScopeBanner from './ScopeBanner.jsx'
-import { documentSelection, documentScopeSentence } from './remediableScope.js'
+import { documentSelection, documentScopeSentence, documentsInSelection } from './remediableScope.js'
 import { openReport, publishFile, publishAllFiles, getReleaseStatus, getReleaseManifest, previewReleaseDestination, previewReleasePackage, listHitlQueue, getSettings, getSourceStatus, rescoreFile, downloadReleasePackage, prepareReleasePackage, downloadPreparedReleasePackage, getQueueJob, putMyReleaseTemplates } from './api.js'
 import { releaseDestinationPhrase, releaseConfirmLines } from './releasePolicy.js'
 import { SET_STATUS, certificationUniverse, releaseSetStatus } from './graduation.js'
@@ -23,7 +23,10 @@ import './release-plan-summary.css'
 // readOnly: time-travel replay — publishing must act on the live estate, not a snapshot.
 export default function Publish({ run, files = [], certified = [], readOnly = false, onPublish, me,
   triage = {} }) {
-  const ready = files.filter((f) => f.compliant)
+  // Release operates on the exact document cohort chosen in Remediate. The banner below explains
+  // the restriction; this filter enforces it for selection, delivery, packaging and set status.
+  const releaseFiles = documentsInSelection(files, triage)
+  const ready = releaseFiles.filter((f) => f.compliant)
   const [done, setDone] = useState({})
   const [pubUrls, setPubUrls] = useState({})   // file -> published Drive URL, from POST /publish
   const [releaseFolder, setReleaseFolder] = useState(null)
@@ -438,7 +441,7 @@ export default function Publish({ run, files = [], certified = [], readOnly = fa
   // on screen: the certification universe, the session's released map, and externally-certified
   // files. `files` refreshes after a remediation (App refetches on acp:file-remediated), so this
   // recomputes and the graduation offer appears without a reload.
-  const setStatus = releaseSetStatus(certificationUniverse(files), done, certified)
+  const setStatus = releaseSetStatus(certificationUniverse(releaseFiles), done, certified)
   const graduate = async () => {
     if (publishing || setStatus.status !== SET_STATUS.GRADUATABLE || !setStatus.graduatable.length) return
     setPublishing(true)

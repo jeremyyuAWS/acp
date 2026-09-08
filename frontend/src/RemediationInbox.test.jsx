@@ -25,12 +25,20 @@ beforeEach(() => { try { localStorage.clear(); sessionStorage.clear() } catch {}
 
 // Interaction tests use a deterministic document sort so the queue order is stable;
 // the priority-default ordering (critical-first) is covered by remediationInboxModel.test.js.
-const render = async (props) => { await act(async () => { root.render(createElement(RemediationInbox, { initialSort: 'document', onOpenWord: () => {}, onRecheck: () => {}, ...props })) }) }
+const render = async (props) => { await act(async () => { root.render(createElement(RemediationInbox, { initialSort: 'document', initialGroup: 'issue', onOpenWord: () => {}, onRecheck: () => {}, ...props })) }) }
 const click = async (el) => { await act(async () => { el.dispatchEvent(new MouseEvent('click', { bubbles: true })) }) }
 const btnByText = (t) => [...container.querySelectorAll('button')].find((b) => b.textContent.includes(t))
 const detailHeading = () => container.querySelector('h3')?.textContent
 
 describe('RemediationInbox — workflow-status queue', () => {
+
+  it('groups the review queue by document by default', async () => {
+    await render({ queue: QUEUE, decisions: {}, initialGroup: 'document' })
+    const select = container.querySelector('select[aria-label="Group findings"]')
+    expect(select.value).toBe('document')
+    expect(container.textContent).toContain('Review queue')
+    expect(container.textContent).toContain('📄 a-brief.docx')
+  })
 
   // ── Clustered rows: many like findings, one row, one decision (PRD Tier C) ───────────────────
   // The failure this exists to stop: a production run put 265 findings into this queue, largely for
