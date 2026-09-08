@@ -47,10 +47,19 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- /*
+        INHERITED FROM podSecurityContext WITH ONLY THE UID CHANGED, which is what the note on
+        `observability.grafana.uid` always meant and what writing the three fields out here failed
+        to do. The image runs as 472 and owns its data directory as 472, so that one field cannot
+        be shared; everything else must be, and when `seccompProfile` was added for the restricted
+        Pod Security Standard this pod would otherwise have been the only one without it — failing
+        admission in a `restricted` namespace while every other workload passed.
+      */}}
+      {{- $grafanaPodSecurity := deepCopy .Values.podSecurityContext }}
+      {{- $_ := set $grafanaPodSecurity "runAsUser" (int .Values.observability.grafana.uid) }}
+      {{- $_ := set $grafanaPodSecurity "fsGroup" (int .Values.observability.grafana.uid) }}
       securityContext:
-        runAsNonRoot: true
-        runAsUser: {{ .Values.observability.grafana.uid }}
-        fsGroup: {{ .Values.observability.grafana.uid }}
+        {{- toYaml $grafanaPodSecurity | nindent 8 }}
       containers:
         - name: grafana
           image: {{ include "acp.image" (dict "root" $ "component" "grafana") | quote }}

@@ -270,9 +270,18 @@ honest options were to say something false or to say nothing, and it says nothin
 external` in v1alpha2 is the fix; inventing one here would have been a contract change smuggled in
 under a wiring fix.
 
-**What is missing.** No `topologySpreadConstraints` anywhere in the chart. No `seccompProfile`, so
-the rendered pods do not meet the restricted Pod Security Standard as written, and
-`readOnlyRootFilesystem` is `false` by default. No PersistentVolumeClaim and no volumes at all —
+**Restricted pod security, now enforced rather than described.** `runAsNonRoot`,
+`allowPrivilegeEscalation: false` and `capabilities.drop: [ALL]` were all present and the
+`seccompProfile` was not — and its absence means `Unconfined`, which is what the standard exists to
+refuse. Three quarters of a standard is not the standard. It is set now, and more usefully the
+reference cluster labels its namespace `pod-security.kubernetes.io/enforce=restricted`, so the API
+SERVER decides: a pod that does not meet it is rejected at admission and the install fails. That is
+the difference between this and a rendered-manifest test, and it is the second claim (after
+NetworkPolicy, which kind cannot enforce) that the disposable cluster turns from text into a
+decision something else makes.
+
+**What is missing.** No `topologySpreadConstraints` anywhere in the chart. `readOnlyRootFilesystem`
+is `false` by default. No PersistentVolumeClaim and no volumes at all —
 worker scratch is the node's ephemeral storage, bounded only by the limit above. The PDB renders
 only for the `high-availability` profile and only for the API tier
 (`values.py`: `"enabled": rt["profile"] == "high-availability"`; `templates/pdb.yaml`), which is a

@@ -501,6 +501,55 @@ def test_private_workers_render_a_policy_that_admits_nothing():
 
 
 @needs_helm
+def test_every_pod_meets_the_restricted_pod_security_standard():
+    """THREE QUARTERS OF A STANDARD IS NOT THE STANDARD.
+
+    `runAsNonRoot`, `allowPrivilegeEscalation: false` and `capabilities.drop: [ALL]` were all here.
+    Without a seccomp profile the pods still fail admission in a namespace enforcing `restricted`,
+    so PRD S5.B's "restricted pod security where technically possible" described three of the four
+    things it needs — and the absence of the field means `Unconfined`, which is precisely what the
+    standard exists to refuse.
+
+    Asserted on EVERY pod the chart renders, hook Jobs and dependencies included, because
+    admission does not exempt the ones that are inconvenient. The reference cluster now enforces
+    the label, so this assertion and the API server agree or the install fails.
+    """
+    manifests = render(load_example("standard-production"))
+    pods = [d for d in manifests if d["kind"] in ("Deployment", "Job")]
+    assert pods, "nothing rendered; this test would prove nothing"
+    for workload in pods:
+        spec = workload["spec"]["template"]["spec"]
+        name = workload["metadata"]["name"]
+        pod_security = spec.get("securityContext", {})
+        assert pod_security.get("seccompProfile", {}).get("type") == "RuntimeDefault", name
+        assert pod_security.get("runAsNonRoot") is True, name
+        for container in spec["containers"]:
+            container_security = container.get("securityContext", {})
+            assert container_security.get("allowPrivilegeEscalation") is False, name
+            assert container_security.get("capabilities", {}).get("drop") == ["ALL"], name
+        # `restricted` also constrains volume types. The chart renders none, which is the easiest
+        # way to satisfy that and worth asserting so a future volume has to be a deliberate choice
+        # against a named list rather than an addition nobody weighed.
+        assert not spec.get("volumes"), (
+            f"{name} gained a volume; the restricted standard allows only configMap, secret, "
+            f"emptyDir, projected, downwardAPI, PVC and ephemeral")
+
+
+@needs_helm
+def test_grafana_differs_from_the_other_pods_in_exactly_one_field():
+    """Grafana's image runs as 472 and owns its data directory as 472, so that UID cannot be
+    shared. Everything else must be — and writing the three fields out by hand is how this pod
+    would have become the only one without a seccomp profile, failing admission in a restricted
+    namespace while every other workload passed."""
+    manifests = render(load_example("standard-production"))
+    grafana = named(manifests, "Deployment", "-grafana")["spec"]["template"]["spec"]
+    api = named(manifests, "Deployment", "-api")["spec"]["template"]["spec"]
+    differing = {k for k in set(grafana["securityContext"]) | set(api["securityContext"])
+                 if grafana["securityContext"].get(k) != api["securityContext"].get(k)}
+    assert differing == {"runAsUser", "fsGroup"}, differing
+
+
+@needs_helm
 def test_tracing_gets_all_three_of_the_variables_it_needs():
     """`api/lf.py` is `_ENABLED = bool(_HOST and _PK and _SK)`.
 

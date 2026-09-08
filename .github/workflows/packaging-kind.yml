@@ -115,6 +115,14 @@ jobs:
         run: |
           set -euo pipefail
           kubectl create namespace "$NAMESPACE"
+          # ENFORCE THE RESTRICTED POD SECURITY STANDARD, so "restricted pod security where
+          # technically possible" (PRD S5.B) stops being a claim about YAML and becomes something
+          # the API server decides. A pod that does not meet it is REJECTED at admission, so the
+          # install fails rather than the chart merely looking compliant — which is the difference
+          # between this job and a rendered-manifest test.
+          kubectl label namespace "$NAMESPACE" \
+            pod-security.kubernetes.io/enforce=restricted \
+            pod-security.kubernetes.io/enforce-version=latest
           PGUSER=acp
           PGPASSWORD="$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
           kubectl -n "$NAMESPACE" create secret generic acp-reference-data \

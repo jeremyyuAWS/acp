@@ -273,6 +273,20 @@ def test_the_office_analyser_is_built_before_the_image():
     assert "spike/dotnet/AcpScan.Cli/AcpScan.Cli.csproj" in run_steps()
 
 
+def test_the_reference_namespace_enforces_restricted_pod_security():
+    """The job labels the namespace so the API SERVER decides whether the chart meets the
+    restricted Pod Security Standard, rather than a test reading the YAML the chart produced. A
+    pod that does not meet it is rejected at admission and the install fails — which is the whole
+    difference between this job and `tests/test_packaging_chart.py`."""
+    script = run_steps()
+    assert "pod-security.kubernetes.io/enforce=restricted" in script
+    assert "pod-security.kubernetes.io/enforce-version=latest" in script, (
+        "without pinning the version the standard moves under the run")
+    steps = [s.get("name", "") for s in workflow()["jobs"]["install"]["steps"]]
+    assert steps.index("Data services") < steps.index("Install"), (
+        "the namespace must carry the label before anything is installed into it")
+
+
 def test_the_cluster_is_deleted_even_when_the_job_fails():
     steps = workflow()["jobs"]["install"]["steps"]
     teardown = [s for s in steps if s.get("name") == "Delete the cluster"]
