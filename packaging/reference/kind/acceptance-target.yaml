@@ -58,15 +58,17 @@ baseUrl: ${ACP_ACCEPTANCE_BASE_URL}
 #                        not isolated to the scenario that injected it.
 #   previous-release     nothing builds a previous release for this job to upgrade from. The
 #                        chart's own upgrade path is covered by the job's upgrade step instead.
-#   backup-restore       The CHART now has both (#1822: a backup CronJob and a restore Job,
-#                        proven end to end on this same cluster), so the old reason —
-#                        "unimplemented" — is no longer why. `acpctl backup`/`restore`
-#                        are still stubs (PRD §6 step 5), and this scenario drives the
-#                        Jobs rather than the CLI, so granting it is now a real option
-#                        and a deliberate next step: it needs the Jobs enabled in the
-#                        reference document (both default off) and a run to establish
-#                        what it reports. Withheld until that run exists rather than
-#                        granted on the assumption it would pass.
+#   backup-restore       NOTHING IS UNIMPLEMENTED ANY MORE, and the reason recorded here has now
+#                        been overtaken twice: #1822 added the chart's backup CronJob and restore
+#                        Job (proven end to end on this same cluster) and #1826 implemented
+#                        `acpctl backup`/`restore` themselves, leaving only `rollback` and
+#                        `upgrade` as stubs. What is left is not a missing feature: the Jobs
+#                        default OFF in the reference document, and no run has established what
+#                        this scenario reports against them. Granting it is a deliberate next
+#                        step — enable the Jobs in the document, run it, record what it says —
+#                        and it stays withheld until that run exists rather than granted on the
+#                        assumption it would pass. Every other reason in this list is a property
+#                        of the target; this one is only that nobody has looked yet.
 capabilities:
   - api
   - kubectl
