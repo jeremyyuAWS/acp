@@ -277,8 +277,13 @@ def test_the_workflow_installs_kind_from_a_script_this_repository_owns():
     assert "scripts/install_kind.sh" in run_steps()
     steps = workflow()["jobs"]["install"]["steps"]
     third_party = {s["uses"].split("@")[0] for s in steps if "uses" in s}
+    # FIRST-PARTY `actions/*` ONLY. The point is not the count but the origin: this job builds an
+    # image and stands up a cluster, so a third-party action here runs arbitrary code next to
+    # both. `upload-artifact` was added with the acceptance step and is the same first-party,
+    # @v4-pinned family already used by ci.yml and four other workflows — adding a NON-`actions/`
+    # entry to this set is a different decision and should not be made to get a job green.
     assert third_party <= {"actions/checkout", "actions/setup-python", "actions/setup-dotnet",
-                           "actions/cache"}, third_party
+                           "actions/cache", "actions/upload-artifact"}, third_party
 
 
 def test_the_office_analyser_is_built_before_the_image():
@@ -526,3 +531,158 @@ def test_the_cluster_is_deleted_even_when_the_job_fails():
     steps = workflow()["jobs"]["install"]["steps"]
     teardown = [s for s in steps if s.get("name") == "Delete the cluster"]
     assert teardown and teardown[0].get("if") == "always()"
+
+
+# ── the acceptance suite, run against this cluster ────────────────────────────
+#
+# WHY THESE EXIST. Everything above asks whether the chart installs. The acceptance step asks
+# whether the INSTALLATION works, and it is the only place the portable suite meets a real API
+# server, real workers and a real CNI — before it existed, "the suite passes" meant "the suite
+# agrees with the fake we wrote alongside it". The tests here hold the wiring itself: that the
+# step runs against the upgraded release, that its expectation covers every scenario rather than
+# the ones somebody remembered, and that a green kind run can never read as a support claim.
+
+ACCEPTANCE_STEP = "Does the installation pass the portable acceptance suite?"
+
+
+def acceptance_target() -> dict:
+    return yaml.safe_load(
+        (PACKAGING / "reference" / "kind" / "acceptance-target.yaml").read_text(encoding="utf-8"))
+
+
+def step_named(name: str) -> dict:
+    return next(s for s in workflow()["jobs"]["install"]["steps"] if s.get("name") == name)
+
+
+def expected_outcomes() -> dict[str, str]:
+    """The EXPECTED table out of the step's own assertion script, parsed rather than duplicated.
+
+    A copy here would drift from the workflow silently, and the drift would look like agreement.
+    """
+    import ast
+    import re
+    body = re.search(r"python - <<'PY'\n(.*?)\nPY\n", step_named(ACCEPTANCE_STEP)["run"], re.S)
+    assert body, "the acceptance step's heredoc terminator is not flush-left; it would not run"
+    tree = ast.parse(body.group(1))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and getattr(node.targets[0], "id", "") == "EXPECTED":
+            return ast.literal_eval(node.value)
+    raise AssertionError("the acceptance step no longer declares an EXPECTED table")
+
+
+def test_the_acceptance_target_describes_this_cluster_and_not_another():
+    target = acceptance_target()
+    assert target["kind"] == "ACPAcceptanceTarget"
+    assert target["distribution"] == "kind"
+    assert target["namespace"] == job_env()["NAMESPACE"], (
+        "the descriptor and the job install into different namespaces, so the suite would be "
+        "asking a namespace with nothing in it")
+
+
+def test_the_acceptance_target_declares_no_release_so_it_cannot_read_as_pinned():
+    """`pinned` is DERIVED from component digests. This cluster loads a local tag with
+    `pullPolicy: Never` and has no registry, so there is no digest — and declaring one to make the
+    report look certified is the false pin PRD §5.1 exists to prevent."""
+    assert "release" not in acceptance_target(), (
+        "the kind descriptor grew a release block; if it carries component digests the report "
+        "will claim a pinned release this cluster cannot have")
+
+
+def test_the_acceptance_target_withholds_the_capabilities_this_job_cannot_honour():
+    granted = set(acceptance_target()["capabilities"])
+    assert "workload-restart" in granted, (
+        "mid-job worker restart is the MVP's hardest requirement and the cluster is disposable; "
+        "withholding it skips the one scenario `rollout status` cannot substitute for")
+    forbidden = {"fault-injection", "scale-control", "previous-release", "backup-restore"}
+    assert not (granted & forbidden), (
+        f"the descriptor grants {sorted(granted & forbidden)}. Each is withheld for a reason "
+        f"stated in the file — fault injection would take down data services shared with every "
+        f"other step in this job, and nothing here builds a previous release to upgrade from.")
+
+
+def test_the_suite_runs_against_the_upgraded_release_not_the_first_install():
+    """A suite that only ever sees a first install certifies the easy half."""
+    names = [s.get("name", "") for s in workflow()["jobs"]["install"]["steps"]]
+    assert names.index("Can it be upgraded, or only installed?") < names.index(ACCEPTANCE_STEP)
+    assert names.index(ACCEPTANCE_STEP) < names.index("Delete the cluster")
+
+
+def test_the_expectation_covers_every_registered_scenario():
+    """THE GUARD WITH THE MOST TEETH. A scenario added to the suite and not to this table would
+    run on the reference cluster and have its outcome ignored — and the step would still pass,
+    because a comparison over a smaller set is a comparison that succeeded."""
+    import sys
+    if str(PACKAGING / "acceptance") not in sys.path:
+        sys.path.insert(0, str(PACKAGING / "acceptance"))
+    from acp_acceptance.scenarios import REGISTRY
+    assert set(expected_outcomes()) == set(REGISTRY), (
+        f"the acceptance step's EXPECTED table and the scenario registry disagree. "
+        f"only in the table: {sorted(set(expected_outcomes()) - set(REGISTRY))}; "
+        f"only in the registry: {sorted(set(REGISTRY) - set(expected_outcomes()))}")
+
+
+def test_every_expected_outcome_is_a_state_the_report_can_carry():
+    assert set(expected_outcomes().values()) <= {"pass", "fail", "skip", "unknown"}
+
+
+def test_no_scenario_is_expected_to_fail():
+    """`fail` here would mean shipping a known defect with a test that asserts it stays. An
+    outcome that cannot be reached is `unknown` or `skip`; a real failure gets fixed."""
+    failing = sorted(k for k, v in expected_outcomes().items() if v == "fail")
+    assert not failing, (
+        f"{failing} are expected to FAIL on the reference cluster. Fix them, or establish that "
+        f"the question cannot be asked here and record that as `unknown` with the reason.")
+
+
+def test_the_scenarios_expected_to_skip_are_exactly_the_ones_without_capabilities():
+    """A skip must come from a withheld capability, not from a scenario quietly not running."""
+    import sys
+    if str(PACKAGING / "acceptance") not in sys.path:
+        sys.path.insert(0, str(PACKAGING / "acceptance"))
+    from acp_acceptance.scenarios import REGISTRY
+    granted = set(acceptance_target()["capabilities"])
+    derived = {sid for sid, scn in REGISTRY.items() if not scn.requires <= granted}
+    declared = {k for k, v in expected_outcomes().items() if v == "skip"}
+    assert declared == derived, (
+        f"the table expects {sorted(declared)} to skip, but the descriptor's capabilities imply "
+        f"{sorted(derived)}. A scenario expected to skip for any other reason is one that stopped "
+        f"measuring something without anybody deciding to.")
+
+
+def test_a_green_kind_run_can_never_read_as_a_support_claim():
+    """PRD §7/§9: `verified` needs acceptance evidence from a target somebody will certify. kind
+    is not one, so the step asserts the report refuses both claims — otherwise a green job is one
+    copy-paste away from being a status update that says MVP eligible."""
+    run = step_named(ACCEPTANCE_STEP)["run"]
+    assert 'report["synthetic"] is False' in run, (
+        "nothing asserts the run actually met the cluster; a fake-backend run would pass this "
+        "step with ten green scenarios")
+    assert 'claim["mvpEligible"]' in run and 'claim["supportedEligible"]' in run
+
+
+def test_the_acceptance_report_is_kept_even_when_the_step_fails():
+    upload = step_named("Keep the acceptance report")
+    assert upload["if"] == "always()", (
+        "a failed acceptance step whose report was thrown away costs a whole run to reproduce, "
+        "and the report is the entire output of the step")
+    assert upload["uses"].startswith("actions/upload-artifact@")
+
+
+def test_the_image_is_stamped_so_the_installation_can_name_itself():
+    """`api-readiness` fails on `version_stamped: false`, and the Dockerfile defaults
+    BUILD_VERSION to `dev` — which is the exact value /healthz reads as unstamped. A bare
+    `docker build` therefore produces an image no acceptance run can pass, and PRD §5.1 requires
+    build version metadata on every image anyway."""
+    build = step_named("Build the application image")["run"]
+    assert "--build-arg BUILD_VERSION=" in build
+    assert "--build-arg BUILD_SHA=" in build
+    assert "dev" not in build.split("BUILD_VERSION=")[1].split("\n")[0], (
+        "BUILD_VERSION is stamped as `dev`, which /healthz reports as version_stamped: false")
+
+
+def test_the_port_forward_is_proved_usable_before_the_suite_runs():
+    """A suite pointed at a port that never opened produces ten `unknown` results whose cause is
+    a race in this step, not a fact about the target."""
+    run = step_named(ACCEPTANCE_STEP)["run"]
+    assert "port-forward" in run and "/healthz" in run
+    assert "the port-forward never became usable" in run

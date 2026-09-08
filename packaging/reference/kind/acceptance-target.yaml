@@ -1,0 +1,66 @@
+# The reference cluster, described as an acceptance TARGET.
+#
+# WHAT THIS IS FOR. `packaging-kind.yml` already installs the chart on a disposable kind cluster,
+# upgrades it, and asserts that the network policies are enforced rather than merely accepted.
+# Those are questions about the PACKAGING. This descriptor points the portable acceptance suite —
+# the questions about the INSTALLATION — at the same cluster, so both are answered by one run.
+#
+# IT CERTIFIES NOTHING, AND THAT IS DELIBERATE. kind is not a supported target and never will be:
+# it is a single-node cluster with a locally-built image and no registry, so it cannot demonstrate
+# the digest pinning PRD §5.1 requires (there is no digest to pin), it has no previous release to
+# upgrade from, and its Postgres and Redis are a two-Deployment convenience, not managed services.
+# What it CAN do is run the suite against a real API server, real workers and a real CNI on every
+# packaging PR, which is the difference between a suite that is written and a suite that works.
+# PRD §7/§9 keep every target at `planned` until an acceptance run happens on a target somebody is
+# prepared to certify; this is not that run, and the report it produces says so by carrying no
+# pinned release.
+kind: ACPAcceptanceTarget
+
+name: acp-reference-kind
+platform: kubernetes
+distribution: kind
+namespace: acp-kind
+releaseName: acp
+
+# The port-forward `packaging-kind.yml` opens. An unset variable is an ERROR rather than an empty
+# string, so a step that forgets to export it fails loudly instead of producing a page of
+# `unknown` results whose cause is one missing line.
+baseUrl: ${ACP_ACCEPTANCE_BASE_URL}
+
+# NO `kubeconfigContext`, ON PURPOSE. The job runs with kind's context already current, so kubectl
+# needs no `--context`; and the field is one of the values `assert_no_secrets` greps the finished
+# report for, because a context routinely names a customer's cluster and subscription. Not setting
+# what we do not need is cheaper than redacting it.
+
+# NO `release:` BLOCK. `pinned` is DERIVED from component digests, never declared, and this
+# cluster runs `acp-app:ci` — a local tag loaded straight into containerd with
+# `image.pullPolicy: Never`. There is no digest, so the report will say the release is not pinned.
+# That is the true statement about this target, and inventing a digest to make it look certified
+# is exactly the false pin PRD §5.1 exists to prevent.
+
+# WHAT THE SUITE MAY DO HERE, and every omission below is a scenario that will SKIP with a reason
+# in the report rather than quietly not running:
+#
+#   api, kubectl, helm   read the installation and drive it through its own surfaces
+#   workload-restart     scenario 6 restarts each worker tier mid-job. Granted because the cluster
+#                        is thrown away at the end of the job and mid-job restart is the MVP's
+#                        hardest requirement — a tier that loses work on restart is the failure
+#                        `rollout status` cannot see.
+#
+# DELIBERATELY WITHHELD:
+#
+#   scale-control        scenario 8 scales the assess tier +2 on a single-node runner. It is a
+#                        `supported`-claim scenario and its finding needs the artifact inventory
+#                        that no build serves yet, so granting it would spend runner memory to
+#                        reach `unknown`.
+#   fault-injection      scenario 7 would scale this cluster's Postgres and Redis to zero. They
+#                        are shared with every other step in the job, so a fault injected here is
+#                        not isolated to the scenario that injected it.
+#   previous-release     nothing builds a previous release for this job to upgrade from. The
+#                        chart's own upgrade path is covered by the job's upgrade step instead.
+#   backup-restore       `acpctl backup` and `restore` are unimplemented (PRD §6 step 5).
+capabilities:
+  - api
+  - kubectl
+  - helm
+  - workload-restart

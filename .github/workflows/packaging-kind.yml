@@ -94,7 +94,23 @@ jobs:
         # From-scratch bases (mirror.gcr.io node:20-slim and python:3.12-slim, the Dockerfile's own
         # defaults) — no private registry is involved anywhere in this job. redeploy.sh's prebuilt
         # acp-base-* images are an ACR cache optimisation and deliberately not used here.
-        run: docker build -f deploy/public/Dockerfile -t "$IMAGE" .
+        #
+        # STAMPED, BECAUSE AN UNSTAMPED IMAGE CANNOT SAY WHAT IT IS. `BUILD_VERSION` defaults to
+        # `dev` in the Dockerfile and `/healthz` reports `version_stamped: false` for exactly that
+        # value — the signal it uses to refuse an image nobody can identify. PRD §5.1 requires
+        # every image to expose build version metadata, so a reference cluster running an image
+        # that cannot name itself is testing something no release resembles, and the acceptance
+        # suite's first scenario would fail on it correctly and uselessly.
+        #
+        # This does NOT change the image TAG, so `acpctl status`'s expected `release.version` drift
+        # below is unaffected: that check reads the `app.kubernetes.io/version` label, which comes
+        # from the tag, not from these build arguments.
+        run: |
+          docker build -f deploy/public/Dockerfile -t "$IMAGE" \
+            --build-arg BUILD_VERSION="0.0.0-kind.${GITHUB_RUN_NUMBER}" \
+            --build-arg BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --build-arg BUILD_SHA="$GITHUB_SHA" \
+            .
 
       # ── the cluster ────────────────────────────────────────────────────────
       - name: Install helm and kind
@@ -569,6 +585,144 @@ jobs:
           kubectl -n "$NAMESPACE" get pods -l app.kubernetes.io/component=api \
             -o jsonpath='{.items[*].metadata.annotations.upgrade-probe}' \
             | grep -q "$GITHUB_RUN_ID"
+
+      - name: Does the installation pass the portable acceptance suite?
+        # THE QUESTIONS THIS JOB DID NOT ASK. Everything above is about the PACKAGING: does the
+        # chart render, install, upgrade, and are its policies enforced. The acceptance suite asks
+        # about the INSTALLATION — do workers claim queued work, does live progress reach a
+        # client, does a tier restarted mid-job lose anything — and PRD §7/§9 make its report the
+        # only thing that can move a target off `planned`. Until this step existed the suite had
+        # never run against an API server, and "the suite passes" meant "the suite agrees with the
+        # fake we wrote alongside it".
+        #
+        # RUN LAST, AGAINST THE UPGRADED RELEASE, because that is the installation an operator
+        # ends up with. A suite that only ever sees a first install certifies the easy half.
+        #
+        # THIS DOES NOT CERTIFY kind. The descriptor explains why at length: no registry, so no
+        # digest to pin; no previous release; data services that are a convenience rather than
+        # managed. The report it writes carries an unpinned release and grants four capabilities
+        # of eight, so four scenarios SKIP with a reason. That is the honest shape of a run on a
+        # target nobody intends to support, and it is still the only place the suite meets a real
+        # cluster on every packaging PR.
+        env:
+          ACP_ACCEPTANCE_BASE_URL: http://127.0.0.1:8078
+        run: |
+          set -euo pipefail
+          kubectl -n "$NAMESPACE" port-forward svc/acp-api 8078:80 &
+          PF=$!
+          trap 'kill $PF 2>/dev/null || true' EXIT
+          # WAIT FOR THE FORWARD, AND FAIL IF IT NEVER COMES UP. `port-forward` backgrounds
+          # instantly and takes a moment to bind; running the suite against a closed port produces
+          # ten `unknown` results whose cause is a race, not the target — which is precisely the
+          # kind of report this suite exists to not produce.
+          for _ in $(seq 1 30); do
+            if curl -fsS --max-time 5 "$ACP_ACCEPTANCE_BASE_URL/healthz" >/dev/null 2>&1; then
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS --max-time 5 "$ACP_ACCEPTANCE_BASE_URL/healthz" \
+            || { echo "the port-forward never became usable; the run below would establish nothing"; exit 1; }
+
+          export PYTHONPATH=packaging/acceptance
+          # The suite's exit codes are 0 pass / 1 mandatory failure / 2 could-not-run, and the
+          # assertion below reads the REPORT rather than the code: on this target some scenarios
+          # cannot pass for reasons that are known, named and not defects, so `exit 2` is the
+          # expected outcome and a bare `set -e` would fail the job on it.
+          set +e
+          python -m acp_acceptance.run \
+            --target packaging/reference/kind/acceptance-target.yaml \
+            --claim mvp \
+            --out /tmp/acceptance/report.json
+          SUITE_EXIT=$?
+          set -e
+          echo "acceptance suite exit: $SUITE_EXIT"
+
+          python - <<'PY'
+          import json, sys
+
+          # WHAT THIS CLUSTER IS EXPECTED TO REPORT, AND WHY EACH ONE. Same posture as the doctor
+          # step above: the expected outcomes must all be present and nothing else may differ, so
+          # a scenario that stops firing fails this step. An expectation is a claim about the
+          # target and gets an explanation, not a state on its own.
+          EXPECTED = {
+              # The installation answers, and names the build it was made from — which is only
+              # true because the image build above stamps BUILD_VERSION.
+              "api-readiness": "pass",
+              # All three tiers registered and are heartbeating. The job asserts the same fact
+              # against /readyz directly a few steps up; this asserts it through the suite, which
+              # is what a certification run would read.
+              "worker-registration": "pass",
+              # Queued work is claimed by a worker and live progress reaches a client.
+              "queue-and-progress": "pass",
+              # UNKNOWN, AND NOT A DEFECT IN THE CLUSTER. `/scans/{sid}/artifacts` is a PRD §12
+              # requirement no build serves yet, so the question "does every authoritative output
+              # live in durable storage" cannot be asked here at all. The suite reports that as
+              # `unknown` rather than as a pass, which is the whole reason it has four states.
+              "fixture-workflow": "unknown",
+              # Same: `/admin/audit-events` and `/admin/support-bundle` (PRD §13) are unserved.
+              "audit-and-diagnostics": "unknown",
+              # The restart itself happens — three tiers, mid-job — but the finding it exists for
+              # (a duplicate authoritative output) is read from the artifact inventory above.
+              "worker-restart": "unknown",
+              # The four `supported`-claim scenarios. SKIPPED because the descriptor withholds
+              # their capabilities, each for a reason it states; a skip is not a pass and costs
+              # the claim, which is correct — this target is not a candidate for one.
+              "dependency-degradation": "skip",
+              "scale-updown": "skip",
+              "upgrade-from-previous": "skip",
+              "backup-restore": "skip",
+          }
+
+          report = json.load(open("/tmp/acceptance/report.json"))
+
+          # THE REPORT MUST NOT CLAIM THIS RUN CERTIFIES ANYTHING. `synthetic` false says it met a
+          # real target; both eligibility booleans false say it is still not evidence for a claim.
+          # Asserting both is what stops a green kind job from being pasted into a status update
+          # as "MVP eligible".
+          assert report["synthetic"] is False, (
+              "the suite reported this run as synthetic — it ran against the fake backend, not "
+              "the cluster, and establishes nothing")
+          claim = report["supportClaim"]
+          assert not claim["mvpEligible"] and not claim["supportedEligible"], (
+              f"a kind run reported itself eligible for a support claim: {claim}")
+
+          found = {s["id"]: s["state"] for s in report["scenarios"]}
+          if found != EXPECTED:
+              differing = {k: (EXPECTED.get(k), found.get(k))
+                           for k in sorted(set(EXPECTED) | set(found))
+                           if EXPECTED.get(k) != found.get(k)}
+              print("the acceptance suite's outcomes on the reference cluster have changed.",
+                    file=sys.stderr)
+              print("  id: (expected, found)", file=sys.stderr)
+              for k, v in differing.items():
+                  print(f"    {k}: {v}", file=sys.stderr)
+              print("", file=sys.stderr)
+              for entry in report["scenarios"]:
+                  if entry["id"] in differing:
+                      print(f"  {entry['id']}: {entry['detail']}", file=sys.stderr)
+              print("\nA scenario that started passing is as much a change as one that stopped: "
+                    "update this table and packaging/docs/kubernetes-mvp-gap-report.md together, "
+                    "or fix what regressed. Do NOT widen the expectation to make a failure fit.",
+                    file=sys.stderr)
+              sys.exit(1)
+
+          print("the reference cluster reports exactly the outcomes it is known to produce:")
+          for entry in report["scenarios"]:
+              print(f"  [{entry['state']:>7}] {entry['id']}: {entry['detail']}")
+          PY
+
+      - name: Keep the acceptance report
+        # ALWAYS, INCLUDING ON FAILURE, because the report is the entire point: a failed step whose
+        # evidence was thrown away costs a whole run to reproduce. It carries no credential — the
+        # target block is an allow-list of five fields and the assembled report is grepped for
+        # every value the descriptor supplied before it is written at all.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance-report
+          path: /tmp/acceptance/
+          if-no-files-found: warn
 
       # ── evidence, and then nothing survives ────────────────────────────────
       - name: What the cluster looked like
