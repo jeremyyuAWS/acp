@@ -22,10 +22,14 @@ AI work, change accepted permissions, raise a cap, or apply a suggestion.
   charges do not include unrecognized operation formats; overall charges do.
 - Provider/model identities come from exact saved proposal `model_call_id` links
   to `ai_calls`, joined through this batch's finding and review-item records and
-  checked against both scan and file. Repeated references count once. Current
+  checked against both scan and file. Repeated references count once. Because
+  review proposals are mutable and may be inherited, these identities are labeled
+  current scan proposal provenance, not a model breakdown for the selected run.
+  Historical batches receive no model list. Replacing proposals must not relabel
+  an older run. Current
   provider settings and pricing URLs are never used to guess historical models.
-  Recorded proposal-call costs are an overlapping subset, not added to the run
-  ledger. Legacy cloud calls whose cost defaulted to zero show unavailable.
+  Recorded proposal-call costs may belong to other runs and must not be added
+  to the selected run ledger. Legacy cloud calls whose cost defaulted to zero show unavailable.
 
 ## Evidence still unavailable
 

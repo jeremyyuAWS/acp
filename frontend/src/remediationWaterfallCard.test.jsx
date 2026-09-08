@@ -94,5 +94,5 @@ it('shows the recorded provider and exact model and preserves unknown costs', as
   expect(container.querySelector('.wf-models').textContent).toContain('anthropic · recorded-model-20260908')
   expect(container.querySelector('.wf-models').textContent).toContain('$0.000042')
   expect(container.querySelector('.wf-models').textContent).toContain('Recorded call cost: Unavailable')
-  expect(container.textContent).toContain('not additional to the run charges')
+  expect(container.textContent).toContain('not a model breakdown for the selected run')
 })

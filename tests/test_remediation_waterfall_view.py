@@ -111,3 +111,28 @@ def test_actual_models_require_exact_proposal_call_links_and_do_not_double_count
     ]
     assert 'PRIVATE CONTENT' not in json.dumps(view)
     assert read_waterfall(s, 'owner', 'scan', 'older-batch')['models'] == []
+
+
+def test_new_proposals_cannot_relabel_a_historical_run(isolated_store):
+    s = isolated_store
+    batch = seed(s)
+    with s._db.cursor() as cur:
+        s._db.execute(cur, 'INSERT INTO ai_calls(id,scan_id,file,provider,model,cost_usd) VALUES(%s,%s,%s,%s,%s,%s)', ('old-call', 'scan', 'a.html', 'anthropic', 'old-model', 0.1))
+        s._db.execute(cur, 'INSERT INTO hitl_queue(id,scan_id,file,proposals) VALUES(%s,%s,%s,%s)', ('review', 'scan', 'a.html', json.dumps([{'model_call_id': 'old-call'}])))
+        s._db.execute(cur, 'INSERT INTO finding_disposition(scan_id,batch_id,finding_id,file,review_item_id) VALUES(%s,%s,%s,%s,%s)', ('scan', batch, 'finding', 'a.html', 'review'))
+    assert read_waterfall(s, 'owner', 'scan', batch)['models'][0]['model'] == 'old-model'
+    with s._db.cursor() as cur:
+        s._db.execute(cur, "UPDATE jobs SET status='done' WHERE batch_id=%s", (batch,))
+    new = s.enqueue_stage_batch('scan', 'remediate', 'remediate_file', [
+        {'owner': 'owner', 'scan_id': 'scan', 'file': 'a.html',
+         'remediation_impact_policy': {'ai': 1, 'rule_based': 2, 'ai_budget_usd': '5.00'}}],
+        snapshot_id='snapshot-2', request_fingerprint='fixture-2')
+    with s._db.cursor() as cur:
+        s._db.execute(cur, 'UPDATE jobs SET created_at=%s WHERE batch_id=%s', ('2099-01-01T00:00:00Z', new['batch_id']))
+        s._db.execute(cur, 'INSERT INTO ai_calls(id,scan_id,file,provider,model,cost_usd) VALUES(%s,%s,%s,%s,%s,%s)', ('new-call', 'scan', 'a.html', 'openai', 'new-model', 0.2))
+        s._db.execute(cur, 'UPDATE hitl_queue SET proposals=%s WHERE id=%s', (json.dumps([{'model_call_id': 'new-call'}]), 'review'))
+        s._db.execute(cur, 'INSERT INTO finding_disposition(scan_id,batch_id,finding_id,file,review_item_id) VALUES(%s,%s,%s,%s,%s)', ('scan', new['batch_id'], 'finding', 'a.html', 'review'))
+    assert read_waterfall(s, 'owner', 'scan', batch)['models'] == []
+    current = read_waterfall(s, 'owner', 'scan', new['batch_id'])
+    assert current['models'][0]['model'] == 'new-model'
+    assert current['proposal_model_scope'] == 'current_scan_proposals'

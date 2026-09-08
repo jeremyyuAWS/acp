@@ -36,6 +36,7 @@ def read_waterfall(store, owner, scan_id, batch_id):
               'available': bool(rows), 'contribution_available': False,
               'contribution_reason': 'AI step breakdown unavailable for this run. Recorded calls are not evidence of usable suggestions.',
               'reviewer_available': False,
+              'proposal_model_scope': 'current_scan_proposals',
               'models': _proposal_models(store, scan_id, batch_id)}
     if rows:
         policy = json.loads(rows[0]['policy_json'])
@@ -82,16 +83,21 @@ def read_waterfall(store, owner, scan_id, batch_id):
 
 
 def _proposal_models(store, scan_id, batch_id):
-    """Actual call identities referenced by current proposals for this batch's findings.
+    """Actual call identities behind the current scan proposals, not run attribution.
 
     This is deliberately not a tier attribution or a claim that every attempt is
-    linked. Never guess from today's configuration, the pricing URL, or call time.
+    linked. Queue proposals are mutable and can be inherited across runs. The
+    caller labels this separately from run activity/cost and older batches receive
+    no proposal models. Never guess from configuration, pricing URL, or call time.
     """
     db = store._db
     with db.cursor() as cur:
         db.execute(cur, """SELECT DISTINCT h.id,h.file,h.proposals FROM hitl_queue h
             JOIN finding_disposition d ON d.review_item_id=h.id AND d.scan_id=h.scan_id
-                AND d.file=h.file WHERE d.scan_id=%s AND d.batch_id=%s""", (scan_id, batch_id))
+                AND d.file=h.file WHERE d.scan_id=%s AND d.batch_id=%s
+                AND d.batch_id=(SELECT batch_id FROM jobs WHERE scan_id=%s
+                    AND type='remediate_file' ORDER BY created_at DESC,id DESC LIMIT 1)""",
+                   (scan_id, batch_id, scan_id))
         linked = {}
         for row in db.fetchall(cur):
             try:
