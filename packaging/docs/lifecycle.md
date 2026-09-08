@@ -100,6 +100,21 @@ least useful thing available at that moment.
 
 ## `backup`
 
+> **Enabling the backup can make `acpctl install` roll the release back, and the error will not
+> mention backups.** `helm --wait` waits for every PVC to be **Bound**. The backup claim is mounted
+> by exactly one pod — the backup Job — which does not exist until the CronJob fires, so on a
+> StorageClass with `volumeBindingMode: WaitForFirstConsumer` (kind's local-path, AWS gp3, Azure's
+> managed-csi default) it stays Pending. `install` passes `--wait --atomic`, so the release rolls
+> back with `context deadline exceeded`. Measured on the reference cluster, run `34241201489`.
+>
+> Point `backup.storage.existingClaim` at a claim that is already Bound, or give
+> `backup.storage.storageClassName` a class with `volumeBindingMode: Immediate`. A claim with no
+> consumer has nowhere to bind; no amount of chart templating changes that.
+>
+> **Not yet checked by `doctor` or refused by `install`**, and it should be: both already read
+> StorageClasses, so reading `volumeBindingMode` and warning when `backup.enabled` meets a
+> WaitForFirstConsumer default is a small, named follow-up rather than a gap to leave implicit.
+
 One command: run the chart's backup CronJob now, wait, and read back what it produced.
 
 ```

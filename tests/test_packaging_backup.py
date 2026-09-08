@@ -630,6 +630,31 @@ def test_the_rendered_job_name_is_where_this_module_looks_for_it():
     assert job_name_in(proc.stdout) == yaml.safe_load(proc.stdout)["metadata"]["name"]
 
 
+def test_the_wait_for_first_consumer_hazard_is_written_down_where_it_bites():
+    """A FAILURE THIS REPOSITORY HAS ALREADY PAID FOR ONCE, and it names nothing about backups.
+
+    `helm --wait` waits for every PVC to reach Bound. The backup claim is mounted by exactly one
+    pod — the backup Job — which does not exist until the CronJob fires, so on a StorageClass with
+    `volumeBindingMode: WaitForFirstConsumer` (kind's local-path, AWS gp3, Azure's managed-csi
+    default) it stays Pending. The reference cluster spent ten minutes on it and then reported
+    `context deadline exceeded` (run 34241201489). `acpctl install` passes `--wait --atomic`, so on
+    such a cluster the release ROLLS BACK.
+
+    Nothing renderable can assert this — it is a property of Kubernetes volume binding, not of the
+    manifest — so what is asserted is that the warning is still in the two places an operator
+    meets it: beside the value that creates the claim, and in the lifecycle doc. A silently
+    deleted warning is how the next person spends the same ten minutes.
+    """
+    values = (PACKAGING / "chart" / "acp" / "values.yaml").read_text(encoding="utf-8")
+    lifecycle = (PACKAGING / "docs" / "lifecycle.md").read_text(encoding="utf-8")
+    for name, text in (("values.yaml", values), ("lifecycle.md", lifecycle)):
+        assert "WaitForFirstConsumer" in text, name
+        assert "existingClaim" in text, name
+        # The escape hatch, not just the diagnosis. A warning that does not say what to do
+        # instead sends the reader to disable the backup.
+        assert "Immediate" in text, name
+
+
 def test_the_docs_describe_both_commands():
     """lifecycle.md is where an operator reads what these do and what has not been proven about
     them. A command that ships without a line there is one whose limits are only in a docstring."""

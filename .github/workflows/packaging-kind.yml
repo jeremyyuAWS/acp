@@ -810,6 +810,22 @@ jobs:
           if-no-files-found: warn
 
       - name: Is the backup restorable, or only written?
+        # RUNS EVEN WHEN AN EARLIER STEP FAILED, AND THAT IS NOT LENIENCY. This step is
+        # independent of the acceptance suite above: it needs an installed release and a
+        # database, which the Install and rollout steps provide, and nothing the suite does or
+        # fails to do changes what it measures. Left gated on the default `success()`, an
+        # unrelated red step SKIPS it — and a check that never runs reports nothing while the job
+        # is already red for another reason, so nobody notices it never ran.
+        #
+        # That is not hypothetical. Runs 34246312816 and 34247813128 both skipped this step
+        # because the acceptance suite failed on `fixture-workflow` first, and on the second of
+        # those the whole point of the commit was a fix to THIS step that consequently went
+        # unproven.
+        #
+        # `!cancelled()` rather than `always()`, so a cancelled run stops here like everything
+        # else. If the install genuinely did not happen, the `helm upgrade` below fails
+        # immediately and says so, which is a better failure than a silent skip.
+        if: ${{ !cancelled() }}
         # PRD S16: "A backup is not considered healthy until a restore test has succeeded within
         # the customer-defined interval." A CronJob that writes dumps nobody ever reads is exactly
         # the thing an installation believes in until the incident, so the restore is the half
@@ -853,6 +869,25 @@ jobs:
           # Turn the backup on. Everything the upgrade step passes, plus the two decisions the
           # chart refuses to make: a schedule (that will not fire inside this run — the job below
           # is created from the CronJob by hand) and a retention.
+          #
+          # NO `--wait` ON THIS ONE, AND THE REASON IS A REAL PROPERTY OF THE CHART RATHER THAN A
+          # CI quirk. `helm --wait` waits for PersistentVolumeClaims to reach Bound. This upgrade
+          # adds `<release>-backups`, and on a StorageClass whose volumeBindingMode is
+          # WaitForFirstConsumer — kind's local-path, AWS gp3, and Azure's managed-csi default —
+          # a claim stays Pending until a POD MOUNTS IT. The only pod that ever mounts this one is
+          # the backup Job, which does not exist until the CronJob fires or `acpctl backup`
+          # creates one. So `--wait` blocks for its whole timeout and then fails:
+          #
+          #   Error: UPGRADE FAILED: context deadline exceeded
+          #   persistentvolumeclaim/acp-backups  waiting for first consumer to be created before binding
+          #
+          # measured on run 34241201489, ten minutes of it. Nothing here needs the wait anyway:
+          # the pod template is unchanged from the previous step, so no rollout happens, and the
+          # next command talks to Postgres rather than to anything this upgrade touched.
+          #
+          # THE SAME TRAP IS LIVE FOR OPERATORS and is written up in values.yaml beside
+          # `backup.storage` and in docs/lifecycle.md — `acpctl install` passes `--wait --atomic`,
+          # so on such a cluster enabling the backup would roll the whole release back.
           helm upgrade acp packaging/chart/acp \
             --namespace "$NAMESPACE" \
             -f /tmp/values.yaml \
@@ -867,7 +902,10 @@ jobs:
             --set backup.schedule='0 2 * * *' \
             --set backup.retentionDays=7 \
             --set backup.storage.size=1Gi \
-            --wait --timeout 10m
+            --timeout 10m
+          # The CronJob is what the next commands need, so assert it exists rather than inferring
+          # it from an exit status that no longer waits for anything.
+          kubectl -n "$NAMESPACE" get cronjob acp-backup -o name
 
           # The row the backup must carry and the restore must bring back. A table of its own
           # rather than an application row, because what is being tested is that the dump/restore
