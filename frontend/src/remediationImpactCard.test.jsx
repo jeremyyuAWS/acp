@@ -199,6 +199,10 @@ describe('RemediationImpactCard', () => {
     const { container } = await mount({ renderAssessment })
     const tile = name => [...container.querySelectorAll('.assesssummary button')].find(node => node.textContent.startsWith(name))
     const historicTotal = () => [...container.querySelectorAll('.assesssummary div')].find(node => node.firstElementChild?.textContent === 'Total findings')?.textContent
+    const historicalLabels = ['Documents assessed', 'Documents needing attention', 'Total findings', 'Findings by severity', 'Unable to assess']
+    const historicalTiles = () => historicalLabels.map(label => [...container.querySelectorAll('.assesssummary div')].find(node => node.firstElementChild?.textContent === label)?.textContent)
+    const historicalBefore = historicalTiles()
+    expect(historicalBefore.every(Boolean)).toBe(true)
     const before = historicTotal()
     expect(before).toContain('1')
     expect(container.querySelector('.remediation-impact__settings .remediation-plan-choices')).not.toBeNull()
@@ -217,10 +221,24 @@ describe('RemediationImpactCard', () => {
     await act(async () => button(container, 'C.docx').click())
     expect(container.querySelector('[role=dialog]').textContent).toContain('human judgment')
     await act(async () => button(container, 'Close details').click())
+    getRemediationImpact.mockImplementationOnce(async (_id, policy) => {
+      const next = result(policy)
+      next.lanes.review.findings = 6
+      next.file_outlook.could_complete.files = 0
+      next.file_outlook.human_work.files = 3
+      return next
+    })
     await act(async () => button(container, 'Review first').click())
     expect(tile('Auto-fix available').textContent).toContain('0')
     expect(tile('Auto-fix available').querySelector('.forecast-delta').textContent).toBe('−4')
     expect(historicTotal()).toBe(before)
+    expect(historicalTiles()).toEqual(historicalBefore)
+    expect(tile('Human review required').querySelector('.forecast-delta').textContent).toBe('+4')
+    expect(tile('Human review required').textContent).toContain('7')
+    const routes = [...container.querySelectorAll('.remediation-impact__routes button strong')].map(n => n.textContent)
+    expect(routes).toEqual(['0', '6', '1', '0'])
+    const outlook = [...container.querySelectorAll('.remediation-impact__outlooks button strong')].map(n => n.textContent)
+    expect(outlook).toEqual(['0', '3', '0', '0'])
   })
   it('has no automated accessibility violations', async () => {
     const { container } = await mount()
