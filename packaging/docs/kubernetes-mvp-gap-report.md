@@ -638,8 +638,8 @@ rendered-manifest test was green on.
 
 WHAT IT STILL DOES NOT ESTABLISH, and none of it should be read as `verified` for a customer:
 `kindest/node:v1.31.4` is a version this chart RUNS on, not one anything is supported on. One node
-means NetworkPolicy is accepted and enforced by nothing, zone spreading has one domain, and the
-PodDisruptionBudget is never tested by a drain. No document has been scanned, assessed or
+means zone spreading has one domain, the PodDisruptionBudget is never tested by a drain, and
+NetworkPolicy — enforced by Calico since 2026-09-08 — has no cross-node path to exercise. No document has been scanned, assessed or
 remediated on it, so nothing here is evidence about the application doing its work — that is
 workstream C. And the images are built from the checkout under a local tag, so none of this is
 evidence about a released artifact.

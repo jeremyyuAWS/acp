@@ -12,11 +12,18 @@
 # the version the packaging docs mean by "the reference Kubernetes version", and moving it is a
 # deliberate change with an acceptance run behind it, not a bump.
 #
-# PINNED BY TAG, NOT BY DIGEST, and the difference is worth one line. Everything else this
-# packaging work pins is pinned by digest, for reasons PRD S5.1 states — so a tag here looks like
-# an oversight and is not. Nobody in this repository has run this cluster yet; the digest belongs
-# here once a run has recorded which one it pulled, and inventing one now would be a pin to bytes
-# nobody has seen, which is the exact failure the digest rule exists to prevent.
+# PINNED BY TAG AND DIGEST, and the digest arrived the way this comment said it should. It used to
+# read "nobody in this repository has run this cluster yet; the digest belongs here once a run has
+# recorded which one it pulled, and inventing one now would be a pin to bytes nobody has seen,
+# which is the exact failure the digest rule exists to prevent." Runs have recorded it now — the
+# create step prints `docker image inspect`'s RepoDigest on every run — so this is a pin to bytes
+# that were observed rather than looked up:
+#
+#     node image digest: kindest/node@sha256:2cb39f7295fe7eafee0842b1052a599a4fb0f8bcf3f83d96c7f4864c357c6c30
+#     (run 34195098934, 2026-09-08, the first fully green run with an enforcing CNI)
+#
+# The tag stays alongside it because kind accepts both and the tag is what a reader recognises;
+# the digest is what decides which bytes run.
 # NO DEFAULT CNI, BECAUSE THE DEFAULT ONE CANNOT ENFORCE THE THING THIS CHART RENDERS.
 # kind ships kindnet, which accepts NetworkPolicy objects and implements none of them — the exact
 # failure `templates/networkpolicy.yaml` warns about in its own header: "Kubernetes silently
@@ -41,4 +48,4 @@ networking:
   podSubnet: "192.168.0.0/16"
 nodes:
   - role: control-plane
-    image: kindest/node:v1.31.4
+    image: kindest/node:v1.31.4@sha256:2cb39f7295fe7eafee0842b1052a599a4fb0f8bcf3f83d96c7f4864c357c6c30

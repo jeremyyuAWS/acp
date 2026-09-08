@@ -245,13 +245,30 @@ def test_the_workflow_loads_the_image_it_installs():
     assert ":" in env["IMAGE"], "the tag is what pullPolicy Never resolves against"
 
 
-def test_the_cluster_pins_a_kubernetes_version():
-    """A reference cluster whose version nobody can name is not a reference. `kindest/node:latest`
-    would move the version under the run."""
+def test_the_cluster_pins_a_kubernetes_version_and_the_bytes_behind_it():
+    """A reference cluster whose version nobody can name is not a reference, and `kindest/node:v…`
+    alone names a version rather than an image: a tag is a mutable pointer, so two runs a month
+    apart can report the same Kubernetes version and have run different bytes.
+
+    The digest was NOT here originally, deliberately — inventing one before any run had recorded
+    which bytes it pulled would have been a pin to bytes nobody had seen, which is the failure the
+    digest rule exists to prevent. The create step prints `docker image inspect`'s RepoDigest on
+    every run, so this one came from a run.
+
+    Both halves are asserted because they answer different questions: the tag is what a reader
+    recognises and what `MINIMUM_KUBERNETES` is compared against, the digest is what decides which
+    bytes run.
+    """
     cluster = yaml.safe_load(CLUSTER.read_text(encoding="utf-8"))
     image = cluster["nodes"][0]["image"]
     assert image.startswith("kindest/node:v"), image
     assert not image.endswith(":latest")
+    assert "@sha256:" in image, (
+        "a tag is a mutable pointer; the create step prints the digest of what it pulled")
+    tag, digest = image.split("@")
+    assert len(digest) == len("sha256:") + 64, digest
+    assert run_steps().count("RepoDigests") == 1, (
+        "the run that records the digest is what makes pinning it honest rather than a lookup")
 
 
 def test_the_workflow_installs_kind_from_a_script_this_repository_owns():
