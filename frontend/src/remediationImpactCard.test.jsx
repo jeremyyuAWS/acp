@@ -282,3 +282,15 @@ it('submits the spending cap and allows correcting an invalid budget', async () 
   await act(async () => button(container, 'Start remediation with this plan').click())
   expect(onRun).toHaveBeenCalledWith({rule_based:2, ai:1, ai_budget_usd:'2.50'}, expect.anything())
 })
+
+it('labels recorded spending separately from the selected plan', async () => {
+  getRemediationImpact.mockImplementation(async () => ({...result(), ai_spending: {
+    cap_units: 2500000, spent_units: 120, held_units: 200000, available_units: 2299880, blocked: true,
+  }}))
+  const {container} = await mount()
+  const spending = container.querySelector('[aria-label="AI spending for the latest remediation run"]')
+  expect(spending.textContent).toContain('Spent: $0.00012')
+  expect(spending.textContent).toContain('Limit: $2.50')
+  expect(spending.textContent).toContain('AI is paused')
+  expect(container.textContent).toContain('7 unresolved findings across 3 files')
+})
