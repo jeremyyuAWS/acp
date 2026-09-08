@@ -3381,17 +3381,26 @@ html[data-wcag="on"] .wcag-toggle--on {
   font-variant-numeric: tabular-nums;
 }
 .workflow-stage-stack__ownership { flex: 0 0 auto; white-space: nowrap; }
-.workflow-stage-stack__locked-state,
-.workflow-stage-stack__item.is-locked .workflow-stage-stack__ownership {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 500;
-  letter-spacing: .01em;
-}
-.workflow-stage-stack__item.is-locked .workflow-stage-stack__summary { min-height: 38px; }
 .workflow-stage-stack__affordance { justify-self: end; }
 .workflow-stage-stack__body { padding: 0 14px 12px 42px; }
 .workflow-stage-stack__body[hidden] { display: none; }
+.workflow-sse-card { --stage-color: var(--focus-ring); padding: 10px 0 2px; }
+.workflow-sse-card.stage-discover { --stage-color: #2f67b1; }
+.workflow-sse-card.stage-assess { --stage-color: #4f8228; }
+.workflow-sse-card.stage-remediate { --stage-color: #8a5a00; }
+.workflow-sse-card.stage-release { --stage-color: #6f4a78; }
+.workflow-sse-card__header { display:flex;align-items:flex-start;gap:14px; }
+.workflow-sse-card__header > div { flex:1; }
+.workflow-sse-card__header strong { display:block;font-size:14px; }
+.workflow-sse-card__header > div span { color:var(--muted);font-size:11.5px; }
+.workflow-sse-card__outcome { margin:10px 0 7px;font-size:13px; }
+.workflow-sse-card__track { height:6px;overflow:hidden;border-radius:999px;background:var(--line); }
+.workflow-sse-card__track > span { display:block;height:100%;background:var(--stage-color);transition:width .3s ease; }
+.workflow-sse-card__metrics { display:flex;flex-wrap:wrap;gap:10px 28px;margin:10px 0 0; }
+.workflow-sse-card__metrics dt { color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:.035em; }
+.workflow-sse-card__metrics dd { margin:1px 0 0;font-size:14px;font-weight:700;font-variant-numeric:tabular-nums; }
+.workflow-sse-card__notice { margin:10px 0 0;color:var(--muted);font-size:12px; }
+@media (prefers-reduced-motion: reduce) { .workflow-sse-card__track > span { transition:none; } }
 .stage-live-accounting {
   display: flex;
   flex-wrap: wrap;

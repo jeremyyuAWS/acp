@@ -3,6 +3,28 @@ import AssessRunProgress from './AssessRunProgress.jsx'
 
 const value = (input) => typeof input === 'number' && Number.isFinite(input) ? input : 0
 
+/** Rehydrate the designed live Discovery card from its canonical SSE projection after a reload.
+ * The direct discovery stream carries more detail when it is available; this keeps the same
+ * checklist, heartbeat and delta counters when only the durable stage stream has reconnected. */
+export function liveDiscoverProgress(snapshot) {
+  const domain = snapshot?.domain_reconciliation || {}
+  const buckets = domain.buckets || {}
+  const work = snapshot?.counts?.work_items || {}
+  const filesFound = value(domain.accounted ?? domain.partitioned ?? domain.total)
+  return {
+    phase: snapshot?.state === 'queued' ? 'queued' : 'discovering',
+    files_found: filesFound,
+    files_evaluated: value(buckets.evaluated),
+    folders_found: typeof buckets.folders_visited === 'number' ? buckets.folders_visited : null,
+    folders_visited: typeof buckets.folders_visited === 'number' ? buckets.folders_visited : null,
+    save_new: typeof buckets.saved === 'number' ? buckets.saved : null,
+    save_updated: 0,
+    current: work.current || snapshot?.current_item || null,
+    run_id: snapshot?.execution_id || snapshot?.workflow_id || 'discover',
+    updated_at: snapshot?.last_durable_update_at || snapshot?.generated_at || null,
+  }
+}
+
 /** Translate a durable final snapshot into the public props of the stage card that owned it live. */
 export function completedDiscoverProgress(snapshot) {
   const domain = snapshot?.domain_reconciliation || {}

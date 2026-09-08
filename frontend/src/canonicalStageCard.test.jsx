@@ -101,6 +101,39 @@ describe('canonical stage card', () => {
     expect(html).toContain('Integrity check: 10 of 10 work items accounted for')
   })
 
+  it.each(['succeeded', 'processing_complete'])('uses the rich completed cards without frozen heartbeat bars for %s stages', (state) => {
+    const lineage = { workflow_id: 'provider-neutral', workflow_revision: 3, stages: [
+      { ...SNAPSHOT, stage: 'discover', state, source: 'drive', domain_reconciliation: {
+        unit: 'inventory documents', total: 147, accounted: 147, exact: true,
+        buckets: { Active: 147 },
+      } },
+      { ...SNAPSHOT, stage: 'assess', execution_id: 'assess-complete', state, source: 'sharepoint',
+        domain_reconciliation: { unit: 'eligible documents', total: 147, accounted: 147,
+          exact: true, buckets: { assessed: 147 } } },
+    ] }
+    const html = renderToStaticMarkup(createElement(WorkflowStageStack, { lineage, receivedAt: Date.now() }))
+    expect(html).toContain('Discovery complete')
+    expect(html).toContain('Assessment complete')
+    expect(html).not.toContain('workflow-sse-card')
+    expect(html).not.toContain('live-heartbeat-bars')
+  })
+
+  it('rehydrates the bullet-based live Discovery card from canonical SSE data', () => {
+    const html = renderToStaticMarkup(createElement(WorkflowStageStack, { receivedAt: Date.now(),
+      lineage: { workflow_id: 'drive-live', workflow_revision: 3, stages: [{
+        ...SNAPSHOT, workflow_id: 'drive-live', stage: 'discover', source: 'drive', state: 'processing',
+        domain_reconciliation: { unit: 'inventory documents', total: 986, accounted: 147,
+          exact: true, buckets: { active: 147, folders_visited: 12 } },
+      }] },
+    }))
+    expect(html).toContain('Discovering documents')
+    expect(html).toContain('Discovery steps')
+    expect(html).toContain('Documents found')
+    expect(html).toContain('live-heartbeat-bars')
+    expect(html).toContain('livecounter')
+    expect(html).not.toContain('workflow-sse-card')
+  })
+
   it('keeps retained history mounted while an earlier-stage card collapses and expands', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-07T01:02:03Z'))
@@ -111,12 +144,13 @@ describe('canonical stage card', () => {
     await act(async () => { root.render(createElement(WorkflowStageStack, {
       lineage, view: 'assess', receivedAt: Date.now(),
     })) })
-    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(2)
+    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(1)
     const summary = container.querySelector('[data-stage="discover"] .workflow-stage-stack__summary')
     await act(async () => { summary.click() })
-    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(2)
+    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(1)
     await act(async () => { summary.click() })
-    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(2)
+    expect(container.querySelectorAll('.live-heartbeat-bars')).toHaveLength(1)
+    expect(container.querySelector('.workflow-sse-card')).not.toBeNull()
     expect(container.textContent).not.toContain('Final · refreshed now')
     await act(async () => { vi.advanceTimersByTime(10_000) })
     expect(container.textContent).not.toContain('Final · refreshed now')
@@ -124,12 +158,14 @@ describe('canonical stage card', () => {
     vi.useRealTimers()
   })
 
-  it('gives locked-stage status copy a quieter typographic treatment', () => {
+  it('omits future stages until the workflow creates them', () => {
     const html = renderToStaticMarkup(createElement(WorkflowStageStack, {
       lineage: { workflow_id: 'workflow-locked', stages: [{ ...SNAPSHOT, stage: 'discover' }] },
     }))
-    expect(html).toContain('workflow-stage-stack__locked-state')
-    expect(html).toContain('Not started')
+    expect(html).not.toContain('Locked')
+    expect(html).not.toContain('data-stage="assess"')
+    expect(html).not.toContain('data-stage="remediate"')
+    expect(html).not.toContain('data-stage="release"')
   })
 
   it('never turns unknown totals into zero', () => {
@@ -300,7 +336,7 @@ describe('unified idempotent workflow integration', () => {
     execution_id: `${name}-${revision}`, ...extra,
   })
 
-  it('restores exactly one current Assess card with completed Discover above and future stages locked', async () => {
+  it('restores exactly one current Assess card with completed Discover above and omits future stages', async () => {
     const { container, root } = createTestRoot()
     const lineage = { workflow_id: 'restore', workflow_revision: 7, stages: [
       stage('discover', 'succeeded', 3), stage('assess', 'processing', 4),
@@ -310,8 +346,8 @@ describe('unified idempotent workflow integration', () => {
     expect(container.querySelector('[data-current="true"]').dataset.stage).toBe('assess')
     expect(container.querySelector('[data-stage="discover"] .workflow-stage-stack__body').hidden).toBe(true)
     expect(container.querySelector('[data-stage="assess"] .workflow-stage-stack__body').hidden).toBe(false)
-    expect([...container.querySelectorAll('.is-locked')].map((node) => node.dataset.stage))
-      .toEqual(['remediate', 'release'])
+    expect(container.querySelector('[data-stage="remediate"]')).toBeNull()
+    expect(container.querySelector('[data-stage="release"]')).toBeNull()
     expect(container.textContent).not.toContain('Discovering documents')
     expect([...container.querySelectorAll('button')].some((button) => /^Stop\b/.test(button.textContent))).toBe(false)
     await act(async () => { root.unmount() })

@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
-import CanonicalStageCard from './CanonicalStageCard.jsx'
-import CompletedStageDetails from './CompletedStageDetails.jsx'
+import CompletedStageDetails, { liveDiscoverProgress } from './CompletedStageDetails.jsx'
+import DiscoverRunProgress from './DiscoverRunProgress.jsx'
 import LiveHeartbeatBars from './LiveHeartbeatBars.jsx'
+import WorkflowStageActivityCard from './WorkflowStageActivityCard.jsx'
 import { canonicalStageCardModel, canonicalWorkflowStages, currentCanonicalStage,
   stageNeedsAttention } from './canonicalStageCard.js'
 
 const STAGES = ['discover', 'assess', 'remediate', 'release']
-const LABELS = { discover: 'Discover', assess: 'Assess', remediate: 'Remediate', release: 'Release' }
 const destination = { discover: 'discover', assess: 'assess', remediate: 'remediate', release: 'publish' }
-const terminal = (state) => ['succeeded', 'failed', 'cancelled', 'superseded', 'integrity_failed'].includes(state)
+const terminal = (state) => ['processing_complete', 'succeeded', 'failed', 'cancelled', 'superseded', 'integrity_failed'].includes(state)
+const completed = (state) => ['processing_complete', 'succeeded'].includes(state)
 
 function storageKey(lineage) {
   const workflow = lineage?.workflow_id || lineage?.scan_id || 'workflow'
@@ -41,30 +42,21 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
   return (
     <section className="workflow-stage-stack" aria-label="Workflow stages"
       data-current-stage={current?.stage || ''}>
-      {STAGES.map((stage) => {
+      {STAGES.filter((stage) => byStage.has(stage)).map((stage) => {
         const snapshot = byStage.get(stage)
-        const locked = !snapshot
         const isCurrent = Boolean(snapshot && stage === current?.stage
           && snapshot.execution_id === current?.execution_id)
         const model = snapshot ? canonicalStageCardModel(snapshot, { isCurrent }) : null
         const attention = Boolean(snapshot && stageNeedsAttention(snapshot))
         const defaultOpen = attention || isCurrent
-        const open = locked ? false : (attention || (overrides[stage] ?? defaultOpen))
+        const open = attention || (overrides[stage] ?? defaultOpen)
         const detail = isCurrent ? stageDetails[stage] : null
         const bodyId = `workflow-stage-${stage}`
         return (
-          <div className={`workflow-stage-stack__item${attention ? ' needs-attention' : ''}${isCurrent ? ' is-current' : ''}${locked ? ' is-locked' : ''}`}
+          <div className={`workflow-stage-stack__item${attention ? ' needs-attention' : ''}${isCurrent ? ' is-current' : ''}`}
                data-stage={stage} data-current={isCurrent ? 'true' : 'false'}
                key={`${stage}:${snapshot?.execution_id || snapshot?.revision || 'locked'}`}>
-            {locked ? <div className="workflow-stage-stack__summary" aria-disabled="true">
-              <span className="workflow-stage-stack__check" aria-hidden="true">·</span>
-              <span className="workflow-stage-stack__label"><b>{LABELS[stage]}</b>
-                <span className="workflow-stage-stack__locked-state"> · Locked</span>
-              </span>
-              <span className="workflow-stage-stack__meta">
-                <span className="workflow-stage-stack__ownership">Not started</span>
-              </span>
-            </div> : <button type="button" className="workflow-stage-stack__summary"
+            <button type="button" className="workflow-stage-stack__summary"
                     aria-expanded={open} aria-controls={bodyId}
                     onClick={() => setOverrides((value) => ({ ...value, [stage]: !open }))}>
               <span className="workflow-stage-stack__check" aria-hidden="true">
@@ -73,21 +65,25 @@ export default function WorkflowStageStack({ lineage, onNavigate, receivedAt = n
               <span className="workflow-stage-stack__label"><b>{model.stageLabel}</b> · {model.stateLabel}</span>
               <span className="workflow-stage-stack__meta">
                 <span className="muted workflow-stage-stack__count">{primaryOutcome(model)}</span>
-                {!terminal(snapshot.state) && <LiveHeartbeatBars measuredAt={receivedAt} stage={stage}
+                {!open && !terminal(snapshot.state) && <LiveHeartbeatBars measuredAt={receivedAt} stage={stage}
                   historyKey={`${snapshot.workflow_id || lineage?.workflow_id || 'workflow'}:${snapshot.execution_id || stage}`}
                   showText />}
                 {isCurrent && <span className="workflow-stage-stack__ownership">Current</span>}
               </span>
               <span className="workflow-stage-stack__affordance" aria-hidden="true">{open ? '−' : '+'}</span>
-            </button>}
-            {!locked && <div id={bodyId} className="workflow-stage-stack__body" hidden={!open}>
-              {detail ? <div className="workflow-stage-stack__live-detail" data-detail-owner="current">{detail}</div> : (
-                ['discover', 'assess'].includes(stage) && terminal(snapshot.state)
+            </button>
+            <div id={bodyId} className="workflow-stage-stack__body" hidden={!open}>
+              {detail ? <div className="workflow-stage-stack__live-detail" data-detail-owner="current">{detail}</div>
+                : completed(snapshot.state) && ['discover', 'assess'].includes(stage)
                   ? <CompletedStageDetails snapshot={snapshot} />
-                  : <CanonicalStageCard snapshot={snapshot} receivedAt={receivedAt}
-                      onOpen={onNavigate ? () => onNavigate(destination[stage]) : null} embedded />
-              )}
-            </div>}
+                  : stage === 'discover' && !terminal(snapshot.state)
+                    ? <DiscoverRunProgress progress={liveDiscoverProgress(snapshot)} busy
+                        source={snapshot?.source || null} scope={snapshot?.scope || null}
+                        freshness="live"
+                        onReview={onNavigate ? () => onNavigate(destination[stage]) : null} />
+                  : <WorkflowStageActivityCard snapshot={snapshot} receivedAt={receivedAt}
+                      onOpen={onNavigate ? () => onNavigate(destination[stage]) : null} />}
+            </div>
           </div>
         )
       })}
