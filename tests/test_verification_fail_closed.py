@@ -210,7 +210,10 @@ def test_both_credit_granting_callers_use_the_three_state_result():
     src = (Path(__file__).resolve().parent.parent / "api" / "handlers.py").read_text()
     tree = ast.parse(src)
 
-    for fname in ("_remediate_file", "_apply_one_value_kind"):
+    wrapper = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == '_remediate_file')
+    assert '_remediate_file_with_policy' in ast.unparse(wrapper)
+    assert 'run_context' in ast.unparse(wrapper)
+    for fname in ("_remediate_file_with_policy", "_apply_one_value_kind"):
         fn = next((n for n in ast.walk(tree)
                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == fname),
                   None)

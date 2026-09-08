@@ -99,7 +99,7 @@ def test_governance_change_blocks_request(specs, monkeypatch):
 
 @pytest.fixture
 def managed(tmp_path, monkeypatch, specs):
-    spending = pytest.importorskip('ai_spending_budget')
+    import ai_spending_budget as spending
     from store import _SQLiteAdapter
     ledger = spending.BudgetLedger(_SQLiteAdapter(str(tmp_path / 'budget.db')))
     ledger.init_schema()

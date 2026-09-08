@@ -319,8 +319,8 @@ def test_all_persistence_failures_block_later_effects():
 
 @pytest.mark.parametrize('scenario', ['success', 'fallback', 'denied', 'timeout', 'overrun'])
 def test_spending_ledger_integration(tmp_path, scenario):
-    # Activated when the independently owned spending module is integrated or on PYTHONPATH.
-    spending = pytest.importorskip('ai_spending_budget')
+    # The ledger is required in the integrated application; missing imports fail the test.
+    import ai_spending_budget as spending
     from store import _SQLiteAdapter
     from llm_remediation_waterfall import BudgetAdapter
     ledger = spending.BudgetLedger(_SQLiteAdapter(str(tmp_path / 'budget.db')))
