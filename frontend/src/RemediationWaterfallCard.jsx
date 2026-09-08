@@ -5,6 +5,7 @@ import { getFindingDispositions } from './api.js'
 import { authEpoch } from './apiIdentity.js'
 import useWaterfallActivity from './useWaterfallActivity.js'
 import WaterfallCount from './WaterfallCount.jsx'
+import RemediationThroughput from './RemediationThroughput.jsx'
 import './remediation-waterfall-card.css'
 
 const OUTCOMES = [
@@ -82,7 +83,7 @@ export default function RemediationWaterfallCard({ snapshot, paused = false, act
     verify: 'Approved changes must be applied and pass the existing verification checks. Document processing and provider responses do not count as fixed findings.',
   }
   return <section className={`wf-card${paused ? ' wf-paused' : ''}`} aria-label="Live remediation waterfall">
-    <header className="wf-header"><div><span className="wf-eyebrow">Results · live remediation</span><h3>Watch the work move forward</h3><p>Rules first. AI where permitted. Your approval, then verification.</p></div><span className="wf-tag">AI suggestions require your approval</span></header>
+    <header className="wf-header"><div><span className="wf-eyebrow">Results · live remediation</span><h3>Watch the work move forward</h3><p>Rules first. AI where permitted. Your approval, then verification.</p></div><div className="wf-header-status"><span className="wf-tag">AI suggestions require your approval</span><RemediationThroughput mini data={snapshot.throughput} identity={identity} paused={paused || state.error} /></div></header>
     <div className="wf-metrics">
       <div><span>{exact ? 'Fixed and checked · findings' : 'Verified changes · all origins'}</span><strong>{displayCount(exact ? rec.resolved_verified : snapshot.fixes?.verified)}</strong></div>
       <div><span>{exact ? 'Awaiting your review · findings' : 'Review items · not findings'}</span><strong>{displayCount(exact ? rec.awaiting_review : snapshot.review?.items)}</strong></div>
