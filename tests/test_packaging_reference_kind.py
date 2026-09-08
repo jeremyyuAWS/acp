@@ -618,11 +618,33 @@ def test_the_acceptance_target_withholds_the_capabilities_this_job_cannot_honour
         f"other step in this job, and nothing here builds a previous release to upgrade from.")
 
 
-def test_the_suite_runs_against_the_upgraded_release_not_the_first_install():
-    """A suite that only ever sees a first install certifies the easy half."""
+def test_the_suite_runs_last_of_all_the_assertions():
+    """A suite that only ever sees a first install certifies the easy half — so it runs after the
+    upgrade. But it must run after EVERYTHING, and the weaker version of this test is what let a
+    real failure through.
+
+    THE ACCEPTANCE STEP IS THE MOST DISRUPTIVE ONE IN THIS JOB. It restarts all three worker tiers
+    mid-job and drives a full discover → assess → remediate on a node already measured 1000m below
+    ACP's own CPU floor. #1826 then added "Is the backup restorable, or only written?" AFTER it,
+    and that step's `helm upgrade` timed out — "UPGRADE FAILED: context deadline exceeded" — on a
+    cluster this step had just finished churning. The old assertion only checked that acceptance
+    came after the upgrade step and before teardown, so an assertion inserted between it and
+    teardown satisfied it.
+
+    Stated as the property the step's own comment claims: nothing that asserts anything runs after
+    it. Only evidence-gathering and teardown may follow.
+    """
     names = [s.get("name", "") for s in workflow()["jobs"]["install"]["steps"]]
     assert names.index("Can it be upgraded, or only installed?") < names.index(ACCEPTANCE_STEP)
-    assert names.index(ACCEPTANCE_STEP) < names.index("Delete the cluster")
+
+    after = names[names.index(ACCEPTANCE_STEP) + 1:]
+    allowed = {"Keep the acceptance report", "What the cluster looked like", "Delete the cluster"}
+    trailing = [n for n in after if n and n not in allowed]
+    assert not trailing, (
+        f"{trailing} run AFTER the acceptance suite, which restarts every worker tier and drives a "
+        f"full remediation before they start. Any assertion placed there runs against a cluster "
+        f"this step has just churned; move it before the acceptance step, or add it to `allowed` "
+        f"only if it genuinely asserts nothing.")
 
 
 def test_the_expectation_covers_every_registered_scenario():
