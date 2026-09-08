@@ -269,6 +269,22 @@ jobs:
         # The upgrade changes the pod template (a podAnnotation) so it is a real rolling update
         # rather than a no-op Helm reports as deployed. Requests are small enough that the surge
         # pod fits: 600m of the runner's 4000m is in use.
+        #
+        # THE ANNOTATION KEY CARRIES NO DOMAIN PREFIX, AGAINST THIS REPOSITORY'S HABIT, and that
+        # is deliberate. `--set podAnnotations."acp\.mova\.io/upgrade-probe"=x` does not mean what
+        # it looks like: helm treats the quotes as part of the KEY, producing the annotation
+        # `"acp.mova.io/upgrade-probe"` with literal quote characters, which Kubernetes rejects as
+        # an invalid key — so the upgrade fails on validation, not on anything this step is for.
+        # Measured with `helm template`, all three forms:
+        #
+        #   podAnnotations."acp\.mova\.io/upgrade-probe"=x  ->  {'"acp.mova.io/upgrade-probe"': 'x'}
+        #   podAnnotations.acp\.mova\.io/upgrade-probe=x    ->  {'acp.mova.io/upgrade-probe': 'x'}
+        #   podAnnotations.upgrade-probe=x                 ->  {'upgrade-probe': 'x'}
+        #
+        # The middle form works and depends on backslashes surviving the shell, the workflow's
+        # block scalar and helm's parser intact. A key with no dots needs none of that, and the
+        # same choice keeps the jsonpath below a plain path rather than a second escaping puzzle.
+        # This is a CI probe, not a product annotation.
         run: |
           set -euo pipefail
           helm upgrade acp packaging/chart/acp \
@@ -280,7 +296,7 @@ jobs:
             --set image.tag="${IMAGE##*:}" \
             --set image.pullPolicy=Never \
             --set secrets.existingSecret=acp-secrets \
-            --set podAnnotations."acp\.mova\.io/upgrade-probe"="$GITHUB_RUN_ID" \
+            --set podAnnotations.upgrade-probe="$GITHUB_RUN_ID" \
             --wait --timeout 10m
           kubectl -n "$NAMESPACE" rollout status deployment/acp-api --timeout=300s
           for role in discover assess remediate; do
@@ -294,7 +310,7 @@ jobs:
           # The annotation is what made this a real rolling update. If it is not on the running
           # pods, the upgrade replaced nothing and everything above passed vacuously.
           kubectl -n "$NAMESPACE" get pods -l app.kubernetes.io/component=api \
-            -o jsonpath='{.items[*].metadata.annotations.acp\.mova\.io/upgrade-probe}' \
+            -o jsonpath='{.items[*].metadata.annotations.upgrade-probe}' \
             | grep -q "$GITHUB_RUN_ID"
 
       # ── evidence, and then nothing survives ────────────────────────────────
