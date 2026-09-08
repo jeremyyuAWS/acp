@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import presets
-from .inventory import build_inventory, connection_budget
+from .inventory import IMAGES, build_inventory, connection_budget
 from .spec import required_secret_names
 
 _RULE = "─" * 78
@@ -26,7 +26,7 @@ def _h(title: str) -> str:
     return f"\n{title}\n{_RULE}"
 
 
-def render(doc: dict[str, Any], warnings: list | None = None) -> str:
+def render(doc: dict[str, Any], warnings: list | None = None, release: Any = None) -> str:
     rt = doc["runtime"]
     services = build_inventory(doc)
     out: list[str] = []
@@ -56,13 +56,34 @@ def render(doc: dict[str, Any], warnings: list | None = None) -> str:
     out.append(_h("2. Images"))
     out.append(f"  registry     {rt.get('imageRegistry', '(not stated — required at install)')}")
     imaged = [s for s in services if s.image]
-    for s in imaged:
-        out.append(f"  {s.image}:{s.image_version}")
-        out.append(f"{'':>4}digest  <unresolved>")
-    out.append("")
-    out.append("  Digests are UNRESOLVED here. `acpctl plan` reaches no registry, and a plan that")
-    out.append("  printed a tag as if it were a pin would defeat the reason PRD S5.1 requires")
-    out.append("  digests. `acpctl install` resolves and verifies signatures before deploying.")
+    if release is None:
+        for s in imaged:
+            out.append(f"  {s.image}:{s.image_version}")
+            out.append(f"{'':>4}digest  <unresolved>")
+        out.append("")
+        out.append("  Digests are UNRESOLVED here. `acpctl plan` reaches no registry, and a plan "
+                   "that")
+        out.append("  printed a tag as if it were a pin would defeat the reason PRD S5.1 requires")
+        out.append("  digests. Pass `--release <manifest>` to plan against a built release.")
+    else:
+        from .release import describe_component
+        # ONE LINE PER LOGICAL IMAGE, AND THE ARTIFACT NAMED ON EACH. Several of PRD S5.1's
+        # images are roles of one artifact, so several lines share a digest — which is the truth
+        # and has to be visible. Collapsing them to one line per artifact would hide that
+        # `acp-discovery-worker` is not a separate build; printing them without the artifact name
+        # would leave a reviewer thinking six images were signed when three were.
+        by_logical = {v: k for k, v in IMAGES.items()}
+        for s in imaged:
+            out.append(f"  {s.image}:{s.image_version}")
+            out.append(f"{'':>4}digest  {describe_component(release, by_logical[s.image])}")
+        out.append("")
+        out.append(f"  Release {release.version}, built from {release.source_revision[:12]}, "
+                   f"pushed to {release.registry}.")
+        out.append("  Digests are what the chart pulls; the registry above is where THIS")
+        out.append("  installation pulls them from, which may be a mirror of the one built to.")
+        out.append("  SIGNATURES ARE NOT VERIFIED BY `plan` — that needs the registry, and is")
+        out.append("  `acpctl install`'s job. What is checked here is that the release declares")
+        out.append("  a signature and an SBOM for every artifact (`acpctl release verify`).")
 
     # 3. Allocations -----------------------------------------------------------
     out.append(_h("3. CPU, memory and storage"))
