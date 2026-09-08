@@ -76,3 +76,23 @@ it('mounts in the live run and supports reduced motion without looping decoratio
   expect(css).toContain('@media(prefers-reduced-motion:reduce)')
   expect(css).not.toContain('infinite')
 })
+it('shows exact small dollar changes instead of rounding them to zero', async () => {
+  const { root, container } = createTestRoot()
+  const format = value => `$${(value / 1000000).toFixed(6)}`
+  await act(async () => root.render(<WaterfallCount value={100} identity="budget" format={format} />))
+  await act(async () => root.render(<WaterfallCount value={142} identity="budget" format={format} />))
+  expect(container.textContent).toContain('$0.000142')
+  expect(container.querySelector('.wf-delta').textContent).toBe('+$0.000042')
+})
+it('shows the recorded provider and exact model and preserves unknown costs', async () => {
+  const { root, container } = createTestRoot()
+  const view = { ...activity.view, models: [
+    { provider: 'anthropic', model: 'recorded-model-20260908', linked_calls: 2, recorded_cost_usd: 0.000042 },
+    { provider: 'openai', model: 'other-recorded-model', linked_calls: 1, recorded_cost_usd: null },
+  ] }
+  await act(async () => root.render(<RemediationWaterfallCard snapshot={snapshot()} activity={{ view }} />))
+  expect(container.querySelector('.wf-models').textContent).toContain('anthropic · recorded-model-20260908')
+  expect(container.querySelector('.wf-models').textContent).toContain('$0.000042')
+  expect(container.querySelector('.wf-models').textContent).toContain('Recorded call cost: Unavailable')
+  expect(container.textContent).toContain('not additional to the run charges')
+})

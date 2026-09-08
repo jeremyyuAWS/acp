@@ -86,3 +86,28 @@ def test_route_owner_and_no_store(isolated_store, monkeypatch):
     with pytest.raises(HTTPException) as error:
         waterfall_status('scan', batch, request, Response())
     assert error.value.status_code == 404
+
+
+def test_actual_models_require_exact_proposal_call_links_and_do_not_double_count(isolated_store):
+    s = isolated_store
+    batch = seed(s)
+    calls = [
+        ('good', 'scan', 'a.html', 'anthropic', 'recorded-model-v1', 0.000042),
+        ('wrong-file', 'scan', 'b.html', 'openai', 'wrong-model', 8.0),
+        ('wrong-scan', 'other', 'a.html', 'openai', 'other-model', 9.0),
+        ('unknown-cost', 'scan', 'a.html', 'openai', 'recorded-model-v2', 0.0),
+    ]
+    with s._db.cursor() as cur:
+        for call in calls:
+            s._db.execute(cur, 'INSERT INTO ai_calls(id,scan_id,file,provider,model,cost_usd) VALUES(%s,%s,%s,%s,%s,%s)', call)
+        proposals = json.dumps([{'model_call_id': call[0], 'proposed_value': 'PRIVATE CONTENT'} for call in calls] + [{'model_call_id': 'good'}])
+        s._db.execute(cur, 'INSERT INTO hitl_queue(id,scan_id,file,proposals) VALUES(%s,%s,%s,%s)', ('review', 'scan', 'a.html', proposals))
+        for fid in ['finding-1', 'finding-2']:
+            s._db.execute(cur, 'INSERT INTO finding_disposition(scan_id,batch_id,finding_id,file,review_item_id) VALUES(%s,%s,%s,%s,%s)', ('scan', batch, fid, 'a.html', 'review'))
+    view = read_waterfall(s, 'owner', 'scan', batch)
+    assert view['models'] == [
+        {'provider': 'anthropic', 'model': 'recorded-model-v1', 'linked_calls': 1, 'recorded_cost_usd': 0.000042},
+        {'provider': 'openai', 'model': 'recorded-model-v2', 'linked_calls': 1, 'recorded_cost_usd': None},
+    ]
+    assert 'PRIVATE CONTENT' not in json.dumps(view)
+    assert read_waterfall(s, 'owner', 'scan', 'older-batch')['models'] == []

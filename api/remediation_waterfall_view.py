@@ -7,6 +7,7 @@ Keep that contribution explicitly unavailable instead of deriving it from calls.
 import datetime as dt
 import hashlib
 import json
+import math
 import re
 
 _TEXT_ATTEMPT = re.compile(r'^text:([0-9a-f]{64}):([12]):([0-9]+)$')
@@ -34,11 +35,13 @@ def read_waterfall(store, owner, scan_id, batch_id):
               'generated_at': dt.datetime.now(dt.timezone.utc).isoformat(),
               'available': bool(rows), 'contribution_available': False,
               'contribution_reason': 'AI step breakdown unavailable for this run. Recorded calls are not evidence of usable suggestions.',
-              'reviewer_available': False}
+              'reviewer_available': False,
+              'models': _proposal_models(store, scan_id, batch_id)}
     if rows:
         policy = json.loads(rows[0]['policy_json'])
         stages = {tier: {'tier': tier, 'operations': 0, 'active': 0, 'settled': 0,
-                         'reserved': 0, 'uncertain': 0, 'released': 0, 'breached': 0}
+                         'reserved': 0, 'uncertain': 0, 'released': 0, 'breached': 0,
+                         'spent_units': 0, 'held_units': 0}
                   for tier in (1, 2)}
         operations = {1: set(), 2: set()}
         spent = held = unknown = other = 0
@@ -61,6 +64,10 @@ def read_waterfall(store, owner, scan_id, batch_id):
             tier = int(match[2])
             operations[tier].add(match[1])
             stages[tier]['active' if state == 'dispatched' else state] += 1
+            if state in ('settled', 'breached'):
+                stages[tier]['spent_units'] += row['actual_cost_units']
+            if state in ('reserved', 'dispatched', 'uncertain'):
+                stages[tier]['held_units'] += row['max_cost_units']
         for tier in stages:
             stages[tier]['operations'] = len(operations[tier])
         result.update(stages=list(stages.values()), other_attempts=other,
@@ -72,3 +79,55 @@ def read_waterfall(store, owner, scan_id, batch_id):
     result['revision'] = hashlib.sha256(json.dumps(
         {k: v for k, v in result.items() if k != 'generated_at'}, sort_keys=True).encode()).hexdigest()[:20]
     return result
+
+
+def _proposal_models(store, scan_id, batch_id):
+    """Actual call identities referenced by current proposals for this batch's findings.
+
+    This is deliberately not a tier attribution or a claim that every attempt is
+    linked. Never guess from today's configuration, the pricing URL, or call time.
+    """
+    db = store._db
+    with db.cursor() as cur:
+        db.execute(cur, """SELECT DISTINCT h.id,h.file,h.proposals FROM hitl_queue h
+            JOIN finding_disposition d ON d.review_item_id=h.id AND d.scan_id=h.scan_id
+                AND d.file=h.file WHERE d.scan_id=%s AND d.batch_id=%s""", (scan_id, batch_id))
+        linked = {}
+        for row in db.fetchall(cur):
+            try:
+                proposals = json.loads(row['proposals'] or '[]')
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(proposals, list):
+                continue
+            for proposal in proposals:
+                call_id = proposal.get('model_call_id') if isinstance(proposal, dict) else None
+                if isinstance(call_id, str) and call_id:
+                    linked.setdefault(call_id, set()).add(row['file'])
+        if not linked:
+            return []
+        # Restrict before aggregation; an untrusted proposal cannot borrow a call
+        # from another scan/file or multiply a call by citing it many times.
+        models = {}
+        ids = list(linked)
+        for start in range(0, len(ids), 400):
+            chunk = ids[start:start + 400]
+            marks = ','.join(['%s'] * len(chunk))
+            db.execute(cur, f"""SELECT id,file,provider,model,cost_usd FROM ai_calls
+                WHERE scan_id=%s AND id IN ({marks})""", (scan_id, *chunk))
+            for call in db.fetchall(cur):
+                if call['file'] not in linked[call['id']] or not call['provider'] or not call['model']:
+                    continue
+                key = (call['provider'], call['model'])
+                model = models.setdefault(key, {'provider': key[0], 'model': key[1],
+                                                'linked_calls': 0, 'recorded_cost_usd': 0.0})
+                model['linked_calls'] += 1
+                cost = call['cost_usd']
+                # Legacy cloud traces defaulted a missing charge to zero. Preserve
+                # uncertainty; the separate budget ledger remains the cost authority.
+                known = isinstance(cost, (int, float)) and math.isfinite(cost) and cost >= 0
+                if not known or (cost == 0 and call['provider'] != 'ollama'):
+                    model['recorded_cost_usd'] = None
+                elif model['recorded_cost_usd'] is not None:
+                    model['recorded_cost_usd'] += cost
+    return sorted(models.values(), key=lambda item: (item['provider'], item['model']))
