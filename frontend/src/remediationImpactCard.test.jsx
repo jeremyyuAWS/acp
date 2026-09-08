@@ -4,8 +4,8 @@ import axe from 'axe-core'
 import RemediationImpactCard from './RemediationImpactCard.jsx'
 import AssessSummary from './AssessSummary.jsx'
 import { createTestRoot, unmountAll } from './testRoots.js'
-import { getRemediationImpact, saveRemediationImpactPolicy, assignRemediationImpact } from './api.js'
-vi.mock('./api.js', () => ({ getRemediationImpact: vi.fn(), saveRemediationImpactPolicy: vi.fn(), assignRemediationImpact: vi.fn() }))
+import { getRemediationImpact, saveRemediationImpactPolicy, assignRemediationImpact, getRemediationAIDetails } from './api.js'
+vi.mock('./api.js', () => ({ getRemediationImpact: vi.fn(), saveRemediationImpactPolicy: vi.fn(), assignRemediationImpact: vi.fn(), getRemediationAIDetails: vi.fn() }))
 globalThis.IS_REACT_ACT_ENVIRONMENT = true
 const result = (policy = { rule_based: 2, ai: 1 }) => ({
   policy, active_policy: { rule_based: 0, ai: 1, revision: 4 }, open: { findings: 7, files: 3 },
@@ -20,6 +20,42 @@ const button = (container, label) => [...container.querySelectorAll('button')].f
 beforeEach(() => { vi.clearAllMocks(); getRemediationImpact.mockImplementation(async (_id, policy) => result(policy || undefined)); saveRemediationImpactPolicy.mockResolvedValue({}) })
 afterEach(unmountAll)
 describe('RemediationImpactCard', () => {
+  it('opens actual saved AI outputs from the live chart without starting remediation', async () => {
+    const onRun = vi.fn()
+    getRemediationImpact.mockResolvedValue({ ...result(), open: { findings: 2, files: 1 },
+      findings: [{ id: 'f1', file: 'A.docx', rule_id: '1.1.1', origin: 'ai', lane: 'review', finding_count: 2 }],
+      integrity: { complete: true, open_equals_lane_sum: true },
+    })
+    getRemediationAIDetails.mockResolvedValue({ available: true, callsAvailable: true, calls: [], items: [
+      { id: 'i1', scan_id: 'run-1', file: 'A.docx', rule_id: '1.1.1', status: 'pending',
+        proposals: [{ before: 'Old description', proposed_value: 'A chart of quarterly results', source: 'AI draft' }] },
+    ] })
+    const { container } = await mount({ onRun, scopeFiles: ['A.docx'] })
+    expect(getRemediationAIDetails).not.toHaveBeenCalled()
+    await act(async () => button(container, 'See findings and AI details').click())
+    expect(getRemediationAIDetails).toHaveBeenCalledWith('run-1')
+    expect(container.querySelector('[role=dialog]').textContent).toContain('Old description')
+    expect(container.querySelector('[role=dialog]').textContent).toContain('A chart of quarterly results')
+    expect(container.querySelector('[role=dialog]').textContent).toContain('Awaiting your review')
+    expect(onRun).not.toHaveBeenCalled()
+    expect(saveRemediationImpactPolicy).not.toHaveBeenCalled()
+  })
+  it('closes suggestion details when the selected scope changes', async () => {
+    getRemediationAIDetails.mockResolvedValue({ available: true, items: [], calls: [], callsAvailable: true })
+    const { container, root } = await mount({ scopeFiles: ['A.docx'] })
+    await act(async () => button(container, 'View AI suggestions').click())
+    expect(container.querySelector('[role=dialog]')).not.toBeNull()
+    await act(async () => root.render(createElement(RemediationImpactCard, { runId: 'run-1', scopeFiles: ['C.docx'] })))
+    expect(container.querySelector('[role=dialog]')).toBeNull()
+  })
+  it('drops chart details when resetting the plan to active settings', async () => {
+    getRemediationAIDetails.mockResolvedValue({ available: true, items: [], calls: [], callsAvailable: true })
+    const { container } = await mount()
+    await act(async () => button(container, 'View AI suggestions').click())
+    expect(container.querySelector('[role=dialog]')).not.toBeNull()
+    await act(async () => button(container, 'Reset to active').click())
+    expect(container.querySelector('[role=dialog]')).toBeNull()
+  })
   it('shows full population, explicit sliders and file outlooks', async () => {
     const { container } = await mount()
     expect(container.textContent).toContain('7 unresolved findings across 3 files')

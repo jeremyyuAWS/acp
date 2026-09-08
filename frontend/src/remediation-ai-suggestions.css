@@ -1,0 +1,12 @@
+.remediation-ai-suggestions { line-height: 1.5; overflow-wrap: anywhere; }
+.remediation-ai-suggestions details { margin: 12px 0; padding: 12px; border: 1px solid var(--border, #ded6e5); border-radius: 8px; }
+.remediation-ai-suggestions summary { cursor: pointer; font-weight: 600; }
+.remediation-ai-suggestions summary:focus-visible { outline: 3px solid #79549a; outline-offset: 4px; }
+.remediation-ai-suggestions__item { border-top: 1px solid var(--border, #ded6e5); margin-top: 20px; padding-top: 12px; }
+.remediation-ai-suggestions__item h4 { margin: 6px 0; }
+.remediation-ai-suggestions__proposal { margin-top: 12px; }
+.remediation-ai-suggestions__comparison { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.remediation-ai-suggestions__comparison > div { background: var(--surface-subtle, #f8f5fa); border: 1px solid var(--border, #ded6e5); padding: 12px; border-radius: 8px; min-width: 0; }
+.remediation-ai-suggestions__comparison h5 { font-size: 14px; margin: 0 0 8px; }
+.remediation-ai-suggestions pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; margin: 0; }
+@media (max-width: 600px) { .remediation-ai-suggestions__comparison { grid-template-columns: 1fr; } }
