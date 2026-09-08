@@ -736,3 +736,21 @@ def test_every_non_passing_scenario_declares_why():
     assert not undeclared, (
         f"{undeclared} are expected not to pass and declare no reason, so the step would accept "
         f"any cause at all for them")
+
+
+def test_the_reason_match_is_case_insensitive_and_the_needles_are_lowercase():
+    """A run reported "...has NO object storage configured" against the needle "no object storage"
+    and the assertion failed on a measurement that was exactly right. Capitalisation used for
+    emphasis inside a sentence is not a different cause.
+
+    BOTH HALVES, because either alone lets the bug back: the comparison must lower the detail, and
+    the needles must be written lowercase so the lowering actually matches them.
+    """
+    run = step_named(ACCEPTANCE_STEP)["run"]
+    assert 'needle.lower() not in detail_of.get(sid, "").lower()' in run, (
+        "the reason comparison is case-sensitive again; a capitalised word in a scenario's own "
+        "sentence will fail an assertion about a correct measurement")
+    upper = {sid: needle for sid, needle in expected_reasons().items() if needle != needle.lower()}
+    assert not upper, (
+        f"these expected reasons are not lowercase, so lowering the detail cannot match them: "
+        f"{upper}")
