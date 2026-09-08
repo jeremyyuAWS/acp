@@ -125,6 +125,21 @@ export function hitlFailureCopy(item, kind, err, outcome = 'not_saved') {
   return `Your ${action} of “${file}” was NOT saved: ${err?.message || err}. It is back in the queue — try again.`
 }
 
+// The remediation endpoint deduplicates an identical effective file set against its sealed
+// assessment input and decision digest. That makes retrying the SAME selection safe, but a 503
+// whose `changes` are unknown still cannot be described as "not enqueued": the response may have
+// been lost after the durable batch was created. Keep that distinction visible to the operator.
+export function remediationSubmissionFailureCopy(err) {
+  if (err?.code === 'DB_CAPACITY_BUSY' && err?.changes === 'unknown') {
+    return 'ACP could not confirm whether this remediation request was accepted because database capacity was exhausted. '
+      + 'Wait for capacity to recover, then retry the same selection; ACP will reuse any matching work already queued.'
+  }
+  if (err?.code === 'DB_CAPACITY_BUSY' && err?.changes === 'none') {
+    return 'Remediation was not submitted because database capacity is currently exhausted. Wait for capacity to recover, then try again.'
+  }
+  return `Could not enqueue: ${err?.message || err}`
+}
+
 function dbItemToUi(it, files) {
   const sc = (it.rule_id || '').replace(/^(WCAG_?|SC_)/, '').replace(/_/g, '.')
   const ba = ITEM_BA[sc] || { meta: 'review AI proposal', before: (d) => d || 'issue found' }
@@ -689,7 +704,7 @@ export default function Remediate({ run, files = [], decisions = {}, setDecision
       try { sessionStorage.setItem(REMKEY(runId), JSON.stringify({ total })) } catch { /* ignore */ }
       startWatching(total)
     } catch (e) {
-      setRemMsg(`Could not enqueue: ${e.message || e}`); setRemBusy(false)
+      setRemMsg(remediationSubmissionFailureCopy(e)); setRemBusy(false)
     } finally {
       remStartRef.current = false
     }

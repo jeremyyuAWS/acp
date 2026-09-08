@@ -113,42 +113,61 @@ def test_request_context_defaults_background_work_to_ordinary_gate(monkeypatch):
         adapter._putconn(conn)
 
 
-def test_concurrent_mutations_serialize_inside_reserved_capacity(monkeypatch):
-    """A mutation burst queues at its own gate instead of consuming ordinary/default slots."""
+def test_overlapping_mutations_borrow_idle_ordinary_capacity(monkeypatch):
+    """The reserve is a guaranteed floor, not a one-request mutation ceiling.
+
+    POST /scans/{sid}/remediate overlaps naturally with other user decisions and performs several
+    short DB transactions. #1783 initially routed every mutation through the single reserved
+    permit, so a second mutation returned DB_CAPACITY_BUSY after five seconds even when both
+    ordinary physical connections were idle.
+    """
     adapter = _adapter(monkeypatch, capacity=3)
     token = store.DB_MUTATION_REQUEST.set(True)
     try:
         first = adapter._getconn(timeout=0.2)
+        second = adapter._getconn(timeout=0.1)
     finally:
         store.DB_MUTATION_REQUEST.reset(token)
+
+    assert first is not None and second is not None
+    assert len(adapter._get_pool().used) == 2
+    adapter._putconn(second)
+    adapter._putconn(first)
+
+
+def test_waiting_mutation_takes_reserve_when_its_holder_finishes(monkeypatch):
+    """Waiting on ordinary capacity must not make a newly free reserve invisible."""
+    adapter = _adapter(monkeypatch, capacity=3)
+    token = store.DB_MUTATION_REQUEST.set(True)
+    try:
+        first_mutation = adapter._getconn(timeout=0.2)
+    finally:
+        store.DB_MUTATION_REQUEST.reset(token)
+    reads = [adapter._getconn(timeout=0.2, read_only=True) for _ in range(2)]
 
     started = threading.Event()
     finished = threading.Event()
     acquired: list[object] = []
 
-    def second_mutation():
+    def waiting_mutation():
         local_token = store.DB_MUTATION_REQUEST.set(True)
         try:
             started.set()
-            acquired.append(adapter._getconn(timeout=0.5))
+            acquired.append(adapter._getconn(timeout=0.4))
             finished.set()
         finally:
             store.DB_MUTATION_REQUEST.reset(local_token)
 
-    thread = threading.Thread(target=second_mutation)
+    thread = threading.Thread(target=waiting_mutation)
     thread.start()
     assert started.wait(timeout=0.2)
-    assert not finished.wait(timeout=0.1), "a second mutation overbooked the reserved slot"
-
-    # Ordinary/default work can still use every non-reserved connection while the first mutation
-    # is in flight; it cannot take the reserved slot from the queued decision.
-    ordinary = [adapter._getconn(timeout=0.2) for _ in range(2)]
-    adapter._putconn(first)
-    assert finished.wait(timeout=0.3)
+    assert not finished.wait(timeout=0.05)
+    adapter._putconn(first_mutation)
+    assert finished.wait(timeout=0.25), "mutation ignored the newly available reserved slot"
     thread.join(timeout=0.2)
 
     adapter._putconn(acquired.pop())
-    for conn in ordinary:
+    for conn in reads:
         adapter._putconn(conn)
 
 
