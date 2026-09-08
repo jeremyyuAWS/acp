@@ -85,6 +85,22 @@
 }
 .canonical-stage-card__heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 .canonical-stage-card__heartbeat { display: flex; align-items: center; justify-content: flex-end; min-width: 148px; }
+.canonical-stage-card__embedded {
+  color: color-mix(in srgb, var(--ink) 86%, var(--muted));
+  font-size: 12px;
+  line-height: 1.35;
+}
+.canonical-stage-card__embedded .canonical-stage-card__heading { align-items: flex-start; }
+.canonical-stage-card__embedded .canonical-stage-card__heading strong { font-size: 13px; font-weight: 700; }
+.canonical-stage-card__embedded .canonical-stage-card__heading .linklike {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.canonical-stage-card__embedded > p b { font-size: 14px; font-weight: 700; }
+.canonical-stage-card__embedded dl { color: var(--muted); }
+.canonical-stage-card__embedded dd { color: var(--ink); font-size: 12px; }
+.canonical-stage-card__embedded .machine-value { font-size: 11px; }
 
 @media (prefers-reduced-motion: reduce) {
   .canonical-stage-card__chevron { transition: none; }

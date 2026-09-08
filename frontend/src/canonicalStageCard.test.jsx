@@ -78,6 +78,7 @@ describe('canonical stage card', () => {
       snapshot: SNAPSHOT, embedded: true, receivedAt: Date.now(),
     }))
     expect(html).not.toContain('canonical-stage-card__summary')
+    expect(html).toContain('canonical-stage-card__embedded')
     expect(html).toContain('Release · Processing')
     expect(html).toContain('Workflow revision 3 · snapshot revision 12')
     expect(html).toContain('live-heartbeat-bars')
