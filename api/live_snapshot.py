@@ -91,6 +91,31 @@ def _phase(state: str, eligible: int, completed: int) -> str:
     return "assessing"
 
 
+def _document_activity(scan: dict, limit: int = 50) -> dict | None:
+    """A bounded projection of durable per-document results for the shared live card.
+
+    The full run payload can contain thousands of files and findings; /live is refreshed every two
+    seconds, so it must never echo that payload. Fifty rows preserves the useful moving history from
+    the original in-session Assess runner while keeping reconnects and SharePoint logins cheap.
+    """
+    files = scan.get("files") if isinstance(scan, dict) else None
+    if not isinstance(files, list):
+        return None
+    completed = [row for row in files if isinstance(row, dict)
+                 and row.get("status") not in (None, "discovered")]
+    rows = []
+    for row in completed[-limit:]:
+        criteria = []
+        for issue in row.get("issues") or []:
+            criterion = issue.get("wcag") or issue.get("rule_id")
+            if criterion and criterion not in criteria:
+                criteria.append(str(criterion))
+        rows.append({"file": row.get("file"), "score": row.get("score"),
+                     "criteria": criteria[:8]})
+    return {"completed": len(completed), "displayed": len(rows), "items": rows,
+            "truncated": len(completed) > len(rows)}
+
+
 def _second_opinion_block(store, scan_id: str) -> dict | None:
     """Bounded governance/usage state; never document content or provider output."""
     try:
@@ -223,6 +248,9 @@ def build_snapshot(store, scan_id: str, owner: str | None = None, now_iso: str |
         in_flight = _pos_int(queue.get("in_flight")) if isinstance(queue, dict) else 0
         snap["kpis"]["processing"] = min(in_flight, max(0, eligible - completed))
         pending = [k for k in pending if k not in ("queued", "throughput", "workers")]
+    document_activity = _document_activity(scan)
+    if document_activity is not None:
+        snap["documents"] = document_activity
     snap["kpis_pending"] = pending
     second_opinion = _second_opinion_block(store, scan_id)
     if second_opinion is not None:

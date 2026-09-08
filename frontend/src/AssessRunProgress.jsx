@@ -220,6 +220,7 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
   const cur = m.queue ? m.queue.current : null
   const eta = throughput && (throughput.etaText || (throughput.calibrating ? 'estimating…' : null))
   const opinion = m.secondOpinion
+  const documents = m.documents
   const updateMode = snapshot?._live?.mode || 'live'
 
   return (
@@ -291,6 +292,36 @@ export default function AssessRunProgress({ snapshot, throughput, onStop }) {
               <PrepStep status={isFinished ? 'done' : 'pending'} label="Finalized conformance results"
                         detail={isFinished ? 'Complete' : eta || 'After all documents finish'} />
             </div>
+
+            {documents?.items?.length > 0 && (
+              <section aria-label="Completed document activity"
+                       style={{ marginTop: 14, border: '1px solid var(--line,#e4e8ec)',
+                                borderRadius: 9, overflow: 'hidden' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12,
+                              padding: '8px 11px', background: 'var(--surface-2,#f7f6f8)',
+                              fontSize: 12.5 }}>
+                  <strong>Document activity</strong>
+                  <span className="muted">
+                    {documents.truncated
+                      ? `Latest ${documents.displayed.toLocaleString()} of ${documents.completed.toLocaleString()} completed`
+                      : `${documents.completed.toLocaleString()} completed`}
+                  </span>
+                </div>
+                <ul className="assesslist" aria-label="Durable per-document assessment progress"
+                    style={{ maxHeight: 300, overflowY: 'auto', margin: 0, padding: '7px 11px' }}>
+                  {documents.items.map((row) => (
+                    <li key={row.file} className="done">
+                      <span className="alstate" aria-hidden="true">✓</span>
+                      <span className="alname" title={row.file}>{row.file}</span>
+                      <span className="alscore">{row.score == null ? '—' : `${row.score}/100`}</span>
+                      {row.criteria.length
+                        ? <span className="alscs">{row.criteria.map((criterion) => <b key={criterion}>{criterion}</b>)}</span>
+                        : <span className="alclean">no failures</span>}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
 
             <details open className="assess-live-details"
                      style={{ borderTop: '1px solid var(--line,#e4e8ec)', marginTop: 14 }}>

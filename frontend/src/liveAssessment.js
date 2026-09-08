@@ -61,6 +61,18 @@ function normalizeQueue(q) {
   }
 }
 
+function normalizeDocuments(documents) {
+  if (!documents || !Array.isArray(documents.items)) return null
+  return {
+    completed: n(documents.completed), displayed: n(documents.displayed),
+    truncated: !!documents.truncated,
+    items: documents.items.filter((row) => row && row.file).map((row) => ({
+      file: row.file, score: typeof row.score === 'number' ? Math.round(row.score) : null,
+      criteria: Array.isArray(row.criteria) ? row.criteria.filter(Boolean).slice(0, 8) : [],
+    })),
+  }
+}
+
 export function normalizeLive(raw) {
   if (!raw || typeof raw !== 'object' || raw.available === false) {
     return { available: false, active: false, kpiCards: [], queue: null, warnings: [] }
@@ -93,6 +105,7 @@ export function normalizeLive(raw) {
     kpiCards,
     outcomeChips: outcomeChips(raw.outcomes || null),
     queue,
+    documents: normalizeDocuments(raw.documents),
     warnings,
     // Passed through for reconnect/ordering (the UI drops out-of-order frames by sequence).
     sequence: typeof raw.sequence === 'number' ? raw.sequence : null,

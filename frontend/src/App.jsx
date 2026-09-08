@@ -53,6 +53,7 @@ import { inventorySnapshot } from './discoverRunTime.js'
 import { scanOptionAt, scanWorkflowContext } from './scanOptionDate.js'
 import AssessSummary from './AssessSummary.jsx'
 import AssessRunIntegrity, { useScanManifest } from './AssessRunIntegrity.jsx'
+import AssessmentReconciliation from './AssessmentReconciliation.jsx'
 import { runIntegrity, integrityCaveat } from './runIntegrity.js'
 import AssessWorklist from './AssessWorklist.jsx'
 import { documentRows } from './assessMetrics.js'
@@ -2419,7 +2420,7 @@ export default function App() {
               <RunDetails scanId={run.id} files={files} cap={cap} assessment={assessment}
                           onBack={() => { setRunDetails(false); window.scrollTo({ top: 0, behavior: 'smooth' }) }} />
             )}
-            {assessed && resultsReady && !runDetails && !assessFile && <><AssessRunIntegrity verdict={runVerdict} manifest={runManifest.manifest} /><AssessSummary files={files} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} run={run} notStarted={run?.not_assessed?.count} integrityCaveat={integrityCaveat(runVerdict)} onRemediate={() => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onRunDetails={() => { setRunDetails(true); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onChangeScope={() => { setView('discover'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /><AssessWorklist files={files} cap={cap} assessment={assessment} onOpenFile={(row) => setAssessFile(row)} onBulkFix={(rows) => handleBulkFix(run.id, rows)} /><RuleBreakdown scanId={run.id} files={files} /></>}
+            {assessed && resultsReady && !runDetails && !assessFile && <><AssessRunIntegrity verdict={runVerdict} manifest={runManifest.manifest} /><AssessSummary files={files} cap={cap} assessment={assessment} assessedAt={fmtStamp(run?.assessed_at)} run={run} notStarted={run?.not_assessed?.count} integrityCaveat={integrityCaveat(runVerdict)} onRemediate={() => { setView('remediate'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onRunDetails={() => { setRunDetails(true); window.scrollTo({ top: 0, behavior: 'smooth' }) }} onChangeScope={() => { setView('discover'); window.scrollTo({ top: 0, behavior: 'smooth' }) }} /><AssessmentReconciliation run={run} files={files} inventory={run?.scope?.inventory} /><AssessWorklist files={files} cap={cap} assessment={assessment} onOpenFile={(row) => setAssessFile(row)} onBulkFix={(rows) => handleBulkFix(run.id, rows)} /><RuleBreakdown scanId={run.id} files={files} /></>}
           </>
         ) : (overviewPreview ? <AssessPreviewCard preview={overviewPreview} /> : placeholder))}
 
