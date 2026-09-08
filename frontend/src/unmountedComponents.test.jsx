@@ -65,6 +65,8 @@ const EXPECTED_UNMOUNTED = [
   // Retired 2026-09-02: removed from Overview (PRD "ACP Discover and Overview Simplification").
   // EstateProgressPanel covers the same estate funnel on both tabs. Kept per retired-feature policy.
   'AssessmentReconciliation',
+  // Retired by the two-slider, server-backed remediation impact planner.
+  'AutomationPolicyControl',
   // Retired 2026-09-08: the generic accounting card was replaced by the stage-specific SSE
   // cards. Keep it available for rollback, but assert that no screen silently mounts it again.
   'CanonicalStageCard',

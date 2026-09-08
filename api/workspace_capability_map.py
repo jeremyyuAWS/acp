@@ -162,10 +162,16 @@ _map_many([
 ], {"remediate.run"})
 _map_many([
     ("GET", "/scans/{sid}/remediation/automation-policy"),
+    ("GET", "/scans/{sid}/remediation/impact-policy"),
+    ("POST", "/scans/{sid}/remediation/impact-preview"),
 ], {"remediate.view", "remediate.run"})
 _map_many([
     ("POST", "/scans/{sid}/remediation/automation-policy/actions"),
+    ("POST", "/scans/{sid}/remediation/impact-policy"),
 ], {"remediate.run"})
+_map_many([
+    ("POST", "/scans/{sid}/remediation/impact-assign"),
+], {"remediate.review"})
 # Live Ops recovery remains independently platform-admin gated in routes/system.py. The
 # capability middleware still needs to name the underlying action: the dynamic stage endpoint
 # can stop assess, remediate, or release work, so any one of those operating rights gets the

@@ -421,7 +421,8 @@ def _propose_text_findings(scan_id: str, filename: str, file_bytes: bytes, ai_en
             # 1.4.5 needs the file on disk (it OCRs embedded images), so compute it here while
             # the temp path is alive — and independently of `text`, since an image-only doc
             # carries no extractable text yet still fails 1.4.5.
-            image_text = _prop.propose_images_of_text(p, p.suffix)
+            image_text = (_prop.propose_images_of_text(p, p.suffix) if ai_enabled else
+                          _prop.propose_images_of_text(p, p.suffix, ai_enabled=False))
             # 2.4.4/2.4.9 link-text proposals read the OOXML zip, so same constraint.
             link_props = (_prop.propose_link_texts(p, p.suffix, ai_enabled=ai_enabled, guidance=_g("2.4.4"))
                           if p.suffix.lower() in (".docx", ".pptx", ".xlsx") else [])
@@ -1163,6 +1164,13 @@ def _remediate_file(payload: dict, job: dict) -> None:
                                 detail="ACP-generated copy shadowing its source — not a document")
         return
 
+    from remediation_impact_execution import execution_controls
+    try:
+        impact_controls = (execution_controls(payload, core.store.get_ai_enabled())
+                           if "remediation_impact_policy" in payload else None)
+    except ValueError as exc:
+        raise FatalJobError(str(exc)) from exc
+
     _OFFICE_MIME = {
         "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -1184,6 +1192,10 @@ def _remediate_file(payload: dict, job: dict) -> None:
     # this slice honest — the alternative is a series of `if ext not in _AV` guards down a
     # 200-line body, each one an opportunity to send a .mp4 into an OOXML path.
     if f".{ext}" in _AV_REMEDIABLE:
+        if impact_controls is not None and not impact_controls["draft_ai"]:
+            core.store.log_decision("system", "remediate.deferred", scan_id=scan_id,
+                                    file=filename, detail="AI drafting disabled by run policy")
+            return
         _propose_media_captions(scan_id, filename, drive_file_id, payload)
         return
 
@@ -1193,6 +1205,9 @@ def _remediate_file(payload: dict, job: dict) -> None:
     # Media returns above: caption proposals are not automatic document mutations and must not
     # depend on this format-fixer query (or on test doubles implementing it).
     _eligible_rules = core.store.list_auto_fail_rules(scan_id, filename)
+    if impact_controls is not None:
+        _eligible_rules = [rule for rule in _eligible_rules
+                           if rule in impact_controls["allowed_rules"]]
     _rule_detail = ("WCAG " + ", ".join(sorted(_eligible_rules))
                     if _eligible_rules else "checking eligible WCAG criteria")
     _activity.record(scan_id, file=filename, action="starting automated remediation",
@@ -1210,13 +1225,31 @@ def _remediate_file(payload: dict, job: dict) -> None:
     # the original bytes — the prose these check is unchanged by remediation, and running
     # here (not after the format branch) means they still surface even when a file has no
     # deterministic fixes and would hit the no-fixes early return below. Both self-gate.
-    _propose_text_findings(scan_id, filename, data, core.store.get_ai_enabled())
+    _draft_ai = (impact_controls["draft_ai"] if impact_controls is not None
+                 else core.store.get_ai_enabled())
+    _propose_text_findings(scan_id, filename, data, _draft_ai)
 
     # docx form-field label proposals (3.3.2) — prefills the unlabeled-content-control
     # deferral with one-click labels derived from each field's adjacent prompt text (or the
     # local model where none). Self-gating like the text proposers; runs on the original bytes.
     if ext == "docx":
-        _propose_form_fields(scan_id, filename, data, core.store.get_ai_enabled())
+        _propose_form_fields(scan_id, filename, data, _draft_ai)
+
+    if impact_controls is not None and not _eligible_rules:
+        review_rules = [{"rule_id": row["rule_id"], "rule_name": row.get("rule_name"),
+                         "finding_count": row.get("finding_count")}
+                        for row in core.store.get_scan_traces(scan_id, file=filename)
+                        if row.get("outcome") == "FAIL"]
+        if review_rules:
+            core.store.queue_hitl_review_for_file(scan_id, filename, review_rules)
+        core.store.log_decision("system", "remediate.deferred", scan_id=scan_id,
+                                file=filename,
+                                detail="Run policy requires review; no automatic mutations permitted")
+        return
+
+    # New-policy jobs generate AI only through proposal-only paths above. Format remediators
+    # contain inline AI writes, so draft-for-review must never enable their AI argument.
+    _format_ai = False if impact_controls is not None else core.store.get_ai_enabled()
 
     # Per-fix before→after evidence for the certification report's "Before → After"
     # section. Each remediator appends {rule_id (SC), before, after, note}; we persist
@@ -1258,7 +1291,7 @@ def _remediate_file(payload: dict, job: dict) -> None:
                            scan_id=scan_id, eligible_rules=len(_eligible_rules)):
             fixed_html, applied, _deferred = remediate_html(
                 data.decode("utf-8", errors="replace"),
-                ai_enabled=core.store.get_ai_enabled(), diffs=rem_diffs,
+                ai_enabled=_format_ai, diffs=rem_diffs,
                 proposals=inline_proposals, in_scope=_scope_allows, filename=filename)
         rem_skipped = _deferred
         fixed_bytes = fixed_html.encode("utf-8")
@@ -1277,7 +1310,7 @@ def _remediate_file(payload: dict, job: dict) -> None:
                 with _joblog.stage("remediate.pdf", doc=_joblog.doc_id(filename),
                                    scan_id=scan_id, eligible_rules=len(_eligible_rules)):
                     out_path, applied, _skipped = remediate_pdf(
-                        src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id,
+                        src, ai_enabled=_format_ai, scan_id=scan_id,
                         diffs=rem_diffs, proposals=_pdf_proposals,
                         applied_fixes=_applied_fixes, in_scope=_scope_allows)
                 rem_skipped = _skipped
@@ -1323,7 +1356,7 @@ def _remediate_file(payload: dict, job: dict) -> None:
                 with _joblog.stage("remediate.office", doc=_joblog.doc_id(filename),
                                    scan_id=scan_id, eligible_rules=len(_eligible_rules), ext=ext):
                     out_path, applied, _skipped = remediate_office(
-                        src, ai_enabled=core.store.get_ai_enabled(), scan_id=scan_id,
+                        src, ai_enabled=_format_ai, scan_id=scan_id,
                         applied_fixes=_applied_fixes, proposals=_proposals,
                         evidence=_evidence, diffs=rem_diffs, in_scope=_scope_allows)
                 rem_skipped = _skipped

@@ -667,13 +667,46 @@ async def remediate_scan(sid: str, request: Request):
 
     # Parse optional scope list from request body.
     scope_set = None
+    body = {}
     try:
         body = await request.json()
-        if isinstance(body.get("scope"), list):
-            scope_set = set(body["scope"])
+        if not isinstance(body, dict):
+            raise HTTPException(422, "A remediation request must be an object.")
+    except HTTPException:
+        raise
     except Exception:
         # missing or non-JSON body — treat as no scope filter
         swallowed("routes.scans.remediate_scan: reading the remediate request body failed")
+
+    if "scope" in body:
+        scope = body["scope"]
+        if (not isinstance(scope, list) or len(scope) > 10000
+                or any(not isinstance(name, str) or not name.strip() for name in scope)):
+            raise HTTPException(422, "scope must be a list of non-empty filenames.")
+        scope_set = set(scope)
+
+    # The planner's policy is an execution contract, not a presentation preference.
+    # Recompute its allowed criteria from durable findings; never accept an allow-list
+    # or eligibility evidence supplied by the browser. Saved defaults also govern old
+    # entry points, while pre-planner deployments retain their existing behavior.
+    import remediation_impact_settings as impact_settings
+    saved_impact = impact_settings.read_impact_policy(core.store, owner)
+    impact_snapshot = None
+    impact_allowed = {}
+    if "remediation_policy" in body or saved_impact["revision"] > 0:
+        try:
+            impact_snapshot = impact_settings.snapshot_impact_policy(
+                core.store, owner, body.get("remediation_policy"))
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(422, str(exc)) from exc
+        from remediation_impact import build_run_impact
+        impact = build_run_impact(core.store, sid, owner, impact_snapshot,
+                                  scope=sorted(scope_set) if scope_set is not None else None)
+        if not impact["integrity"]["complete"] or not impact["capabilities"]["execute"]:
+            raise HTTPException(409, "The remediation forecast is incomplete or this policy cannot execute.")
+        for finding in impact["findings"]:
+            if finding["lane"] == "automatic":
+                impact_allowed.setdefault(finding["file"], set()).add(finding["criterion"])
 
     # Create the single 'Remediated' folder ONCE here (single-threaded), then pass
     # its id to every job — avoids concurrent workers each creating their own.
@@ -746,11 +779,17 @@ async def remediate_scan(sid: str, request: Request):
     policy_snapshot = automation_policy.snapshot_for_future_run(core.store, owner)
     request_fingerprint = _json.dumps(
         {"files": selected_files, "decision_digest": decision_digest,
-         "automation_policy_snapshot_id": policy_snapshot["snapshot_id"]}, sort_keys=True)
+         "automation_policy_snapshot_id": policy_snapshot["snapshot_id"],
+         **({"remediation_impact_policy": impact_snapshot,
+             "allowed_rules": {name: sorted(impact_allowed.get(name, ())) for name in selected_files}}
+            if impact_snapshot else {})}, sort_keys=True)
     for payload in payloads:
         # Provenance only; no decision content enters the queue payload.
         payload["decision_digest"] = decision_digest
         payload["automation_policy"] = policy_snapshot
+        if impact_snapshot:
+            payload["remediation_impact_policy"] = impact_snapshot
+            payload["remediation_impact_allowed_rules"] = sorted(impact_allowed.get(payload["file"], ()))
     execution = _enqueue_stage_batch(
         sid, "remediate", "remediate_file", payloads, snapshot_id=snapshot_id,
         request_fingerprint=request_fingerprint, input_manifest_id=input_manifest_id)

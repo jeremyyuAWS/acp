@@ -1,6 +1,6 @@
 """Read-only remediation automation policy preview API."""
 from fastapi import APIRouter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt, StrictStr
 
 from remediation_automation_policy import build_policy_preview
 
@@ -15,3 +15,89 @@ class PolicyPreviewRequest(BaseModel):
 @router.post("/remediation/automation-policy/preview")
 def remediation_policy_preview(body: PolicyPreviewRequest):
     return build_policy_preview(body.findings, level=body.level)
+
+
+class ImpactPreviewRequest(BaseModel):
+    scope: list[StrictStr] | None = None
+    rule_based: StrictInt | None = Field(default=None, ge=0, le=2)
+    ai: StrictInt | None = Field(default=None, ge=0, le=3)
+
+
+class ImpactSaveRequest(ImpactPreviewRequest):
+    rule_based: StrictInt = Field(ge=0, le=2)
+    ai: StrictInt = Field(ge=0, le=3)
+    expected_revision: StrictInt = Field(ge=0)
+
+
+def _impact_owner(request):
+    return getattr(request.state, 'user_email', None) or 'demo'
+
+
+from fastapi import HTTPException, Request, Response
+
+
+@router.post('/scans/{sid}/remediation/impact-preview')
+def remediation_impact_preview(sid: str, body: ImpactPreviewRequest, request: Request, response: Response):
+    import core
+    from remediation_impact import build_run_impact, provider_summary
+    selected = body.model_dump(exclude_none=True, exclude={'scope'})
+    if selected and len(selected) != 2:
+        raise HTTPException(422, 'Both rule_based and ai are required.')
+    response.headers['Cache-Control'] = 'no-store'
+    try:
+        result = build_run_impact(core.store, sid, _impact_owner(request), selected or None, scope=body.scope)
+        result['providers'] = provider_summary(result['capabilities']['ai_enabled'])
+        return result
+    except LookupError as exc:
+        raise HTTPException(404, 'scan not found') from exc
+
+
+@router.get('/scans/{sid}/remediation/impact-policy')
+def remediation_impact_policy(sid: str, request: Request, response: Response):
+    import core
+    from remediation_impact_settings import read_impact_policy
+    owner = _impact_owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
+        raise HTTPException(404, 'scan not found')
+    response.headers['Cache-Control'] = 'no-store'
+    return read_impact_policy(core.store, owner)
+
+
+@router.post('/scans/{sid}/remediation/impact-policy')
+def save_remediation_impact_policy(sid: str, body: ImpactSaveRequest, request: Request):
+    import core
+    from remediation_impact_settings import save_impact_policy, ImpactPolicyConflict
+    owner = _impact_owner(request)
+    if core.store.get_scan(sid, owner=owner) is None:
+        raise HTTPException(404, 'scan not found')
+    try:
+        return save_impact_policy(core.store, owner, owner,
+                                  {'rule_based': body.rule_based, 'ai': body.ai}, body.expected_revision)
+    except ImpactPolicyConflict as exc:
+        raise HTTPException(409, {'message': 'Policy changed. Reload and try again.', 'current': exc.current}) from exc
+    except ValueError as exc:
+        raise HTTPException(409 if 'revision' in str(exc).lower() else 422, str(exc)) from exc
+
+
+class ImpactAssignmentPolicy(BaseModel):
+    rule_based: StrictInt = Field(ge=0, le=2)
+    ai: StrictInt = Field(ge=0, le=3)
+
+
+class ImpactAssignmentRequest(BaseModel):
+    files: list[StrictStr] = Field(min_length=1, max_length=10000)
+    assignee: StrictStr = Field(min_length=3, max_length=320)
+    policy: ImpactAssignmentPolicy | None = None
+
+
+@router.post('/scans/{sid}/remediation/impact-assign')
+def assign_remediation_impact_work(sid: str, body: ImpactAssignmentRequest, request: Request):
+    import core
+    from remediation_impact import assign_impact_work
+    try:
+        return assign_impact_work(core.store, sid, _impact_owner(request), body.files,
+                                  body.assignee, body.policy.model_dump() if body.policy else None)
+    except LookupError as exc:
+        raise HTTPException(404, 'scan not found') from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc

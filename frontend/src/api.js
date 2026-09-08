@@ -935,9 +935,9 @@ export const cancelScan = (scanId) => (SIM
 // SIM keeps a tiny drain state so getRemediationStatus ticks down over a few polls —
 // the demo then shows the live KPI / progress-bar updates instead of finishing instantly.
 let _simRemed = { remaining: 0, total: 0 }
-export const remediateScan = (scanId, scope) => {
+export const remediateScan = (scanId, scope, remediationPolicy) => {
   if (SIM) { const n = scope ? scope.length : 3; _simRemed = { remaining: n, total: n }; return sim({ scan_id: scanId, enqueued: n, job_ids: ['a', 'b', 'c'], workers: 4 }) }
-  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediate`, { method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json' }, body: JSON.stringify(scope ? { scope } : {}) }).then(j)
+  return fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediate`, { method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json' }, body: JSON.stringify({ ...(scope ? { scope } : {}), ...(remediationPolicy ? { remediation_policy: remediationPolicy } : {}) }) }).then(j)
 }
 // Access allow-list (who can use the app) — managed from Settings.
 export const getAllowlist = () => (SIM
@@ -1075,6 +1075,25 @@ export const getRemediationAutomationPolicy = (scanId) => (SIM
           capabilities: { apply_waiting: false } })
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/automation-policy`,
           { headers: headers(), cache: 'no-store' }).then(j))
+// This forecast comes from the complete stored run, never a browser's partial review queue.
+export const getRemediationImpact = (scanId, policy, scope) => (SIM
+  ? sim(null)
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/impact-preview`, {
+      method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ ...policy, ...(scope ? { scope } : {}) }), cache: 'no-store',
+    }).then(j))
+export const saveRemediationImpactPolicy = (scanId, policy, expectedRevision) => (SIM
+  ? Promise.reject(new Error('Saving remediation settings requires a connected backend.'))
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/impact-policy`, {
+      method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ ...policy, expected_revision: expectedRevision }),
+    }).then(j))
+export const assignRemediationImpact = (scanId, files, assignee, policy) => (SIM
+  ? Promise.reject(new Error('Assigning remediation work requires a connected backend.'))
+  : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/impact-assign`, {
+      method: 'POST', headers: headers({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ files, assignee, policy }),
+    }).then(j))
 export const submitRemediationPolicyAction = (scanId, action, level, expectedRevision, idempotencyKey) => (SIM
   ? sim({ action, policy: { level, revision: expectedRevision + 1 }, duplicate: false })
   : fetch(`${BASE}/scans/${encodeURIComponent(scanId)}/remediation/automation-policy/actions`, {
