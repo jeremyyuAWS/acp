@@ -154,6 +154,22 @@ HEARTBEAT_MAX_SECONDS = 90
 POLL_SECONDS = 5.0
 MAX_POLLS = 24                    # two minutes at the poll interval above
 
+# ASSESSMENT GETS ITS OWN BUDGET, because it is a different kind of work from the one MAX_POLLS
+# was sized for. Discovery lists metadata; assessment DOWNLOADS each document and runs the WCAG
+# analysers over it — LibreOffice for Office formats, the PDF engine for PDFs — which is minutes
+# of CPU per corpus rather than seconds of I/O.
+#
+# NOT A NUMBER CHOSEN TO MAKE A SCENARIO PASS. Run 34246784436 reported "assessment did not
+# complete within 120s" on the reference cluster, which is a one-node runner already measured at
+# 1000m of CPU BELOW ACP's own minimum (`capacity.floor`: needs 5000m, has 4000m) and which had
+# earlier refused the assess request outright with DB_CAPACITY_BUSY. Two minutes was the discovery
+# budget applied to a job that is not discovery.
+#
+# Still bounded, and a timeout is still a FAIL: a target that accepts work and never finishes it
+# is a finding, and the message below carries the progress counts so the next run says whether it
+# stalled at zero or was one document short.
+ASSESS_MAX_POLLS = 120            # ten minutes at the poll interval above
+
 # The run states, taken from what `api/store.py` actually WRITES to `scan_runs.status`. The first
 # real run against a cluster is why this list is not `live_snapshot._ACTIVE_STATES`: copying that
 # set produced `unknown` on a run that was working perfectly, twice.
@@ -707,7 +723,7 @@ def fixture_workflow(ctx: ScenarioContext) -> Outcome:
         # terminal at `discovered` (see RUN_SUCCEEDED_STATES), so a terminal-state wait here would
         # return immediately and report an assessment that had not started as finished.
         progressed = False
-        for _ in range(MAX_POLLS):
+        for _ in range(ASSESS_MAX_POLLS):
             snap = ctx.get(PATH_SCAN_LIVE.format(sid=sid))
             bad = _unavailable(snap, PATH_SCAN_LIVE.format(sid=sid))
             if bad is not None:
@@ -729,9 +745,17 @@ def fixture_workflow(ctx: ScenarioContext) -> Outcome:
                 break
             ctx.backend.sleep(POLL_SECONDS)
         if not progressed:
+            # THE COUNTS GO IN THE MESSAGE, not only the evidence. "did not complete within 120s"
+            # was true and told me nothing: a run stalled at 0 of 6 and a run one document short
+            # produce the identical line, and they are completely different findings. The 503
+            # taught the same lesson one round earlier.
+            final_counts = _counts(_json(ctx.get(PATH_SCAN_LIVE.format(sid=sid))) or {})
             return Outcome.failed(
-                f"{label} did not complete within {MAX_POLLS * POLL_SECONDS:.0f}s",
-                **_counts(_json(ctx.get(PATH_SCAN_LIVE.format(sid=sid))) or {}))
+                f"{label} did not complete within "
+                f"{ASSESS_MAX_POLLS * POLL_SECONDS:.0f}s — "
+                f"{final_counts['completed']} of {final_counts['eligible']} eligible documents "
+                f"finished ({final_counts['discovered']} discovered)",
+                **final_counts)
 
     items, failure = _artifacts(ctx, sid)
     if failure is not None:

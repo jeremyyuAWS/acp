@@ -84,6 +84,11 @@ HEALTHY: dict[str, Any] = {
     # Whether the installation has anywhere durable to put one at all. False models a deployment
     # with no object storage — where an empty inventory says nothing about remediation.
     "object_storage_configured": True,
+    # Discovery finishes, assessment never does — the reference cluster's measured shape on run
+    # 34246784436. `discovered` is a TERMINAL success for a Discover-only run, so `_await_scan`
+    # returns happily and the assess wait is what has to notice; without this the fake cannot
+    # reach that wait at all.
+    "stall_assessment": False,
     "duplicate_artifacts": False,         # scenario 6's failure mode
     "lose_work_on_restart": False,        # scenario 6's other failure mode
     "drains_on_scale_down": True,         # scenario 8
@@ -271,6 +276,11 @@ class FakeBackend(ExecutionBackend):
         # produces, and the first real run reported both `queued` and `discovered` as states it
         # did not model.
         complete = scan.polls >= int(self.world["scan_polls_until_complete"])
+        if complete and self.world.get("stall_assessment"):
+            # Terminal at `discovered` with nothing assessed: eligible stays at the discovered
+            # count and completed stays at zero, which is what a stalled assessment looks like.
+            return HttpResponse(200, json.dumps(
+                self._snapshot(scan, state="discovered", discovered=total, completed=0)))
         if complete:
             state, done = "discovered", total
         elif scan.polls <= 1:
