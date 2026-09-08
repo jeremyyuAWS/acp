@@ -804,6 +804,20 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
 - **"12 of 70 documents processed" said nothing had been processed** (#1561) — a completeness figure
   that read as zero progress while two thirds of the estate was done. Live processed-document
   completeness is now shown during remediation (#1511).
+- **ADR 0055: describe the image of text instead of replacing it — the other half of #1715**
+  (#1733, #1742, #1758, #1761, #1764, #1767, #1776). #1715 cleared pptx 1.4.5 by deleting the raster
+  and writing real text, which is right when the image is prose and wrong when it is a chart: 1.4.5
+  exempts charts precisely because a picture of data is not a picture of prose, so those rows had no
+  path at all. ADR 0055 designs the second lane — keep the image, describe it — with its premises
+  measured before the writer (#1733), implemented (#1742), extended to the chart dead end (#1758) and
+  then to docx and xlsx (#1764). Two defects found and fixed in its own wake: a **false certification**
+  and a filed transcript (#1761). It **refuses** a described decision for an image no writer can reach
+  (#1776) and reaches the layout image the ADR opens with without wedging silently (#1767) — a lane
+  that silently does nothing is the failure mode this pair of ADRs keeps re-learning.
+- One f-string kept the whole repo from parsing on 3.11 (#1734), and the Python floor is now declared
+  where the guard can read it (#1755) rather than implied.
+
+
 
 
 ## Feature: Multi-tenancy and the control plane · #4608
@@ -926,6 +940,23 @@ ADO: `MovateAI-Foundry` / `AI-Foundry` · Epic **#3664** ACP — Accessibility C
 - **A guarded Sonnet remediation pilot** (#1714) — the provider path, settings surface and store
   wiring to run Sonnet on remediation proposals behind an explicit switch, with a pilot module and
   tests rather than a global provider swap.
+- **The hosted run covering all 142 cases: every category now gets a verdict** (#1727), with the
+  rollout panel switched onto it. The structural cases were **measuring verbosity** rather than
+  correctness until they were given an after-edit path (#1730) — a scoring bug that would have made a
+  chattier model look better.
+- **Opus 5 measured beside Sonnet 5 and Haiku 4.5 on the corrected bands** (#1736), then **a second
+  run on the fully-sampled corpus in which replication rejected five of the eleven enables** (#1775).
+  That is the finding: six survived re-measurement, five did not, and enabling on a single run would
+  have shipped five criteria on noise. This is what the three-repeat default and the coverage band
+  (#1705) were built for.
+- **The spend guard was under-quoting, and is now checked against invoices** (#1740); Sonnet 5 is
+  priced at Sonnet 5's rate rather than Sonnet 4.6's (#1766). A guard that refuses before it bills is
+  only as good as its price table.
+- Governed remediation text runs on OpenAI as well as Anthropic (#1756); the eval rule tier is keyed
+  on root cause with its writes gated on scope (#1760); every vision review value is attributed to the
+  exact call that produced it (#1738).
+
+
 
 
 
@@ -1573,6 +1604,20 @@ reach production, safely.
   more expensive failure. The test **evaluates** the group expression against concrete contexts rather
   than grepping it for `github.sha`, which would pass for an expression that fixed main by breaking PR
   supersession.
+- **Production capacity scheduling, completed and made honest** (#1735, #1739, #1743, #1765, #1768,
+  #1780, #1759). The controls shipped (#1735), reconciliation state stopped claiming more than it knew
+  (#1739), the refresh explains itself (#1765), and the accessibility interactions are locked by test
+  (#1759) rather than by review.
+- **Critical database mutation capacity isolated** (#1783), **GPU vision concurrency bounded with
+  recovery** (#1786), and Assess and HITL kept resilient during dependency saturation (#1778) — three
+  independent ways the platform previously degraded into a queue nobody could drain.
+- HITL decisions protected from stale retries (#1785); a throttled billing feed now reads
+  "Temporarily unavailable" rather than "Not configured" (#1732) — the operator response to those two
+  is completely different, and the panel was sending people to the wrong one.
+- The shared checkout now warns that it is **shallow**, so `merge --ff-only` refusing outright is
+  explained rather than mysterious (#1744).
+
+
 
 
 
@@ -1650,6 +1695,13 @@ the write path actually does, and tells a reviewer when the source moved on unde
   selection step, configurable and hardened corrected-file download names, accessibility polish on the
   step panel, and the Release package preview mapped into the workspace capability map, across seven
   slices with backend package/preview tests behind them.
+- **Release destinations chosen and preflighted before the write** (#1741), reusable delivery
+  templates saved (#1745), large downloads prepared durably (#1746), review outcomes linked to the
+  exact AI calls behind them (#1769), and **the release artifacts three parts of packaging disagreed
+  about, reconciled** (#1797). A release whose own components cannot agree on what is in it is not an
+  audit artifact.
+
+
 
 
 
@@ -2072,6 +2124,14 @@ existing data and the existing decision path; nothing adds a second write path.
 - Automation preview shows file impact (#1636) and confidence (#1618); the automation slider counts
   were reconciled with what remediation actually does (#1651). The remediation accessibility check was
   scoped to the workflow panel (#1522).
+- **Governed remediation policy became authoritative rather than advisory** (#1771, #1772, #1773,
+  #1774, #1782, #1795). Routing reasons are authoritative (#1771), the automation impact preview says
+  what the policy will actually do (#1725, #1772), the review card shows the policy impact it is
+  bound by (#1773), governed policy actions shipped (#1774), and the outcome text and findings metrics
+  were aligned to match (#1782, #1795). The gap being closed is a reviewer reading one thing on the
+  card and the engine doing another.
+
+
 
 
 ## Feature: Estate coverage — three denominators and discovery at scale · #4597
@@ -3029,6 +3089,18 @@ are picked up here. Unbound Feature — no ADO id assigned yet; rebind if the pr
   revision. The long hold is right for a success (Cost Management rate-limits and the panel polls
   every 60s), and wrong for a failure, which is almost always something an operator is actively
   fixing; failures now hold 60s while successes keep the hour, and Azure's `Retry-After` still wins.
+- **The Live Operations drawer became tabbed, on one consolidated activity model** (#1748, #1750,
+  #1749, #1747). Live assessment counters explain themselves (#1747) and the overview metrics have a
+  presentation of their own (#1749) instead of being read off the map.
+- Heartbeat history matched to its real refresh cadence (#1789) and shown **only while live** (#1781) —
+  a heartbeat bar that keeps animating after the run ends reads as work still happening.
+- Presentation pass across the operations surfaces: unified KPI typography (#1791), proportional type
+  for document names (#1792), subtler embedded stage accounting (#1787), refined locked-stage
+  typography (#1788), a concise complete-stage label (#1793), fixed stage header formatting (#1770),
+  Settings focus kept stable with the idle account menu dismissed (#1720), and the PowerPoint locator
+  escape warning removed (#1794).
+
+
 
 
 
@@ -3339,6 +3411,38 @@ in either direction.
   regular callers directed to `GET /scans/{sid}/inventory`); `GET /scans/jobs/{job_id}` let any authenticated
   caller who knew or guessed a job id read another user's scan state — source paths, phase, file counts; and
   the remediate POST was likewise unscoped. Same class as #1202 and #872, found by looking rather than waiting.
+## Feature: ACP — Iteration 12 delivery · #5675
+
+Created 2026-09-08 under Epic #3664, mirroring #5478. It carries **2026-09-07's whole day as nine
+Closed Tasks totalling exactly 8 hours** — the daily cap, not the day's full output.
+
+Delivery-log and repository work — **3h**:
+
+- **#5676 (1.5h)** — Document 431 commits across two standup passes, PRs #1276–#1724.
+- **#5677 (0.5h)** — Land the log on `main` via PR #1729, carrying the 2026-09-04 section that had
+  been committed to a parked branch and never merged.
+- **#5678 (0.5h)** — Unpark the `acp` checkout from a branch 803 commits behind `main`.
+- **#5679 (0.5h)** — Diagnose the `AssessSummary` case collision and correct the Open item it produced.
+
+Product work, the 81 commits dated that day — **5h**:
+
+- **#5686 (1.5h)** — Kubernetes/Helm packaging (#1798–#1808).
+- **#5687 (1.5h)** — Canonical stage model and the Live Operations drawer (#1720–#1793).
+- **#5688 (1h)** — ADR 0055 describe-instead-of-replace, and the false certification it exposed
+  (#1733–#1776).
+- **#5689 (0.5h)** — Eval replication and model rollout gates (#1727–#1775).
+- **#5690 (0.5h)** — Capacity scheduling, DB mutation isolation, governed remediation policy
+  (#1735–#1795).
+
+**This is a re-cut, recorded rather than silently rewritten.** #5676–#5679 originally held all 8
+hours, because the first pass booked only the delivery-log work and left the day's 81 product commits
+with no estimate at all. Rather than add hours to a day already at its cap, the existing four Tasks
+were rescaled from 8h to 3h and the product Tasks created for the remaining 5h. The narrative for
+that product work stays under its functional Features above; only the estimate lives here, the same
+split #5478 used. The day's ledger total is unchanged at 8h — the cap was never breached in either
+direction.
+
+
 
 ## Feature: Canonical stage model and durable workflow execution · needs a Feature
 
@@ -3371,6 +3475,17 @@ is the layer above it — what stage the *work* is in, independent of which atte
 - **Cumulative workflow stage cards** (#1719) — a stage stack that shows the run's stages
   accumulating rather than only the current one, so an operator can see the shape of a run in progress
   instead of a single label.
+- **The canonical workflow stage experience unified across the product** (#1763, #1753, #1751).
+  Stage accounting models defined once (#1753) and accessibility contracts tested against them
+  (#1751), so the tabs stop each deriving stage from whatever they had seen.
+- Cumulative and live stage cards: live accounting deltas on every card (#1722), KPIs spread across
+  the card (#1723), canonical stage accounting collapsed and polished (#1726), heartbeat history on
+  the canonical card (#1754), stage-specific completed cards restored (#1762) and SSE-style cards
+  restored (#1790).
+- **Cross-stage conflict is now a dialog in the live stage-start flow** (#1757) rather than a failure
+  discovered after the fact, and guided schedule management shipped (#1728).
+
+
 
 
 
@@ -3394,6 +3509,32 @@ to a customer yet and all of it is prerequisite to retiring the current polling 
 - **The load gate is decided on structure in CI and on the clock only in staging** (#1706). A
   wall-clock latency assertion on shared CI runners fails for reasons that have nothing to do with the
   code; the gate now checks in CI what CI can actually answer.
+## Feature: Kubernetes / Helm packaging · needs a Feature
+
+A self-contained chart, proven by installing it on a disposable cluster rather than by reading it.
+Distinct from *Continuous deployment to Azure* (#4614), which is the ACA path this does not replace:
+this is the portable packaging a customer could run. Sixteen commits, and the pattern throughout is
+that **installing it found the defects reading it did not**.
+
+- **The chart was installed on a disposable cluster, and the two things that stopped it installing
+  were fixed** (#1799). Then: the install was losing every remediated document (#1801) — a data-loss
+  defect invisible to any amount of template review — and the seam between chart and application was
+  turned into a test rather than a discovery (#1804).
+- **Security defaults that were open by default**: a public ingress that authenticates nobody, refused
+  (#1803); worker pods no longer run the API, and the API got a readiness probe **that can actually
+  fail** (#1798); the API server decides whether pods are restricted (#1808); network policies are
+  enforced as rendered, including fixing one that blocked its own install (#1811); and the API says
+  who may reach it instead of admitting every pod in the cluster (#1813).
+- **Correct scheduling and lifecycle**: a GPU request placed somewhere Kubernetes will read it
+  (#1802), the worker allowed to drain for as long as Kubernetes waits for it (#1805) — matching the
+  540s drain the capacity gauge already accounts for — and multi-replica tiers placed with the chart
+  proven to **upgrade** as well as install (#1809).
+- Configuration made explicit: the application is told which environment it is in (#1806), tracing
+  gets all three of its variables **or none** (#1807) — a half-configured tracer is worse than an
+  unconfigured one — and annotations render as strings with the doctor step asserting what it finds
+  (#1810).
+
+
 
 
 
@@ -4117,3 +4258,34 @@ to a customer yet and all of it is prerequisite to retiring the current polling 
   case-only duplicate tracked on the parked branch, already fixed on `main` by #1114. The original
   wording and the reason it was believable are recorded inside the replacement rather than deleted.
   No Feature bullets and no sync marker changed — this pass documents no commits.
+
+- **2026-09-08 (standup — first daily run, and the first under the 8h cap)** — 85 commits past the
+  `8c854d71` marker, PRs #1725–#1813, all documented here. Mode `clean`, delta exact. 72 of the 85 are
+  Jeremy's and 14 are `claude[bot]`'s; **81 are dated 2026-09-07 and only 4 are dated today**, which
+  matters for the hours below. Bullets were appended under seven existing Features, and **one new
+  Feature was written with no ADO id**: *Kubernetes / Helm packaging* — sixteen commits taking the
+  chart from unreviewed to installed on a disposable cluster, which found a data-loss defect (#1801)
+  and five open-by-default security defaults that reading the templates had not. It is deliberately
+  distinct from Continuous deployment (#4614): the ACA path is not being replaced.
+  **NO HOURS WERE BOOKED FOR THIS PASS, and that is the correct outcome, not a gap.** Both days the
+  delta covers were already full: 2026-09-07 held 8h (Iteration 12 Feature #5675, Tasks #5676–#5679 —
+  the delivery-log and repository work) and 2026-09-08 held 8h (Feature #391, Tasks #5680–#5682 — the
+  ADO tooling: the 8h/day ledger, the skill updates, the daily cron). `ado-hours.sh book` refused both
+  attempts with exit 3 and the ledger is unchanged. Under the rule the cap was built for, the excess is
+  **reported as capped and not moved to another day** — so this product work carries no estimate, and
+  the ADO Tasks that would have held it were not created. If those 81 Monday commits are judged to
+  outweigh what #5676–#5679 booked, the fix is to re-cut that day's 8 hours between them, not to add to
+  the day.
+  Two things this entry does **not** do: it does not re-verify PR claims against the source (the
+  bullets follow commit subjects and bodies), and it does not open an Iteration 13 Feature. Sync marker
+  advanced from `8c854d71` to `origin/main` head.
+
+- **2026-09-08 (hours re-cut, no commits documented)** — 2026-09-07's 8 hours were re-divided across
+  nine Tasks under #5675 rather than four. The first pass had booked the whole day to the delivery-log
+  work (#5676–#5679) while the 81 product commits dated that day carried no estimate; the fix under the
+  cap is to re-cut the day, never to extend it. #5676–#5679 were rescaled 8h → 3h and #5686–#5690
+  created for the remaining 5h, totalling exactly 8.0h. **The `ado-hours.sh` ledger is untouched** — it
+  records the day's total, which was and remains 8h to `acp`, and ADO holds the breakdown. Its note
+  line still names only #5676–#5679, which is now a subset; the ledger is append-only by design and
+  was deliberately not hand-edited to match. No Feature bullets changed and the sync marker was not
+  advanced.
