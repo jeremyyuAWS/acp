@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { getAdminAnalytics } from './api.js'
+import './operations-typography.css'
 
 const SOURCE_COLOR = { drive: '#4285F4', sharepoint: '#0078D4', local: '#6E62C4', unknown: '#9a948f' }
 const SOURCE_LABEL = { drive: 'Google Drive', sharepoint: 'SharePoint', local: 'Local', unknown: 'Unknown' }
@@ -101,11 +102,10 @@ function LineChart({ points, height = 100, color = '#4285F4' }) {
 
 function KpiCard({ label, value, sub, color }) {
   return (
-    <div className="panel" style={{ flex: '1 1 140px', minWidth: 120, padding: '16px 18px' }}>
-      <div style={{ fontSize: 26, fontWeight: 700, color: color || 'var(--ink)',
-                    fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>{value}</div>
-      <div style={{ fontSize: 12, color: 'var(--muted)', marginTop: 5 }}>{label}</div>
-      {sub && <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 2 }}>{sub}</div>}
+    <div className="panel ops-kpi">
+      <div className="ops-kpi__value" style={{ color: color || 'var(--ink)' }}>{value}</div>
+      <div className="ops-kpi__label">{label}</div>
+      {sub && <div className="ops-kpi__meta">{sub}</div>}
     </div>
   )
 }
@@ -132,9 +132,8 @@ function FunnelStage({ label, count, maxCount, color }) {
   const w = maxCount > 0 ? Math.max(count / maxCount * 100, 0) : 0
   return (
     <div style={{ flex: 1, minWidth: 0 }}>
-      <div style={{ fontSize: 11, color: 'var(--muted)', marginBottom: 4, whiteSpace: 'nowrap' }}>{label}</div>
-      <div style={{ fontSize: 20, fontWeight: 700, color: color || 'var(--ink)',
-                    fontVariantNumeric: 'tabular-nums', marginBottom: 6 }}>
+      <div className="ops-kpi__meta ops-kpi__meta--nowrap">{label}</div>
+      <div className="ops-kpi__value ops-kpi__value--compact" style={{ color: color || 'var(--ink)' }}>
         {fmt(count)}
       </div>
       <div style={{ height: 6, background: 'var(--line)', borderRadius: 3, overflow: 'hidden' }}>
@@ -224,7 +223,7 @@ export function AdminInsights({ me }) {
       )}
 
       {/* KPI row */}
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 20 }}>
+      <div className="ops-kpi-grid ops-kpi-grid--analytics">
         <KpiCard
           label="Unique files"
           value={data ? fmt(totalDocs) : '—'}
