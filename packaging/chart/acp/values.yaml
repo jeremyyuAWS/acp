@@ -56,6 +56,16 @@ api:
     type: ClusterIP
     port: 80
 
+# The command every worker container runs, unless a role overrides it with `command`.
+#
+# NOT A TUNING KNOB — without it a worker pod runs the API. The application image's CMD starts
+# uvicorn, so a worker Deployment that inherits it serves HTTP, reports Ready and claims no jobs,
+# with no error anywhere. `acp-worker` is the image's worker entrypoint (deploy/public/
+# worker-entry.sh, which execs `python -m worker_main`). Override per role only for a worker
+# image whose entrypoint differs.
+workerCommand:
+  - acp-worker
+
 # One entry per worker role. The keys are the role names the application understands
 # (ACP_WORKER_ROLE), and adding a key here adds a Deployment — there is no per-role template.
 workers: {}

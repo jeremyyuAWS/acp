@@ -24,7 +24,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from packaging_helpers import PACKAGING, load_example
+from packaging_helpers import PACKAGING, ROOT, load_example
 
 CHART = PACKAGING / "chart" / "acp"
 HELM = shutil.which("helm")
@@ -528,13 +528,93 @@ def test_workers_get_no_http_probes():
 
 @needs_helm
 def test_the_api_gets_both_probes_and_they_are_not_the_same_endpoint():
-    """/readyz reports on dependencies and should remove a pod from the load balancer; /healthz
-    reports on the process and should restart it. Pointing both at one endpoint means a database
-    outage restarts every pod, which moves the outage around instead of shedding it."""
+    """Readiness sheds traffic, liveness restarts the process. Pointing both at one endpoint
+    means a database outage restarts every pod, which moves the outage around instead of
+    shedding it."""
     api = named(render(load_example("standard-production")), "Deployment", "-api")
     container = api["spec"]["template"]["spec"]["containers"][0]
-    assert container["readinessProbe"]["httpGet"]["path"] == "/readyz"
+    assert container["readinessProbe"]["httpGet"]["path"] == "/probe/readyz"
     assert container["livenessProbe"]["httpGet"]["path"] == "/healthz"
+
+
+@needs_helm
+def test_the_readiness_probe_points_at_a_route_that_can_actually_fail():
+    """A READINESS PROBE THAT CANNOT RETURN NON-200 IS NOT A READINESS PROBE.
+
+    This chart pointed readiness at `/readyz` until 2026-09-08, and nothing ever failed because
+    nothing could: that handler takes no Response and never sets a status, so it answers 200 from
+    a replica whose database reads have not started answering — the exact replica the gate exists
+    to hold traffic away from. `api/routes/system.py` says so in its own words, in the block
+    comment above `probe_readyz` calling it "the ONE route a platform probe may point at".
+
+    So this asserts against the APPLICATION rather than against a string: whatever path the chart
+    probes must be a route in system.py whose handler sets 503. A future chart edit back to
+    /readyz fails here, and so does an application change that stops /probe/readyz being able to
+    fail — which is the direction nothing else would catch.
+    """
+    api = named(render(load_example("standard-production")), "Deployment", "-api")
+    path = api["spec"]["template"]["spec"]["containers"][0]["readinessProbe"]["httpGet"]["path"]
+    source = (ROOT / "api" / "routes" / "system.py").read_text(encoding="utf-8")
+    route = re.search(
+        rf'@router\.get\("{re.escape(path)}"\)\s*\ndef (\w+)\(([^)]*)\):(.*?)(?=\n@router\.|\Z)',
+        source, re.DOTALL)
+    assert route, f"the chart probes {path}, which is not a GET route in api/routes/system.py"
+    name, signature, body = route.group(1), route.group(2), route.group(3)
+    assert "Response" in signature, (
+        f"{name} takes no Response, so it cannot set a status code and the probe can never fail")
+    assert "status_code = 503" in body, (
+        f"{name} never sets 503, so an unready replica would still be sent traffic")
+
+
+@needs_helm
+def test_a_worker_container_runs_the_worker_and_not_the_api():
+    """THE FAILURE THIS CATCHES IS COMPLETELY SILENT.
+
+    The application image's CMD starts uvicorn (deploy/public/Dockerfile), and the API and every
+    worker tier share that image — they differ by command and by ACP_WORKER_ROLE, which is the
+    topology ADR 0048 is built on. A worker Deployment that inherits the image's CMD therefore
+    runs the API SERVER: it starts, it binds, its pods report Ready, and it claims no jobs. The
+    Deployment is healthy in every way Kubernetes can see. The only symptoms are a queue that
+    never drains and a tier that never writes a heartbeat, and both read as ACP being slow.
+
+    Until 2026-09-08 the chart rendered exactly that, with a comment beside it saying "workers do
+    not listen".
+    """
+    manifests = render(load_example("standard-production"))
+    workers = [d for d in app_workloads(manifests)
+               if d["metadata"]["labels"]["app.kubernetes.io/component"] == "worker"]
+    assert workers, "no worker Deployment was rendered; this test would prove nothing"
+    for deployment in workers:
+        container = deployment["spec"]["template"]["spec"]["containers"][0]
+        command = container.get("command")
+        assert command, f"{deployment['metadata']['name']} inherits the image CMD, which is uvicorn"
+        assert command == ["acp-worker"], command
+        # The other direction, so the assertion above cannot pass on a command that still serves
+        # HTTP: nothing in a worker's command may start the API.
+        joined = " ".join(command)
+        for forbidden in ("uvicorn", "app:app", "gunicorn"):
+            assert forbidden not in joined, (
+                f"{deployment['metadata']['name']} would serve HTTP, not claim jobs")
+
+
+@needs_helm
+def test_the_api_does_not_get_the_worker_command():
+    """The companion. One image, two roles, and the command is the whole of the difference — so a
+    chart that set it on both would have swapped the failure rather than fixed it."""
+    api = named(render(load_example("standard-production")), "Deployment", "-api")
+    assert "command" not in api["spec"]["template"]["spec"]["containers"][0]
+
+
+@needs_helm
+def test_a_role_may_override_the_worker_command():
+    """A purpose-built worker image can have a different entrypoint. The override exists so that
+    the fix above is not also a constraint on which images an operator may run."""
+    manifests = render(load_example("standard-production"),
+                       extra=["--set", "workers.assess.command={/bin/custom-worker}"])
+    assess = named(manifests, "Deployment", "-worker-assess")
+    discover = named(manifests, "Deployment", "-worker-discover")
+    assert assess["spec"]["template"]["spec"]["containers"][0]["command"] == ["/bin/custom-worker"]
+    assert discover["spec"]["template"]["spec"]["containers"][0]["command"] == ["acp-worker"]
 
 
 @needs_helm

@@ -57,6 +57,26 @@ spec:
         - name: worker
           image: {{ include "acp.image" (dict "root" $ "component" "worker") | quote }}
           imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          {{- /*
+            THE COMMAND IS NOT OPTIONAL, AND LEAVING IT OUT WAS SILENT.
+
+            The ACP application image's CMD starts uvicorn (deploy/public/Dockerfile). A worker
+            Deployment with no `command` therefore runs the API SERVER — it starts, it binds, it
+            reports Ready, and it claims no jobs. Nothing surfaces: the Deployment is healthy,
+            the pods are Running, and the only symptom is a queue that never drains and a tier
+            that never writes a heartbeat, which reads as ACP being slow.
+
+            The comment below this block said "workers do not listen" while the rendered manifest
+            produced a container that did exactly that. `acp-worker` is the image's worker
+            entrypoint (deploy/public/worker-entry.sh -> python -m worker_main), the same single
+            token deploy/discovery/Dockerfile sets as its CMD.
+
+            An image without that entrypoint now CrashLoopBackOffs, loudly, instead of quietly
+            serving HTTP — which is the failure this line is for. Override per role with
+            `workers.<role>.command` when a purpose-built worker image starts differently.
+          */}}
+          command:
+            {{- toYaml (default $.Values.workerCommand $cfg.command) | nindent 12 }}
           securityContext:
             {{- toYaml $.Values.securityContext | nindent 12 }}
           env:
@@ -66,11 +86,13 @@ spec:
               value: {{ $v | quote }}
             {{- end }}
           {{- /*
-            NO HTTP PROBES. Workers do not listen; they claim jobs from the queue. A readiness
-            probe on a port nothing serves fails forever, and a liveness probe on one restarts a
-            healthy worker every failureThreshold. Liveness for a queue consumer is a different
-            question (is it still claiming?) and belongs with the job log, not here — stated
-            rather than left as an apparent omission.
+            NO HTTP PROBES. Workers do not listen — which is true of what this renders only
+            because of the `command` above; without it the container ran uvicorn and this comment
+            described an intention rather than a manifest. A readiness probe on a port nothing
+            serves fails forever, and a liveness probe on one restarts a healthy worker every
+            failureThreshold. Liveness for a queue consumer is a different question (is it still
+            claiming?) and belongs with the job log, not here — stated rather than left as an
+            apparent omission.
           */}}
           {{- with $cfg.resources }}
           resources:
