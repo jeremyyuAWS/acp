@@ -8,7 +8,8 @@ from __future__ import annotations
 
 import pytest
 
-from packaging_helpers import EXAMPLE_IDS, EXAMPLES, errors_for, findings_for, load, load_example
+from packaging_helpers import (EXAMPLE_IDS, EXAMPLES, PACKAGING, errors_for, findings_for,
+                               load, load_example)
 
 
 @pytest.mark.parametrize("path", EXAMPLES, ids=EXAMPLE_IDS)
@@ -374,3 +375,61 @@ def test_the_derived_azure_document_wires_the_account_production_actually_uses()
                       DEPLOY_SH.read_text(encoding="utf-8"), re.MULTILINE)
     assert match, "deploy.sh no longer sets BLOB_ACCOUNT the way blob_account() parses"
     assert derived == match.group(1)
+
+
+# ── public ingress must be authenticated ──────────────────────────────────────
+def test_public_ingress_without_an_auth_reference_is_refused():
+    """PRD S13. `api/app.py`'s `_access_gate` middleware is EXPLICITLY a no-op when neither
+    ACP_ACCESS_CODE nor ACP_GOOGLE_CLIENT_ID is set — its own docstring says so — and the chart
+    renders neither unless the document declares one. So a `publicIngress: true` installation
+    served every non-public route to anything that could reach the ingress. Not a weak gate: no
+    gate."""
+    doc = load_example("standard-production")
+    assert doc["network"]["publicIngress"] is True
+    del doc["secrets"]["refs"]["acp-google-client-id"]
+    assert "network.unauthenticated-ingress" in errors_for(doc)
+
+
+def test_either_authentication_mode_satisfies_it():
+    """deploy/public/deploy.sh chooses between exactly these two — per-user GIS or the Basic-auth
+    passcode — so the contract accepts either rather than picking for the operator."""
+    from acpctl.spec import AUTH_SECRET_NAMES
+    for name in AUTH_SECRET_NAMES:
+        doc = load_example("standard-production")
+        del doc["secrets"]["refs"]["acp-google-client-id"]
+        doc["secrets"]["refs"][name] = {"name": "acp-kv", "key": "k"}
+        assert "network.unauthenticated-ingress" not in errors_for(doc), name
+
+
+def test_the_google_drive_source_secret_does_not_satisfy_it():
+    """THE CONFUSION THIS RULE HAS TO SURVIVE, and the reason the gap stayed invisible.
+
+    `google-oauth-client-secret` is required for the Google Drive SOURCE and projects as
+    GOOGLE_OAUTH_CLIENT_SECRET, which nothing in `api/` reads. The variable that opens the gate is
+    ACP_GOOGLE_CLIENT_ID — a different value, a different name, and a document could carry the
+    first while the deployment authenticated nobody.
+    """
+    doc = load_example("standard-production")
+    del doc["secrets"]["refs"]["acp-google-client-id"]
+    doc["secrets"]["refs"]["google-oauth-client-secret"] = {"name": "acp-kv", "key": "g"}
+    assert "network.unauthenticated-ingress" in errors_for(doc)
+
+
+def test_an_installation_with_no_public_ingress_needs_no_gate():
+    """THE CONTROL. A rule that fired on a private installation would be demanding a credential
+    for traffic that cannot arrive."""
+    doc = load_example("standard-production")
+    doc["network"]["publicIngress"] = False
+    del doc["secrets"]["refs"]["acp-google-client-id"]
+    del doc["runtime"]["publicUrl"]
+    assert "network.unauthenticated-ingress" not in errors_for(doc)
+
+
+def test_the_reference_cluster_document_is_private_and_therefore_exempt():
+    """The kind reference installs with no ingress at all, which is why it validated before this
+    rule existed and still does. Asserted so a later change to that document cannot quietly make
+    the reference cluster an open one."""
+    from acpctl.spec import load_document
+    doc = load_document(PACKAGING / "reference" / "kind" / "acp-deployment.yaml")
+    assert doc["network"]["publicIngress"] is False
+    assert "network.unauthenticated-ingress" not in errors_for(doc)

@@ -60,6 +60,13 @@ secrets:
   provider: env-file
   refs:
     database-url: { name: acp-env, key: DATABASE_URL }
+    # WHAT OPENS THE GATE. `api/app.py`'s access middleware is a no-op when neither
+    # ACP_ACCESS_CODE nor ACP_GOOGLE_CLIENT_ID is set, so a public-ingress installation without one
+    # of these serves every non-public route to anything that reaches the ingress. The chart
+    # projects each `secrets.refs` key as an uppercase env var, so declaring the reference IS the
+    # wiring. Swap this key for `acp-access-code` to use the Basic-auth passcode gate instead —
+    # deploy/public/deploy.sh chooses between exactly these two modes and always sets one.
+    acp-google-client-id: { name: acp-env, key: GOOGLE_CLIENT_ID }
     langfuse-secret-key: { name: acp-env, key: LANGFUSE_SECRET_KEY }
 sources:
   - local-upload

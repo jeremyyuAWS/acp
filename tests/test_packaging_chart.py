@@ -501,6 +501,23 @@ def test_private_workers_render_a_policy_that_admits_nothing():
 
 
 @needs_helm
+def test_the_access_gate_variable_actually_reaches_the_api():
+    """The end of the chain for `network.unauthenticated-ingress`, asserted on the render.
+
+    The rule makes a document declare an authentication reference; this establishes that declaring
+    it WIRES something — the chart's `secrets.refs` projection turns the key into
+    ACP_GOOGLE_CLIENT_ID, which is the variable `api/app.py` reads to arm the gate. A rule that
+    demanded a reference the chart then dropped would be a contract that felt safer and changed
+    nothing.
+    """
+    api = named(render(load_example("standard-production")), "Deployment", "-api")
+    env = api["spec"]["template"]["spec"]["containers"][0]["env"]
+    by_name = {e["name"]: e for e in env}
+    assert "ACP_GOOGLE_CLIENT_ID" in by_name, sorted(by_name)
+    assert "secretKeyRef" in by_name["ACP_GOOGLE_CLIENT_ID"]["valueFrom"]
+
+
+@needs_helm
 def test_asking_for_a_gpu_renders_a_gpu_request():
     """`ai.ollama.gpu: true` RENDERED NOTHING AT ALL until 2026-09-08.
 
