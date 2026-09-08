@@ -810,6 +810,22 @@ jobs:
           if-no-files-found: warn
 
       - name: Is the backup restorable, or only written?
+        # RUNS EVEN WHEN AN EARLIER STEP FAILED, AND THAT IS NOT LENIENCY. This step is
+        # independent of the acceptance suite above: it needs an installed release and a
+        # database, which the Install and rollout steps provide, and nothing the suite does or
+        # fails to do changes what it measures. Left gated on the default `success()`, an
+        # unrelated red step SKIPS it — and a check that never runs reports nothing while the job
+        # is already red for another reason, so nobody notices it never ran.
+        #
+        # That is not hypothetical. Runs 34246312816 and 34247813128 both skipped this step
+        # because the acceptance suite failed on `fixture-workflow` first, and on the second of
+        # those the whole point of the commit was a fix to THIS step that consequently went
+        # unproven.
+        #
+        # `!cancelled()` rather than `always()`, so a cancelled run stops here like everything
+        # else. If the install genuinely did not happen, the `helm upgrade` below fails
+        # immediately and says so, which is a better failure than a silent skip.
+        if: ${{ !cancelled() }}
         # PRD S16: "A backup is not considered healthy until a restore test has succeeded within
         # the customer-defined interval." A CronJob that writes dumps nobody ever reads is exactly
         # the thing an installation believes in until the incident, so the restore is the half
