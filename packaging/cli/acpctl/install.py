@@ -172,7 +172,7 @@ def resolve_components(release: Any | None, wanted: list[str],
     for component in wanted:
         digest = digests.get(component)
         resolved[component] = {
-            "repository": chart_defaults[component],
+            "repository": repositories.get(component) or chart_defaults[component],
             "digest": digest,
         }
         if not digest:
