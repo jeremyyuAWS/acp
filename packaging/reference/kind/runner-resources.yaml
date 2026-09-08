@@ -1,0 +1,45 @@
+# The ONE place the reference cluster departs from the document it installs, and why.
+#
+# The document asks for the `small` preset on every tier: 1 CPU, 2Gi memory, 4Gi of temporary
+# storage, requested and limited. Five pods of that is 5 CPU and 20Gi of ephemeral storage
+# REQUESTED. A GitHub-hosted `ubuntu-latest` runner has 4 CPU and about 14GB of disk, and a kind
+# node reports the host's capacity — so the install would not depart from the document at all: it
+# would simply never schedule, and the job would fail on a Pending pod with a message about
+# insufficient cpu that says nothing about ACP.
+#
+# ONLY `requests` ARE LOWERED. Limits stay exactly as the document sets them, which keeps the
+# property that matters — a worker cannot exceed the temporary storage its preset allows, and
+# PRD S12's "no authoritative output may exist only on ephemeral disk" is still being tested
+# against a real bound. Requests are a scheduling hint; limits are the contract.
+# tests/test_packaging_reference_kind.py asserts that this file touches nothing but `requests`,
+# so it cannot quietly grow into a second deployment document.
+#
+# WHAT THIS COSTS, said plainly: an install here is not evidence about capacity or performance.
+# It is evidence that the manifests are correct, that the tiers start, register and heartbeat, and
+# that the application can reach its data services. Those are the questions rendering cannot
+# answer and a one-node cluster can.
+api:
+  resources:
+    requests:
+      cpu: 150m
+      memory: 640Mi
+      ephemeral-storage: 1Gi
+workers:
+  discover:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+        ephemeral-storage: 1Gi
+  assess:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+        ephemeral-storage: 1Gi
+  remediate:
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+        ephemeral-storage: 1Gi

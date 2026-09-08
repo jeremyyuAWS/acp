@@ -1,0 +1,25 @@
+# The disposable reference cluster.
+#
+# ONE NODE, DELIBERATELY. A multi-node kind cluster would let topology spread and PodDisruption
+# budgets have something to act on, and it would still not be a real answer about either: kind's
+# "nodes" are containers on one host, so a spread constraint satisfied here says nothing about
+# zones. A second node would buy the appearance of testing those and not the fact, which is the
+# specific trade this whole reference is trying not to make. They stay listed as untested in
+# packaging/docs/kubernetes-mvp-gap-report.md until a cluster that can answer them exists.
+#
+# The version is pinned rather than floating: `kindest/node:latest` moves the Kubernetes version
+# under the run, and a reference cluster whose version nobody can name is not a reference. This is
+# the version the packaging docs mean by "the reference Kubernetes version", and moving it is a
+# deliberate change with an acceptance run behind it, not a bump.
+#
+# PINNED BY TAG, NOT BY DIGEST, and the difference is worth one line. Everything else this
+# packaging work pins is pinned by digest, for reasons PRD S5.1 states — so a tag here looks like
+# an oversight and is not. Nobody in this repository has run this cluster yet; the digest belongs
+# here once a run has recorded which one it pulled, and inventing one now would be a pin to bytes
+# nobody has seen, which is the exact failure the digest rule exists to prevent.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: acp-reference
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.31.4
