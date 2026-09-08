@@ -751,6 +751,50 @@ def test_the_gpu_count_is_a_values_knob():
 
 
 @needs_helm
+def test_ollamas_root_stays_writable_whatever_the_shared_value_says():
+    """A COMMENT THAT DESCRIBED A SETTING NOBODY HAD SET.
+
+    `templates/ollama.yaml` said the shared securityContext "sets it true, which is right for the
+    API and the workers" — and `values.yaml` has `readOnlyRootFilesystem: false`, so it had never
+    been true for anything. The override was a guard reading as an exception in force, and a
+    reader deciding whether the chart hardens its root filesystems would have concluded it does.
+
+    So this asserts the guard rather than the comment: turn the shared value on and ollama alone
+    must stay writable, because it writes its runtime state under the model root while serving.
+    That is a property of `merge`'s precedence, which is what the override actually relies on, and
+    it holds no matter what the default becomes.
+    """
+    manifests = render(load_example("standard-production"),
+                       extra=["--set", "securityContext.readOnlyRootFilesystem=true"])
+    ollama = named(manifests, "Deployment", "-ollama")["spec"]["template"]["spec"]
+    assert ollama["containers"][0]["securityContext"]["readOnlyRootFilesystem"] is False
+    for suffix in ("-api", "-worker-remediate"):
+        other = named(manifests, "Deployment", suffix)["spec"]["template"]["spec"]
+        assert other["containers"][0]["securityContext"]["readOnlyRootFilesystem"] is True, suffix
+
+
+@needs_helm
+def test_the_shared_root_filesystem_is_writable_and_that_is_deliberate():
+    """The other half, and the one that makes the gap report's entry checkable.
+
+    `PUT /rubric` writes `<repo>/config/rubric.active.json` INTO THE IMAGE (api/routes/rubric.py),
+    so a read-only root turns an owner-only admin endpoint into a 500. Every other runtime write
+    the application makes goes to `$TMPDIR`, which an emptyDir would cover — that one does not,
+    and moving it is an application change rather than a packaging one.
+
+    This test exists so the default is a recorded decision instead of an oversight. When the
+    rubric write moves, this is the test that fails and says where to look.
+    """
+    values = yaml.safe_load((CHART / "values.yaml").read_text(encoding="utf-8"))
+    assert values["securityContext"]["readOnlyRootFilesystem"] is False, (
+        "if this is now true, PUT /rubric must no longer write into the image; see "
+        "packaging/docs/kubernetes-mvp-gap-report.md")
+    rubric = (ROOT / "api" / "routes" / "rubric.py").read_text(encoding="utf-8")
+    assert 'config/rubric.active.json").write_text' in rubric, (
+        "the write this default exists for has moved; re-check whether the default can flip")
+
+
+@needs_helm
 def test_the_remediated_output_store_reaches_every_workload_that_writes_to_it():
     """THE SEAM THAT DID NOT MEET UNTIL 2026-09-08, asserted on the render.
 
