@@ -71,6 +71,29 @@ def test_live_snapshot_carries_compact_sharepoint_visibility_scope():
     assert "inventory" not in snap["scope"]
 
 
+def test_live_snapshot_carries_bounded_provider_neutral_document_activity(monkeypatch):
+    files = [{"file": f"Department/report-{i:03}.pdf", "status": "pass", "score": 100,
+              "issues": []} for i in range(55)]
+    files[54]["score"] = 81
+    files[54]["issues"] = [{"wcag": "1.4.3"}]
+
+    class _Documents(_FakeStore):
+        def get_scan(self, sid, owner=None):
+            return {"run": self._run, "files": files}
+
+        def count_files_done(self, sid):
+            return (55, 60)
+
+    monkeypatch.setattr(live_snapshot, "_live_queue_block", lambda store, sid: None)
+    snap = live_snapshot.build_snapshot(_Documents({"status": "running", "source": "sharepoint",
+        "files": 60, "files_done": 55}), "s1", owner="o")
+    assert snap["documents"]["completed"] == 55
+    assert snap["documents"]["displayed"] == 50
+    assert snap["documents"]["truncated"] is True
+    assert snap["documents"]["items"][-1] == {
+        "file": "Department/report-054.pdf", "score": 81, "criteria": ["1.4.3"]}
+
+
 def test_phase_progression():
     base = {"status": "running", "files": 10, "certifiable": 0, "uncertain": 0, "error": 0}
     assert _snap({**base, "files": 0})["phase"] == "preparing"          # eligible not yet known
