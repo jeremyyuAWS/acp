@@ -2607,15 +2607,40 @@ class _PgAdapter:
         """psycopg2's ThreadedConnectionPool.getconn raises PoolError the moment the pool is
         empty — it never waits. A request arriving during a burst should queue for a moment,
         not fail. Ordinary work is admitted through a pool-minus-reserve gate. Critical HTTP
-        mutations use only the reserved gate, so neither unclassified background work nor a burst
-        of concurrent mutations can steal or overbook that capacity."""
+        mutations prefer the reserved gate and may borrow ordinary capacity; ordinary work can
+        never borrow in the other direction, so the protected floor remains available."""
         import psycopg2.pool
         pool = self._get_pool()
         deadline = time.monotonic() + timeout
         critical = DB_MUTATION_REQUEST.get() if read_only is None else not bool(read_only)
         ordinary_gate = self._ensure_read_gate()
-        gate = self._mutation_gate if critical else ordinary_gate
-        if not gate.acquire(timeout=max(0.0, timeout)):
+        # The reserve is a floor for mutations, not their entire ceiling. Hard-partitioning every
+        # POST/PUT/DELETE into the single reserved permit made two overlapping mutations serialize
+        # even while every ordinary connection sat idle; the second then surfaced
+        # DB_CAPACITY_BUSY after five seconds. Prefer the reserved permit, but let mutations borrow
+        # ordinary capacity when it is available. Reads still cannot borrow in the other direction,
+        # so one physical connection remains protected from a GET burst.
+        if critical:
+            gate = None
+            acquired = False
+            # A mutation waiting behind full ordinary traffic must remain eligible for the
+            # reserved permit when its current holder returns it. Blocking on only the ordinary
+            # semaphore here would miss that wake-up and could still time out beside a free
+            # reserved connection.
+            while True:
+                for candidate in (self._mutation_gate, ordinary_gate):
+                    if candidate.acquire(blocking=False):
+                        gate, acquired = candidate, True
+                        break
+                if acquired:
+                    break
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.01)
+        else:
+            gate = ordinary_gate
+            acquired = gate.acquire(timeout=max(0.0, timeout))
+        if not acquired:
             kind = "critical mutation" if critical else "ordinary database work"
             raise psycopg2.pool.PoolError(f"{kind} admission limit reached")
         while True:

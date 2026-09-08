@@ -58,7 +58,8 @@ az containerapp create "${AZ[@]}" -g "$RG" -n "$OLLAMA_APP" --environment "$GPU_
   --cpu 8 --memory 56Gi \
   --target-port 11434 --ingress external \
   --min-replicas 1 --max-replicas 2 \
-  --env-vars OLLAMA_MAX_LOADED_MODELS=2 OLLAMA_HOST=0.0.0.0:11434 -o none
+  --env-vars OLLAMA_MAX_LOADED_MODELS=2 OLLAMA_HOST=127.0.0.1:11500 \
+             ACP_OLLAMA_UPSTREAM=http://127.0.0.1:11500 -o none
 
 GPU_FQDN="$(az containerapp show "${AZ[@]}" -g "$RG" -n "$OLLAMA_APP" --query properties.configuration.ingress.fqdn -o tsv)"
 
