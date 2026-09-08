@@ -1,13 +1,24 @@
-"""acpctl entry point. Read-only in this release: nothing here provisions, mutates or contacts.
+"""acpctl entry point.
 
     python -m acpctl validate  packaging/examples/standard-production.acp-deployment.yaml
     python -m acpctl plan      <spec>
     python -m acpctl inventory <spec> [--json]
     python -m acpctl values    <spec>
+    python -m acpctl doctor    <spec> -n <namespace>
+    python -m acpctl status    <spec> -n <namespace>
+    python -m acpctl install   <spec> -n <namespace> --release-manifest <path> --yes
+    python -m acpctl uninstall <spec> -n <namespace>
 
-Exit codes: 0 valid, 1 invalid (or plan refused), 2 usage error. `validate` exits 1 on errors
-only — warnings are printed and do not fail, because a check that fails on a legitimate choice
-gets ignored.
+TWO OF THESE CAN CHANGE A CLUSTER, AND ONLY TWO. Everything above `install` reads or renders and
+nothing else — `cluster.py` enforces that with a kubectl allow-list containing no mutating verb,
+and the doctor and status tests assert the refusal. `install` and `uninstall` mutate through
+`helm.py`, which has its OWN, narrower allow-list: helm plus four kubectl writes, nothing more.
+The split is deliberate, so that adding an installer did not quietly retire the read-only
+guarantee the other commands are built on. See packaging/docs/lifecycle.md.
+
+Exit codes: 0 success, 1 refused/invalid/failed, 2 usage error or an unreachable cluster (which
+is retryable and 1 is not). `validate` exits 1 on errors only — warnings are printed and do not
+fail, because a check that fails on a legitimate choice gets ignored.
 """
 from __future__ import annotations
 
@@ -25,12 +36,10 @@ from .values import build_values, render_values_yaml
 # PRD S10's full command list. Unimplemented commands are REJECTED with a message naming the
 # phase they belong to, never accepted-and-ignored.
 NOT_YET_IMPLEMENTED = {
-    "install": "provisioning — phase 3+, deliberately out of the first slice (PRD S23.6)",
     "upgrade": "phase 5",
     "rollback": "phase 5",
     "backup": "phase 5",
     "restore": "phase 5",
-    "uninstall": "phase 5",
     "support-bundle": "phase 5",
 }
 
@@ -48,6 +57,17 @@ def init_profiles():
 def init_platforms():
     from .init_doc import PLATFORMS
     return PLATFORMS
+
+
+def install_default_chart():
+    """The shipped chart's path, for `--chart`'s default and its help text.
+
+    Imported lazily like the two above. `install` pulls in helm.py, state.py and (through the
+    preflight) cluster.py; making `acpctl validate` pay for that at import time would be a
+    read-only command loading the module that holds every mutating call.
+    """
+    from .install import DEFAULT_CHART
+    return DEFAULT_CHART
 
 
 def _print_findings(kind: str, findings: Sequence, stream) -> None:
@@ -314,6 +334,73 @@ def cmd_status(args) -> int:
     return 0 if report["ok"] else 1
 
 
+def _emit(outcome, args) -> int:
+    """One printer for the two commands that change things.
+
+    THE JSON GOES TO STDOUT ALONE, and the running commentary to stderr, because the state
+    document is the machine-readable half and a pipeline doing `acpctl install … --json | jq`
+    must not have to strip progress lines out of it. Without `--json` both go to stdout, which is
+    what a person at a terminal wants.
+
+    The reason line is printed on FAILURE to stderr and on success to stdout for the same reason
+    every other command here does it: an operator redirecting stdout to a file still sees why
+    something was refused.
+    """
+    if args.json and outcome.state is not None:
+        print(json.dumps(outcome.state, indent=2, sort_keys=False))
+    if outcome.code == 0:
+        if outcome.reason:
+            print(outcome.reason, file=sys.stderr if args.json else sys.stdout)
+        return 0
+    print(f"\nacpctl {args.command}: {outcome.reason}", file=sys.stderr)
+    return outcome.code
+
+
+def cmd_install(args) -> int:
+    """Install the release this document describes, and record exactly what was installed.
+
+    EXIT CODES, chosen for what a pipeline should do and matching doctor/status:
+
+        0  installed and VERIFIED, or already installed and identical (a re-run is a no-op)
+        1  refused, or failed, or succeeded-but-unverifiable — the last is deliberately not 0,
+           because an installer that exits 0 for a result it could not observe is the failure
+           this whole command set is written against
+        2  a usage error, or the cluster could not be reached so nothing was established, or
+           there was nobody to answer the confirmation prompt. Retryable; 1 is not.
+    """
+    from . import install as install_mod
+
+    echo = (lambda line: print(line, file=sys.stderr)) if args.json else print
+    outcome = install_mod.install(
+        args.spec, namespace=args.namespace, release_name=args.release_name,
+        release_manifest=args.release_manifest, allow_unpinned=args.allow_unpinned,
+        adopt=args.adopt, skip_preflight=args.skip_preflight, assume_yes=args.yes,
+        context=args.context, chart_dir=args.chart, echo=echo)
+    return _emit(outcome, args)
+
+
+def cmd_uninstall(args) -> int:
+    """Preview — or, with --yes, perform — the removal of one installation.
+
+    EXIT CODES:
+
+        0  the preview was printed (nothing changed), or the removal completed
+        1  refused, or the removal did not complete, or there was nothing here to remove — the
+           last is a failure rather than a success, because "we removed nothing" is a different
+           answer from "we removed it"
+        2  a usage error (no --data-policy, no --confirm-name for a delete) or an unreachable
+           cluster
+    """
+    from . import uninstall as uninstall_mod
+
+    echo = (lambda line: print(line, file=sys.stderr)) if args.json else print
+    outcome = uninstall_mod.uninstall(
+        args.spec, namespace=args.namespace, release_name=args.release_name,
+        data_policy=args.data_policy, assume_yes=args.yes, confirm_name=args.confirm_name,
+        context=args.context, echo=echo)
+    return _emit(outcome, args)
+
+
 def _print_status(report: dict, *, spec: str) -> None:
     print(f"acpctl status — {spec}")
     print(f"namespace: {report['namespace']}")
@@ -423,6 +510,56 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--context", default=None, help="kubeconfig context to use")
     p.add_argument("--json", action="store_true", help="machine-readable output")
     p.set_defaults(func=cmd_status)
+
+    p = sub.add_parser(
+        "install",
+        help="install the release this document describes (CHANGES A CLUSTER — previews the "
+             "plan and asks first)")
+    p.add_argument("spec")
+    # REQUIRED, WITH NO DEFAULT, unlike doctor and status which fall back to metadata.name. Those
+    # two read; this one creates. A namespace defaulted from a document is one an operator did
+    # not choose, and "installed into the wrong namespace" is not a mistake a read-only command
+    # can make.
+    p.add_argument("--namespace", "-n", required=True, help="namespace to install into")
+    p.add_argument("--release-name", default=None,
+                   help="helm release name (default: the document's metadata.name)")
+    p.add_argument("--release-manifest", default=None,
+                   help="the release's image digests, as YAML or JSON (see packaging/docs/"
+                        "lifecycle.md); without it the install refuses unless --allow-unpinned")
+    p.add_argument("--allow-unpinned", action="store_true",
+                   help="install from tags when no digest is available — prints a warning and is "
+                        "recorded in the installation state as pinned: false")
+    p.add_argument("--adopt", action="store_true",
+                   help="install into a namespace that already holds a different ACP installation")
+    p.add_argument("--skip-preflight", action="store_true",
+                   help="install without running the doctor checks first (recorded in the state)")
+    p.add_argument("--yes", action="store_true",
+                   help="skip the confirmation prompt; required when stdin is not a terminal")
+    p.add_argument("--chart", default=str(install_default_chart()),
+                   help="path to the ACP chart")
+    p.add_argument("--context", default=None, help="kubeconfig context to use")
+    p.add_argument("--json", action="store_true",
+                   help="print the installation state as JSON on stdout")
+    p.set_defaults(func=cmd_install)
+
+    p = sub.add_parser(
+        "uninstall",
+        help="remove an installation — PREVIEWS by default and changes nothing without --yes")
+    p.add_argument("spec")
+    p.add_argument("--namespace", "-n", required=True, help="namespace to remove from")
+    p.add_argument("--release-name", default=None,
+                   help="helm release name (default: the document's metadata.name)")
+    p.add_argument("--yes", action="store_true", help="actually remove it; without this the "
+                                                      "command previews and changes nothing")
+    p.add_argument("--data-policy", default=None, choices=["retain", "delete"],
+                   help="what happens to in-cluster PersistentVolumeClaims this release owns. "
+                        "NO DEFAULT — required with --yes")
+    p.add_argument("--confirm-name", default=None,
+                   help="the release name, typed out; required by --data-policy delete")
+    p.add_argument("--context", default=None, help="kubeconfig context to use")
+    p.add_argument("--json", action="store_true",
+                   help="print the final installation record as JSON on stdout")
+    p.set_defaults(func=cmd_uninstall)
 
     for name, why in sorted(NOT_YET_IMPLEMENTED.items()):
         p = sub.add_parser(name, help=f"not yet implemented — {why}")
