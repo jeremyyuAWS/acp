@@ -205,6 +205,84 @@ observability:
     # `observability.langfuse.host`, which `acpctl validate` requires whenever a mode is set.
     host: ""
 
+# Database backup, as a CronJob, and the restore Job that makes it worth having. OFF BY DEFAULT,
+# and `schedule` and `retentionDays` have NO DEFAULTS AT ALL: between them they are this
+# installation's recovery point objective and its retention policy, and a chart that picked
+# `"0 2 * * *"` and `7` would be choosing both on the operator's behalf and recording that choice
+# nowhere anyone would read it. Enabling backup without either fails the render naming the key.
+#
+# NOT YET DECLARABLE IN A DEPLOYMENT DOCUMENT, and that is deliberate rather than pending.
+# `acpctl values` does not emit this block, so a values file regenerated from a document loses it
+# — set it in an overlay, or with --set, until the contract carries it. Adding it to the document
+# means the document choosing a backup STRATEGY, and for `data.postgres.mode: managed` — every
+# production example in packaging/examples/ — the provider's own point-in-time recovery already
+# covers this ground. Whether a second, in-cluster logical copy belongs beside it is an owner
+# decision (PRD S16 RTO/RPO), not one to settle by shipping a schema field.
+#
+# See templates/backup-cronjob.yaml for what this does and does not back up: Postgres only, onto a
+# volume in the same cluster, which covers accidental deletion and a bad migration and does not
+# cover the cluster loss PRD S16 also names.
+backup:
+  enabled: false
+  # A cron expression in the CLUSTER's timezone. This is the RPO — no default.
+  schedule: ""
+  # Days of dumps to keep. Match `data.postgres.backupRetentionDays` in the deployment document,
+  # so the job that deletes them and the document that promises them cannot disagree. No default.
+  retentionDays: null
+  image:
+    registry: ""
+    repository: postgres
+    # AT LEAST THE MAJOR VERSION OF THE SERVER. pg_dump refuses to dump a newer server than
+    # itself, so this is a value rather than a constant. 16 is what the reference cluster runs.
+    tag: "16"
+    digest: ""
+    pullPolicy: IfNotPresent
+  # Where the dumps land inside the container, and the volume they land on. The claim is created
+  # by this chart with `helm.sh/resource-policy: keep`, so `helm uninstall` leaves the backups
+  # behind rather than deleting them at the exact moment somebody wants them.
+  mountPath: /backups
+  storage:
+    # Point this at a claim backed by storage that outlives the cluster, and the recovery story
+    # stops ending at the cluster boundary. Set, nothing below is used and no claim is created.
+    existingClaim: ""
+    # Sized for retentionDays × the compressed dump, with room for the one being written. A
+    # default rather than a refusal because a volume that is too small fails loudly and
+    # immediately, which is not the class of mistake the missing defaults above guard against.
+    size: 20Gi
+    storageClassName: ""
+    accessMode: ReadWriteOnce
+  # One retry, because the ordinary cause of a failed backup is a database that was briefly
+  # unreachable, and a missed window costs more than a second attempt.
+  backoffLimit: 1
+  # A missed window (controller outage, cordoned node) still runs, up to six hours late. A late
+  # backup is worth strictly more than no backup.
+  startingDeadlineSeconds: 21600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  resources:
+    requests:
+      cpu: "100m"
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+# The restore, run deliberately and never as part of a deploy. See templates/restore-job.yaml for
+# the supported invocation — it renders this one object with `helm template -s` and applies it,
+# rather than being a hook on `helm upgrade`, which is the one command whose job is to bring the
+# application back up while a restore needs it down.
+restore:
+  enabled: false
+  # Which dump, by filename on the backup volume. No "latest": after a bad migration the newest
+  # backup is the one you do not want.
+  file: ""
+  # Names the Job. A new restore needs a new id, so a values file left with `enabled: true`
+  # re-applies an identical completed Job on the next upgrade instead of restoring again.
+  runId: ""
+  # Must equal this release's full name. The accident worth refusing is a production restore run
+  # with a staging values file, and a yes/no token reads the same in both.
+  confirm: ""
+
 # Schema migrations run as a hook BEFORE the new code is admitted, with backoffLimit 0 — a failed
 # migration must stop the release rather than retry against a database it has already half
 # changed. See ADR 0045 for why every migration is additive and why there is no down-migration.

@@ -627,9 +627,16 @@ vacuously, renders correctly and spreads nothing.
 `test_every_spread_constraint_selects_the_pods_it_is_attached_to` asserts each selector is a
 subset of the labels its own pod template carries.
 
-**What is missing.** No PersistentVolumeClaim and no volumes at all —
-worker scratch is the node's ephemeral storage, bounded only by the limit above. No
-backup or restore Job, which PRD S5.2 lists as part of the Kubernetes package. Langfuse is deployed
+**What is missing.** Worker scratch is an `emptyDir` bounded by the tier's `ephemeral-storage`
+limit and nothing else; the application itself claims no persistent volume, which is correct while
+every authoritative artifact belongs in object storage. The backup and restore Jobs PRD S5.2 names
+now exist — `templates/backup-cronjob.yaml` and `templates/restore-job.yaml`, both off by default,
+both exercised end to end on the reference cluster (write a row, back up, delete it, restore, prove
+it is back). What they do **not** cover is recorded beside them rather than left to be assumed:
+Postgres only, onto a claim in the same cluster, so region or cluster loss is still the
+infrastructure adapter's problem and an installation whose only backup is this one has a recovery
+story that stops at the cluster boundary. They are also not yet declarable in a deployment
+document — see the next step. Langfuse is deployed
 ungated by Compose and rendered by nothing in the chart — asserted, deliberately, by
 `test_packaging_chart.py::test_compose_deploys_what_the_chart_omits`.
 
@@ -657,15 +664,37 @@ Secret, and installing them would test their behaviour rather than this chart's 
 **What remains a claim about text, and it is the sharpest one left.** "No authoritative output
 lives only on ephemeral storage" (PRD §12) is asserted by
 `tests/test_packaging_inventory.py::test_worker_scratch_is_declared_and_disposable` against the
-inventory's declaration. Nothing has observed where a remediated file actually lands, because no
-document has ever been scanned or remediated on this cluster — that is workstream C, and the
+inventory's declaration. Nothing has observed where a remediated file actually lands. Documents
+now DO move through this cluster — #1796's acceptance step queued and processed six — but the
+acceptance suite reads no artifact inventory, because `/scans/{sid}/artifacts` does not exist in
+any build; that is the workstream C blocker recorded in the table below, and the
 `ACP_BLOB_ACCOUNT` defect (an installation that produced remediated documents and dropped them)
-is the reminder of what that gap can hide.
+is the reminder of what this particular gap can hide.
 
-**Next step.** Not another cluster capability. The remaining workstream B items are each blocked
-on a decision rather than on work: `readOnlyRootFilesystem` on moving the rubric write out of the
-container, a backup/restore Job on RTO/RPO and retention, and a supported-distribution claim on
-PRD §4.
+**Next step.** Not another cluster capability. Two of the three workstream B items that were
+blocked on a decision have been unblocked by doing the work the decision was not actually needed
+for: `readOnlyRootFilesystem` needed the rubric write moved out of the container, and the
+backup/restore Jobs needed the chart to stop trying to choose an RPO — `backup.schedule` and
+`backup.retentionDays` have no defaults and the render fails naming them, so the operator makes
+the decision the chart cannot.
+
+**What is still an owner decision, and it is one question, not three.** Should a deployment
+document carry the in-cluster backup at all? Every production example sets
+`data.postgres.mode: managed`, where the provider's own point-in-time recovery already covers this
+ground and `data.postgres.backupRetentionDays` describes IT — so adding a schema field would put a
+second, weaker copy beside the first and give an operator two retention numbers that can disagree.
+Until that is answered the Jobs stay chart-values-only: `acpctl values` does not emit them, so a
+values file regenerated from a document loses the block — which `values.yaml` states where
+somebody would hit it. The remaining workstream B item is unchanged: a supported-distribution
+claim, PRD §4.
+
+**Two seams this leaves open, named so neither is read as an absence.** `acpctl backup` and
+`acpctl restore` still exit 2 as phase 5 — the CHART has the Jobs and the CLI has no command that
+runs them, so "acpctl backup refuses" must not be read as "this installation cannot be backed up".
+And the support bundle does not collect `latest.json`, which is the file the backup CronJob writes
+precisely so PRD §14's "backup age and restore-test status" can be read without database access;
+collecting it is a few lines in `support_bundle.py` and the obvious next step for whoever owns
+workstream D.
 
 ---
 
@@ -830,7 +859,7 @@ target has done that.
 | Target | State | Evidence | Blocker | Next action |
 |---|---|---|---|---|
 | Release artifacts | in progress | `ACPRelease`, `acpctl release verify`, `--release` on `values`/`plan` (#1797; `tests/test_packaging_release.py`, 37 cases) — a manifest reconciles the plan's eight names, the chart's four components and the built artifacts, and renders every image by digest | Nothing builds, signs, SBOMs or scans an artifact, so no real manifest exists and CI has no release to fail on. Scanning and provenance are not even expressible in the schema | Build the images in CI and emit a signed manifest from that build |
-| Helm hardening | in progress | Requests/limits with `ephemeral-storage` on every workload; restricted pod security **enforced by the API server on the disposable cluster**, not merely rendered (#1808); multi-replica tiers placed, and the chart proven to **upgrade** as well as install (#1809); `terminationGracePeriodSeconds: 300` with a matching drain window (#1805); no worker Service; `doctor` blocks on KEDA, CNI and ESO. Two silent defects closed by #1798 | `kindest/node:v1.31.4` is a version the chart RUNS on, not one anything is supported on — naming a supported distribution is PRD §4 and an owner decision. Zone spreading is soft on every profile and unprovable on a one-node cluster; `readOnlyRootFilesystem` is ON for every ACP workload, with Ollama and Grafana exempt and recorded (#1818); no backup/restore Job | A backup/restore Job, which needs RTO/RPO and retention decided first |
+| Helm hardening | in progress | Requests/limits with `ephemeral-storage` on every workload; restricted pod security **enforced by the API server on the disposable cluster**, not merely rendered (#1808); multi-replica tiers placed, and the chart proven to **upgrade** as well as install (#1809); `terminationGracePeriodSeconds: 300` with a matching drain window (#1805); no worker Service; `doctor` blocks on KEDA, CNI and ESO. Two silent defects closed by #1798. A backup CronJob and a restore Job, both off by default, both **run end to end on the disposable cluster** — write a row, back up, delete it, restore, prove it is back — with the refusal that stops a restore under a live application exercised first, because a guard that is never run is a comment | `kindest/node:v1.31.4` is a version the chart RUNS on, not one anything is supported on — naming a supported distribution is PRD §4 and an owner decision. Zone spreading is soft on every profile and unprovable on a one-node cluster; `readOnlyRootFilesystem` is ON for every ACP workload, with Ollama and Grafana exempt and recorded (#1818). The backup covers **Postgres only, onto a claim in the same cluster**, so region or cluster loss stays the adapter's problem — and it is not declarable in a deployment document | Whether a deployment document should carry an in-cluster backup at all, given every production example is `postgres.mode: managed` with the provider's own PITR; then a supported-distribution claim (PRD §4) |
 | Acceptance suite | in progress | **Run against the disposable cluster on every packaging PR** (`packaging-kind.yml`; four runs, latest 34237399304 green). MEASURED there: the API is ready and names its build (`0.0.0-kind.50`); all three worker tiers register and heartbeat; and **6 documents were queued and processed by the worker tier** — the first documents this packaging work has moved through a real installation | Three MVP scenarios cannot be answered at all, because the surfaces they read do not exist in any build: `/scans/{sid}/artifacts` (PRD §12's durable-output inventory), `/admin/audit-events` and `/admin/support-bundle` (PRD §13). They report `unknown`, never pass, so **no MVP claim is reachable until those three ship** — that is now the concrete blocker, measured rather than predicted. **and scenario 4 is unanswerable on this cluster for a second, separate reason**: `POST /scans/{sid}/assess` answers 503 `DB_CAPACITY_BUSY` and keeps answering it (run 34236164828), so the fixture workflow never reaches the artifact probe. Two independent readings agree on the cause — `capacity.floor` FAILs with "needs 5000m, cluster has 4000m allocatable", and the application's own admission gate times out on a mutation. Connections are NOT the constraint: Postgres serves the document's declared 200 and each API replica asks for ~20. A one-node runner sharing 4 CPU between the control plane, Calico, Postgres, Redis, two API replicas and three workers cannot also run a download-and-analyse fan-out. kind itself certifies nothing either way: no registry, so no digest to pin | Serve the three surfaces; then the same job answers the MVP scenarios end to end |
 | Lifecycle | in progress | `install`/`uninstall`/`support-bundle` **in flight in #1796**, not assessed here. Read-only commands ship today; `workloadIdentity` renders nothing (D1) | No image, no cluster: `doctor`/`status` exit 2 here | Emit `serviceAccount.annotations`; then exercise `install` against the first real cluster |
 | AKS | not started | `SUPPORT_STATUS["azure"] = "planned"` (`presets.py:68-75`). `deploy/public/` deploys Container Apps, a different topology (ADR 0048) | Everything above, plus a billable environment | Run the acceptance suite against AKS once one exists; do not rename the status before that |
@@ -846,7 +875,7 @@ Human decisions. Each is left open deliberately; none is blocked on engineering.
 |---|---|---|
 | Provisioning a billable cloud environment for the acceptance run | Cost and blast radius; see the ask at the top | **outstanding** |
 | Which on-premises Kubernetes distribution is certified first | PRD §4 excludes "arbitrary Kubernetes distributions without passing certification tests", so the first one is a commitment to a customer's cluster shape — it needs a customer signal, not a preference | **outstanding** |
-| RTO, RPO and backup retention | PRD §8/§16 make these customer-defined. `grep -n "rto\|rpo\|restoreTest" packaging/schema/acp-deployment.schema.json` → **exit 1**; the only backup field is `backupRetentionDays` (`:296`), so neither is expressible and neither is checkable | **outstanding** |
+| RTO, RPO and backup retention | PRD §8/§16 make these customer-defined. `grep -n "rto\|rpo\|restoreTest" packaging/schema/acp-deployment.schema.json` → **exit 1**; the only backup field is `backupRetentionDays` (`:296`), so neither is expressible and neither is checkable. The chart no longer needs the answer to ship a backup — `backup.schedule` IS the RPO and `backup.retentionDays` IS the retention, so both have no default and the render fails naming them, which puts the decision in front of the operator instead of taking it. What is still open is narrower: whether the DOCUMENT should carry an in-cluster backup at all, when every production example is `postgres.mode: managed` and the provider's PITR already covers this ground | **outstanding**, and narrower |
 | What `self-hosted` means — operator-provisioned or chart-provisioned data services | ADR 0048's addendum raises it and explicitly does not decide it; today it means `regulated` does not render without an override | **outstanding** |
 | Whether `acp-langfuse` belongs in the contract at all | Compose runs it, production never has, the chart projects its credential (C3); which side moves is a product decision | **outstanding** |
 | Hostname egress enforcement | `networkpolicy.yaml:72-87`: NetworkPolicy matches IPs, not names. A real allow-list needs Cilium `toFQDNs` or an egress proxy — a cluster requirement to impose on a customer | **outstanding** |
