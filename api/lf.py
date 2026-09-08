@@ -89,7 +89,10 @@ def exporter_health() -> dict:
             state = "idle"
         return {
             "configured": _ENABLED, "state": state, "exporting": exporting,
-            "pending": _flush_requested, "attempts": _flush_attempts,
+            # A request flag left by a previously enabled test/runtime configuration is not
+            # actionable once export is disabled. Reporting it as pending contradicts the
+            # disabled state and made health depend on test order.
+            "pending": bool(_ENABLED and _flush_requested), "attempts": _flush_attempts,
             "successes": _flush_successes, "failures": _flush_failures,
             "consecutive_failures": _flush_consecutive_failures,
             "last_attempt_at": _flush_last_attempt_at,

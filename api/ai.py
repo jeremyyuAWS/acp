@@ -79,9 +79,75 @@ _TAGS_CACHE: dict = {"at": 0.0, "tags": None}
 # state or a control-plane dependency.
 VISION_CIRCUIT_FAILURES = max(1, int(_envf("ACP_VISION_CIRCUIT_FAILURES", 1)))
 VISION_CIRCUIT_COOLDOWN = max(1.0, _envf("ACP_VISION_CIRCUIT_COOLDOWN", 120.0))
+VISION_MAX_CONCURRENCY = max(1, int(_envf("ACP_VISION_MAX_CONCURRENCY", 2)))
+VISION_QUEUE_TIMEOUT = max(0.0, _envf("ACP_VISION_QUEUE_TIMEOUT", 0.25))
 _VISION_CIRCUITS: dict[tuple[str, str, str], dict] = {}
 _VISION_CIRCUIT_LOCK = threading.Lock()
 _MISSING_VISION_MODELS_WARNED: set[tuple[str, str]] = set()
+_VISION_GATE = threading.BoundedSemaphore(VISION_MAX_CONCURRENCY)
+_VISION_RUNTIME_LOCK = threading.Lock()
+_VISION_RUNTIME = {
+    "active": 0, "peak_active": 0, "admitted": 0, "backpressured": 0,
+    "completed": 0, "failed": 0, "timeouts": 0, "circuit_skips": 0,
+}
+
+
+def vision_runtime_health() -> dict:
+    """Content-free process-local load signal for operators and autoscaling diagnostics."""
+    with _VISION_RUNTIME_LOCK:
+        return {
+            "max_concurrency": VISION_MAX_CONCURRENCY,
+            "queue_timeout_seconds": VISION_QUEUE_TIMEOUT,
+            **_VISION_RUNTIME,
+        }
+
+
+def _vision_metric(name: str, amount: int = 1) -> None:
+    with _VISION_RUNTIME_LOCK:
+        _VISION_RUNTIME[name] += amount
+
+
+def _enter_vision_capacity() -> bool:
+    if not _VISION_GATE.acquire(timeout=VISION_QUEUE_TIMEOUT):
+        _vision_metric("backpressured")
+        print("[vision] event=vision.capacity_rejected "
+              f"max_concurrency={VISION_MAX_CONCURRENCY} "
+              f"queue_timeout_seconds={VISION_QUEUE_TIMEOUT:g} action=defer_to_review",
+              flush=True)
+        return False
+    with _VISION_RUNTIME_LOCK:
+        _VISION_RUNTIME["active"] += 1
+        _VISION_RUNTIME["admitted"] += 1
+        _VISION_RUNTIME["peak_active"] = max(
+            _VISION_RUNTIME["peak_active"], _VISION_RUNTIME["active"])
+    return True
+
+
+def _leave_vision_capacity() -> None:
+    with _VISION_RUNTIME_LOCK:
+        _VISION_RUNTIME["active"] -= 1
+        _VISION_RUNTIME["completed"] += 1
+    _VISION_GATE.release()
+
+
+def _bounded_vision_generate(provider, prompt: str, image_bytes: bytes, **kwargs) -> dict:
+    """Run one provider request inside the shared GPU admission limit."""
+    if not _enter_vision_capacity():
+        return {
+            "ok": False, "reason": "capacity_busy",
+            "provider": getattr(provider, "name", "unknown"),
+            "zone": getattr(provider, "zone", None),
+            "model": kwargs.get("model") or getattr(provider, "model", None),
+        }
+    try:
+        result = provider.generate(prompt, image_bytes, **kwargs)
+        if not result.get("ok"):
+            _vision_metric("failed")
+            if result.get("reason") == "timeout":
+                _vision_metric("timeouts")
+        return result
+    finally:
+        _leave_vision_capacity()
 
 
 def reset_vision_circuits() -> None:
@@ -686,6 +752,7 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
             return None
 
     now = time.monotonic()
+    half_open_probe = False
     with _VISION_CIRCUIT_LOCK:
         circuit = _VISION_CIRCUITS.get(circuit_key) if circuit_enabled else None
         if circuit and now - circuit["opened_at"] < VISION_CIRCUIT_COOLDOWN:
@@ -697,13 +764,27 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
             _trace_ai("vision", prompt, None, _t0, ok=False, reason="circuit_open",
                       model=mdl, scan_id=scan_id, file=file, provider=circuit_key[0],
                       zone=getattr(prov, "zone", None), prompt_version=prompt_version)
+            _vision_metric("circuit_skips")
             return None
         if circuit and now - circuit["opened_at"] >= VISION_CIRCUIT_COOLDOWN:
-            _VISION_CIRCUITS.pop(circuit_key, None)
+            if circuit.get("probing"):
+                _vision_metric("circuit_skips")
+                return None
+            circuit["probing"] = True
+            half_open_probe = True
     # A scale-to-zero GPU provider gets its own cold-start budget; the Ollama timeout is too short
     # for a RunPod VL-7B cold boot and would turn a healthy endpoint into a silent local fallback.
     _timeout = RUNPOD_VISION_TIMEOUT if getattr(prov, "name", "") == "runpod_serverless" else OLLAMA_VISION_TIMEOUT
-    res = prov.generate(prompt, image_bytes, model=model, timeout=_timeout)
+    res = _bounded_vision_generate(
+        prov, prompt, image_bytes, model=model, timeout=_timeout)
+    # Circuit state belongs to the selected provider. A successful local fallback must not
+    # erase evidence that the GPU provider timed out, or every file retries the overloaded GPU.
+    circuit_res = res
+    if half_open_probe and res.get("reason") == "capacity_busy":
+        with _VISION_CIRCUIT_LOCK:
+            current = _VISION_CIRCUITS.get(circuit_key)
+            if current:
+                current["probing"] = False
     # Fallback floor (ADR 0022): if the default GPU provider missed — a serverless cold-start over the
     # timeout, or the endpoint down — retry on the always-available local CPU Ollama so the finding
     # still gets *a* draft (degraded, not broken). Recorded honestly: the trace/ai_calls row reports
@@ -722,19 +803,22 @@ def _vision_generate(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
                   prompt_version=prompt_version)
         fb = _providers.local_vision_provider()
         if getattr(fb, "name", "") == "ollama":
-            res = fb.generate(prompt, image_bytes, model=None, timeout=OLLAMA_VISION_TIMEOUT)
+            res = _bounded_vision_generate(
+                fb, prompt, image_bytes, model=None, timeout=OLLAMA_VISION_TIMEOUT)
     mdl = res.get("model") or mdl
     reason = res.get("reason") or _providers.REASON_TRANSPORT
+    circuit_reason = circuit_res.get("reason") or _providers.REASON_TRANSPORT
     with _VISION_CIRCUIT_LOCK:
-        if res.get("ok"):
+        if circuit_res.get("ok"):
             _VISION_CIRCUITS.pop(circuit_key, None)
-        elif circuit_enabled and reason not in (_providers.REASON_EMPTY, _providers.REASON_UNUSABLE):
+        elif circuit_enabled and circuit_reason not in (
+                _providers.REASON_EMPTY, _providers.REASON_UNUSABLE, "capacity_busy"):
             previous = _VISION_CIRCUITS.get(circuit_key) or {"failures": 0}
             failures = previous.get("failures", 0) + 1
             if failures >= VISION_CIRCUIT_FAILURES:
                 _VISION_CIRCUITS[circuit_key] = {
                     "failures": failures, "opened_at": time.monotonic(),
-                    "reason": reason, "reported": False,
+                    "reason": circuit_reason, "reported": False,
                 }
             else:
                 _VISION_CIRCUITS[circuit_key] = {**previous, "failures": failures}
@@ -1083,7 +1167,8 @@ def _escalate_vision(prompt: str, image_bytes: bytes, *, scan_id: str | None = N
         return None
     import time as _t
     _t0 = _t.monotonic()
-    res = cloud.generate(prompt, image_bytes, timeout=OLLAMA_VISION_TIMEOUT)
+    res = _bounded_vision_generate(
+        cloud, prompt, image_bytes, timeout=OLLAMA_VISION_TIMEOUT)
     mdl = res.get("model")
     # Stay vendor-agnostic (rule 6): the provider names itself in its result; ai.py never hardcodes
     # a cloud vendor. 'cloud' is only a defensive fallback if an adapter omitted its own name.
