@@ -46,15 +46,48 @@ from .report import Outcome
 # Marked with whether the application serves them today, because a probe against a path that was
 # never implemented produces `unknown` on a perfectly healthy cluster, and the reader deserves to
 # know which kind of gap they are looking at.
-PATH_HEALTH = "/healthz"                              # exists — api/routes/system.py
-PATH_READY = "/readyz"                                # exists — api/routes/system.py
-PATH_WORKER_CAPACITY = "/control/workers/capacity"    # exists — api/routes/control.py
-PATH_SCANS = "/scans"                                 # exists — api/routes/scans.py
-PATH_SCAN_STATUS = "/scans/{sid}/status"              # exists
-PATH_SCAN_EVENTS = "/scans/{sid}/events"              # exists (SSE)
-PATH_SCAN_ASSESS = "/scans/{sid}/assess"              # exists
-PATH_SCAN_REMEDIATE = "/scans/{sid}/remediate"        # exists
-PATH_JOB = "/scans/jobs/{jid}"                        # exists
+PATH_HEALTH = "/healthz"                              # exists — api/routes/system.py:490
+PATH_READY = "/readyz"                                # exists — api/routes/system.py:561
+# WORKER REGISTRATION IS READ FROM `/readyz`, AND `/control/workers/capacity` IS DELIBERATELY NOT
+# USED. That route exists (api/routes/control.py:540) and this suite probed it until it was run
+# against something that is not Azure: it reads Azure Container Apps replica counts and Azure
+# Monitor metrics, and with no Azure configured it returns `_empty_capacity(False)` — a block with
+# no `roles` key at all. Every scenario asking it about worker tiers would report "no worker tier
+# registered" on a perfectly healthy Kubernetes cluster.
+#
+# PRD §2.9 keeps provider differences in infrastructure adapters, and a PORTABLE acceptance suite
+# that certifies six platforms cannot take its central reading through an Azure-only surface.
+# `/readyz` carries `workers.roles.<role>` = {heartbeat_at, age_s, alive, pool_size, version}
+# (store.worker_roles_status) on every platform, which is the same fact without the adapter.
+PATH_READY_ROLES = "/readyz"                          # exists — api/routes/system.py:561
+PATH_SCANS = "/scans"                                 # exists — api/routes/scans.py:200
+
+# STARTING A SCAN IS A QUERY-STRING CALL, NOT A JSON BODY, and getting that wrong is how this
+# suite spent its first life passing against a fake and failing against the application. The real
+# signature is `start_scan(source: str = Query(..., pattern="^(local|drive|sharepoint)$"), ...)`:
+# a POST with a JSON body and no query string answers 422 before any handler runs, so every
+# scenario that starts a scan would have reported a target failure caused entirely by the suite.
+#
+# `source=local` reads the image's own corpus directory, and deploy/public/Dockerfile:86 copies
+# `demo-fixtures/` into it — so FIXTURES below are present in any image built from this
+# repository, with no upload step and no per-target seeding.
+#
+# `queue=true` is the point rather than a convenience: it hands the work to the worker tier, which
+# is the path these scenarios exist to certify. With `queue=false` discovery runs inside the API
+# process and a green report would say nothing about whether any worker ever claimed a job.
+PATH_SCAN_START = "/scans?source=local&queue=true&ai=false&pii=false"
+
+# PROGRESS IS `/live`, NOT `/status`. `/scans/{sid}/status` exists and is a different thing: ADR
+# 0026's Accessibility Status roll-up, which answers `{"available": ..., ...}` and never carries
+# `files_done`. Polling it for progress reads as a scan that is permanently at zero.
+#
+# `/live` is `live_snapshot.build_snapshot` — the authoritative object the application's own
+# running screen polls, so the suite asks the same question the product asks.
+PATH_SCAN_LIVE = "/scans/{sid}/live"                  # exists — api/routes/scans.py:1230
+PATH_SCAN_EVENTS = "/scans/{sid}/events"              # exists (SSE) — api/routes/scans.py:1253
+PATH_SCAN_ASSESS = "/scans/{sid}/assess"              # exists — api/routes/scans.py:1359
+PATH_SCAN_REMEDIATE = "/scans/{sid}/remediate"        # exists — api/routes/scans.py:647
+PATH_JOB = "/scans/jobs/{jid}"                        # exists — api/routes/scans.py:826
 PATH_ARTIFACTS = "/scans/{sid}/artifacts"             # SUITE REQUIREMENT — the durable-artifact
                                                       # inventory PRD §12 needs; a build without
                                                       # it cannot demonstrate §20.5 at all
@@ -97,6 +130,15 @@ HEARTBEAT_MAX_SECONDS = 90
 
 POLL_SECONDS = 5.0
 MAX_POLLS = 24                    # two minutes at the poll interval above
+
+# The run states `/live` reports, copied from api/live_snapshot.py:28-29 rather than guessed. A
+# state in neither set is `unknown` and never a pass: the suite has no idea what the run is doing,
+# and "the application grew a state we do not model" is a fact about the suite that must not be
+# reported as a fact about the target.
+RUN_ACTIVE_STATES = frozenset({"preparing", "running", "degraded", "pausing", "paused",
+                               "finalizing"})
+RUN_SUCCEEDED_STATE = "completed"
+RUN_FAILED_STATES = frozenset({"canceled", "cancelled", "failed"})
 
 # Storage schemes that are DURABLE. PRD §12: no authoritative output may exist only on ephemeral
 # disk, and §20.5 makes that an acceptance criterion. A remediated file whose only location is
@@ -170,7 +212,15 @@ def _unavailable(resp: HttpResponse, path: str) -> Outcome | None:
 
 def _start_scan(ctx: ScenarioContext, fixtures: Iterable[str] = FIXTURES
                 ) -> tuple[str | None, Outcome | None]:
-    """Read the synthetic fixtures and submit them as one scan. Returns (scan_id, failure)."""
+    """Start a queued local scan of the image's own fixture corpus. Returns (scan_id, failure).
+
+    THE FIXTURE READ IS A PRECONDITION CHECK, NOT AN UPLOAD. There is no endpoint that accepts
+    document bytes from this suite, and inventing one would mean certifying a path no user takes.
+    `source=local` scans what the image already carries, and deploy/public/Dockerfile:86 copies
+    `demo-fixtures/` in — so reading them here asserts that the repository this image was built
+    from still contains the documents the assertions below count. A run whose corpus silently
+    shrank would otherwise report "4 of 4 processed" while processing two.
+    """
     names = []
     for path in fixtures:
         try:
@@ -178,28 +228,56 @@ def _start_scan(ctx: ScenarioContext, fixtures: Iterable[str] = FIXTURES
         except BackendError as exc:
             return None, Outcome.unknown(f"fixture {path} could not be read: {exc}")
         names.append(path.rsplit("/", 1)[-1])
-    resp = ctx.post(PATH_SCANS, {"fixtures": names, "source": "acceptance-suite"})
-    bad = _unavailable(resp, PATH_SCANS)
+
+    resp = ctx.post(PATH_SCAN_START)
+    bad = _unavailable(resp, PATH_SCAN_START)
     if bad is not None:
         return None, bad
     body = _json(resp) or {}
+    if resp.status == 409:
+        # One active workflow per owner (api/routes/scans.py's discovery_workflow_active fence).
+        # A previous scenario's run is still going, which is a fact about how this suite sequences
+        # its own work and not a finding about the target.
+        return None, Outcome.unknown(
+            f"{PATH_SCANS} answered 409: a scan for this owner is still active, so this scenario "
+            f"could not start its own", status=409, detail=str(body.get("detail"))[:200])
     if not resp.ok or not body.get("scan_id"):
         return None, Outcome.failed(
-            f"submitting {len(names)} synthetic fixtures to {PATH_SCANS} answered "
-            f"{resp.status} without a scan id", status=resp.status)
+            f"starting a local scan of {len(names)} fixtures answered {resp.status} without a "
+            f"scan id", status=resp.status)
     return str(body["scan_id"]), None
+
+
+def _counts(snap: dict | None) -> dict[str, int]:
+    """The three denominators `/live` reports, as ints.
+
+    THREE, NOT ONE, and the snapshot's own comment says why: "discovered >= eligible >= completed
+    — three honest denominators, never blended into one %". A scenario that compares `completed`
+    against `discovered` reports a failure on every run with an ineligible file in the corpus.
+    """
+    totals = (snap or {}).get("totals") or {}
+    kpis = (snap or {}).get("kpis") or {}
+    return {"discovered": int(totals.get("discovered") or 0),
+            "eligible": int(totals.get("eligible") or 0),
+            "completed": int(kpis.get("completed") or 0)}
 
 
 def _await_scan(ctx: ScenarioContext, sid: str, *, max_polls: int = MAX_POLLS
                 ) -> tuple[dict | None, Outcome | None]:
-    """Poll a scan to a terminal state. Returns (final status, failure).
+    """Poll `/live` to a terminal run state. Returns (final snapshot, failure).
 
     A scan that never terminates is a FAIL, not an unknown: the suite reached the target, asked
     repeatedly, and the target did not finish work it accepted. That is a statement about the
     target — which is exactly what a timeout here usually means (a worker took the job and died,
     or a scale-down abandoned it).
+
+    `available: false` IS NOT A TIMEOUT AND NOT A FAILING RUN. `/live` degrades to it for an
+    unknown OR FOREIGN scan, and this suite authenticates as whatever the target's access gate
+    makes of it — so the same answer means "your scan id is wrong" and "you are asking as a
+    different owner than the one who created it". Neither establishes anything about the target's
+    ability to process work, so it is `unknown`, with the reason named.
     """
-    path = PATH_SCAN_STATUS.format(sid=sid)
+    path = PATH_SCAN_LIVE.format(sid=sid)
     seen: list[int] = []
     for _ in range(max_polls):
         resp = ctx.get(path)
@@ -207,16 +285,26 @@ def _await_scan(ctx: ScenarioContext, sid: str, *, max_polls: int = MAX_POLLS
         if bad is not None:
             return None, bad
         body = _json(resp) or {}
-        seen.append(int(body.get("files_done", 0)))
-        status = str(body.get("status", ""))
-        if status in ("complete", "completed", "done"):
+        if not body.get("available", False):
+            return None, Outcome.unknown(
+                f"{path} reports the run is not available to this caller "
+                f"({body.get('reason') or 'no reason given'}); it is either an unknown scan or "
+                f"one owned by a different identity, and neither says anything about the target",
+                reason=body.get("reason"))
+        state = str(body.get("state") or "").strip().lower()
+        seen.append(_counts(body)["completed"])
+        if state == RUN_SUCCEEDED_STATE:
             return body, None
-        if status in ("failed", "error", "cancelled"):
-            return body, Outcome.failed(f"the scan ended in status {status!r}", status=status)
+        if state in RUN_FAILED_STATES:
+            return body, Outcome.failed(f"the run ended in state {state!r}", state=state)
+        if state not in RUN_ACTIVE_STATES:
+            return None, Outcome.unknown(
+                f"the run reports state {state!r}, which this suite does not model. That is a gap "
+                f"in the suite, not a finding about the target.", state=state)
         ctx.backend.sleep(POLL_SECONDS)
     return None, Outcome.failed(
-        f"the scan did not reach a terminal state within {max_polls} polls "
-        f"({max_polls * POLL_SECONDS:.0f}s); files_done went {seen}",
+        f"the run did not reach a terminal state within {max_polls} polls "
+        f"({max_polls * POLL_SECONDS:.0f}s); completed went {seen}",
         progress=seen)
 
 
@@ -261,6 +349,48 @@ def _ephemeral(items: list[dict]) -> list[str]:
         if scheme not in DURABLE_SCHEMES:
             out.append(location)
     return out
+
+
+def _role_status(ctx: ScenarioContext) -> tuple[dict | None, Outcome | None]:
+    """`/readyz`'s per-role heartbeat block. Returns (roles, failure).
+
+    A ROLE ABSENT FROM THE BLOCK HAS NEVER BEATEN, which `store.worker_roles_status` draws as a
+    deliberate distinction from a role that beat and went stale (present, `alive` false, with an
+    age). The two need completely different fixes — a tier that never started versus one that
+    started and lost Redis — so the scenarios below keep them apart rather than reporting "not
+    ready" for both.
+    """
+    resp = ctx.get(PATH_READY_ROLES)
+    bad = _unavailable(resp, PATH_READY_ROLES)
+    if bad is not None:
+        return None, bad
+    body = _json(resp) or {}
+    roles = ((body.get("workers") or {}).get("roles") or {})
+    if not isinstance(roles, dict) or "error" in roles:
+        return None, Outcome.unknown(
+            f"{PATH_READY_ROLES} could not report per-role worker state "
+            f"({roles.get('error') if isinstance(roles, dict) else type(roles).__name__})")
+    return roles, None
+
+
+def _ready_replicas(ctx: ScenarioContext, workload: str) -> int | None:
+    """Ready replicas for one Deployment, or None when it cannot be read.
+
+    kubectl RATHER THAN AN API FIELD, because replica count is a property of the orchestrator and
+    the application does not portably know it — the Azure route that did is the one this suite
+    just stopped using.
+    """
+    got = ctx.backend.kubectl(["get", f"deployment/{workload}", "-n", ctx.target.namespace,
+                               "-o", "json"])
+    if not got.ok:
+        return None
+    payload = got.json()
+    # NO `status` KEY AT ALL IS "COULD NOT READ", NOT ZERO. A List payload, an empty body or a
+    # shape this suite does not model would otherwise read as a Deployment with no ready replicas
+    # — reporting a scaling failure on a tier that scaled perfectly.
+    if not isinstance(payload, dict) or "status" not in payload:
+        return None
+    return int((payload.get("status") or {}).get("readyReplicas") or 0)
 
 
 def _scale(ctx: ScenarioContext, workload: str, replicas: int, *, requires: str):
@@ -326,22 +456,19 @@ def worker_registration(ctx: ScenarioContext) -> Outcome:
     registration surface, and the Deployment count is cross-checked underneath it to tell "no pods"
     apart from "pods that never registered", which need completely different fixes.
     """
-    resp = ctx.get(PATH_WORKER_CAPACITY)
-    bad = _unavailable(resp, PATH_WORKER_CAPACITY)
-    if bad is not None:
-        return bad
-    body = _json(resp) or {}
-    roles = body.get("roles") or {}
+    roles, failure = _role_status(ctx)
+    if failure is not None:
+        return failure
     stale, missing, observed = [], [], {}
     for role in WORKER_ROLES:
         entry = roles.get(role)
         if not entry:
             missing.append(role)
             continue
-        age = entry.get("heartbeat_age_seconds")
-        observed[role] = {"replicas": entry.get("replicas"), "ready": entry.get("ready"),
-                          "heartbeatAgeSeconds": age, "slots": entry.get("slots")}
-        if age is None or float(age) > HEARTBEAT_MAX_SECONDS or not entry.get("ready"):
+        age = entry.get("age_s")
+        observed[role] = {"alive": entry.get("alive"), "heartbeatAgeSeconds": age,
+                          "poolSize": entry.get("pool_size"), "version": entry.get("version")}
+        if age is None or float(age) > HEARTBEAT_MAX_SECONDS or not entry.get("alive"):
             stale.append(role)
 
     pods = {}
@@ -392,7 +519,15 @@ def queue_and_progress(ctx: ScenarioContext) -> Outcome:
         events = ctx.backend.sse(stream_path, max_events=10, timeout=POLL_SECONDS * 4)
     except BackendError as exc:
         return Outcome.unknown(f"the event stream at {stream_path} could not be opened: {exc}")
-    progress = [e for e in events if str(e.get("event", "")).startswith("progress")]
+
+    # THIS STREAM CARRIES NO `event:` FIELD, and an earlier version of this scenario looked for
+    # one — it filtered on `event` starting with "progress" and would have reported "no progress
+    # events" on a stream working exactly as designed. `stream_live_events` is a snapshot-REPLACE
+    # stream: every `data:` frame is the whole `/live` object, emitted when its content changes,
+    # with `: keep-alive` comment frames in between. So a progress frame is one whose decoded data
+    # is a snapshot, and the keep-alives are deliberately not counted as progress.
+    snapshots = [e for e in events if isinstance(e.get("data"), dict)
+                 and "available" in e["data"]]
     if not events:
         return Outcome.failed(
             f"{stream_path} opened and delivered no events; live progress is how every UI in this "
@@ -401,18 +536,21 @@ def queue_and_progress(ctx: ScenarioContext) -> Outcome:
     final, failure = _await_scan(ctx, sid)
     if failure is not None:
         return failure
-    done = int((final or {}).get("files_done", 0))
-    total = int((final or {}).get("files_total", 0))
-    if total and done < total:
-        return Outcome.failed(f"the scan completed with {done}/{total} files processed",
-                              filesDone=done, filesTotal=total)
-    if not progress:
+    counts = _counts(final)
+    if counts["discovered"] < len(FIXTURES):
         return Outcome.failed(
-            f"the scan completed but the stream carried no progress events "
-            f"(saw {[e.get('event') for e in events]})", events=[e.get("event") for e in events])
+            f"the queued run completed having discovered {counts['discovered']} documents; the "
+            f"image carries at least {len(FIXTURES)} under its local corpus, so the worker tier "
+            f"either did not claim the job or listed nothing",
+            discovered=counts["discovered"], expected=len(FIXTURES))
+    if not snapshots:
+        return Outcome.failed(
+            f"the run completed but the stream carried no snapshot frames "
+            f"(saw {len(events)} frame(s), none of them a snapshot)", frames=len(events))
     return Outcome.passed(
-        f"{total} queued documents processed, with {len(progress)} live progress events",
-        scanId=sid, filesTotal=total, progressEvents=len(progress))
+        f"{counts['discovered']} documents queued and processed by the worker tier, with "
+        f"{len(snapshots)} live snapshot frames on the event stream",
+        scanId=sid, **counts, snapshotFrames=len(snapshots))
 
 
 # ── 4. fixture-workflow ───────────────────────────────────────────────────────
@@ -592,8 +730,8 @@ def worker_restart(ctx: ScenarioContext) -> Outcome:
         if duplicates:
             findings.append(f"{role}: {len(duplicates)} document(s) have two authoritative "
                             f"outputs after the restart")
-        elif int((final or {}).get("files_done", 0)) < len(FIXTURES):
-            findings.append(f"{role}: {final.get('files_done')} of {len(FIXTURES)} documents "
+        elif _counts(final)["discovered"] < len(FIXTURES):
+            findings.append(f"{role}: {_counts(final)['discovered']} of {len(FIXTURES)} documents "
                             f"survived the restart")
     if findings:
         return Outcome.failed("; ".join(findings), tiers=evidence)
@@ -680,20 +818,25 @@ def scale_updown(ctx: ScenarioContext) -> Outcome:
     """
     role = "assess"
     workload = WORKLOAD[role]
-    before = ctx.get(PATH_WORKER_CAPACITY)
-    bad = _unavailable(before, PATH_WORKER_CAPACITY)
-    if bad is not None:
-        return bad
-    baseline = ((_json(before) or {}).get("roles") or {}).get(role) or {}
-    start_replicas = int(baseline.get("replicas") or 1)
+    start_replicas = _ready_replicas(ctx, workload)
+    if start_replicas is None:
+        return Outcome.unknown(
+            f"could not read the replica count of {workload}; nothing about scaling was "
+            f"established", workload=workload)
+    start_replicas = max(1, start_replicas)
 
     up = _scale(ctx, workload, start_replicas + 2, requires="scale-control")
     if not up.ok:
         return Outcome.unknown(f"could not scale {workload}: {up.error or up.stderr.strip()}")
+    # BOTH HALVES, because either alone passes on a broken tier: pods can be Ready without ever
+    # claiming a queue lane (scenario 2's whole subject), and the tier can keep heartbeating from
+    # its OLD replicas while the new ones never start.
     registered = False
     for _ in range(MAX_POLLS):
-        entry = ((_json(ctx.get(PATH_WORKER_CAPACITY)) or {}).get("roles") or {}).get(role) or {}
-        if int(entry.get("replicas") or 0) >= start_replicas + 2 and entry.get("ready"):
+        ready_now = _ready_replicas(ctx, workload) or 0
+        roles, failure = _role_status(ctx)
+        entry = (roles or {}).get(role) or {}
+        if ready_now >= start_replicas + 2 and entry.get("alive"):
             registered = True
             break
         ctx.backend.sleep(POLL_SECONDS)
@@ -726,7 +869,7 @@ def scale_updown(ctx: ScenarioContext) -> Outcome:
     return Outcome.passed(
         f"{workload} scaled {start_replicas}→{start_replicas + 2}→{start_replicas}; new replicas "
         f"registered and in-flight work drained without duplication",
-        role=role, filesDone=(final or {}).get("files_done"), scanId=sid)
+        role=role, scanId=sid, **_counts(final))
 
 
 # ── 9. upgrade-from-previous ──────────────────────────────────────────────────
@@ -854,4 +997,4 @@ def backup_restore(ctx: ScenarioContext) -> Outcome:
     return Outcome.passed(
         f"backup taken, restore performed, and a {len(FIXTURES)}-document workflow completed "
         f"afterwards with {len(_authoritative(items or []))} artifacts persisted",
-        scanId=sid, filesDone=(final or {}).get("files_done"))
+        scanId=sid, **_counts(final))

@@ -24,6 +24,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -58,9 +59,24 @@ HEALTHY: dict[str, Any] = {
     # Per role: replicas, ready, heartbeat age, and the slot count the tier advertises. A worker
     # with pods but no heartbeat is the case scenario 2 exists for — a Deployment reporting 3/3
     # while nothing has registered with the queue looks perfectly healthy in kubectl.
-    "workers": {role: {"replicas": 2, "ready": 2, "heartbeat_age_seconds": 4, "slots": 4}
+    # `/readyz`'s `workers.roles.<role>`, field for field with store.worker_roles_status: a role
+    # ABSENT from this mapping has never beaten, which is deliberately distinct from one that beat
+    # and went stale (present, `alive` false, with an age). Scenario 2 tells those apart, so the
+    # fake has to be able to express both.
+    "workers": {role: {"heartbeat_at": "2026-09-08T09:00:00+00:00", "age_s": 4.0, "alive": True,
+                       "pool_size": 4, "version": "2026.9.8.1"}
                 for role in WORKER_ROLES},
+    # Replicas are the ORCHESTRATOR's fact, not the application's, and they live apart from the
+    # heartbeat for the reason scenario 2 exists: a tier can have Ready pods and no registration,
+    # or registration from old pods while new ones never start. Folding them into one block made
+    # both of those inexpressible.
+    "replicas": {role: 2 for role in WORKER_ROLES},
     "queue": {"depth": 0, "oldest_wait_seconds": 0},
+    # What `source=local` finds. The application scans the image's own corpus directory rather
+    # than anything the caller names — deploy/public/Dockerfile:86 copies `demo-fixtures/` into
+    # /app/test-corpus/files — so the fake models a corpus, not an upload.
+    "local_corpus": ["word-accessibility-demo.docx", "powerpoint-accessibility-demo.pptx",
+                     "excel-accessibility-demo.xlsx", "pdf-accessibility-demo.pdf"],
     # How many status polls a scan takes to finish. Small so the self-test is fast; the point is
     # that it is more than one, so "poll until terminal" is actually exercised.
     "scan_polls_until_complete": 2,
@@ -121,6 +137,7 @@ class FakeBackend(ExecutionBackend):
                  start: datetime | None = None) -> None:
         super().__init__(grants=grants)
         self.world = shape if shape is not None else world()
+        self._query: dict[str, str] = {}
         self._clock = 0.0
         self._wall = start or datetime(2026, 9, 8, 12, 0, 0, tzinfo=timezone.utc)
         self._scans: dict[str, _Scan] = {}
@@ -129,7 +146,7 @@ class FakeBackend(ExecutionBackend):
         # takes it away, and `/readyz` reads this back.
         self._deps = {name: 1 for name in ("redis", "postgres", "object-storage", "ai-provider")}
         self._restarts: dict[str, int] = {}
-        self._replicas = {role: self.world["workers"][role]["replicas"] for role in WORKER_ROLES}
+        self._replicas = dict(self.world["replicas"])
         self._restored = False
 
     # -- clock --------------------------------------------------------------
@@ -152,6 +169,11 @@ class FakeBackend(ExecutionBackend):
     # -- HTTP ---------------------------------------------------------------
     def _http(self, method: str, path: str, body: Any) -> HttpResponse:
         route, params = _match(method, path)
+        # Handlers read query parameters the way the application does. Kept as flat single values
+        # because every parameter these scenarios send is scalar; a repeated one would need
+        # parse_qs's list form, and no scenario has that shape today.
+        self._query = {k: v[0] for k, v in
+                       urllib.parse.parse_qs(urllib.parse.urlparse(path).query).items()}
         fault = self._fault(route) if route else None
         if fault:
             if "error" in fault:
@@ -180,48 +202,90 @@ class FakeBackend(ExecutionBackend):
             checks[mapping[dep]] = "unavailable"
         ready = not down
         payload = {"ready": ready, "checks": checks,
-                   "degraded": sorted(mapping[d] for d in down)}
+                   "degraded": sorted(mapping[d] for d in down),
+                   # The block scenario 2 reads. `can_run_scans` and `local_pool` are carried
+                   # because /readyz carries them and a scenario may one day need them; `roles` is
+                   # the part under test.
+                   "workers": {"alive": True, "local_pool": 0, "can_run_scans": True,
+                               "roles": dict(self.world["workers"])}}
         # 503 when not ready: a readiness probe that answers 200 while a dependency is gone is the
         # bug PRD §14 is about, and the degradation scenario asserts the status code, not just the
         # body, because Kubernetes routes traffic on the code.
         return HttpResponse(200 if ready else 503, json.dumps(payload))
 
-    def _route_get_control_workers_capacity(self, params, body) -> HttpResponse:
-        roles = {}
-        for role in WORKER_ROLES:
-            entry = dict(self.world["workers"][role])
-            entry["replicas"] = self._replicas[role]
-            entry["ready"] = min(entry.get("ready", 0), self._replicas[role])
-            roles[role] = entry
-        return HttpResponse(200, json.dumps({"roles": roles, "queue": self.world["queue"]}))
-
     def _route_post_scans(self, params, body) -> HttpResponse:
-        files = list((body or {}).get("fixtures") or [])
+        """The real `POST /scans` is a QUERY-STRING call, and this fake refuses anything else.
+
+        THE FAKE'S JOB IS TO BE WRONG IN THE SAME WAYS THE APPLICATION IS. An earlier version
+        accepted a JSON body of fixture names — a shape `api/routes/scans.py` has never served —
+        so the whole suite passed its self-test and would have answered 422 against every real
+        cluster, reporting a target failure that was entirely the suite's. Mirroring the 422 here
+        means a regression to the old shape fails in CI with no cluster involved.
+        """
+        query = self._query
+        if query.get("source") != "local":
+            # FastAPI's own answer for a missing/invalid `source` query parameter, whose pattern
+            # is ^(local|drive|sharepoint)$.
+            return HttpResponse(422, json.dumps({"detail": [{
+                "type": "missing", "loc": ["query", "source"],
+                "msg": "Field required"}]}))
+        # The corpus the image carries, not anything the caller named: `source=local` scans
+        # /app/test-corpus/files, and deploy/public/Dockerfile:86 puts demo-fixtures/ there.
+        files = list(self.world.get("local_corpus") or [])
         scan_id = f"acc-scan-{self._next_id}"
         self._next_id += 1
         self._scans[scan_id] = _Scan(scan_id, files)
-        return HttpResponse(201, json.dumps({"scan_id": scan_id, "files_total": len(files)}))
+        queued = query.get("queue") == "true"
+        payload = {"scan_id": scan_id, "source": "local", "queued": queued}
+        if queued:
+            payload["job_id"] = f"discover-{scan_id}"
+        return HttpResponse(200, json.dumps(payload))
 
-    def _route_get_scans_status(self, params, body) -> HttpResponse:
+    def _route_get_scans_live(self, params, body) -> HttpResponse:
+        """`live_snapshot.build_snapshot`'s shape, field for field.
+
+        THREE DENOMINATORS, NOT `files_done`/`files_total`. The application reports
+        `totals.discovered >= totals.eligible >= kpis.completed` and deliberately never blends
+        them; a fake that answered with two flat counters would let a scenario be written against
+        numbers no cluster produces.
+        """
         scan = self._scans.get(params["sid"])
         if scan is None:
-            return HttpResponse(404, json.dumps({"detail": "no such scan"}))
+            # `/live` degrades rather than 404ing — an unknown OR FOREIGN scan is `available:
+            # false` with a reason, and the suite must treat that as `unknown`, not as a failure.
+            return HttpResponse(200, json.dumps({"available": False, "reason": "scan_not_found"}))
         scan.polls += 1
+        total = len(scan.files)
         if scan.lost:
-            # Work was lost: the scan never terminates and its progress went BACKWARDS. Both are
+            # Work was lost: the run never terminates and its progress went BACKWARDS. Both are
             # asserted, because a stall alone is indistinguishable from a slow cluster.
-            return HttpResponse(200, json.dumps({
-                "scan_id": scan.scan_id, "status": "running",
-                "files_total": len(scan.files), "files_done": 0, "restarts": scan.restarts}))
-        done = min(len(scan.files), scan.polls * max(1, len(scan.files)))
+            return HttpResponse(200, json.dumps(self._snapshot(scan, state="running",
+                                                               discovered=total, completed=0)))
         complete = scan.polls >= int(self.world["scan_polls_until_complete"])
-        scan.finished_files = len(scan.files) if complete else done
-        return HttpResponse(200, json.dumps({
-            "scan_id": scan.scan_id,
-            "status": "complete" if complete else "running",
-            "files_total": len(scan.files),
-            "files_done": scan.finished_files,
-            "restarts": scan.restarts}))
+        done = total if complete else min(total, scan.polls)
+        scan.finished_files = done
+        return HttpResponse(200, json.dumps(self._snapshot(
+            scan, state="completed" if complete else "running",
+            discovered=total, completed=done)))
+
+    def _snapshot(self, scan, *, state: str, discovered: int, completed: int) -> dict:
+        return {
+            "available": True,
+            "run_id": scan.scan_id,
+            "source": "local",
+            "state": state,
+            "phase": "complete" if state == "completed" else "assessing",
+            "active": state in ("preparing", "running", "degraded", "pausing", "paused",
+                                "finalizing"),
+            "totals": {"discovered": discovered, "eligible": discovered},
+            "kpis": {"completed": completed, "processing": max(0, discovered - completed),
+                     "need_attention": 0, "unable_to_assess": 0},
+            "outcomes": {"passed": completed, "review": 0, "failed": 0,
+                         "processing": max(0, discovered - completed)},
+            "sequence": completed,
+            "generated_at": self.utcnow().isoformat(),
+            "restarts": scan.restarts,
+        }
 
     def _route_get_scans_events(self, params, body) -> HttpResponse:
         return HttpResponse(200, "")     # only used via _sse; kept so the route is known
@@ -273,12 +337,24 @@ class FakeBackend(ExecutionBackend):
         scan = self._scans.get(m.group("sid"))
         if scan is None:
             raise BackendError("no such scan")
+        # SNAPSHOT-REPLACE FRAMES, WITH NO `event:` FIELD, because that is what
+        # `stream_live_events` emits: the whole `/live` object each time its content changes, and
+        # `: keep-alive` comment frames in between. The fake used to emit `event: progress` /
+        # `event: complete` — a shape the application has never sent — which let a scenario filter
+        # on an event name and pass the self-test while reporting "no progress events" against
+        # every real cluster.
         total = max(1, len(scan.files))
-        events = [{"event": "progress",
-                   "data": {"scan_id": scan.scan_id, "files_done": i + 1, "files_total": total}}
-                  for i in range(min(total, max_events - 1))]
-        events.append({"event": "complete", "data": {"scan_id": scan.scan_id, "status": "complete"}})
-        return events[:max_events]
+        frames: list[dict] = []
+        for i in range(min(total, max_events - 1)):
+            frames.append({"data": self._snapshot(scan, state="running", discovered=total,
+                                                  completed=i + 1)})
+            if i == 0:
+                # One keep-alive, so a scenario that counts frames has to distinguish them from
+                # snapshots rather than counting everything the stream delivered.
+                frames.append({"": "keep-alive", "data": ""})
+        frames.append({"data": self._snapshot(scan, state="completed", discovered=total,
+                                              completed=total)})
+        return frames[:max_events]
 
     # -- kubectl / helm -----------------------------------------------------
     def _command(self, tool: str, args: list[str]) -> CommandResult:
@@ -293,6 +369,17 @@ class FakeBackend(ExecutionBackend):
         verb = next((a for a in args if not a.startswith("-")), "")
         rest = [a for a in args if not a.startswith("-")][1:]
         if verb == "get" and rest and rest[0].startswith("deploy"):
+            # `kubectl get deployment/NAME -o json` answers ONE object; `kubectl get deployments
+            # -l ... -o json` answers a List. The fake used to answer a List either way, so a
+            # caller reading `.status.readyReplicas` off the single form silently got nothing and
+            # read it as zero ready replicas — a healthy tier reported as one that never scaled.
+            named = rest[0].split("/", 1)[1] if "/" in rest[0] else ""
+            if named:
+                for item in self._deployment_list()["items"]:
+                    if item["metadata"]["name"] == named:
+                        return CommandResult(0, json.dumps(item))
+                return CommandResult(1, stderr=f'Error from server (NotFound): deployments.apps '
+                                                f'"{named}" not found')
             return CommandResult(0, json.dumps(self._deployment_list()))
         if verb == "get" and rest and rest[0].startswith("job"):
             return CommandResult(0, json.dumps({"items": [self._job_object()]}))
@@ -417,9 +504,8 @@ def _workload_arg(rest: list[str]) -> str:
 _ROUTES: list[tuple[str, str]] = [
     ("GET /healthz", r"^/healthz$"),
     ("GET /readyz", r"^/readyz$"),
-    ("GET /control/workers/capacity", r"^/control/workers/capacity$"),
-    ("POST /scans", r"^/scans$"),
-    ("GET /scans/{sid}/status", r"^/scans/(?P<sid>[^/]+)/status$"),
+    ("POST /scans", r"^/scans(\?.*)?$"),
+    ("GET /scans/{sid}/live", r"^/scans/(?P<sid>[^/]+)/live$"),
     ("GET /scans/{sid}/events", r"^/scans/(?P<sid>[^/]+)/events$"),
     ("POST /scans/{sid}/assess", r"^/scans/(?P<sid>[^/]+)/assess$"),
     ("POST /scans/{sid}/remediate", r"^/scans/(?P<sid>[^/]+)/remediate$"),
@@ -432,9 +518,8 @@ _ROUTES: list[tuple[str, str]] = [
 _HANDLER_SLUG = {
     "GET /healthz": "healthz",
     "GET /readyz": "readyz",
-    "GET /control/workers/capacity": "control_workers_capacity",
     "POST /scans": "scans",
-    "GET /scans/{sid}/status": "scans_status",
+    "GET /scans/{sid}/live": "scans_live",
     "GET /scans/{sid}/events": "scans_events",
     "POST /scans/{sid}/assess": "scans_assess",
     "POST /scans/{sid}/remediate": "scans_remediate",

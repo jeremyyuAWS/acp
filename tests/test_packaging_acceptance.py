@@ -460,7 +460,10 @@ def test_a_scenario_that_raises_is_unknown_rather_than_fail(monkeypatch):
 def test_a_tier_with_pods_but_no_heartbeat_fails_worker_registration():
     """The failure that reads as healthy in kubectl: Ready pods that never registered."""
     world = fake.world()
-    world["workers"]["remediate"] = dict(world["workers"]["remediate"], heartbeat_age_seconds=3600)
+    # Present in the roles block, so the tier HAS registered at some point, but stale — which
+    # store.worker_roles_status draws as a different fact from a role that never beaten, and needs
+    # a different fix (lost Redis, not a tier that never started).
+    world["workers"]["remediate"] = dict(world["workers"]["remediate"], age_s=3600.0, alive=False)
     run, _ = run_fake(world=world, scenario_ids=["worker-registration"])
     entry = entry_for(run.report, "worker-registration")
     assert entry["state"] == FAIL
@@ -485,7 +488,7 @@ def test_an_unreachable_api_is_unknown_not_fail():
 
 def test_a_build_that_does_not_serve_a_required_surface_is_unknown():
     """A 404 says this build has no such surface — which is not a finding about workers."""
-    world = fake.world(faults={"GET /control/workers/capacity": {"status": 404}})
+    world = fake.world(faults={"GET /readyz": {"status": 404}})
     run, _ = run_fake(world=world, scenario_ids=["worker-registration"])
     entry = entry_for(run.report, "worker-registration")
     assert entry["state"] == UNKNOWN
@@ -695,3 +698,196 @@ def test_the_readme_states_that_no_target_has_passed_yet():
     text = (ACCEPTANCE / "README.md").read_text(encoding="utf-8")
     assert "No target has passed this suite" in text
     assert "planned" in text
+
+
+# ── the suite's API contract versus the application's actual routes ───────────
+#
+# WHY THIS SECTION EXISTS. Every test above passed while the suite spoke a contract the
+# application has never served: it POSTed a JSON body of fixture names to `/scans`, whose real
+# signature is `source: str = Query(..., pattern="^(local|drive|sharepoint)$")` — a 422 before any
+# handler runs — and it polled `/scans/{sid}/status` for `files_done`, which is ADR 0026's
+# Accessibility Status roll-up and has never carried that field. Both would have reported a
+# failing TARGET, on a healthy cluster, for a defect entirely inside this suite.
+#
+# The fake passed because the fake had been written from the same assumption. That is the failure
+# mode CLAUDE.md calls a check that cannot fail, and the fix is not "be more careful with the
+# fake": it is to compare the suite's paths against `api/routes/` in a test that needs no cluster.
+
+API_ROUTES = ROOT / "api" / "routes"
+
+# (constant name, HTTP method, whether the application serves it today). The third column is the
+# assertion, in both directions: a path marked served that disappears fails, and a path marked
+# MISSING that someone implements ALSO fails — with a message saying to move it, because a
+# scenario reporting `unknown: this build does not serve X` after X shipped is a scenario that
+# silently stopped measuring anything.
+SUITE_PATHS = [
+    ("PATH_HEALTH", "get", True),
+    ("PATH_READY", "get", True),
+    ("PATH_READY_ROLES", "get", True),
+    ("PATH_SCANS", "post", True),
+    ("PATH_SCAN_LIVE", "get", True),
+    ("PATH_SCAN_EVENTS", "get", True),
+    ("PATH_SCAN_ASSESS", "post", True),
+    ("PATH_SCAN_REMEDIATE", "post", True),
+    ("PATH_JOB", "get", True),
+    # PRD §12/§13 surfaces the acceptance criteria need and no build serves yet. Their scenarios
+    # report `unknown`, never a pass — see the kind-cluster job's expected-outcome table.
+    ("PATH_ARTIFACTS", "get", False),
+    ("PATH_AUDIT", "get", False),
+    ("PATH_SUPPORT_BUNDLE", "get", False),
+]
+
+
+def _route_decorators() -> set[tuple[str, str]]:
+    """Every `@router.<verb>("<path>")` in api/routes, as (verb, path)."""
+    import re as _re
+    found = set()
+    for source in sorted(API_ROUTES.glob("*.py")):
+        for verb, path in _re.findall(r'@router\.(get|post|put|patch|delete)\(\s*"([^"]+)"',
+                                      source.read_text(encoding="utf-8")):
+            found.add((verb, path))
+    return found
+
+
+def _path_pattern(template: str) -> str:
+    """A suite path template as a regex over route paths.
+
+    The two spell their parameters differently and always will — the suite says `{sid}` where
+    `scans.py` says `{scan_id}`, and `{jid}` where it says `{job_id}` — so the comparison is on
+    the SHAPE of the path, not on the parameter names. Query strings are stripped: they are the
+    caller's business, and `_route_decorators` never sees them.
+    """
+    import re as _re
+    base = template.split("?", 1)[0]
+    return "^" + _re.sub(r"\\\{[a-zA-Z_]+\\\}", r"\\{[a-zA-Z_]+(?::path)?\\}",
+                         _re.escape(base)) + "$"
+
+
+@pytest.mark.parametrize("const,verb,served", SUITE_PATHS)
+def test_every_path_the_suite_probes_matches_the_applications_actual_routes(const, verb, served):
+    import re as _re
+    template = getattr(scenarios_mod, const)
+    pattern = _path_pattern(template)
+    hits = sorted(p for v, p in _route_decorators() if v == verb and _re.match(pattern, p))
+    if served:
+        assert hits, (
+            f"{const} = {template!r} is declared as a path the application serves, and no "
+            f"@router.{verb} in api/routes matches it. Either the route moved and the scenarios "
+            f"that probe it now report a target failure that is really ours, or this entry is "
+            f"wrong. Do not relax this test — fix the constant.")
+    else:
+        assert not hits, (
+            f"{const} = {template!r} is declared MISSING, and api/routes now serves {hits}. "
+            f"Its scenario is currently reporting `unknown: this build does not serve X` and has "
+            f"therefore stopped measuring anything. Move it to served=True and re-check what the "
+            f"scenario asserts.")
+
+
+def test_the_scan_start_call_carries_source_local_and_sends_no_body():
+    backend = fake.FakeBackend(grants=frozenset(CAPABILITIES))
+    ctx_target = run_mod.SELF_TEST_TARGET
+    from acp_acceptance.context import ScenarioContext
+    ctx = ScenarioContext(target=ctx_target, backend=backend, artifacts=ArtifactSink())
+    sid, failure = scenarios_mod._start_scan(ctx)
+    assert failure is None, failure.detail
+    starts = [e for e in backend.log if e["kind"] == "http" and e["method"] == "POST"
+              and e["path"].startswith("/scans?")]
+    assert starts, f"no query-string POST to /scans in the log: {backend.log}"
+    assert "source=local" in starts[0]["path"], starts[0]["path"]
+    assert "queue=true" in starts[0]["path"], (
+        "the scan must be QUEUED — with queue=false discovery runs inside the API process and a "
+        "green report would say nothing about whether any worker ever claimed a job")
+
+
+def test_the_fake_refuses_a_scan_start_that_omits_source_exactly_as_fastapi_would():
+    """The bite check. If this fake ever accepts the old shape again, the whole suite goes back to
+    passing a contract no cluster serves."""
+    backend = fake.FakeBackend(grants=frozenset(CAPABILITIES))
+    resp = backend.http("POST", "/scans", body={"fixtures": ["a.docx"], "source": "acceptance"})
+    assert resp.status == 422, (
+        f"the fake accepted a JSON-body scan start ({resp.status}); the application answers 422 "
+        f"for a missing `source` query parameter, and a fake that is wrong in a different way "
+        f"than the application is worse than no fake")
+
+
+def test_the_suite_polls_live_and_not_status():
+    backend = fake.FakeBackend(grants=frozenset(CAPABILITIES))
+    from acp_acceptance.context import ScenarioContext
+    ctx = ScenarioContext(target=run_mod.SELF_TEST_TARGET, backend=backend,
+                          artifacts=ArtifactSink())
+    sid, failure = scenarios_mod._start_scan(ctx)
+    assert failure is None
+    snap, failure = scenarios_mod._await_scan(ctx, sid)
+    assert failure is None, failure.detail
+    polled = [e["path"] for e in backend.log if e["kind"] == "http" and e["method"] == "GET"]
+    assert any(p.endswith("/live") for p in polled), polled
+    assert not any(p.endswith("/status") for p in polled), (
+        "/scans/{sid}/status is ADR 0026's Accessibility Status roll-up, not scan progress — it "
+        "never carries a completion count, so polling it reads as a scan permanently at zero")
+
+
+def test_a_run_that_is_not_available_to_this_caller_is_unknown_rather_than_a_failure():
+    """`/live` answers `available: false` for an unknown OR FOREIGN scan. Reporting that as a
+    target failure sends an operator to debug a cluster over an identity mismatch."""
+    backend = fake.FakeBackend(grants=frozenset(CAPABILITIES))
+    from acp_acceptance.context import ScenarioContext
+    ctx = ScenarioContext(target=run_mod.SELF_TEST_TARGET, backend=backend,
+                          artifacts=ArtifactSink())
+    snap, failure = scenarios_mod._await_scan(ctx, "no-such-scan")
+    assert snap is None
+    assert failure is not None and failure.state == UNKNOWN, failure
+    assert "not available" in failure.detail
+
+
+def test_keep_alive_frames_are_not_counted_as_live_progress():
+    """The stream carries `: keep-alive` comment frames between snapshots. Counting them would let
+    a stream that delivers nothing but keep-alives report live progress."""
+    run, _ = run_fake(scenario_ids=["queue-and-progress"])
+    entry = entry_for(run.report, "queue-and-progress")
+    assert entry["state"] == PASS, entry
+    frames = entry["evidence"]["snapshotFrames"]
+    backend = fake.FakeBackend(grants=frozenset(CAPABILITIES))
+    from acp_acceptance.context import ScenarioContext
+    ctx = ScenarioContext(target=run_mod.SELF_TEST_TARGET, backend=backend,
+                          artifacts=ArtifactSink())
+    sid, _ = scenarios_mod._start_scan(ctx)
+    delivered = backend.sse(f"/scans/{sid}/events", max_events=10)
+    assert any(f.get("data") == "" for f in delivered), (
+        "the fake stopped emitting keep-alive frames, so this test no longer proves they are "
+        "excluded")
+    assert frames < len(delivered), (
+        f"every one of the {len(delivered)} delivered frames was counted as progress, keep-alives "
+        f"included")
+
+
+def test_the_suite_takes_no_reading_through_a_provider_specific_surface():
+    """PRD §2.9: provider differences live in infrastructure adapters, not in the portable suite.
+
+    THE DEFECT THIS CATCHES SHIPPED. `worker-registration` — the scenario that decides whether any
+    worker tier registered at all — read `/control/workers/capacity`, which is Azure Container
+    Apps: it queries ACA replica counts and Azure Monitor, and with no Azure configured returns
+    `_empty_capacity(False)`, a block carrying no `roles` key. Against any Kubernetes cluster the
+    scenario would have reported "no worker tier registered for discovery, assess, remediate" —
+    a total, confident, wrong failure, on a target whose workers were heartbeating fine.
+
+    The tell was in the route's own module: a handler gated on `_AZ_CONFIGURED` cannot answer
+    portably. So that is what this asserts, rather than a hand-kept list of banned paths.
+    """
+    import re as _re
+    offenders = []
+    for const, verb, served in SUITE_PATHS:
+        if not served:
+            continue
+        pattern = _path_pattern(getattr(scenarios_mod, const))
+        for source in sorted(API_ROUTES.glob("*.py")):
+            text = source.read_text(encoding="utf-8")
+            hits = [p for v, p in _re.findall(
+                r'@router\.(get|post|put|patch|delete)\(\s*"([^"]+)"', text)
+                if v == verb and _re.match(pattern, p)]
+            if hits and "_AZ_CONFIGURED" in text:
+                offenders.append(f"{const} -> {source.name}{hits}")
+    assert not offenders, (
+        "the acceptance suite probes a route whose module gates on Azure configuration: "
+        f"{offenders}. A portable suite certifying six platforms cannot take a reading through "
+        f"a provider adapter — on every non-Azure target that route degrades to an empty block "
+        f"and the scenario reports a failure that is about the adapter, not the target.")
